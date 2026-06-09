@@ -1,0 +1,8 @@
+{
+  "type": "agent_state",
+  "session": "550e8400-e29b-41d4-a716-446655440000",
+  "phase": "working",
+  "tool": "Bash",
+  "since": 1717200000000,
+  "workingSince": 1717200005000
+}

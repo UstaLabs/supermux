@@ -1,0 +1,13 @@
+{
+  "type": "snapshot",
+  "sessions": [
+    {
+      "name": "editor",
+      "workdir": "/home/user/projects/claudemux",
+      "mute": false,
+      "connected": true,
+      "agent": "claude",
+      "model": "opus-4.8"
+    }
+  ]
+}

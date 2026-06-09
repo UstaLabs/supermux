@@ -1,0 +1,26 @@
+{
+  "type": "commands_changed",
+  "session": "550e8400-e29b-41d4-a716-446655440000",
+  "resolved": true,
+  "commands": [
+    {
+      "id": "cmd-agent-1",
+      "family": "agent",
+      "name": "compact",
+      "sigil": "/",
+      "description": "Compact conversation history",
+      "insertText": "/compact "
+    },
+    {
+      "id": "cmd-ctrl-1",
+      "family": "control",
+      "name": "mute",
+      "sigil": "/",
+      "description": "Mute this session",
+      "action": {
+        "kind": "mute",
+        "muted": false
+      }
+    }
+  ]
+}

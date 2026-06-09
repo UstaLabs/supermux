@@ -1,0 +1,13 @@
+{
+  "type": "message_append",
+  "session": "550e8400-e29b-41d4-a716-446655440000",
+  "entry": {
+    "id": "in:1",
+    "ts": "2026-06-01T00:00:00Z",
+    "direction": "inbound",
+    "channel": "web",
+    "chat_id": "web",
+    "message_id": "m1",
+    "text": "hi"
+  }
+}

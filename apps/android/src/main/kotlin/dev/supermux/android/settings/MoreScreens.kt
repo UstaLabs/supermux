@@ -1,0 +1,1488 @@
+package dev.supermux.android.settings
+
+import android.app.TimePickerDialog
+import android.content.Context
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import dev.supermux.android.R
+import dev.supermux.android.chat.TimelineItemRow
+import dev.supermux.android.chat.mergeTimeline
+import dev.supermux.android.theme.LocalPanes
+import dev.supermux.net.ArchivedDto
+import dev.supermux.net.CuratorSettingsResponse
+import dev.supermux.net.DeviceDto
+import dev.supermux.net.ProxyDto
+import dev.supermux.android.session.relTime
+import dev.supermux.proto.LogEntry
+import dev.supermux.proto.SessionInfo
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import java.time.format.TextStyle
+import java.util.Locale
+import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
+import org.json.JSONObject
+
+// ─── SettingsScreen ───────────────────────────────────────────────────────────
+//
+// Mirrors the web: an INDEX with two rows (Curator, Editor) that navigate to
+// sub-pages. Internal nav via `opened` (null = index). Curator is server-backed
+// (load/save/run-now suspend callbacks); Editor is local SharedPreferences.
+
+@Composable
+fun SettingsScreen(
+    onBack: () -> Unit,
+    curatorLoad: suspend () -> CuratorSettingsResponse?,
+    curatorSave: suspend (Boolean, Int, Int) -> CuratorSettingsResponse?,
+    curatorRunNow: suspend () -> Unit,
+) {
+    var opened by remember { mutableStateOf<String?>(null) }
+
+    when (opened) {
+        "curator" -> CuratorSettingsPage(
+            onBack = { opened = null },
+            curatorLoad = curatorLoad,
+            curatorSave = curatorSave,
+            curatorRunNow = curatorRunNow,
+        )
+        "editor" -> EditorSettingsPage(onBack = { opened = null })
+        else -> SettingsIndexPage(
+            onBack = onBack,
+            onOpenCurator = { opened = "curator" },
+            onOpenEditor = { opened = "editor" },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsIndexPage(
+    onBack: () -> Unit,
+    onOpenCurator: () -> Unit,
+    onOpenEditor: () -> Unit,
+) {
+    val c = LocalPanes.current
+    BackHandler { onBack() }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Settings", color = Color(c.foreground)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color(c.foreground),
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color(c.sessionList),
+                ),
+            )
+        },
+        containerColor = Color(c.background),
+    ) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            SettingsNavRow(
+                iconRes = R.drawable.ic_sparkle,
+                label = "Curator",
+                desc = "Nightly knowledge curation schedule",
+                onClick = onOpenCurator,
+            )
+            HorizontalDivider(color = Color(c.border))
+            SettingsNavRow(
+                iconRes = R.drawable.ic_file,
+                label = "Editor",
+                desc = "Code editor preferences",
+                onClick = onOpenEditor,
+            )
+        }
+    }
+}
+
+/** A 36dp rounded icon box used by index rows and Curator rows. */
+@Composable
+private fun SettingsIconBox(iconRes: Int) {
+    val c = LocalPanes.current
+    Box(
+        Modifier
+            .size(36.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(c.card))
+            .border(1.dp, Color(c.border), RoundedCornerShape(10.dp)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            painterResource(iconRes),
+            contentDescription = null,
+            tint = Color(c.mutedForeground),
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
+/** Tappable index row: icon box + label/desc + trailing chevron. */
+@Composable
+private fun SettingsNavRow(
+    iconRes: Int,
+    label: String,
+    desc: String,
+    onClick: () -> Unit,
+) {
+    val c = LocalPanes.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        SettingsIconBox(iconRes)
+        Column(Modifier.weight(1f)) {
+            Text(label, color = Color(c.foreground), fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Text(desc, color = Color(c.mutedForeground), fontSize = 11.sp)
+        }
+        Icon(
+            painterResource(R.drawable.ic_chevron_right),
+            contentDescription = null,
+            tint = Color(c.mutedForeground),
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
+// ─── Curator page ──────────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CuratorSettingsPage(
+    onBack: () -> Unit,
+    curatorLoad: suspend () -> CuratorSettingsResponse?,
+    curatorSave: suspend (Boolean, Int, Int) -> CuratorSettingsResponse?,
+    curatorRunNow: suspend () -> Unit,
+) {
+    val c = LocalPanes.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var loaded by remember { mutableStateOf(false) }
+    var enabled by remember { mutableStateOf(false) }
+    var hour by remember { mutableStateOf(1) }
+    var minute by remember { mutableStateOf(0) }
+    var nextRun by remember { mutableStateOf<String?>(null) }
+    var saving by remember { mutableStateOf(false) }
+    var running by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        val r = curatorLoad()
+        if (r != null) {
+            enabled = r.config.enabled
+            hour = r.config.hour
+            minute = r.config.minute
+            nextRun = r.nextRun
+        }
+        loaded = true
+    }
+
+    BackHandler { onBack() }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Curator", color = Color(c.foreground)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color(c.foreground),
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color(c.sessionList),
+                ),
+            )
+        },
+        containerColor = Color(c.background),
+    ) { padding ->
+        if (!loaded) {
+            Box(
+                Modifier.fillMaxSize().padding(padding),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(color = Color(c.primary))
+            }
+        } else {
+            Column(Modifier.fillMaxSize().padding(padding)) {
+                // 1. Nightly curator toggle
+                CuratorRow(
+                    iconRes = R.drawable.ic_sparkle,
+                    label = "Nightly curator",
+                    desc = "Curate ~/.mux daily, commit + push, and post a digest.",
+                ) {
+                    Switch(
+                        checked = enabled,
+                        onCheckedChange = { enabled = it },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color(c.primaryForeground),
+                            checkedTrackColor = Color(c.primary),
+                        ),
+                    )
+                }
+                HorizontalDivider(color = Color(c.border))
+
+                // 2. Run at — opens a TimePickerDialog
+                CuratorRow(
+                    label = "Run at",
+                    desc = "Daily, host local time.",
+                ) {
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color(c.card))
+                            .border(1.dp, Color(c.border), RoundedCornerShape(6.dp))
+                            .clickable {
+                                TimePickerDialog(
+                                    context,
+                                    { _, h, m -> hour = h; minute = m },
+                                    hour,
+                                    minute,
+                                    true,
+                                ).show()
+                            }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        Text(
+                            String.format(Locale.US, "%02d:%02d", hour, minute),
+                            color = Color(c.foreground),
+                            fontSize = 14.sp,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                }
+                HorizontalDivider(color = Color(c.border))
+
+                // 3. Next run (read-only)
+                CuratorRow(
+                    label = "Next run",
+                    desc = "The digest notifies all your devices.",
+                ) {
+                    Text(
+                        curatorNextRunLabel(enabled, nextRun),
+                        color = Color(c.mutedForeground),
+                        fontSize = 14.sp,
+                    )
+                }
+                HorizontalDivider(color = Color(c.border))
+
+                // Footer actions
+                Row(
+                    Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                saving = true
+                                val r = curatorSave(enabled, hour, minute)
+                                if (r != null) nextRun = r.nextRun
+                                saving = false
+                            }
+                        },
+                        enabled = !saving,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(c.primary)),
+                    ) {
+                        Text(if (saving) "Saving…" else "Save", color = Color(c.primaryForeground))
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                running = true
+                                curatorRunNow()
+                                running = false
+                            }
+                        },
+                        enabled = !running,
+                        border = BorderStroke(1.dp, Color(c.border)),
+                    ) {
+                        Icon(
+                            painterResource(R.drawable.ic_play),
+                            contentDescription = null,
+                            tint = Color(c.foreground),
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (running) "Starting…" else "Run now", color = Color(c.foreground))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Curator list row: optional icon box + label/desc + trailing control slot. */
+@Composable
+private fun CuratorRow(
+    label: String,
+    desc: String,
+    iconRes: Int? = null,
+    trailing: @Composable () -> Unit,
+) {
+    val c = LocalPanes.current
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (iconRes != null) SettingsIconBox(iconRes)
+        Column(Modifier.weight(1f)) {
+            Text(label, color = Color(c.foreground), fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Text(desc, color = Color(c.mutedForeground), fontSize = 11.sp)
+        }
+        trailing()
+    }
+}
+
+/** Mirrors the web's nextRunLabel: disabled / formatted local datetime / raw / —. */
+private fun curatorNextRunLabel(enabled: Boolean, nextRun: String?): String {
+    if (!enabled) return "Disabled"
+    val raw = nextRun ?: return "—"
+    return runCatching {
+        val dt = LocalDateTime.ofInstant(Instant.parse(raw), ZoneId.systemDefault())
+        dt.format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT))
+    }.getOrNull() ?: raw
+}
+
+// ─── Editor page (local SharedPreferences) ───────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EditorSettingsPage(onBack: () -> Unit) {
+    val c = LocalPanes.current
+    val prefs = LocalContext.current
+        .getSharedPreferences("cmux-editor-settings", Context.MODE_PRIVATE)
+
+    var lineWrap by remember { mutableStateOf(prefs.getBoolean("lineWrap", true)) }
+    var fontSize by remember { mutableStateOf(prefs.getInt("fontSize", 13)) }
+
+    BackHandler { onBack() }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Editor", color = Color(c.foreground)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color(c.foreground),
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color(c.sessionList),
+                ),
+            )
+        },
+        containerColor = Color(c.background),
+    ) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            // 1. Wrap long lines
+            CuratorRow(
+                label = "Wrap long lines",
+                desc = "Wrap instead of horizontal scroll.",
+            ) {
+                Switch(
+                    checked = lineWrap,
+                    onCheckedChange = {
+                        lineWrap = it
+                        prefs.edit().putBoolean("lineWrap", it).apply()
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color(c.primaryForeground),
+                        checkedTrackColor = Color(c.primary),
+                    ),
+                )
+            }
+            HorizontalDivider(color = Color(c.border))
+
+            // 2. Font size stepper (clamp 10..24)
+            CuratorRow(
+                label = "Font size",
+                desc = "Code editor text size.",
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    StepperButton(text = "−", enabled = fontSize > 10) {
+                        val v = (fontSize - 1).coerceIn(10, 24)
+                        fontSize = v
+                        prefs.edit().putInt("fontSize", v).apply()
+                    }
+                    Text(
+                        fontSize.toString(),
+                        color = Color(c.foreground),
+                        fontSize = 14.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                    StepperButton(text = "+", enabled = fontSize < 24) {
+                        val v = (fontSize + 1).coerceIn(10, 24)
+                        fontSize = v
+                        prefs.edit().putInt("fontSize", v).apply()
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Small bordered −/+ button for the font-size stepper. */
+@Composable
+private fun StepperButton(text: String, enabled: Boolean, onClick: () -> Unit) {
+    val c = LocalPanes.current
+    val alpha = if (enabled) 1f else 0.4f
+    Box(
+        Modifier
+            .size(32.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color(c.card))
+            .border(1.dp, Color(c.border).copy(alpha = alpha), RoundedCornerShape(6.dp))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, color = Color(c.foreground).copy(alpha = alpha), fontSize = 18.sp)
+    }
+}
+
+// ─── UsageScreen ─────────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun UsageScreen(
+    onBack: () -> Unit,
+    onLoad: suspend () -> String?,
+) {
+    val c = LocalPanes.current
+    var usage by remember { mutableStateOf<UsageData?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var loadFailed by remember { mutableStateOf(false) }
+    var reloadKey by remember { mutableStateOf(0) }
+
+    LaunchedEffect(reloadKey) {
+        loading = true
+        loadFailed = false
+        val raw = onLoad()
+        if (raw == null) {
+            loadFailed = true
+        } else {
+            usage = parseUsage(raw)
+        }
+        loading = false
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Usage", color = Color(c.foreground)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color(c.foreground),
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { if (!loading) reloadKey++ }, enabled = !loading) {
+                        Icon(
+                            Icons.Filled.Refresh,
+                            contentDescription = "Refresh",
+                            tint = if (loading) Color(c.mutedForeground) else Color(c.foreground),
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color(c.sessionList),
+                ),
+            )
+        },
+        containerColor = Color(c.background),
+    ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            when {
+                loading && usage == null -> {
+                    CircularProgressIndicator(
+                        color = Color(c.primary),
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                }
+                loadFailed && usage == null -> {
+                    Text(
+                        "Unable to load usage data.",
+                        color = Color(c.mutedForeground),
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                }
+                else -> {
+                    val u = usage
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        ClaudeUsageCard(u?.claude, u?.errors?.get("claude"))
+                        CodexUsageCard(u?.codex, u?.errors?.get("codex"))
+                        CursorUsageCard(u?.cursor, u?.errors?.get("cursor"))
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─── Usage data model + parsing (defensive: missing sections → null) ───────────
+
+/** resetsAt raw value: ISO string (claude/cursor) or unix-seconds number (codex). */
+private data class UsageWindowData(val used: Double, val resetsAt: String?)
+private data class ClaudeExtraUsageData(val enabled: Boolean, val monthlyLimit: Double, val usedCredits: Double, val currency: String)
+private data class ClaudeUsageData(
+    val fiveHour: UsageWindowData?,
+    val sevenDay: UsageWindowData?,
+    val sevenDaySonnet: UsageWindowData?,
+    val extraUsage: ClaudeExtraUsageData?,
+)
+private data class CodexCreditsData(val hasCredits: Boolean, val balance: String)
+private data class CodexUsageData(
+    val plan: String?,
+    val primaryWindow: UsageWindowData?,
+    val secondaryWindow: UsageWindowData?,
+    val credits: CodexCreditsData?,
+    val limitReached: Boolean,
+)
+private data class CursorUsageData(
+    val totalPercentUsed: Double,
+    val totalSpendCents: Double,
+    val includedCents: Double,
+    val limitCents: Double,
+    val billingCycleStart: String?,
+    val billingCycleEnd: String?,
+)
+private data class UsageData(
+    val claude: ClaudeUsageData?,
+    val codex: CodexUsageData?,
+    val cursor: CursorUsageData?,
+    val errors: Map<String, String>,
+)
+
+// Defensive accessors over org.json (Android SDK, no extra dep). Any missing /
+// wrong-typed field collapses to null/0 so a partial payload still renders.
+private fun JSONObject.objOrNull(key: String): JSONObject? =
+    if (isNull(key)) null else optJSONObject(key)
+private fun JSONObject.strOrNull(key: String): String? =
+    if (isNull(key) || !has(key)) null else optString(key, "").ifEmpty { null }
+private fun JSONObject.numOr(key: String, def: Double = 0.0): Double = optDouble(key, def)
+
+private fun parseWindow(o: JSONObject?): UsageWindowData? {
+    if (o == null) return null
+    // resetsAt may be a string (ISO) or a number (unix secs) — keep it as text.
+    val reset = if (o.isNull("resetsAt") || !o.has("resetsAt")) null else o.get("resetsAt").toString()
+    return UsageWindowData(used = o.numOr("used"), resetsAt = reset)
+}
+
+private fun parseUsage(raw: String): UsageData {
+    val root = runCatching { JSONObject(raw) }.getOrNull()
+        ?: return UsageData(null, null, null, emptyMap())
+
+    val claude = root.objOrNull("claude")?.let { o ->
+        ClaudeUsageData(
+            fiveHour = parseWindow(o.objOrNull("fiveHour")),
+            sevenDay = parseWindow(o.objOrNull("sevenDay")),
+            sevenDaySonnet = parseWindow(o.objOrNull("sevenDaySonnet")),
+            extraUsage = o.objOrNull("extraUsage")?.let { e ->
+                ClaudeExtraUsageData(
+                    enabled = e.optBoolean("enabled", false),
+                    monthlyLimit = e.numOr("monthlyLimit"),
+                    usedCredits = e.numOr("usedCredits"),
+                    currency = e.strOrNull("currency") ?: "USD",
+                )
+            },
+        )
+    }
+
+    val codex = root.objOrNull("codex")?.let { o ->
+        CodexUsageData(
+            plan = o.strOrNull("plan"),
+            primaryWindow = parseWindow(o.objOrNull("primaryWindow")),
+            secondaryWindow = parseWindow(o.objOrNull("secondaryWindow")),
+            credits = o.objOrNull("credits")?.let { cr ->
+                CodexCreditsData(
+                    hasCredits = cr.optBoolean("hasCredits", false),
+                    balance = cr.strOrNull("balance") ?: "0",
+                )
+            },
+            limitReached = o.optBoolean("limitReached", false),
+        )
+    }
+
+    val cursor = root.objOrNull("cursor")?.let { o ->
+        CursorUsageData(
+            totalPercentUsed = o.numOr("totalPercentUsed"),
+            totalSpendCents = o.numOr("totalSpendCents"),
+            includedCents = o.numOr("includedCents"),
+            limitCents = o.numOr("limitCents"),
+            billingCycleStart = o.strOrNull("billingCycleStart"),
+            billingCycleEnd = o.strOrNull("billingCycleEnd"),
+        )
+    }
+
+    val errors = root.objOrNull("errors")?.let { e ->
+        buildMap {
+            for (key in e.keys()) {
+                e.strOrNull(key)?.let { put(key, it) }
+            }
+        }
+    } ?: emptyMap()
+
+    return UsageData(claude, codex, cursor, errors)
+}
+
+// ─── Usage rendering helpers ───────────────────────────────────────────────────
+
+private enum class ResetKind { CLAUDE, CODEX, CURSOR }
+
+private fun clampPct(v: Double): Double = v.coerceIn(0.0, 100.0)
+
+/** Bar colour by percentage: >=85 red, >=60 amber, else primary. */
+@Composable
+private fun barColor(pct: Double): Color {
+    val c = LocalPanes.current
+    return when {
+        pct >= 85 -> Color(c.destructive)
+        pct >= 60 -> Color(c.warning)
+        else -> Color(c.primary)
+    }
+}
+
+/**
+ * Reset formatting.
+ *  - CLAUDE: resetsAt is an ISO-8601 string.
+ *  - CODEX: resetsAt is unix SECONDS.
+ *  - CURSOR: resetsAt is an ISO-8601 string (billing cycle end).
+ * Shows "resets in Xh Ym" when <24h, else "resets <Mon D>".
+ */
+private fun formatReset(resetsAt: String?, kind: ResetKind): String {
+    val s = resetsAt?.takeIf { it.isNotBlank() } ?: return ""
+    val ms: Long = when (kind) {
+        ResetKind.CODEX -> {
+            val secs = s.toDoubleOrNull() ?: return ""
+            (secs * 1000.0).toLong()
+        }
+        ResetKind.CLAUDE, ResetKind.CURSOR -> {
+            // Try epoch-millis numeric first, else parse ISO-8601.
+            s.toLongOrNull() ?: runCatching {
+                Instant.parse(s).toEpochMilli()
+            }.getOrElse { return "" }
+        }
+    }
+    val diff = ms - System.currentTimeMillis()
+    if (diff <= 0) return "resets soon"
+    if (diff < 24L * 3600_000L) {
+        val h = (diff / 3600_000L).toInt()
+        val m = ((diff % 3600_000L) / 60_000L).toInt()
+        return if (h > 0) "resets in ${h}h ${m}m" else "resets in ${m}m"
+    }
+    val date = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault())
+    val month = date.month.getDisplayName(TextStyle.SHORT, Locale.US)
+    return "resets $month ${date.dayOfMonth}"
+}
+
+private fun money(cents: Double): String = "$" + "%.2f".format(Locale.US, cents / 100.0)
+private fun dollars(v: Double): String = "$" + "%.2f".format(Locale.US, v)
+
+/** Outer usage card: rounded 12dp, border, title + plan subtitle, content slot. */
+@Composable
+private fun UsageCard(
+    title: String,
+    subtitle: String,
+    enabled: Boolean,
+    badge: (@Composable () -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val c = LocalPanes.current
+    val alpha = if (enabled) 1f else 0.5f
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(c.card).copy(alpha = alpha))
+            .border(1.dp, Color(c.border).copy(alpha = alpha), RoundedCornerShape(12.dp))
+            .padding(16.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(title, color = Color(c.foreground), fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text(subtitle, color = Color(c.mutedForeground), fontSize = 12.sp)
+            }
+            badge?.invoke()
+        }
+        content()
+    }
+}
+
+/** A labelled usage window: label + "{pct}% used" + progress bar + reset line. */
+@Composable
+private fun UsageWindowRow(label: String, used: Double, resetsAt: String?, kind: ResetKind) {
+    val c = LocalPanes.current
+    val pct = clampPct(used)
+    Column(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(label, color = Color(c.mutedForeground), fontSize = 12.sp, modifier = Modifier.weight(1f))
+            Text("${used.roundToInt()}% used", color = Color(c.foreground), fontSize = 12.sp)
+        }
+        // Progress bar track + fill
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(8.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(Color(c.muted)),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth((pct / 100.0).toFloat())
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(barColor(used)),
+            )
+        }
+        val reset = formatReset(resetsAt, kind)
+        if (reset.isNotEmpty()) {
+            Text(reset, color = Color(c.mutedForeground), fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
+        }
+    }
+}
+
+/** A footer row separated by a top border (extra usage / credits / spend). */
+@Composable
+private fun UsageFooterRow(label: String, value: String) {
+    val c = LocalPanes.current
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        HorizontalDivider(color = Color(c.border))
+        Row(
+            Modifier.fillMaxWidth().padding(top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(label, color = Color(c.mutedForeground), fontSize = 12.sp, modifier = Modifier.weight(1f))
+            Text(value, color = Color(c.foreground), fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun ClaudeUsageCard(claude: ClaudeUsageData?, error: String?) {
+    val c = LocalPanes.current
+    UsageCard(title = "Claude", subtitle = "Pro plan", enabled = claude != null) {
+        if (claude == null) {
+            Text(error ?: "Not available", color = Color(c.mutedForeground), fontSize = 12.sp)
+        } else {
+            claude.fiveHour?.let { UsageWindowRow("5-hour window", it.used, it.resetsAt, ResetKind.CLAUDE) }
+            claude.sevenDay?.let { UsageWindowRow("7-day window", it.used, it.resetsAt, ResetKind.CLAUDE) }
+            claude.sevenDaySonnet?.let { UsageWindowRow("7-day Sonnet", it.used, it.resetsAt, ResetKind.CLAUDE) }
+            claude.extraUsage?.takeIf { it.enabled }?.let { e ->
+                UsageFooterRow("Extra usage", "${dollars(e.usedCredits)} / ${dollars(e.monthlyLimit)}")
+            }
+        }
+    }
+}
+
+@Composable
+private fun CodexUsageCard(codex: CodexUsageData?, error: String?) {
+    val c = LocalPanes.current
+    UsageCard(
+        title = "Codex",
+        subtitle = codex?.plan ?: "unknown",
+        enabled = codex != null,
+        badge = if (codex?.limitReached == true) {
+            {
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(Color(c.destructive).copy(alpha = 0.1f))
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                ) {
+                    Text("limit reached", color = Color(c.destructive), fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                }
+            }
+        } else null,
+    ) {
+        if (codex == null) {
+            Text(error ?: "Not available", color = Color(c.mutedForeground), fontSize = 12.sp)
+        } else {
+            codex.primaryWindow?.let { UsageWindowRow("5-hour window", it.used, it.resetsAt, ResetKind.CODEX) }
+            codex.secondaryWindow?.let { UsageWindowRow("7-day window", it.used, it.resetsAt, ResetKind.CODEX) }
+            codex.credits?.takeIf { it.hasCredits }?.let { cr ->
+                UsageFooterRow("Credits balance", "$${cr.balance}")
+            }
+        }
+    }
+}
+
+@Composable
+private fun CursorUsageCard(cursor: CursorUsageData?, error: String?) {
+    val c = LocalPanes.current
+    UsageCard(title = "Cursor", subtitle = "Billing cycle", enabled = cursor != null) {
+        if (cursor == null) {
+            Text(error ?: "Not available", color = Color(c.mutedForeground), fontSize = 12.sp)
+        } else {
+            // Cursor uses cents + ISO billing cycle end; reset line tracks billingCycleEnd.
+            UsageWindowRow("Usage", cursor.totalPercentUsed, cursor.billingCycleEnd, ResetKind.CURSOR)
+            UsageFooterRow("Spend", "${money(cursor.totalSpendCents)} / ${money(cursor.includedCents)} included")
+        }
+    }
+}
+
+// ─── DevicesScreen ────────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DevicesScreen(
+    onBack: () -> Unit,
+    onLoad: suspend () -> List<DeviceDto>,
+    onRevoke: (String) -> Unit,
+) {
+    val c = LocalPanes.current
+    var devices by remember { mutableStateOf<List<DeviceDto>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var revokeTarget by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        devices = onLoad()
+        loading = false
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Devices", color = Color(c.foreground)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color(c.foreground),
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color(c.sessionList),
+                ),
+            )
+        },
+        containerColor = Color(c.background),
+    ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            when {
+                loading -> CircularProgressIndicator(
+                    color = Color(c.primary),
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                devices.isEmpty() -> Text(
+                    "No devices registered.",
+                    color = Color(c.mutedForeground),
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
+                    items(devices, key = { it.name }) { device ->
+                        DeviceRow(
+                            device = device,
+                            onRevoke = { revokeTarget = device.name },
+                        )
+                        HorizontalDivider(color = Color(c.border).copy(alpha = 0.4f))
+                    }
+                }
+            }
+        }
+    }
+
+    // Confirm revoke dialog
+    revokeTarget?.let { name ->
+        AlertDialog(
+            onDismissRequest = { revokeTarget = null },
+            title = { Text("Revoke device?") },
+            text = { Text("Remove \"$name\" from authorized devices?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onRevoke(name)
+                    devices = devices.filterNot { it.name == name }
+                    revokeTarget = null
+                }) { Text("Revoke", color = Color(c.destructive)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { revokeTarget = null }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+@Composable
+private fun DeviceRow(device: DeviceDto, onRevoke: () -> Unit) {
+    val c = LocalPanes.current
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(device.name, color = Color(c.foreground), fontWeight = FontWeight.Medium, fontSize = 14.sp)
+            val lastSeen = relTime(device.last_seen_at)
+            if (lastSeen.isNotEmpty()) {
+                Text("Last seen $lastSeen", color = Color(c.mutedForeground), fontSize = 11.sp)
+            }
+        }
+        TextButton(onClick = onRevoke) {
+            Text("Revoke", color = Color(c.destructive), fontSize = 13.sp)
+        }
+    }
+}
+
+// ─── ArchivedScreen ───────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ArchivedScreen(
+    onBack: () -> Unit,
+    onLoad: suspend () -> List<ArchivedDto>,
+    onResume: (String) -> Unit,
+    loadLogs: suspend (String) -> List<LogEntry> = { emptyList() },
+) {
+    val c = LocalPanes.current
+    var sessions by remember { mutableStateOf<List<ArchivedDto>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var resumedIds by remember { mutableStateOf(setOf<String>()) }
+    // Internal nav: tapping a row opens a read-only chat view of that session.
+    var openedId by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        sessions = onLoad()
+        loading = false
+    }
+
+    val opened = openedId?.let { id -> sessions.firstOrNull { it.id == id } }
+    if (opened != null) {
+        ArchivedChatScreen(
+            sessionId = opened.id,
+            name = opened.name,
+            resumed = opened.id in resumedIds,
+            onBack = { openedId = null },
+            onResume = {
+                onResume(opened.id)
+                resumedIds = resumedIds + opened.id
+            },
+            loadLogs = loadLogs,
+        )
+        return
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Archived", color = Color(c.foreground)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color(c.foreground),
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color(c.sessionList),
+                ),
+            )
+        },
+        containerColor = Color(c.background),
+    ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            when {
+                loading -> CircularProgressIndicator(
+                    color = Color(c.primary),
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                sessions.isEmpty() -> Text(
+                    "No archived sessions.",
+                    color = Color(c.mutedForeground),
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
+                    items(sessions, key = { it.id }) { session ->
+                        ArchivedRow(
+                            session = session,
+                            resumed = session.id in resumedIds,
+                            onOpen = { openedId = session.id },
+                            onResume = {
+                                onResume(session.id)
+                                resumedIds = resumedIds + session.id
+                            },
+                        )
+                        HorizontalDivider(color = Color(c.border).copy(alpha = 0.4f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArchivedRow(session: ArchivedDto, resumed: Boolean, onOpen: () -> Unit, onResume: () -> Unit) {
+    val c = LocalPanes.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen)
+            .padding(horizontal = 8.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(session.name, color = Color(c.foreground), fontWeight = FontWeight.Medium, fontSize = 14.sp)
+            Text(
+                session.workdir,
+                color = Color(c.mutedForeground),
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+            )
+            val killed = relTime(session.killed_at)
+            if (killed.isNotEmpty()) {
+                Text("Ended $killed", color = Color(c.mutedForeground), fontSize = 10.sp)
+            }
+        }
+        TextButton(
+            onClick = onResume,
+            enabled = !resumed,
+        ) {
+            Text(
+                if (resumed) "Resumed" else "Resume",
+                color = if (resumed) Color(c.mutedForeground) else Color(c.primary),
+                fontSize = 13.sp,
+            )
+        }
+    }
+}
+
+// ─── ArchivedChatScreen (read-only timeline of an archived session) ────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ArchivedChatScreen(
+    sessionId: String,
+    name: String,
+    resumed: Boolean,
+    onBack: () -> Unit,
+    onResume: () -> Unit,
+    loadLogs: suspend (String) -> List<LogEntry>,
+) {
+    val c = LocalPanes.current
+    var messages by remember { mutableStateOf<List<LogEntry>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+
+    LaunchedEffect(sessionId) {
+        messages = loadLogs(sessionId)
+        loading = false
+    }
+
+    BackHandler { onBack() }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(name, color = Color(c.foreground), fontSize = 16.sp, maxLines = 1)
+                        Text("archived", color = Color(c.mutedForeground), fontSize = 11.sp)
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color(c.foreground),
+                        )
+                    }
+                },
+                actions = {
+                    TextButton(onClick = onResume, enabled = !resumed) {
+                        Text(
+                            if (resumed) "Resumed" else "Resume",
+                            color = if (resumed) Color(c.mutedForeground) else Color(c.primary),
+                            fontSize = 13.sp,
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color(c.sessionList),
+                ),
+            )
+        },
+        containerColor = Color(c.background),
+    ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            when {
+                loading -> CircularProgressIndicator(
+                    color = Color(c.primary),
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                messages.isEmpty() -> Text(
+                    "No messages.",
+                    color = Color(c.mutedForeground),
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                else -> {
+                    // Read-only: reuse chat timeline composables; no composer.
+                    val timelineItems = remember(messages) { mergeTimeline(messages, emptyList()) }
+                    LazyColumn(
+                        Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        items(timelineItems) { item ->
+                            TimelineItemRow(item)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─── ProxyScreen ──────────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ProxyScreen(
+    onLoad: suspend () -> List<ProxyDto>,
+    sessions: List<SessionInfo>,
+    onCreate: (sessionName: String, port: Int, domain: String?) -> Unit,
+    onTogglePublic: (domain: String, isPublic: Boolean) -> Unit,
+    onRemove: (domain: String) -> Unit,
+    onBack: () -> Unit,
+) {
+    val c = LocalPanes.current
+    val proxies = remember { mutableStateListOf<ProxyDto>() }
+    var loading by remember { mutableStateOf(true) }
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var removeTarget by remember { mutableStateOf<String?>(null) }
+    var reloadKey by remember { mutableStateOf(0) }
+
+    LaunchedEffect(reloadKey) {
+        loading = true
+        val loaded = onLoad()
+        proxies.clear()
+        proxies.addAll(loaded)
+        loading = false
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Proxies", color = Color(c.foreground)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color(c.foreground),
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { showCreateDialog = true }) {
+                        Icon(Icons.Filled.Add, contentDescription = "Expose port", tint = Color(c.foreground))
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(c.sessionList)),
+            )
+        },
+        containerColor = Color(c.background),
+    ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            when {
+                loading -> CircularProgressIndicator(
+                    color = Color(c.primary),
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                proxies.isEmpty() -> Text(
+                    "No proxies configured.",
+                    color = Color(c.mutedForeground),
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
+                    items(proxies, key = { it.domain }) { proxy ->
+                        ProxyRow(
+                            proxy = proxy,
+                            onTogglePublic = { isPublic ->
+                                onTogglePublic(proxy.domain, isPublic)
+                                val idx = proxies.indexOfFirst { it.domain == proxy.domain }
+                                if (idx >= 0) proxies[idx] = proxy.copy(isPublic = isPublic)
+                            },
+                            onRemove = { removeTarget = proxy.domain },
+                        )
+                        HorizontalDivider(color = Color(c.border).copy(alpha = 0.4f))
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Expose port dialog ────────────────────────────────────────────────────
+    if (showCreateDialog) {
+        ExposePortDialog(
+            sessions = sessions,
+            onDismiss = { showCreateDialog = false },
+            onCreate = { sessionName, port, domain ->
+                onCreate(sessionName, port, domain)
+                showCreateDialog = false
+                reloadKey++
+            },
+        )
+    }
+
+    // ── Confirm remove dialog ─────────────────────────────────────────────────
+    removeTarget?.let { domain ->
+        AlertDialog(
+            onDismissRequest = { removeTarget = null },
+            title = { Text("Remove proxy?") },
+            text = { Text("Remove proxy for \"$domain\"?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onRemove(domain)
+                    proxies.removeAll { it.domain == domain }
+                    removeTarget = null
+                }) { Text("Remove", color = Color(c.destructive)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { removeTarget = null }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+@Composable
+private fun ProxyRow(
+    proxy: ProxyDto,
+    onTogglePublic: (Boolean) -> Unit,
+    onRemove: () -> Unit,
+) {
+    val c = LocalPanes.current
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                proxy.domain,
+                color = Color(c.foreground),
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Medium,
+                fontSize = 13.sp,
+            )
+            if (proxy.sessionName.isNotEmpty() || proxy.port != 0) {
+                Text(
+                    "→ ${proxy.sessionName}:${proxy.port}",
+                    color = Color(c.mutedForeground),
+                    fontSize = 11.sp,
+                )
+            }
+        }
+        Text(
+            if (proxy.isPublic) "public" else "private",
+            color = Color(c.mutedForeground),
+            fontSize = 11.sp,
+            modifier = Modifier.padding(end = 4.dp),
+        )
+        Switch(
+            checked = proxy.isPublic,
+            onCheckedChange = onTogglePublic,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color(c.primaryForeground),
+                checkedTrackColor = Color(c.primary),
+            ),
+        )
+        IconButton(onClick = onRemove) {
+            Icon(
+                Icons.Filled.Delete,
+                contentDescription = "Remove",
+                tint = Color(c.destructive),
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ExposePortDialog(
+    sessions: List<SessionInfo>,
+    onDismiss: () -> Unit,
+    onCreate: (sessionName: String, port: Int, domain: String?) -> Unit,
+) {
+    val c = LocalPanes.current
+    var selectedSession by remember { mutableStateOf(sessions.firstOrNull()?.name ?: "") }
+    var portText by remember { mutableStateOf("") }
+    var domainText by remember { mutableStateOf("") }
+    var sessionDropdownExpanded by remember { mutableStateOf(false) }
+
+    val portValid = portText.toIntOrNull()?.let { it in 1..65535 } == true
+    val canCreate = selectedSession.isNotBlank() && portValid
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Expose port") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                // Session picker
+                Box {
+                    OutlinedTextField(
+                        value = selectedSession,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Session") },
+                        modifier = Modifier.fillMaxWidth(),
+                        trailingIcon = {
+                            IconButton(onClick = { sessionDropdownExpanded = true }) {
+                                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color(c.foreground),
+                            unfocusedTextColor = Color(c.foreground),
+                            focusedBorderColor = Color(c.primary),
+                            unfocusedBorderColor = Color(c.border),
+                            focusedLabelColor = Color(c.primary),
+                            unfocusedLabelColor = Color(c.mutedForeground),
+                        ),
+                    )
+                    DropdownMenu(
+                        expanded = sessionDropdownExpanded,
+                        onDismissRequest = { sessionDropdownExpanded = false },
+                    ) {
+                        sessions.forEach { session ->
+                            DropdownMenuItem(
+                                text = { Text(session.name) },
+                                onClick = {
+                                    selectedSession = session.name
+                                    sessionDropdownExpanded = false
+                                },
+                            )
+                        }
+                        if (sessions.isEmpty()) {
+                            DropdownMenuItem(
+                                text = { Text("No sessions", color = Color(c.mutedForeground)) },
+                                onClick = { sessionDropdownExpanded = false },
+                            )
+                        }
+                    }
+                }
+
+                // Port field
+                OutlinedTextField(
+                    value = portText,
+                    onValueChange = { portText = it.filter { ch -> ch.isDigit() } },
+                    label = { Text("Port") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    isError = portText.isNotBlank() && !portValid,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color(c.foreground),
+                        unfocusedTextColor = Color(c.foreground),
+                        focusedBorderColor = Color(c.primary),
+                        unfocusedBorderColor = Color(c.border),
+                        focusedLabelColor = Color(c.primary),
+                        unfocusedLabelColor = Color(c.mutedForeground),
+                        cursorColor = Color(c.primary),
+                    ),
+                )
+
+                // Optional domain field
+                OutlinedTextField(
+                    value = domainText,
+                    onValueChange = { domainText = it },
+                    label = { Text("Domain (optional)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color(c.foreground),
+                        unfocusedTextColor = Color(c.foreground),
+                        focusedBorderColor = Color(c.primary),
+                        unfocusedBorderColor = Color(c.border),
+                        focusedLabelColor = Color(c.primary),
+                        unfocusedLabelColor = Color(c.mutedForeground),
+                        cursorColor = Color(c.primary),
+                    ),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val port = portText.toIntOrNull() ?: return@TextButton
+                    val domain = domainText.trim().ifBlank { null }
+                    onCreate(selectedSession, port, domain)
+                },
+                enabled = canCreate,
+            ) {
+                Text("Create", color = if (canCreate) Color(c.primary) else Color(c.mutedForeground))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}

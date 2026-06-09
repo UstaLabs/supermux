@@ -1,0 +1,21 @@
+[Unit]
+Description=supermux broker — drive Claude Code / Codex / Cursor sessions over Telegram and a web PWA
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Replace __MUX_REPO__ with the absolute path to your supermux clone
+# (for example %h/projects/supermux). SETUP.md can template this for you, or
+# edit it by hand before `systemctl --user enable --now supermux`.
+WorkingDirectory=__MUX_REPO__
+ExecStart=/usr/bin/env bun src/main.ts
+Restart=on-failure
+RestartSec=5
+Environment=NODE_ENV=production
+# Broker state + the .env file live in ~/.mux/state/ (override with
+# MUX_STATE_DIR). Put MUX_WEB_PORT/MUX_WEB_PUBLIC_URL and/or MUX_TELEGRAM_BOT_TOKEN
+# in ~/.mux/state/.env.
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,6 @@
+{
+  "type": "agent_error",
+  "session": "editor",
+  "errorType": "StopFailure",
+  "errorMessage": "boom"
+}

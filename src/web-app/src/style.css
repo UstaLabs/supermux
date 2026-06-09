@@ -1,0 +1,190 @@
+
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap');
+
+@import "tailwindcss";
+
+@import "tw-animate-css";
+
+@import "shadcn-vue/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+html, body, #app { height: 100%; }
+
+/* CodeMirror LSP completion menu (rendered on document.body) */
+.cm-tooltip.cm-tooltip-autocomplete {
+  z-index: 200;
+}
+
+@theme inline {
+  --font-sans: 'Geist Variable', sans-serif;
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --background: oklch(0.955 0.006 115);
+  --foreground: oklch(0.19 0.008 130);
+  --card: oklch(0.995 0.004 105);
+  --card-foreground: oklch(0.19 0.008 130);
+  --popover: oklch(0.995 0.004 105);
+  --popover-foreground: oklch(0.19 0.008 130);
+  --primary: oklch(0.49 0.105 185);
+  --primary-foreground: oklch(0.985 0.01 180);
+  --secondary: oklch(0.91 0.008 115);
+  --secondary-foreground: oklch(0.22 0.008 130);
+  --muted: oklch(0.91 0.008 115);
+  --muted-foreground: oklch(0.51 0.014 130);
+  --accent: oklch(0.91 0.008 115);
+  --accent-foreground: oklch(0.22 0.008 130);
+  --destructive: oklch(0.54 0.19 27);
+  --border: oklch(0.86 0.01 110);
+  --input: oklch(0.86 0.01 110);
+  --ring: oklch(0.49 0.105 185);
+  --chart-1: oklch(0.49 0.105 185);
+  --chart-2: oklch(0.51 0.014 130);
+  --chart-3: oklch(0.36 0.01 130);
+  --chart-4: oklch(0.72 0.05 90);
+  --chart-5: oklch(0.62 0.12 35);
+  --radius: 0.5rem;
+  --sidebar: oklch(0.925 0.007 115);
+  --sidebar-foreground: oklch(0.19 0.008 130);
+  --sidebar-primary: oklch(0.49 0.105 185);
+  --sidebar-primary-foreground: oklch(0.985 0.01 180);
+  --sidebar-accent: oklch(0.9 0.008 115);
+  --sidebar-accent-foreground: oklch(0.22 0.008 130);
+  --sidebar-border: oklch(0.86 0.01 110);
+  --sidebar-ring: oklch(0.49 0.105 185);
+  --cmux-rail: oklch(0.925 0.007 115);
+  --cmux-session-list: oklch(0.94 0.007 115);
+  --cmux-header: oklch(0.995 0.004 105);
+  --cmux-chat: oklch(0.965 0.006 115);
+  --cmux-workspace: oklch(0.95 0.006 115);
+  --cmux-code: oklch(0.995 0.004 105);
+  --cmux-terminal: #141511;
+  --cmux-terminal-foreground: #d8ded3;
+  --cmux-user-message: oklch(0.93 0.035 175);
+  --cmux-warning: oklch(0.66 0.13 75);
+}
+
+.dark {
+  --background: oklch(0.14 0.006 130);
+  --foreground: oklch(0.94 0.008 120);
+  --card: oklch(0.18 0.008 130);
+  --card-foreground: oklch(0.94 0.008 120);
+  --popover: oklch(0.18 0.008 130);
+  --popover-foreground: oklch(0.94 0.008 120);
+  --primary: oklch(0.72 0.105 180);
+  --primary-foreground: oklch(0.13 0.018 170);
+  --secondary: oklch(0.24 0.008 130);
+  --secondary-foreground: oklch(0.94 0.008 120);
+  --muted: oklch(0.24 0.008 130);
+  --muted-foreground: oklch(0.68 0.018 125);
+  --accent: oklch(0.24 0.008 130);
+  --accent-foreground: oklch(0.94 0.008 120);
+  --destructive: oklch(0.72 0.18 24);
+  --border: oklch(0.28 0.01 130);
+  --input: oklch(0.28 0.01 130);
+  --ring: oklch(0.72 0.105 180);
+  --chart-1: oklch(0.72 0.105 180);
+  --chart-2: oklch(0.68 0.018 125);
+  --chart-3: oklch(0.52 0.014 125);
+  --chart-4: oklch(0.76 0.06 90);
+  --chart-5: oklch(0.72 0.14 35);
+  --sidebar: oklch(0.18 0.008 130);
+  --sidebar-foreground: oklch(0.94 0.008 120);
+  --sidebar-primary: oklch(0.72 0.105 180);
+  --sidebar-primary-foreground: oklch(0.13 0.018 170);
+  --sidebar-accent: oklch(0.24 0.008 130);
+  --sidebar-accent-foreground: oklch(0.94 0.008 120);
+  --sidebar-border: oklch(0.28 0.01 130);
+  --sidebar-ring: oklch(0.72 0.105 180);
+  --cmux-rail: oklch(0.18 0.008 130);
+  --cmux-session-list: oklch(0.205 0.008 130);
+  --cmux-header: oklch(0.16 0.008 130);
+  --cmux-chat: oklch(0.155 0.008 130);
+  --cmux-workspace: oklch(0.135 0.008 130);
+  --cmux-code: oklch(0.115 0.008 130);
+  --cmux-terminal: #050605;
+  --cmux-terminal-foreground: #d8ded3;
+  --cmux-user-message: oklch(0.25 0.045 175);
+  --cmux-warning: oklch(0.78 0.12 75);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    @apply font-sans;
+  }
+}
+
+@layer components {
+  .cmux-pane {
+    @apply border-border;
+    background: var(--cmux-workspace);
+  }
+
+  .cmux-header {
+    @apply border-border;
+    background: var(--cmux-header);
+  }
+
+  .cmux-icon-button {
+    @apply inline-flex items-center justify-center size-8 rounded-md border border-transparent text-muted-foreground transition-colors;
+    background: color-mix(in oklab, var(--muted) 55%, transparent);
+  }
+
+  .cmux-icon-button:hover {
+    @apply text-foreground border-border;
+    background: var(--accent);
+  }
+
+  .cmux-icon-button-active {
+    color: var(--primary);
+    border-color: color-mix(in oklab, var(--primary) 32%, var(--border));
+    background: color-mix(in oklab, var(--primary) 14%, var(--accent));
+  }
+
+  .cmux-soft-card {
+    @apply border border-border rounded-md;
+    background: var(--card);
+    box-shadow: 0 1px 2px color-mix(in oklab, var(--foreground) 8%, transparent);
+  }
+}

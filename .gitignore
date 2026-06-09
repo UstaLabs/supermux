@@ -1,0 +1,14 @@
+node_modules/
+bun.lock
+*.log
+dist/
+.env
+.DS_Store
+*.pid
+.worktrees/
+
+# Web PWA build output (cd src/web-app && bun run build)
+src/channels/web/static/
+
+# Internal planning/spec docs (kept local, never published)
+docs/superpowers/

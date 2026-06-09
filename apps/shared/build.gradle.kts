@@ -1,0 +1,43 @@
+plugins {
+    alias(libs.plugins.multiplatform)
+    alias(libs.plugins.serialization)
+    alias(libs.plugins.android.library)
+}
+
+kotlin {
+    // expect/actual classes are stable-in-practice but flagged Beta; acknowledge it.
+    compilerOptions { freeCompilerArgs.add("-Xexpect-actual-classes") }
+
+    jvm()
+    androidTarget()
+    // iOS targets are declared so the iosMain source set + Apple actuals exist;
+    // their compile/link tasks run on a Mac (Spec 2). On this Linux host they
+    // are disabled (see kotlin.native.ignoreDisabledTargets in gradle.properties).
+    iosArm64()
+    iosSimulatorArm64()
+
+    sourceSets {
+        commonMain.dependencies {
+            implementation(libs.coroutines.core)
+            implementation(libs.serialization.json)
+            implementation(libs.ktor.client.core)
+            implementation(libs.ktor.client.websockets)
+            implementation(libs.ktor.client.content.negotiation)
+            implementation(libs.ktor.serialization.kotlinx.json)
+        }
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+            implementation(libs.coroutines.test)
+        }
+        jvmMain.dependencies { implementation(libs.ktor.client.cio) }
+        iosMain.dependencies { implementation(libs.ktor.client.darwin) }
+        androidMain.dependencies { implementation(libs.androidx.security.crypto) }
+    }
+}
+
+android {
+    namespace = "dev.supermux.shared"
+    compileSdk = libs.versions.androidCompileSdk.get().toInt()
+    defaultConfig { minSdk = libs.versions.androidMinSdk.get().toInt() }
+    compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+}

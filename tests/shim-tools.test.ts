@@ -1,0 +1,90 @@
+import { test, expect } from "bun:test"
+import { listTools, callTool } from "../src/shim/tools"
+
+function fakeShim() {
+  const outbound: any[] = []
+  const orchestration: any[] = []
+  return {
+    outbound, orchestration,
+    callOutbound: async (op: any) => { outbound.push(op); return { ok: true, value: { message_id: 999 } } },
+    callOrchestration: async (op: any) => { orchestration.push(op); return { ok: true, value: { ok: 1 } } },
+  } as any
+}
+
+test("listTools advertises reply / react / edit_message / download_attachment", () => {
+  const names = listTools().map(t => t.name)
+  for (const n of ["reply", "react", "edit_message", "download_attachment"]) expect(names).toContain(n)
+})
+
+test("listTools advertises orchestration tools too", () => {
+  const names = listTools().map(t => t.name)
+  for (const n of ["spawn_session", "kill_session", "rename_session", "mute_session", "list_sessions", "set_active", "get_active"]) {
+    expect(names).toContain(n)
+  }
+})
+
+test("outbound tool descriptions are channel-neutral", () => {
+  const desc = (name: string) => {
+    const t = listTools("claude").find(t => t.name === name)
+    if (!t) throw new Error(`tool ${name} not found`)
+    return t.description
+  }
+  expect(desc("reply")).not.toContain("Telegram reply")
+  expect(desc("reply").toLowerCase()).toContain("active channel")
+  expect(desc("download_attachment")).not.toContain("Telegram")
+  expect(desc("react")).toContain("Telegram only")
+  expect(desc("edit_message")).toContain("Telegram only")
+})
+
+test("reply forwards to broker outbound", async () => {
+  const shim = fakeShim()
+  const r = await callTool({ name: "reply", arguments: { chat_id: "c1", text: "hi" } }, shim)
+  expect(shim.outbound).toEqual([{ name: "reply", args: { chat_id: "c1", text: "hi" } }])
+  expect(r.content[0]).toEqual({ type: "text", text: "sent (id: 999)" })
+})
+
+test("spawn_session forwards to broker orchestration", async () => {
+  const shim = fakeShim()
+  await callTool({ name: "spawn_session", arguments: { workdir: "/tmp/foo" } }, shim)
+  expect(shim.orchestration).toEqual([{ name: "spawn_session", args: { workdir: "/tmp/foo" } }])
+})
+
+test("broker error becomes MCP error response", async () => {
+  const shim = {
+    callOutbound: async () => ({ ok: false, error: "broker said no" }),
+    callOrchestration: async () => ({ ok: false, error: "denied" }),
+  } as any
+  const r = await callTool({ name: "reply", arguments: { chat_id: "c1", text: "x" } }, shim)
+  expect(r.isError).toBe(true)
+  expect(r.content[0]).toEqual({ type: "text", text: "broker said no" })
+})
+
+import { describe } from "bun:test"
+
+describe("shim tool surface gating", () => {
+  test("listTools('claude') includes reply", () => {
+    const names = listTools("claude").map((t: any) => t.name)
+    expect(names).toContain("reply")
+  })
+
+  test("listTools('codex') includes reply with file-only description", () => {
+    const tools = listTools("codex")
+    const names = tools.map((t: any) => t.name)
+    expect(names).toContain("reply")
+    expect(names).toContain("react")
+    const reply = tools.find((t: any) => t.name === "reply")
+    expect(reply?.description).toContain("files[]")
+    expect(reply?.description.toLowerCase()).toContain("only")
+  })
+
+  test("listTools('cursor') includes reply with file-only description", () => {
+    const tools = listTools("cursor")
+    expect(tools.map((t: any) => t.name)).toContain("reply")
+    expect(tools.find((t: any) => t.name === "reply")?.description).toContain("files[]")
+  })
+
+  test("listTools() with no arg defaults to claude (back-compat)", () => {
+    const names = listTools().map((t: any) => t.name)
+    expect(names).toContain("reply")
+  })
+})

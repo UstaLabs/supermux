@@ -1,0 +1,59 @@
+import { spawn } from "child_process"
+import type { CursorRunner } from "./adapter"
+import { makeLogger } from "../../../shared/log"
+
+const log = makeLogger("agents/cursor/runner")
+
+export function makeRealCursorRunner(opts: { home: string; authEnv: Record<string, string> }): CursorRunner {
+  return async (args, onLine, onExit, signal) => {
+    return new Promise((resolve) => {
+      const env: Record<string, string> = {
+        ...(process.env as Record<string, string>),
+        ...opts.authEnv,
+        HOME: opts.home,
+      }
+      const child = spawn("cursor-agent", args, { env, stdio: ["ignore", "pipe", "pipe"] })
+      // User-initiated stop: SIGTERM the child. Its `exit` event then runs the
+      // normal settle path (onExit + resolve) — a clean turn-end, not an error.
+      const onAbort = () => { try { child.kill("SIGTERM") } catch { /* already gone */ } }
+      let settled = false
+      const settle = (code: number | null) => {
+        if (settled) return
+        settled = true
+        signal?.removeEventListener("abort", onAbort)
+        onExit(code)
+        resolve()
+      }
+      if (signal) {
+        if (signal.aborted) onAbort()
+        else signal.addEventListener("abort", onAbort, { once: true })
+      }
+
+      let buf = ""
+      child.stdout!.on("data", (chunk: Buffer) => {
+        buf += chunk.toString("utf8")
+        const lines = buf.split("\n")
+        buf = lines.pop() ?? ""
+        for (const l of lines) if (l.trim()) onLine(l)
+      })
+
+      // Consume stderr so the child doesn't deadlock when the pipe buffer
+      // fills. Log at debug since cursor-agent uses stderr for routine output.
+      child.stderr!.on("data", (chunk: Buffer) => {
+        log.debug("stderr", { text: chunk.toString("utf8").slice(0, 200) })
+      })
+
+      child.on("exit", (code) => {
+        if (buf.trim()) onLine(buf)
+        settle(code ?? null)
+      })
+      // ENOENT / EACCES — child failed to spawn. Without this, onExit never
+      // fires and the adapter's `active` promise hangs forever, locking the
+      // session.
+      child.on("error", (err) => {
+        log.warn("spawn_error", { err: String(err) })
+        settle(null)
+      })
+    })
+  }
+}

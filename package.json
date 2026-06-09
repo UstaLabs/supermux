@@ -1,0 +1,37 @@
+{
+  "name": "supermux",
+  "version": "0.0.1",
+  "description": "Multi-agent broker: drive Claude Code, Codex, and Cursor sessions over Telegram and a web PWA",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "broker": "bun src/main.ts",
+    "shim": "bun src/shim/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "pair": "bun scripts/pair.ts",
+    "revoke": "bun scripts/revoke.ts",
+    "plugin": "bun scripts/plugin.ts",
+    "migrate:mux": "bun scripts/migrate-to-mux.ts",
+    "generate:logo": "bun scripts/generate-logo-assets.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@opencode-ai/sdk": "^1.16.2",
+    "croner": "^10.0.1",
+    "grammy": "^1.36.0",
+    "qrcode-terminal": "^0.12.0",
+    "web-push": "^3.6.7",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/bun": "latest",
+    "@types/qrcode-terminal": "^0.12.2",
+    "@types/web-push": "^3.6.4",
+    "playwright": "^1.60.0",
+    "png-to-ico": "^3.0.1",
+    "typescript": "^5.6.0"
+  }
+}

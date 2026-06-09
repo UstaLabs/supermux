@@ -1,0 +1,13 @@
+{
+  "type": "activity_append",
+  "session": "550e8400-e29b-41d4-a716-446655440000",
+  "event": {
+    "ts": "2026-06-01T00:00:00Z",
+    "kind": "tool",
+    "tool": "Bash",
+    "title": "Bash: ls",
+    "phase": "started",
+    "seq": 1,
+    "callId": "c1"
+  }
+}
