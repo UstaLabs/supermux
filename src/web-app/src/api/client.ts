@@ -5,6 +5,22 @@ export interface ReviewComment {
   id: string; repo: string; path: string; side: "RIGHT" | "LEFT"; anchorLine: number; anchorContext: string
   body: string; author: string; status: "open" | "submitted" | "resolved"; currentLine: number | null; outdated: boolean
 }
+export type GitRemoteStatus = {
+  hasRemote: boolean; branch: string | null; upstream: string | null; ahead: number; behind: number
+}
+export type GitPushResult =
+  | { status: "pushed" }
+  | { status: "up_to_date" }
+  | { status: "rejected_non_ff" }
+  | { status: "auth_failed"; message: string }
+  | { status: "error"; message: string }
+export type GitPullResult =
+  | { status: "clean" }
+  | { status: "up_to_date" }
+  | { status: "conflict"; files: string[] }
+  | { status: "dirty"; files: string[] }
+  | { status: "auth_failed"; message: string }
+  | { status: "error"; message: string }
 async function request(method: string, path: string, body?: unknown): Promise<any> {
   const res = await fetch(path, {
     method,
@@ -84,6 +100,16 @@ export const api = {
       | { status: "uncommitted"; files: string[] }
       | { status: "error"; message: string }
     >,
+  gitStatus: (id: string) =>
+    request("GET", `/sessions/${encodeURIComponent(id)}/git/status`) as Promise<GitRemoteStatus>,
+  gitFetch: (id: string) =>
+    request("POST", `/sessions/${encodeURIComponent(id)}/git/fetch`, {}) as Promise<{ ok: boolean; error?: string }>,
+  gitPublish: (id: string) =>
+    request("POST", `/sessions/${encodeURIComponent(id)}/git/publish`, {}) as Promise<GitPushResult>,
+  gitPush: (id: string) =>
+    request("POST", `/sessions/${encodeURIComponent(id)}/git/push`, {}) as Promise<GitPushResult>,
+  gitPull: (id: string) =>
+    request("POST", `/sessions/${encodeURIComponent(id)}/git/pull`, {}) as Promise<GitPullResult>,
   sendMessage: (id: string, text: string) =>
     request("POST", `/sessions/${encodeURIComponent(id)}/message`, { text }) as Promise<{ ok: boolean; reason?: string }>,
   verifySuggest: (id: string) =>

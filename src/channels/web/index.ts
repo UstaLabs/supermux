@@ -18,6 +18,7 @@ import { pairJsonResponse } from "./pair-json"
 import { normalizeExistingWorkdir, uniqueKnownWorkdirs } from "../../core/session-manager/workdir-paths"
 import { hooksFileUsesHookSecret } from "../../core/agents/claude/hooks-settings"
 import { getRepoInfo } from "../../core/git/repo-info"
+import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from "../../core/git/remote"
 import type { AgentKind } from "../../core/agents/types"
 import { AGENT_KINDS, isAgentKind } from "../../shared/agents"
 import type { SlashCommand } from "../../core/slash-commands/types"
@@ -1329,6 +1330,36 @@ export class WebChannel implements Channel {
         commitMessage: typeof body.commitMessage === "string" ? body.commitMessage : undefined,
       })
       return this.json(result)
+    }
+    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/git\/status$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getSessionWorkdir?.(id)
+      if (!workdir) return this.json({ error: "session not found" }, 404)
+      return this.json(remoteStatus(workdir))
+    }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/fetch$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getSessionWorkdir?.(id)
+      if (!workdir) return this.json({ error: "session not found" }, 404)
+      return this.json(fetchRemote(workdir))
+    }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/publish$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getSessionWorkdir?.(id)
+      if (!workdir) return this.json({ error: "session not found" }, 404)
+      return this.json(publishBranch(workdir))
+    }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/push$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getSessionWorkdir?.(id)
+      if (!workdir) return this.json({ error: "session not found" }, 404)
+      return this.json(pushBranch(workdir))
+    }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/pull$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getSessionWorkdir?.(id)
+      if (!workdir) return this.json({ error: "session not found" }, 404)
+      return this.json(pullBranch(workdir))
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/message$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
