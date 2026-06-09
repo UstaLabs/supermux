@@ -128,5 +128,3 @@ For a persistent native deployment there's a `systemd/mux.service` template; [`S
 ## License
 
 [MIT](./LICENSE) — free and open source.
-
-<sub>supermux is unrelated to coder/mux and to Mux, the video company.</sub>
