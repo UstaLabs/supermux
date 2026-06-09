@@ -15,22 +15,23 @@ export function extractCiCommands(yaml: string): string[] {
   const out: string[] = []
   const lines = yaml.split("\n")
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
+    const line = lines[i]!
     const run = line.match(/^\s*-?\s*run:\s*(.*)$/) // GitHub Actions
     if (run) {
-      const val = run[1].trim()
+      const val = (run[1] ?? "").trim()
       if (val === "|" || val === ">" || val === "|-" || val === ">-") {
-        const indent = line.match(/^\s*/)![0].length
+        const indent = (line.match(/^\s*/)![0] ?? "").length
         for (let j = i + 1; j < lines.length; j++) {
-          if (lines[j].trim() === "") continue
-          if (lines[j].match(/^\s*/)![0].length <= indent) break
-          if (CHECK_RE.test(lines[j])) out.push(lines[j].trim())
+          const next = lines[j]!
+          if (next.trim() === "") continue
+          if ((next.match(/^\s*/)![0] ?? "").length <= indent) break
+          if (CHECK_RE.test(next)) out.push(next.trim())
         }
       } else if (val && CHECK_RE.test(val)) out.push(val)
       continue
     }
     const dash = line.match(/^\s*-\s+(.*)$/) // GitLab `script:` entries / generic list items
-    if (dash && !/^(uses|name|with|env):/.test(dash[1]) && CHECK_RE.test(dash[1])) out.push(dash[1].trim())
+    if (dash && !/^(uses|name|with|env):/.test(dash[1]!) && CHECK_RE.test(dash[1]!)) out.push(dash[1]!.trim())
   }
   return [...new Set(out)].filter((c) => c.length > 1 && c.length < 200).slice(0, 10)
 }
