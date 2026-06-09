@@ -138,7 +138,10 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     const res = await this.client.session.create({
       body: {
         title: this.sessionName,
-        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        permission: [
+          { permission: "*", pattern: "*", action: "allow" },
+          { permission: "question", pattern: "*", action: "deny" },
+        ],
       },
       query: { directory: this.workdir },
     })
@@ -157,7 +160,10 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     try {
       await this.client.session.update({
         sessionID: this.sessionId,
-        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        permission: [
+          { permission: "*", pattern: "*", action: "allow" },
+          { permission: "question", pattern: "*", action: "deny" },
+        ],
       })
     } catch (err) {
       log.warn("opencode_resume_permission_update_failed", { session: this.sessionName, err: asError(err).message })

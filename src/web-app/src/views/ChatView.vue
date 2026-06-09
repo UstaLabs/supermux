@@ -21,6 +21,7 @@ import { formatWorkdir } from "@/lib/format-workdir"
 import { toWorkdirRelativePath } from "@/lib/workdir-display"
 import { toast } from "vue-sonner"
 import AgentLogo from "@/components/AgentLogo.vue"
+import BranchSyncStatus from "@/components/BranchSyncStatus.vue"
 import ModelSwitcher from "@/components/ModelSwitcher.vue"
 import EffortSwitcher from "@/components/EffortSwitcher.vue"
 import ModelPill from "@/components/ModelPill.vue"
@@ -488,7 +489,13 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
           />
           <span class="font-semibold truncate leading-tight">{{ displayName }}</span>
         </div>
-        <div v-if="workdirLabel" class="text-[11px] text-muted-foreground truncate font-mono">
+        <BranchSyncStatus
+          v-if="!isArchived"
+          :session-id="props.id"
+          :workdir="session?.workdir"
+          :workdir-label="workdirLabel"
+        />
+        <div v-else-if="workdirLabel" class="text-[11px] text-muted-foreground truncate font-mono">
           {{ workdirLabel }}
         </div>
       </div>

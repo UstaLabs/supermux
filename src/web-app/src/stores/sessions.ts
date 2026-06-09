@@ -38,7 +38,19 @@ export const useSessions = defineStore("sessions", () => {
   }
 
   function replace(next: Session[]) { list.value = next }
-  function add(s: Session) { if (!list.value.find((x) => x.id === s.id)) list.value.push(s) }
+  function add(s: Session) {
+    const existing = list.value.find((x) => x.id === s.id)
+    if (!existing) { list.value.push(s); return }
+    // A worktree session is added first without repo_root (optimistic add /
+    // early onRegister broadcast); the authoritative post-spawn broadcast
+    // re-adds it with repo_root. Backfill any newly-defined fields instead of
+    // dropping the duplicate — but never clobber an existing value with
+    // undefined (the optimistic add omits repo_root).
+    for (const key of Object.keys(s) as (keyof Session)[]) {
+      const v = s[key]
+      if (v !== undefined) (existing as Record<string, unknown>)[key] = v
+    }
+  }
   function remove(id: string) { list.value = list.value.filter((x) => x.id !== id) }
   function rename(id: string, newName: string) {
     const s = list.value.find((x) => x.id === id)

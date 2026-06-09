@@ -134,6 +134,10 @@ export class Registry {
     this.reservations.add(name)
   }
 
+  releaseName(name: string): void {
+    this.reservations.delete(name)
+  }
+
   unregister(id: string): void {
     const s = this.sessions.getById(id)
     if (!s) return

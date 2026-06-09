@@ -388,6 +388,8 @@ async function spawnClaudeSession(deps: SpawnDeps, args: SpawnArgs): Promise<Spa
     if (tmuxWindow?.windowId) deps.onTmuxWindowId?.(id, tmuxWindow.windowId)
     await (deps.postSpawnReady ?? sendChannelConsentEnter)(`${deps.tmuxSession}:${name}`)
   } catch (err) {
+    // Free the reserved name so a retry can reclaim it (see the function doc).
+    deps.registry.releaseName(name)
     throw err
   }
   deps.onClaudeSessionId?.(name, claudeSessionId)

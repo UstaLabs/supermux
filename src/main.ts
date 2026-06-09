@@ -914,6 +914,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             agent: entry.agent,
             model: entry.model,
             reasoningLevel: sessionEffort(entry),
+            repo_root: entry.repo_root || undefined,
+            session_branch: entry.session_branch || undefined,
           },
         })
       }
@@ -988,6 +990,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             agent: entry.agent,
             model: entry.model,
             reasoningLevel: sessionEffort(entry),
+            repo_root: entry.repo_root || undefined,
+            session_branch: entry.session_branch || undefined,
           },
         })
       }
@@ -1446,7 +1450,7 @@ async function resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name
 
     webChannel?.broadcastToAll({
       type: "session_added",
-      session: { id: sessionId, name, workdir: session.workdir, agent: session.agent, status: "active" },
+      session: { id: sessionId, name, workdir: session.workdir, agent: session.agent, status: "active", repo_root: session.repo_root || undefined, session_branch: session.session_branch || undefined },
     })
 
     await refreshTelegramMenu()
@@ -1751,7 +1755,7 @@ const server = await startSocketServer({
             if (entry) {
               webChannel?.broadcastToAll({
                 type: "session_added",
-                session: { id: entry.id, name: entry.name, workdir: entry.workdir, mute: !!entry.mute, connected: true, agent: entry.agent, model: entry.model },
+                session: { id: entry.id, name: entry.name, workdir: entry.workdir, mute: !!entry.mute, connected: true, agent: entry.agent, model: entry.model, repo_root: entry.repo_root || undefined, session_branch: entry.session_branch || undefined },
               })
             }
             // Auto-bind the requesting chat to the new session if the
@@ -2360,6 +2364,8 @@ _tg.on("inbound", async (msg: InboundMessage) => {
               agent: entry.agent,
               model: entry.model,
               reasoningLevel: sessionEffort(entry),
+              repo_root: entry.repo_root || undefined,
+              session_branch: entry.session_branch || undefined,
             },
           })
         }

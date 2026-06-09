@@ -117,13 +117,33 @@ export async function spawnOpenCodeServer(opts: {
   }
   // Pre-seed session-private opencode config with permission auto-allow so
   // subagents spawned via `task` don't hang on unanswerable permission asks.
+  // `question` is denied: its structured multiple-choice prompts render as
+  // UI the user can't see through the broker's chat channel; the model
+  // should ask via plain text instead (same reason we deny AskUserQuestion
+  // in Claude Code's PreToolUse hooks).
   const configDir = resolve(opts.configHome, "opencode")
   mkdirSync(configDir, { recursive: true })
   writeFileSync(
     resolve(configDir, "opencode.jsonc"),
     JSON.stringify({
       $schema: "https://opencode.ai/config.json",
-      permission: "allow",
+      permission: {
+        bash: "allow",
+        doom_loop: "allow",
+        edit: "allow",
+        external_directory: "allow",
+        glob: "allow",
+        grep: "allow",
+        list: "allow",
+        lsp: "allow",
+        read: "allow",
+        skill: "allow",
+        task: "allow",
+        todowrite: "allow",
+        webfetch: "allow",
+        websearch: "allow",
+        question: "deny",
+      },
     }, null, 2),
     "utf8",
   )
