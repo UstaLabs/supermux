@@ -1,7 +1,7 @@
 {
   "name": "supermux",
   "version": "0.0.1",
-  "description": "Multi-agent broker: drive Claude Code, Codex, and Cursor sessions over Telegram and a web PWA",
+  "description": "Run Claude Code, Codex, Cursor & OpenCode around the clock on a box you own — steered from any screen. Self-hosted, no vendor cloud.",
   "license": "MIT",
   "private": true,
   "type": "module",
