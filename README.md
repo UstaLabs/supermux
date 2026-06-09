@@ -11,7 +11,9 @@
 > supermux runs **Claude Code, Codex, Cursor & OpenCode** around the clock on a box you own — and puts every session on every screen you carry.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-&nbsp;Free · open source · self-hosted · no vendor cloud · built with supermux
+![Self-hosted](https://img.shields.io/badge/self--hosted-2ea44f)
+![No vendor cloud](https://img.shields.io/badge/no%20vendor%20cloud-1f6feb)
+![Built with supermux](https://img.shields.io/badge/built%20with%20supermux-blueviolet)
 
 <!-- hero demo GIF (planned): push lands on phone → open web app → review diff → inline comment → agent fixes → merge -->
 
