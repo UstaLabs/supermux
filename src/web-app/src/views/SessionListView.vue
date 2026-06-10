@@ -154,7 +154,7 @@ function navigateToPA() {
           <template v-if="group.workdir === PA_GROUP_KEY" #actions>
             <button
               type="button"
-              class="shrink-0 p-1.5 mr-1.5 rounded text-muted-foreground hover:text-foreground transition-colors"
+              class="shrink-0 p-2 -my-1 mr-1 rounded text-muted-foreground hover:text-foreground transition-colors"
               aria-label="New personal assistant"
               @click="navigateToPA"
             >
@@ -254,7 +254,7 @@ function navigateToPA() {
         <template v-if="group.workdir === PA_GROUP_KEY" #actions>
           <button
             type="button"
-            class="shrink-0 p-1.5 mr-1.5 rounded text-muted-foreground hover:text-foreground transition-colors"
+            class="shrink-0 p-2 -my-1 mr-1 rounded text-muted-foreground hover:text-foreground transition-colors"
             aria-label="New personal assistant"
             @click="navigateToPA"
           >
