@@ -60,7 +60,7 @@ import { checkPreflight, hasBinary } from "./shared/preflight"
 import { detectAllAgents } from "./core/agents/detect"
 import { homedir } from "os"
 import { home } from "./shared/home"
-import { join, dirname } from "path"
+import { join, dirname, resolve } from "path"
 import { fileURLToPath } from "url"
 import { ClaudeCodeAdapter } from "./core/agents/claude/index"
 import { writeClaudeHooksSettings, writePersistedHookSecret, CLAUDE_HOOKS_SETTINGS_PATH } from "./core/agents/claude/hooks-settings"
@@ -494,6 +494,12 @@ async function onAssistantMessage(
   const sessionEntry = registry.get(sessionId)
   const sessionName = sessionEntry?.name ?? sessionId
 
+  // Resolve file paths relative to the session's working directory.
+  // Agents pass relative paths (e.g. "./output.png") from their cwd, but
+  // transformOutbound reads from the broker's cwd which is different.
+  const workdir = sessionEntry?.workdir ?? process.cwd()
+  const resolvedFiles = ev.files?.map((fp) => resolve(workdir, fp))
+
   // If chat_id is explicit (shim reply path), dispatch to that single chat.
   // Otherwise (stream-derived), fan out to all chats where this session is active.
   const targets: { channelName: string; chat_id: string }[] = []
@@ -517,7 +523,7 @@ async function onAssistantMessage(
     const ch = channels[channelName]!
     const initial: OutboundAction = {
       op: "reply", chat_id, text: ev.text,
-      reply_to: ev.reply_to, files: ev.files, format: ev.format, keyboard: ev.keyboard,
+      reply_to: ev.reply_to, files: resolvedFiles, format: ev.format, keyboard: ev.keyboard,
     }
     try {
       const action = await transformOutbound(initial, sessionId, ch.capabilities, fileStore, registry)
