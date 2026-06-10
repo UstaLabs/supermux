@@ -11,26 +11,36 @@ function git(cwd: string, args: string[], timeout = 120_000): { ok: boolean; out
 }
 
 export interface RemoteStatus {
-  hasRemote: boolean       // an "origin" remote exists
-  branch: string | null    // current branch, or null when detached
-  upstream: string | null  // e.g. "origin/mux/s", or null when unpublished
-  ahead: number            // commits HEAD has that upstream lacks
-  behind: number           // commits upstream has that HEAD lacks
+  isRepo: boolean            // workdir is inside a git work tree
+  hasRemote: boolean         // an "origin" remote exists
+  branch: string | null      // current branch, or null when detached
+  detachedSha: string | null // short HEAD sha when detached (and isRepo)
+  upstream: string | null    // e.g. "origin/mux/s", or null when unpublished
+  ahead: number              // commits HEAD has that upstream lacks
+  behind: number             // commits upstream has that HEAD lacks
 }
 
 /** Read the branch's remote-sync state. Local refs only — no network. */
 export function remoteStatus(workdir: string): RemoteStatus {
+  const inside = git(workdir, ["rev-parse", "--is-inside-work-tree"])
+  const isRepo = inside.ok && inside.out === "true"
+
   const remotes = git(workdir, ["remote"])
   const hasRemote = remotes.ok && remotes.out.split("\n").map((s) => s.trim()).includes("origin")
 
   const br = git(workdir, ["symbolic-ref", "--quiet", "--short", "HEAD"])
   const branch = br.ok && br.out ? br.out : null
+  let detachedSha: string | null = null
+  if (isRepo && !branch) {
+    const sha = git(workdir, ["rev-parse", "--short", "HEAD"])
+    detachedSha = sha.ok && sha.out ? sha.out : null
+  }
 
-  if (!hasRemote || !branch) return { hasRemote, branch, upstream: null, ahead: 0, behind: 0 }
+  if (!hasRemote || !branch) return { isRepo, hasRemote, branch, detachedSha, upstream: null, ahead: 0, behind: 0 }
 
   const up = git(workdir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
   const upstream = up.ok && up.out ? up.out : null
-  if (!upstream) return { hasRemote, branch, upstream: null, ahead: 0, behind: 0 }
+  if (!upstream) return { isRepo, hasRemote, branch, detachedSha, upstream: null, ahead: 0, behind: 0 }
 
   const counts = git(workdir, ["rev-list", "--count", "--left-right", "@{upstream}...HEAD"])
   let ahead = 0, behind = 0
@@ -39,7 +49,7 @@ export function remoteStatus(workdir: string): RemoteStatus {
     behind = Number(b) || 0
     ahead = Number(a) || 0
   }
-  return { hasRemote, branch, upstream, ahead, behind }
+  return { isRepo, hasRemote, branch, detachedSha, upstream, ahead, behind }
 }
 
 /** Refresh remote-tracking refs from origin (best-effort, timeboxed). */

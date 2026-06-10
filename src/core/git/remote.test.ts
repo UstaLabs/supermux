@@ -156,3 +156,18 @@ test("pull: second call after resolving conflict completes merge → clean", () 
   const second = pullBranch(work)
   expect(second.status).toBe("clean")
 })
+
+test("isRepo true inside a repo, false outside", () => {
+  const { work } = repoWithRemote()
+  expect(remoteStatus(work).isRepo).toBe(true)
+  expect(remoteStatus(mkdtempSync(join(tmpdir(), "mux-norepo-"))).isRepo).toBe(false)
+})
+
+test("detached HEAD → detachedSha set; on a branch → null", () => {
+  const { work } = repoWithRemote()
+  expect(remoteStatus(work).detachedSha).toBeNull()
+  g(work, "checkout", "--detach")
+  const s = remoteStatus(work)
+  expect(s.branch).toBeNull()
+  expect(s.detachedSha).toBe(g(work, "rev-parse", "--short", "HEAD"))
+})
