@@ -975,6 +975,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         cursorResolveAuth: resolveCursorAuth,
         cursorRunnerFactory: makeRealCursorRunner,
         cursorAdapterFactory: (opts) => new CursorAdapter(opts),
+        resolveAttachment: resolveAttachmentPath,
       })
       const entry = registry.get(r.id)
       await refreshTelegramMenu()

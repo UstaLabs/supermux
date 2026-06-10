@@ -147,6 +147,7 @@ export async function spawnPA(opts: {
   cursorAdapterFactory?: (opts: ConstructorParameters<typeof CursorAdapter>[0]) => CursorAdapter
   opencodeSpawnServer?: typeof spawnOpenCodeServer
   opencodeAdapterFactory?: (opts: ConstructorParameters<typeof OpenCodeAdapter>[0]) => OpenCodeAdapter
+  resolveAttachment?: (file_id: string) => Promise<string>
   /** When provided, spawnPA skips registerPA (session already exists) and
    * updates the existing session's PID on completion. */
   id?: string
@@ -245,6 +246,7 @@ export async function spawnPA(opts: {
         opts.onCodexSessionId?.(id, threadId)
       },
       initialThreadId: undefined,
+      resolveAttachment: opts.resolveAttachment,
     })
 
     await adapter.start()
@@ -280,6 +282,7 @@ export async function spawnPA(opts: {
       initialSessionId: undefined,
       model,
       pluginArgs: cursorSpawnArgs({ sessionName: name }).args,
+      resolveAttachment: opts.resolveAttachment,
     })
 
     await adapter.start()
@@ -351,6 +354,7 @@ export async function spawnPA(opts: {
       persistSessionId: async (sid) => { opts.onOpenCodeSessionId?.(name, sid) },
       initialSessionId: undefined,
       model,
+      resolveAttachment: opts.resolveAttachment,
     })
 
     await adapter.start()
@@ -511,6 +515,7 @@ export async function spawnCursorSession(deps: SpawnDeps, args: SpawnArgs): Prom
       initialSessionId: undefined,
       model: args.model,
       pluginArgs: cursorSpawnArgs({ sessionName: name }).args,
+      resolveAttachment: deps.resolveAttachment,
     })
 
     deps.registry.register({
