@@ -1,6 +1,6 @@
 import { beforeEach, expect, test } from "bun:test"
 import { createPinia, setActivePinia } from "pinia"
-import { isActionableResult, useGitRemote } from "./gitRemote"
+import { isActionableResult, sessionsSharingCheckout, useGitRemote } from "./gitRemote"
 
 beforeEach(() => setActivePinia(createPinia()))
 
@@ -24,4 +24,25 @@ test("initial state is empty; dismiss clears a session's result", () => {
   g.resultBySession["s1"] = { status: "conflict", files: ["a"] }
   g.dismiss("s1")
   expect(g.resultBySession["s1"]).toBeNull()
+})
+
+test("switch results: switched and invalid_name are not card-actionable, refusals are", () => {
+  expect(isActionableResult({ status: "switched", branch: "dev" })).toBe(false)
+  expect(isActionableResult({ status: "invalid_name", message: "bad" })).toBe(false)
+  expect(isActionableResult({ status: "clobber", files: ["a"] })).toBe(true)
+  expect(isActionableResult({ status: "checked_out_elsewhere", path: "/x" })).toBe(true)
+  expect(isActionableResult({ status: "merge_in_progress" })).toBe(true)
+})
+
+test("sessionsSharingCheckout: same checkout and subdirs count, self and outsiders don't", () => {
+  const sessions = [
+    { id: "me", name: "me", workdir: "/repo" },
+    { id: "a", name: "alpha", workdir: "/repo" },
+    { id: "b", name: "beta", workdir: "/repo/packages/web" },
+    { id: "c", name: "gamma", workdir: "/repo-other" },          // sibling, not inside
+    { id: "d", name: "delta", workdir: "/home/u/.mux/worktrees/repo/x" }, // worktree session elsewhere
+  ]
+  const r = sessionsSharingCheckout(sessions, "me", "/repo")
+  expect(r.map((s) => s.name).sort()).toEqual(["alpha", "beta"])
+  expect(sessionsSharingCheckout(sessions, "me", null)).toEqual([])
 })
