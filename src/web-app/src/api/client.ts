@@ -6,7 +6,8 @@ export interface ReviewComment {
   body: string; author: string; status: "open" | "submitted" | "resolved"; currentLine: number | null; outdated: boolean
 }
 export type GitRemoteStatus = {
-  hasRemote: boolean; branch: string | null; upstream: string | null; ahead: number; behind: number
+  isRepo: boolean; hasRemote: boolean; branch: string | null; detachedSha: string | null
+  upstream: string | null; ahead: number; behind: number
 }
 export type GitPushResult =
   | { status: "pushed" }
@@ -20,6 +21,22 @@ export type GitPullResult =
   | { status: "conflict"; files: string[] }
   | { status: "dirty"; files: string[] }
   | { status: "auth_failed"; message: string }
+  | { status: "error"; message: string }
+export type GitLocalBranch = { name: string; checkedOutAt: string | null }
+export type GitBranchList = {
+  inPlace: boolean
+  repoRoot: string | null
+  current: string | null
+  detachedSha: string | null
+  local: GitLocalBranch[]
+  remote: string[]
+}
+export type GitSwitchResult =
+  | { status: "switched"; branch: string }
+  | { status: "clobber"; files: string[] }
+  | { status: "checked_out_elsewhere"; path: string }
+  | { status: "merge_in_progress" }
+  | { status: "invalid_name"; message: string }
   | { status: "error"; message: string }
 async function request(method: string, path: string, body?: unknown): Promise<any> {
   const res = await fetch(path, {
@@ -110,6 +127,10 @@ export const api = {
     request("POST", `/sessions/${encodeURIComponent(id)}/git/push`, {}) as Promise<GitPushResult>,
   gitPull: (id: string) =>
     request("POST", `/sessions/${encodeURIComponent(id)}/git/pull`, {}) as Promise<GitPullResult>,
+  gitBranches: (id: string) =>
+    request("GET", `/sessions/${encodeURIComponent(id)}/git/branches`) as Promise<GitBranchList>,
+  gitSwitch: (id: string, name: string, create?: boolean) =>
+    request("POST", `/sessions/${encodeURIComponent(id)}/git/switch`, { name, create: !!create }) as Promise<GitSwitchResult>,
   sendMessage: (id: string, text: string) =>
     request("POST", `/sessions/${encodeURIComponent(id)}/message`, { text }) as Promise<{ ok: boolean; reason?: string }>,
   verifySuggest: (id: string) =>
