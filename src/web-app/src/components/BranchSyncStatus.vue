@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue"
-import { GitBranch, Loader2Icon } from "lucide-vue-next"
-import BranchPickerSheet from "@/components/BranchPickerSheet.vue"
+import { ArrowUp, ArrowDown, RefreshCw, UploadCloud, GitBranch, Loader2Icon } from "lucide-vue-next"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import BranchPickerPopover from "@/components/BranchPickerPopover.vue"
 import { useGitRemote, type GitActionResult } from "@/stores/gitRemote"
 import { api, type GitPullResult, type GitSwitchResult } from "@/api/client"
 import { toast } from "vue-sonner"
@@ -9,6 +10,7 @@ import { toast } from "vue-sonner"
 const props = defineProps<{ sessionId: string; workdir?: string; workdirLabel?: string }>()
 
 const git = useGitRemote()
+const syncOpen = ref(false)
 const sending = ref(false)
 
 const status = computed(() => git.statusBySession[props.sessionId])
@@ -50,6 +52,23 @@ onMounted(loadStatus)
 watch(() => props.sessionId, loadStatus)
 watch(() => props.workdir, loadStatus)
 
+async function act(op: "publish" | "push" | "pull" | "fetch") {
+  syncOpen.value = false
+  const r = await git.run(props.sessionId, op)
+  if (!r) return
+  if (op === "fetch") {
+    const fetchResult = r as { ok: boolean; error?: string }
+    if (fetchResult.ok) void git.loadBranches(props.sessionId)
+    else toast.error(fetchResult.error ?? "Couldn't reach origin")
+    return
+  }
+  const res = r as GitActionResult
+  if (res.status === "pushed") toast.success("Pushed to origin")
+  else if (res.status === "clean") toast.success("Pulled from origin")
+  else if (res.status === "up_to_date") toast.info("Already up to date")
+  // Non-success results render in the card (the store captured them).
+}
+
 type Sendable = Extract<GitPullResult | GitSwitchResult,
   { status: "conflict" | "dirty" | "clobber" | "merge_in_progress" }>
 const sendable = computed(() =>
@@ -86,6 +105,10 @@ async function pullFromCard() {
   if (res.status === "clean") toast.success("Pulled from origin")
   else if (res.status === "up_to_date") toast.info("Already up to date")
 }
+
+const segBtn = "inline-flex items-center gap-1 rounded px-1 py-0.5 transition-colors hover:bg-accent hover:text-foreground"
+const itemClass =
+  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent disabled:opacity-40 disabled:pointer-events-none"
 </script>
 
 <template>
@@ -94,18 +117,59 @@ async function pullFromCard() {
     {{ props.workdirLabel }}
   </div>
 
-  <BranchPickerSheet v-else-if="eligible" :session-id="props.sessionId" :workdir="props.workdir">
-    <button
-      type="button"
-      class="inline-flex max-w-full items-center gap-1 -ml-1 rounded px-1 py-0.5 text-[11px] font-mono text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-      aria-label="Branches"
-    >
-      <GitBranch class="size-3 shrink-0 opacity-70" />
-      <span class="truncate max-w-40">{{ label }}</span>
-      <span v-if="showState" class="shrink-0 opacity-80">· {{ stateLabel }}</span>
-      <Loader2Icon v-if="busy" class="size-3 shrink-0 animate-spin" />
-    </button>
-  </BranchPickerSheet>
+  <!-- Split pill: branch name opens the branch picker; sync state opens the sync menu. -->
+  <div v-else-if="eligible" class="inline-flex max-w-full items-center -ml-1 text-[11px] font-mono text-muted-foreground">
+    <BranchPickerPopover :session-id="props.sessionId">
+      <button type="button" :class="segBtn" class="max-w-full" aria-label="Switch branch">
+        <GitBranch class="size-3 shrink-0 opacity-70" />
+        <span class="truncate max-w-40">{{ label }}</span>
+        <Loader2Icon v-if="busy && !showState" class="size-3 shrink-0 animate-spin" />
+      </button>
+    </BranchPickerPopover>
+
+    <DropdownMenu v-if="showState" v-model:open="syncOpen">
+      <DropdownMenuTrigger as-child>
+        <button type="button" :class="segBtn" class="shrink-0" aria-label="Branch sync">
+          <span class="opacity-80">· {{ stateLabel }}</span>
+          <Loader2Icon v-if="busy" class="size-3 shrink-0 animate-spin" />
+        </button>
+      </DropdownMenuTrigger>
+
+      <DropdownMenuContent align="start" class="w-56 p-1">
+        <p v-if="props.workdir" class="px-2 pt-1 pb-1 text-[10px] font-mono uppercase tracking-wide text-muted-foreground truncate">
+          {{ props.workdir }}
+        </p>
+
+        <button v-if="!published" type="button" :class="itemClass" :disabled="!!busy" @click="act('publish')">
+          <UploadCloud class="size-4 shrink-0 opacity-80" />
+          <span class="flex-1">Publish branch</span>
+          <Loader2Icon v-if="busy === 'publish'" class="size-3.5 animate-spin" />
+        </button>
+
+        <template v-else>
+          <button type="button" :class="itemClass" :disabled="!!busy || ahead === 0" @click="act('push')">
+            <ArrowUp class="size-4 shrink-0 opacity-80" />
+            <span class="flex-1">Push</span>
+            <span v-if="ahead" class="text-[11px] text-muted-foreground">{{ ahead }}</span>
+            <Loader2Icon v-if="busy === 'push'" class="size-3.5 animate-spin" />
+          </button>
+          <button type="button" :class="itemClass" :disabled="!!busy || behind === 0" @click="act('pull')">
+            <ArrowDown class="size-4 shrink-0 opacity-80" />
+            <span class="flex-1">Pull</span>
+            <span v-if="behind" class="text-[11px] text-muted-foreground">{{ behind }}</span>
+            <Loader2Icon v-if="busy === 'pull'" class="size-3.5 animate-spin" />
+          </button>
+        </template>
+
+        <div class="my-1 border-t border-border" />
+        <button type="button" :class="itemClass" :disabled="!!busy" @click="act('fetch')">
+          <RefreshCw class="size-4 shrink-0 opacity-80" />
+          <span class="flex-1">Fetch</span>
+          <Loader2Icon v-if="busy === 'fetch'" class="size-3.5 animate-spin" />
+        </button>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  </div>
 
   <!-- Actionable result card (conflict / dirty / clobber / elsewhere / merge / rejected / auth / error). -->
   <div
