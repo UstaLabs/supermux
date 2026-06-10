@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, provide, onMounted } from "vue"
 import { useRoute, useRouter } from "vue-router"
-import { PanelLeftClose, Sparkles } from "lucide-vue-next"
+import { PanelLeftClose, Plus, Sparkles } from "lucide-vue-next"
 import { useSessions } from "@/stores/sessions"
 import { useUnread } from "@/stores/unread"
 import { useLayout } from "@/stores/layout"
 import { useSortedSessions } from "@/composables/useSortedSessions"
-import { usePathGroups } from "@/composables/usePathGroups"
+import { PA_GROUP_KEY, usePathGroups } from "@/composables/usePathGroups"
 import { useRenameRequest } from "@/composables/useRenameRequest"
 import { api } from "@/api/client"
 import { toast } from "vue-sonner"
@@ -40,7 +40,10 @@ const showKillConfirm = ref(false)
 const renamingRow = ref<string | null>(null)
 
 const sortedSessions = useSortedSessions()
-const { groups, toggle } = usePathGroups(sortedSessions)
+const { groups, paGroup, toggle } = usePathGroups(sortedSessions)
+const hasPAs = computed(() => paGroup.value.sessions.length > 0)
+// PA group pinned first; path groups keep their recency order below it.
+const displayGroups = computed(() => (hasPAs.value ? [paGroup.value, ...groups.value] : groups.value))
 const activeId = computed(() => (typeof route.params.id === "string" ? route.params.id : ""))
 
 onMounted(() => {
@@ -121,6 +124,7 @@ function navigateToPA() {
     <div class="flex-1 overflow-y-auto">
       <NewSessionListRow />
       <a
+        v-if="!hasPAs"
         href="#"
         class="block rounded-md border border-transparent hover:bg-card/70 active:bg-card mx-2 my-1 px-3 py-2.5 transition-colors"
         @click.prevent="navigateToPA"
@@ -140,13 +144,23 @@ function navigateToPA() {
         </div>
       </a>
 
-      <template v-for="group in groups" :key="group.workdir">
+      <template v-for="group in displayGroups" :key="group.workdir">
         <PathGroupSection
           :label="group.label"
           :collapsed="group.collapsed"
           :count="group.sessions.length"
           @toggle="toggle(group.workdir)"
         >
+          <template v-if="group.workdir === PA_GROUP_KEY" #actions>
+            <button
+              type="button"
+              class="shrink-0 p-1.5 mr-1.5 rounded text-muted-foreground hover:text-foreground transition-colors"
+              aria-label="New personal assistant"
+              @click="navigateToPA"
+            >
+              <Plus class="size-3.5" />
+            </button>
+          </template>
           <template v-for="s in group.sessions" :key="s.id">
             <SessionContextMenu
               :name="s.name"
@@ -206,6 +220,7 @@ function navigateToPA() {
 
     <NewSessionListRow class="mt-1" />
     <a
+      v-if="!hasPAs"
       href="#"
       class="block rounded-md border border-transparent hover:bg-card/70 active:bg-card mx-2 my-1 px-3 py-2.5 transition-colors"
       @click.prevent="navigateToPA"
@@ -229,13 +244,23 @@ function navigateToPA() {
       <p class="text-xs">No sessions yet — start one above.</p>
     </div>
 
-    <template v-for="group in groups" :key="group.workdir">
+    <template v-for="group in displayGroups" :key="group.workdir">
       <PathGroupSection
         :label="group.label"
         :collapsed="group.collapsed"
         :count="group.sessions.length"
         @toggle="toggle(group.workdir)"
       >
+        <template v-if="group.workdir === PA_GROUP_KEY" #actions>
+          <button
+            type="button"
+            class="shrink-0 p-1.5 mr-1.5 rounded text-muted-foreground hover:text-foreground transition-colors"
+            aria-label="New personal assistant"
+            @click="navigateToPA"
+          >
+            <Plus class="size-3.5" />
+          </button>
+        </template>
         <SwipeableSessionRow
           v-for="s in group.sessions"
           :key="s.id"
