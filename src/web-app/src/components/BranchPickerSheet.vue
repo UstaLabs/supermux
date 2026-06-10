@@ -88,7 +88,7 @@ async function act(op: "publish" | "push" | "pull" | "fetch") {
 }
 
 const syncBtn = "inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-[12px] hover:bg-accent disabled:opacity-40 disabled:pointer-events-none"
-const rowBtn = "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-[13px] font-mono hover:bg-accent disabled:opacity-40 disabled:pointer-events-none"
+const rowBtn = "flex w-full items-center gap-2 rounded-md px-2 py-2.5 text-left text-[13px] font-mono hover:bg-accent disabled:opacity-40 disabled:pointer-events-none"
 </script>
 
 <template>
@@ -133,7 +133,11 @@ const rowBtn = "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left te
       <!-- Branch picker -->
       <template v-else-if="showList">
         <div class="mt-4">
-          <Input v-model="query" placeholder="Filter branches or type a new name…" autocapitalize="off" autocorrect="off" spellcheck="false" />
+          <Input
+            v-model="query" placeholder="Filter branches or type a new name…"
+            autocapitalize="off" autocorrect="off" spellcheck="false"
+            @keydown.enter.prevent="showCreate && pick(query.trim(), true)"
+          />
           <p v-if="invalidMsg" class="mt-1 text-[11px] text-destructive">{{ invalidMsg }}</p>
         </div>
 
@@ -167,7 +171,7 @@ const rowBtn = "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left te
               <Check v-if="isCurrent(b.name)" class="size-4 shrink-0" />
               <GitBranch v-else class="size-4 shrink-0 opacity-50" />
               <span class="flex-1 truncate">{{ b.name }}</span>
-              <span v-if="takenElsewhere(b)" class="text-[10px] text-muted-foreground truncate max-w-32">in {{ b.checkedOutAt }}</span>
+              <span v-if="takenElsewhere(b)" class="text-[10px] text-muted-foreground truncate max-w-[45%]">in {{ b.checkedOutAt }}</span>
             </button>
           </div>
 
