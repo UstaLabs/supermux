@@ -23,7 +23,8 @@ const branches = computed(() => git.branchesBySession[props.sessionId])
 const busy = computed(() => git.busyBySession[props.sessionId] ?? null)
 const self = computed(() => sessionsStore.list.find((s) => s.id === props.sessionId))
 
-const showSync = computed(() => !!status.value?.hasRemote && !!status.value?.branch)
+const showSync = computed(() => !!status.value?.hasRemote)
+const onBranch = computed(() => !!status.value?.branch)
 const published = computed(() => !!status.value?.upstream)
 const ahead = computed(() => status.value?.ahead ?? 0)
 const behind = computed(() => status.value?.behind ?? 0)
@@ -103,21 +104,23 @@ const rowBtn = "flex w-full items-center gap-2 rounded-md px-2 py-2.5 text-left 
       </SheetTitle>
       <p v-if="props.workdir" class="mt-0.5 text-[10px] font-mono text-muted-foreground truncate">{{ props.workdir }}</p>
 
-      <!-- Sync actions (existing semantics; hidden without origin or when detached) -->
+      <!-- Sync actions (hidden without origin; Publish/Push/Pull also require a branch) -->
       <div v-if="showSync" class="mt-3 flex items-center gap-2">
-        <button v-if="!published" type="button" :class="syncBtn" :disabled="!!busy" @click="act('publish')">
-          <UploadCloud class="size-3.5 opacity-80" /> Publish
-          <Loader2Icon v-if="busy === 'publish'" class="size-3 animate-spin" />
-        </button>
-        <template v-else>
-          <button type="button" :class="syncBtn" :disabled="!!busy || ahead === 0" @click="act('push')">
-            <ArrowUp class="size-3.5 opacity-80" /> Push <span v-if="ahead" class="text-muted-foreground">{{ ahead }}</span>
-            <Loader2Icon v-if="busy === 'push'" class="size-3 animate-spin" />
+        <template v-if="onBranch">
+          <button v-if="!published" type="button" :class="syncBtn" :disabled="!!busy" @click="act('publish')">
+            <UploadCloud class="size-3.5 opacity-80" /> Publish
+            <Loader2Icon v-if="busy === 'publish'" class="size-3 animate-spin" />
           </button>
-          <button type="button" :class="syncBtn" :disabled="!!busy || behind === 0" @click="act('pull')">
-            <ArrowDown class="size-3.5 opacity-80" /> Pull <span v-if="behind" class="text-muted-foreground">{{ behind }}</span>
-            <Loader2Icon v-if="busy === 'pull'" class="size-3 animate-spin" />
-          </button>
+          <template v-else>
+            <button type="button" :class="syncBtn" :disabled="!!busy || ahead === 0" @click="act('push')">
+              <ArrowUp class="size-3.5 opacity-80" /> Push <span v-if="ahead" class="text-muted-foreground">{{ ahead }}</span>
+              <Loader2Icon v-if="busy === 'push'" class="size-3 animate-spin" />
+            </button>
+            <button type="button" :class="syncBtn" :disabled="!!busy || behind === 0" @click="act('pull')">
+              <ArrowDown class="size-3.5 opacity-80" /> Pull <span v-if="behind" class="text-muted-foreground">{{ behind }}</span>
+              <Loader2Icon v-if="busy === 'pull'" class="size-3 animate-spin" />
+            </button>
+          </template>
         </template>
         <button type="button" :class="syncBtn" :disabled="!!busy" @click="act('fetch')">
           <RefreshCw class="size-3.5 opacity-80" /> Fetch
@@ -186,6 +189,7 @@ const rowBtn = "flex w-full items-center gap-2 rounded-md px-2 py-2.5 text-left 
           <p v-if="!filteredLocal.length && !filteredRemote.length && !showCreate" class="px-2 text-[12px] text-muted-foreground">No branches match.</p>
         </div>
       </template>
+      <p v-else-if="!pinned && !branches" class="mt-4 text-[12px] text-muted-foreground">Loading branches…</p>
     </SheetContent>
   </Sheet>
 </template>

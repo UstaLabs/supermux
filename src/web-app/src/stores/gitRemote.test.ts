@@ -29,7 +29,7 @@ test("initial state is empty; dismiss clears a session's result", () => {
 test("switch results: switched and invalid_name are not card-actionable, refusals are", () => {
   expect(isActionableResult({ status: "switched", branch: "dev" })).toBe(false)
   expect(isActionableResult({ status: "invalid_name", message: "bad" })).toBe(false)
-  expect(isActionableResult({ status: "clobber", files: ["a"] })).toBe(true)
+  expect(isActionableResult({ status: "clobber", files: ["a"], branch: "dev" })).toBe(true)
   expect(isActionableResult({ status: "checked_out_elsewhere", path: "/x" })).toBe(true)
   expect(isActionableResult({ status: "merge_in_progress" })).toBe(true)
 })

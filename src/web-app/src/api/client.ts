@@ -33,7 +33,7 @@ export type GitBranchList = {
 }
 export type GitSwitchResult =
   | { status: "switched"; branch: string }
-  | { status: "clobber"; files: string[] }
+  | { status: "clobber"; files: string[]; branch: string }
   | { status: "checked_out_elsewhere"; path: string }
   | { status: "merge_in_progress" }
   | { status: "invalid_name"; message: string }

@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from "vue"
 import { GitBranch, Loader2Icon } from "lucide-vue-next"
 import BranchPickerSheet from "@/components/BranchPickerSheet.vue"
-import { useGitRemote } from "@/stores/gitRemote"
+import { useGitRemote, type GitActionResult } from "@/stores/gitRemote"
 import { api, type GitPullResult, type GitSwitchResult } from "@/api/client"
 import { toast } from "vue-sonner"
 
@@ -62,7 +62,7 @@ function gitIssueMessage(r: Sendable): string {
   if (r.status === "dirty")
     return `Pull is blocked by uncommitted changes in: ${r.files.join(", ")}. Please commit or stash them, then I'll Pull again.`
   if (r.status === "clobber")
-    return `Switching branches is blocked — uncommitted changes to these files would be overwritten:\n${r.files.map((f) => `- ${f}`).join("\n")}\n\nPlease commit or stash them, then I'll switch again.`
+    return `Switching to \`${r.branch}\` is blocked — uncommitted changes to these files would be overwritten:\n${r.files.map((f) => `- ${f}`).join("\n")}\n\nPlease commit or stash them, then I'll switch again.`
   return "A merge is in progress in this checkout. Please resolve and commit it (or abort it), then I'll switch branches."
 }
 
@@ -79,7 +79,13 @@ async function sendToAgent() {
   } finally { sending.value = false }
 }
 
-async function pullFromCard() { await git.run(props.sessionId, "pull") }
+async function pullFromCard() {
+  const r = await git.run(props.sessionId, "pull")
+  if (!r) return
+  const res = r as GitActionResult
+  if (res.status === "clean") toast.success("Pulled from origin")
+  else if (res.status === "up_to_date") toast.info("Already up to date")
+}
 </script>
 
 <template>

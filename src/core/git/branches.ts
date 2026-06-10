@@ -59,14 +59,14 @@ export function listBranches(workdir: string): BranchList {
 
 export type SwitchResult =
   | { status: "switched"; branch: string }
-  | { status: "clobber"; files: string[] }            // git refused: local changes would be overwritten
-  | { status: "checked_out_elsewhere"; path: string } // branch held by another worktree
+  | { status: "clobber"; files: string[]; branch: string } // git refused: local changes would be overwritten
+  | { status: "checked_out_elsewhere"; path: string }      // branch held by another worktree
   | { status: "merge_in_progress" }
   | { status: "invalid_name"; message: string }
   | { status: "error"; message: string }
 
 /** Parse `git switch` refusal output into a typed result. */
-function classifySwitchFailure(out: string): SwitchResult {
+function classifySwitchFailure(out: string, target: string): SwitchResult {
   if (/would be overwritten by checkout/i.test(out)) {
     // Tracked and untracked clobber messages both list the files in an
     // indented block right under a line ending in "overwritten by checkout:".
@@ -79,7 +79,7 @@ function classifySwitchFailure(out: string): SwitchResult {
       if (m) files.push(m[1]!.trim())
       else if (files.length) collecting = false
     }
-    return { status: "clobber", files }
+    return { status: "clobber", files, branch: target }
   }
   const wt = out.match(/already (?:checked out|used by worktree) at '([^']+)'/i)
   if (wt) return { status: "checked_out_elsewhere", path: wt[1]! }
@@ -102,21 +102,21 @@ export function switchBranch(workdir: string, name: string, opts?: { create?: bo
     const v = git(workdir, ["check-ref-format", "--branch", target])
     if (!v.ok) return { status: "invalid_name", message: v.out || `invalid branch name: ${target}` }
     const r = git(workdir, ["switch", "-c", target])
-    return r.ok ? { status: "switched", branch: target } : classifySwitchFailure(r.out)
+    return r.ok ? { status: "switched", branch: target } : classifySwitchFailure(r.out, target)
   }
 
   const list = listBranches(workdir)
 
   if (list.local.some((b) => b.name === target)) {
     const r = git(workdir, ["switch", target])
-    return r.ok ? { status: "switched", branch: target } : classifySwitchFailure(r.out)
+    return r.ok ? { status: "switched", branch: target } : classifySwitchFailure(r.out, target)
   }
   if (list.remote.includes(target)) {
     const localName = target.slice(target.indexOf("/") + 1)
     const r = list.local.some((b) => b.name === localName)
       ? git(workdir, ["switch", localName])
       : git(workdir, ["switch", "-c", localName, "--track", target])
-    return r.ok ? { status: "switched", branch: localName } : classifySwitchFailure(r.out)
+    return r.ok ? { status: "switched", branch: localName } : classifySwitchFailure(r.out, localName)
   }
   return { status: "error", message: `no such branch: ${target}` }
 }

@@ -113,6 +113,7 @@ test("switchBranch: clobbering uncommitted changes → clobber with files", () =
   const r = switchBranch(work, "dev")
   expect(r.status).toBe("clobber")
   if (r.status === "clobber") expect(r.files).toContain("f.txt")
+  if (r.status === "clobber") expect(r.branch).toBe("dev")
   expect(g(work, "branch", "--show-current")).toBe("main") // unchanged
 })
 
