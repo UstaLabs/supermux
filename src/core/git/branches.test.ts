@@ -83,6 +83,7 @@ test("listBranches: not a repo → nulls and empties", () => {
   const l = listBranches(dir)
   expect(l.repoRoot).toBeNull()
   expect(l.current).toBeNull()
+  expect(l.detachedSha).toBeNull()
   expect(l.local).toEqual([])
   expect(l.remote).toEqual([])
 })

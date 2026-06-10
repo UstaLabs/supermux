@@ -13,7 +13,7 @@ function git(cwd: string, args: string[], timeout = 30_000): { ok: boolean; out:
 export interface LocalBranch { name: string; checkedOutAt: string | null }
 export interface BranchList {
   repoRoot: string | null     // toplevel of the enclosing repo, null outside one
-  current: string | null      // checked-out branch, null when detached
+  current: string | null      // checked-out branch name; null when detached; non-null but absent from local[] when unborn
   detachedSha: string | null  // short HEAD sha when detached
   local: LocalBranch[]        // checkedOutAt = worktree path when the branch is checked out somewhere
   remote: string[]            // e.g. "origin/main"; origin/HEAD symref filtered out
@@ -42,7 +42,9 @@ export function listBranches(workdir: string): BranchList {
   const locals = git(workdir, ["for-each-ref", "--format=%(refname:short)\t%(worktreepath)", "refs/heads"])
   const local: LocalBranch[] = !locals.ok || !locals.out ? [] : locals.out.split("\n").filter(Boolean).map((line) => {
     const [name, wt] = line.split("\t")
-    return { name: name!, checkedOutAt: wt || null }
+    let checkedOutAt: string | null = wt || null
+    if (checkedOutAt) { try { checkedOutAt = realpathSync(checkedOutAt) } catch { /* keep raw */ } }
+    return { name: name!, checkedOutAt }
   })
 
   // %(refname:short) renders the origin/HEAD symref as "origin/HEAD" or bare
