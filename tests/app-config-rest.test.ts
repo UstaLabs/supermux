@@ -9,7 +9,7 @@ import { SettingsStore } from "../src/core/settings/store"
 import { openDb, runMigrations } from "../src/core/storage/db"
 
 const DEV_PATH = `/tmp/devices-app-config-${process.pid}.json`
-const PORT = 18797
+const PORT = 18897
 let ch: WebChannel
 let token: string
 let store: SettingsStore

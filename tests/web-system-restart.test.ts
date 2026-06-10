@@ -3,6 +3,8 @@ import { existsSync, unlinkSync } from "fs"
 import { WebChannel, __resetAuthFailures } from "../src/channels/web"
 import { DeviceStore } from "../src/channels/web/device-store"
 
+const childProcess = require("child_process")
+
 const DEV_PATH = `/tmp/devices-system-restart-${process.pid}.json`
 const PORT = 18797
 let ch: WebChannel
@@ -62,22 +64,30 @@ test("POST /system/restart returns 403 cross-origin", async () => {
 })
 
 test("POST /system/restart spawns systemctl and returns ok", async () => {
+  const originalSpawn = childProcess.spawn
   const spawnMock = mock((cmd: string, args: string[], opts: Record<string, unknown>) => {
     spawnCalls.push({ cmd, args, opts })
     return { unref: () => {} }
   })
-  mock.module("child_process", () => ({ spawn: spawnMock }))
+  // Override the exported spawn directly instead of mock.module() which leaks
+  // across test files in Bun's parallel test runner.
+  Object.defineProperty(childProcess, "spawn", { value: spawnMock, writable: true, configurable: true })
 
-  const res = await fetch(`http://127.0.0.1:${PORT}/system/restart`, {
-    method: "POST",
-    headers: auth(),
-    body: "{}",
-  })
-  expect(res.status).toBe(200)
-  const body = await res.json() as any
-  expect(body.ok).toBe(true)
-  expect(spawnCalls.length).toBe(1)
-  expect(spawnCalls[0]!.cmd).toBe("systemctl")
-  expect(spawnCalls[0]!.args).toEqual(["--user", "restart", "mux.service"])
-  expect(spawnCalls[0]!.opts.detached).toBe(true)
+  try {
+    const res = await fetch(`http://127.0.0.1:${PORT}/system/restart`, {
+      method: "POST",
+      headers: auth(),
+      body: "{}",
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json() as any
+    expect(body.ok).toBe(true)
+    expect(spawnCalls.length).toBe(1)
+    expect(spawnCalls[0]!.cmd).toBe("systemctl")
+    expect(spawnCalls[0]!.args).toEqual(["--user", "restart", "mux.service"])
+    expect(spawnCalls[0]!.opts.detached).toBe(true)
+  } finally {
+    Object.defineProperty(childProcess, "spawn", { value: originalSpawn, writable: true, configurable: true })
+    mock.restore()
+  }
 })

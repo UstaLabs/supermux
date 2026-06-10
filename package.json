@@ -26,12 +26,17 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@codemirror/state": "^6.6.0",
     "@resvg/resvg-js": "^2.6.2",
     "@types/bun": "latest",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/web-push": "^3.6.4",
+    "@vueuse/core": "^14.3.0",
+    "marked": "^18.0.5",
+    "pinia": "^3.0.4",
     "playwright": "^1.60.0",
     "png-to-ico": "^3.0.1",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vue": "^3.5.35"
   }
 }

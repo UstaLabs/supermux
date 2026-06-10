@@ -3,13 +3,36 @@ import { spawn } from "child_process"
 type TmuxResult = { code: number; stdout: string; stderr: string }
 type TmuxRunner = (args: string[]) => Promise<TmuxResult>
 
+async function streamToString(stream: any): Promise<string> {
+  const chunks: string[] = []
+  // Bun exposes ReadableStream on stdout/stderr; Node exposes Readable with .on("data")
+  if (stream && "getReader" in stream) {
+    const reader = stream.getReader()
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      chunks.push(typeof value === "string" ? value : Buffer.from(value).toString("utf8"))
+    }
+  } else if (stream && "on" in stream) {
+    return new Promise((resolve) => {
+      let out = ""
+      stream.on("data", (d: any) => { out += d })
+      stream.on("end", () => resolve(out))
+    })
+  }
+  return chunks.join("")
+}
+
 function runTmux(args: string[]): Promise<TmuxResult> {
   return new Promise((resolve, reject) => {
     const proc = spawn("tmux", args, { stdio: ["ignore", "pipe", "pipe"] })
-    let stdout = "", stderr = ""
-    proc.stdout.on("data", d => { stdout += d })
-    proc.stderr.on("data", d => { stderr += d })
-    proc.on("close", code => resolve({ code: code ?? 0, stdout, stderr }))
+    let stdoutP = streamToString(proc.stdout)
+    let stderrP = streamToString(proc.stderr)
+    proc.on("close", async (code) => {
+      const stdout = await stdoutP
+      const stderr = await stderrP
+      resolve({ code: code ?? 0, stdout, stderr })
+    })
     proc.on("error", reject)
   })
 }
