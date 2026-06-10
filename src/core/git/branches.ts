@@ -111,5 +111,12 @@ export function switchBranch(workdir: string, name: string, opts?: { create?: bo
     const r = git(workdir, ["switch", target])
     return r.ok ? { status: "switched", branch: target } : classifySwitchFailure(r.out)
   }
+  if (list.remote.includes(target)) {
+    const localName = target.slice(target.indexOf("/") + 1)
+    const r = list.local.some((b) => b.name === localName)
+      ? git(workdir, ["switch", localName])
+      : git(workdir, ["switch", "-c", localName, "--track", target])
+    return r.ok ? { status: "switched", branch: localName } : classifySwitchFailure(r.out)
+  }
   return { status: "error", message: `no such branch: ${target}` }
 }

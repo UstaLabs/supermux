@@ -168,3 +168,28 @@ test("switchBranch create: works on an unborn HEAD", () => {
   const r = switchBranch(work, "fresh", { create: true })
   expect(r).toEqual({ status: "switched", branch: "fresh" })
 })
+
+test("switchBranch remote: creates a local tracking branch", () => {
+  const { work } = repo()
+  const r = switchBranch(work, "origin/remote-only")
+  expect(r).toEqual({ status: "switched", branch: "remote-only" })
+  expect(g(work, "branch", "--show-current")).toBe("remote-only")
+  expect(g(work, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")).toBe("origin/remote-only")
+})
+
+test("switchBranch remote: existing local twin → just switches to it", () => {
+  const { work } = repo()
+  g(work, "switch", "dev") // so switching to main is a real change
+  const r = switchBranch(work, "origin/main") // local "main" already exists
+  expect(r).toEqual({ status: "switched", branch: "main" })
+  expect(g(work, "branch", "--show-current")).toBe("main")
+})
+
+test("switchBranch: branch held by another worktree → checked_out_elsewhere", () => {
+  const { work } = repo()
+  const wt = join(mkdtempSync(join(tmpdir(), "mux-br-wt2-")), "w")
+  g(work, "worktree", "add", wt, "dev")
+  const r = switchBranch(work, "dev")
+  expect(r.status).toBe("checked_out_elsewhere")
+  if (r.status === "checked_out_elsewhere") expect(r.path).toContain("/w")
+})
