@@ -1,6 +1,7 @@
 // src/core/git/branches.ts
 import { execFileSync } from "child_process"
 import { realpathSync } from "fs"
+import { mergeInProgress } from "./integrate"
 
 function git(cwd: string, args: string[], timeout = 30_000): { ok: boolean; out: string } {
   try {
@@ -54,4 +55,51 @@ export function listBranches(workdir: string): BranchList {
     .filter((n) => n && n.includes("/") && !n.endsWith("/HEAD"))
 
   return { repoRoot, current, detachedSha, local, remote }
+}
+
+export type SwitchResult =
+  | { status: "switched"; branch: string }
+  | { status: "clobber"; files: string[] }            // git refused: local changes would be overwritten
+  | { status: "checked_out_elsewhere"; path: string } // branch held by another worktree
+  | { status: "merge_in_progress" }
+  | { status: "invalid_name"; message: string }
+  | { status: "error"; message: string }
+
+/** Parse `git switch` refusal output into a typed result. */
+function classifySwitchFailure(out: string): SwitchResult {
+  if (/would be overwritten by checkout/i.test(out)) {
+    // Tracked and untracked clobber messages both list the files in an
+    // indented block right under a line ending in "overwritten by checkout:".
+    const files: string[] = []
+    let collecting = false
+    for (const line of out.split("\n")) {
+      if (/overwritten by checkout:/i.test(line)) { collecting = true; continue }
+      if (!collecting) continue
+      const m = line.match(/^\s+(\S.*)$/)
+      if (m) files.push(m[1]!.trim())
+      else if (files.length) collecting = false
+    }
+    return { status: "clobber", files }
+  }
+  const wt = out.match(/already (?:checked out|used by worktree) at '([^']+)'/i)
+  if (wt) return { status: "checked_out_elsewhere", path: wt[1]! }
+  return { status: "error", message: out }
+}
+
+/** Switch the checkout to a branch. `create` makes a new branch off HEAD; a
+ *  name from the remote list (e.g. "origin/foo") checks out a local tracking
+ *  branch. Plain `git switch` semantics otherwise: non-conflicting uncommitted
+ *  changes carry over, clobbering ones make git refuse (→ `clobber`). */
+export function switchBranch(workdir: string, name: string, opts?: { create?: boolean }): SwitchResult {
+  const target = name.trim()
+  if (!target) return { status: "invalid_name", message: "branch name required" }
+  if (mergeInProgress(workdir)) return { status: "merge_in_progress" }
+
+  const list = listBranches(workdir)
+
+  if (list.local.some((b) => b.name === target)) {
+    const r = git(workdir, ["switch", target])
+    return r.ok ? { status: "switched", branch: target } : classifySwitchFailure(r.out)
+  }
+  return { status: "error", message: `no such branch: ${target}` }
 }

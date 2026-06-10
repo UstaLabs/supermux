@@ -4,7 +4,7 @@ import { execFileSync } from "child_process"
 import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { listBranches, repoToplevel } from "./branches"
+import { listBranches, repoToplevel, switchBranch } from "./branches"
 
 function g(cwd: string, ...a: string[]) {
   return execFileSync("git", ["-C", cwd, ...a], { encoding: "utf-8" }).trim()
@@ -86,4 +86,57 @@ test("listBranches: not a repo → nulls and empties", () => {
   expect(l.detachedSha).toBeNull()
   expect(l.local).toEqual([])
   expect(l.remote).toEqual([])
+})
+
+test("switchBranch: plain switch to an existing local branch", () => {
+  const { work } = repo()
+  const r = switchBranch(work, "dev")
+  expect(r).toEqual({ status: "switched", branch: "dev" })
+  expect(g(work, "branch", "--show-current")).toBe("dev")
+})
+
+test("switchBranch: non-conflicting uncommitted changes carry over", () => {
+  const { work } = repo()
+  writeFileSync(join(work, "f.txt"), "edited\n") // same content on both branches → carry
+  const r = switchBranch(work, "dev")
+  expect(r.status).toBe("switched")
+  expect(g(work, "status", "--porcelain")).toContain("f.txt")
+})
+
+test("switchBranch: clobbering uncommitted changes → clobber with files", () => {
+  const { work } = repo()
+  g(work, "switch", "dev")
+  writeFileSync(join(work, "f.txt"), "dev version\n")
+  g(work, "add", "."); g(work, "commit", "-m", "diverge f.txt")
+  g(work, "switch", "main")
+  writeFileSync(join(work, "f.txt"), "uncommitted local\n")
+  const r = switchBranch(work, "dev")
+  expect(r.status).toBe("clobber")
+  if (r.status === "clobber") expect(r.files).toContain("f.txt")
+  expect(g(work, "branch", "--show-current")).toBe("main") // unchanged
+})
+
+test("switchBranch: merge in progress → merge_in_progress", () => {
+  const { work } = repo()
+  // Build a conflicting merge: dev and main both edit f.txt.
+  g(work, "switch", "dev")
+  writeFileSync(join(work, "f.txt"), "dev\n"); g(work, "add", "."); g(work, "commit", "-m", "dev edit")
+  g(work, "switch", "main")
+  writeFileSync(join(work, "f.txt"), "main\n"); g(work, "add", "."); g(work, "commit", "-m", "main edit")
+  try { g(work, "merge", "dev") } catch { /* conflict expected */ }
+  const r = switchBranch(work, "dev")
+  expect(r).toEqual({ status: "merge_in_progress" })
+})
+
+test("switchBranch: unknown name → error", () => {
+  const { work } = repo()
+  const r = switchBranch(work, "no-such-branch")
+  expect(r.status).toBe("error")
+})
+
+test("switchBranch: from detached HEAD back onto a branch", () => {
+  const { work } = repo()
+  g(work, "checkout", "--detach")
+  const r = switchBranch(work, "main")
+  expect(r).toEqual({ status: "switched", branch: "main" })
 })
