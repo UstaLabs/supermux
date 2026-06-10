@@ -4,10 +4,12 @@ import { createPinia } from "pinia"
 import App from "./App.vue"
 import { router } from "./router"
 import { useWS } from "./api/ws"
+import { initBootTiming, recordBootMark } from "./lib/boot-timing"
 import "vue-sonner/style.css"
 import "./style.css"
 
 patchLSPPluginGet()
+initBootTiming()
 
 if ("serviceWorker" in navigator) {
   const hadController = Boolean(navigator.serviceWorker.controller)
@@ -15,6 +17,7 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("controllerchange", () => {
     if (!hadController || reloadingForUpdate) return
     reloadingForUpdate = true
+    recordBootMark("controller_reload")
     location.reload()
   })
 
@@ -46,3 +49,4 @@ window.addEventListener("unhandledrejection", (e) => {
 app.config.errorHandler = (err) => reportClientError("vue", String((err as Error)?.message ?? err), (err as Error)?.stack)
 
 app.mount("#app")
+recordBootMark("app_mounted")
