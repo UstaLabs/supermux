@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from "vue"
 import { GitBranch, Loader2Icon } from "lucide-vue-next"
 import BranchPickerSheet from "@/components/BranchPickerSheet.vue"
 import { useGitRemote } from "@/stores/gitRemote"
-import { api } from "@/api/client"
+import { api, type GitPullResult, type GitSwitchResult } from "@/api/client"
 import { toast } from "vue-sonner"
 
 const props = defineProps<{ sessionId: string; workdir?: string; workdirLabel?: string }>()
@@ -50,7 +50,8 @@ onMounted(loadStatus)
 watch(() => props.sessionId, loadStatus)
 watch(() => props.workdir, loadStatus)
 
-type Sendable = { status: "conflict" | "dirty"; files: string[] } | { status: "clobber"; files: string[] } | { status: "merge_in_progress" }
+type Sendable = Extract<GitPullResult | GitSwitchResult,
+  { status: "conflict" | "dirty" | "clobber" | "merge_in_progress" }>
 const sendable = computed(() =>
   result.value?.status === "conflict" || result.value?.status === "dirty"
   || result.value?.status === "clobber" || result.value?.status === "merge_in_progress")
