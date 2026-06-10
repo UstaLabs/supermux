@@ -511,6 +511,8 @@ async function onAssistantMessage(
       targets.push({ channelName, chat_id })
     }
   }
+  let dispatchedCount = 0
+  let lastError: string | undefined
   for (const { channelName, chat_id } of targets) {
     const ch = channels[channelName]!
     const initial: OutboundAction = {
@@ -521,7 +523,12 @@ async function onAssistantMessage(
       const action = await transformOutbound(initial, sessionId, ch.capabilities, fileStore, registry)
       if (action.op !== "reply") continue
       const res = await ch.send(action)
-      if (!res.ok) { log.warn("dispatch_reply_failed", { sessionName, chat_id, err: res.error }); continue }
+      if (!res.ok) {
+        log.warn("dispatch_reply_failed", { sessionName, chat_id, err: res.error })
+        lastError = res.error ?? "channel send failed"
+        continue
+      }
+      dispatchedCount++
       firePushForReply({
         sender: pushSender, action, sessionName, sessionId,
         isMuted: () => !!registry.get(sessionId)?.mute,
@@ -542,7 +549,11 @@ async function onAssistantMessage(
       })
     } catch (err: any) {
       log.warn("dispatch_reply_threw", { sessionName, chat_id, err: String(err) })
+      lastError = String(err)
     }
+  }
+  if (dispatchedCount === 0) {
+    throw new Error(lastError ?? "no dispatch targets succeeded")
   }
 }
 
