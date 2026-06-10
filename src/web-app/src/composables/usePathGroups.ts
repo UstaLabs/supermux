@@ -5,6 +5,10 @@ import { workdirDisplay } from "@/lib/workdir-display"
 
 const COLLAPSED_KEY = "cmux:collapsed-paths"
 
+// Sentinel group key for the pinned Personal Assistants group. Cannot collide
+// with real group keys, which are absolute filesystem paths.
+export const PA_GROUP_KEY = "__pas__"
+
 export interface PathGroup {
   workdir: string
   label: string
@@ -44,10 +48,24 @@ export function usePathGroups(sortedSessions: ComputedRef<Session[]>) {
     persistCollapsed(collapsedSet.value)
   }
 
+  // Personal assistants are not project work: they get a dedicated pinned
+  // group instead of joining their workdir's path group.
+  const paGroup = computed<PathGroup>(() => {
+    const list = sortedSessions.value.filter((s) => s.role === "personal_assistant")
+    list.sort((a, b) => lastMessageTs(b, messages).localeCompare(lastMessageTs(a, messages)))
+    return {
+      workdir: PA_GROUP_KEY,
+      label: "Personal Assistants",
+      sessions: list,
+      collapsed: collapsedSet.value.has(PA_GROUP_KEY),
+    }
+  })
+
   const groups = computed<PathGroup[]>(() => {
     const byPath = new Map<string, Session[]>()
     const homeDir = sessionsStore.homeDir
     for (const s of sortedSessions.value) {
+      if (s.role === "personal_assistant") continue
       // Worktree-backed sessions group under their project (repo_root), not the
       // internal worktree path.
       const key = workdirDisplay(s.repo_root ?? s.workdir, homeDir).key
@@ -78,5 +96,5 @@ export function usePathGroups(sortedSessions: ComputedRef<Session[]>) {
     return result
   })
 
-  return { groups, toggle }
+  return { groups, paGroup, toggle }
 }

@@ -44,13 +44,14 @@ docker compose up -d
 # open http://localhost:8787 — the setup wizard launches automatically
 ```
 
-The **setup wizard** runs on first open and walks you through five steps:
+The **setup wizard** runs on first open and walks you through four steps:
 
-1. **Connect an agent** — paste a `CLAUDE_CODE_OAUTH_TOKEN` (get one via `claude setup-token`), an Anthropic or OpenAI API key, or use the Codex/Cursor device-flow ("authorize via link").
-2. **Identity** — choose a name for your assistant and write its `soul.md`.
-3. **Channels** — optionally add a Telegram bot token.
-4. **Exposure** — optionally set a public URL; the wizard shows ready-to-paste Caddy, nginx, and Cloudflare Tunnel snippets and runs a reachability test.
-5. **Done** — spawn your first session.
+1. **Welcome** — a quick intro.
+2. **Agents** — paste a `CLAUDE_CODE_OAUTH_TOKEN` (get one via `claude setup-token`), an Anthropic or OpenAI API key, or use the Codex/Cursor device-flow ("authorize via link").
+3. **Connectivity** — optionally add a Telegram bot token, set a public URL (ready-to-paste Caddy, nginx, and Cloudflare Tunnel snippets + a reachability test), and pair more devices.
+4. **Done** — spawn your first session.
+
+Your assistant's **identity is set up automatically** afterward: on first spawn it walks you through writing its own `soul.md` (no preset persona) via the `/mux:soul` skill — revise it anytime.
 
 **First-run pairing is automatic:** the first browser to open a fresh instance is paired. On a headless box, `bun run pair <name>` does the same.
 
@@ -58,7 +59,7 @@ The **setup wizard** runs on first open and walks you through five steps:
 - `http://localhost` is a browser **secure context**, so the installable PWA and push notifications work without HTTPS or a tunnel.
 - **Prebuilt image:** uncomment `image: ghcr.io/ustalabs/supermux:latest` in `docker-compose.yml` to skip the local build.
 
-> **Prefer guided setup — Docker *or* native?** Paste [`SETUP.md`](./SETUP.md) into Claude Code, Claude.ai, or ChatGPT and it walks you through it, step by step.
+> **Prefer guided setup?** Paste [`SETUP.md`](./SETUP.md) into Claude Code, Claude.ai, or ChatGPT — it asks **where** you want supermux to run (this computer, a mini PC / VPS over SSH, or a throwaway Docker container) and walks you through it step by step. On the SSH path, an agent with a shell (e.g. Claude Code) connects to the box and runs the install for you.
 
 ## A full workspace, in the browser
 
