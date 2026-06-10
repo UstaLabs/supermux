@@ -63,31 +63,21 @@ test("POST /system/restart returns 403 cross-origin", async () => {
   expect(res.status).toBe(403)
 })
 
-test("POST /system/restart spawns systemctl and returns ok", async () => {
-  const originalSpawn = childProcess.spawn
-  const spawnMock = mock((cmd: string, args: string[], opts: Record<string, unknown>) => {
-    spawnCalls.push({ cmd, args, opts })
-    return { unref: () => {} }
+test.skip("POST /system/restart spawns systemctl and returns ok", async () => {
+  // DANGER: this test cannot be safely mocked.
+  // The broker uses `await import("child_process")` (ESM dynamic import)
+  // but Bun test mocks only affect `require("child_process")` (CJS).
+  // These are different module objects, so the mock is silently ignored
+  // and the REAL systemctl restart is executed.
+  //
+  // To make this testable, the broker needs a `restartBroker` hook in
+  // WebChannel opts so the test can inject a no-op instead.
+  const res = await fetch(`http://127.0.0.1:${PORT}/system/restart`, {
+    method: "POST",
+    headers: auth(),
+    body: "{}",
   })
-  // Override the exported spawn directly instead of mock.module() which leaks
-  // across test files in Bun's parallel test runner.
-  Object.defineProperty(childProcess, "spawn", { value: spawnMock, writable: true, configurable: true })
-
-  try {
-    const res = await fetch(`http://127.0.0.1:${PORT}/system/restart`, {
-      method: "POST",
-      headers: auth(),
-      body: "{}",
-    })
-    expect(res.status).toBe(200)
-    const body = await res.json() as any
-    expect(body.ok).toBe(true)
-    expect(spawnCalls.length).toBe(1)
-    expect(spawnCalls[0]!.cmd).toBe("systemctl")
-    expect(spawnCalls[0]!.args).toEqual(["--user", "restart", "mux.service"])
-    expect(spawnCalls[0]!.opts.detached).toBe(true)
-  } finally {
-    Object.defineProperty(childProcess, "spawn", { value: originalSpawn, writable: true, configurable: true })
-    mock.restore()
-  }
+  expect(res.status).toBe(200)
+  const body = await res.json() as any
+  expect(body.ok).toBe(true)
 })
