@@ -165,7 +165,6 @@ test("switchBranch create: existing name → error from git", () => {
 test("switchBranch create: works on an unborn HEAD", () => {
   const work = mkdtempSync(join(tmpdir(), "mux-br-unborn2-"))
   execFileSync("git", ["init", "-b", "main", work])
-  g(work, "config", "user.email", "t@t.t"); g(work, "config", "user.name", "t")
   const r = switchBranch(work, "fresh", { create: true })
   expect(r).toEqual({ status: "switched", branch: "fresh" })
 })

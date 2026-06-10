@@ -96,6 +96,8 @@ export function switchBranch(workdir: string, name: string, opts?: { create?: bo
   if (mergeInProgress(workdir)) return { status: "merge_in_progress" }
 
   if (opts?.create) {
+    // Belt-and-suspenders: check-ref-format would also reject these, but the
+    // early return keeps a dash-leading name from ever reaching arg parsing.
     if (target.startsWith("-")) return { status: "invalid_name", message: `invalid branch name: ${target}` }
     const v = git(workdir, ["check-ref-format", "--branch", target])
     if (!v.ok) return { status: "invalid_name", message: v.out || `invalid branch name: ${target}` }
