@@ -49,8 +49,9 @@ export const useGitRemote = defineStore("gitRemote", () => {
   }
 
   /** Run a remote op; sets busy for its duration, captures any actionable result,
-   *  and always reloads status afterward. Returns the raw API result. */
-  async function run(id: string, op: GitOp): Promise<GitActionResult | { ok: boolean; error?: string } | undefined> {
+   *  and always reloads status afterward. Returns the raw API result.
+   *  "switch" is excluded — it has its own dedicated action below. */
+  async function run(id: string, op: Exclude<GitOp, "switch">): Promise<GitActionResult | { ok: boolean; error?: string } | undefined> {
     if (busyBySession.value[id]) return
     setBusy(id, op); setResult(id, null)
     try {
