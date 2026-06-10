@@ -1377,6 +1377,8 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
+      // getSessionWorkdir is UUID-only, so name-addressed requests 404 above;
+      // the name arm of this find keeps the 409 guard intact if that changes.
       const snap = this.opts.getSessionsSnapshot().find((s) => s.id === id || s.name === id)
       if (snap?.session_branch) {
         return this.json({ error: "worktree sessions are pinned to their session branch" }, 409)
