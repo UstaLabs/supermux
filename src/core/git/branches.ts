@@ -95,6 +95,14 @@ export function switchBranch(workdir: string, name: string, opts?: { create?: bo
   if (!target) return { status: "invalid_name", message: "branch name required" }
   if (mergeInProgress(workdir)) return { status: "merge_in_progress" }
 
+  if (opts?.create) {
+    if (target.startsWith("-")) return { status: "invalid_name", message: `invalid branch name: ${target}` }
+    const v = git(workdir, ["check-ref-format", "--branch", target])
+    if (!v.ok) return { status: "invalid_name", message: v.out || `invalid branch name: ${target}` }
+    const r = git(workdir, ["switch", "-c", target])
+    return r.ok ? { status: "switched", branch: target } : classifySwitchFailure(r.out)
+  }
+
   const list = listBranches(workdir)
 
   if (list.local.some((b) => b.name === target)) {

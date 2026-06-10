@@ -140,3 +140,32 @@ test("switchBranch: from detached HEAD back onto a branch", () => {
   const r = switchBranch(work, "main")
   expect(r).toEqual({ status: "switched", branch: "main" })
 })
+
+test("switchBranch create: new branch off HEAD", () => {
+  const { work } = repo()
+  const r = switchBranch(work, "feature/x", { create: true })
+  expect(r).toEqual({ status: "switched", branch: "feature/x" })
+  expect(g(work, "branch", "--show-current")).toBe("feature/x")
+})
+
+test("switchBranch create: invalid names rejected without touching the repo", () => {
+  const { work } = repo()
+  expect(switchBranch(work, "has space", { create: true }).status).toBe("invalid_name")
+  expect(switchBranch(work, "-leading-dash", { create: true }).status).toBe("invalid_name")
+  expect(switchBranch(work, "  ", { create: true }).status).toBe("invalid_name")
+  expect(g(work, "branch", "--show-current")).toBe("main")
+})
+
+test("switchBranch create: existing name → error from git", () => {
+  const { work } = repo()
+  const r = switchBranch(work, "dev", { create: true })
+  expect(r.status).toBe("error")
+})
+
+test("switchBranch create: works on an unborn HEAD", () => {
+  const work = mkdtempSync(join(tmpdir(), "mux-br-unborn2-"))
+  execFileSync("git", ["init", "-b", "main", work])
+  g(work, "config", "user.email", "t@t.t"); g(work, "config", "user.name", "t")
+  const r = switchBranch(work, "fresh", { create: true })
+  expect(r).toEqual({ status: "switched", branch: "fresh" })
+})
