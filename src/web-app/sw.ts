@@ -1,16 +1,29 @@
 /// <reference lib="webworker" />
-import { precacheAndRoute } from "workbox-precaching"
 
-declare const self: ServiceWorkerGlobalScope & {
-  __WB_MANIFEST: Array<string | { url: string; revision: string | null }>
-}
+declare const self: ServiceWorkerGlobalScope
+
+// This worker deliberately has NO fetch handler. A fetch handler (the old
+// workbox precache) puts service-worker startup on the critical path of every
+// navigation; on cold-started Android Chrome that startup is a lottery
+// (0.1s–14s measured, occasionally wedging forever) and was the root cause of
+// minutes-long blank screens on phones whose OS kills Chrome between uses.
+// Without a fetch handler the browser skips the worker for all requests:
+// navigations go straight to network, assets ride the immutable HTTP cache +
+// CDN edge. The worker exists only for Web Push.
 
 self.skipWaiting()
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim())
+  event.waitUntil(
+    (async () => {
+      await self.clients.claim()
+      // Drop the old precache storage (~3MB/device) left behind by the
+      // previous workbox worker — nothing reads it anymore.
+      for (const key of await caches.keys()) {
+        if (key.includes("precache")) await caches.delete(key)
+      }
+    })(),
+  )
 })
-
-precacheAndRoute(self.__WB_MANIFEST)
 
 interface PushPayload {
   session: string

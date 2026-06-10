@@ -54,7 +54,10 @@ export default defineConfig({
         ],
       },
       injectManifest: {
-        globPatterns: ["**/*.{js,css,html,svg,png,ico,webmanifest}"],
+        // The worker is push-only — no precache, so nothing to inject. A fetch
+        // handler would put SW startup on every navigation's critical path
+        // (the Android blank-screen root cause).
+        injectionPoint: undefined,
       },
     }),
   ],
