@@ -63,6 +63,7 @@ import { home } from "./shared/home"
 import { join, dirname, resolve } from "path"
 import { fileURLToPath } from "url"
 import { ClaudeCodeAdapter } from "./core/agents/claude/index"
+import { wireClaudeStateEvents } from "./core/agents/claude/state-projection"
 import { writeClaudeHooksSettings, writePersistedHookSecret, CLAUDE_HOOKS_SETTINGS_PATH } from "./core/agents/claude/hooks-settings"
 import type { AgentAdapter } from "./core/agents/types"
 import { resolveCodexAuth } from "./core/agents/codex/auth"
@@ -835,19 +836,21 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       if (typeof claudeSid !== "string") return
       const s = registry.list().find((x) => x.agent_session_id === claudeSid)
       if (!s) return
+      const adapter = adapters.get(s.id)
+      if (!(adapter instanceof ClaudeCodeAdapter)) return
       if (event === "StopFailure") {
-        // Field shape isn't firmly documented — accept flat (error_type/error_message)
-        // or nested (error_details/error.{type,message}) or reason/message.
+        // Field shape isn't firmly documented — accept flat (error_type/error_message),
+        // nested (error_details/error.{type,message}), or reason/message.
         const pick = (...vals: unknown[]) => vals.find((v) => typeof v === "string" && v) as string | undefined
         const det = (body?.error_details ?? body?.error) as Record<string, unknown> | undefined
         const errorType = pick(body?.error_type, det?.type, body?.reason) ?? "error"
         const errorMessage = pick(body?.error_message, det?.message, body?.message) ?? "Agent turn failed"
-        void notifyAgentError(s.id, s.name, errorType, errorMessage)
+        adapter.ingestHook("StopFailure", { errorType, errorMessage })
         return
       }
       const tool = typeof body?.tool_name === "string" ? body.tool_name : undefined
       log.info("agent_hook", { session: s.name, event, tool })
-      agentStateStore.applyEvent(s.id, event as any, tool)
+      adapter.ingestHook(event, { tool })
     },
     setMute: (id, muted) => {
       const s = registry.get(id)
@@ -1558,7 +1561,13 @@ const server = await startSocketServer({
             interruptSocket: () => interruptClaudePane(sessionUuid),
           })
           registerClaudeRuntime(sessionUuid, adapter)
-          adapter.on("assistant-message", (ev: any) => onAssistantMessage(sessionUuid, ev))
+          wireClaudeStateEvents(adapter, {
+            onState: (event, tool) => agentStateStore.applyEvent(sessionUuid, event, tool),
+            onError: (errorType, message) => {
+              const s = registry.get(sessionUuid)
+              void notifyAgentError(sessionUuid, s?.name ?? sessionUuid, errorType, message)
+            },
+          })
         }
         if (existing.status === "suspended") {
           registry.sessions.activate(sessionUuid, msg.pid as number)
@@ -1620,7 +1629,13 @@ const server = await startSocketServer({
           interruptSocket: () => interruptClaudePane(sessionUuid),
         })
         registerClaudeRuntime(sessionUuid, adapter)
-        adapter.on("assistant-message", (ev: any) => onAssistantMessage(sessionUuid, ev))
+        wireClaudeStateEvents(adapter, {
+          onState: (event, tool) => agentStateStore.applyEvent(sessionUuid, event, tool),
+          onError: (errorType, message) => {
+            const s = registry.get(sessionUuid)
+            void notifyAgentError(sessionUuid, s?.name ?? sessionUuid, errorType, message)
+          },
+        })
       }
       // If this registration matches a pending /spawn, flip the chat's active.
       const pendingChat = pendingSpawnActive.get(finalName)
