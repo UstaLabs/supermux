@@ -25,7 +25,9 @@ export type ToolCallEvent = {
 
 export type TurnStartEvent    = { kind: "turn-start" }
 export type TurnCompleteEvent = { kind: "turn-complete" }
-export type AgentErrorEvent   = { kind: "error"; error: Error }
+// errorType is the agent's own classification (e.g. Claude's StopFailure error_type);
+// omitted by stream-derived adapters, which fall back to a generic "error".
+export type AgentErrorEvent   = { kind: "error"; error: Error; errorType?: string }
 
 export type AgentEvent =
   | AssistantMessageEvent
