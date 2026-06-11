@@ -1,5 +1,6 @@
 import { EventEmitter } from "events"
-import type { AgentAdapter, AssistantMessageEvent, InboundMeta, AgentKind } from "../types"
+import type { AgentAdapter, InboundMeta, AgentKind } from "../types"
+import { claudeHookToAgentEvent } from "./hook-events"
 
 export type ClaudeAdapterOpts = {
   sessionName: string
@@ -47,8 +48,11 @@ export class ClaudeCodeAdapter extends EventEmitter implements AgentAdapter {
     await this.opts.interruptSocket()
   }
 
-  // Called by main.ts when the shim's reply() lands.
-  emitAssistantMessage(text: string, extras?: Omit<AssistantMessageEvent, "kind" | "text">): void {
-    this.emit("assistant-message", { kind: "assistant-message", text, ...(extras ?? {}) })
+  // Translate a raw Claude lifecycle hook into a canonical event and emit it.
+  // The broker's onAgentHook calls this; the state projection consumes the emits.
+  // No-op hooks (e.g. SessionStart) emit nothing.
+  ingestHook(hookEvent: string, opts?: { tool?: string; errorType?: string; errorMessage?: string }): void {
+    const ev = claudeHookToAgentEvent(hookEvent, opts)
+    if (ev) this.emit(ev.kind, ev)
   }
 }

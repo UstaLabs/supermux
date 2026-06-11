@@ -2,19 +2,6 @@ import { describe, test, expect } from "bun:test"
 import { ClaudeCodeAdapter } from "../../src/core/agents/claude/index"
 
 describe("ClaudeCodeAdapter", () => {
-  test("emits assistant-message when emitAssistantMessage is called", async () => {
-    const a = new ClaudeCodeAdapter({
-      sessionName: "s1",
-      workdir: "/w",
-      sendInboundSocket: async () => {},
-      interruptSocket: async () => {},
-    })
-    const received: string[] = []
-    a.on("assistant-message", (ev) => received.push(ev.text))
-    a.emitAssistantMessage("hello world")
-    expect(received).toEqual(["hello world"])
-  })
-
   test("send forwards to sendInboundSocket", async () => {
     const calls: any[] = []
     const a = new ClaudeCodeAdapter({
