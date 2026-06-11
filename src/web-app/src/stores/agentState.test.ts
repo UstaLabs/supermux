@@ -20,3 +20,9 @@ test("set ignores undefined / malformed (e.g. missing snapshot key)", () => {
   a.set("s1", undefined)
   expect(a.get("s1").phase).toBe("idle")
 })
+
+test("markSending flips a session to sending immediately", () => {
+  const a = useAgentState()
+  a.markSending("s1", 1234)
+  expect(a.get("s1")).toEqual({ phase: "sending", since: 1234 })
+})

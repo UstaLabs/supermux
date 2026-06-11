@@ -21,5 +21,9 @@ export const useAgentState = defineStore("agentState", () => {
     return bySession.value[session] ?? IDLE
   }
 
-  return { bySession, set, get }
+  function markSending(session: string, now: number = Date.now()) {
+    bySession.value[session] = { phase: "sending", since: now }
+  }
+
+  return { bySession, set, get, markSending }
 })

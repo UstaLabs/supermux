@@ -3,6 +3,7 @@ import { toValue } from "vue"
 import { toast } from "vue-sonner"
 import { useWS } from "@/api/ws"
 import { useUploader } from "@/composables/useUploader"
+import { useAgentState } from "@/stores/agentState"
 import { useMessages } from "@/stores/messages"
 import { useUploads } from "@/stores/uploads"
 import { useVoicePreviews } from "@/stores/voice-previews"
@@ -16,6 +17,7 @@ function webMessageId(): string {
 
 export function useComposerSubmit(sessionId: MaybeRefOrGetter<string>) {
   const ws = useWS()
+  const agentState = useAgentState()
   const messages = useMessages()
   const uploader = useUploader()
   const uploads = useUploads()
@@ -36,6 +38,8 @@ export function useComposerSubmit(sessionId: MaybeRefOrGetter<string>) {
       text: t || undefined,
       attachments,
     })
+    // Flip here too so direct callers of send() (e.g. suggestion clicks) also get the indicator.
+    agentState.markSending(id)
     ws.send({
       type: "send",
       session: id,
@@ -48,6 +52,8 @@ export function useComposerSubmit(sessionId: MaybeRefOrGetter<string>) {
 
   async function submit(payload: PromptInputMessage) {
     const id = toValue(sessionId)
+    // Flip optimistically before the upload await so the indicator shows during long uploads.
+    agentState.markSending(id)
     const files = (payload?.files ?? []) as unknown as Array<{ id: string; file?: File }>
 
     if (files.length === 0) {
