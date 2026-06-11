@@ -23,6 +23,8 @@ export function useComposerSubmit(sessionId: MaybeRefOrGetter<string>) {
   const uploads = useUploads()
   const voicePreviews = useVoicePreviews()
 
+  // Last submitted payload, captured per-submit for retryLast() after a stall.
+  // This composable is instantiated per ChatView (one session), so it's effectively per-session.
   let lastPayload: PromptInputMessage | null = null
 
   function send(text: string, attachments?: AttachmentRef[]) {
