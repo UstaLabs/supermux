@@ -1249,6 +1249,7 @@ async function killSession(id: string) {
   deleteRuntime(s.id)
   stopClaudeTailer(s.id)
   agentStateStore.clear(s.id)
+  recentInboundIds.clear(s.id)
   // Do NOT delete agent_home — needed for resume
 
   // Reclaim this session's worktree if it has no unsaved/unmerged work; otherwise
