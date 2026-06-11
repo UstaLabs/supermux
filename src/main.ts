@@ -2081,6 +2081,9 @@ async function spawnSession(args: { workdir: string; requestedName?: string; age
       name: r.name,
       lookup: (id, name) => registry.get(id) ?? registry.resolveName(name),
       stillAlive: async () => (await listSessionWindows(TMUX_SESSION)).includes(r.name),
+    }).catch((err) => {
+      log.warn("spawn_post_check_failed", { name: r.name, workdir })
+      throw err
     })
   }
   if (args.model && registered) {
