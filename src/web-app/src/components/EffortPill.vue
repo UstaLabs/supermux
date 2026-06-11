@@ -11,20 +11,22 @@ defineEmits<{ (e: "click"): void }>()
 
 const sessions = useSessions()
 const visible = ref(false)
-const currentLevel = ref<string | undefined>()
+const fetchedLevel = ref<string | undefined>()
 
 const agent = computed(() => sessions.byId(props.sessionId)?.agent)
 
+const currentLevel = computed(() => sessions.byId(props.sessionId)?.reasoningLevel ?? fetchedLevel.value)
+
 watch(() => [props.sessionId, agent.value] as const, async () => {
   visible.value = false
-  currentLevel.value = undefined
+  fetchedLevel.value = undefined
   if (agent.value === "cursor") return
   try {
     const res = await fetch(`/sessions/${encodeURIComponent(props.sessionId)}/reasoning-levels`, {})
     if (!res.ok) return
     const data = await res.json()
     visible.value = data.visible !== false && (data.levels?.length ?? 0) > 1
-    currentLevel.value = data.current
+    fetchedLevel.value = data.current
   } catch {}
 }, { immediate: true })
 </script>

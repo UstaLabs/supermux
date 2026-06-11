@@ -3,6 +3,7 @@ import { ref, watch } from "vue"
 import { DialogOverlay, DialogContent, DialogPortal, DialogRoot } from "reka-ui"
 import { useSessions } from "@/stores/sessions"
 import { Check } from "@lucide/vue"
+import { toast } from "vue-sonner"
 
 const props = defineProps<{ sessionId: string; open: boolean }>()
 const emit = defineEmits<{ (e: "update:open", v: boolean): void }>()
@@ -13,6 +14,7 @@ const currentModel = ref<string | undefined>()
 const agent = ref<string>("")
 const loading = ref(false)
 const switching = ref<string | null>(null)
+const pendingModel = ref<string | null>(null)
 
 watch(() => props.open, async (isOpen) => {
   if (!isOpen) return
@@ -31,28 +33,41 @@ watch(() => props.open, async (isOpen) => {
   }
 })
 
-async function selectModel(modelId: string) {
-  if (modelId === currentModel.value) {
-    emit("update:open", false)
-    return
-  }
+async function selectModel(modelId: string, applyNow = false) {
+  if (!applyNow && modelId === currentModel.value) { emit("update:open", false); return }
   switching.value = modelId
   try {
     const res = await fetch(`/sessions/${encodeURIComponent(props.sessionId)}/model`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ model: modelId }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(applyNow ? { model: modelId, applyNow: true } : { model: modelId }),
     })
     if (res.ok) {
       currentModel.value = modelId
       sessions.updateState(props.sessionId, { model: modelId })
-      emit("update:open", false)
+      const body = await res.json().catch(() => ({}))
+      if (res.status === 202 || body?.status === "queued") {
+        pendingModel.value = modelId
+      } else {
+        emit("update:open", false)
+      }
+    } else {
+      const body = await res.json().catch(() => ({}))
+      toast.error(`Couldn't switch model: ${body?.error ?? res.status}`)
     }
-  } catch {} finally {
+  } catch (err: any) {
+    toast.error(`Couldn't switch model: ${err?.message ?? "network error"}`)
+  } finally {
     switching.value = null
   }
+}
+
+async function applyNow() {
+  if (!pendingModel.value) return
+  const modelId = pendingModel.value
+  await selectModel(modelId, true)
+  pendingModel.value = null
+  emit("update:open", false)
 }
 </script>
 
@@ -70,6 +85,7 @@ async function selectModel(modelId: string) {
         <div class="px-4 pb-2">
           <h3 class="font-semibold text-base">Switch Model</h3>
           <p class="text-xs text-muted-foreground">{{ agent }} · {{ sessions.displayName(props.sessionId) ?? props.sessionId }}</p>
+          <p class="text-xs text-muted-foreground mt-0.5">Changing the model restarts the agent for this session.</p>
         </div>
         <div class="overflow-y-auto flex-1 px-2 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
           <div v-if="loading" class="py-8 text-center text-muted-foreground text-sm">Loading models…</div>
@@ -90,6 +106,16 @@ async function selectModel(modelId: string) {
             <Check v-if="m.id === currentModel" class="size-4 text-primary shrink-0" />
             <div v-else-if="switching === m.id" class="size-4 shrink-0 border-2 border-muted-foreground/30 border-t-primary rounded-full animate-spin" />
           </button>
+          <div v-if="pendingModel" class="flex items-center justify-between gap-3 px-3 py-2 mt-1 rounded-lg bg-accent/40">
+            <span class="text-xs text-muted-foreground">Will apply after this turn</span>
+            <button
+              class="text-xs font-medium px-2 py-1 rounded-md hover:bg-accent transition-colors"
+              :disabled="switching !== null"
+              @click="applyNow"
+            >
+              Change now (ends current turn)
+            </button>
+          </div>
         </div>
       </DialogContent>
     </DialogPortal>

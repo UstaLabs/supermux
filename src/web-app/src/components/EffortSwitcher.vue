@@ -3,6 +3,7 @@ import { ref, watch } from "vue"
 import { DialogOverlay, DialogContent, DialogPortal, DialogRoot } from "reka-ui"
 import { useSessions } from "@/stores/sessions"
 import { Check } from "@lucide/vue"
+import { toast } from "vue-sonner"
 
 const props = defineProps<{ sessionId: string; open: boolean }>()
 const emit = defineEmits<{ (e: "update:open", v: boolean): void }>()
@@ -14,6 +15,7 @@ const agent = ref<string>("")
 const visible = ref(false)
 const loading = ref(false)
 const switching = ref<string | null>(null)
+const pendingLevel = ref<string | null>(null)
 
 watch(() => props.open, async (isOpen) => {
   if (!isOpen) return
@@ -32,26 +34,41 @@ watch(() => props.open, async (isOpen) => {
   }
 })
 
-async function selectLevel(levelId: string) {
-  if (levelId === currentLevel.value) {
-    emit("update:open", false)
-    return
-  }
+async function selectLevel(levelId: string, applyNow = false) {
+  if (!applyNow && levelId === currentLevel.value) { emit("update:open", false); return }
   switching.value = levelId
   try {
     const res = await fetch(`/sessions/${encodeURIComponent(props.sessionId)}/reasoning-level`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reasoningLevel: levelId }),
+      body: JSON.stringify(applyNow ? { reasoningLevel: levelId, applyNow: true } : { reasoningLevel: levelId }),
     })
     if (res.ok) {
       currentLevel.value = levelId
       sessions.updateState(props.sessionId, { reasoningLevel: levelId })
-      emit("update:open", false)
+      const body = await res.json().catch(() => ({}))
+      if (res.status === 202 || body?.status === "queued") {
+        pendingLevel.value = levelId
+      } else {
+        emit("update:open", false)
+      }
+    } else {
+      const body = await res.json().catch(() => ({}))
+      toast.error(`Couldn't switch thinking level: ${body?.error ?? res.status}`)
     }
-  } catch {} finally {
+  } catch (err: any) {
+    toast.error(`Couldn't switch thinking level: ${err?.message ?? "network error"}`)
+  } finally {
     switching.value = null
   }
+}
+
+async function applyNow() {
+  if (!pendingLevel.value) return
+  const levelId = pendingLevel.value
+  await selectLevel(levelId, true)
+  pendingLevel.value = null
+  emit("update:open", false)
 }
 </script>
 
@@ -69,6 +86,7 @@ async function selectLevel(levelId: string) {
         <div class="px-4 pb-2">
           <h3 class="font-semibold text-base">Thinking Level</h3>
           <p class="text-xs text-muted-foreground">{{ agent }} · {{ sessions.displayName(props.sessionId) ?? props.sessionId }}</p>
+          <p class="text-xs text-muted-foreground mt-0.5">Changing the thinking level restarts the agent for this session.</p>
         </div>
         <div class="overflow-y-auto flex-1 px-2 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
           <div v-if="loading" class="py-8 text-center text-muted-foreground text-sm">Loading levels…</div>
@@ -89,6 +107,16 @@ async function selectLevel(levelId: string) {
             <Check v-if="l.id === currentLevel" class="size-4 text-primary shrink-0" />
             <div v-else-if="switching === l.id" class="size-4 shrink-0 border-2 border-muted-foreground/30 border-t-primary rounded-full animate-spin" />
           </button>
+          <div v-if="pendingLevel" class="flex items-center justify-between gap-3 px-3 py-2 mt-1 rounded-lg bg-accent/40">
+            <span class="text-xs text-muted-foreground">Will apply after this turn</span>
+            <button
+              class="text-xs font-medium px-2 py-1 rounded-md hover:bg-accent transition-colors"
+              :disabled="switching !== null"
+              @click="applyNow"
+            >
+              Change now (ends current turn)
+            </button>
+          </div>
         </div>
       </DialogContent>
     </DialogPortal>
