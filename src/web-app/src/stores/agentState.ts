@@ -1,7 +1,7 @@
 import { defineStore } from "pinia"
 import { ref } from "vue"
 
-export type AgentPhase = "idle" | "sending" | "thinking" | "running"
+export type AgentPhase = "idle" | "sending" | "thinking" | "running" | "stalled"
 export interface AgentStateEntry {
   phase: AgentPhase
   tool?: string

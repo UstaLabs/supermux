@@ -23,6 +23,8 @@ export function useComposerSubmit(sessionId: MaybeRefOrGetter<string>) {
   const uploads = useUploads()
   const voicePreviews = useVoicePreviews()
 
+  let lastPayload: PromptInputMessage | null = null
+
   function send(text: string, attachments?: AttachmentRef[]) {
     const id = toValue(sessionId)
     const t = text?.trim() ?? ""
@@ -51,6 +53,7 @@ export function useComposerSubmit(sessionId: MaybeRefOrGetter<string>) {
   }
 
   async function submit(payload: PromptInputMessage) {
+    lastPayload = payload
     const id = toValue(sessionId)
     // Flip optimistically before the upload await so the indicator shows during long uploads.
     agentState.markSending(id)
@@ -104,5 +107,9 @@ export function useComposerSubmit(sessionId: MaybeRefOrGetter<string>) {
     voicePreviews.clearAll()
   }
 
-  return { send, submit }
+  async function retryLast() {
+    if (lastPayload) await submit(lastPayload)
+  }
+
+  return { send, submit, retryLast }
 }

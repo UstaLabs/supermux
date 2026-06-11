@@ -4,7 +4,7 @@ defineOptions({ name: "ChatView" })
 import { computed, ref, provide, onMounted, onBeforeUnmount, nextTick, watch } from "vue"
 import { useRouter } from "vue-router"
 import { ChevronLeft, TerminalSquare, FileCode2, MessageSquare, Monitor, GitMerge } from "@lucide/vue"
-import { Loader2Icon, SendHorizonalIcon, SquareIcon } from "lucide-vue-next"
+import { AlertTriangleIcon, Loader2Icon, SendHorizonalIcon, SquareIcon } from "lucide-vue-next"
 import { useMessages } from "@/stores/messages"
 import { useWS } from "@/api/ws"
 import { useSessions } from "@/stores/sessions"
@@ -66,7 +66,7 @@ const props = defineProps<{ id: string }>()
 const router = useRouter()
 const messages = useMessages()
 const pendingFirstMessage = usePendingFirstMessage()
-const { send, submit: submitComposer } = useComposerSubmit(() => props.id)
+const { send, submit: submitComposer, retryLast } = useComposerSubmit(() => props.id)
 const ws = useWS()
 const sessions = useSessions()
 const displays = useDisplays()
@@ -108,6 +108,8 @@ function onControlCommand(cmd: SlashCommand) {
     case "kill":   killConfirmOpen.value = true; break
   }
 }
+
+function retryStalled() { void retryLast() }
 
 // Soft-interrupt the running agent (Stop button / /stop). The broker flips the
 // live status to idle and broadcasts it, so the Working… indicator clears.
@@ -734,7 +736,31 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
               <!-- Live status: "Sending…" until the agent's real start signal,
                    then "Working…" until idle. Nothing when idle. -->
               <div
-                v-if="!isArchived && liveState.phase === 'sending'"
+                v-if="!isArchived && liveState.phase === 'stalled'"
+                class="flex items-center gap-1.5 px-1 py-0.5 text-xs italic text-muted-foreground/70 ml-2"
+              >
+                <AlertTriangleIcon class="size-3.5 shrink-0 text-amber-500" />
+                No response yet
+                <button
+                  type="button"
+                  class="ml-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium not-italic text-muted-foreground hover:text-primary hover:bg-primary/10 active:scale-95 transition"
+                  aria-label="Retry sending"
+                  @click="retryStalled"
+                >
+                  Retry
+                </button>
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium not-italic text-muted-foreground hover:text-destructive hover:bg-destructive/10 active:scale-95 transition"
+                  aria-label="Stop the agent"
+                  @click="interrupt"
+                >
+                  <SquareIcon class="size-3 shrink-0" />
+                  Stop
+                </button>
+              </div>
+              <div
+                v-else-if="!isArchived && liveState.phase === 'sending'"
                 class="flex items-center gap-1.5 px-1 py-0.5 text-xs italic text-muted-foreground/70 ml-2"
               >
                 <SendHorizonalIcon class="size-3.5 shrink-0 animate-pulse" />
