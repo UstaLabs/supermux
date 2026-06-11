@@ -35,6 +35,8 @@ import { waitForRegisteredSession } from "./core/session-manager/spawn-registrat
 import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
 import { resolveDownloadAttachment } from "./core/session-manager/download"
 import { runInterrupt } from "./core/session-manager/interrupt"
+import { RecentInboundIds } from "./core/session-manager/recent-inbound-ids"
+import { deliverInbound as deliverInboundCore, type InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
 import { buildMenuEntries } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
 import { appendSoulSetupInvocation, readSoulSetupState, shouldAutoSendSoulSetup } from "./core/session-manager/soul-setup"
@@ -1938,6 +1940,17 @@ const server = await startSocketServer({
   },
 })
 
+const recentInboundIds = new RecentInboundIds()
+function deliverInbound(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
+  return deliverInboundCore({
+    getAdapter: (id) => adapters.get(id),
+    isClaude: (id) => (registry.get(id)?.agent ?? "claude") === "claude",
+    applyDeliver: (id) => agentStateStore.applyEvent(id, "deliver"),
+    sendInboundSocket: (id, payload) => server.sendInbound(id, payload),
+    seen: recentInboundIds,
+  }, sessionId, text, meta)
+}
+
 async function submitReview(sessionId: string): Promise<{ ok: boolean; delivered: number; reason?: string }> {
   const s = registry.get(sessionId)
   if (!s) return { ok: false, delivered: 0, reason: "no such session" }
@@ -1965,18 +1978,9 @@ async function submitReview(sessionId: string): Promise<{ ok: boolean; delivered
   // Deliver the full review to the agent as a normal user turn (same path as a web
   // message): adapter.send for codex/cursor/opencode; server.sendInbound for claude.
   // chat_id "web" so the agent's reply routes back to the visible web chat.
-  const agentKind = s.agent ?? "claude"
-  const adapterDriven = agentKind === "codex" || agentKind === "cursor" || agentKind === "opencode"
   const meta = { channel: "web", chat_id: "web", message_id: messageId }
-  if (adapterDriven) {
-    const adapter = adapters.get(s.id)
-    if (!adapter) return { ok: false, delivered: 0, reason: "agent adapter not ready" }
-    agentStateStore.applyEvent(s.id, "deliver")
-    await adapter.send(text, meta as never)
-  } else {
-    agentStateStore.applyEvent(s.id, "deliver")
-    await server.sendInbound(s.id, { content: text, meta: meta as never })
-  }
+  const r = await deliverInbound(s.id, text, meta)
+  if (!r.ok) return { ok: false, delivered: 0, reason: "agent adapter not ready" }
   for (const c of open) reviewStore.update(c.id, { status: "submitted" })
   return { ok: true, delivered: open.length }
 }
@@ -1991,18 +1995,9 @@ async function deliverUserMessage(sessionId: string, text: string): Promise<{ ok
   try {
     messageLog.append(s.id, { id: `in:web:${messageId}`, ts: new Date().toISOString(), direction: "inbound", channel: "web", chat_id: "web", message_id: messageId, text })
   } catch (err: any) { log.error("deliver_message_append_failed", { session: s.name, err: err?.message ?? String(err) }) }
-  const agentKind = s.agent ?? "claude"
-  const adapterDriven = agentKind === "codex" || agentKind === "cursor" || agentKind === "opencode"
   const meta = { channel: "web", chat_id: "web", message_id: messageId }
-  if (adapterDriven) {
-    const adapter = adapters.get(s.id)
-    if (!adapter) return { ok: false, reason: "agent adapter not ready" }
-    agentStateStore.applyEvent(s.id, "deliver")
-    await adapter.send(text, meta as never)
-  } else {
-    agentStateStore.applyEvent(s.id, "deliver")
-    await server.sendInbound(s.id, { content: text, meta: meta as never })
-  }
+  const r = await deliverInbound(s.id, text, meta)
+  if (!r.ok) return { ok: false, reason: "agent adapter not ready" }
   return { ok: true }
 }
 
@@ -2448,55 +2443,29 @@ _tg.on("inbound", async (msg: InboundMessage) => {
     log.error("messages_append_failed", { session: session.name, err: err?.message ?? String(err) })
   }
   try {
-    const adapter = adapters.get(session.id)
-    const agentKind = session.agent ?? "claude"
-    // codex/cursor/opencode are adapter-driven (in-process send()); only claude
-    // is delivered to a shim socket via server.sendInbound(). Omitting opencode
-    // here queues its inbound for a socket that never consumes it → turn hangs.
-    const adapterDriven = agentKind === "codex" || agentKind === "cursor" || agentKind === "opencode"
-    if (adapter && adapterDriven) {
-      agentStateStore.applyEvent(session.id, "deliver")
-      await adapter.send(decision.text, {
-        chat_id: msg.chat_id,
-        message_id: msg.message_id,
-        user: msg.user,
-        user_id: msg.user_id,
-        ts: msg.ts,
-        ...(msg.attachments?.[0] ? {
-          attachment_kind: msg.attachments[0].kind,
-          attachment_file_id: msg.attachments[0].file_id,
-          ...(msg.attachments[0].size != null ? { attachment_size: String(msg.attachments[0].size) } : {}),
-          ...(msg.attachments[0].mime ? { attachment_mime: msg.attachments[0].mime } : {}),
-          ...(msg.attachments[0].name ? { attachment_name: msg.attachments[0].name } : {}),
-        } : {}),
-      })
-      log.debug("send_inbound.after", { session: session.name, via: "adapter", ok: true })
-    } else if (adapterDriven) {
-      log.warn("send_inbound.adapter_missing", { session: session.name, agent: agentKind })
+    const meta = {
+      chat_id: msg.chat_id,
+      message_id: msg.message_id,
+      user: msg.user,
+      user_id: msg.user_id,
+      ts: msg.ts,
+      ...(msg.attachments?.[0] ? {
+        attachment_kind: msg.attachments[0].kind,
+        attachment_file_id: msg.attachments[0].file_id,
+        ...(msg.attachments[0].size != null ? { attachment_size: String(msg.attachments[0].size) } : {}),
+        ...(msg.attachments[0].mime ? { attachment_mime: msg.attachments[0].mime } : {}),
+        ...(msg.attachments[0].name ? { attachment_name: msg.attachments[0].name } : {}),
+      } : {}),
+    }
+    const r = await deliverInbound(session.id, decision.text, meta)
+    if (!r.ok) {
+      log.warn("send_inbound.adapter_missing", { session: session.name, agent: session.agent ?? "claude" })
       await _tg.send({
         op: "reply", chat_id: msg.chat_id,
-        text: `⚠ ${agentKind} session "${session.name}" is not responding (adapter disconnected). Try /kill + re-spawn.`,
+        text: `⚠ ${session.agent ?? "claude"} session "${session.name}" is not responding (adapter disconnected). Try /kill + re-spawn.`,
         disable_notification: false,
       })
     } else {
-      agentStateStore.applyEvent(session.id, "deliver")
-      await server.sendInbound(session.id, {
-        content: decision.text,
-        meta: {
-          chat_id: msg.chat_id,
-          message_id: msg.message_id,
-          user: msg.user,
-          user_id: msg.user_id,
-          ts: msg.ts,
-          ...(msg.attachments?.[0] ? {
-            attachment_kind: msg.attachments[0].kind,
-            attachment_file_id: msg.attachments[0].file_id,
-            ...(msg.attachments[0].size != null ? { attachment_size: String(msg.attachments[0].size) } : {}),
-            ...(msg.attachments[0].mime ? { attachment_mime: msg.attachments[0].mime } : {}),
-            ...(msg.attachments[0].name ? { attachment_name: msg.attachments[0].name } : {}),
-          } : {}),
-        },
-      })
       log.debug("send_inbound.after", { session: session.name, ok: true })
     }
   } catch (err: any) {
@@ -2573,30 +2542,13 @@ if (webChannel) {
       },
       adapterSend: async (sid, text, meta) => {
         const sessionEntry = registry.get(sid)
-        const agentKind = sessionEntry?.agent ?? "claude"
-        const adapter = sessionEntry ? adapters.get(sessionEntry.id) : undefined
-        // Adapter-driven agents run an in-process adapter (no inbound shim
-        // socket): the user's turn must be handed to adapter.send() directly.
-        // Claude is the exception — its inbound is delivered to the connected
-        // shim socket via server.sendInbound(). opencode MUST be here too;
-        // routing it to sendInbound() queues the inbound for a socket that never
-        // consumes it, so the turn hangs forever at "sending".
-        const adapterDriven = agentKind === "codex" || agentKind === "cursor" || agentKind === "opencode"
-        log.info("web_inbound_routing", { sid, agent: agentKind, has_adapter: !!adapter })
-        if (adapter && adapterDriven) {
-          try {
-            agentStateStore.applyEvent(sessionEntry?.id ?? sid, "deliver")
-            await adapter.send(text, meta)
-            log.info("web_inbound_adapter_sent", { sid, agent: agentKind })
-          } catch (err: any) {
-            log.error("web_inbound_adapter_failed", { sid, err: err?.message ?? String(err) })
-          }
-        } else if (adapterDriven) {
-          log.warn("web_inbound_adapter_missing", { sid, agent: agentKind })
-        } else {
-          const sessionId = sessionEntry?.id ?? sid
-          agentStateStore.applyEvent(sessionId, "deliver")
-          await server.sendInbound(sessionId, { content: text, meta })
+        const sessionId = sessionEntry?.id ?? sid
+        log.info("web_inbound_routing", { sid, agent: sessionEntry?.agent ?? "claude" })
+        try {
+          const r = await deliverInbound(sessionId, text, meta)
+          if (!r.ok) log.warn("web_inbound_adapter_missing", { sid, agent: sessionEntry?.agent ?? "claude" })
+        } catch (err: any) {
+          log.error("web_inbound_adapter_failed", { sid, err: err?.message ?? String(err) })
         }
       },
     })
