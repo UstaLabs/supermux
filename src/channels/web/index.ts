@@ -130,9 +130,9 @@ export interface WebChannelOpts {
   vapidPublicKey?: string
   viewingTracker?: import("../../core/push/viewing-tracker").ViewingTracker
   getModels?: (agent: AgentKind) => { id: string; displayName: string }[]
-  switchModel?: (sessionName: string, model: string) => Promise<{ ok: true } | { ok: false; error: string }>
+  switchModel?: (sessionName: string, model: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
   getSessionReasoningLevels?: (id: string) => { agent: string; current?: string; levels: { id: string; description?: string }[]; visible: boolean } | undefined
-  switchReasoningLevel?: (id: string, level: string) => Promise<{ ok: true } | { ok: false; error: string }>
+  switchReasoningLevel?: (id: string, level: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
   getSessionAgent?: (name: string) => { agent: AgentKind; model?: string; reasoningLevel?: string } | undefined
   interruptSession?: (id: string) => Promise<{ ok: boolean; reason?: string }>
   finishSession?: (id: string, opts?: { skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string }) => Promise<import("../../core/worktree/finish").FinishResult>
@@ -1465,11 +1465,12 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const model = body.model as string | undefined
+      const applyNow = body.applyNow === true
       if (!model) return this.json({ error: "model required" }, 400)
       if (!this.opts.switchModel) return this.json({ error: "not configured" }, 503)
-      const result = await this.opts.switchModel(id, model)
+      const result = await this.opts.switchModel(id, model, applyNow)
       if (!result.ok) return this.json({ error: result.error }, 400)
-      return this.json({ ok: true })
+      return this.json({ ok: true, status: result.status }, result.status === "queued" ? 202 : 200)
     }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/reasoning-levels$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
@@ -1481,11 +1482,12 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const reasoningLevel = body.reasoningLevel as string | undefined
+      const applyNow = body.applyNow === true
       if (!reasoningLevel) return this.json({ error: "reasoningLevel required" }, 400)
       if (!this.opts.switchReasoningLevel) return this.json({ error: "not configured" }, 503)
-      const result = await this.opts.switchReasoningLevel(id, reasoningLevel)
+      const result = await this.opts.switchReasoningLevel(id, reasoningLevel, applyNow)
       if (!result.ok) return this.json({ error: result.error }, 400)
-      return this.json({ ok: true })
+      return this.json({ ok: true, status: result.status }, result.status === "queued" ? 202 : 200)
     }
     if (method === "GET" && path === "/projects") {
       const active = this.opts.getSessionsSnapshot().map((s) => s.workdir)

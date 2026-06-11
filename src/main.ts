@@ -36,6 +36,7 @@ import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
 import { resolveDownloadAttachment } from "./core/session-manager/download"
 import { runInterrupt } from "./core/session-manager/interrupt"
 import { RecentInboundIds } from "./core/session-manager/recent-inbound-ids"
+import { PendingReapply, shouldDeferReapply } from "./core/session-manager/pending-reapply"
 import { deliverInbound as deliverInboundCore, type InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
 import { buildMenuEntries } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
@@ -864,10 +865,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     vapidPublicKey: vapid.publicKey,
     viewingTracker,
     getModels: (agent) => modelCache.get(agent).map((m) => ({ id: m.id, displayName: m.displayName })),
-    switchModel: async (id, model) => {
+    switchModel: async (id, model, applyNow) => {
       const s = registry.get(id)
       if (!s) return { ok: false, error: "session not found" }
-      return switchSessionModel(s.id, model)
+      return switchSessionModel(s.id, model, { applyNow })
     },
     getSessionReasoningLevels: (id) => {
       const s = registry.get(id)
@@ -884,10 +885,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         visible: true,
       }
     },
-    switchReasoningLevel: async (id, reasoningLevel) => {
+    switchReasoningLevel: async (id, reasoningLevel, applyNow) => {
       const s = registry.get(id)
       if (!s) return { ok: false, error: "session not found" }
-      return switchSessionReasoningLevel(s.id, reasoningLevel)
+      return switchSessionReasoningLevel(s.id, reasoningLevel, { applyNow })
     },
     getSessionAgent: (id) => {
       const s = registry.get(id)
@@ -1250,6 +1251,7 @@ async function killSession(id: string) {
   stopClaudeTailer(s.id)
   agentStateStore.clear(s.id)
   recentInboundIds.clear(s.id)
+  pendingReapply.clear(s.id)
   // Do NOT delete agent_home — needed for resume
 
   // Reclaim this session's worktree if it has no unsaved/unmerged work; otherwise
@@ -1942,6 +1944,7 @@ const server = await startSocketServer({
 })
 
 const recentInboundIds = new RecentInboundIds()
+const pendingReapply = new PendingReapply()
 function deliverInbound(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
   return deliverInboundCore({
     getAdapter: (id) => adapters.get(id),
@@ -2204,7 +2207,29 @@ async function reapplySessionAgentConfig(sessionId: string): Promise<{ ok: true 
   return { ok: false, error: `agent does not support reasoning level: ${session.agent}` }
 }
 
-async function switchSessionModel(sessionId: string, newModel: string): Promise<{ ok: true } | { ok: false; error: string }> {
+// Apply a model/effort change now if the session is idle (or applyNow), else
+// record a deferred respawn to run when the turn ends. The registry was already
+// updated by the caller; `olds` are restored only if a (now or deferred) apply fails.
+async function applyOrDeferReapply(
+  sessionId: string,
+  olds: { oldModel?: string; oldReasoningLevel?: string },
+  applyNow: boolean,
+): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
+  const phase = agentStateStore.get(sessionId).phase
+  if (shouldDeferReapply(phase, applyNow)) {
+    pendingReapply.mark(sessionId, olds)
+    return { ok: true, status: "queued" }
+  }
+  const result = await reapplySessionAgentConfig(sessionId)
+  if (!result.ok) {
+    registry.setModel(sessionId, olds.oldModel)
+    registry.setReasoningLevel(sessionId, olds.oldReasoningLevel)
+    return result
+  }
+  return { ok: true, status: "applied" }
+}
+
+async function switchSessionModel(sessionId: string, newModel: string, opts?: { applyNow?: boolean }): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
   const session = registry.get(sessionId)
   if (!session) return { ok: false, error: `no such session: ${sessionId}` }
 
@@ -2227,18 +2252,13 @@ async function switchSessionModel(sessionId: string, newModel: string): Promise<
       adapter.model = newModel
     }
     webChannel?.broadcastToAll({ type: "session_state", session: session.id, model: newModel })
-    return { ok: true }
+    return { ok: true, status: "applied" }
   }
 
-  const result = await reapplySessionAgentConfig(sessionId)
-  if (!result.ok) {
-    registry.setModel(sessionId, oldModel)
-    registry.setReasoningLevel(sessionId, oldReasoningLevel)
-  }
-  return result
+  return applyOrDeferReapply(sessionId, { oldModel, oldReasoningLevel }, opts?.applyNow ?? false)
 }
 
-async function switchSessionReasoningLevel(sessionId: string, newLevel: string): Promise<{ ok: true } | { ok: false; error: string }> {
+async function switchSessionReasoningLevel(sessionId: string, newLevel: string, opts?: { applyNow?: boolean }): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
   const session = registry.get(sessionId)
   if (!session) return { ok: false, error: `no such session: ${sessionId}` }
 
@@ -2255,11 +2275,7 @@ async function switchSessionReasoningLevel(sessionId: string, newLevel: string):
   const oldReasoningLevel = session.reasoningLevel
   registry.setReasoningLevel(sessionId, newLevel)
 
-  const result = await reapplySessionAgentConfig(sessionId)
-  if (!result.ok) {
-    registry.setReasoningLevel(sessionId, oldReasoningLevel)
-  }
-  return result
+  return applyOrDeferReapply(sessionId, { oldModel: session.model, oldReasoningLevel }, opts?.applyNow ?? false)
 }
 
 // Wire telegram inbound through routing
@@ -2485,6 +2501,18 @@ activityStore.on("append", (sessionId: string, event) => {
 })
 agentStateStore.on("change", (sessionId: string, state) => {
   webChannel?.broadcastToAll({ type: "agent_state", session: sessionId, phase: state.phase, tool: state.tool, since: state.since, workingSince: state.workingSince })
+  if (state.phase === "idle" && pendingReapply.has(sessionId)) {
+    const olds = pendingReapply.take(sessionId)!
+    void reapplySessionAgentConfig(sessionId).then((r) => {
+      if (!r.ok) {
+        registry.setModel(sessionId, olds.oldModel)
+        registry.setReasoningLevel(sessionId, olds.oldReasoningLevel)
+        const s = registry.get(sessionId)
+        webChannel?.broadcastToAll({ type: "session_state", session: sessionId, model: s?.model, reasoningLevel: sessionEffort(s ?? ({} as any)) })
+        void notifyAgentError(sessionId, s?.name ?? sessionId, "config", `Failed to apply model/effort change: ${r.error}`)
+      }
+    }).catch((err) => log.warn("drain_reapply_failed", { sessionId, err: String(err) }))
+  }
 })
 agentStateStore.on("thoughtComplete", (sessionId: string, durationMs: number, now: number) => {
   const sec = Math.max(1, Math.round(durationMs / 1000))
