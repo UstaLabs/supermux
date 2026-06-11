@@ -31,7 +31,6 @@ import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCom
 import { AgentKind, isAgentKind } from "./shared/agents"
 import { sendChannelConsentEnter } from "./core/session-manager/post-spawn-keys"
 import { preAcceptTrust } from "./core/session-manager/trust"
-import { verifySpawnSurvived } from "./core/session-manager/verify-spawn"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
 import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
 import { resolveDownloadAttachment } from "./core/session-manager/download"
@@ -2074,27 +2073,15 @@ async function spawnSession(args: { workdir: string; requestedName?: string; age
   )
   let registered = registry.get(r.session_id)
   if ((args.agent ?? "claude") === "claude") {
-    const survived = await verifySpawnSurvived({
+    // No blind sleep: wait for the shim to register (proof the window survived
+    // AND the agent came up), while polling window liveness so an instant death
+    // fast-fails instead of waiting out the full registration timeout.
+    registered = await waitForRegisteredSession({
+      id: r.session_id,
       name: r.name,
-      listWindows: () => listSessionWindows(TMUX_SESSION),
+      lookup: (id, name) => registry.get(id) ?? registry.resolveName(name),
+      stillAlive: async () => (await listSessionWindows(TMUX_SESSION)).includes(r.name),
     })
-    if (!survived) {
-      log.warn("spawn_post_check_failed", { name: r.name, workdir })
-      throw new Error(
-        `spawn failed for "${r.name}": tmux window did not survive after creation. ` +
-        `Common causes: workdir doesn't exist, claude binary not on PATH, or claude crashed on startup. ` +
-        `Check the tmux pane history for the underlying error.`
-      )
-    }
-    try {
-      registered = await waitForRegisteredSession({
-        id: r.session_id,
-        name: r.name,
-        lookup: (id, name) => registry.get(id) ?? registry.resolveName(name),
-      })
-    } catch (err) {
-      throw err
-    }
   }
   if (args.model && registered) {
     registry.sessions.setModel(registered.id, args.model)
