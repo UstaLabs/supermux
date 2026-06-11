@@ -140,3 +140,31 @@ test("workingSince is set on entering working and preserved across tool transiti
   s.applyEvent("a", "Stop", undefined, 9000)               // idle -> cleared
   expect(s.get("a").workingSince).toBeUndefined()
 })
+
+test("sweepStalled moves a long-sending session to stalled and emits once", () => {
+  const s = new AgentStateStore()
+  const seen: string[] = []
+  s.on("change", (_sid, st) => seen.push(st.phase))
+  s.applyEvent("a", "deliver", undefined, 1000)               // sending at 1000
+  expect(s.sweepStalled(1000 + 29_999, 30_000)).toEqual([])   // not yet
+  expect(s.sweepStalled(1000 + 30_000, 30_000)).toEqual(["a"])// stalls now
+  expect(s.get("a")).toEqual({ phase: "stalled", since: 31_000 })
+  expect(s.sweepStalled(1000 + 60_000, 30_000)).toEqual([])   // already stalled: no re-emit
+  expect(seen).toEqual(["sending", "stalled"])
+})
+
+test("sweepStalled ignores non-sending phases", () => {
+  const s = new AgentStateStore()
+  s.applyEvent("a", "PreToolUse", "Bash", 1000)               // running
+  expect(s.sweepStalled(1000 + 100_000, 30_000)).toEqual([])
+  expect(s.get("a").phase).toBe("running")
+})
+
+test("a real event recovers a stalled session", () => {
+  const s = new AgentStateStore()
+  s.applyEvent("a", "deliver", undefined, 0)
+  s.sweepStalled(30_000, 30_000)                              // stalled
+  expect(s.get("a").phase).toBe("stalled")
+  s.applyEvent("a", "UserPromptSubmit", undefined, 31_000)    // turn really started
+  expect(s.get("a").phase).toBe("thinking")
+})

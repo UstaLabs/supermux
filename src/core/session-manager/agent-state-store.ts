@@ -1,6 +1,6 @@
 import { EventEmitter } from "events"
 
-export type AgentPhase = "idle" | "sending" | "thinking" | "running"
+export type AgentPhase = "idle" | "sending" | "thinking" | "running" | "stalled"
 
 export interface AgentState {
   phase: AgentPhase
@@ -54,6 +54,24 @@ export class AgentStateStore extends EventEmitter {
       if (durationMs >= 1000) this.emit("thoughtComplete", sessionId, durationMs, now)
     }
     this.emit("change", sessionId, next)
+  }
+
+  // Move any session stuck in "sending" past `deadlineMs` into "stalled",
+  // emitting "change" for each. Pure with respect to `now` (no internal timer)
+  // so the broker drives it on an interval and tests pass an explicit clock.
+  // Returns the affected session ids. Already-stalled sessions are skipped, so
+  // it never re-emits; a later real event (UserPromptSubmit/Stop/…) recovers them.
+  sweepStalled(now: number, deadlineMs: number): string[] {
+    const affected: string[] = []
+    for (const [sid, st] of this.bySession) {
+      if (st.phase === "sending" && now - st.since >= deadlineMs) {
+        const next: AgentState = { phase: "stalled", since: now }
+        this.bySession.set(sid, next)
+        this.emit("change", sid, next)
+        affected.push(sid)
+      }
+    }
+    return affected
   }
 
   get(sessionId: string): AgentState {
