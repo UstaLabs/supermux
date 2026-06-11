@@ -34,6 +34,7 @@ import { preAcceptTrust } from "./core/session-manager/trust"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
 import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
 import { resolveDownloadAttachment } from "./core/session-manager/download"
+import { runInterrupt } from "./core/session-manager/interrupt"
 import { buildMenuEntries } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
 import { appendSoulSetupInvocation, readSoulSetupState, shouldAutoSendSoulSetup } from "./core/session-manager/soul-setup"
@@ -616,15 +617,10 @@ async function interruptClaudePane(sessionId: string): Promise<void> {
 // status to idle so the UI clears "Working…" at once. The agent's own turn-end
 // (Claude's Esc, codex turn/completed, cursor child exit) reconverges on idle.
 async function interruptSessionById(sessionId: string): Promise<{ ok: boolean; reason?: string }> {
-  const adapter = adapters.get(sessionId)
-  if (!adapter) return { ok: false, reason: "session not interruptible" }
-  try {
-    await adapter.interrupt()
-  } catch (err: any) {
-    return { ok: false, reason: err?.message ?? String(err) }
-  }
-  agentStateStore.applyEvent(sessionId, "Stop")
-  return { ok: true }
+  return runInterrupt({
+    adapter: adapters.get(sessionId),
+    onClear: () => agentStateStore.applyEvent(sessionId, "Stop"),
+  })
 }
 
 async function finishSessionById(sessionId: string, opts?: { skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string }): Promise<FinishResult> {
