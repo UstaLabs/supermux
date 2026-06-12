@@ -1,6 +1,6 @@
 {
   "name": "supermux",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Run Claude Code, Codex, Cursor & OpenCode around the clock on a box you own — steered from any screen. Self-hosted, no vendor cloud.",
   "license": "MIT",
   "private": true,
