@@ -22,3 +22,17 @@ declare module "*.tmpl" {
   const content: string
   export default content
 }
+
+// PWA assets embedded by scripts/generate-static-manifest.ts (the generated
+// src/channels/web/static-manifest.generated.ts imports every built static file
+// `with { type: "file" }`). Under moduleResolution:bundler these wildcards make
+// the imports resolve to a path string; without them tsc errors (.css/.png/.svg/
+// .ico/.webmanifest are unresolvable → TS2307; .js resolves on disk but untyped
+// → TS7016). `.html` is intentionally omitted — bun-types already declares it
+// (as HTMLBundle), and the generator coerces that one binding to string.
+declare module "*.css" { const path: string; export default path }
+declare module "*.png" { const path: string; export default path }
+declare module "*.svg" { const path: string; export default path }
+declare module "*.ico" { const path: string; export default path }
+declare module "*.webmanifest" { const path: string; export default path }
+declare module "*.js" { const path: string; export default path }

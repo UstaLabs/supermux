@@ -1,8 +1,9 @@
 import type { Channel, ChannelCapabilities, InboundAttachment, InboundMessage, OutboundAction, OutboundResult } from "../channel"
 import { DeviceStore } from "./device-store"
+import { serveStatic } from "./static-serve"
 import { makeLogger } from "../../shared/log"
 import { home } from "../../shared/home"
-import { existsSync, statSync, readFileSync, writeFileSync, mkdirSync } from "fs"
+import { existsSync, writeFileSync, mkdirSync } from "fs"
 import { join } from "path"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { extractSubdomain, handleProxyRequest, parseCookie } from "./proxy"
@@ -54,28 +55,6 @@ export function __resetAuthFailures(): void {
   authFailures.clear()
 }
 
-function guessMime(p: string): string {
-  if (p.endsWith(".html")) return "text/html"
-  if (p.endsWith(".js"))   return "application/javascript"
-  if (p.endsWith(".css"))  return "text/css"
-  if (p.endsWith(".json")) return "application/json"
-  if (p.endsWith(".svg"))  return "image/svg+xml"
-  if (p.endsWith(".png"))  return "image/png"
-  if (p.endsWith(".webmanifest")) return "application/manifest+json"
-  if (p.endsWith(".ico"))  return "image/x-icon"
-  if (p.endsWith(".woff2")) return "font/woff2"
-  return "application/octet-stream"
-}
-
-function cacheControlFor(candidate: string): string {
-  // Vite emits hashed filenames under /assets/ — those are content-addressed
-  // (changing the bundle changes the URL) and safe to cache forever.
-  if (candidate.startsWith("/assets/")) return "public, max-age=31536000, immutable"
-  // Everything else is an entry point (HTML, sw.js, registerSW.js, manifest,
-  // icons). Force revalidation so Cloudflare + browser PWAs pick up updates.
-  return "no-cache, must-revalidate"
-}
-
 const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/system", "/repos"]
 const MAX_CLIENT_LOG_RING = 800
 
@@ -120,6 +99,7 @@ export interface WebChannelOpts {
   devicesFile: string
   publicUrl: string
   staticDir?: string
+  staticEmbedded?: Record<string, string>
   getSessionsSnapshot: () => SessionSnapshot[]
   getSessionLog: (name: string) => unknown[]
   getSessionActivity?: (name: string) => unknown[]
@@ -847,20 +827,11 @@ export class WebChannel implements Channel {
     // serve a stale index.html or sw.js that points to old hashed bundles, and PWAs see
     // no update. Hashed files in /assets/ are content-addressed (e.g. index-DaYj1-bp.js)
     // and safe to cache forever; everything else (HTML shell, SW, manifest, registerSW)
-    // is an entry point and must revalidate every request.
-    if (this.opts.staticDir && method === "GET" && !API_PREFIXES.some((p) => path === p || path.startsWith(p + "/"))) {
-      const candidate = path === "/" ? "/index.html" : path
-      const filePath = join(this.opts.staticDir, candidate)
-      if (existsSync(filePath) && statSync(filePath).isFile()) {
-        return new Response(readFileSync(filePath), {
-          headers: { "content-type": guessMime(filePath), "cache-control": cacheControlFor(candidate) },
-        })
-      }
-      // SPA fallback for unknown non-API GETs (e.g., /devices, /s/ana — handled by vue-router)
-      const idx = join(this.opts.staticDir, "index.html")
-      if (existsSync(idx)) {
-        return new Response(readFileSync(idx), { headers: { "content-type": "text/html", "cache-control": "no-cache, must-revalidate" } })
-      }
+    // is an entry point and must revalidate every request. Resolution (disk-first, then
+    // embedded PWA for compiled binaries, then SPA fallback) lives in serveStatic.
+    if (method === "GET" && !API_PREFIXES.some((p) => path === p || path.startsWith(p + "/"))) {
+      const res = serveStatic({ staticDir: this.opts.staticDir, embedded: this.opts.staticEmbedded ?? {}, path })
+      if (res) return res
     }
 
     if (method === "POST" && path.startsWith("/internal/agent-hook/")) {

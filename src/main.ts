@@ -1,6 +1,7 @@
 // src/main.ts
 import { TelegramChannel } from "./channels/telegram"
 import { WebChannel } from "./channels/web"
+import { EMBEDDED_STATIC } from "./channels/web/static-manifest.generated"
 import { requireAtLeastOneChannel } from "./shared/channels"
 import { handleWebInbound } from "./channels/web/inbound-handler"
 import type { Channel, InboundMessage, OutboundAction } from "./channels/channel"
@@ -736,6 +737,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     devicesFile: DEVICES_FILE,
     publicUrl: MUX_WEB_PUBLIC_URL,
     staticDir: STATIC_DIR,
+    staticEmbedded: EMBEDDED_STATIC,
     internalSecret: INTERNAL_SECRET,
     getCuratorSettings: () => ({ config: settings.getCurator(), nextRun: curatorScheduler?.nextRun()?.toISOString() ?? null }),
     setCuratorSettings: (cfg) => {
