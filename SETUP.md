@@ -135,8 +135,11 @@ opencode auth login
 git clone https://github.com/UstaLabs/supermux.git ~/projects/supermux
 cd ~/projects/supermux
 bun install
+# Build the web app (the PWA is served from a gitignored static dir —
+# without this step the broker has no web UI):
+cd src/web-app && bun install --frozen-lockfile && bun run build && cd ../..
 ```
-**VERIFY:** `bun install` completes; optionally `bun run typecheck` passes.
+**VERIFY:** `bun install` completes; `ls src/channels/web/static/index.html` exists (the web UI was built); optionally `bun run typecheck` passes.
 
 ### B4. Write the env file
 State lives under `~/.mux/`. Create the env file at `~/.mux/state/.env`:
@@ -176,7 +179,7 @@ bun src/main.ts
 ```
 **VERIFY:** preflight passes (tmux + an agent CLI found, web env valid) and the broker reports the web channel listening. Stop it (Ctrl-C) once confirmed.
 
-For a persistent install, use a **systemd user service**. Write `~/.config/systemd/user/mux.service`, templating the actual repo path:
+For a persistent install, use a **systemd user service**. Write `~/.config/systemd/user/supermux.service`, templating the actual repo path:
 ```ini
 [Unit]
 Description=supermux broker
