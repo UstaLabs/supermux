@@ -21,7 +21,8 @@ import { writeOpenCodePreamble } from "../agents/opencode/preamble-writer"
 import { spawnOpenCodeServer, type OpenCodeSpawnHandle } from "../agents/opencode/spawn"
 import { OpenCodeAdapter } from "../agents/opencode/adapter"
 import { cursorSpawnArgs, codexSpawnArgs, codexPrepareSessionHome, opencodeConfigEntries } from "../plugins"
-import { join, resolve as resolvePath } from "path"
+import { join } from "path"
+import { shimSpawnSpec } from "./shim-spawn"
 import { mkdirSync } from "fs"
 import { randomUUID } from "crypto"
 import { execSync } from "child_process"
@@ -46,7 +47,6 @@ function captureBaseCommits(workdir: string): Record<string, string> {
 }
 
 const HOME = home()
-const SHIM_ENTRY = resolvePath(import.meta.dirname, "..", "..", "shim", "index.ts")
 
 type CursorSpawnHandle = { onExit: (cb: (code: number | null) => void) => void }
 
@@ -204,8 +204,7 @@ export async function spawnPA(opts: {
 
     writeCodexConfig({
       codexHome: sessionHome,
-      shimCommand: "bun",
-      shimArgs: ["run", SHIM_ENTRY],
+      ...shimSpawnSpec(),
       sessionName: name,
       socketsDir: SOCKETS_DIR,
       sessionId: id,
@@ -263,8 +262,7 @@ export async function spawnPA(opts: {
 
     writeCursorMcpConfig({
       sessionHome,
-      shimCommand: "bun",
-      shimArgs: ["run", SHIM_ENTRY],
+      ...shimSpawnSpec(),
       sessionName: name,
       socketsDir: SOCKETS_DIR,
       sessionId: id,
@@ -315,8 +313,7 @@ export async function spawnPA(opts: {
 
     writeOpenCodeConfig({
       configHome,
-      shimCommand: "bun",
-      shimArgs: ["run", SHIM_ENTRY],
+      ...shimSpawnSpec(),
       sessionName: name,
       socketsDir: SOCKETS_DIR,
       sessionId: id,
@@ -417,8 +414,7 @@ export async function spawnCodexSession(deps: SpawnDeps, args: SpawnArgs): Promi
 
     writeCodexConfig({
       codexHome: sessionHome,
-      shimCommand: "bun",
-      shimArgs: ["run", SHIM_ENTRY],
+      ...shimSpawnSpec(),
       sessionName: name,
       socketsDir: SOCKETS_DIR,
       sessionId: id,
@@ -491,8 +487,7 @@ export async function spawnCursorSession(deps: SpawnDeps, args: SpawnArgs): Prom
 
     writeCursorMcpConfig({
       sessionHome,
-      shimCommand: "bun",
-      shimArgs: ["run", SHIM_ENTRY],
+      ...shimSpawnSpec(),
       sessionName: name,
       socketsDir: SOCKETS_DIR,
       sessionId: id,
@@ -586,8 +581,7 @@ export async function spawnOpenCodeSession(deps: SpawnDeps, args: SpawnArgs): Pr
 
     writeOpenCodeConfig({
       configHome,
-      shimCommand: "bun",
-      shimArgs: ["run", SHIM_ENTRY],
+      ...shimSpawnSpec(),
       sessionName: name,
       socketsDir: SOCKETS_DIR,
       sessionId: id,
@@ -662,8 +656,7 @@ export async function resumeOpenCodeSession(
   const { pluginPaths, skillsPaths } = opencodeConfigEntries({ sessionName: session.name })
   writeOpenCodeConfig({
     configHome,
-    shimCommand: "bun",
-    shimArgs: ["run", SHIM_ENTRY],
+    ...shimSpawnSpec(),
     sessionName: session.name,
     socketsDir: SOCKETS_DIR,
     sessionId: session.id,

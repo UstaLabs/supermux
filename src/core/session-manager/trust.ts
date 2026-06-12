@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, renameSync, existsSync, unlinkSync } from "fs"
-import { resolve } from "path"
 import { makeLogger } from "../../shared/log"
 import { home } from "../../shared/home"
+import { shimSpawnSpec } from "./shim-spawn"
 
 const log = makeLogger("trust")
 
@@ -12,12 +12,6 @@ const log = makeLogger("trust")
 // tools, so an agent tool-call can't be dispatched twice. MUST match spawn-command.ts.
 export const CLAUDE_SHIM_SERVER = "mux-shim"
 export const CLAUDE_CHANNEL_SERVER = "mux-channel"
-
-// Absolute path to the shim entrypoint, resolved from THIS file's location so it
-// works no matter where the repo lives (rename-proof for the repo dir too).
-function shimEntrypoint(): string {
-  return resolve(import.meta.dirname, "../../..", "src/shim/index.ts")
-}
 
 // Atomically prepare ~/.claude.json before launching claude for `workdir`.
 // Several first-run concerns, one read-modify-write (avoids a concurrent-spawn
@@ -76,15 +70,16 @@ export function preAcceptTrust(workdir: string): void {
   // 2. Register the two shim MCP servers: tools (mux-shim) + channel-only
   //    (mux-channel, MUX_CHANNEL_ONLY=1). Only the tools one advertises tools.
   config.mcpServers ??= {}
-  const shimPath = shimEntrypoint()
+  const spec = shimSpawnSpec()
   const desired: Record<string, { type: string; command: string; args: string[]; env: Record<string, string> }> = {
-    [CLAUDE_SHIM_SERVER]: { type: "stdio", command: "bun", args: ["run", shimPath], env: {} },
-    [CLAUDE_CHANNEL_SERVER]: { type: "stdio", command: "bun", args: ["run", shimPath], env: { MUX_CHANNEL_ONLY: "1" } },
+    [CLAUDE_SHIM_SERVER]: { type: "stdio", command: spec.shimCommand, args: spec.shimArgs, env: {} },
+    [CLAUDE_CHANNEL_SERVER]: { type: "stdio", command: spec.shimCommand, args: spec.shimArgs, env: { MUX_CHANNEL_ONLY: "1" } },
   }
   for (const [name, want] of Object.entries(desired)) {
     const cur = config.mcpServers[name]
     const wired =
-      cur && cur.command === "bun" && Array.isArray(cur.args) && cur.args.includes(shimPath) &&
+      cur && cur.command === want.command &&
+      Array.isArray(cur.args) && JSON.stringify(cur.args) === JSON.stringify(want.args) &&
       (want.env.MUX_CHANNEL_ONLY ? cur.env?.MUX_CHANNEL_ONLY === "1" : !cur.env?.MUX_CHANNEL_ONLY)
     if (!wired) {
       config.mcpServers[name] = want
