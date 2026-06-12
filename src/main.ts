@@ -99,6 +99,7 @@ import { normalizeToolName } from "./core/agents/tool-normalize"
 import { gcOrphanAgentHomes, reclaimCursorHomes } from "./core/agents/shared-runtime"
 import { CuratorScheduler } from "./core/curator/scheduler"
 import { runCurator, type CuratorDeps } from "./core/curator/run"
+import { curatorPromptPath } from "./core/runtime-assets"
 import { SettingsStore } from "./core/settings/store"
 import { SETTINGS_KEY_CURATOR, parseCuratorConfig, type CuratorConfig } from "./core/settings/curator-config"
 import { listLspServerSettingsRows } from "./core/lsp/editor-settings"
@@ -2791,7 +2792,7 @@ refreshModelCache().catch((err) => log.warn("model_cache_init_failed", { err: St
       // and its digest/notice fans out to all devices.
       chatId: "web",
       repoPath: MUX_HOME,
-      promptPath: join(import.meta.dirname, "..", "prompts", "knowledge-curator.md"),
+      promptPath: curatorPromptPath(STATE_DIR),
       spawn: async ({ workdir, name }) => {
         const r = await spawnSession({ workdir, requestedName: name, agent: "claude" })
         return { name: r.name }

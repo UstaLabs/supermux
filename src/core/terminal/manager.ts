@@ -1,10 +1,10 @@
 import { makeLogger } from "../../shared/log"
-import { resolve as resolvePath } from "path"
 import { existsSync } from "fs"
+import { STATE_DIR } from "../../shared/paths"
+import { ptyHelperPath } from "../runtime-assets"
 
 const log = makeLogger("terminal")
 
-const PTY_HELPER = resolvePath(import.meta.dirname, "pty-helper")
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000
 
 export interface TerminalInstance {
@@ -45,15 +45,16 @@ export class TerminalManager {
       return { ok: false, error: "terminal already open for this session" }
     }
 
-    if (!existsSync(PTY_HELPER)) {
-      log.error("pty_helper_missing", { path: PTY_HELPER })
+    const ptyHelper = ptyHelperPath(STATE_DIR)
+    if (!existsSync(ptyHelper)) {
+      log.error("pty_helper_missing", { path: ptyHelper })
       return { ok: false, error: "pty-helper binary not found" }
     }
 
     const shell = process.env.SHELL ?? "/bin/bash"
 
     const proc = Bun.spawn(
-      [PTY_HELPER, String(opts.cols), String(opts.rows), opts.workdir, shell],
+      [ptyHelper, String(opts.cols), String(opts.rows), opts.workdir, shell],
       { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
     )
 

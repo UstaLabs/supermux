@@ -1,27 +1,24 @@
 import { resolve, basename, join } from "path"
 import { writeFileSync, mkdirSync, existsSync } from "fs"
 import { buildMemoryPreamble } from "../memory/preamble"
-import { ENVIRONMENT_MD_PATH } from "../agents/environment"
 import type { AgentRole } from "../memory/injector"
 import type { SessionRole } from "./policy"
 import { STATE_DIR } from "../../shared/paths"
 import { CLAUDE_HOOKS_SETTINGS_PATH } from "../agents/claude/hooks-settings"
 import { claudeSpawnArgs, codexSpawnArgs, cursorSpawnArgs } from "../plugins"
+import { environmentMdPath, promptsDir, replyFallbackPath } from "../runtime-assets"
 import { makeLogger } from "../../shared/log"
 
 const log = makeLogger("spawn-command")
 
-// spawn-command.ts lives at src/core/session-manager/, so the project root is
-// three levels up. (This file was at src/broker/ before Phase 1's refactor;
-// the relative depth changed when it moved.)
-const PROMPTS_DIR = resolve(import.meta.dirname, "..", "..", "..", "prompts")
-
-// The reply conventions now live in the mux-core plugin's SessionStart
-// hook (see the plugin-host design spec, Phase 4).
-// This file is appended ONLY as a safety net when that plugin is absent from
-// the spawn (e.g. a missing/broken plugins.json), so a session can never end up
-// with no reply rules at all.
-const REPLY_FALLBACK_PATH = resolve(PROMPTS_DIR, "reply-fallback.md")
+// environment.md (--append-system-prompt-file), reply-fallback.md
+// (--append-system-prompt-file, a safety-net appended only when the mux-core
+// plugin — which normally carries reply rules via its SessionStart hook — is
+// absent from the spawn), and the prompts dir (--add-dir) all have their PATHS
+// handed to the spawned claude process. In a compiled binary those repo files
+// live in $bunfs (unreadable by children), so they're routed through
+// runtime-assets, which copies them onto disk; in source mode the helpers
+// return the real repo paths. See src/core/runtime-assets.ts.
 const CORE_PLUGIN_NAME = "mux-core"
 
 // Single source of truth for the claude invocation broker spawns into a tmux
@@ -42,13 +39,13 @@ export function buildClaudeSpawnCommand(opts: { name: string; sessionId?: string
   const { flags: pluginFlags, hasCorePlugin } = buildPluginFlags(opts.name, opts.pluginsFile, opts.pluginsDir)
   // Reply rules normally arrive via mux-core's SessionStart hook. Only
   // append the static fallback when that plugin isn't part of this spawn.
-  const replyFallback = hasCorePlugin ? "" : ` --append-system-prompt-file ${REPLY_FALLBACK_PATH}`
+  const replyFallback = hasCorePlugin ? "" : ` --append-system-prompt-file ${replyFallbackPath(STATE_DIR)}`
   // MUX_SESSION_ROLE lets the SessionStart hook inject the PA's soul.md (its full
   // identity) for personal assistants only — workers must never receive soul.md.
   return `bash -lc 'CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 MUX_SESSION_ID=${sessionId} MUX_DISPLAY_NAME=${opts.name} MUX_SESSION_ROLE=${role} ` +
     `claude --dangerously-skip-permissions --dangerously-load-development-channels server:mux-channel ` +
-    `--add-dir ${PROMPTS_DIR} ` +
-    `--append-system-prompt-file ${ENVIRONMENT_MD_PATH} ` +
+    `--add-dir ${promptsDir(STATE_DIR)} ` +
+    `--append-system-prompt-file ${environmentMdPath(STATE_DIR)} ` +
     `--append-system-prompt-file ${memoryPreamblePath}${replyFallback}${pluginFlags}${modelFlag}${effortFlag}${sessionFlag}${settingsFlag}'`
 }
 
