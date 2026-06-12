@@ -40,6 +40,11 @@ bun install
   || ( cd src/web-app && ./node_modules/.bin/vite build ) \
   || ( cd src/web-app && bun node_modules/vite/bin/vite.js build )
 
+# Restore workspace mutations unconditionally (on success or failure): the
+# embedded copies live inside $OUT now; the tree goes back to committed state.
+# Registered HERE, right before the mutating steps, so any early exit is covered.
+trap 'git checkout -- src/channels/web/static-manifest.generated.ts src/core/terminal/pty-helper 2>/dev/null || true' EXIT
+
 # pty-helper: native-arch compile (overwrites the committed x64 ELF in the tree
 # so the embed below picks up THIS machine's arch; restored at the end).
 : "${CC:=cc}"
@@ -55,9 +60,5 @@ bun build --compile --minify src/cli.ts \
   --define "process.env.SUPERMUX_BUILD_VERSION=\"$VERSION\"" \
   --define "process.env.SUPERMUX_BUILD_COMMIT=\"$COMMIT\"" \
   --outfile "$OUT"
-
-# Restore workspace mutations (manifest entries + native-rebuilt pty-helper):
-# the embedded copies live inside $OUT now; the tree goes back to committed.
-git checkout -- src/channels/web/static-manifest.generated.ts src/core/terminal/pty-helper 2>/dev/null || true
 
 echo "built: $OUT ($VERSION $COMMIT)"
