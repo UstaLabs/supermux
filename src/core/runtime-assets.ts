@@ -6,7 +6,7 @@
 // never serves a previous version's files. In source mode callers get the
 // real repo paths directly (no copy) — the exported helpers branch on
 // IS_COMPILED for exactly that.
-import { copyFileSync, chmodSync, existsSync, mkdirSync, renameSync, unlinkSync } from "fs"
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "fs"
 import { join, dirname, resolve as resolvePath } from "path"
 import { BUILD_VERSION, IS_COMPILED } from "../shared/build-info"
 
@@ -20,13 +20,18 @@ export function materializeAsset(opts: { stateDir: string; name: string; sourceP
   const dest = join(opts.stateDir, "runtime-assets", BUILD_VERSION, opts.name)
   if (existsSync(dest)) return dest
   mkdirSync(dirname(dest), { recursive: true, mode: 0o700 })
-  // Atomic: copy to a tmp in the same dir, chmod it, then rename onto dest —
+  // Atomic: write to a tmp in the same dir, chmod it, then rename onto dest —
   // a mid-write crash/ENOSPC can never leave a partial file that the
   // existsSync fast-path above would then trust forever (the file gets
   // exec'd / handed to spawned agents, so a truncated copy is poison).
+  //
+  // readFileSync+writeFileSync, NOT copyFileSync: in a compiled binary the
+  // source is a /$bunfs/ virtual path, and Bun's copyFileSync can't read those
+  // (ENOENT) — only the JS fs read shim sees them. read-then-write works for
+  // both $bunfs sources (compiled) and real paths (source mode).
   const tmp = `${dest}.tmp.${process.pid}`
   try {
-    copyFileSync(opts.sourcePath, tmp)
+    writeFileSync(tmp, readFileSync(opts.sourcePath))
     if (opts.executable) chmodSync(tmp, 0o755)
     renameSync(tmp, dest)
   } catch (err) {
@@ -67,6 +72,19 @@ export function curatorPromptPath(stateDir: string): string {
 export function environmentMdPath(stateDir: string): string {
   if (!IS_COMPILED) return ENVIRONMENT_MD_SOURCE_PATH
   return materializeAsset({ stateDir, name: "environment.md", sourcePath: environmentMdEmbedded })
+}
+
+// In-process CONTENT read of environment.md. Lives here, not in
+// environment.ts, because of the single-importer rule: bun dedupes modules
+// by specifier and IGNORES import attributes, so the same file imported
+// `with {type:"file"}` here and `with {type:"text"}` elsewhere silently
+// collapses to whichever resolves first (compiled: the text import won and
+// environmentMdPath() tried to copyFileSync the document body as a filename
+// → ENAMETOOLONG → every Claude spawn failed). One importer, one attribute;
+// content readers go through the path — readFileSync of a $bunfs path works
+// in-process in compiled mode.
+export function environmentMdContent(): string {
+  return readFileSync(environmentMdEmbedded, "utf8")
 }
 
 // reply-fallback.md: spawn-command.ts passes this path to spawned claude via

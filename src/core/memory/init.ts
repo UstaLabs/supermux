@@ -1,9 +1,8 @@
-import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from "fs"
-import { join, resolve } from "path"
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
+import { join } from "path"
 import { buildAgentsMd } from "./index-builder"
 import { home } from "../../shared/home"
-
-const TEMPLATES_DIR = resolve(import.meta.dirname, "templates")
+import { TEMPLATES } from "./templates-embedded"
 
 export function getMuxHome(): string {
   return process.env.MUX_HOME ?? join(home(), ".mux")
@@ -39,8 +38,8 @@ function copyTemplate(templateName: string, destPath: string): void {
   // (agents.md created), so initMux must seed missing files only — overwriting
   // here would wipe that customization.
   if (existsSync(destPath)) return
-  const src = join(TEMPLATES_DIR, templateName)
-  const content = readFileSync(src, "utf8")
+  const content = TEMPLATES[templateName]
+  if (content === undefined) throw new Error(`unknown template: ${templateName}`)
   writeFileSync(destPath, content, { encoding: "utf8" })
 }
 
@@ -56,7 +55,7 @@ export function seedSoulName(name: string, root?: string): void {
   const home = root ?? getMuxHome()
   initMux(home)
   const soulPath = join(home, "soul.md")
-  const template = readFileSync(join(TEMPLATES_DIR, "soul.md.tmpl"), "utf8")
+  const template = TEMPLATES["soul.md.tmpl"]!
 
   let current = ""
   try { current = readFileSync(soulPath, "utf8") } catch {}

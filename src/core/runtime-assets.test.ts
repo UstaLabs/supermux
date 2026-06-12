@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "fs"
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
-import { materializeAsset } from "./runtime-assets"
+import { environmentMdContent, materializeAsset } from "./runtime-assets"
+import { readEnvironmentMd } from "./agents/environment"
 
 describe("materializeAsset", () => {
   test("copies the source file into the version-keyed dir and chmods it", () => {
@@ -32,5 +33,21 @@ describe("materializeAsset", () => {
     const second = materializeAsset({ stateDir, name: "f.md", sourcePath: src })
     expect(second).toBe(first)
     expect(statSync(second).mtimeMs).toBe(mtime1)
+  })
+})
+
+describe("environment.md single-importer rule", () => {
+  // Both consumers (the path helper's content sibling and the agents-side
+  // readEnvironmentMd) are imported statically at the top of THIS file, so they
+  // coexist in one process — the exact condition under which the old
+  // dual-attribute import (file vs text) silently collapsed. If the bindings
+  // ever diverge again, readEnvironmentMd would yield a path (or empty) and
+  // these assertions break.
+  test("path and content consumers coexist (single-importer rule)", () => {
+    const content = readEnvironmentMd()
+    expect(content.length).toBeGreaterThan(500)
+    expect(content).toContain("supermux")
+    expect(existsSync(content)).toBe(false) // content, not a path
+    expect(environmentMdContent()).toBe(content) // both readers agree
   })
 })

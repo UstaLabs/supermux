@@ -1,11 +1,5 @@
 import { test, expect } from "bun:test"
-import { existsSync } from "fs"
-import { ENVIRONMENT_MD_PATH, readEnvironmentMd } from "../../src/core/agents/environment"
-
-test("ENVIRONMENT_MD_PATH points at an existing prompts/environment.md", () => {
-  expect(ENVIRONMENT_MD_PATH.endsWith("prompts/environment.md")).toBe(true)
-  expect(existsSync(ENVIRONMENT_MD_PATH)).toBe(true)
-})
+import { readEnvironmentMd } from "../../src/core/agents/environment"
 
 test("readEnvironmentMd returns the doc content", () => {
   const content = readEnvironmentMd()

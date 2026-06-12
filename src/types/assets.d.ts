@@ -14,3 +14,11 @@ declare module "*/terminal/pty-helper" {
   const path: string
   export default path
 }
+
+// Memory seed templates imported with `with { type: "text" }`. Bun returns
+// the file content as a string (source mode: reads the file; compiled: bundled
+// bytes). tsc has no built-in knowledge of the "text" import attribute.
+declare module "*.tmpl" {
+  const content: string
+  export default content
+}

@@ -1,14 +1,12 @@
 import { readdirSync, readFileSync, existsSync } from "fs"
 import { join } from "path"
+import { TEMPLATES } from "./templates-embedded"
 
 export function buildAgentsMd(root: string): string {
   const domainsDir = join(root, "domains")
   const domainIndex = buildDomainIndex(domainsDir)
 
-  const template = readFileSync(
-    join(import.meta.dirname, "templates", "agents.md.tmpl"),
-    "utf8"
-  )
+  const template = TEMPLATES["agents.md.tmpl"]!
 
   return template.replace("{{DOMAIN_INDEX}}", domainIndex)
 }
