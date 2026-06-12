@@ -24,6 +24,11 @@ COMMIT="${3:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# Restore workspace mutations unconditionally (on success, failure, or signal):
+# the embedded copies live inside $OUT now; the tree goes back to committed state.
+# Registered early (before any bun install) so Ctrl-C mid-install is also caught.
+trap 'git checkout -- src/channels/web/static-manifest.generated.ts src/core/terminal/pty-helper 2>/dev/null || true' EXIT INT TERM
+
 # The ROOT bun.lock is GITIGNORED in this repo (only src/web-app/bun.lock is
 # committed — see .gitignore + Dockerfile), so --frozen-lockfile would abort the
 # root install with "lockfile not found / out of date". Use a plain install at
@@ -39,11 +44,6 @@ bun install
 ( cd src/web-app && bun run build ) \
   || ( cd src/web-app && ./node_modules/.bin/vite build ) \
   || ( cd src/web-app && bun node_modules/vite/bin/vite.js build )
-
-# Restore workspace mutations unconditionally (on success or failure): the
-# embedded copies live inside $OUT now; the tree goes back to committed state.
-# Registered HERE, right before the mutating steps, so any early exit is covered.
-trap 'git checkout -- src/channels/web/static-manifest.generated.ts src/core/terminal/pty-helper 2>/dev/null || true' EXIT
 
 # pty-helper: native-arch compile (overwrites the committed x64 ELF in the tree
 # so the embed below picks up THIS machine's arch; restored at the end).
