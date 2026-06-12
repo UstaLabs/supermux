@@ -15,6 +15,7 @@ env:
 jobs:
   build-binaries:
     strategy:
+      fail-fast: false   # one arch failing must not cancel the other's evidence
       matrix:
         include:
           - runner: ubuntu-24.04

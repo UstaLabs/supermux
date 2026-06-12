@@ -86,6 +86,16 @@ echo "PASS 1/3: version"
 # ── Check 2: broker boots on isolated state, /me → 401 ──────────────────────
 # Both MUX_WEB_PORT and MUX_WEB_PUBLIC_URL are required for the web channel; the
 # isolated MUX_HOME/MUX_STATE_DIR guarantee we never read/write real state.
+#
+# The broker's preflight FATALS unless at least one agent CLI (claude/codex/
+# cursor-agent) is on PATH. CI runners have none, and this smoke never spawns a
+# session — so satisfy the presence check with an inert stub on a private PATH
+# prefix. Locally the real CLIs are found first; the stub is just a no-op shadow.
+mkdir -p "$TMP/stubbin"
+printf '#!/bin/sh\nexit 0\n' > "$TMP/stubbin/claude"
+chmod +x "$TMP/stubbin/claude"
+
+PATH="$PATH:$TMP/stubbin" \
 MUX_HOME="$TMP" \
 MUX_STATE_DIR="$TMP/state" \
 MUX_WEB_PORT="$PORT" \
