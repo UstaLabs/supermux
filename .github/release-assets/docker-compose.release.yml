@@ -1,0 +1,56 @@
+# ─── supermux – zero-infra taste-test ────────────────────────────────────────
+#
+# Downloaded from supermux.dev. Pins a released version — no clone needed.
+#
+# Quick start:
+#   1. docker compose up -d          # pull + start the broker
+#   2. cp .env.example .env          # optional: edit MUX_WEB_PUBLIC_URL if needed
+#   3. docker compose exec broker claude login   # first-time auth (device flow)
+#   4. Open http://localhost:8787 in your browser
+#
+# State persists across restarts via named volumes (mux-state, claude-auth).
+# Put the projects you want Claude to edit inside ./workspace/ — it is mounted
+# at /workspace inside every spawned agent session.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  broker:
+    image: ghcr.io/ustalabs/supermux:__SUPERMUX_TAG__
+
+    # Expose the web PWA + API on the host
+    ports:
+      - "8787:8787"
+
+    # Load env vars from .env if present (optional — compose works without it)
+    env_file:
+      - path: .env
+        required: false
+
+    # Explicit env overrides — these are the minimal values needed to enable
+    # the web channel.  Adjust MUX_WEB_PUBLIC_URL if you're behind a reverse proxy.
+    environment:
+      MUX_WEB_PORT: "8787"
+      MUX_WEB_PUBLIC_URL: "http://localhost:8787"
+      # MUX_TELEGRAM_BOT_TOKEN: ""   # uncomment + set to enable the Telegram channel
+
+    # Persist broker state and Claude auth across container restarts
+    volumes:
+      # Broker database, push keys, session state
+      - mux-state:/root/.mux
+      # Claude Code OAuth tokens (survives `claude login`)
+      - claude-auth:/root/.claude
+      # Bind-mount a local workspace so agent sessions have a real project to edit.
+      # Put your repos here or symlink them in.
+      - ./workspace:/workspace
+
+    # Keep a TTY so `docker compose exec broker claude login` (interactive
+    # device-flow OAuth) works without extra flags.
+    tty: true
+    stdin_open: true
+
+    restart: unless-stopped
+
+# ── Named volumes ─────────────────────────────────────────────────────────────
+volumes:
+  mux-state:
+  claude-auth:
