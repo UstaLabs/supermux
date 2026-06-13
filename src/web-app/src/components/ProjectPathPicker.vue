@@ -5,6 +5,10 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/compon
 import { Input } from "@/components/ui/input"
 import { buildProjectOptions, type ProjectPath } from "@/lib/project-options"
 import { formatWorkdir } from "@/lib/format-workdir"
+import { useForges } from "@/stores/forges"
+import { useForgeOmnibox } from "@/composables/useForgeOmnibox"
+import { buildOmniboxOptions, type OmniOption, type OmniCloud } from "@/lib/forge-omnibox"
+import ForgeIcon from "@/components/ForgeIcon.vue"
 
 const props = withDefaults(defineProps<{
   modelValue: string
@@ -26,6 +30,9 @@ const draft = ref("")
 const activeIndex = ref(0)
 const inputRef = ref<InstanceType<typeof Input> | null>(null)
 const listEl = ref<HTMLElement | null>(null)
+
+const forges = useForges()
+const omni = useForgeOmnibox(draft)
 
 const projectOptions = computed(() => buildProjectOptions(props.projects, props.homeDir))
 const normalizedDraft = computed(() => draft.value.trim())
@@ -71,6 +78,7 @@ watch(open, async (isOpen) => {
   if (!isOpen) return
   draft.value = props.modelValue
   activeIndex.value = 0
+  void forges.loadConnections()
   await nextTick()
   const input = inputRef.value?.$el ?? inputRef.value
   input?.focus?.()
@@ -128,6 +136,30 @@ function onInputKeydown(e: KeyboardEvent) {
     e.preventDefault()
     open.value = false
   }
+}
+
+const cloudByConnection = computed(() => {
+  const groups: { connection: { id: string; host: string; account: { login: string }; kind: "github" | "gitlab" }; repos: OmniCloud[] }[] = []
+  const opts = buildOmniboxOptions({ query: draft.value, localProjects: [], cloudRepos: omni.cloudRepos.value, connections: forges.connections })
+  for (const o of opts) {
+    if (o.kind !== "cloud") continue
+    const conn = forges.connections.find((c) => c.id === o.connectionId)
+    if (!conn) continue
+    let g = groups.find((x) => x.connection.id === conn.id)
+    if (!g) { g = { connection: conn, repos: [] }; groups.push(g) }
+    g.repos.push(o)
+  }
+  return groups
+})
+
+const createOptions = computed(() =>
+  buildOmniboxOptions({ query: draft.value, localProjects: projectOptions.value, cloudRepos: omni.cloudRepos.value, connections: forges.connections })
+    .filter((o): o is Extract<OmniOption, { kind: "create" }> => o.kind === "create"),
+)
+
+async function handleResolve(opt: OmniOption) {
+  if (opt.kind === "local") { selectPath(opt.path); return }
+  try { const path = await omni.resolve(opt); emit("update:modelValue", path); open.value = false } catch { /* keep open; error surfaced elsewhere */ }
 }
 
 defineExpose({
@@ -222,8 +254,58 @@ defineExpose({
           </button>
         </div>
 
-        <div v-else-if="!showTypedPathOption" class="px-3 py-8 text-center text-sm text-muted-foreground">
+        <div v-else-if="!showTypedPathOption && cloudByConnection.length === 0 && createOptions.length === 0" class="px-3 py-8 text-center text-sm text-muted-foreground">
           Type an existing project path, or create a session from a known project.
+        </div>
+
+        <!-- Cloud repos grouped by connection -->
+        <template v-for="g in cloudByConnection" :key="g.connection.id">
+          <div class="mt-1">
+            <p class="flex items-center gap-1.5 px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              <ForgeIcon :kind="g.connection.kind" class="size-3.5" />
+              {{ g.connection.host }} · @{{ g.connection.account.login }}
+            </p>
+            <button
+              v-for="o in g.repos"
+              :key="o.repo.fullName"
+              type="button"
+              role="option"
+              class="flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left hover:bg-accent"
+              @mousedown.prevent
+              @click="handleResolve(o)"
+            >
+              <FolderOpen class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+              <span class="min-w-0 flex-1">
+                <span class="block truncate text-sm font-medium">{{ o.repo.name }}</span>
+                <span class="block truncate font-mono text-xs text-muted-foreground">{{ o.repo.fullName }}</span>
+              </span>
+              <span class="shrink-0 text-xs text-muted-foreground">↓ clone</span>
+            </button>
+          </div>
+        </template>
+
+        <!-- Create options -->
+        <div v-if="createOptions.length > 0" class="mt-1">
+          <p class="px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            Create
+          </p>
+          <button
+            v-for="o in createOptions"
+            :key="o.createTarget"
+            type="button"
+            role="option"
+            class="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-accent"
+            @mousedown.prevent
+            @click="handleResolve(o)"
+          >
+            <CornerDownLeft class="size-4 shrink-0 text-muted-foreground" />
+            <span class="block truncate text-sm">{{ o.label }}</span>
+          </button>
+        </div>
+
+        <!-- Resolving indicator -->
+        <div v-if="omni.resolving.value" class="px-3 py-2 text-center text-xs text-muted-foreground">
+          {{ omni.searching.value ? "Searching…" : "Cloning / Creating…" }}
         </div>
       </div>
     </DropdownMenuContent>
