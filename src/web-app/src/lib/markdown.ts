@@ -105,6 +105,13 @@ export function injectCodeCopyButtons(html: string): string {
   return html.replace(CODE_BLOCK_RE, (block) => `<div class="code-block">${COPY_BUTTON}${block}</div>`)
 }
 
+const MARKDOWN_EXT_RE = /\.(md|markdown|mdown|mkd|mdx)$/i
+
+/** True for paths the editor can render as a markdown preview. */
+export function isMarkdownPath(path: string): boolean {
+  return MARKDOWN_EXT_RE.test(path)
+}
+
 // Non-greedy, so each <table>…</table> matches independently. GFM tables can't
 // nest, and marked escapes < and > inside cells, so a literal </table> in the
 // source can never close a table early.

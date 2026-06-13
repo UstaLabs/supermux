@@ -115,6 +115,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: supermux-linux-*
           merge-multiple: true
       - name: Create or update GitHub Release
         env:
@@ -139,6 +140,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: supermux-linux-*
           merge-multiple: true
       - name: Check website token
         id: tok
@@ -156,7 +158,7 @@ jobs:
           V="${GITHUB_REF_NAME#v}"
           SHA_X64=$(cut -d' ' -f1 dist/supermux-linux-x64.sha256)
           SHA_ARM64=$(cut -d' ' -f1 dist/supermux-linux-arm64.sha256)
-          git clone "https://x-access-token:${TOKEN}@github.com/UstaLabs/supermux-website.git" site
+          git clone "https://x-access-token:${TOKEN}@github.com/AhmetHuseyinDOK/supermux-website.git" site
           bun scripts/generate-versions-json.ts "$V" "$SHA_X64" "$SHA_ARM64" > site/versions.json
           sed "s|__SUPERMUX_TAG__|v${V}|" .github/release-assets/docker-compose.release.yml > site/docker-compose.yml
           cd site
