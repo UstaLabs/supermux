@@ -5,6 +5,7 @@ import { PanelLeft, Plus } from "lucide-vue-next"
 import { useSessions } from "@/stores/sessions"
 import { useUnread } from "@/stores/unread"
 import { useLayout } from "@/stores/layout"
+import { useAgentState, isAgentWorking } from "@/stores/agentState"
 import { useSortedSessions } from "@/composables/useSortedSessions"
 import { useRenameRequest } from "@/composables/useRenameRequest"
 import { api } from "@/api/client"
@@ -20,6 +21,7 @@ const unread = useUnread()
 const route = useRoute()
 const router = useRouter()
 const layout = useLayout()
+const agentState = useAgentState()
 const sortedSessions = useSortedSessions()
 const { requestRename } = useRenameRequest()
 
@@ -109,7 +111,7 @@ async function confirmKill() {
             class="rounded-xl"
             :class="s.id === activeId ? 'ring-2 ring-primary ring-offset-2 ring-offset-[var(--cmux-rail)]' : ''"
           >
-            <SessionAvatar :name="s.name" :connected="s.connected" :agent="s.agent" />
+            <SessionAvatar :name="s.name" :connected="s.connected" :agent="s.agent" :working="isAgentWorking(agentState.get(s.id).phase, s.connected)" />
           </div>
           <span
             v-if="unread.isUnread(s.id)"

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, nextTick } from "vue"
 import { useMessages } from "@/stores/messages"
+import { useAgentState, isAgentWorking } from "@/stores/agentState"
 import SessionAvatar from "@/components/SessionAvatar.vue"
 
 const props = defineProps<{
@@ -27,6 +28,12 @@ const emit = defineEmits<{
 }>()
 
 const messages = useMessages()
+const agentState = useAgentState()
+
+// Drives the chat-list running spinner: true while this session's agent is
+// actively working (thinking/running) and still connected. Reads the same
+// agent_state the chat view's "Working…" indicator uses.
+const working = computed(() => isAgentWorking(agentState.get(props.id).phase, props.connected))
 
 const renameValue = ref(props.name)
 const renameInput = ref<HTMLInputElement | null>(null)
@@ -80,7 +87,7 @@ defineExpose({ startRename })
     @click="handleNavigate"
   >
     <div class="flex items-start gap-3">
-      <SessionAvatar :name="props.name" :connected="props.connected" :agent="props.agent" />
+      <SessionAvatar :name="props.name" :connected="props.connected" :agent="props.agent" :working="working" />
 
       <div class="min-w-0 flex-1">
         <div class="flex items-baseline justify-between gap-2">
