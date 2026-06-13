@@ -164,7 +164,9 @@ try {
 const registry = new Registry(db)
 const reviewStore = new ReviewStore(db)
 const settings = new SettingsStore(db)
-const credentialHelperPath = installCredentialLauncher(join(STATE_DIR, "bin"), join(import.meta.dir, ".."))
+const credentialHelperPath = join(STATE_DIR, "bin", "mux-credential")
+try { installCredentialLauncher(join(STATE_DIR, "bin"), join(import.meta.dir, "..")) }
+catch (err) { log.error("forge_credential_launcher_failed", { err: String(err) }) }
 const forgeStore = new ForgeStore(db)
 const forgeService = new ForgeService(forgeStore, {
   projectsRoot: join(STATE_DIR, "projects"),
@@ -1206,7 +1208,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getForgeConnections: () => forgeService.connections(),
     getForgeCliStatus: () => detectForgeClis(),
     addForgeConnection: (o) => forgeService.addConnection(o as any),
-    importForgeCli: async (kind, transport) => forgeService.addConnection({ kind: kind as any, token: importCliToken(kind as any), source: "cli", transport }),
+    importForgeCli: async (kind, transport) => {
+      if (kind !== "github" && kind !== "gitlab") throw new Error(`unsupported forge kind: ${kind}`)
+      return forgeService.addConnection({ kind, token: importCliToken(kind), source: "cli", transport })
+    },
     removeForgeConnection: (id) => forgeService.removeConnection(id),
     searchForgeRepos: (q) => forgeService.search(q),
     cloneForgeRepo: (id, owner, name) => forgeService.clone(id, owner, name),

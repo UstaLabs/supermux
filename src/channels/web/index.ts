@@ -1082,7 +1082,8 @@ export class WebChannel implements Channel {
     // ── Forge: git connections + repo management ───────────────────────────
     if (path === "/forge/connections" && method === "GET") {
       const conns = this.opts.getForgeConnections?.(); if (!conns) return this.json({ error: "forge unavailable" }, 503)
-      return this.json({ connections: conns, cli: this.opts.getForgeCliStatus?.() ?? null })
+      let cli = null; try { cli = this.opts.getForgeCliStatus?.() ?? null } catch { cli = null }
+      return this.json({ connections: conns, cli })
     }
     if (path === "/forge/connections" && method === "POST") {
       if (!this.opts.addForgeConnection) return this.json({ error: "forge unavailable" }, 503)
@@ -1102,12 +1103,16 @@ export class WebChannel implements Channel {
     }
     {
       const fm = path.match(/^\/forge\/connections\/(.+)$/)
-      if (fm && method === "DELETE") { this.opts.removeForgeConnection?.(decodeURIComponent(fm[1]!)); return this.json({ ok: true }) }
+      if (fm && method === "DELETE") {
+        if (!this.opts.removeForgeConnection) return this.json({ error: "forge unavailable" }, 503)
+        this.opts.removeForgeConnection(decodeURIComponent(fm[1]!)); return this.json({ ok: true })
+      }
     }
     if (path === "/forge/search" && method === "POST") {
       if (!this.opts.searchForgeRepos) return this.json({ error: "forge unavailable" }, 503)
       const b = await req.json().catch(() => ({})) as any
-      return this.json(await this.opts.searchForgeRepos(String(b.query ?? "")))
+      try { return this.json(await this.opts.searchForgeRepos(String(b.query ?? ""))) }
+      catch (e: any) { return this.json({ error: e?.message ?? String(e) }, 400) }
     }
     if (path === "/forge/clone" && method === "POST") {
       if (!this.opts.cloneForgeRepo) return this.json({ error: "forge unavailable" }, 503)
@@ -1132,13 +1137,15 @@ export class WebChannel implements Channel {
       return this.json({ repos: list })
     }
     if (path === "/forge/cloned" && method === "DELETE") {
+      if (!this.opts.removeClonedRepo) return this.json({ error: "forge unavailable" }, 503)
       const b = await req.json().catch(() => ({})) as any
-      try { this.opts.removeClonedRepo?.(String(b.path ?? "")); return this.json({ ok: true }) }
+      try { this.opts.removeClonedRepo(String(b.path ?? "")); return this.json({ ok: true }) }
       catch (e: any) { return this.json({ error: e?.message ?? String(e) }, 400) }
     }
     if (path === "/forge/cloned/pull" && method === "POST") {
+      if (!this.opts.pullClonedRepo) return this.json({ error: "forge unavailable" }, 503)
       const b = await req.json().catch(() => ({})) as any
-      try { return this.json(this.opts.pullClonedRepo?.(String(b.path ?? "")) ?? { error: "forge unavailable" }) }
+      try { return this.json(this.opts.pullClonedRepo(String(b.path ?? ""))) }
       catch (e: any) { return this.json({ error: e?.message ?? String(e) }, 400) }
     }
 
