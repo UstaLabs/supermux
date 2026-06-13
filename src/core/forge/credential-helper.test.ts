@@ -14,19 +14,17 @@ function repo(): string {
   execFileSync("git", ["init", "-q", r]); return r
 }
 
-test("bindHttpsCredentials stores the helper ref (round-trips via git config) — not the raw token", () => {
+test("bindHttpsCredentials stores the absolute helper ref (round-trips via git config) — not the raw token", () => {
   const r = repo()
-  bindHttpsCredentials(r, "github.com", "github:github.com:ahmet")
+  bindHttpsCredentials(r, "github.com", "github:github.com:ahmet", "/opt/mux/bin/mux-credential")
   const val = execFileSync("git", ["-C", r, "config", "--get", "credential.https://github.com.helper"], { encoding: "utf8" }).trim()
-  expect(val).toBe(helperCommand("github:github.com:ahmet"))
-  const cfg = readFileSync(join(r, ".git", "config"), "utf8")
-  expect(cfg).not.toContain("ghp_") // no token on disk
+  expect(val).toBe(helperCommand("/opt/mux/bin/mux-credential", "github:github.com:ahmet"))
+  expect(val).toContain("/opt/mux/bin/mux-credential")
+  expect(readFileSync(join(r, ".git", "config"), "utf8")).not.toContain("ghp_")
 })
 
-test("helperCommand single-quotes the id so shell metacharacters cannot inject", () => {
-  expect(helperCommand("github:github.com:ahmet")).toBe("!mux-credential 'github:github.com:ahmet'")
-  // a hostile id with a quote is escaped, not broken out of
-  expect(helperCommand("a'b")).toBe("!mux-credential 'a'\\''b'")
+test("helperCommand quotes both the path and the id", () => {
+  expect(helperCommand("/a b/mux-credential", "x'y")).toBe("!'/a b/mux-credential' 'x'\\''y'")
 })
 
 test("resolveCredentialFill emits username+password from a lookup, empty on miss", () => {

@@ -27,7 +27,7 @@ function fakeAdapter(repos: RemoteRepo[]): ForgeAdapter {
 function svc(repos: RemoteRepo[]) {
   const db = openDb(":memory:"); runMigrations(db, MIGRATIONS)
   const store = new ForgeStore(db)
-  return new ForgeService(store, { projectsRoot: join(work, "projects"), sshRoot: join(work, "ssh") }, () => fakeAdapter(repos))
+  return new ForgeService(store, { projectsRoot: join(work, "projects"), sshRoot: join(work, "ssh"), credentialHelperPath: join(work, "bin", "mux-credential") }, () => fakeAdapter(repos))
 }
 function cred(id: string): ForgeCredential {
   return { id, kind: "github", host: "github.com", apiBase: "https://api.github.com", label: "",

@@ -11,7 +11,7 @@ import { execFileSync } from "child_process"
 import { scanCloned, removeCloned as rmCloned, isInsideRoot, type ClonedRepo } from "./cloned"
 import { pullBranch, isAuthError, type PullResult } from "../git/remote"
 
-export interface ForgeServiceConfig { projectsRoot: string; sshRoot: string }
+export interface ForgeServiceConfig { projectsRoot: string; sshRoot: string; credentialHelperPath: string }
 export interface ConnError { connectionId: string; code: string; message: string }
 
 export class ForgeService {
@@ -93,7 +93,7 @@ export class ForgeService {
       } else {
         const res = await gitClone({ url: `https://${c.host}/${owner}/${name}.git`, targetDir: target,
           https: { user: adapter.gitUser(), token: c.token } })
-        if (!res.reused) bindHttpsCredentials(target, c.host, connectionId)
+        if (!res.reused) bindHttpsCredentials(target, c.host, connectionId, this.cfg.credentialHelperPath)
       }
     } catch (e) {
       if (e instanceof ForgeError) throw e
