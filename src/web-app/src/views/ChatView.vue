@@ -478,13 +478,13 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
 <template>
   <div class="h-dvh flex flex-col bg-[var(--cmux-chat)] text-foreground">
     <header
-      class="flex items-center gap-3 px-3 py-2 min-h-[3.5rem] border-b border-border sticky top-0 bg-[var(--cmux-header)]/95 backdrop-blur z-10"
+      class="flex items-center gap-3 px-3 py-1.5 min-h-[3.5rem] border-b border-border sticky top-0 bg-[var(--cmux-header)]/95 backdrop-blur z-10"
       style="padding-top: calc(env(safe-area-inset-top, 0px) + 0.5rem)"
     >
       <router-link v-if="!isDesktop" :to="isArchived ? '/archived' : '/'" class="text-muted-foreground hover:text-foreground transition -ml-1 p-1" aria-label="Back">
         <ChevronLeft class="size-5" />
       </router-link>
-      <div class="min-w-0 flex-1">
+      <div class="min-w-0 flex-1 leading-tight">
         <div class="flex items-center gap-2">
           <AgentLogo
             v-if="session?.agent"
