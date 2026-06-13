@@ -16,3 +16,8 @@ test("installCredentialLauncher writes an executable launcher pointing at the cl
   expect(body).toContain("/opt/mux/repo")
   expect(statSync(p).mode & 0o777).toBe(0o700)
 })
+
+test("launcher embeds the current bun binary (process.execPath)", () => {
+  const p = installCredentialLauncher(join(work, "bin2"), "/opt/mux/repo")
+  expect(readFileSync(p, "utf8")).toContain(process.execPath)
+})
