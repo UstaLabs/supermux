@@ -144,9 +144,10 @@ const STRIP_RESPONSE_HEADERS = new Set(["transfer-encoding"])
 export async function handleProxyRequest(
   req: Request,
   upstream: { port: number; sessionName: string },
+  pathOpts?: { prefix: string; upstreamPath: string },
 ): Promise<Response> {
   const url = new URL(req.url)
-  const pathAndQuery = url.pathname + (url.search || "")
+  const pathAndQuery = pathOpts ? pathOpts.upstreamPath : url.pathname + (url.search || "")
   const upstreamUrl = buildUpstreamUrl(upstream.port, pathAndQuery)
 
   // Build forwarded headers
@@ -169,6 +170,7 @@ export async function handleProxyRequest(
       method: req.method,
       headers: forwardedHeaders,
       body: req.body,
+      redirect: pathOpts ? "manual" : "follow",
       // @ts-ignore — Bun supports signal-based timeout via AbortSignal.timeout
       signal: AbortSignal.timeout(30_000),
     })
@@ -208,6 +210,20 @@ export async function handleProxyRequest(
   // (Cloudflare) and browsers don't serve stale bundles.
   if (!responseHeaders.has("cache-control")) {
     responseHeaders.set("cache-control", "no-store")
+  }
+
+  // Path mode: re-anchor redirects and cookies under the /p/<slug> prefix.
+  if (pathOpts) {
+    const upstreamHost = `127.0.0.1:${upstream.port}`
+    const loc = responseHeaders.get("location")
+    if (loc) responseHeaders.set("location", rewriteLocation(loc, pathOpts.prefix, upstreamHost))
+    const setCookies = upstreamRes.headers.getSetCookie?.() ?? []
+    if (setCookies.length) {
+      responseHeaders.delete("set-cookie")
+      for (const c of setCookies) {
+        responseHeaders.append("set-cookie", rewriteSetCookiePath(c, pathOpts.prefix))
+      }
+    }
   }
 
   return new Response(upstreamRes.body, {

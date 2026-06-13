@@ -1,9 +1,10 @@
-import { test, expect, describe } from "bun:test"
+import { test, expect, describe, afterAll } from "bun:test"
 import {
   matchProxyPath,
   buildProxyPublicUrl,
   rewriteLocation,
   rewriteSetCookiePath,
+  handleProxyRequest,
 } from "../src/channels/web/proxy"
 
 describe("matchProxyPath", () => {
@@ -84,5 +85,64 @@ describe("rewriteSetCookiePath", () => {
   })
   test("already-scoped cookie Path is left unchanged (idempotent)", () => {
     expect(rewriteSetCookiePath("sid=1; Path=/p/app/x", prefix)).toBe("sid=1; Path=/p/app/x")
+  })
+})
+
+describe("handleProxyRequest path mode", () => {
+  let srv: ReturnType<typeof Bun.serve> | undefined
+  afterAll(() => srv?.stop())
+
+  test("strips the /p/<slug> prefix before forwarding upstream", async () => {
+    srv = Bun.serve({
+      port: 0,
+      fetch(req) {
+        return new Response(JSON.stringify({ path: new URL(req.url).pathname }), {
+          headers: { "content-type": "application/json" },
+        })
+      },
+    })
+    const port = (srv as any).port as number
+    const req = new Request(`http://broker.example.com/p/app/assets/x.js`)
+    const res = await handleProxyRequest(req, { port, sessionName: "app" }, {
+      prefix: "/p/app",
+      upstreamPath: "/assets/x.js",
+    })
+    expect(res.status).toBe(200)
+    expect((await res.json() as { path: string }).path).toBe("/assets/x.js")
+  })
+
+  test("rewrites an absolute-path Location with the prefix", async () => {
+    const s = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response(null, { status: 302, headers: { location: "/login" } })
+      },
+    })
+    const port = (s as any).port as number
+    const req = new Request("http://broker.example.com/p/app/")
+    const res = await handleProxyRequest(req, { port, sessionName: "app" }, {
+      prefix: "/p/app",
+      upstreamPath: "/",
+    })
+    s.stop()
+    expect(res.status).toBe(302)
+    expect(res.headers.get("location")).toBe("/p/app/login")
+  })
+
+  test("rewrites Set-Cookie Path to the prefix", async () => {
+    const s = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response("ok", { headers: { "set-cookie": "sid=1; Path=/" } })
+      },
+    })
+    const port = (s as any).port as number
+    const req = new Request("http://broker.example.com/p/app/")
+    const res = await handleProxyRequest(req, { port, sessionName: "app" }, {
+      prefix: "/p/app",
+      upstreamPath: "/",
+    })
+    s.stop()
+    expect(res.headers.getSetCookie().some((c) => c.includes("Path=/p/app/"))).toBe(true)
   })
 })
