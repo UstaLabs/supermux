@@ -79,3 +79,15 @@ test("listCloned reflects what createLocal made; removeCloned deletes it", async
   s.removeCloned(path)
   expect(existsSync(path)).toBe(false)
 })
+
+test("createLocal rejects unsafe names", async () => {
+  const s = svc([])
+  await expect(s.createLocal("../evil")).rejects.toMatchObject({ name: "ForgeError" })
+  await expect(s.createLocal("a/b")).rejects.toMatchObject({ name: "ForgeError" })
+  await expect(s.createLocal("")).rejects.toMatchObject({ name: "ForgeError" })
+})
+
+test("pullCloned rejects a path outside the projects root", () => {
+  const s = svc([])
+  expect(() => s.pullCloned("/etc")).toThrow()
+})

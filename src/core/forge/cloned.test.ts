@@ -40,3 +40,10 @@ test("isInsideRoot rejects traversal", () => {
   expect(isInsideRoot(root, join(work, "evil"))).toBe(false)
   expect(isInsideRoot(root, join(root, "..", "evil"))).toBe(false)
 })
+
+test("scanCloned ignores a .git FILE (git worktree), only directories", () => {
+  const root = join(work, "wt")
+  mkdirSync(join(root, "github.com", "ahmet", "wtrepo"), { recursive: true })
+  writeFileSync(join(root, "github.com", "ahmet", "wtrepo", ".git"), "gitdir: /elsewhere")
+  expect(scanCloned(root)).toHaveLength(0)
+})

@@ -8,7 +8,7 @@ import { ensureKeypair, seedKnownHosts, sshCommandFor, bindSshCommand, removeKey
 import { join } from "path"
 import { mkdirSync } from "fs"
 import { execFileSync } from "child_process"
-import { scanCloned, removeCloned as rmCloned, type ClonedRepo } from "./cloned"
+import { scanCloned, removeCloned as rmCloned, isInsideRoot, type ClonedRepo } from "./cloned"
 import { pullBranch, type PullResult } from "../git/remote"
 
 export interface ForgeServiceConfig { projectsRoot: string; sshRoot: string }
@@ -106,6 +106,7 @@ export class ForgeService {
 
   /** Create an empty local git repo (no remote) under projectsRoot/local/<name>. */
   async createLocal(name: string): Promise<{ localPath: string }> {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || name === "..") throw new ForgeError("invalid_input", "invalid repo name")
     const dir = join(this.cfg.projectsRoot, "local", name)
     mkdirSync(dir, { recursive: true })
     execFileSync("git", ["init", "-q", dir])
@@ -117,7 +118,7 @@ export class ForgeService {
   removeCloned(path: string): void { rmCloned(this.cfg.projectsRoot, path) }
 
   pullCloned(path: string): PullResult {
-    if (!path.startsWith(this.cfg.projectsRoot)) throw new ForgeError("not_found", "not a managed repo")
+    if (!isInsideRoot(this.cfg.projectsRoot, path)) throw new ForgeError("not_found", "not a managed repo")
     return pullBranch(path)
   }
 }

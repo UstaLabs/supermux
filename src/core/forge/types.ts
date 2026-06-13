@@ -50,7 +50,7 @@ export interface CreateRepoInput {
 
 export class ForgeError extends Error {
   constructor(
-    readonly code: "auth" | "scope_missing" | "rate_limited" | "conflict" | "not_found" | "network" | "unknown",
+    readonly code: "auth" | "scope_missing" | "rate_limited" | "conflict" | "not_found" | "network" | "unknown" | "invalid_input",
     message: string,
     readonly status?: number,
   ) {

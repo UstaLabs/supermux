@@ -2,6 +2,7 @@
 import { execFileSync } from "child_process"
 import { existsSync, readdirSync, statSync, rmSync } from "fs"
 import { join, resolve, relative, isAbsolute } from "path"
+import { ForgeError } from "./types"
 
 export interface ClonedRepo {
   path: string; host: string; owner: string; name: string; fullName: string; sizeBytes: number
@@ -21,25 +22,25 @@ export function scanCloned(root: string): ClonedRepo[] {
   if (!existsSync(root)) return []
   const out: ClonedRepo[] = []
   const dirs = (p: string) => { try { return readdirSync(p).filter((d) => { try { return statSync(join(p, d)).isDirectory() } catch { return false } }) } catch { return [] } }
+  const isRepo = (p: string) => { const g = join(p, ".git"); try { return existsSync(g) && statSync(g).isDirectory() } catch { return false } }
   for (const host of dirs(root)) {
     if (host === "local") {
-      // repos created locally (no remote): root/local/<name>
       for (const name of dirs(join(root, host))) {
         const path = join(root, host, name)
-        if (existsSync(join(path, ".git"))) out.push({ path, host: "local", owner: "local", name, fullName: name, sizeBytes: dirSize(path) })
+        if (isRepo(path)) out.push({ path, host: "local", owner: "local", name, fullName: name, sizeBytes: dirSize(path) })
       }
       continue
     }
     for (const owner of dirs(join(root, host)))
       for (const name of dirs(join(root, host, owner))) {
         const path = join(root, host, owner, name)
-        if (existsSync(join(path, ".git"))) out.push({ path, host, owner, name, fullName: `${owner}/${name}`, sizeBytes: dirSize(path) })
+        if (isRepo(path)) out.push({ path, host, owner, name, fullName: `${owner}/${name}`, sizeBytes: dirSize(path) })
       }
   }
   return out
 }
 
 export function removeCloned(root: string, path: string): void {
-  if (!isInsideRoot(root, path)) throw new Error("refusing to delete outside the projects root")
+  if (!isInsideRoot(root, path)) throw new ForgeError("not_found", "path is outside the projects root")
   rmSync(path, { recursive: true, force: true })
 }
