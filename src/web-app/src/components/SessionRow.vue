@@ -31,9 +31,10 @@ const messages = useMessages()
 const agentState = useAgentState()
 
 // Drives the chat-list running spinner: true while this session's agent is
-// actively working (thinking/running) and still connected. Reads the same
-// agent_state the chat view's "Working…" indicator uses.
-const working = computed(() => isAgentWorking(agentState.get(props.id).phase, props.connected))
+// actively working (thinking/running). Reads the same agent_state — and uses
+// the same condition — as the chat view's "Working…" indicator, so the two
+// never disagree.
+const working = computed(() => isAgentWorking(agentState.get(props.id).phase))
 
 const renameValue = ref(props.name)
 const renameInput = ref<HTMLInputElement | null>(null)
