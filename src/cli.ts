@@ -6,6 +6,7 @@
 //   supermux pair <dev> → scripts/pair.ts   (argv shifted: script reads argv[2])
 //   supermux revoke <d> → scripts/revoke.ts (argv shifted)
 //   supermux version    → "X.Y.Z (commit)"
+//   supermux setup      → write .env + user systemd unit + agent-CLI report (src/cli-setup.ts)
 //   supermux update     → check/apply an update (src/cli-update.ts)
 //   supermux rollback   → revert to the previous binary (src/cli-update.ts)
 //
@@ -33,6 +34,10 @@ switch (sub) {
   case "version":
     console.log(versionString())
     break
+  case "setup": {
+    const { runSetupCommand } = await import("./cli-setup")
+    process.exit(await runSetupCommand(process.argv.slice(3)))
+  }
   case "update": {
     const { runUpdateCommand } = await import("./cli-update")
     process.exit(await runUpdateCommand(process.argv.slice(3)))
@@ -44,7 +49,7 @@ switch (sub) {
   default:
     console.error(`supermux: unknown subcommand '${sub}'`)
     console.error(
-      "usage: supermux [shim|pair <device>|revoke <device>|version|update|rollback]",
+      "usage: supermux [shim|pair <device>|revoke <device>|version|setup|update|rollback]",
     )
     process.exit(2)
 }

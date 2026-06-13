@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { existsSync, mkdtempSync } from "fs"
+import { tmpdir } from "os"
+import { join } from "path"
 
 function runCli(args: string[]): { code: number; stdout: string; stderr: string } {
   const r = Bun.spawnSync(["bun", "src/cli.ts", ...args], { cwd: import.meta.dirname + "/.." })
@@ -24,5 +27,26 @@ describe("cli dispatcher", () => {
     const r = runCli(["pair"])
     expect(r.code).toBe(1)
     expect(r.stderr).toContain("usage: bun run pair <device-name>")
+  })
+
+  test("setup --no-service runs and exits 0 (writes .env to an isolated state dir)", () => {
+    // Sandbox MUX_STATE_DIR/HOME so this never touches the real ~/.mux.
+    const tmp = mkdtempSync(join(tmpdir(), "smx-cli-setup-"))
+    const r = Bun.spawnSync(["bun", "src/cli.ts", "setup", "--no-service"], {
+      cwd: import.meta.dirname + "/..",
+      env: {
+        ...process.env,
+        HOME: join(tmp, "home"),
+        MUX_HOME: join(tmp, "mux"),
+        MUX_STATE_DIR: join(tmp, "mux", "state"),
+      },
+    })
+    expect(r.exitCode).toBe(0)
+    expect(existsSync(join(tmp, "mux", "state", ".env"))).toBe(true)
+  })
+
+  test("unknown subcommand usage lists setup", () => {
+    const r = runCli(["frobnicate"])
+    expect(r.stderr).toContain("setup")
   })
 })
