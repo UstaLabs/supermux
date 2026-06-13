@@ -4,6 +4,7 @@ import { useRouter } from "vue-router"
 import { ArrowLeft, Trash2, RotateCw } from "lucide-vue-next"
 import { useForges } from "@/stores/forges"
 import ForgeIcon from "@/components/ForgeIcon.vue"
+import { Input } from "@/components/ui/input"
 
 const router = useRouter()
 const forges = useForges()
@@ -78,8 +79,8 @@ function fmtBytes(n: number): string {
           class="rounded-lg bg-primary text-primary-foreground text-sm py-2 disabled:opacity-60" :disabled="submitting" @click="importCli(addKind)">
           Import token from {{ addKind === 'github' ? 'gh' : 'glab' }} CLI<span v-if="forges.cliStatus?.[addKind]?.login"> (@{{ forges.cliStatus?.[addKind]?.login }})</span>
         </button>
-        <input v-model="token" type="password" placeholder="Personal access token" class="rounded-lg border border-border bg-input px-3 py-2 text-sm font-mono" />
-        <input v-model="baseUrl" type="text" placeholder="Self-hosted base URL (optional)" class="rounded-lg border border-border bg-input px-3 py-2 text-sm font-mono" />
+        <Input v-model="token" type="password" placeholder="Personal access token" class="font-mono" />
+        <Input v-model="baseUrl" type="text" placeholder="Self-hosted base URL (optional)" class="font-mono" />
         <div class="flex gap-2 items-center text-sm">
           <span class="text-muted-foreground">Transport</span>
           <button v-for="t in (['https', 'ssh'] as const)" :key="t" type="button"
