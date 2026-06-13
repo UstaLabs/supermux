@@ -115,6 +115,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: supermux-linux-*
           merge-multiple: true
       - name: Create or update GitHub Release
         env:
@@ -139,6 +140,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: supermux-linux-*
           merge-multiple: true
       - name: Check website token
         id: tok
