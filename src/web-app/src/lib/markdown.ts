@@ -105,6 +105,13 @@ export function injectCodeCopyButtons(html: string): string {
   return html.replace(CODE_BLOCK_RE, (block) => `<div class="code-block">${COPY_BUTTON}${block}</div>`)
 }
 
+const MARKDOWN_EXT_RE = /\.(md|markdown|mdown|mkd|mdx)$/i
+
+/** True for paths the editor can render as a markdown preview. */
+export function isMarkdownPath(path: string): boolean {
+  return MARKDOWN_EXT_RE.test(path)
+}
+
 export function renderMarkdown(text: string): string {
   const html = marked.parse(text, { async: false }) as string
   const sanitized = DOMPurify.sanitize(html, {

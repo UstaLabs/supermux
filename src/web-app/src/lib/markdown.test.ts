@@ -1,6 +1,19 @@
 import { describe, expect, it } from "bun:test"
 import { marked } from "marked"
-import { injectCodeCopyButtons, linkifyFilePaths, linkifyMarkdownFileAnchors } from "./markdown"
+import { injectCodeCopyButtons, isMarkdownPath, linkifyFilePaths, linkifyMarkdownFileAnchors } from "./markdown"
+
+describe("isMarkdownPath", () => {
+  it("matches markdown extensions case-insensitively", () => {
+    for (const p of ["README.md", "/docs/Guide.MARKDOWN", "notes.mdown", "a.mkd", "x.mdx"]) {
+      expect(isMarkdownPath(p)).toBe(true)
+    }
+  })
+  it("rejects non-markdown files", () => {
+    for (const p of ["main.ts", "style.css", "mdfile", "readme.md.bak", "a.md.ts"]) {
+      expect(isMarkdownPath(p)).toBe(false)
+    }
+  })
+})
 
 function fileLink(
   display: string,

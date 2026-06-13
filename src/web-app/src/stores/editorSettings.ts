@@ -1,5 +1,6 @@
 import { defineStore } from "pinia"
 import { reactive, watch } from "vue"
+import { clampTreeWidth, TREE_WIDTH } from "@/lib/editor-resize"
 
 const KEY = "cmux:editor-settings"
 
@@ -10,6 +11,8 @@ export interface EditorSettings {
   lineWrap: boolean
   // Editor font size in pixels.
   fontSize: number
+  // File-tree sidebar width in pixels (desktop layout).
+  treeWidth: number
 }
 
 function clampFontSize(v: unknown): number {
@@ -18,7 +21,7 @@ function clampFontSize(v: unknown): number {
 }
 
 function defaults(): EditorSettings {
-  return { lineWrap: true, fontSize: FONT_SIZE.default }
+  return { lineWrap: true, fontSize: FONT_SIZE.default, treeWidth: TREE_WIDTH.default }
 }
 
 function load(): EditorSettings {
@@ -31,6 +34,7 @@ function load(): EditorSettings {
     return {
       lineWrap: typeof p.lineWrap === "boolean" ? p.lineWrap : base.lineWrap,
       fontSize: clampFontSize(p.fontSize),
+      treeWidth: clampTreeWidth(p.treeWidth),
     }
   } catch {
     return base
@@ -47,6 +51,7 @@ export const useEditorSettings = defineStore("editorSettings", () => {
   function setLineWrap(value: boolean) { state.lineWrap = value }
   function toggleLineWrap() { state.lineWrap = !state.lineWrap }
   function setFontSize(value: number) { state.fontSize = clampFontSize(value) }
+  function setTreeWidth(value: number) { state.treeWidth = clampTreeWidth(value) }
 
-  return { state, setLineWrap, toggleLineWrap, setFontSize }
+  return { state, setLineWrap, toggleLineWrap, setFontSize, setTreeWidth }
 })

@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted, onActivated, onDeactivated, computed, watch, inject, toRef, type Ref } from "vue"
 import type { Extension } from "@codemirror/state"
 import { useRouter } from "vue-router"
-import { Search, GitCompareArrows, PanelLeftClose, PanelLeftOpen, RefreshCw, Settings2, Download, Loader2 } from "@lucide/vue"
+import { Search, GitCompareArrows, PanelLeftClose, PanelLeftOpen, RefreshCw, Settings2, Download, Loader2, Eye, Pencil } from "@lucide/vue"
 import { useEditor } from "@/composables/useEditor"
 import { useIsDesktop } from "@/composables/useIsDesktop"
 import { useSessions } from "@/stores/sessions"
@@ -14,7 +14,11 @@ import EditorTabs from "./EditorTabs.vue"
 import CodeEditor from "./CodeEditor.vue"
 import DiffView from "./DiffView.vue"
 import SymbolLocationsPanel from "./SymbolLocationsPanel.vue"
+import MarkdownPreview from "./MarkdownPreview.vue"
 import { uriToWorkdirPath, type SymbolLocation } from "@/lib/lsp-symbol-navigation"
+import { isMarkdownPath } from "@/lib/markdown"
+import { resolveTreeResize, TREE_COLLAPSE_AT, TREE_WIDTH } from "@/lib/editor-resize"
+import { useEditorSettings } from "@/stores/editorSettings"
 
 const props = defineProps<{
   sessionName: string
@@ -24,9 +28,64 @@ const props = defineProps<{
 const editor = useEditor(toRef(() => props.sessionName))
 const isDesktop = useIsDesktop()
 const router = useRouter()
+const editorSettings = useEditorSettings()
 const treeVisible = ref(true)
 const searchQuery = ref("")
 const searchResults = ref<Array<{ path: string; name: string; type: string; ignored?: boolean }>>([])
+
+// ── Markdown preview ──────────────────────────────────────────────────────
+// For .md files the header offers a Preview toggle that swaps the code editor
+// for a rendered, read-only view. The flag is global but only takes effect for
+// markdown tabs, so switching to a non-markdown file falls back to the editor.
+const previewMode = ref(false)
+const activeIsMarkdown = computed(() => {
+  const tab = editor.activeTab.value
+  return !!tab && isMarkdownPath(tab.path)
+})
+const showPreview = computed(() => previewMode.value && activeIsMarkdown.value)
+const showPreviewToggle = computed(() => activeIsMarkdown.value && !editor.showDiff.value)
+
+// ── Resizable / collapsible file tree (desktop layout) ──────────────────────
+// The sidebar width is persisted; dragging the handle resizes it, and dragging
+// it below the collapse threshold hides the tree (the header toggle restores it
+// at its previous width). On narrow layouts the tree is a full-screen overlay,
+// so resizing doesn't apply there.
+const bodyEl = ref<HTMLElement | null>(null)
+const resizing = ref(false)
+let resizeStartX = 0
+let resizeStartWidth = 0
+
+function maxTreeWidth(): number {
+  const w = bodyEl.value?.clientWidth ?? 0
+  // Always leave room for the editor; never exceed the absolute max.
+  return w > 0 ? Math.min(TREE_WIDTH.max, Math.max(TREE_WIDTH.min, w - 240)) : TREE_WIDTH.max
+}
+
+function onResizeStart(e: PointerEvent) {
+  resizing.value = true
+  resizeStartX = e.clientX
+  resizeStartWidth = editorSettings.state.treeWidth
+  ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+  e.preventDefault()
+}
+
+function onResizeMove(e: PointerEvent) {
+  if (!resizing.value) return
+  const desired = resizeStartWidth + (e.clientX - resizeStartX)
+  const action = resolveTreeResize(desired, { min: TREE_WIDTH.min, max: maxTreeWidth(), collapseAt: TREE_COLLAPSE_AT })
+  if (action.type === "collapse") {
+    editorSettings.setTreeWidth(resizeStartWidth) // remember pre-drag width for re-open
+    treeVisible.value = false
+    endResize(e)
+  } else {
+    editorSettings.setTreeWidth(action.width)
+  }
+}
+
+function endResize(e: PointerEvent) {
+  resizing.value = false
+  try { (e.target as HTMLElement).releasePointerCapture(e.pointerId) } catch { /* capture may already be gone */ }
+}
 
 let searchTimeout: NodeJS.Timeout | null = null
 
@@ -219,8 +278,21 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <!-- Markdown preview toggle (markdown files only) -->
       <button
+        v-if="showPreviewToggle"
         class="cmux-icon-button size-7 ml-auto"
+        :class="{ 'text-primary': showPreview }"
+        :title="previewMode ? 'Edit' : 'Preview'"
+        @click="previewMode = !previewMode"
+      >
+        <Pencil v-if="previewMode" class="size-3.5" />
+        <Eye v-else class="size-3.5" />
+      </button>
+
+      <button
+        class="cmux-icon-button size-7"
+        :class="{ 'ml-auto': !showPreviewToggle }"
         title="View Changes"
         @click="editor.loadDiff()"
       >
@@ -255,16 +327,29 @@ onUnmounted(() => {
     />
 
     <!-- Body -->
-    <div class="flex-1 flex overflow-hidden relative">
-      <!-- File tree sidebar (desktop: fixed sidebar, mobile: full-width overlay) -->
+    <div ref="bodyEl" class="flex-1 flex overflow-hidden relative">
+      <!-- File tree sidebar (desktop: resizable sidebar, mobile: full-width overlay) -->
       <div
         v-if="treeVisible && !editor.showDiff.value"
         :class="isDesktop
-          ? 'w-48 shrink-0 border-r border-border bg-[var(--cmux-session-list)] overflow-hidden'
+          ? 'shrink-0 border-r border-border bg-[var(--cmux-session-list)] overflow-hidden'
           : 'absolute inset-0 z-10 bg-[var(--cmux-session-list)] overflow-hidden'"
+        :style="isDesktop ? { width: `${editorSettings.state.treeWidth}px` } : undefined"
       >
         <FileTree :session-name="props.sessionName" @open-file="onTreeFileOpen($event)" />
       </div>
+
+      <!-- Resize handle (desktop): drag to resize, drag fully shut to collapse. -->
+      <div
+        v-if="isDesktop && treeVisible && !editor.showDiff.value"
+        class="w-1.5 shrink-0 -ml-px z-10 cursor-col-resize touch-none transition-colors hover:bg-primary/30"
+        :class="resizing ? 'bg-primary/40' : ''"
+        title="Drag to resize · drag shut to collapse"
+        @pointerdown="onResizeStart"
+        @pointermove="onResizeMove"
+        @pointerup="endResize"
+        @pointercancel="endResize"
+      />
 
       <!-- Editor / Diff / Empty state -->
       <div class="flex-1 overflow-hidden relative">
@@ -292,6 +377,15 @@ onUnmounted(() => {
             </button>
           </div>
 
+          <!-- Rendered markdown preview (read-only) — otherwise the code editor -->
+          <MarkdownPreview
+            v-if="showPreview"
+            class="flex-1 min-h-0 h-full"
+            :content="editor.activeTab.value.content"
+            @open-file="revealFile"
+          />
+
+          <template v-else>
           <div
             v-if="lspBanner"
             class="flex items-center gap-2 px-3 py-1.5 bg-[color-mix(in_oklab,var(--cmux-accent,#6366f1)_12%,var(--cmux-header))] border-b border-[color-mix(in_oklab,var(--cmux-accent,#6366f1)_28%,var(--border))] text-[12px] text-foreground"
@@ -342,6 +436,7 @@ onUnmounted(() => {
             @update="editor.updateContent(editor.activeTab.value!.path, $event)"
             @save="editor.saveFile(editor.activeTab.value!.path)"
           />
+          </template>
         </template>
 
         <div v-else class="flex items-center justify-center h-full text-muted-foreground text-[13px] bg-[var(--cmux-code)]">
