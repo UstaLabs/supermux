@@ -51,6 +51,68 @@ export function buildUpstreamWsUrl(port: number, pathAndQuery: string): string {
   return `ws://127.0.0.1:${port}${pathAndQuery}`
 }
 
+// --- Path-based proxy: /p/<slug>/... ---
+
+/**
+ * Matches a path-based proxy URL. Returns the slug and `rest` (the path AFTER
+ * the `/p/<slug>` prefix), or null when `pathname` is not a proxy path.
+ *   /p/app          -> { slug: "app", rest: null }   (caller 301s to add "/")
+ *   /p/app/         -> { slug: "app", rest: "/" }
+ *   /p/app/assets/x -> { slug: "app", rest: "/assets/x" }
+ *   /pair, /proxies -> null
+ */
+export function matchProxyPath(pathname: string): { slug: string; rest: string | null } | null {
+  const m = pathname.match(/^\/p\/([^/]+)(\/.*)?$/)
+  if (!m) return null
+  return { slug: m[1]!, rest: m[2] ?? null }
+}
+
+/**
+ * Builds a proxy's public URL. Subdomain mode (unchanged) when a base domain is
+ * set; path mode under the broker's own public URL otherwise.
+ */
+export function buildProxyPublicUrl(
+  slug: string,
+  opts: { baseDomain?: string; publicUrl?: string },
+): string {
+  if (opts.baseDomain) return `https://${slug}.${opts.baseDomain}`
+  const base = (opts.publicUrl ?? "").replace(/\/+$/, "")
+  return `${base}/p/${slug}/`
+}
+
+/**
+ * Path mode only: re-add the proxy prefix to a redirect Location. Absolute paths
+ * (single leading slash) and absolute URLs pointing back at the loopback upstream
+ * are rewritten; relative, protocol-relative, and off-host Locations pass through.
+ */
+export function rewriteLocation(loc: string, prefix: string, upstreamHost: string): string {
+  let path = loc
+  for (const scheme of ["http://", "https://"]) {
+    if (loc.startsWith(scheme + upstreamHost)) {
+      path = loc.slice((scheme + upstreamHost).length) || "/"
+      break
+    }
+  }
+  if (path.startsWith("/") && !path.startsWith("//")) return prefix + path
+  return loc
+}
+
+/**
+ * Path mode only: scope an upstream Set-Cookie to the proxy prefix so each app's
+ * cookies stay under its own /p/<slug>/ path and don't leak across apps sharing
+ * the broker origin.
+ */
+export function rewriteSetCookiePath(setCookie: string, prefix: string): string {
+  if (/;\s*path=/i.test(setCookie)) {
+    return setCookie.replace(/;(\s*)path=([^;]*)/i, (_m, sp: string, p: string) => {
+      const orig = p.trim() || "/"
+      const np = orig === "/" ? `${prefix}/` : `${prefix}${orig.startsWith("/") ? "" : "/"}${orig}`
+      return `;${sp}Path=${np}`
+    })
+  }
+  return `${setCookie}; Path=${prefix}/`
+}
+
 // --- Cookie parsing ---
 
 export function parseCookie(cookieHeader: string | null, name: string): string | null {
