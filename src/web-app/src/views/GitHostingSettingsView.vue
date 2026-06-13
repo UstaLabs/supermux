@@ -1,109 +1,178 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue"
+import { onMounted, ref, computed } from "vue"
 import { useRouter } from "vue-router"
-import { ArrowLeft, Trash2, RotateCw } from "lucide-vue-next"
+import { ArrowLeft, GitBranch, ChevronDown } from "lucide-vue-next"
 import { useForges } from "@/stores/forges"
 import ForgeIcon from "@/components/ForgeIcon.vue"
 import { Input } from "@/components/ui/input"
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
+
+type Kind = "github" | "gitlab"
+const KINDS: Kind[] = ["github", "gitlab"]
 
 const router = useRouter()
 const forges = useForges()
 
-const addKind = ref<"github" | "gitlab">("github")
+const sheetOpen = ref(false)
+const addKind = ref<Kind>("github")
 const token = ref("")
 const baseUrl = ref("")
 const transport = ref<"https" | "ssh">("https")
+const showAdvanced = ref(false)
 const submitting = ref(false)
 
-onMounted(() => { forges.loadConnections(); forges.loadCloned() })
+const hasConnections = computed(() => forges.connections.length > 0)
+const cli = computed(() => forges.cliStatus)
+
+onMounted(() => forges.loadConnections())
 
 function goBack() { if (window.history.length > 1) router.back(); else router.push("/settings") }
+
+function openSheet(kind?: Kind) {
+  if (kind) addKind.value = kind
+  token.value = ""; baseUrl.value = ""; transport.value = "https"; showAdvanced.value = false
+  forges.error = null
+  sheetOpen.value = true
+}
+
+const tokenDocsUrl = computed(() => {
+  const host = baseUrl.value.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "")
+  if (addKind.value === "github")
+    return host && host !== "github.com" ? `https://${host}/settings/tokens` : "https://github.com/settings/personal-access-tokens/new"
+  return host && host !== "gitlab.com" ? `https://${host}/-/user_settings/personal_access_tokens` : "https://gitlab.com/-/user_settings/personal_access_tokens"
+})
+const scopesHint = computed(() => addKind.value === "github"
+  ? "Contents (RW), Administration (RW, to create), read:org"
+  : "api — or read_api + write_repository")
 
 async function submit() {
   if (!token.value.trim()) return
   submitting.value = true
-  try { await forges.connect({ kind: addKind.value, token: token.value.trim(), host: baseUrl.value.trim() || undefined, source: "pat", transport: transport.value }); token.value = ""; baseUrl.value = "" }
-  catch { /* surfaced via forges.error */ } finally { submitting.value = false }
+  try {
+    await forges.connect({ kind: addKind.value, token: token.value.trim(), host: baseUrl.value.trim() || undefined, source: "pat", transport: transport.value })
+    sheetOpen.value = false
+  } catch { /* surfaced via forges.error */ } finally { submitting.value = false }
 }
-async function importCli(kind: "github" | "gitlab") {
+async function importCli(kind: Kind) {
   submitting.value = true
-  try { await forges.importFromCli(kind, transport.value) } catch { /* surfaced */ } finally { submitting.value = false }
+  try { await forges.importFromCli(kind, transport.value); sheetOpen.value = false } catch { /* surfaced */ } finally { submitting.value = false }
 }
-async function disconnect(id: string) { if (!confirm("Disconnect this account?")) return; submitting.value = true; try { await forges.disconnect(id) } finally { submitting.value = false } }
-async function del(path: string) { if (!confirm("Delete this cloned repo from disk?")) return; submitting.value = true; try { await forges.removeCloned(path) } finally { submitting.value = false } }
-async function pull(path: string) { submitting.value = true; try { await forges.pullCloned(path) } catch { /* surfaced via forges.error */ } finally { submitting.value = false } }
-
-function fmtBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  const u = ["KB", "MB", "GB"]; let v = n / 1024, i = 0
-  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++ }
-  return `${v.toFixed(v < 10 ? 1 : 0)} ${u[i]}`
+async function disconnect(id: string) {
+  if (!confirm("Disconnect this account?")) return
+  submitting.value = true
+  try { await forges.disconnect(id) } finally { submitting.value = false }
 }
 </script>
 
 <template>
   <div class="min-h-screen bg-background text-foreground">
-    <header class="flex items-center gap-2 px-3 py-3 border-b border-border sticky top-0 bg-background/95 backdrop-blur z-10" style="padding-top: calc(env(safe-area-inset-top, 0px) + 0.75rem)">
+    <header
+      class="flex items-center gap-2 px-3 py-3 border-b border-border sticky top-0 bg-background/95 backdrop-blur z-10"
+      style="padding-top: calc(env(safe-area-inset-top, 0px) + 0.75rem)"
+    >
       <button type="button" class="cmux-icon-button" aria-label="Back" @click="goBack"><ArrowLeft class="size-5" /></button>
       <h1 class="text-base font-semibold tracking-tight">Git hosting</h1>
     </header>
 
-    <div class="mx-auto w-full max-w-2xl px-4 py-6 flex flex-col gap-5">
-      <p v-if="forges.error" class="text-sm text-destructive">{{ forges.error }}</p>
+    <div class="mx-auto w-full max-w-2xl">
+      <p v-if="forges.error" class="text-sm text-destructive px-4 pt-4">{{ forges.error }}</p>
 
-      <section class="rounded-xl border border-border bg-card p-4">
-        <h2 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">Connected accounts</h2>
-        <p v-if="!forges.connections.length" class="text-sm text-muted-foreground">No accounts connected yet.</p>
-        <ul v-else class="flex flex-col divide-y divide-border">
-          <li v-for="c in forges.connections" :key="c.id" class="flex items-center gap-3 py-2.5">
-            <ForgeIcon :kind="c.kind" class="size-5 shrink-0" />
-            <div class="min-w-0 flex-1">
-              <div class="text-sm font-medium truncate">{{ c.label }}<span v-if="c.status === 'needs_reconnect'" class="ml-1 text-xs" style="color:var(--cmux-warning)">· reconnect</span></div>
-              <div class="text-xs text-muted-foreground truncate">{{ c.transport.toUpperCase() }}<span v-if="c.source === 'cli'"> · via CLI</span><span v-if="c.ssh"> · key {{ c.ssh.registered ? 'registered' : 'add manually' }}</span></div>
-            </div>
-            <button type="button" class="text-xs text-muted-foreground hover:text-foreground" @click="disconnect(c.id)">Disconnect</button>
-          </li>
-        </ul>
-      </section>
+      <!-- ── Empty state (first-run) ───────────────────────────── -->
+      <div v-if="!hasConnections" class="flex flex-col items-center text-center px-6 pt-10 pb-20">
+        <div class="size-14 rounded-2xl bg-muted grid place-items-center mb-4"><GitBranch class="size-7 text-muted-foreground" /></div>
+        <h2 class="text-xl font-semibold tracking-tight mb-1.5">Connect a Git host</h2>
+        <p class="text-sm text-muted-foreground max-w-xs leading-relaxed mb-6">
+          Bring your GitHub &amp; GitLab repos into supermux — clone, create, and launch sessions on them without leaving the app.
+        </p>
 
-      <section class="rounded-xl border border-border bg-card p-4 flex flex-col gap-3">
-        <h2 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Add a connection</h2>
-        <div class="flex gap-2">
-          <button v-for="k in (['github', 'gitlab'] as const)" :key="k" type="button"
-            class="flex-1 inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm capitalize"
-            :class="addKind === k ? 'border-primary text-primary' : 'border-border text-muted-foreground'" @click="addKind = k">
-            <ForgeIcon :kind="k" class="size-4" /> {{ k }}
+        <template v-for="k in KINDS" :key="k">
+          <button
+            v-if="cli?.[k]?.available"
+            type="button" :disabled="submitting" @click="importCli(k)"
+            class="w-full flex items-center gap-3 text-left rounded-xl border p-3.5 mb-3 disabled:opacity-60 transition"
+            style="border-color: color-mix(in oklab, var(--primary) 45%, var(--border)); background: color-mix(in oklab, var(--primary) 8%, var(--card))"
+          >
+            <ForgeIcon :kind="k" class="size-6 shrink-0" />
+            <span class="flex-1 min-w-0">
+              <span class="block text-sm font-semibold">Import from your {{ k === 'github' ? 'gh' : 'glab' }} CLI</span>
+              <span class="block text-xs text-muted-foreground truncate">@{{ cli?.[k]?.login }} · already signed in</span>
+            </span>
+            <span class="rounded-lg bg-primary text-primary-foreground text-xs font-medium px-3 py-1.5">Import</span>
           </button>
-        </div>
-        <button v-if="forges.cliStatus?.[addKind]?.available" type="button"
-          class="rounded-lg bg-primary text-primary-foreground text-sm py-2 disabled:opacity-60" :disabled="submitting" @click="importCli(addKind)">
-          Import token from {{ addKind === 'github' ? 'gh' : 'glab' }} CLI<span v-if="forges.cliStatus?.[addKind]?.login"> (@{{ forges.cliStatus?.[addKind]?.login }})</span>
-        </button>
-        <Input v-model="token" type="password" placeholder="Personal access token" class="font-mono" />
-        <Input v-model="baseUrl" type="text" placeholder="Self-hosted base URL (optional)" class="font-mono" />
-        <div class="flex gap-2 items-center text-sm">
-          <span class="text-muted-foreground">Transport</span>
-          <button v-for="t in (['https', 'ssh'] as const)" :key="t" type="button"
-            class="rounded-md border px-2.5 py-1 text-xs uppercase" :class="transport === t ? 'border-primary text-primary' : 'border-border text-muted-foreground'" @click="transport = t">{{ t }}</button>
-          <span v-if="transport === 'ssh' && addKind === 'gitlab'" class="text-xs" style="color:var(--cmux-warning)">experimental</span>
-        </div>
-        <button type="button" class="rounded-lg bg-primary text-primary-foreground text-sm py-2 disabled:opacity-60 capitalize" :disabled="submitting || !token.trim()" @click="submit">Connect {{ addKind }}</button>
-      </section>
+        </template>
 
-      <section class="rounded-xl border border-border bg-card p-4">
-        <h2 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">Cloned repositories</h2>
-        <p v-if="!forges.clonedRepos.length" class="text-sm text-muted-foreground">Nothing cloned yet.</p>
-        <ul v-else class="flex flex-col divide-y divide-border">
-          <li v-for="r in forges.clonedRepos" :key="r.path" class="flex items-center gap-3 py-2.5">
-            <div class="min-w-0 flex-1">
-              <div class="text-sm font-medium truncate">{{ r.name }}</div>
-              <div class="text-xs text-muted-foreground font-mono truncate">{{ r.path }} · {{ fmtBytes(r.sizeBytes) }}</div>
+        <div class="flex items-center gap-2.5 text-muted-foreground text-xs my-3 w-full"><span class="h-px bg-border flex-1"></span>or connect manually<span class="h-px bg-border flex-1"></span></div>
+        <div class="flex gap-2.5 w-full">
+          <button
+            v-for="k in KINDS" :key="k" type="button" @click="openSheet(k)"
+            class="flex-1 inline-flex items-center justify-center gap-2 rounded-lg border border-border py-2.5 text-sm capitalize hover:bg-muted/50 transition"
+          ><ForgeIcon :kind="k" class="size-4" /> {{ k }}</button>
+        </div>
+        <p class="text-xs text-muted-foreground max-w-xs mt-4">Uses a personal access token or your CLI login. Read-only unless you create or push.</p>
+      </div>
+
+      <!-- ── Accounts list (≥1 connection) ─────────────────────── -->
+      <div v-else class="px-4 py-5">
+        <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2.5">Accounts</p>
+        <div v-for="c in forges.connections" :key="c.id" class="flex items-center gap-3 rounded-xl border border-border bg-card p-3 mb-2">
+          <ForgeIcon :kind="c.kind" class="size-5 shrink-0" />
+          <div class="min-w-0 flex-1">
+            <div class="text-sm font-semibold flex items-center gap-2 truncate">
+              @{{ c.account.login }}
+              <span v-if="c.status === 'needs_reconnect'" class="text-[10px] rounded-full px-1.5 py-px border" style="color: var(--cmux-warning); border-color: color-mix(in oklab, var(--cmux-warning) 45%, transparent)">reconnect</span>
+              <span v-else class="size-1.5 rounded-full" style="background:#3fb950"></span>
             </div>
-            <button type="button" class="cmux-icon-button" aria-label="Pull" @click="pull(r.path)"><RotateCw class="size-4" /></button>
-            <button type="button" class="cmux-icon-button text-destructive" aria-label="Delete" @click="del(r.path)"><Trash2 class="size-4" /></button>
-          </li>
-        </ul>
-      </section>
+            <div class="text-xs text-muted-foreground truncate">{{ c.host }} · {{ c.transport.toUpperCase() }}<span v-if="c.source === 'cli'"> · via CLI</span></div>
+          </div>
+          <button v-if="c.status === 'needs_reconnect'" type="button" class="text-xs text-primary" @click="openSheet(c.kind)">Reconnect</button>
+          <button type="button" class="text-xs text-muted-foreground hover:text-foreground" @click="disconnect(c.id)">Disconnect</button>
+        </div>
+        <button type="button" @click="openSheet()" class="w-full flex items-center justify-center gap-2 rounded-xl border border-dashed border-border text-primary py-3 text-sm font-medium hover:bg-muted/30 transition">＋ Add account</button>
+      </div>
     </div>
+
+    <!-- ── Add-account sheet ─────────────────────────────────── -->
+    <Sheet v-model:open="sheetOpen">
+      <SheetContent side="bottom" class="max-w-[440px] mx-auto rounded-t-2xl px-5 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+1.25rem)]">
+        <SheetTitle class="text-base">Add a Git account</SheetTitle>
+        <div class="flex flex-col gap-3">
+          <div class="inline-flex bg-secondary rounded-lg p-0.5 gap-0.5">
+            <button
+              v-for="k in KINDS" :key="k" type="button" @click="addKind = k"
+              class="flex-1 inline-flex items-center justify-center gap-2 rounded-md py-2 text-xs font-medium capitalize"
+              :class="addKind === k ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground'"
+            ><ForgeIcon :kind="k" class="size-3.5" /> {{ k }}</button>
+          </div>
+
+          <button
+            v-if="cli?.[addKind]?.available" type="button" :disabled="submitting" @click="importCli(addKind)"
+            class="rounded-lg bg-primary text-primary-foreground text-sm py-2.5 font-medium disabled:opacity-60"
+          >Import token from {{ addKind === 'github' ? 'gh' : 'glab' }} CLI<span v-if="cli?.[addKind]?.login"> (@{{ cli?.[addKind]?.login }})</span></button>
+          <div v-if="cli?.[addKind]?.available" class="flex items-center gap-2.5 text-muted-foreground text-xs"><span class="h-px bg-border flex-1"></span>or paste a token<span class="h-px bg-border flex-1"></span></div>
+
+          <div>
+            <Input v-model="token" type="password" :placeholder="addKind === 'github' ? 'github_pat_…' : 'glpat-…'" class="font-mono" />
+            <p class="text-xs text-muted-foreground mt-1.5"><a :href="tokenDocsUrl" target="_blank" rel="noreferrer" class="text-primary">Create a fine-grained token ↗</a> · needs {{ scopesHint }}</p>
+          </div>
+
+          <div class="border-t border-border pt-3">
+            <button type="button" class="w-full flex items-center justify-between text-xs text-muted-foreground" @click="showAdvanced = !showAdvanced">
+              Self-hosted &amp; transport
+              <ChevronDown class="size-4 transition-transform" :class="showAdvanced ? 'rotate-180' : ''" />
+            </button>
+            <div v-if="showAdvanced" class="flex flex-col gap-2.5 mt-3">
+              <Input v-model="baseUrl" type="text" placeholder="API base URL (self-hosted) — e.g. github.acme.com/api/v3" class="font-mono" />
+              <div class="flex gap-2">
+                <button v-for="t in (['https', 'ssh'] as const)" :key="t" type="button" @click="transport = t"
+                  class="flex-1 rounded-md border py-2 text-xs uppercase" :class="transport === t ? 'border-primary text-primary' : 'border-border text-muted-foreground'">{{ t }}</button>
+              </div>
+              <p v-if="transport === 'ssh' && addKind === 'gitlab'" class="text-xs" style="color: var(--cmux-warning)">SSH for GitLab is experimental</p>
+            </div>
+          </div>
+
+          <button type="button" @click="submit" :disabled="submitting || !token.trim()" class="rounded-lg bg-primary text-primary-foreground text-sm py-2.5 font-medium capitalize disabled:opacity-60">Connect {{ addKind }}</button>
+        </div>
+      </SheetContent>
+    </Sheet>
   </div>
 </template>
