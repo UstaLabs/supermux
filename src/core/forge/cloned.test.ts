@@ -26,6 +26,14 @@ test("scanCloned finds host/owner/repo git dirs under the root", () => {
   expect(sm.path).toBe(join(root, "github.com", "ahmet", "supermux"))
 })
 
+test("scanCloned reports a locally-created repo (local/<name>) with host=local", () => {
+  const root = join(work, "localproj")
+  gitRepo(join(root, "local", "scratch"))
+  const found = scanCloned(root)
+  expect(found).toHaveLength(1)
+  expect(found[0]).toMatchObject({ host: "local", owner: "local", name: "scratch", fullName: "scratch" })
+})
+
 test("isInsideRoot rejects traversal", () => {
   const root = join(work, "projects")
   expect(isInsideRoot(root, join(root, "github.com", "a", "b"))).toBe(true)

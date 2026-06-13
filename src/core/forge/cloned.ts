@@ -22,19 +22,19 @@ export function scanCloned(root: string): ClonedRepo[] {
   const out: ClonedRepo[] = []
   const dirs = (p: string) => { try { return readdirSync(p).filter((d) => { try { return statSync(join(p, d)).isDirectory() } catch { return false } }) } catch { return [] } }
   for (const host of dirs(root)) {
-    for (const owner of dirs(join(root, host))) {
-      // 3-level: root/host/owner/name
+    if (host === "local") {
+      // repos created locally (no remote): root/local/<name>
+      for (const name of dirs(join(root, host))) {
+        const path = join(root, host, name)
+        if (existsSync(join(path, ".git"))) out.push({ path, host: "local", owner: "local", name, fullName: name, sizeBytes: dirSize(path) })
+      }
+      continue
+    }
+    for (const owner of dirs(join(root, host)))
       for (const name of dirs(join(root, host, owner))) {
         const path = join(root, host, owner, name)
-        if (!existsSync(join(path, ".git"))) continue
-        out.push({ path, host, owner, name, fullName: `${owner}/${name}`, sizeBytes: dirSize(path) })
+        if (existsSync(join(path, ".git"))) out.push({ path, host, owner, name, fullName: `${owner}/${name}`, sizeBytes: dirSize(path) })
       }
-      // 2-level: root/owner/name  (host="" for local repos)
-      const path2 = join(root, host, owner)
-      if (existsSync(join(path2, ".git"))) {
-        out.push({ path: path2, host: "", owner: host, name: owner, fullName: `${host}/${owner}`, sizeBytes: dirSize(path2) })
-      }
-    }
   }
   return out
 }
