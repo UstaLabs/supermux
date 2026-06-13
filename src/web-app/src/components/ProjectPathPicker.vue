@@ -158,6 +158,7 @@ const createOptions = computed(() =>
 )
 
 async function handleResolve(opt: OmniOption) {
+  if (opt.kind !== "local" && omni.resolving.value) return
   if (opt.kind === "local") { selectPath(opt.path); return }
   try { const path = await omni.resolve(opt); emit("update:modelValue", path); open.value = false } catch { /* keep open; error surfaced elsewhere */ }
 }
@@ -270,7 +271,8 @@ defineExpose({
               :key="o.repo.fullName"
               type="button"
               role="option"
-              class="flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left hover:bg-accent"
+              :disabled="omni.resolving.value"
+              class="flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left hover:bg-accent disabled:opacity-60"
               @mousedown.prevent
               @click="handleResolve(o)"
             >
@@ -294,7 +296,8 @@ defineExpose({
             :key="o.createTarget"
             type="button"
             role="option"
-            class="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-accent"
+            :disabled="omni.resolving.value"
+            class="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-accent disabled:opacity-60"
             @mousedown.prevent
             @click="handleResolve(o)"
           >
@@ -304,8 +307,8 @@ defineExpose({
         </div>
 
         <!-- Resolving indicator -->
-        <div v-if="omni.resolving.value" class="px-3 py-2 text-center text-xs text-muted-foreground">
-          {{ omni.searching.value ? "Searching…" : "Cloning / Creating…" }}
+        <div v-if="omni.searching.value || omni.resolving.value" class="px-3 py-2 text-center text-xs text-muted-foreground">
+          {{ omni.resolving.value ? "Cloning / creating…" : "Searching…" }}
         </div>
       </div>
     </DropdownMenuContent>
