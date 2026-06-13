@@ -51,3 +51,12 @@ test("sshRemoteUrl + gitUser", () => {
   expect(gl.gitUser()).toBe("oauth2")
   expect(gl.sshRemoteUrl({ host: "gitlab.com", owner: "acme", name: "web" } as any)).toBe("git@gitlab.com:acme/web.git")
 })
+
+test("listRepos maps a public repo to private:false", async () => {
+  mock(() => ({ body: [{
+    name: "pub", path_with_namespace: "ahmet/pub", visibility: "public",
+    default_branch: "main", http_url_to_repo: "https://gitlab.com/ahmet/pub.git", web_url: "https://gitlab.com/ahmet/pub",
+  }] }))
+  const repos = await gl.listRepos(c, {})
+  expect(repos[0].private).toBe(false)
+})

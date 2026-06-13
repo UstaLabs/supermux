@@ -17,6 +17,7 @@ async function call(c: ForgeCredential, path: string, init?: RequestInit): Promi
   const text = await res.text().catch(() => "")
   if (res.status === 401) throw new ForgeError("auth", text, 401)
   if (res.status === 429) throw new ForgeError("rate_limited", text, 429)
+  if (res.status === 403 && (res.headers.get("ratelimit-remaining") === "0" || res.headers.has("retry-after"))) throw new ForgeError("rate_limited", text, 403)
   if (res.status === 403) throw new ForgeError("scope_missing", text, 403)
   if (res.status === 404) throw new ForgeError("not_found", text, 404)
   if (res.status === 400 && /taken|already exists/i.test(text)) throw new ForgeError("conflict", text, 400)
@@ -44,7 +45,7 @@ export const gitlabAdapter: ForgeAdapter = {
   },
   async listRepos(c, { query, perPage = 50 }) {
     const search = query ? `&search=${encodeURIComponent(query)}` : ""
-    const j = await call(c, `/projects?membership=true&simple=true&order_by=last_activity_at&per_page=${perPage}${search}`)
+    const j = await call(c, `/projects?membership=true&order_by=last_activity_at&per_page=${perPage}${search}`)
     return (j as any[]).map((r) => toRepo(c, r))
   },
   async createRepo(c, input) {
