@@ -45,7 +45,7 @@ const avatarStyle = computed(() => {
       aria-label="Session suspended"
       class="absolute -bottom-1 -right-1 z-10 grid size-[18px] place-items-center rounded-full bg-card ring-1 ring-border/70"
     >
-      <PauseIcon class="size-3 text-amber-500 fill-amber-500" aria-hidden="true" />
+      <PauseIcon class="size-2 text-amber-500 fill-amber-500" aria-hidden="true" />
     </span>
   </div>
 </template>
