@@ -58,5 +58,5 @@ test("listRepos maps a public repo to private:false", async () => {
     default_branch: "main", http_url_to_repo: "https://gitlab.com/ahmet/pub.git", web_url: "https://gitlab.com/ahmet/pub",
   }] }))
   const repos = await gl.listRepos(c, {})
-  expect(repos[0].private).toBe(false)
+  expect(repos[0]!.private).toBe(false)
 })
