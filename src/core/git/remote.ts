@@ -65,7 +65,7 @@ export type PushResult =
   | { status: "auth_failed"; message: string }
   | { status: "error"; message: string }
 
-function isAuthError(lower: string): boolean {
+export function isAuthError(lower: string): boolean {
   return lower.includes("authentication failed")
     || lower.includes("could not read username")
     || lower.includes("invalid username or password")

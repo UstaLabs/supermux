@@ -15,6 +15,7 @@ export interface PromptInputContext {
   textInput: Ref<string>
   files: Ref<AttachmentFile[]>
   isLoading: Ref<boolean>
+  focused: Ref<boolean>
   fileInputRef: Ref<HTMLInputElement | null>
   setTextInput: (val: string) => void
   addFiles: (files: File[] | FileList) => void

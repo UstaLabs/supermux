@@ -84,11 +84,50 @@ export function linkifyFilePaths(html: string): string {
   }).join("")
 }
 
+// Static, data-free markup — safe to inject after sanitization. The copied
+// code itself stays inside the already-sanitized <pre><code>, never here.
+const COPY_BUTTON =
+  '<button class="code-copy-btn" type="button" aria-label="Copy code">' +
+  '<svg class="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
+  ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>' +
+  '<path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>' +
+  '<svg class="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
+  ' stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M20 6 9 17l-5-5"/></svg></button>'
+
+// Non-greedy, so each <pre>…</pre> matches independently. marked escapes < and >
+// inside code, so a literal </pre> in the source can never close a block early.
+const CODE_BLOCK_RE = /<pre\b[^>]*>[\s\S]*?<\/pre>/g
+
+/** Wrap each fenced code block in a positioned container carrying a copy button. */
+export function injectCodeCopyButtons(html: string): string {
+  return html.replace(CODE_BLOCK_RE, (block) => `<div class="code-block">${COPY_BUTTON}${block}</div>`)
+}
+
+const MARKDOWN_EXT_RE = /\.(md|markdown|mdown|mkd|mdx)$/i
+
+/** True for paths the editor can render as a markdown preview. */
+export function isMarkdownPath(path: string): boolean {
+  return MARKDOWN_EXT_RE.test(path)
+}
+
+// Non-greedy, so each <table>…</table> matches independently. GFM tables can't
+// nest, and marked escapes < and > inside cells, so a literal </table> in the
+// source can never close a table early.
+const TABLE_RE = /<table\b[^>]*>[\s\S]*?<\/table>/g
+
+/** Wrap each table in a horizontally scrollable container so wide tables
+ *  don't overflow the message on narrow screens. */
+export function wrapTables(html: string): string {
+  return html.replace(TABLE_RE, (table) => `<div class="md-table-wrap">${table}</div>`)
+}
+
 export function renderMarkdown(text: string): string {
   const html = marked.parse(text, { async: false }) as string
   const sanitized = DOMPurify.sanitize(html, {
     ADD_ATTR: ["target", "data-path", "data-line", "data-line-end"],
   })
   // Markdown [label](path:line) links are file-links from the marked renderer above.
-  return linkifyFilePaths(sanitized)
+  return wrapTables(injectCodeCopyButtons(linkifyFilePaths(sanitized)))
 }

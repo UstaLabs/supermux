@@ -8,6 +8,7 @@ import type { Channel, InboundMessage, OutboundAction } from "./channels/channel
 import { classifyInbound, transformOutbound } from "./core/routing"
 import { handleSlash } from "./core/commands"
 import { Registry, type ProxyEntry } from "./core/session-manager/registry"
+import { makeReadAdvancer } from "./core/session-manager/read-status"
 
 function proxyWsPayload(entry: ProxyEntry) {
   return {
@@ -107,6 +108,10 @@ import { CuratorScheduler } from "./core/curator/scheduler"
 import { runCurator, type CuratorDeps } from "./core/curator/run"
 import { curatorPromptPath } from "./core/runtime-assets"
 import { SettingsStore } from "./core/settings/store"
+import { ForgeStore } from "./core/forge/store"
+import { ForgeService } from "./core/forge/service"
+import { detectForgeClis, importCliToken } from "./core/forge/cli-import"
+import { installCredentialLauncher } from "./core/forge/launcher"
 import { SETTINGS_KEY_CURATOR, parseCuratorConfig, type CuratorConfig } from "./core/settings/curator-config"
 import { listLspServerSettingsRows } from "./core/lsp/editor-settings"
 import { getServerById } from "./core/lsp/registry"
@@ -183,6 +188,15 @@ try {
 const registry = new Registry(db)
 const reviewStore = new ReviewStore(db)
 const settings = new SettingsStore(db)
+const credentialHelperPath = join(STATE_DIR, "bin", "mux-credential")
+try { installCredentialLauncher(join(STATE_DIR, "bin"), join(import.meta.dir, "..")) }
+catch (err) { log.error("forge_credential_launcher_failed", { err: String(err) }) }
+const forgeStore = new ForgeStore(db)
+const forgeService = new ForgeService(forgeStore, {
+  projectsRoot: join(STATE_DIR, "projects"),
+  sshRoot: join(STATE_DIR, "ssh"),
+  credentialHelperPath,
+})
 // Onboarding-editable config: stored values layer over env over built-in defaults.
 // Empty store (every existing install) ⇒ resolves exactly to the old env reads.
 const appConfigEnv = {
@@ -767,6 +781,15 @@ const updateChecker = process.env.MUX_UPDATE_CHECK === "0" ? null : new UpdateCh
 })
 updateChecker?.start()
 
+// Read status: a session is "read" up to its newest message whenever a device
+// is actively viewing it. advanceRead persists last_read_at and broadcasts
+// session_read to every client — idempotent, so it no-ops when nothing changed.
+const advanceRead = makeReadAdvancer({
+  sessions: registry.sessions,
+  messages: messageLog,
+  broadcast: (frame) => webChannel?.broadcastToAll(frame),
+})
+
 if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   webChannel = new WebChannel({
     updateChecker,
@@ -904,6 +927,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     pushStore,
     vapidPublicKey: vapid.publicKey,
     viewingTracker,
+    getReads: () => registry.sessions.allReads(),
+    getDrafts: () => registry.sessions.allDrafts(),
+    setDraft: (id, text) => registry.sessions.setDraft(id, text),
+    markRead: (id) => advanceRead(id),
     getModels: (agent) => modelCache.get(agent).map((m) => ({ id: m.id, displayName: m.displayName })),
     switchModel: async (id, model, applyNow) => {
       const s = registry.get(id)
@@ -1229,6 +1256,21 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         return { ok: true }
       } catch (err: any) { return { ok: false, reason: err?.message ?? String(err) } }
     },
+    getForgeConnections: () => forgeService.connections(),
+    getForgeCliStatus: () => detectForgeClis(),
+    addForgeConnection: (o) => forgeService.addConnection(o as any),
+    importForgeCli: async (kind, transport) => {
+      if (kind !== "github" && kind !== "gitlab") throw new Error(`unsupported forge kind: ${kind}`)
+      return forgeService.addConnection({ kind, token: importCliToken(kind), source: "cli", transport })
+    },
+    removeForgeConnection: (id) => forgeService.removeConnection(id),
+    searchForgeRepos: (q) => forgeService.search(q),
+    cloneForgeRepo: (id, owner, name) => forgeService.clone(id, owner, name),
+    createForgeRepo: (input) => forgeService.create(input as any),
+    createLocalRepo: (name) => forgeService.createLocal(name),
+    listClonedRepos: () => forgeService.listCloned(),
+    removeClonedRepo: (p) => forgeService.removeCloned(p),
+    pullClonedRepo: (p) => forgeService.pullCloned(p),
   })
   // loginManager constructed AFTER webChannel so its onChange can reference webChannel.
   // The startAgentLogin/getAgentLogin/cancelAgentLogin closures above close over `loginManager`
@@ -2535,6 +2577,9 @@ _tg.on("inbound", async (msg: InboundMessage) => {
 // look up session name for display
 messageLog.on("append", (sessionId, entry) => {
   webChannel?.broadcastToAll({ type: "message_append", session: sessionId, entry })
+  // If a device is actively viewing this session, the new message is already
+  // read — advance read status so the unread badge stays clear on every device.
+  if (viewingTracker.isAnyExactViewing(sessionId)) advanceRead(sessionId)
 })
 activityStore.on("append", (sessionId: string, event) => {
   webChannel?.broadcastToAll({ type: "activity_append", session: sessionId, event })

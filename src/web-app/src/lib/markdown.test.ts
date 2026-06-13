@@ -1,6 +1,19 @@
 import { describe, expect, it } from "bun:test"
 import { marked } from "marked"
-import { linkifyFilePaths, linkifyMarkdownFileAnchors } from "./markdown"
+import { injectCodeCopyButtons, isMarkdownPath, linkifyFilePaths, linkifyMarkdownFileAnchors, wrapTables } from "./markdown"
+
+describe("isMarkdownPath", () => {
+  it("matches markdown extensions case-insensitively", () => {
+    for (const p of ["README.md", "/docs/Guide.MARKDOWN", "notes.mdown", "a.mkd", "x.mdx"]) {
+      expect(isMarkdownPath(p)).toBe(true)
+    }
+  })
+  it("rejects non-markdown files", () => {
+    for (const p of ["main.ts", "style.css", "mdfile", "readme.md.bak", "a.md.ts"]) {
+      expect(isMarkdownPath(p)).toBe(false)
+    }
+  })
+})
 
 function fileLink(
   display: string,
@@ -99,6 +112,70 @@ describe("linkifyMarkdownFileAnchors", () => {
     const html = linkifyMarkdownFileAnchors(`<a href="src/main.ts">main.ts</a>`)
     expect(html).toContain(fileLink("main.ts", "src/main.ts"))
     expect(html).not.toContain('href="src/main.ts"')
+  })
+})
+
+describe("injectCodeCopyButtons", () => {
+  it("wraps a fenced code block with a code-block container and copy button", () => {
+    const html = '<pre><code class="language-js">const x = 1;\n</code></pre>\n'
+    const out = injectCodeCopyButtons(html)
+    expect(out).toContain('<div class="code-block">')
+    expect(out).toContain('class="code-copy-btn"')
+    expect(out).toContain('aria-label="Copy code"')
+    // original code block is preserved verbatim inside the wrapper
+    expect(out).toContain('<pre><code class="language-js">const x = 1;\n</code></pre>')
+  })
+
+  it("places the button before the <pre> so it overlays the top-right", () => {
+    const out = injectCodeCopyButtons("<pre><code>hi\n</code></pre>")
+    expect(out.indexOf("code-copy-btn")).toBeLessThan(out.indexOf("<pre>"))
+  })
+
+  it("leaves inline <code> untouched (block code only)", () => {
+    const html = "<p>Run <code>npm test</code> now.</p>"
+    expect(injectCodeCopyButtons(html)).toBe(html)
+  })
+
+  it("adds a button to every code block", () => {
+    const html = "<pre><code>one\n</code></pre>\n<pre><code>two\n</code></pre>\n"
+    const out = injectCodeCopyButtons(html)
+    expect(out.match(/code-copy-btn/g)?.length).toBe(2)
+    expect(out.match(/class="code-block"/g)?.length).toBe(2)
+  })
+
+  it("does not match escaped </pre> appearing as code content", () => {
+    // marked escapes < and > inside code, so a literal </pre> can't close the block early
+    const html = "<pre><code>&lt;/pre&gt; is text\n</code></pre>"
+    const out = injectCodeCopyButtons(html)
+    expect(out.match(/code-copy-btn/g)?.length).toBe(1)
+  })
+})
+
+describe("wrapTables", () => {
+  it("wraps a table in a scrollable container, preserving it verbatim", () => {
+    const html = "<table><thead><tr><th>a</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table>"
+    const out = wrapTables(html)
+    expect(out).toContain('<div class="md-table-wrap">')
+    expect(out).toContain(html)
+    expect(out.indexOf('class="md-table-wrap"')).toBeLessThan(out.indexOf("<table>"))
+  })
+
+  it("wraps every table", () => {
+    const html = "<table><tr><td>1</td></tr></table>\n<table><tr><td>2</td></tr></table>"
+    const out = wrapTables(html)
+    expect(out.match(/class="md-table-wrap"/g)?.length).toBe(2)
+  })
+
+  it("leaves non-table HTML untouched", () => {
+    const html = "<p>Just a <code>paragraph</code>.</p>"
+    expect(wrapTables(html)).toBe(html)
+  })
+
+  it("does not match escaped </table> appearing as cell content", () => {
+    // marked escapes < and > inside cells, so a literal </table> can't close the table early
+    const html = "<table><tr><td>&lt;/table&gt; is text</td></tr></table>"
+    const out = wrapTables(html)
+    expect(out.match(/class="md-table-wrap"/g)?.length).toBe(1)
   })
 })
 

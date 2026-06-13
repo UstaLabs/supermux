@@ -34,6 +34,7 @@ export const router = createRouter({
     { path: "/settings/curator", component: CuratorSettingsView, meta: { fullScreen: true } },
     { path: "/settings/editor", component: EditorSettingsView, meta: { fullScreen: true } },
     { path: "/setup", component: () => import("./views/SetupView.vue"), meta: { fullScreen: true } },
+    { path: "/settings/git-hosting", component: () => import("./views/GitHostingSettingsView.vue"), meta: { fullScreen: true } },
     { path: "/settings/keyboard", component: KeyboardSettingsView, meta: { fullScreen: true } },
     { path: "/settings/system", component: SystemSettingsView, meta: { fullScreen: true } },
     { path: "/personal-assistants", component: PersonalAssistantsView, meta: { fullScreen: true } },

@@ -59,7 +59,7 @@ export function __resetAuthFailures(): void {
   authFailures.clear()
 }
 
-const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/system", "/repos"]
+const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/system", "/repos", "/forge"]
 const MAX_CLIENT_LOG_RING = 800
 
 export type StoredClientLogEntry = {
@@ -113,6 +113,10 @@ export interface WebChannelOpts {
   pushStore?: import("../../core/push/subscriptions").PushSubscriptionStore
   vapidPublicKey?: string
   viewingTracker?: import("../../core/push/viewing-tracker").ViewingTracker
+  getReads?: () => Record<string, string>          // sessionId -> last_read_at (snapshot)
+  getDrafts?: () => Record<string, string>         // sessionId -> draft text (snapshot)
+  setDraft?: (sessionId: string, text: string | null) => void
+  markRead?: (sessionId: string) => void           // advance read + broadcast session_read
   getModels?: (agent: AgentKind) => { id: string; displayName: string }[]
   switchModel?: (sessionName: string, model: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
   getSessionReasoningLevels?: (id: string) => { agent: string; current?: string; levels: { id: string; description?: string }[]; visible: boolean } | undefined
@@ -186,6 +190,18 @@ export interface WebChannelOpts {
   setSoul?: (content: string) => Promise<void> | void
   getExposure?: () => { exposureMode: string; publicUrl: string; snippets: import("../../core/settings/exposure").ExposureSnippets }
   validateExposure?: () => Promise<{ reachable: boolean; status?: number; error?: string }>
+  getForgeConnections?: () => import("../../core/forge/types").ForgeConnection[]
+  getForgeCliStatus?: () => { github: { available: boolean; login?: string }; gitlab: { available: boolean; login?: string } }
+  addForgeConnection?: (o: { kind: string; host?: string; apiBase?: string; token: string; source: "pat" | "cli"; transport?: "https" | "ssh" }) => Promise<import("../../core/forge/types").ForgeConnection>
+  importForgeCli?: (kind: string, transport?: "https" | "ssh") => Promise<import("../../core/forge/types").ForgeConnection>
+  removeForgeConnection?: (id: string) => void
+  searchForgeRepos?: (query: string) => Promise<{ repos: unknown[]; errors: unknown[] }>
+  cloneForgeRepo?: (connectionId: string, owner: string, name: string) => Promise<{ localPath: string }>
+  createForgeRepo?: (input: { connectionId: string; name: string; owner?: string; private: boolean }) => Promise<{ repo: unknown; localPath: string }>
+  createLocalRepo?: (name: string) => Promise<{ localPath: string }>
+  listClonedRepos?: () => unknown[]
+  removeClonedRepo?: (path: string) => void
+  pullClonedRepo?: (path: string) => unknown
   // null = update checks disabled (MUX_UPDATE_CHECK=0); undefined = same as null.
   updateChecker?: UpdateChecker | null
 }
@@ -338,6 +354,11 @@ export class WebChannel implements Channel {
   broadcastToAll(frame: object): void {
     const json = JSON.stringify(frame)
     for (const c of this.wsConnections) c.ws.send(json)
+  }
+
+  broadcastToOthers(frame: object, except: import("bun").ServerWebSocket<WSData>): void {
+    const json = JSON.stringify(frame)
+    for (const c of this.wsConnections) if (c.ws !== except) c.ws.send(json)
   }
 
   private async routeRequestOrUpgrade(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
@@ -618,7 +639,9 @@ export class WebChannel implements Channel {
       const proxies = this.opts.listProxies?.() ?? []
       const displays = this.opts.listDisplays?.() ?? []
       const onboarded = this.opts.getAppConfig?.()?.onboarded ?? false
-      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, agentState, proxies, displays, commands, commandsResolved, homeDir: home(), onboarded }))
+      const reads = this.opts.getReads?.() ?? {}
+      const drafts = this.opts.getDrafts?.() ?? {}
+      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, agentState, proxies, displays, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts }))
       return
     }
     if (frame.type === "ping") {
@@ -633,6 +656,25 @@ export class WebChannel implements Channel {
         return
       }
       this.opts.viewingTracker?.update(ws.data.deviceName, { session, visible })
+      // A visible device sitting on an exact session has read it up to its
+      // newest message. (Sitting on the list, session===null, does not count.)
+      if (visible && typeof session === "string") this.opts.markRead?.(session)
+      return
+    }
+    if (frame.type === "draft_set" && typeof frame.session === "string" && typeof frame.text === "string") {
+      // Empty text is a clear — normalize so an empty draft never lingers.
+      if (frame.text.length === 0) {
+        this.opts.setDraft?.(frame.session, null)
+        this.broadcastToOthers({ type: "draft_clear", session: frame.session }, ws)
+      } else {
+        this.opts.setDraft?.(frame.session, frame.text)
+        this.broadcastToOthers({ type: "draft_set", session: frame.session, text: frame.text }, ws)
+      }
+      return
+    }
+    if (frame.type === "draft_clear" && typeof frame.session === "string") {
+      this.opts.setDraft?.(frame.session, null)
+      this.broadcastToOthers({ type: "draft_clear", session: frame.session }, ws)
       return
     }
     if (frame.type === "send" && frame.session && frame.op === "reply") {
@@ -685,6 +727,10 @@ export class WebChannel implements Channel {
       }
       this.opts.onSendFromWeb(msg)
       for (const h of this.inboundHandlers) h(msg)
+      // The draft just became a real message — clear it for this session on the
+      // user's other devices too (the sender's composer already cleared locally).
+      this.opts.setDraft?.(frame.session, null)
+      this.broadcastToOthers({ type: "draft_clear", session: frame.session }, ws)
       return
     }
     if (frame.type === "editor_open" && frame.session) {
@@ -1139,6 +1185,76 @@ export class WebChannel implements Channel {
       if (!this.opts.runCuratorNow) return this.json({ error: "curator unavailable" }, 503)
       void this.opts.runCuratorNow() // fire-and-forget; run.ts guards re-entrancy
       return this.json({ ok: true })
+    }
+
+    // ── Forge: git connections + repo management ───────────────────────────
+    if (path === "/forge/connections" && method === "GET") {
+      const conns = this.opts.getForgeConnections?.(); if (!conns) return this.json({ error: "forge unavailable" }, 503)
+      let cli = null; try { cli = this.opts.getForgeCliStatus?.() ?? null } catch { cli = null }
+      return this.json({ connections: conns, cli })
+    }
+    if (path === "/forge/connections" && method === "POST") {
+      if (!this.opts.addForgeConnection) return this.json({ error: "forge unavailable" }, 503)
+      const b = await req.json().catch(() => ({})) as any
+      try {
+        return this.json(await this.opts.addForgeConnection({
+          kind: String(b.kind ?? ""), host: b.host ? String(b.host) : undefined, apiBase: b.apiBase ? String(b.apiBase) : undefined,
+          token: String(b.token ?? ""), source: b.source === "cli" ? "cli" : "pat", transport: b.transport === "ssh" ? "ssh" : "https",
+        }))
+      } catch (e: any) { return this.json({ error: e?.message ?? String(e) }, 400) }
+    }
+    if (path === "/forge/connections/import" && method === "POST") {
+      if (!this.opts.importForgeCli) return this.json({ error: "forge unavailable" }, 503)
+      const b = await req.json().catch(() => ({})) as any
+      try { return this.json(await this.opts.importForgeCli(String(b.kind ?? ""), b.transport === "ssh" ? "ssh" : "https")) }
+      catch (e: any) { return this.json({ error: e?.message ?? String(e) }, 400) }
+    }
+    {
+      const fm = path.match(/^\/forge\/connections\/(.+)$/)
+      if (fm && method === "DELETE") {
+        if (!this.opts.removeForgeConnection) return this.json({ error: "forge unavailable" }, 503)
+        this.opts.removeForgeConnection(decodeURIComponent(fm[1]!)); return this.json({ ok: true })
+      }
+    }
+    if (path === "/forge/search" && method === "POST") {
+      if (!this.opts.searchForgeRepos) return this.json({ error: "forge unavailable" }, 503)
+      const b = await req.json().catch(() => ({})) as any
+      try { return this.json(await this.opts.searchForgeRepos(String(b.query ?? ""))) }
+      catch (e: any) { return this.json({ error: e?.message ?? String(e) }, 400) }
+    }
+    if (path === "/forge/clone" && method === "POST") {
+      if (!this.opts.cloneForgeRepo) return this.json({ error: "forge unavailable" }, 503)
+      const b = await req.json().catch(() => ({})) as any
+      try { return this.json(await this.opts.cloneForgeRepo(String(b.connectionId ?? ""), String(b.owner ?? ""), String(b.name ?? ""))) }
+      catch (e: any) { return this.json({ error: e?.message ?? String(e) }, 400) }
+    }
+    if (path === "/forge/create" && method === "POST") {
+      if (!this.opts.createForgeRepo) return this.json({ error: "forge unavailable" }, 503)
+      const b = await req.json().catch(() => ({})) as any
+      try { return this.json(await this.opts.createForgeRepo({ connectionId: String(b.connectionId ?? ""), name: String(b.name ?? ""), owner: b.owner ? String(b.owner) : undefined, private: b.private !== false })) }
+      catch (e: any) { return this.json({ error: e?.message ?? String(e) }, 400) }
+    }
+    if (path === "/forge/create-local" && method === "POST") {
+      if (!this.opts.createLocalRepo) return this.json({ error: "forge unavailable" }, 503)
+      const b = await req.json().catch(() => ({})) as any
+      try { return this.json(await this.opts.createLocalRepo(String(b.name ?? ""))) }
+      catch (e: any) { return this.json({ error: e?.message ?? String(e) }, 400) }
+    }
+    if (path === "/forge/cloned" && method === "GET") {
+      const list = this.opts.listClonedRepos?.(); if (!list) return this.json({ error: "forge unavailable" }, 503)
+      return this.json({ repos: list })
+    }
+    if (path === "/forge/cloned" && method === "DELETE") {
+      if (!this.opts.removeClonedRepo) return this.json({ error: "forge unavailable" }, 503)
+      const b = await req.json().catch(() => ({})) as any
+      try { this.opts.removeClonedRepo(String(b.path ?? "")); return this.json({ ok: true }) }
+      catch (e: any) { return this.json({ error: e?.message ?? String(e) }, 400) }
+    }
+    if (path === "/forge/cloned/pull" && method === "POST") {
+      if (!this.opts.pullClonedRepo) return this.json({ error: "forge unavailable" }, 503)
+      const b = await req.json().catch(() => ({})) as any
+      try { return this.json(this.opts.pullClonedRepo(String(b.path ?? ""))) }
+      catch (e: any) { return this.json({ error: e?.message ?? String(e) }, 400) }
     }
 
     // ── Model discovery ────────────────────────────────────────────────────

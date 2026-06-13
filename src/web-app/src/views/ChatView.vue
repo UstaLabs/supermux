@@ -22,6 +22,7 @@ import { toWorkdirRelativePath } from "@/lib/workdir-display"
 import { toast } from "vue-sonner"
 import AgentLogo from "@/components/AgentLogo.vue"
 import BranchSyncStatus from "@/components/BranchSyncStatus.vue"
+import SessionLinks from "@/components/SessionLinks.vue"
 import ModelSwitcher from "@/components/ModelSwitcher.vue"
 import EffortSwitcher from "@/components/EffortSwitcher.vue"
 import ModelPill from "@/components/ModelPill.vue"
@@ -56,6 +57,7 @@ import {
   PromptInputAttachments,
 } from "@/components/ai-elements/prompt-input"
 import PromptInputActionAddCamera from "@/components/ai-elements/prompt-input/PromptInputActionAddCamera.vue"
+import PromptInputDraftSync from "@/components/PromptInputDraftSync.vue"
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input"
 import { Suggestion } from "@/components/ai-elements/suggestion"
 import Tool from "@/components/ai-elements/tool/Tool.vue"
@@ -476,13 +478,13 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
 <template>
   <div class="h-dvh flex flex-col bg-[var(--cmux-chat)] text-foreground">
     <header
-      class="flex items-center gap-3 px-3 py-2 min-h-[3.5rem] border-b border-border sticky top-0 bg-[var(--cmux-header)]/95 backdrop-blur z-10"
+      class="flex items-center gap-3 px-3 py-1.5 min-h-[3.5rem] border-b border-border sticky top-0 bg-[var(--cmux-header)]/95 backdrop-blur z-10"
       style="padding-top: calc(env(safe-area-inset-top, 0px) + 0.5rem)"
     >
       <router-link v-if="!isDesktop" :to="isArchived ? '/archived' : '/'" class="text-muted-foreground hover:text-foreground transition -ml-1 p-1" aria-label="Back">
         <ChevronLeft class="size-5" />
       </router-link>
-      <div class="min-w-0 flex-1">
+      <div class="min-w-0 flex-1 leading-tight">
         <div class="flex items-center gap-2">
           <AgentLogo
             v-if="session?.agent"
@@ -501,6 +503,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
           {{ workdirLabel }}
         </div>
       </div>
+      <SessionLinks v-if="!isArchived && session?.name" :session-name="session?.name ?? ''" />
       <button
         v-if="isArchived"
         class="shrink-0 px-3 py-1.5 text-xs font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition disabled:opacity-50"
@@ -809,6 +812,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
             @submit="onPromptSubmit"
           >
             <SlashCommandMenu :commands="sessionCommands" :loading="!commandsStore.isResolved(props.id)" @control="onControlCommand" />
+            <PromptInputDraftSync :session-id="props.id" />
             <PromptInputHeader>
               <PromptInputAttachments />
             </PromptInputHeader>

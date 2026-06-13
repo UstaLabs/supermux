@@ -1,13 +1,29 @@
 <script setup lang="ts">
 import { computed } from "vue"
+import { toast } from "vue-sonner"
 import { renderMarkdown } from "@/lib/markdown"
 
 const props = defineProps<{ content: string }>()
 const emit = defineEmits<{ openFile: [path: string, line?: number, endLine?: number] }>()
 const rendered = computed(() => renderMarkdown(props.content))
 
-function onClick(e: MouseEvent) {
+async function onClick(e: MouseEvent) {
   const target = e.target as HTMLElement
+
+  const copyBtn = target.closest(".code-copy-btn") as HTMLElement | null
+  if (copyBtn) {
+    // The code lives in the sibling <pre><code>; strip marked's trailing newline.
+    const code = copyBtn.closest(".code-block")?.querySelector("pre code")?.textContent ?? ""
+    try {
+      await navigator.clipboard.writeText(code.replace(/\n$/, ""))
+      copyBtn.classList.add("copied")
+      setTimeout(() => copyBtn.classList.remove("copied"), 1500)
+    } catch {
+      toast.error("Couldn't copy to clipboard")
+    }
+    return
+  }
+
   const link = target.closest("a.file-link") as HTMLElement | null
   if (link) {
     e.preventDefault()
@@ -47,8 +63,9 @@ function onClick(e: MouseEvent) {
   border-radius: 0.35rem;
   background: rgba(255, 255, 255, 0.08);
 }
+.md-body :deep(.code-block) { position: relative; margin: 0.5rem 0; }
 .md-body :deep(pre) {
-  margin: 0.5rem 0;
+  margin: 0;
   padding: 0.75rem 0.9rem;
   border-radius: 0.5rem;
   overflow-x: auto;
@@ -61,15 +78,52 @@ function onClick(e: MouseEvent) {
   background: transparent;
   font-size: inherit;
 }
+/* Copy button lives on the non-scrolling .code-block wrapper, so it stays
+   pinned to the top-right while the <pre> scrolls horizontally. */
+.md-body :deep(.code-copy-btn) {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.8rem;
+  height: 1.8rem;
+  padding: 0;
+  /* Near-opaque so it cleanly covers any code beneath it on long first lines. */
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.4rem;
+  color: rgba(255, 255, 255, 0.65);
+  background: rgba(15, 23, 42, 0.94);
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+  -webkit-tap-highlight-color: transparent;
+}
+.md-body :deep(.code-copy-btn:hover) {
+  color: #fff;
+  background: rgba(30, 41, 59, 0.98);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+.md-body :deep(.code-copy-btn svg) { display: block; width: 0.95rem; height: 0.95rem; }
+.md-body :deep(.code-copy-btn .icon-check) { display: none; }
+.md-body :deep(.code-copy-btn.copied) { color: #4ade80; border-color: rgba(74, 222, 128, 0.4); }
+.md-body :deep(.code-copy-btn.copied .icon-copy) { display: none; }
+.md-body :deep(.code-copy-btn.copied .icon-check) { display: block; }
 .md-body :deep(blockquote) {
   border-left: 3px solid currentColor;
   opacity: 0.85;
   padding-left: 0.7rem;
   margin: 0.4rem 0;
 }
+/* Wide tables scroll horizontally instead of overflowing the message. */
+.md-body :deep(.md-table-wrap) {
+  overflow-x: auto;
+  margin: 0.5rem 0;
+  -webkit-overflow-scrolling: touch;
+}
 .md-body :deep(table) {
   border-collapse: collapse;
-  margin: 0.5rem 0;
+  margin: 0;
   font-size: 0.9em;
 }
 .md-body :deep(th),

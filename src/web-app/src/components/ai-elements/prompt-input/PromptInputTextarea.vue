@@ -13,7 +13,7 @@ interface Props extends /* @vue-ignore */ PromptInputTextareaProps {
 
 const props = defineProps<Props>()
 
-const { textInput, setTextInput, addFiles, files, removeFile } = usePromptInput()
+const { textInput, setTextInput, addFiles, files, removeFile, focused } = usePromptInput()
 const isComposing = ref(false)
 
 function handleKeyDown(e: KeyboardEvent) {
@@ -78,6 +78,8 @@ const modelValue = computed({
     v-bind="props"
     @keydown="handleKeyDown"
     @paste="handlePaste"
+    @focus="focused = true"
+    @blur="focused = false"
     @compositionstart="isComposing = true"
     @compositionend="isComposing = false"
   />

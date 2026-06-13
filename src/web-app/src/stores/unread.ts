@@ -2,26 +2,12 @@ import { defineStore } from "pinia"
 import { ref, computed } from "vue"
 import { useMessages } from "./messages"
 
-const KEY = "cmux:unread:lastRead"
-
-function loadLastRead(): Record<string, string> {
-  try {
-    const raw = localStorage.getItem(KEY)
-    if (!raw) return {}
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {}
-  } catch {
-    return {}
-  }
-}
-
-function persist(map: Record<string, string>): void {
-  try { localStorage.setItem(KEY, JSON.stringify(map)) } catch {}
-}
-
 export const useUnread = defineStore("unread", () => {
   const messages = useMessages()
-  const lastRead = ref<Record<string, string>>(loadLastRead())
+  // Server is the source of truth: seeded from the snapshot's `reads` map and
+  // updated by `session_read` frames. No localStorage — read status is global
+  // across the user's devices.
+  const lastRead = ref<Record<string, string>>({})
 
   const unreadSessions = computed<Set<string>>(() => {
     const set = new Set<string>()
@@ -38,10 +24,23 @@ export const useUnread = defineStore("unread", () => {
     return unreadSessions.value.has(session)
   }
 
-  function markRead(session: string): void {
-    lastRead.value = { ...lastRead.value, [session]: new Date().toISOString() }
-    persist(lastRead.value)
+  // Monotonic: only ever advances a session's read pointer, so an optimistic
+  // local mark (now()) is never undone by a slightly-older server timestamp.
+  function setLastRead(session: string, ts: string): void {
+    const cur = lastRead.value[session]
+    if (cur && cur >= ts) return
+    lastRead.value = { ...lastRead.value, [session]: ts }
   }
 
-  return { isUnread, markRead }
+  function seed(map: Record<string, string>): void {
+    for (const [session, ts] of Object.entries(map)) setLastRead(session, ts)
+  }
+
+  // Optimistic local clear when the user opens/looks at a session. The server
+  // confirms and syncs the user's other devices via the `session_read` frame.
+  function markRead(session: string): void {
+    setLastRead(session, new Date().toISOString())
+  }
+
+  return { isUnread, setLastRead, seed, markRead }
 })
