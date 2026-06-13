@@ -2,11 +2,6 @@ import { makeLogger } from "../../shared/log"
 
 const log = makeLogger("proxy")
 
-// --- Types ---
-
-export type ProxyLookup = (domain: string) => { port: number; sessionName: string } | undefined
-export type ProxyAuth = (req: Request) => boolean
-
 // --- Subdomain extraction ---
 
 /**

@@ -253,6 +253,12 @@ chosen automatically by configuration:
   hardcodes its own base path (Vite, Next.js) — won't work under a sub-path. Use
   **subdomain mode** for those.
 
+  Note: in path mode all exposed apps share the broker's web origin, so
+  `localStorage`/`sessionStorage`/`IndexedDB` are NOT isolated between them (cookies
+  are confined per sub-path, but web storage is origin-scoped). The broker's own
+  auth is an HttpOnly cookie and is not exposed, but only path-expose apps you
+  trust — use subdomain mode (separate origins) to isolate untrusted apps.
+
 **Caddy** (automatic TLS):
 ```
 reverse_proxy /api/* localhost:8787

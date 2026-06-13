@@ -73,6 +73,25 @@ test("private proxy requires auth; valid cookie passes", async () => {
   expect((await authed.json() as { path: string }).path).toBe("/x")
 })
 
+test("bare /p/<slug> 301 preserves the query string", async () => {
+  const res = await fetch(`http://127.0.0.1:${PORT}/p/pub?x=1`, { redirect: "manual" })
+  expect(res.status).toBe(301)
+  expect(res.headers.get("location")).toBe("/p/pub/?x=1")
+})
+
+test("private proxy rejects a WebSocket upgrade without auth", async () => {
+  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/p/app/ws`)  // private slug, no cookie
+  const opened = await new Promise<boolean>((resolve) => {
+    const t = setTimeout(() => resolve(false), 2000)
+    ws.addEventListener("open", () => { clearTimeout(t); resolve(true) })
+    ws.addEventListener("message", () => { clearTimeout(t); resolve(true) })
+    ws.addEventListener("error", () => { clearTimeout(t); resolve(false) })
+    ws.addEventListener("close", () => { clearTimeout(t); resolve(false) })
+  })
+  try { ws.close() } catch {}
+  expect(opened).toBe(false)
+})
+
 test("WebSocket proxies with the prefix stripped", async () => {
   const ws = new WebSocket(`ws://127.0.0.1:${PORT}/p/pub/ws/hmr`)
   const first = await new Promise<string>((resolve, reject) => {
