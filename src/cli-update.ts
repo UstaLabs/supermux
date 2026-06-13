@@ -116,6 +116,11 @@ export async function runRollbackCommand(
     } else {
       println("Restart the broker to finish — the previous binary is on disk.")
     }
+    println(
+      "Note: if the version you updated FROM added a database migration, the older binary may refuse to boot" +
+      " (a safety guard against running old code on migrated state)." +
+      " If the broker fails to come back, re-run `supermux update` to recover.",
+    )
     return 0
   }
 

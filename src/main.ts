@@ -153,13 +153,16 @@ process.on("exit", () => releasePidFile(PID_FILE))
 
 // Schema downgrade guard: refuse to start if state was written by a newer build.
 // Must run BEFORE openDb so we never touch a DB we can't safely migrate.
+// NOTE: this is also the rollback-into-older-migration tripwire — if a forward
+// update added migrations and the user then runs `supermux rollback`, the older
+// binary lands here and exits. Recovery is a forward `supermux update`, not another rollback.
 {
   const stampCheck = checkSchemaStamp(STATE_DIR, MIGRATIONS.length)
   if (!stampCheck.ok) {
     log.error("schema_downgrade_refused", {
       stamp: stampCheck.stamp,
       supported: MIGRATIONS.length,
-      hint: "this state was written by a newer supermux — run `supermux rollback` to restore the previous binary, or upgrade again",
+      hint: `This binary is OLDER than the schema the on-disk state was migrated to (stamp=${stampCheck.stamp} > supported=${MIGRATIONS.length}). An older binary cannot safely run against forward-migrated state. Recover by installing a build at least as new as the one that wrote this state (e.g. \`supermux update\`). NOTE: \`supermux rollback\` will NOT help here — it selects an even older binary.`,
     })
     process.exit(1)
   }
