@@ -5,6 +5,11 @@ import { adapterFor } from "./registry"
 import { projectDir, gitClone } from "../git/clone"
 import { bindHttpsCredentials } from "./credential-helper"
 import { ensureKeypair, seedKnownHosts, sshCommandFor, bindSshCommand, removeKeypair } from "./ssh-keys"
+import { join } from "path"
+import { mkdirSync } from "fs"
+import { execFileSync } from "child_process"
+import { scanCloned, removeCloned as rmCloned, type ClonedRepo } from "./cloned"
+import { pullBranch, type PullResult } from "../git/remote"
 
 export interface ForgeServiceConfig { projectsRoot: string; sshRoot: string }
 export interface ConnError { connectionId: string; code: string; message: string }
@@ -97,5 +102,22 @@ export class ForgeService {
     const repo = await this.adapterFactory(c.kind).createRepo(c, input)
     const { localPath } = await this.clone(input.connectionId, repo.owner, repo.name)
     return { repo, localPath }
+  }
+
+  /** Create an empty local git repo (no remote) under projectsRoot/local/<name>. */
+  async createLocal(name: string): Promise<{ localPath: string }> {
+    const dir = join(this.cfg.projectsRoot, "local", name)
+    mkdirSync(dir, { recursive: true })
+    execFileSync("git", ["init", "-q", dir])
+    return { localPath: dir }
+  }
+
+  listCloned(): ClonedRepo[] { return scanCloned(this.cfg.projectsRoot) }
+
+  removeCloned(path: string): void { rmCloned(this.cfg.projectsRoot, path) }
+
+  pullCloned(path: string): PullResult {
+    if (!path.startsWith(this.cfg.projectsRoot)) throw new ForgeError("not_found", "not a managed repo")
+    return pullBranch(path)
   }
 }

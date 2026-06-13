@@ -63,3 +63,19 @@ test("removeConnection deletes the connection's ssh key dir", async () => {
   s.removeConnection("github:github.com:a")
   expect(existsSync(keyDir)).toBe(false)
 })
+
+test("createLocal inits a git repo under the projects root", async () => {
+  const s = svc([])
+  const { localPath } = await s.createLocal("scratch")
+  expect(existsSync(join(localPath, ".git"))).toBe(true)
+  expect(localPath).toBe(join(work, "projects", "local", "scratch"))
+})
+
+test("listCloned reflects what createLocal made; removeCloned deletes it", async () => {
+  const s = svc([])
+  await s.createLocal("scratch")
+  expect(s.listCloned().some((c) => c.name === "scratch")).toBe(true)
+  const path = join(work, "projects", "local", "scratch")
+  s.removeCloned(path)
+  expect(existsSync(path)).toBe(false)
+})
