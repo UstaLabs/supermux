@@ -38,6 +38,20 @@ export type GitSwitchResult =
   | { status: "merge_in_progress" }
   | { status: "invalid_name"; message: string }
   | { status: "error"; message: string }
+export interface ForgeConnection {
+  id: string; kind: "github" | "gitlab"; host: string; apiBase: string; label: string
+  account: { login: string; name?: string; avatarUrl?: string }
+  source: "pat" | "cli"; transport: "https" | "ssh"
+  ssh?: { fingerprint: string; registered: boolean }; status: "ok" | "needs_reconnect"
+}
+export interface ForgeCliStatus { github: { available: boolean; login?: string }; gitlab: { available: boolean; login?: string } }
+export interface RemoteRepo {
+  connectionId: string; kind: "github" | "gitlab"; host: string; owner: string; name: string
+  fullName: string; private: boolean; description?: string; defaultBranch: string; language?: string
+  updatedAt?: string; cloneUrl: string; webUrl: string
+}
+export interface ClonedRepo { path: string; host: string; owner: string; name: string; fullName: string; sizeBytes: number }
+export interface ForgeAddInput { kind: string; host?: string; apiBase?: string; token: string; source: "pat" | "cli"; transport?: "https" | "ssh" }
 async function request(method: string, path: string, body?: unknown): Promise<any> {
   const res = await fetch(path, {
     method,
@@ -269,4 +283,15 @@ export const api = {
   createPA: (args: { name: string; agent?: string; model?: string; focusText?: string }) =>
     request("POST", "/api/pas", args),
   restartBroker: () => request("POST", "/system/restart"),
+  listForges: () => request("GET", "/forge/connections") as Promise<{ connections: ForgeConnection[]; cli: ForgeCliStatus | null }>,
+  addForge: (input: ForgeAddInput) => request("POST", "/forge/connections", input) as Promise<ForgeConnection>,
+  importForge: (kind: string, transport?: "https" | "ssh") => request("POST", "/forge/connections/import", { kind, transport }) as Promise<ForgeConnection>,
+  removeForge: (id: string) => request("DELETE", `/forge/connections/${encodeURIComponent(id)}`),
+  searchForge: (query: string) => request("POST", "/forge/search", { query }) as Promise<{ repos: RemoteRepo[]; errors: { connectionId: string; code: string; message: string }[] }>,
+  cloneForge: (connectionId: string, owner: string, name: string) => request("POST", "/forge/clone", { connectionId, owner, name }) as Promise<{ localPath: string }>,
+  createForge: (input: { connectionId: string; name: string; owner?: string; private: boolean }) => request("POST", "/forge/create", input) as Promise<{ repo: RemoteRepo; localPath: string }>,
+  createLocalRepo: (name: string) => request("POST", "/forge/create-local", { name }) as Promise<{ localPath: string }>,
+  listClonedRepos: () => request("GET", "/forge/cloned") as Promise<{ repos: ClonedRepo[] }>,
+  removeClonedRepo: (path: string) => request("DELETE", "/forge/cloned", { path }),
+  pullClonedRepo: (path: string) => request("POST", "/forge/cloned/pull", { path }),
 }
