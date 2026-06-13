@@ -1,6 +1,6 @@
 // src/core/forge/service.test.ts
 import { test, expect, afterAll } from "bun:test"
-import { mkdtempSync, rmSync } from "fs"
+import { mkdtempSync, rmSync, existsSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { openDb, runMigrations } from "../storage/db"
@@ -52,4 +52,14 @@ test("a failing connection yields a soft error, not a thrown search", async () =
   const { repos, errors } = await s.search("x")
   expect(repos).toHaveLength(0)
   expect(errors[0]).toMatchObject({ connectionId: "github:github.com:a" })
+})
+
+test("removeConnection deletes the connection's ssh key dir", async () => {
+  const s = svc([repo("x")])
+  s["store"].add({ ...cred("github:github.com:a"), transport: "ssh" })
+  await s.provisionSsh("github:github.com:a")
+  const keyDir = join(work, "ssh", "github_github.com_a")
+  expect(existsSync(keyDir)).toBe(true)
+  s.removeConnection("github:github.com:a")
+  expect(existsSync(keyDir)).toBe(false)
 })

@@ -1,13 +1,21 @@
 // src/core/forge/ssh-keys.ts
 import { execFileSync } from "child_process"
-import { mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync } from "fs"
+import { mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync, rmSync } from "fs"
 import { join } from "path"
 
+function safeId(connectionId: string): string {
+  return connectionId.replace(/[^a-zA-Z0-9._-]/g, "_")
+}
+
 function keyDir(root: string, connectionId: string): string {
-  const safe = connectionId.replace(/[^a-zA-Z0-9._-]/g, "_")
-  const dir = join(root, safe)
+  const dir = join(root, safeId(connectionId))
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   return dir
+}
+
+/** Delete a connection's keypair directory (idempotent; no-op if absent). */
+export function removeKeypair(root: string, connectionId: string): void {
+  rmSync(join(root, safeId(connectionId)), { recursive: true, force: true })
 }
 
 export interface Keypair { privatePath: string; publicKey: string; fingerprint: string }

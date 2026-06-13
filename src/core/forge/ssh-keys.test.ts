@@ -4,7 +4,7 @@ import { execFileSync } from "child_process"
 import { mkdtempSync, rmSync, existsSync, statSync, readFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { ensureKeypair, seedKnownHosts, bindSshCommand, sshCommandFor } from "./ssh-keys"
+import { ensureKeypair, seedKnownHosts, bindSshCommand, sshCommandFor, removeKeypair } from "./ssh-keys"
 
 const work = mkdtempSync(join(tmpdir(), "forge-ssh-"))
 afterAll(() => rmSync(work, { recursive: true, force: true }))
@@ -44,4 +44,12 @@ test("seedKnownHosts does not duplicate an already-present line", () => {
   seedKnownHosts(r, ["example.com ssh-ed25519 KKK"])
   const content = readFileSync(join(r, "known_hosts"), "utf8")
   expect(content.split("KKK").length - 1).toBe(1)
+})
+
+test("removeKeypair deletes the connection's key dir", () => {
+  const r = mkdtempSync(join(work, "rm-"))
+  const kp = ensureKeypair(r, "github:github.com:ahmet")
+  expect(existsSync(kp.privatePath)).toBe(true)
+  removeKeypair(r, "github:github.com:ahmet")
+  expect(existsSync(kp.privatePath)).toBe(false)
 })

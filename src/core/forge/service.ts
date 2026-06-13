@@ -4,7 +4,7 @@ import type { ForgeStore } from "./store"
 import { adapterFor } from "./registry"
 import { projectDir, gitClone } from "../git/clone"
 import { bindHttpsCredentials } from "./credential-helper"
-import { ensureKeypair, seedKnownHosts, sshCommandFor, bindSshCommand } from "./ssh-keys"
+import { ensureKeypair, seedKnownHosts, sshCommandFor, bindSshCommand, removeKeypair } from "./ssh-keys"
 
 export interface ForgeServiceConfig { projectsRoot: string; sshRoot: string }
 export interface ConnError { connectionId: string; code: string; message: string }
@@ -37,8 +37,7 @@ export class ForgeService {
   }
 
   removeConnection(id: string): void {
-    const c = this.store.getCredential(id)
-    if (c?.sshKeyPath) try { /* best-effort: caller deletes key dir */ } catch {}
+    if (this.store.getCredential(id)) removeKeypair(this.cfg.sshRoot, id)
     this.store.remove(id)
   }
 
