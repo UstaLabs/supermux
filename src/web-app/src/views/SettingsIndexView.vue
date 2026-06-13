@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useRouter } from "vue-router"
-import { ArrowLeft, ChevronRight, Sparkle, FileCode, Keyboard, Bot, UserRoundCog, Server } from "lucide-vue-next"
+import { ArrowLeft, ChevronRight, Sparkle, FileCode, Keyboard, Bot, UserRoundCog, Server, GitBranch } from "lucide-vue-next"
 
 const router = useRouter()
 
@@ -15,6 +15,7 @@ const items = [
   { label: "Curator", desc: "Nightly knowledge curation schedule", icon: Sparkle, path: "/settings/curator" },
   { label: "Editor", desc: "Font, wrap, and language servers", icon: FileCode, path: "/settings/editor" },
   { label: "Keyboard", desc: "Workspace shortcuts and custom bindings", icon: Keyboard, path: "/settings/keyboard" },
+  { label: "Git hosting", desc: "GitHub & GitLab connections and repos", icon: GitBranch, path: "/settings/git-hosting" },
   { label: "System", desc: "Broker restart and status", icon: Server, path: "/settings/system" },
 ]
 </script>
