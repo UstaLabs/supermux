@@ -35,7 +35,7 @@ const avatarStyle = computed(() => {
       v-if="props.working"
       role="status"
       aria-label="Agent is working"
-      class="absolute -bottom-1 -right-1 z-10 grid size-[18px] place-items-center rounded-full bg-card ring-1 ring-border/70"
+      class="absolute -bottom-1 -right-1 grid size-[18px] place-items-center rounded-full bg-card ring-1 ring-border/70"
     >
       <Loader2Icon class="size-3 animate-spin text-primary" aria-hidden="true" />
     </span>
@@ -43,7 +43,7 @@ const avatarStyle = computed(() => {
       v-else-if="props.suspended"
       role="img"
       aria-label="Session suspended"
-      class="absolute -bottom-1 -right-1 z-10 grid size-[18px] place-items-center rounded-full bg-card ring-1 ring-border/70"
+      class="absolute -bottom-1 -right-1 grid size-[18px] place-items-center rounded-full bg-card ring-1 ring-border/70"
     >
       <PauseIcon class="size-2 text-amber-500 fill-amber-500" aria-hidden="true" />
     </span>
