@@ -24,6 +24,10 @@ import { listBranches, switchBranch } from "../../core/git/branches"
 import type { AgentKind } from "../../core/agents/types"
 import { AGENT_KINDS, isAgentKind } from "../../shared/agents"
 import type { SlashCommand } from "../../core/slash-commands/types"
+import type { UpdateChecker } from "../../core/update/checker"
+import { detectUpdateMode } from "../../core/update/mode"
+import { resolveAndApply, restartViaSystemd } from "../../core/update/apply"
+import { BUILD_COMMIT, BUILD_VERSION } from "../../shared/build-info"
 
 const VALID_KINDS: AttachmentKind[] = ["photo", "document", "voice", "audio", "video_note"]
 
@@ -182,6 +186,8 @@ export interface WebChannelOpts {
   setSoul?: (content: string) => Promise<void> | void
   getExposure?: () => { exposureMode: string; publicUrl: string; snippets: import("../../core/settings/exposure").ExposureSnippets }
   validateExposure?: () => Promise<{ reachable: boolean; status?: number; error?: string }>
+  // null = update checks disabled (MUX_UPDATE_CHECK=0); undefined = same as null.
+  updateChecker?: UpdateChecker | null
 }
 
 export class WebChannel implements Channel {
@@ -736,6 +742,74 @@ export class WebChannel implements Channel {
 
   private json(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+  }
+
+  // Mode-specific instruction text shown when self-update isn't possible
+  // (source/docker installs, or checks disabled). Mirrors the CLI's wording.
+  private updateInstruction(mode: import("../../core/update/checker").UpdateMode): string {
+    if (mode === "docker") return "Docker install — update with: docker compose pull && docker compose up -d"
+    return "Source install — update via git (git pull && restart)."
+  }
+
+  /**
+   * POST /api/update/run handler. The checker's STATE is the in-flight guard:
+   * if it's already checking/downloading/swapping we 409 rather than starting a
+   * second apply. Only `binary` mode self-updates; source/docker (and the
+   * checks-disabled / no-checker case) return 400 with the instruction text.
+   *
+   * On a green light we kick off resolveAndApply ASYNC (never awaited in the
+   * handler) and return 202 immediately. Progress is pushed into the checker via
+   * onState so the PWA's status poll reflects downloading→swapping; on success we
+   * either restart via systemd (the process dies — the PWA reconnects to the new
+   * version) or land in restart-required; on failure we record state "failed".
+   */
+  private handleUpdateRun(): Response {
+    const checker = this.opts.updateChecker
+    // No checker (MUX_UPDATE_CHECK=0) → can't self-update; tell the caller how.
+    if (!checker) {
+      return this.json(
+        { error: "update checks disabled", instruction: this.updateInstruction(detectUpdateMode()) },
+        400,
+      )
+    }
+    const status = checker.status()
+    if (status.mode !== "binary") {
+      return this.json(
+        { error: `self-update not available in ${status.mode} mode`, instruction: this.updateInstruction(status.mode) },
+        400,
+      )
+    }
+    // Busy guard: the checker's own state IS the in-flight flag.
+    if (status.state === "checking" || status.state === "downloading" || status.state === "swapping") {
+      return this.json({ error: "busy" }, 409)
+    }
+    // Claim the slot synchronously so a second concurrent POST sees "checking" → 409.
+    checker.setState("checking")
+
+    // Green light. Fire-and-forget the apply; surface progress via the checker.
+    void (async () => {
+      try {
+        const result = await resolveAndApply({
+          url: process.env.MUX_UPDATE_URL ?? "https://supermux.dev/versions.json",
+          currentVersion: BUILD_VERSION,
+          onState: (s) => checker.setState(s),
+        })
+        if (result.ok) {
+          if (restartViaSystemd({})) {
+            // Process is about to die; systemd restarts → PWA reconnects to the
+            // new version. Nothing more to do here.
+          } else {
+            checker.setState("restart-required")
+          }
+        } else {
+          checker.setState("failed", result.error.kind)
+        }
+      } catch (err) {
+        checker.setState("failed", err instanceof Error ? err.message : String(err))
+      }
+    })()
+
+    return this.json({ started: true }, 202)
   }
 
   ingestClientLogs(device: string, entries: unknown[], meta?: Record<string, unknown>): void {
@@ -1728,6 +1802,33 @@ export class WebChannel implements Channel {
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
+    }
+
+    // ── In-app updater ──────────────────────────────────────────────────────
+    // (auth already enforced by the gate above; mirrors the /api/pas routes).
+    // When MUX_UPDATE_CHECK=0 the broker passes updateChecker=null: status still
+    // returns a renderable shape (disabled:true) rather than 404, and run reports
+    // it can't self-update with the mode-specific instruction text.
+    if (method === "GET" && path === "/api/update/status") {
+      const checker = this.opts.updateChecker
+      if (!checker) {
+        return this.json({
+          current: BUILD_VERSION,
+          commit: BUILD_COMMIT,
+          mode: detectUpdateMode(),
+          updateAvailable: false,
+          latest: null,
+          notesUrl: null,
+          state: "idle",
+          lastChecked: null,
+          lastError: null,
+          disabled: true,
+        })
+      }
+      return this.json(checker.status())
+    }
+    if (method === "POST" && path === "/api/update/run") {
+      return this.handleUpdateRun()
     }
 
     if (method === "POST" && path === "/client-logs") {

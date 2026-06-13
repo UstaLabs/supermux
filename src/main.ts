@@ -46,7 +46,9 @@ import { openDb, runMigrations } from "./core/storage/db"
 import { MIGRATIONS } from "./core/storage/migrations"
 import { checkSchemaStamp, writeSchemaStamp } from "./core/storage/schema-stamp"
 import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
-import { BUILD_VERSION } from "./shared/build-info"
+import { BUILD_VERSION, BUILD_COMMIT } from "./shared/build-info"
+import { UpdateChecker } from "./core/update/checker"
+import { detectUpdateMode } from "./core/update/mode"
 import { ReviewStore } from "./core/review/store"
 import { serializeReview } from "./core/review/serialize"
 import { FileStore } from "./core/files/store"
@@ -749,8 +751,22 @@ function spawnLoginProc(kind: string) {
 // (embedded in the Claude hook curl URLs). In-memory; rotates every restart.
 const INTERNAL_SECRET = randomBytes(24).toString("hex")
 
+// In-app update checker. Kill switch MUX_UPDATE_CHECK=0 → no checker at all
+// (the web routes then report disabled). Otherwise it polls versions.json on a
+// boot-jittered interval; failures are recorded as lastError, never thrown, so a
+// refused/offline update host can't crash the broker. Surfaced to the PWA via
+// the web channel's /api/update/* routes; stopped in gracefulShutdown.
+const updateChecker = process.env.MUX_UPDATE_CHECK === "0" ? null : new UpdateChecker({
+  url: process.env.MUX_UPDATE_URL ?? "https://supermux.dev/versions.json",
+  currentVersion: BUILD_VERSION,
+  commit: BUILD_COMMIT,
+  mode: detectUpdateMode(),
+})
+updateChecker?.start()
+
 if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   webChannel = new WebChannel({
+    updateChecker,
     port: MUX_WEB_PORT,
     devicesFile: DEVICES_FILE,
     publicUrl: MUX_WEB_PUBLIC_URL,
@@ -2887,6 +2903,9 @@ async function gracefulShutdown(signal: string) {
   try {
     if (webChannel) await webChannel.stop()
   } catch (err: any) { log.warn("webChannel_stop_failed", { err: err?.message }) }
+  try {
+    updateChecker?.stop()
+  } catch (err: any) { log.warn("update_checker_stop_failed", { err: err?.message }) }
   if (telegram) try {
     await telegram.stop()
   } catch (err: any) { log.warn("telegram_stop_failed", { err: err?.message }) }

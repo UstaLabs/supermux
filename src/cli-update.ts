@@ -61,7 +61,7 @@ export async function runUpdateCommand(
     currentVersion: BUILD_VERSION,
     onState(s) {
       if (s === "checking") println("checking versions.json…")
-      else if (s === "downloading") println(`downloading v? → tmp…`)
+      else if (s === "downloading") println("downloading new version…")
       else if (s === "swapping") println("swapping binaries…")
     },
   })
