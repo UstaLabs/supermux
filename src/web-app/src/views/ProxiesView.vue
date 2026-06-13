@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue"
+import { ref, onMounted } from "vue"
 import { ArrowLeft, Plus, ExternalLink, Trash2, Network } from "lucide-vue-next"
 import { useProxies, type Proxy as ProxyRow } from "@/stores/proxies"
 import { api } from "@/api/client"
@@ -17,15 +17,8 @@ const publicTarget = ref<string | null>(null)
 const showPublicConfirm = ref(false)
 const toggling = ref<string | null>(null)
 
-const baseDomain = computed(() => {
-  const host = window.location.hostname
-  const parts = host.split(".")
-  return parts.length >= 2 ? parts.slice(-2).join(".") : host
-})
-
-function proxyUrl(domain: string): string {
-  const protocol = window.location.protocol
-  return `${protocol}//${domain}.${baseDomain.value}`
+function displayUrl(url: string): string {
+  return url.replace(/^https?:\/\//, "").replace(/\/+$/, "")
 }
 
 function requestDelete(domain: string) {
@@ -123,12 +116,12 @@ onMounted(refresh)
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2 min-w-0">
               <a
-                :href="proxyUrl(p.domain)"
+                :href="p.url"
                 target="_blank"
                 rel="noopener noreferrer"
                 class="font-medium text-primary hover:underline truncate flex items-center gap-1 min-w-0"
               >
-                <span class="truncate">{{ p.domain }}.{{ baseDomain }}</span>
+                <span class="truncate">{{ displayUrl(p.url) }}</span>
                 <ExternalLink class="size-3 shrink-0" />
               </a>
               <span
