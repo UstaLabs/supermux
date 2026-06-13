@@ -55,7 +55,7 @@ export function __resetAuthFailures(): void {
   authFailures.clear()
 }
 
-const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/system", "/repos"]
+const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/system", "/repos", "/forge"]
 const MAX_CLIENT_LOG_RING = 800
 
 export type StoredClientLogEntry = {
@@ -182,6 +182,18 @@ export interface WebChannelOpts {
   setSoul?: (content: string) => Promise<void> | void
   getExposure?: () => { exposureMode: string; publicUrl: string; snippets: import("../../core/settings/exposure").ExposureSnippets }
   validateExposure?: () => Promise<{ reachable: boolean; status?: number; error?: string }>
+  getForgeConnections?: () => import("../../core/forge/types").ForgeConnection[]
+  getForgeCliStatus?: () => { github: { available: boolean; login?: string }; gitlab: { available: boolean; login?: string } }
+  addForgeConnection?: (o: { kind: string; host?: string; apiBase?: string; token: string; source: "pat" | "cli"; transport?: "https" | "ssh" }) => Promise<import("../../core/forge/types").ForgeConnection>
+  importForgeCli?: (kind: string, transport?: "https" | "ssh") => Promise<import("../../core/forge/types").ForgeConnection>
+  removeForgeConnection?: (id: string) => void
+  searchForgeRepos?: (query: string) => Promise<{ repos: unknown[]; errors: unknown[] }>
+  cloneForgeRepo?: (connectionId: string, owner: string, name: string) => Promise<{ localPath: string }>
+  createForgeRepo?: (input: { connectionId: string; name: string; owner?: string; private: boolean }) => Promise<{ repo: unknown; localPath: string }>
+  createLocalRepo?: (name: string) => Promise<{ localPath: string }>
+  listClonedRepos?: () => unknown[]
+  removeClonedRepo?: (path: string) => void
+  pullClonedRepo?: (path: string) => unknown
 }
 
 export class WebChannel implements Channel {
@@ -1065,6 +1077,69 @@ export class WebChannel implements Channel {
       if (!this.opts.runCuratorNow) return this.json({ error: "curator unavailable" }, 503)
       void this.opts.runCuratorNow() // fire-and-forget; run.ts guards re-entrancy
       return this.json({ ok: true })
+    }
+
+    // ── Forge: git connections + repo management ───────────────────────────
+    if (path === "/forge/connections" && method === "GET") {
+      const conns = this.opts.getForgeConnections?.(); if (!conns) return this.json({ error: "forge unavailable" }, 503)
+      return this.json({ connections: conns, cli: this.opts.getForgeCliStatus?.() ?? null })
+    }
+    if (path === "/forge/connections" && method === "POST") {
+      if (!this.opts.addForgeConnection) return this.json({ error: "forge unavailable" }, 503)
+      const b = await req.json().catch(() => ({})) as any
+      try {
+        return this.json(await this.opts.addForgeConnection({
+          kind: String(b.kind ?? ""), host: b.host ? String(b.host) : undefined, apiBase: b.apiBase ? String(b.apiBase) : undefined,
+          token: String(b.token ?? ""), source: b.source === "cli" ? "cli" : "pat", transport: b.transport === "ssh" ? "ssh" : "https",
+        }))
+      } catch (e: any) { return this.json({ error: e?.message ?? String(e) }, 400) }
+    }
+    if (path === "/forge/connections/import" && method === "POST") {
+      if (!this.opts.importForgeCli) return this.json({ error: "forge unavailable" }, 503)
+      const b = await req.json().catch(() => ({})) as any
+      try { return this.json(await this.opts.importForgeCli(String(b.kind ?? ""), b.transport === "ssh" ? "ssh" : "https")) }
+      catch (e: any) { return this.json({ error: e?.message ?? String(e) }, 400) }
+    }
+    {
+      const fm = path.match(/^\/forge\/connections\/(.+)$/)
+      if (fm && method === "DELETE") { this.opts.removeForgeConnection?.(decodeURIComponent(fm[1]!)); return this.json({ ok: true }) }
+    }
+    if (path === "/forge/search" && method === "POST") {
+      if (!this.opts.searchForgeRepos) return this.json({ error: "forge unavailable" }, 503)
+      const b = await req.json().catch(() => ({})) as any
+      return this.json(await this.opts.searchForgeRepos(String(b.query ?? "")))
+    }
+    if (path === "/forge/clone" && method === "POST") {
+      if (!this.opts.cloneForgeRepo) return this.json({ error: "forge unavailable" }, 503)
+      const b = await req.json().catch(() => ({})) as any
+      try { return this.json(await this.opts.cloneForgeRepo(String(b.connectionId ?? ""), String(b.owner ?? ""), String(b.name ?? ""))) }
+      catch (e: any) { return this.json({ error: e?.message ?? String(e) }, 400) }
+    }
+    if (path === "/forge/create" && method === "POST") {
+      if (!this.opts.createForgeRepo) return this.json({ error: "forge unavailable" }, 503)
+      const b = await req.json().catch(() => ({})) as any
+      try { return this.json(await this.opts.createForgeRepo({ connectionId: String(b.connectionId ?? ""), name: String(b.name ?? ""), owner: b.owner ? String(b.owner) : undefined, private: b.private !== false })) }
+      catch (e: any) { return this.json({ error: e?.message ?? String(e) }, 400) }
+    }
+    if (path === "/forge/create-local" && method === "POST") {
+      if (!this.opts.createLocalRepo) return this.json({ error: "forge unavailable" }, 503)
+      const b = await req.json().catch(() => ({})) as any
+      try { return this.json(await this.opts.createLocalRepo(String(b.name ?? ""))) }
+      catch (e: any) { return this.json({ error: e?.message ?? String(e) }, 400) }
+    }
+    if (path === "/forge/cloned" && method === "GET") {
+      const list = this.opts.listClonedRepos?.(); if (!list) return this.json({ error: "forge unavailable" }, 503)
+      return this.json({ repos: list })
+    }
+    if (path === "/forge/cloned" && method === "DELETE") {
+      const b = await req.json().catch(() => ({})) as any
+      try { this.opts.removeClonedRepo?.(String(b.path ?? "")); return this.json({ ok: true }) }
+      catch (e: any) { return this.json({ error: e?.message ?? String(e) }, 400) }
+    }
+    if (path === "/forge/cloned/pull" && method === "POST") {
+      const b = await req.json().catch(() => ({})) as any
+      try { return this.json(this.opts.pullClonedRepo?.(String(b.path ?? "")) ?? { error: "forge unavailable" }) }
+      catch (e: any) { return this.json({ error: e?.message ?? String(e) }, 400) }
     }
 
     // ── Model discovery ────────────────────────────────────────────────────

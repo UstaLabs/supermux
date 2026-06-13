@@ -102,6 +102,10 @@ import { CuratorScheduler } from "./core/curator/scheduler"
 import { runCurator, type CuratorDeps } from "./core/curator/run"
 import { curatorPromptPath } from "./core/runtime-assets"
 import { SettingsStore } from "./core/settings/store"
+import { ForgeStore } from "./core/forge/store"
+import { ForgeService } from "./core/forge/service"
+import { detectForgeClis, importCliToken } from "./core/forge/cli-import"
+import { installCredentialLauncher } from "./core/forge/launcher"
 import { SETTINGS_KEY_CURATOR, parseCuratorConfig, type CuratorConfig } from "./core/settings/curator-config"
 import { listLspServerSettingsRows } from "./core/lsp/editor-settings"
 import { getServerById } from "./core/lsp/registry"
@@ -160,6 +164,13 @@ try {
 const registry = new Registry(db)
 const reviewStore = new ReviewStore(db)
 const settings = new SettingsStore(db)
+const credentialHelperPath = installCredentialLauncher(join(STATE_DIR, "bin"), join(import.meta.dir, ".."))
+const forgeStore = new ForgeStore(db)
+const forgeService = new ForgeService(forgeStore, {
+  projectsRoot: join(STATE_DIR, "projects"),
+  sshRoot: join(STATE_DIR, "ssh"),
+  credentialHelperPath,
+})
 // Onboarding-editable config: stored values layer over env over built-in defaults.
 // Empty store (every existing install) ⇒ resolves exactly to the old env reads.
 const appConfigEnv = {
@@ -1192,6 +1203,18 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         return { ok: true }
       } catch (err: any) { return { ok: false, reason: err?.message ?? String(err) } }
     },
+    getForgeConnections: () => forgeService.connections(),
+    getForgeCliStatus: () => detectForgeClis(),
+    addForgeConnection: (o) => forgeService.addConnection(o as any),
+    importForgeCli: async (kind, transport) => forgeService.addConnection({ kind: kind as any, token: importCliToken(kind as any), source: "cli", transport }),
+    removeForgeConnection: (id) => forgeService.removeConnection(id),
+    searchForgeRepos: (q) => forgeService.search(q),
+    cloneForgeRepo: (id, owner, name) => forgeService.clone(id, owner, name),
+    createForgeRepo: (input) => forgeService.create(input as any),
+    createLocalRepo: (name) => forgeService.createLocal(name),
+    listClonedRepos: () => forgeService.listCloned(),
+    removeClonedRepo: (p) => forgeService.removeCloned(p),
+    pullClonedRepo: (p) => forgeService.pullCloned(p),
   })
   // loginManager constructed AFTER webChannel so its onChange can reference webChannel.
   // The startAgentLogin/getAgentLogin/cancelAgentLogin closures above close over `loginManager`
