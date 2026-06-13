@@ -2421,6 +2421,7 @@ _tg.on("inbound", async (msg: InboundMessage) => {
         return s ? sessionEffort(s) : undefined
       },
       proxyBaseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
+      proxyPublicUrl: process.env.MUX_WEB_PUBLIC_URL,
       resumeFromArchive: (id: string) => resumeFromArchive(id),
       spawnPA: async (args: { name: string; agent?: AgentKind; model?: string; focus?: string }) => {
         const workdir = join(home(), ".mux", "workspace", args.name)
