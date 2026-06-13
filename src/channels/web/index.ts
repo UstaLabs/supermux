@@ -6,7 +6,7 @@ import { home } from "../../shared/home"
 import { existsSync, writeFileSync, mkdirSync } from "fs"
 import { join } from "path"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
-import { extractSubdomain, handleProxyRequest, parseCookie } from "./proxy"
+import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
 import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOriginOk } from "./cookies"
 import { FsService } from "../../core/editor/fs-service"
 import { computeWorkdirDiff } from "../../core/editor/workdir-diff"
@@ -156,7 +156,7 @@ export interface WebChannelOpts {
   listChatIds?: () => string[]
   createProxy?: (args: { sessionName: string; port: number; domain?: string }) => { url: string; domain: string; port: number }
   removeProxy?: (domain: string) => void
-  listProxies?: () => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean }[]
+  listProxies?: () => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean; url: string }[]
   updateProxy?: (domain: string, isPublic: boolean) => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean }
   terminalManager?: import("../../core/terminal/manager").TerminalManager
   fsWatcher?: FsWatcher
@@ -362,14 +362,27 @@ export class WebChannel implements Channel {
   }
 
   private async routeRequestOrUpgrade(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
+    const url = new URL(req.url)
     if (this.opts.proxyBaseDomain) {
       const host = req.headers.get("host") ?? ""
       const sub = extractSubdomain(host, this.opts.proxyBaseDomain, this.opts.proxyMainHost)
       if (sub) {
         return this.handleProxyRoute(req, sub, server)
       }
+    } else if (this.opts.proxyLookup) {
+      // Path-based proxy (active only when no base domain is configured).
+      const pm = matchProxyPath(url.pathname)
+      if (pm) {
+        if (pm.rest === null) {
+          // bare /p/<slug> → 301 so the browser anchors relative URLs correctly
+          return new Response(null, { status: 301, headers: { location: `/p/${pm.slug}/${url.search}` } })
+        }
+        return this.handleProxyRoute(req, pm.slug, server, {
+          prefix: `/p/${pm.slug}`,
+          upstreamPath: pm.rest + url.search,
+        })
+      }
     }
-    const url = new URL(req.url)
     if (url.pathname === "/ws") {
       const token = authToken(req)
       if (!this.checkRateLimit(req)) return new Response("rate limited", { status: 429 })
@@ -886,15 +899,20 @@ export class WebChannel implements Channel {
     while (this.clientLogRing.length > MAX_CLIENT_LOG_RING) this.clientLogRing.shift()
   }
 
-  private async handleProxyRoute(req: Request, subdomain: string, server?: import("bun").Server<WSData>): Promise<Response | undefined> {
+  private async handleProxyRoute(
+    req: Request,
+    slug: string,
+    server?: import("bun").Server<WSData>,
+    pathOpts?: { prefix: string; upstreamPath: string },
+  ): Promise<Response | undefined> {
     if (!this.opts.proxyLookup) return new Response("proxy not configured", { status: 500 })
-    const upstream = this.opts.proxyLookup(subdomain)
+    const upstream = this.opts.proxyLookup(slug)
     if (!upstream) return new Response("not found", { status: 404 })
 
     if (!upstream.isPublic) {
-      // The cmux_token cookie is Domain=.<base>, so a paired device already sends
-      // it to proxy subdomains — no token-transfer page needed. A static 401 (no
-      // reflected input) replaces the old /proxy-auth redirect dance.
+      // The cmux_token cookie is host-only (path mode) or Domain=.<base>
+      // (subdomain mode), so a paired device already sends it here. A static
+      // 401 (no reflected input) replaces the old /proxy-auth redirect dance.
       const token = authToken(req)
       if (!token || !this.opts.proxyAuth?.(token)) {
         const mainUrl = this.opts.publicUrl.replace(/\/$/, "")
@@ -914,14 +932,15 @@ export class WebChannel implements Channel {
       // back in the 101 so strict clients accept the handshake. The full list is
       // forwarded to the upstream dial in the websocket `open` handler.
       const selectedProtocol = wsProtocol?.split(",")[0]?.trim()
+      const wsPath = pathOpts ? pathOpts.upstreamPath : url.pathname + url.search
       const upgraded = server.upgrade(req, {
-        data: { proxyUpstream: upstream, proxyPath: url.pathname + url.search, proxyWsProtocol: wsProtocol } as any,
+        data: { proxyUpstream: upstream, proxyPath: wsPath, proxyWsProtocol: wsProtocol } as any,
         ...(selectedProtocol ? { headers: { "Sec-WebSocket-Protocol": selectedProtocol } } : {}),
       })
       return upgraded ? undefined : new Response("ws upgrade failed", { status: 500 })
     }
 
-    return handleProxyRequest(req, upstream)
+    return handleProxyRequest(req, upstream, pathOpts)
   }
 
   private async routeRequest(req: Request): Promise<Response> {
