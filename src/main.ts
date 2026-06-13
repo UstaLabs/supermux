@@ -44,6 +44,9 @@ import { MessageStore } from "./core/session-manager/messages"
 import { appendSoulSetupInvocation, readSoulSetupState, shouldAutoSendSoulSetup } from "./core/session-manager/soul-setup"
 import { openDb, runMigrations } from "./core/storage/db"
 import { MIGRATIONS } from "./core/storage/migrations"
+import { checkSchemaStamp, writeSchemaStamp } from "./core/storage/schema-stamp"
+import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
+import { BUILD_VERSION } from "./shared/build-info"
 import { ReviewStore } from "./core/review/store"
 import { serializeReview } from "./core/review/serialize"
 import { FileStore } from "./core/files/store"
@@ -146,12 +149,27 @@ try {
 acquirePidFile(PID_FILE)
 process.on("exit", () => releasePidFile(PID_FILE))
 
+// Schema downgrade guard: refuse to start if state was written by a newer build.
+// Must run BEFORE openDb so we never touch a DB we can't safely migrate.
+{
+  const stampCheck = checkSchemaStamp(STATE_DIR, MIGRATIONS.length)
+  if (!stampCheck.ok) {
+    log.error("schema_downgrade_refused", {
+      stamp: stampCheck.stamp,
+      supported: MIGRATIONS.length,
+      hint: "this state was written by a newer supermux — run `supermux rollback` to restore the previous binary, or upgrade again",
+    })
+    process.exit(1)
+  }
+}
+
 // DB creation BEFORE registry
 const dbPath = join(STATE_DIR, "db.sqlite3")
 let db: ReturnType<typeof openDb>
 try {
   db = openDb(dbPath)
   runMigrations(db, MIGRATIONS)
+  writeSchemaStamp(STATE_DIR, MIGRATIONS.length)
 } catch (err: any) {
   log.error("storage_init_failed", { dbPath, err: err?.message ?? String(err) })
   process.exit(1)
@@ -2780,6 +2798,11 @@ await resumeNonClaudeAdapters()
     })
   }
 }
+// Sweep stale runtime-assets directories from previous versions.
+try {
+  const swept = sweepRuntimeAssets(STATE_DIR, BUILD_VERSION)
+  if (swept.length) log.info("runtime_assets_swept", { removed: swept })
+} catch (err) { log.warn("runtime_assets_sweep_failed", { err: String(err) }) }
 await refreshTelegramMenu()
 if (webChannel) await webChannel.start()
 refreshModelCache().catch((err) => log.warn("model_cache_init_failed", { err: String(err) }))
