@@ -38,6 +38,28 @@ export type GitSwitchResult =
   | { status: "merge_in_progress" }
   | { status: "invalid_name"; message: string }
   | { status: "error"; message: string }
+// In-app updater (GET /api/update/status). Mirrors the broker's UpdateStatus
+// shape (src/core/update/checker.ts) plus `disabled` when MUX_UPDATE_CHECK=0.
+export type UpdateMode = "binary" | "source" | "docker"
+export type UpdateState =
+  | "idle"
+  | "checking"
+  | "downloading"
+  | "swapping"
+  | "restart-required"
+  | "failed"
+export interface UpdateStatusDTO {
+  current: string
+  commit: string
+  latest: string | null
+  updateAvailable: boolean
+  notesUrl: string | null
+  mode: UpdateMode
+  state: UpdateState
+  lastChecked: number | null
+  lastError: string | null
+  disabled?: boolean
+}
 async function request(method: string, path: string, body?: unknown): Promise<any> {
   const res = await fetch(path, {
     method,
@@ -269,4 +291,7 @@ export const api = {
   createPA: (args: { name: string; agent?: string; model?: string; focusText?: string }) =>
     request("POST", "/api/pas", args),
   restartBroker: () => request("POST", "/system/restart"),
+  getUpdateStatus: () => request("GET", "/api/update/status") as Promise<UpdateStatusDTO>,
+  runUpdate: () =>
+    request("POST", "/api/update/run", {}) as Promise<{ started: boolean } | { error: string; instruction?: string }>,
 }
