@@ -26,15 +26,17 @@ export function ensureKeypair(root: string, connectionId: string): Keypair {
   return { privatePath: priv, publicKey, fingerprint }
 }
 
-/** Write host-key lines into the connection's known_hosts; returns the file path. */
+/** Append host-key lines to the connection store's known_hosts (idempotent); returns the path. */
 export function seedKnownHosts(root: string, lines: string[]): string {
   const path = join(root, "known_hosts")
-  writeFileSync(path, lines.join("\n") + "\n", { flag: "a" })
+  const existing = existsSync(path) ? readFileSync(path, "utf8") : ""
+  const toAdd = lines.filter((l) => l.trim() && !existing.includes(l.trim()))
+  if (toAdd.length) writeFileSync(path, toAdd.join("\n") + "\n", { flag: "a" })
   return path
 }
 
 export function sshCommandFor(privateKeyPath: string, knownHostsPath: string): string {
-  return `ssh -i ${privateKeyPath} -o IdentitiesOnly=yes -o UserKnownHostsFile=${knownHostsPath} -o StrictHostKeyChecking=yes`
+  return `ssh -i '${privateKeyPath}' -o IdentitiesOnly=yes -o UserKnownHostsFile='${knownHostsPath}' -o StrictHostKeyChecking=yes`
 }
 
 export function bindSshCommand(repoPath: string, sshCommand: string): void {

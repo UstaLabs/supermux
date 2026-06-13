@@ -31,3 +31,17 @@ test("bindSshCommand sets core.sshCommand pointing at the key + known_hosts", ()
   expect(cfg).toContain("sshCommand")
   expect(cfg).toContain("IdentitiesOnly=yes")
 })
+
+test("sshCommandFor quotes the key and known_hosts paths", () => {
+  const cmd = sshCommandFor("/a b/k", "/a b/known_hosts")
+  expect(cmd).toContain("-i '/a b/k'")
+  expect(cmd).toContain("UserKnownHostsFile='/a b/known_hosts'")
+})
+
+test("seedKnownHosts does not duplicate an already-present line", () => {
+  const r = mkdtempSync(join(work, "kh-"))
+  seedKnownHosts(r, ["example.com ssh-ed25519 KKK"])
+  seedKnownHosts(r, ["example.com ssh-ed25519 KKK"])
+  const content = readFileSync(join(r, "known_hosts"), "utf8")
+  expect(content.split("KKK").length - 1).toBe(1)
+})
