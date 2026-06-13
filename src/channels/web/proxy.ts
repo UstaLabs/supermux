@@ -62,7 +62,7 @@ export function buildUpstreamWsUrl(port: number, pathAndQuery: string): string {
  *   /pair, /proxies -> null
  */
 export function matchProxyPath(pathname: string): { slug: string; rest: string | null } | null {
-  const m = pathname.match(/^\/p\/([^/]+)(\/.*)?$/)
+  const m = pathname.match(/^\/p\/([^/?#]+)(\/.*)?$/)
   if (!m) return null
   return { slug: m[1]!, rest: m[2] ?? null }
 }
@@ -93,7 +93,11 @@ export function rewriteLocation(loc: string, prefix: string, upstreamHost: strin
       break
     }
   }
-  if (path.startsWith("/") && !path.startsWith("//")) return prefix + path
+  if (path.startsWith("/") && !path.startsWith("//")) {
+    // Idempotent: an already-prefixed path (e.g. a base-aware upstream) is left as-is.
+    if (path === prefix || path.startsWith(prefix + "/")) return path
+    return prefix + path
+  }
   return loc
 }
 
@@ -106,6 +110,8 @@ export function rewriteSetCookiePath(setCookie: string, prefix: string): string 
   if (/;\s*path=/i.test(setCookie)) {
     return setCookie.replace(/;(\s*)path=([^;]*)/i, (_m, sp: string, p: string) => {
       const orig = p.trim() || "/"
+      // Idempotent: a cookie already scoped under the prefix is left as-is.
+      if (orig === prefix || orig.startsWith(prefix + "/")) return `;${sp}Path=${orig}`
       const np = orig === "/" ? `${prefix}/` : `${prefix}${orig.startsWith("/") ? "" : "/"}${orig}`
       return `;${sp}Path=${np}`
     })

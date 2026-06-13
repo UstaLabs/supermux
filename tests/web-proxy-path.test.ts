@@ -24,6 +24,10 @@ describe("matchProxyPath", () => {
     expect(matchProxyPath("/p/")).toBeNull()
     expect(matchProxyPath("/p")).toBeNull()
   })
+  test("does not swallow a query/fragment into the slug", () => {
+    expect(matchProxyPath("/p/ap?p")).toBeNull()
+    expect(matchProxyPath("/p/ap#x")).toBeNull()
+  })
 })
 
 describe("buildProxyPublicUrl", () => {
@@ -62,6 +66,9 @@ describe("rewriteLocation", () => {
   test("relative Location is left alone", () => {
     expect(rewriteLocation("next", prefix, host)).toBe("next")
   })
+  test("already-prefixed Location is left unchanged (idempotent)", () => {
+    expect(rewriteLocation("/p/app/login", prefix, host)).toBe("/p/app/login")
+  })
 })
 
 describe("rewriteSetCookiePath", () => {
@@ -69,10 +76,13 @@ describe("rewriteSetCookiePath", () => {
   test("Path=/ becomes Path=<prefix>/", () => {
     expect(rewriteSetCookiePath("sid=1; Path=/; HttpOnly", prefix)).toBe("sid=1; Path=/p/app/; HttpOnly")
   })
-  test("Path=/admin becomes Path=<prefix>/admin", () => {
-    expect(rewriteSetCookiePath("sid=1; Path=/admin", prefix)).toBe("sid=1; Path=/p/app/admin")
+  test("Path=/admin becomes Path=<prefix>/admin (other attrs preserved)", () => {
+    expect(rewriteSetCookiePath("sid=1; Path=/admin; HttpOnly", prefix)).toBe("sid=1; Path=/p/app/admin; HttpOnly")
   })
   test("no Path attribute → scoped to <prefix>/", () => {
     expect(rewriteSetCookiePath("sid=1; HttpOnly", prefix)).toBe("sid=1; HttpOnly; Path=/p/app/")
+  })
+  test("already-scoped cookie Path is left unchanged (idempotent)", () => {
+    expect(rewriteSetCookiePath("sid=1; Path=/p/app/x", prefix)).toBe("sid=1; Path=/p/app/x")
   })
 })
