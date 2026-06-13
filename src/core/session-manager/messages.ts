@@ -158,6 +158,14 @@ export class MessageStore {
     const rows = this.db.prepare("SELECT DISTINCT session_id FROM messages WHERE session_id IS NOT NULL").all() as Array<{ session_id: string }>
     return rows.map((r) => r.session_id)
   }
+
+  /** ISO timestamp of the newest message in a session, or null if it has none. */
+  newestTs(sessionId: string): string | null {
+    const row = this.db.prepare(
+      "SELECT ts FROM messages WHERE session_id = ? ORDER BY ts DESC, rowid DESC LIMIT 1"
+    ).get(sessionId) as { ts: string } | undefined
+    return row?.ts ?? null
+  }
 }
 
 function rowToMessage(row: any): Message {

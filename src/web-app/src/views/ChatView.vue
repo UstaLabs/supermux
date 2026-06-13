@@ -56,6 +56,7 @@ import {
   PromptInputAttachments,
 } from "@/components/ai-elements/prompt-input"
 import PromptInputActionAddCamera from "@/components/ai-elements/prompt-input/PromptInputActionAddCamera.vue"
+import PromptInputDraftSync from "@/components/PromptInputDraftSync.vue"
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input"
 import { Suggestion } from "@/components/ai-elements/suggestion"
 import Tool from "@/components/ai-elements/tool/Tool.vue"
@@ -809,6 +810,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
             @submit="onPromptSubmit"
           >
             <SlashCommandMenu :commands="sessionCommands" :loading="!commandsStore.isResolved(props.id)" @control="onControlCommand" />
+            <PromptInputDraftSync :session-id="props.id" />
             <PromptInputHeader>
               <PromptInputAttachments />
             </PromptInputHeader>

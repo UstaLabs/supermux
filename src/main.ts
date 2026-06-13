@@ -8,6 +8,7 @@ import type { Channel, InboundMessage, OutboundAction } from "./channels/channel
 import { classifyInbound, transformOutbound } from "./core/routing"
 import { handleSlash } from "./core/commands"
 import { Registry, type ProxyEntry } from "./core/session-manager/registry"
+import { makeReadAdvancer } from "./core/session-manager/read-status"
 
 function proxyWsPayload(entry: ProxyEntry) {
   return {
@@ -767,6 +768,15 @@ const updateChecker = process.env.MUX_UPDATE_CHECK === "0" ? null : new UpdateCh
 })
 updateChecker?.start()
 
+// Read status: a session is "read" up to its newest message whenever a device
+// is actively viewing it. advanceRead persists last_read_at and broadcasts
+// session_read to every client — idempotent, so it no-ops when nothing changed.
+const advanceRead = makeReadAdvancer({
+  sessions: registry.sessions,
+  messages: messageLog,
+  broadcast: (frame) => webChannel?.broadcastToAll(frame),
+})
+
 if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   webChannel = new WebChannel({
     updateChecker,
@@ -904,6 +914,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     pushStore,
     vapidPublicKey: vapid.publicKey,
     viewingTracker,
+    getReads: () => registry.sessions.allReads(),
+    getDrafts: () => registry.sessions.allDrafts(),
+    setDraft: (id, text) => registry.sessions.setDraft(id, text),
+    markRead: (id) => advanceRead(id),
     getModels: (agent) => modelCache.get(agent).map((m) => ({ id: m.id, displayName: m.displayName })),
     switchModel: async (id, model, applyNow) => {
       const s = registry.get(id)
@@ -2535,6 +2549,9 @@ _tg.on("inbound", async (msg: InboundMessage) => {
 // look up session name for display
 messageLog.on("append", (sessionId, entry) => {
   webChannel?.broadcastToAll({ type: "message_append", session: sessionId, entry })
+  // If a device is actively viewing this session, the new message is already
+  // read — advance read status so the unread badge stays clear on every device.
+  if (viewingTracker.isAnyExactViewing(sessionId)) advanceRead(sessionId)
 })
 activityStore.on("append", (sessionId: string, event) => {
   webChannel?.broadcastToAll({ type: "activity_append", session: sessionId, event })

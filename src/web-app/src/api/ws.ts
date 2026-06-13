@@ -12,6 +12,8 @@ import { useLsp } from "../stores/lsp"
 import { useOnboarding } from "../stores/onboarding"
 import { useSessionCache } from "../stores/sessionCache"
 import { useFinishProgress } from "../stores/finishProgress"
+import { useUnread } from "../stores/unread"
+import { useDrafts } from "../stores/drafts"
 import { router } from "../router"
 
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 30000]
@@ -27,6 +29,8 @@ export const useWS = defineStore("ws", () => {
   const commands = useCommandsStore()
   const onboarding = useOnboarding()
   const finishProgress = useFinishProgress()
+  const unread = useUnread()
+  const drafts = useDrafts()
   let ws: WebSocket | null = null
   let attempt = 0
   // Frames sent before the socket is OPEN (e.g. on the fast claim→connect path)
@@ -96,6 +100,8 @@ export const useWS = defineStore("ws", () => {
       if (frame.proxies) proxies.replace(frame.proxies.map((p: { isPublic?: boolean }) => ({ ...p, isPublic: !!p.isPublic })))
       if (frame.displays) displays.replace(frame.displays)
       if (frame.commands) commands.hydrate(frame.commands, frame.commandsResolved)
+      if (frame.reads) unread.seed(frame.reads)
+      if (frame.drafts) drafts.seed(frame.drafts)
       onboarding.setOnboarded(frame.onboarded ?? false)
     } else if (frame.type === "session_added")    sessions.add(frame.session)
     else if   (frame.type === "finish_progress")  finishProgress.set(frame.session, frame.stage)
@@ -108,6 +114,9 @@ export const useWS = defineStore("ws", () => {
     }
     else if   (frame.type === "session_renamed")  sessions.rename(frame.id, frame.new)
     else if   (frame.type === "session_state")    sessions.updateState(frame.session, { mute: frame.mute, connected: frame.connected, model: frame.model, reasoningLevel: frame.reasoningLevel })
+    else if   (frame.type === "session_read")     unread.setLastRead(frame.session, frame.last_read_at)
+    else if   (frame.type === "draft_set")        drafts.applyRemote(frame.session, frame.text ?? "")
+    else if   (frame.type === "draft_clear")      drafts.applyRemote(frame.session, "")
     else if   (frame.type === "message_append")   messages.append(frame.session, frame.entry)
     else if   (frame.type === "activity_append")  activity.append(frame.session, frame.event)
     else if   (frame.type === "agent_state")      agentState.set(frame.session, { phase: frame.phase, tool: frame.tool, since: frame.since, workingSince: frame.workingSince })

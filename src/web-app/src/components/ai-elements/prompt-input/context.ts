@@ -15,6 +15,9 @@ export function usePromptInputProvider(props: {
   const files = ref<AttachmentFile[]>([])
   const fileInputRef = ref<HTMLInputElement | null>(null)
   const isLoading = ref(false)
+  // Whether the composer textarea is focused. Lets draft sync avoid yanking
+  // text out of a composer the user is actively typing in.
+  const focused = ref(false)
 
   const revokeObjectUrl = (file: AttachmentFile) => {
     if (file.url && file.url.startsWith('blob:')) {
@@ -212,6 +215,7 @@ export function usePromptInputProvider(props: {
     files,
     fileInputRef,
     isLoading,
+    focused,
     setTextInput,
     addFiles,
     removeFile,

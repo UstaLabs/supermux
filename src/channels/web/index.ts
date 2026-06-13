@@ -113,6 +113,10 @@ export interface WebChannelOpts {
   pushStore?: import("../../core/push/subscriptions").PushSubscriptionStore
   vapidPublicKey?: string
   viewingTracker?: import("../../core/push/viewing-tracker").ViewingTracker
+  getReads?: () => Record<string, string>          // sessionId -> last_read_at (snapshot)
+  getDrafts?: () => Record<string, string>         // sessionId -> draft text (snapshot)
+  setDraft?: (sessionId: string, text: string | null) => void
+  markRead?: (sessionId: string) => void           // advance read + broadcast session_read
   getModels?: (agent: AgentKind) => { id: string; displayName: string }[]
   switchModel?: (sessionName: string, model: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
   getSessionReasoningLevels?: (id: string) => { agent: string; current?: string; levels: { id: string; description?: string }[]; visible: boolean } | undefined
@@ -338,6 +342,11 @@ export class WebChannel implements Channel {
   broadcastToAll(frame: object): void {
     const json = JSON.stringify(frame)
     for (const c of this.wsConnections) c.ws.send(json)
+  }
+
+  broadcastToOthers(frame: object, except: import("bun").ServerWebSocket<WSData>): void {
+    const json = JSON.stringify(frame)
+    for (const c of this.wsConnections) if (c.ws !== except) c.ws.send(json)
   }
 
   private async routeRequestOrUpgrade(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
@@ -618,7 +627,9 @@ export class WebChannel implements Channel {
       const proxies = this.opts.listProxies?.() ?? []
       const displays = this.opts.listDisplays?.() ?? []
       const onboarded = this.opts.getAppConfig?.()?.onboarded ?? false
-      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, agentState, proxies, displays, commands, commandsResolved, homeDir: home(), onboarded }))
+      const reads = this.opts.getReads?.() ?? {}
+      const drafts = this.opts.getDrafts?.() ?? {}
+      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, agentState, proxies, displays, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts }))
       return
     }
     if (frame.type === "ping") {
@@ -633,6 +644,25 @@ export class WebChannel implements Channel {
         return
       }
       this.opts.viewingTracker?.update(ws.data.deviceName, { session, visible })
+      // A visible device sitting on an exact session has read it up to its
+      // newest message. (Sitting on the list, session===null, does not count.)
+      if (visible && typeof session === "string") this.opts.markRead?.(session)
+      return
+    }
+    if (frame.type === "draft_set" && typeof frame.session === "string" && typeof frame.text === "string") {
+      // Empty text is a clear — normalize so an empty draft never lingers.
+      if (frame.text.length === 0) {
+        this.opts.setDraft?.(frame.session, null)
+        this.broadcastToOthers({ type: "draft_clear", session: frame.session }, ws)
+      } else {
+        this.opts.setDraft?.(frame.session, frame.text)
+        this.broadcastToOthers({ type: "draft_set", session: frame.session, text: frame.text }, ws)
+      }
+      return
+    }
+    if (frame.type === "draft_clear" && typeof frame.session === "string") {
+      this.opts.setDraft?.(frame.session, null)
+      this.broadcastToOthers({ type: "draft_clear", session: frame.session }, ws)
       return
     }
     if (frame.type === "send" && frame.session && frame.op === "reply") {
@@ -685,6 +715,10 @@ export class WebChannel implements Channel {
       }
       this.opts.onSendFromWeb(msg)
       for (const h of this.inboundHandlers) h(msg)
+      // The draft just became a real message — clear it for this session on the
+      // user's other devices too (the sender's composer already cleared locally).
+      this.opts.setDraft?.(frame.session, null)
+      this.broadcastToOthers({ type: "draft_clear", session: frame.session }, ws)
       return
     }
     if (frame.type === "editor_open" && frame.session) {

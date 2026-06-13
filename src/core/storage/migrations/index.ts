@@ -21,6 +21,7 @@ import m013 from "./013_opencode_agent.sql" with { type: "text" }
 import m014 from "./014_tmux_window_id.sql" with { type: "text" }
 import m015 from "./015_worktree_session.sql" with { type: "text" }
 import m016 from "./016_review_comments.sql" with { type: "text" }
+import m017 from "./017_read_status_drafts.sql" with { type: "text" }
 
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "001_init", sql: m001 },
@@ -38,4 +39,5 @@ export const MIGRATIONS: Migration[] = [
   { version: 14, name: "014_tmux_window_id", sql: m014 },
   { version: 15, name: "015_worktree_session", sql: m015 },
   { version: 16, name: "016_review_comments", sql: m016 },
+  { version: 17, name: "017_read_status_drafts", sql: m017 },
 ].sort((a, b) => a.version - b.version)
