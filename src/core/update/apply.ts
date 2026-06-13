@@ -212,9 +212,18 @@ export async function applyUpdate(opts: {
 
   // 2. Download → tmp (sibling of execPath, same fs for an atomic rename later).
   //    The fetch's AbortSignal only guards connect+headers; it does NOT abort a
-  //    stalled body drain (proven). So we race the body write (Bun.write) against
-  //    a hard deadline and treat a deadline win as download-failed. The timer is
-  //    cleared in a finally so a fast success never keeps the process alive.
+  //    stalled body drain (proven). So we race the body DRAIN against a hard
+  //    deadline and treat a deadline win as download-failed. The timer is cleared
+  //    in a finally so a fast success never keeps the process alive.
+  //
+  //    The drain is `res.arrayBuffer()` (buffer the whole body) and NOT
+  //    `Bun.write(tmpPath, res)`: on Bun 1.3.x `Bun.write(path, Response)` HANGS
+  //    forever draining a large body (empirically proven against a ~95MB asset
+  //    over loopback AND over the network — the update-flow e2e caught this; a
+  //    real self-update would otherwise stall the full deadline then fail).
+  //    `res.arrayBuffer()` drains correctly, and writing the in-memory bytes to
+  //    disk is fast and reliable. We then read the file back for the sha (verify
+  //    what actually LANDED, not just what we buffered).
   onState("downloading")
   let res: Response
   try {
@@ -238,7 +247,8 @@ export async function applyUpdate(opts: {
         downloadTimeoutMs,
       )
     })
-    await Promise.race([Bun.write(tmpPath, res), deadline])
+    const body = new Uint8Array(await Promise.race([res.arrayBuffer(), deadline]))
+    await Bun.write(tmpPath, body)
   } catch (err) {
     // Stalled or write error: best-effort cleanup of a partial tmp; never leave
     // junk behind.
