@@ -24,6 +24,15 @@ const submitting = ref(false)
 const hasConnections = computed(() => forges.connections.length > 0)
 const cli = computed(() => forges.cliStatus)
 
+/** Offer CLI import only when that CLI is authed AND its account isn't already connected. */
+function canImport(kind: Kind): boolean {
+  const c = cli.value?.[kind]
+  if (!c?.available) return false
+  const login = c.login?.toLowerCase()
+  if (!login) return true
+  return !forges.connections.some((x) => x.kind === kind && x.account.login.toLowerCase() === login)
+}
+
 onMounted(() => forges.loadConnections())
 
 function goBack() { if (window.history.length > 1) router.back(); else router.push("/settings") }
@@ -87,7 +96,7 @@ async function disconnect(id: string) {
 
         <template v-for="k in KINDS" :key="k">
           <button
-            v-if="cli?.[k]?.available"
+            v-if="canImport(k)"
             type="button" :disabled="submitting" @click="importCli(k)"
             class="w-full flex items-center gap-3 text-left rounded-xl border p-3.5 mb-3 disabled:opacity-60 transition"
             style="border-color: color-mix(in oklab, var(--primary) 45%, var(--border)); background: color-mix(in oklab, var(--primary) 8%, var(--card))"
@@ -145,10 +154,10 @@ async function disconnect(id: string) {
           </div>
 
           <button
-            v-if="cli?.[addKind]?.available" type="button" :disabled="submitting" @click="importCli(addKind)"
+            v-if="canImport(addKind)" type="button" :disabled="submitting" @click="importCli(addKind)"
             class="rounded-lg bg-primary text-primary-foreground text-sm py-2.5 font-medium disabled:opacity-60"
           >Import token from {{ addKind === 'github' ? 'gh' : 'glab' }} CLI<span v-if="cli?.[addKind]?.login"> (@{{ cli?.[addKind]?.login }})</span></button>
-          <div v-if="cli?.[addKind]?.available" class="flex items-center gap-2.5 text-muted-foreground text-xs"><span class="h-px bg-border flex-1"></span>or paste a token<span class="h-px bg-border flex-1"></span></div>
+          <div v-if="canImport(addKind)" class="flex items-center gap-2.5 text-muted-foreground text-xs"><span class="h-px bg-border flex-1"></span>or paste a token<span class="h-px bg-border flex-1"></span></div>
 
           <div>
             <Input v-model="token" type="password" :placeholder="addKind === 'github' ? 'github_pat_…' : 'glpat-…'" class="font-mono" />
