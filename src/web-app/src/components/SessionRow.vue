@@ -88,7 +88,7 @@ defineExpose({ startRename })
     @click="handleNavigate"
   >
     <div class="flex items-start gap-3">
-      <SessionAvatar :name="props.name" :connected="props.connected" :agent="props.agent" :working="working" />
+      <SessionAvatar :name="props.name" :connected="props.connected" :agent="props.agent" :working="working" :suspended="props.status === 'suspended'" />
 
       <div class="min-w-0 flex-1">
         <div class="flex items-baseline justify-between gap-2">
@@ -104,9 +104,6 @@ defineExpose({ startRename })
           </template>
           <span v-else class="font-medium truncate">{{ props.name }}</span>
           <span v-if="lastTs" class="text-[11px] text-muted-foreground shrink-0">{{ rel(lastTs) }}</span>
-        </div>
-        <div v-if="props.status === 'suspended'" class="mt-0.5">
-          <span class="inline-flex items-center text-[10px] font-medium text-amber-500/70">suspended</span>
         </div>
         <div class="flex items-center justify-between gap-2 mt-0.5">
           <div
