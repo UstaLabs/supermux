@@ -28,9 +28,9 @@ async function importCli(kind: "github" | "gitlab") {
   submitting.value = true
   try { await forges.importFromCli(kind, transport.value) } catch { /* surfaced */ } finally { submitting.value = false }
 }
-function disconnect(id: string) { if (confirm("Disconnect this account?")) forges.disconnect(id) }
-function del(path: string) { if (confirm("Delete this cloned repo from disk?")) forges.removeCloned(path) }
-async function pull(path: string) { await forges.pullCloned(path) }
+async function disconnect(id: string) { if (!confirm("Disconnect this account?")) return; submitting.value = true; try { await forges.disconnect(id) } finally { submitting.value = false } }
+async function del(path: string) { if (!confirm("Delete this cloned repo from disk?")) return; submitting.value = true; try { await forges.removeCloned(path) } finally { submitting.value = false } }
+async function pull(path: string) { submitting.value = true; try { await forges.pullCloned(path) } catch { /* surfaced via forges.error */ } finally { submitting.value = false } }
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`
@@ -42,7 +42,7 @@ function fmtBytes(n: number): string {
 
 <template>
   <div class="min-h-screen bg-background text-foreground">
-    <header class="flex items-center gap-2 px-3 py-3 border-b border-border sticky top-0 bg-background/95 backdrop-blur z-10">
+    <header class="flex items-center gap-2 px-3 py-3 border-b border-border sticky top-0 bg-background/95 backdrop-blur z-10" style="padding-top: calc(env(safe-area-inset-top, 0px) + 0.75rem)">
       <button type="button" class="cmux-icon-button" aria-label="Back" @click="goBack"><ArrowLeft class="size-5" /></button>
       <h1 class="text-base font-semibold tracking-tight">Git hosting</h1>
     </header>
@@ -76,7 +76,7 @@ function fmtBytes(n: number): string {
         </div>
         <button v-if="forges.cliStatus?.[addKind]?.available" type="button"
           class="rounded-lg bg-primary text-primary-foreground text-sm py-2 disabled:opacity-60" :disabled="submitting" @click="importCli(addKind)">
-          Import token from {{ addKind === 'github' ? 'gh' : 'glab' }} CLI<span v-if="forges.cliStatus[addKind].login"> (@{{ forges.cliStatus[addKind].login }})</span>
+          Import token from {{ addKind === 'github' ? 'gh' : 'glab' }} CLI<span v-if="forges.cliStatus?.[addKind]?.login"> (@{{ forges.cliStatus?.[addKind]?.login }})</span>
         </button>
         <input v-model="token" type="password" placeholder="Personal access token" class="rounded-lg border border-border bg-input px-3 py-2 text-sm font-mono" />
         <input v-model="baseUrl" type="text" placeholder="Self-hosted base URL (optional)" class="rounded-lg border border-border bg-input px-3 py-2 text-sm font-mono" />

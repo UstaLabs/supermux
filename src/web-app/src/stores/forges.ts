@@ -36,7 +36,10 @@ export const useForges = defineStore("forges", () => {
     try { clonedRepos.value = (await api.listClonedRepos()).repos } catch (e: any) { error.value = e?.message ?? "failed to load repos" }
   }
   async function removeCloned(path: string) { try { await api.removeClonedRepo(path); await loadCloned() } catch (e: any) { error.value = e?.message ?? "failed to remove" } }
-  async function pullCloned(path: string) { return api.pullClonedRepo(path) }
+  async function pullCloned(path: string) {
+    try { const r = await api.pullClonedRepo(path); await loadCloned(); return r }
+    catch (e: any) { error.value = e?.message ?? "failed to pull"; throw e }
+  }
 
   return { connections, cliStatus, clonedRepos, loading, error, loadConnections, connect, importFromCli, disconnect, loadCloned, removeCloned, pullCloned }
 })
