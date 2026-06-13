@@ -232,6 +232,27 @@ supermux ships **no preset agent persona** — and you don't set it up by hand. 
 
 If the human wants the broker reachable from outside localhost, `MUX_WEB_PUBLIC_URL` must be the HTTPS address the browser actually uses. Three common options:
 
+### Exposing apps: subdomains vs. sub-paths
+
+`expose_port` publishes a session's local port to the web. There are two modes,
+chosen automatically by configuration:
+
+- **Subdomain mode** — set `MUX_PROXY_BASE_DOMAIN` (e.g. `apps.example.com`).
+  Each app gets `https://<slug>.apps.example.com`. Requires wildcard DNS
+  (`*.apps.example.com`) and a wildcard TLS cert (e.g. via Cloudflare). Works for
+  any app — each gets its own origin.
+- **Path mode** — leave `MUX_PROXY_BASE_DOMAIN` unset. Apps are served under your
+  existing broker URL at `https://<broker>/p/<slug>/`. No wildcard DNS or TLS
+  required — ideal when you reach the broker over a single hostname (Tailscale, a
+  quick tunnel, or one cert).
+
+  Path mode strips the `/p/<slug>` prefix before forwarding, so the app is
+  presented as if at the site root. It works for apps that use **relative** URLs.
+  Apps that assume they live at the domain root — absolute `/asset` links,
+  `fetch('/api')`, a hardcoded root WebSocket, or a framework dev server that
+  hardcodes its own base path (Vite, Next.js) — won't work under a sub-path. Use
+  **subdomain mode** for those.
+
 **Caddy** (automatic TLS):
 ```
 reverse_proxy /api/* localhost:8787
