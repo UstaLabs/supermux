@@ -22,6 +22,7 @@ import { toWorkdirRelativePath } from "@/lib/workdir-display"
 import { toast } from "vue-sonner"
 import AgentLogo from "@/components/AgentLogo.vue"
 import BranchSyncStatus from "@/components/BranchSyncStatus.vue"
+import SessionLinks from "@/components/SessionLinks.vue"
 import ModelSwitcher from "@/components/ModelSwitcher.vue"
 import EffortSwitcher from "@/components/EffortSwitcher.vue"
 import ModelPill from "@/components/ModelPill.vue"
@@ -502,6 +503,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
           {{ workdirLabel }}
         </div>
       </div>
+      <SessionLinks v-if="!isArchived && session?.name" :session-name="session?.name ?? ''" />
       <button
         v-if="isArchived"
         class="shrink-0 px-3 py-1.5 text-xs font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition disabled:opacity-50"
