@@ -115,9 +115,15 @@ async function onClick(e: MouseEvent) {
   padding-left: 0.7rem;
   margin: 0.4rem 0;
 }
+/* Wide tables scroll horizontally instead of overflowing the message. */
+.md-body :deep(.md-table-wrap) {
+  overflow-x: auto;
+  margin: 0.5rem 0;
+  -webkit-overflow-scrolling: touch;
+}
 .md-body :deep(table) {
   border-collapse: collapse;
-  margin: 0.5rem 0;
+  margin: 0;
   font-size: 0.9em;
 }
 .md-body :deep(th),

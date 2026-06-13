@@ -2,6 +2,7 @@
 import { ref, onMounted } from "vue"
 import { ArrowLeft, Plus, ExternalLink, Trash2, Network } from "lucide-vue-next"
 import { useProxies, type Proxy as ProxyRow } from "@/stores/proxies"
+import { displayUrl } from "@/lib/proxy-url"
 import { api } from "@/api/client"
 import { toast } from "vue-sonner"
 import DeleteProxyDialog from "@/components/DeleteProxyDialog.vue"
@@ -16,10 +17,6 @@ const showDeleteConfirm = ref(false)
 const publicTarget = ref<string | null>(null)
 const showPublicConfirm = ref(false)
 const toggling = ref<string | null>(null)
-
-function displayUrl(url: string): string {
-  return url.replace(/^https?:\/\//, "").replace(/\/+$/, "")
-}
 
 function requestDelete(domain: string) {
   deleteTarget.value = domain
