@@ -2,8 +2,9 @@ import { execFileSync } from "child_process"
 
 /** The git credential-helper command string. The broker resolves <connId>'s token at fill time. */
 export function helperCommand(connectionId: string): string {
-  // `!` makes git run this as a shell command; bun runs our entrypoint (see main.ts wiring in Plan 2).
-  return `!mux-credential ${connectionId}`
+  // `!` makes git run this via `sh -c`; single-quote the id so shell metacharacters
+  // in a connection id can never inject. (sh single-quote escape: ' -> '\'' )
+  return `!mux-credential '${connectionId.replace(/'/g, "'\\''")}'`
 }
 
 /** Bind a cloned repo to its connection: future push/fetch/pull over this host use the helper. */
