@@ -112,11 +112,22 @@ export function isMarkdownPath(path: string): boolean {
   return MARKDOWN_EXT_RE.test(path)
 }
 
+// Non-greedy, so each <table>…</table> matches independently. GFM tables can't
+// nest, and marked escapes < and > inside cells, so a literal </table> in the
+// source can never close a table early.
+const TABLE_RE = /<table\b[^>]*>[\s\S]*?<\/table>/g
+
+/** Wrap each table in a horizontally scrollable container so wide tables
+ *  don't overflow the message on narrow screens. */
+export function wrapTables(html: string): string {
+  return html.replace(TABLE_RE, (table) => `<div class="md-table-wrap">${table}</div>`)
+}
+
 export function renderMarkdown(text: string): string {
   const html = marked.parse(text, { async: false }) as string
   const sanitized = DOMPurify.sanitize(html, {
     ADD_ATTR: ["target", "data-path", "data-line", "data-line-end"],
   })
   // Markdown [label](path:line) links are file-links from the marked renderer above.
-  return injectCodeCopyButtons(linkifyFilePaths(sanitized))
+  return wrapTables(injectCodeCopyButtons(linkifyFilePaths(sanitized)))
 }

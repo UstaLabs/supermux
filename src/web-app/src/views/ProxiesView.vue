@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue"
+import { ref, onMounted } from "vue"
 import { ArrowLeft, Plus, ExternalLink, Trash2, Network } from "lucide-vue-next"
 import { useProxies, type Proxy as ProxyRow } from "@/stores/proxies"
+import { proxyUrl, proxyHostname } from "@/lib/proxy-url"
 import { api } from "@/api/client"
 import { toast } from "vue-sonner"
 import DeleteProxyDialog from "@/components/DeleteProxyDialog.vue"
@@ -16,17 +17,6 @@ const showDeleteConfirm = ref(false)
 const publicTarget = ref<string | null>(null)
 const showPublicConfirm = ref(false)
 const toggling = ref<string | null>(null)
-
-const baseDomain = computed(() => {
-  const host = window.location.hostname
-  const parts = host.split(".")
-  return parts.length >= 2 ? parts.slice(-2).join(".") : host
-})
-
-function proxyUrl(domain: string): string {
-  const protocol = window.location.protocol
-  return `${protocol}//${domain}.${baseDomain.value}`
-}
 
 function requestDelete(domain: string) {
   deleteTarget.value = domain
@@ -128,7 +118,7 @@ onMounted(refresh)
                 rel="noopener noreferrer"
                 class="font-medium text-primary hover:underline truncate flex items-center gap-1 min-w-0"
               >
-                <span class="truncate">{{ p.domain }}.{{ baseDomain }}</span>
+                <span class="truncate">{{ proxyHostname(p.domain) }}</span>
                 <ExternalLink class="size-3 shrink-0" />
               </a>
               <span
