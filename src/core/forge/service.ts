@@ -9,7 +9,7 @@ import { join } from "path"
 import { mkdirSync } from "fs"
 import { execFileSync } from "child_process"
 import { scanCloned, removeCloned as rmCloned, isInsideRoot, type ClonedRepo } from "./cloned"
-import { pullBranch, type PullResult } from "../git/remote"
+import { pullBranch, isAuthError, type PullResult } from "../git/remote"
 
 export interface ForgeServiceConfig { projectsRoot: string; sshRoot: string }
 export interface ConnError { connectionId: string; code: string; message: string }
@@ -68,6 +68,7 @@ export class ForgeService {
         out.push(...repos)
       } catch (e) {
         const code = e instanceof ForgeError ? e.code : "unknown"
+        if (code === "auth") this.store.setStatus(pub.id, "needs_reconnect")
         errors.push({ connectionId: pub.id, code, message: String((e as Error).message) })
       }
     }))
@@ -82,16 +83,23 @@ export class ForgeService {
     const adapter = this.adapterFactory(c.kind)
     const target = projectDir(this.cfg.projectsRoot, c.host, owner, name)
     const repo = { kind: c.kind, host: c.host, owner, name } as RemoteRepo
-    if (c.transport === "ssh") {
-      const kp = ensureKeypair(this.cfg.sshRoot, connectionId)
-      const kh = seedKnownHosts(this.cfg.sshRoot, await adapter.hostKeys(c).catch(() => []))
-      const ssh = sshCommandFor(kp.privatePath, kh)
-      const res = await gitClone({ url: adapter.sshRemoteUrl(repo), targetDir: target, sshCommand: ssh })
-      if (!res.reused) bindSshCommand(target, ssh)
-    } else {
-      const res = await gitClone({ url: `https://${c.host}/${owner}/${name}.git`, targetDir: target,
-        https: { user: adapter.gitUser(), token: c.token } })
-      if (!res.reused) bindHttpsCredentials(target, c.host, connectionId)
+    try {
+      if (c.transport === "ssh") {
+        const kp = ensureKeypair(this.cfg.sshRoot, connectionId)
+        const kh = seedKnownHosts(this.cfg.sshRoot, await adapter.hostKeys(c).catch(() => []))
+        const ssh = sshCommandFor(kp.privatePath, kh)
+        const res = await gitClone({ url: adapter.sshRemoteUrl(repo), targetDir: target, sshCommand: ssh })
+        if (!res.reused) bindSshCommand(target, ssh)
+      } else {
+        const res = await gitClone({ url: `https://${c.host}/${owner}/${name}.git`, targetDir: target,
+          https: { user: adapter.gitUser(), token: c.token } })
+        if (!res.reused) bindHttpsCredentials(target, c.host, connectionId)
+      }
+    } catch (e) {
+      if (e instanceof ForgeError) throw e
+      const msg = (e as Error).message ?? String(e)
+      if (isAuthError(msg.toLowerCase())) { this.store.setStatus(connectionId, "needs_reconnect"); throw new ForgeError("auth", msg) }
+      throw new ForgeError("network", msg)
     }
     return { localPath: target }
   }

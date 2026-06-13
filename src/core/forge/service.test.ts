@@ -91,3 +91,10 @@ test("pullCloned rejects a path outside the projects root", () => {
   const s = svc([])
   expect(() => s.pullCloned("/etc")).toThrow()
 })
+
+test("clone maps a git failure to a ForgeError (and never a raw Error)", async () => {
+  const s = svc([])
+  // a connection whose host won't resolve → git clone fails fast (DNS), exercising the wrap
+  s["store"].add({ ...cred("github:nope.invalid:a"), host: "nope.invalid" })
+  await expect(s.clone("github:nope.invalid:a", "o", "r")).rejects.toMatchObject({ name: "ForgeError" })
+}, 30_000)
