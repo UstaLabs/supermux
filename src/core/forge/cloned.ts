@@ -42,5 +42,7 @@ export function scanCloned(root: string): ClonedRepo[] {
 
 export function removeCloned(root: string, path: string): void {
   if (!isInsideRoot(root, path)) throw new ForgeError("not_found", "path is outside the projects root")
+  const g = join(path, ".git")
+  if (!existsSync(g) || !statSync(g).isDirectory()) throw new ForgeError("not_found", "not a cloned repository")
   rmSync(path, { recursive: true, force: true })
 }

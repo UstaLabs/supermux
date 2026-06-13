@@ -4,7 +4,7 @@ import { execFileSync } from "child_process"
 import { mkdtempSync, rmSync, mkdirSync, existsSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { scanCloned, isInsideRoot } from "./cloned"
+import { scanCloned, isInsideRoot, removeCloned } from "./cloned"
 
 const work = mkdtempSync(join(tmpdir(), "forge-cloned-"))
 afterAll(() => rmSync(work, { recursive: true, force: true }))
@@ -39,6 +39,16 @@ test("isInsideRoot rejects traversal", () => {
   expect(isInsideRoot(root, join(root, "github.com", "a", "b"))).toBe(true)
   expect(isInsideRoot(root, join(work, "evil"))).toBe(false)
   expect(isInsideRoot(root, join(root, "..", "evil"))).toBe(false)
+})
+
+test("removeCloned refuses a path that isn't a cloned repo, allows a real one", () => {
+  const root = join(work, "rmguard")
+  mkdirSync(join(root, "github.com", "ahmet"), { recursive: true }) // host/owner subtree, NO .git
+  expect(() => removeCloned(root, join(root, "github.com"))).toThrow()
+  expect(() => removeCloned(root, join(root, "github.com", "ahmet"))).toThrow()
+  gitRepo(join(root, "github.com", "ahmet", "repo"))
+  removeCloned(root, join(root, "github.com", "ahmet", "repo"))
+  expect(existsSync(join(root, "github.com", "ahmet", "repo"))).toBe(false)
 })
 
 test("scanCloned ignores a .git FILE (git worktree), only directories", () => {
