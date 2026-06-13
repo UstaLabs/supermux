@@ -36,6 +36,16 @@ jobs:
         run: scripts/build-binary.sh "dist/supermux-linux-${{ matrix.arch }}" "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
       - name: Smoke test
         run: scripts/smoke-binary.sh "dist/supermux-linux-${{ matrix.arch }}" 18791 "${{ steps.ver.outputs.version }}"
+      - name: Compiled asset probe
+        # Proves the COMPILED binary can materialize embedded runtime-assets out
+        # of $bunfs (pty-helper + prompt files) for spawned children — the exact
+        # class of the env.md ENAMETOOLONG landmine. Build a tiny probe binary,
+        # run it, then rm it BEFORE the checksum/upload steps so the probe never
+        # ships in the release artifacts (upload grabs dist/*).
+        run: |
+          bun build --compile scripts/asset-probe.ts --outfile dist/asset-probe
+          ./dist/asset-probe
+          rm -f dist/asset-probe
       - name: Checksum
         run: cd dist && sha256sum "supermux-linux-${{ matrix.arch }}" > "supermux-linux-${{ matrix.arch }}.sha256"
       - uses: actions/upload-artifact@v4
@@ -43,6 +53,22 @@ jobs:
           name: supermux-linux-${{ matrix.arch }}
           path: dist/*
           if-no-files-found: error
+
+  update-flow:
+    # Hermetic update→swap→rollback e2e on REAL compiled binaries: builds two
+    # versions, serves a local versions.json over HTTP, runs `supermux update`
+    # then `supermux rollback`, asserting the on-disk version transitions and
+    # reversibility. Independent (no `needs`) so it runs in parallel with the
+    # other jobs as validation; runs on tag pushes AND workflow_dispatch dry runs
+    # (no `if` gate). x64 only — one arch is enough to exercise the real cycle.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh
+      - name: Update-flow e2e
+        run: scripts/test-update-flow.sh
 
   docker:
     runs-on: ubuntu-latest

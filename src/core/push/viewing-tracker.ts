@@ -50,4 +50,19 @@ export class ViewingTracker {
     }
     return false
   }
+
+  /**
+   * True when some non-expired device is viewing EXACTLY this session and is
+   * visible. Stricter than `isPresentFor` / `isAnyPresentFor`: sitting on the
+   * chat list (`session === null`) suppresses push but does NOT count here.
+   * Drives server-side read status — a chat is only "read" by being opened.
+   */
+  isAnyExactViewing(sessionId: string): boolean {
+    for (const s of this.states.values()) {
+      if (Date.now() - s.updatedAt > this.ttlMs) continue
+      if (!s.visible) continue
+      if (s.session === sessionId) return true
+    }
+    return false
+  }
 }

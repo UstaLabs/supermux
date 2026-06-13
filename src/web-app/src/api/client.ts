@@ -52,6 +52,28 @@ export interface RemoteRepo {
 }
 export interface ClonedRepo { path: string; host: string; owner: string; name: string; fullName: string; sizeBytes: number }
 export interface ForgeAddInput { kind: string; host?: string; apiBase?: string; token: string; source: "pat" | "cli"; transport?: "https" | "ssh" }
+// In-app updater (GET /api/update/status). Mirrors the broker's UpdateStatus
+// shape (src/core/update/checker.ts) plus `disabled` when MUX_UPDATE_CHECK=0.
+export type UpdateMode = "binary" | "source" | "docker"
+export type UpdateState =
+  | "idle"
+  | "checking"
+  | "downloading"
+  | "swapping"
+  | "restart-required"
+  | "failed"
+export interface UpdateStatusDTO {
+  current: string
+  commit: string
+  latest: string | null
+  updateAvailable: boolean
+  notesUrl: string | null
+  mode: UpdateMode
+  state: UpdateState
+  lastChecked: number | null
+  lastError: string | null
+  disabled?: boolean
+}
 async function request(method: string, path: string, body?: unknown): Promise<any> {
   const res = await fetch(path, {
     method,
@@ -294,4 +316,7 @@ export const api = {
   listClonedRepos: () => request("GET", "/forge/cloned") as Promise<{ repos: ClonedRepo[] }>,
   removeClonedRepo: (path: string) => request("DELETE", "/forge/cloned", { path }),
   pullClonedRepo: (path: string) => request("POST", "/forge/cloned/pull", { path }),
+  getUpdateStatus: () => request("GET", "/api/update/status") as Promise<UpdateStatusDTO>,
+  runUpdate: () =>
+    request("POST", "/api/update/run", {}) as Promise<{ started: boolean } | { error: string; instruction?: string }>,
 }

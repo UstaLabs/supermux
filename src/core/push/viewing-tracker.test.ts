@@ -94,3 +94,42 @@ test("isPresentFor: TTL expiry → not present", () => {
   t.update("iphone", { session: "ana", visible: true })
   expect(t.isPresentFor("iphone", "ana")).toBe(false)
 })
+
+// isAnyExactViewing drives read-status: stricter than push suppression. Sitting
+// on the chat list (session=null) suppresses push but must NOT mark a chat read.
+test("isAnyExactViewing: exact session + visible → true", () => {
+  const t = new ViewingTracker()
+  t.update("iphone", { session: "ana", visible: true })
+  expect(t.isAnyExactViewing("ana")).toBe(true)
+})
+
+test("isAnyExactViewing: on the list (session=null) does NOT count as reading", () => {
+  const t = new ViewingTracker()
+  t.update("iphone", { session: null, visible: true })
+  expect(t.isAnyExactViewing("ana")).toBe(false)
+})
+
+test("isAnyExactViewing: a different session → false", () => {
+  const t = new ViewingTracker()
+  t.update("iphone", { session: "zoom", visible: true })
+  expect(t.isAnyExactViewing("ana")).toBe(false)
+})
+
+test("isAnyExactViewing: backgrounded (not visible) → false", () => {
+  const t = new ViewingTracker()
+  t.update("iphone", { session: "ana", visible: false })
+  expect(t.isAnyExactViewing("ana")).toBe(false)
+})
+
+test("isAnyExactViewing: expired entry → false", () => {
+  const t = new ViewingTracker({ ttlMs: -1 })
+  t.update("iphone", { session: "ana", visible: true })
+  expect(t.isAnyExactViewing("ana")).toBe(false)
+})
+
+test("isAnyExactViewing: true when any one of several devices exact-views", () => {
+  const t = new ViewingTracker()
+  t.update("iphone", { session: null, visible: true })   // on the list
+  t.update("laptop", { session: "ana", visible: true })  // actually viewing
+  expect(t.isAnyExactViewing("ana")).toBe(true)
+})

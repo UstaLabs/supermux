@@ -200,6 +200,49 @@ export class SessionStore {
     if (session) { session.repo_root = wt.repo_root; session.base_branch = wt.base_branch; session.session_branch = wt.session_branch }
   }
 
+  // --- Read status & drafts (server-side, global per session; migration 017) ---
+  // These touch only the new columns and deliberately bypass the in-memory
+  // Session cache and the session_state broadcast path: read advances ride the
+  // `session_read` frame and draft writes ride `draft_set`/`draft_clear`.
+
+  getLastReadAt(id: string): string | null {
+    const row = this.db.query("SELECT last_read_at FROM sessions WHERE id = ?").get(id) as { last_read_at: string | null } | null
+    return row?.last_read_at ?? null
+  }
+
+  setLastReadAt(id: string, ts: string): void {
+    this.db.run("UPDATE sessions SET last_read_at = ? WHERE id = ?", [ts, id])
+  }
+
+  getDraft(id: string): string | null {
+    const row = this.db.query("SELECT draft FROM sessions WHERE id = ?").get(id) as { draft: string | null } | null
+    return row?.draft ?? null
+  }
+
+  setDraft(id: string, text: string | null): void {
+    this.db.run("UPDATE sessions SET draft = ? WHERE id = ?", [text ?? null, id])
+  }
+
+  /** Map of sessionId → last_read_at for all non-archived sessions that have one. */
+  allReads(): Record<string, string> {
+    const rows = this.db.query(
+      "SELECT id, last_read_at FROM sessions WHERE last_read_at IS NOT NULL AND status IN ('active','suspended')"
+    ).all() as Array<{ id: string; last_read_at: string }>
+    const out: Record<string, string> = {}
+    for (const r of rows) out[r.id] = r.last_read_at
+    return out
+  }
+
+  /** Map of sessionId → draft text for all non-archived sessions that have one. */
+  allDrafts(): Record<string, string> {
+    const rows = this.db.query(
+      "SELECT id, draft FROM sessions WHERE draft IS NOT NULL AND status IN ('active','suspended')"
+    ).all() as Array<{ id: string; draft: string }>
+    const out: Record<string, string> = {}
+    for (const r of rows) out[r.id] = r.draft
+    return out
+  }
+
   grantOrchestrate(id: string, value: boolean): void {
     const session = this.cache.get(id)
     if (!session) return

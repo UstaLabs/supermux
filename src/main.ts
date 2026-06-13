@@ -8,6 +8,7 @@ import type { Channel, InboundMessage, OutboundAction } from "./channels/channel
 import { classifyInbound, transformOutbound } from "./core/routing"
 import { handleSlash } from "./core/commands"
 import { Registry, type ProxyEntry } from "./core/session-manager/registry"
+import { makeReadAdvancer } from "./core/session-manager/read-status"
 
 function proxyWsPayload(entry: ProxyEntry) {
   return {
@@ -44,6 +45,11 @@ import { MessageStore } from "./core/session-manager/messages"
 import { appendSoulSetupInvocation, readSoulSetupState, shouldAutoSendSoulSetup } from "./core/session-manager/soul-setup"
 import { openDb, runMigrations } from "./core/storage/db"
 import { MIGRATIONS } from "./core/storage/migrations"
+import { checkSchemaStamp, writeSchemaStamp } from "./core/storage/schema-stamp"
+import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
+import { BUILD_VERSION, BUILD_COMMIT } from "./shared/build-info"
+import { UpdateChecker } from "./core/update/checker"
+import { detectUpdateMode } from "./core/update/mode"
 import { ReviewStore } from "./core/review/store"
 import { serializeReview } from "./core/review/serialize"
 import { FileStore } from "./core/files/store"
@@ -150,12 +156,30 @@ try {
 acquirePidFile(PID_FILE)
 process.on("exit", () => releasePidFile(PID_FILE))
 
+// Schema downgrade guard: refuse to start if state was written by a newer build.
+// Must run BEFORE openDb so we never touch a DB we can't safely migrate.
+// NOTE: this is also the rollback-into-older-migration tripwire — if a forward
+// update added migrations and the user then runs `supermux rollback`, the older
+// binary lands here and exits. Recovery is a forward `supermux update`, not another rollback.
+{
+  const stampCheck = checkSchemaStamp(STATE_DIR, MIGRATIONS.length)
+  if (!stampCheck.ok) {
+    log.error("schema_downgrade_refused", {
+      stamp: stampCheck.stamp,
+      supported: MIGRATIONS.length,
+      hint: `This binary is OLDER than the schema the on-disk state was migrated to (stamp=${stampCheck.stamp} > supported=${MIGRATIONS.length}). An older binary cannot safely run against forward-migrated state. Recover by installing a build at least as new as the one that wrote this state (e.g. \`supermux update\`). NOTE: \`supermux rollback\` will NOT help here — it selects an even older binary.`,
+    })
+    process.exit(1)
+  }
+}
+
 // DB creation BEFORE registry
 const dbPath = join(STATE_DIR, "db.sqlite3")
 let db: ReturnType<typeof openDb>
 try {
   db = openDb(dbPath)
   runMigrations(db, MIGRATIONS)
+  writeSchemaStamp(STATE_DIR, MIGRATIONS.length)
 } catch (err: any) {
   log.error("storage_init_failed", { dbPath, err: err?.message ?? String(err) })
   process.exit(1)
@@ -744,8 +768,31 @@ function spawnLoginProc(kind: string) {
 // (embedded in the Claude hook curl URLs). In-memory; rotates every restart.
 const INTERNAL_SECRET = randomBytes(24).toString("hex")
 
+// In-app update checker. Kill switch MUX_UPDATE_CHECK=0 → no checker at all
+// (the web routes then report disabled). Otherwise it polls versions.json on a
+// boot-jittered interval; failures are recorded as lastError, never thrown, so a
+// refused/offline update host can't crash the broker. Surfaced to the PWA via
+// the web channel's /api/update/* routes; stopped in gracefulShutdown.
+const updateChecker = process.env.MUX_UPDATE_CHECK === "0" ? null : new UpdateChecker({
+  url: process.env.MUX_UPDATE_URL ?? "https://supermux.dev/versions.json",
+  currentVersion: BUILD_VERSION,
+  commit: BUILD_COMMIT,
+  mode: detectUpdateMode(),
+})
+updateChecker?.start()
+
+// Read status: a session is "read" up to its newest message whenever a device
+// is actively viewing it. advanceRead persists last_read_at and broadcasts
+// session_read to every client — idempotent, so it no-ops when nothing changed.
+const advanceRead = makeReadAdvancer({
+  sessions: registry.sessions,
+  messages: messageLog,
+  broadcast: (frame) => webChannel?.broadcastToAll(frame),
+})
+
 if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   webChannel = new WebChannel({
+    updateChecker,
     port: MUX_WEB_PORT,
     devicesFile: DEVICES_FILE,
     publicUrl: MUX_WEB_PUBLIC_URL,
@@ -880,6 +927,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     pushStore,
     vapidPublicKey: vapid.publicKey,
     viewingTracker,
+    getReads: () => registry.sessions.allReads(),
+    getDrafts: () => registry.sessions.allDrafts(),
+    setDraft: (id, text) => registry.sessions.setDraft(id, text),
+    markRead: (id) => advanceRead(id),
     getModels: (agent) => modelCache.get(agent).map((m) => ({ id: m.id, displayName: m.displayName })),
     switchModel: async (id, model, applyNow) => {
       const s = registry.get(id)
@@ -2526,6 +2577,9 @@ _tg.on("inbound", async (msg: InboundMessage) => {
 // look up session name for display
 messageLog.on("append", (sessionId, entry) => {
   webChannel?.broadcastToAll({ type: "message_append", session: sessionId, entry })
+  // If a device is actively viewing this session, the new message is already
+  // read — advance read status so the unread badge stays clear on every device.
+  if (viewingTracker.isAnyExactViewing(sessionId)) advanceRead(sessionId)
 })
 activityStore.on("append", (sessionId: string, event) => {
   webChannel?.broadcastToAll({ type: "activity_append", session: sessionId, event })
@@ -2808,6 +2862,11 @@ await resumeNonClaudeAdapters()
     })
   }
 }
+// Sweep stale runtime-assets directories from previous versions.
+try {
+  const swept = sweepRuntimeAssets(STATE_DIR, BUILD_VERSION)
+  if (swept.length) log.info("runtime_assets_swept", { removed: swept })
+} catch (err) { log.warn("runtime_assets_sweep_failed", { err: String(err) }) }
 await refreshTelegramMenu()
 if (webChannel) await webChannel.start()
 refreshModelCache().catch((err) => log.warn("model_cache_init_failed", { err: String(err) }))
@@ -2892,6 +2951,9 @@ async function gracefulShutdown(signal: string) {
   try {
     if (webChannel) await webChannel.stop()
   } catch (err: any) { log.warn("webChannel_stop_failed", { err: err?.message }) }
+  try {
+    updateChecker?.stop()
+  } catch (err: any) { log.warn("update_checker_stop_failed", { err: err?.message }) }
   if (telegram) try {
     await telegram.stop()
   } catch (err: any) { log.warn("telegram_stop_failed", { err: err?.message }) }
