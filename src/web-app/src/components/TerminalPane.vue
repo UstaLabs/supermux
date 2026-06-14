@@ -11,6 +11,7 @@ const props = defineProps<{
   sessionName: string
   terminalId: string
   active: boolean
+  kind?: "scratch" | "agent"
 }>()
 
 const emit = defineEmits<{ exit: [] }>()
@@ -22,7 +23,7 @@ let fitAddon: FitAddon | null = null
 let ro: ResizeObserver | null = null
 let lastSentSize: { cols: number; rows: number } | null = null
 
-const terminal = useTerminal(toRef(() => props.sessionName), toRef(() => props.terminalId))
+const terminal = useTerminal(toRef(() => props.sessionName), toRef(() => props.terminalId), toRef(() => props.kind ?? "scratch"))
 
 function cssVar(name: string, fallback: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
