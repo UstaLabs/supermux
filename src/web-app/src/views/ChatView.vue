@@ -38,6 +38,7 @@ import TerminalPanel from "@/components/TerminalPanel.vue"
 import EditorPane from "@/components/editor/EditorPane.vue"
 import SessionDisplayPanel from "@/components/SessionDisplayPanel.vue"
 import TerminalPane from "@/components/TerminalPane.vue"
+import AgentViewToggle from "@/components/AgentViewToggle.vue"
 
 import { Conversation, ConversationContent } from "@/components/ai-elements/conversation"
 import { Message, MessageContent } from "@/components/ai-elements/message"
@@ -518,29 +519,6 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
       >
         {{ resuming ? "…" : "Resume" }}
       </button>
-      <div
-        v-if="!isArchived && isClaude"
-        class="inline-flex shrink-0 rounded-md border border-border overflow-hidden text-xs"
-        role="tablist"
-        aria-label="Main view"
-      >
-        <button
-          type="button"
-          role="tab"
-          :aria-selected="mainView === 'chat'"
-          class="px-2.5 py-1 font-medium transition-colors"
-          :class="mainView === 'chat' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'"
-          @click="mainView = 'chat'"
-        >Chat</button>
-        <button
-          type="button"
-          role="tab"
-          :aria-selected="mainView === 'terminal'"
-          class="px-2.5 py-1 font-medium transition-colors"
-          :class="mainView === 'terminal' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'"
-          @click="mainView = 'terminal'"
-        >Terminal</button>
-      </div>
       <button
         v-if="isDesktop && !isArchived"
         class="cmux-icon-button disabled:opacity-40 disabled:cursor-not-allowed"
@@ -829,6 +807,9 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
           </ConversationContent>
         </Conversation>
 
+        <div v-if="isClaude && !isArchived" class="flex justify-center px-3 pt-2 bg-[var(--cmux-chat)]">
+          <AgentViewToggle :session-id="props.id" />
+        </div>
         <div
           v-if="!isArchived"
           class="px-3 pt-3 bg-[var(--cmux-chat)]"
@@ -896,6 +877,13 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
               :active="mainView === 'terminal'"
               @exit="mainView = 'chat'"
             />
+          </div>
+          <div
+            v-if="isClaude"
+            class="flex justify-center px-3 py-2 bg-[var(--cmux-chat)] border-t border-border"
+            style="padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem)"
+          >
+            <AgentViewToggle :session-id="props.id" />
           </div>
         </template>
       </div>
