@@ -8,7 +8,6 @@ describe("agent-tmux naming", () => {
     expect(viewerSessionName("phone", "mux:sess-1")).not.toBe(viewerSessionName("laptop", "mux:sess-1"))
     expect(viewerSessionName("phone", "mux:sess-1")).not.toBe(viewerSessionName("phone", "mux:sess-2"))
   })
-
 })
 
 describe("agent-tmux attachArgv", () => {
@@ -22,8 +21,17 @@ describe("agent-tmux attachArgv", () => {
     expect(script).toContain(`display-message -p -t '@5' '#{window_index}'`)
     expect(script).toContain(`new-session -d -s '${viewer}' -t "$s"`)
     expect(script).toContain(`select-window -t '${viewer}':"$w"`)
+    expect(script).toContain(`[ -n "$s" ] && [ -n "$w" ] || exit 1`)
     expect(script).toContain(`exec tmux attach -t '${viewer}'`)
     expect(script).not.toContain("window_name")
+  })
+
+  test("accepts the mux:<name> fallback target form", () => {
+    const argv = attachArgv({ device: "d", agentTarget: "mux:my-sess" })
+    const script = argv[2]!
+    const viewer = viewerSessionName("d", "mux:my-sess")
+    expect(script).toContain(`display-message -p -t 'mux:my-sess' '#{session_name}'`)
+    expect(script).toContain(`exec tmux attach -t '${viewer}'`)
   })
 })
 
