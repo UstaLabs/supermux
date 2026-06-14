@@ -268,6 +268,9 @@ export class TerminalManager {
         inst.intentional = true
         this.terminals.delete(key)
         try { inst.proc.kill() } catch {}
+        if (inst.kind === "agent" && inst.agentTarget) {
+          void this.agentTerm.killViewer(inst.deviceName, inst.agentTarget)
+        }
       }
     }
     try { await this.term.killAllTerminals(sessionName) } catch {}

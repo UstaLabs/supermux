@@ -33,6 +33,12 @@ describe("agent-tmux attachArgv", () => {
     expect(script).toContain(`display-message -p -t 'mux:my-sess' '#{session_name}'`)
     expect(script).toContain(`exec tmux attach -t '${viewer}'`)
   })
+
+  test("shell-quotes single quotes in the target (no injection)", () => {
+    const argv = attachArgv({ device: "d", agentTarget: "x'y" })
+    // POSIX escape: x'y -> 'x'\''y'  (the quote can't terminate the string early)
+    expect(argv[2]!).toContain("'x'\\''y'")
+  })
 })
 
 describe("agent-tmux control ops (mock runner)", () => {
@@ -44,10 +50,4 @@ describe("agent-tmux control ops (mock runner)", () => {
     expect(calls.flat()).not.toContain("mux:sess-1")
   })
 
-  test("hasAgentWindow reflects the has-session exit code", async () => {
-    const yes = createAgentTmux({ run: async () => ({ code: 0, stdout: "", stderr: "" }) })
-    const no = createAgentTmux({ run: async () => ({ code: 1, stdout: "", stderr: "" }) })
-    expect(await yes.hasAgentWindow("mux:s")).toBe(true)
-    expect(await no.hasAgentWindow("mux:s")).toBe(false)
-  })
 })

@@ -73,11 +73,5 @@ export function createAgentTmux(opts: { run?: TmuxRunner } = {}) {
     await run(["kill-session", "-t", viewerSessionName(device, agentTarget)])
   }
 
-  /** Whether the agent's tmux window still exists. */
-  async function hasAgentWindow(agentTarget: string): Promise<boolean> {
-    const r = await run(["has-session", "-t", agentTarget])
-    return r.code === 0
-  }
-
-  return { attachArgv, killViewer, hasAgentWindow }
+  return { attachArgv, killViewer }
 }

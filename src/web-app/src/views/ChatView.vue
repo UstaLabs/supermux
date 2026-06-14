@@ -199,7 +199,7 @@ const activeTab = computed({
 })
 const isClaude = computed(() => session.value?.agent === "claude")
 const mainView = computed<"chat" | "terminal">({
-  get: () => (isClaude.value ? panels.value.mainView : "chat"),
+  get: () => (isClaude.value && !isArchived.value ? panels.value.mainView : "chat"),
   set: (v) => { if (isClaude.value) panels.value.mainView = v },
 })
 type PendingOpenFile = { path: string; line?: number; endLine?: number }
