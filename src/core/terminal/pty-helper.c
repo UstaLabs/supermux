@@ -5,8 +5,11 @@
  * Resize protocol: a NUL byte followed by "R<cols>:<rows>\n" on stdin
  * triggers ioctl(TIOCSWINSZ) on the PTY master.
  *
- * Usage: pty-helper <cols> <rows> <workdir> [shell]
- * Exits with the child shell's exit code.
+ * Usage: pty-helper <cols> <rows> <workdir> [cmd [args...]]
+ *   With a cmd + args, the child execs that argv verbatim (e.g. a tmux
+ *   attach: `tmux -L muxterm new-session -A ...`). With no cmd, it falls
+ *   back to a login shell ($SHELL or /bin/bash), preserving old behavior.
+ * Exits with the child's exit code.
  */
 
 #define _GNU_SOURCE
@@ -31,15 +34,13 @@ static void sigchld_handler(int sig) {
 
 int main(int argc, char *argv[]) {
     if (argc < 4) {
-        fprintf(stderr, "usage: pty-helper <cols> <rows> <workdir> [shell]\n");
+        fprintf(stderr, "usage: pty-helper <cols> <rows> <workdir> [cmd [args...]]\n");
         return 1;
     }
 
     int cols = atoi(argv[1]);
     int rows = atoi(argv[2]);
     const char *workdir = argv[3];
-    const char *shell = argc > 4 ? argv[4] : getenv("SHELL");
-    if (!shell) shell = "/bin/bash";
 
     if (cols < 1) cols = 80;
     if (rows < 1) rows = 24;
@@ -54,14 +55,21 @@ int main(int argc, char *argv[]) {
     }
 
     if (pid == 0) {
-        /* Child: exec shell in workdir */
+        /* Child: exec the requested command (or a login shell) in workdir */
         if (chdir(workdir) != 0) {
             perror("chdir");
             _exit(1);
         }
         setenv("TERM", "xterm-256color", 1);
         setenv("COLORTERM", "truecolor", 1);
-        execlp(shell, shell, "-l", (char *)NULL);
+        if (argc > 4) {
+            /* Explicit command + args, e.g. `tmux -L muxterm new-session ...` */
+            execvp(argv[4], &argv[4]);
+        } else {
+            const char *shell = getenv("SHELL");
+            if (!shell) shell = "/bin/bash";
+            execlp(shell, shell, "-l", (char *)NULL);
+        }
         perror("exec");
         _exit(1);
     }

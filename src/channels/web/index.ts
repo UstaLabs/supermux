@@ -73,7 +73,7 @@ export type StoredClientLogEntry = {
 }
 const MUTATING_METHODS = new Set(["POST", "PUT", "DELETE", "PATCH"])
 
-type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalSession?: string; display?: true; scrcpy?: true; displayStreamId?: string }
+type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalSession?: string; terminalId?: string; display?: true; scrcpy?: true; displayStreamId?: string }
 
 export interface SessionSnapshot {
   id?: string
@@ -383,6 +383,9 @@ export class WebChannel implements Channel {
     if (url.pathname === "/ws/term") {
       const token = authToken(req)
       const sessionName = url.searchParams.get("session") ?? ""
+      // Per-terminal id (multiple terminals per session). Sanitized to a safe
+      // charset since it becomes part of a tmux session name; defaults to "main".
+      const terminalId = (url.searchParams.get("terminal") ?? "").replace(/[^A-Za-z0-9]/g, "").slice(0, 64) || "main"
       if (!this.checkRateLimit(req)) return new Response("rate limited", { status: 429 })
       const dev = this.store.verify(token)
       if (!dev) { this.recordAuthFailure(req); return new Response("unauthorized", { status: 401 }) }
@@ -391,7 +394,7 @@ export class WebChannel implements Channel {
         return new Response("session not found", { status: 404 })
       }
       const upgraded = server.upgrade(req, {
-        data: { deviceName: dev.name, openedAt: Date.now(), terminal: true, terminalSession: sessionName } as WSData,
+        data: { deviceName: dev.name, openedAt: Date.now(), terminal: true, terminalSession: sessionName, terminalId } as WSData,
       })
       if (upgraded) return undefined
       return new Response("upgrade failed", { status: 500 })
@@ -466,11 +469,13 @@ export class WebChannel implements Channel {
     const tm = this.opts.terminalManager
     if (!tm) { ws.close(1011, "terminal not configured"); return }
     const sessionName = ws.data.terminalSession!
+    const terminalId = ws.data.terminalId!
     const workdir = this.opts.getSessionWorkdir?.(sessionName)
     if (!workdir) { ws.close(1011, "session not found"); return }
-    const result = tm.spawn({
+    const result = tm.attach({
       deviceName: ws.data.deviceName,
       sessionName,
+      terminalId,
       workdir,
       cols: 80,
       rows: 24,
@@ -487,21 +492,27 @@ export class WebChannel implements Channel {
     const tm = this.opts.terminalManager
     if (!tm) return
     const sessionName = ws.data.terminalSession!
+    const terminalId = ws.data.terminalId!
     if (typeof msg === "string") {
       try {
         const frame = JSON.parse(msg)
         if (frame.type === "resize" && typeof frame.cols === "number" && typeof frame.rows === "number") {
-          tm.resize(ws.data.deviceName, sessionName, frame.cols, frame.rows)
+          tm.resize(ws.data.deviceName, sessionName, terminalId, frame.cols, frame.rows)
+        } else if (frame.type === "close") {
+          // Explicit close: destroy the tmux session, then drop the socket.
+          void tm.close(sessionName, terminalId)
+          try { ws.close() } catch {}
         }
       } catch {}
       return
     }
     const data = msg instanceof ArrayBuffer ? new Uint8Array(msg) : new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength)
-    tm.write(ws.data.deviceName, sessionName, data)
+    tm.write(ws.data.deviceName, sessionName, terminalId, data)
   }
 
   private onTerminalWsClose(ws: import("bun").ServerWebSocket<WSData>): void {
-    this.opts.terminalManager?.kill(ws.data.deviceName, ws.data.terminalSession!)
+    // Socket dropped (reload / nav / network): DETACH — the tmux session lives on.
+    this.opts.terminalManager?.detach(ws.data.deviceName, ws.data.terminalSession!, ws.data.terminalId!)
   }
 
   private onDisplayWsOpen(ws: import("bun").ServerWebSocket<WSData>): void {
@@ -1918,6 +1929,25 @@ export class WebChannel implements Channel {
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
+    }
+
+    // ── Web terminals ────────────────────────────────────────────────────────
+    // List a session's persisted terminals (source of truth: the muxterm tmux
+    // server) so the PWA can rebuild its tab strip across reloads.
+    if (method === "GET" && path === "/api/term/list") {
+      const session = url.searchParams.get("session") ?? ""
+      if (!session || !this.opts.getSessionWorkdir?.(session)) return this.json({ error: "session not found" }, 404)
+      const terminals = (await this.opts.terminalManager?.listForSession(session)) ?? []
+      return this.json({ terminals })
+    }
+    // Explicitly destroy one terminal (its tmux session + any viewers).
+    if (method === "POST" && path === "/api/term/close") {
+      const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
+      const session = typeof body.session === "string" ? body.session : ""
+      const terminal = typeof body.terminal === "string" ? body.terminal : ""
+      if (!session || !terminal) return this.json({ error: "session and terminal required" }, 400)
+      await this.opts.terminalManager?.close(session, terminal)
+      return this.json({ ok: true })
     }
 
     // ── In-app updater ──────────────────────────────────────────────────────

@@ -1,198 +1,117 @@
 import { describe, it, expect, afterEach } from "bun:test"
-import { TerminalManager } from "../src/core/terminal/manager"
-import { resolve as resolvePath } from "path"
+import { spawnSync } from "child_process"
+import { mkdtempSync } from "fs"
+import { tmpdir } from "os"
+import { resolve as resolvePath, join } from "path"
 import { existsSync } from "fs"
+import { TerminalManager } from "../src/core/terminal/manager"
 
 const PTY_HELPER = resolvePath(import.meta.dirname, "../src/core/terminal/pty-helper")
+const TMUX = Bun.which("tmux")
+const CAN_RUN = !!TMUX && existsSync(PTY_HELPER)
 
-async function waitFor(fn: () => boolean, timeoutMs = 2000): Promise<void> {
+async function waitFor(fn: () => boolean | Promise<boolean>, timeoutMs = 4000): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    if (fn()) return
+    if (await fn()) return
     await new Promise((r) => setTimeout(r, 50))
   }
 }
 
-describe("TerminalManager", () => {
-  let mgr: TerminalManager
+describe("TerminalManager (tmux-backed)", () => {
+  let mgr: TerminalManager | undefined
+  const sockets: string[] = []
+  let n = 0
+
+  function makeMgr(): { mgr: TerminalManager; socket: string } {
+    const socket = `muxterm-test-${process.pid}-${n++}`
+    sockets.push(socket)
+    const stateDir = mkdtempSync(join(tmpdir(), "muxterm-test-"))
+    const m = new TerminalManager({ stateDir, socket })
+    return { mgr: m, socket }
+  }
 
   afterEach(() => {
     mgr?.shutdown()
-  })
-
-  it("rejects spawn when pty-helper is missing", () => {
-    mgr = new TerminalManager()
-    // Temporarily override the helper path check by using a non-existent workdir
-    // that would fail even if helper existed. Instead, test the "already open" path.
-    const result = mgr.spawn({
-      deviceName: "dev1",
-      sessionName: "s1",
-      workdir: "/tmp",
-      cols: 80,
-      rows: 24,
-      onData: () => {},
-      onExit: () => {},
-    })
-    // If pty-helper exists (it should in dev), spawn succeeds
-    if (existsSync(PTY_HELPER)) {
-      expect(result.ok).toBe(true)
+    mgr = undefined
+    // Tear down any tmux servers this test spun up so sessions don't leak.
+    for (const s of sockets.splice(0)) {
+      spawnSync("tmux", ["-L", s, "kill-server"], { stdio: "ignore" })
     }
   })
 
-  it("spawns a terminal and receives output", async () => {
-    if (!existsSync(PTY_HELPER)) return
+  it("attaches a terminal whose tmux session outlives the viewer (detach)", async () => {
+    if (!CAN_RUN) return
+    const made = makeMgr(); mgr = made.mgr
 
-    mgr = new TerminalManager()
-    let received = ""
-    let exitCode: number | null = null
+    const r = mgr.attach({ deviceName: "dev1", sessionName: "s1", terminalId: "t1", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
+    expect(r.ok).toBe(true)
+    expect(mgr.has("dev1", "s1", "t1")).toBe(true)
 
-    const exitPromise = new Promise<void>((resolve) => {
-      const result = mgr.spawn({
-        deviceName: "dev1",
-        sessionName: "s1",
-        workdir: "/tmp",
-        cols: 80,
-        rows: 24,
-        onData: (data) => { received += new TextDecoder().decode(data) },
-        onExit: (code) => { exitCode = code; resolve() },
-      })
-      expect(result.ok).toBe(true)
-    })
+    // tmux session comes up shortly after the viewer spawns.
+    await waitFor(() => mgr!.hasSession("s1", "t1"))
+    expect(await mgr.hasSession("s1", "t1")).toBe(true)
 
-    // Give the shell time to start
-    await new Promise((r) => setTimeout(r, 500))
+    // Detach = kill the viewer only. The tmux session must survive.
+    mgr.detach("dev1", "s1", "t1")
+    expect(mgr.has("dev1", "s1", "t1")).toBe(false)
+    expect(await mgr.hasSession("s1", "t1")).toBe(true)
 
-    // Send a command
-    mgr.write("dev1", "s1", new TextEncoder().encode("echo TERMINAL_TEST_OUTPUT\r"))
-
-    // Send exit
-    await new Promise((r) => setTimeout(r, 500))
-    mgr.write("dev1", "s1", new TextEncoder().encode("exit\r"))
-
-    await Promise.race([exitPromise, new Promise((r) => setTimeout(r, 5000))])
-
-    expect(received).toContain("TERMINAL_TEST_OUTPUT")
-  })
-
-  it("rejects duplicate terminal for same device+session", () => {
-    if (!existsSync(PTY_HELPER)) return
-
-    mgr = new TerminalManager()
-    const r1 = mgr.spawn({
-      deviceName: "dev1",
-      sessionName: "s1",
-      workdir: "/tmp",
-      cols: 80,
-      rows: 24,
-      onData: () => {},
-      onExit: () => {},
-    })
-    expect(r1.ok).toBe(true)
-
-    const r2 = mgr.spawn({
-      deviceName: "dev1",
-      sessionName: "s1",
-      workdir: "/tmp",
-      cols: 80,
-      rows: 24,
-      onData: () => {},
-      onExit: () => {},
-    })
-    expect(r2.ok).toBe(false)
-    if (!r2.ok) expect(r2.error).toContain("already open")
-  })
-
-  it("allows different sessions for the same device", () => {
-    if (!existsSync(PTY_HELPER)) return
-
-    mgr = new TerminalManager()
-    const r1 = mgr.spawn({ deviceName: "dev1", sessionName: "s1", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
-    const r2 = mgr.spawn({ deviceName: "dev1", sessionName: "s2", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
-    expect(r1.ok).toBe(true)
+    // Re-attach to the SAME terminal id reuses the surviving session.
+    const r2 = mgr.attach({ deviceName: "dev1", sessionName: "s1", terminalId: "t1", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
     expect(r2.ok).toBe(true)
-    expect(mgr.count()).toBe(2)
+    expect(mgr.has("dev1", "s1", "t1")).toBe(true)
   })
 
-  it("allows more than three terminals per device", () => {
-    if (!existsSync(PTY_HELPER)) return
-
-    mgr = new TerminalManager()
-    for (let i = 0; i < 3; i++) {
-      const r = mgr.spawn({ deviceName: "dev1", sessionName: `s${i}`, workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
-      expect(r.ok).toBe(true)
-    }
-    const r4 = mgr.spawn({ deviceName: "dev1", sessionName: "s3", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
-    expect(r4.ok).toBe(true)
-  })
-
-  it("kill removes terminal", () => {
-    if (!existsSync(PTY_HELPER)) return
-
-    mgr = new TerminalManager()
-    mgr.spawn({ deviceName: "dev1", sessionName: "s1", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
-    expect(mgr.has("dev1", "s1")).toBe(true)
-    mgr.kill("dev1", "s1")
-    expect(mgr.has("dev1", "s1")).toBe(false)
-  })
-
-  it("killAllForSession removes all terminals for that session", () => {
-    if (!existsSync(PTY_HELPER)) return
-
-    mgr = new TerminalManager()
-    mgr.spawn({ deviceName: "dev1", sessionName: "s1", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
-    mgr.spawn({ deviceName: "dev2", sessionName: "s1", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
-    mgr.spawn({ deviceName: "dev1", sessionName: "s2", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
-    expect(mgr.count()).toBe(3)
-    mgr.killAllForSession("s1")
-    expect(mgr.count()).toBe(1)
-    expect(mgr.has("dev1", "s2")).toBe(true)
-  })
-
-  it("resize sends resize command to PTY", async () => {
-    if (!existsSync(PTY_HELPER)) return
-
-    mgr = new TerminalManager()
+  it("relays shell output through tmux", async () => {
+    if (!CAN_RUN) return
+    const made = makeMgr(); mgr = made.mgr
     let received = ""
-    mgr.spawn({
-      deviceName: "dev1",
-      sessionName: "s1",
-      workdir: "/tmp",
-      cols: 80,
-      rows: 24,
-      onData: (data) => { received += new TextDecoder().decode(data) },
-      onExit: () => {},
-    })
-
-    await new Promise((r) => setTimeout(r, 500))
-
-    const resized = mgr.resize("dev1", "s1", 120, 40)
-    expect(resized).toBe(true)
-
-    // Verify stty reports the new size
-    mgr.write("dev1", "s1", new TextEncoder().encode("stty size\r"))
-    await waitFor(() => received.includes("40 120"))
-
-    expect(received).toContain("40 120")
+    mgr.attach({ deviceName: "dev1", sessionName: "s1", terminalId: "t1", workdir: "/tmp", cols: 80, rows: 24, onData: (d) => { received += new TextDecoder().decode(d) }, onExit: () => {} })
+    await waitFor(() => mgr!.hasSession("s1", "t1"))
+    await new Promise((r) => setTimeout(r, 400)) // let the shell prompt settle
+    mgr.write("dev1", "s1", "t1", new TextEncoder().encode("echo TERMINAL_TMUX_OK\n"))
+    await waitFor(() => received.includes("TERMINAL_TMUX_OK"))
+    expect(received).toContain("TERMINAL_TMUX_OK")
   })
 
-  it("shutdown kills all terminals", () => {
-    if (!existsSync(PTY_HELPER)) return
+  it("close destroys the tmux session", async () => {
+    if (!CAN_RUN) return
+    const made = makeMgr(); mgr = made.mgr
+    mgr.attach({ deviceName: "dev1", sessionName: "s1", terminalId: "t1", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
+    await waitFor(() => mgr!.hasSession("s1", "t1"))
 
-    mgr = new TerminalManager()
-    mgr.spawn({ deviceName: "dev1", sessionName: "s1", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
-    mgr.spawn({ deviceName: "dev2", sessionName: "s2", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
-    expect(mgr.count()).toBe(2)
-    mgr.shutdown()
-    expect(mgr.count()).toBe(0)
+    await mgr.close("s1", "t1")
+    expect(mgr.has("dev1", "s1", "t1")).toBe(false)
+    expect(await mgr.hasSession("s1", "t1")).toBe(false)
   })
 
-  it("write returns false for non-existent terminal", () => {
-    mgr = new TerminalManager()
-    expect(mgr.write("dev1", "s1", new TextEncoder().encode("test"))).toBe(false)
+  it("supports multiple terminals per session and lists them", async () => {
+    if (!CAN_RUN) return
+    const made = makeMgr(); mgr = made.mgr
+    mgr.attach({ deviceName: "dev1", sessionName: "s1", terminalId: "t1", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
+    mgr.attach({ deviceName: "dev1", sessionName: "s1", terminalId: "t2", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
+    await waitFor(async () => (await mgr!.listForSession("s1")).length === 2)
+    const list = await mgr.listForSession("s1")
+    expect(list.map((l) => l.id).sort()).toEqual(["t1", "t2"])
   })
 
-  it("resize returns false for non-existent terminal", () => {
-    mgr = new TerminalManager()
-    expect(mgr.resize("dev1", "s1", 80, 24)).toBe(false)
+  it("killAllForSession removes all of a session's terminals", async () => {
+    if (!CAN_RUN) return
+    const made = makeMgr(); mgr = made.mgr
+    mgr.attach({ deviceName: "dev1", sessionName: "s1", terminalId: "t1", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
+    mgr.attach({ deviceName: "dev1", sessionName: "s2", terminalId: "t1", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
+    await waitFor(() => mgr!.hasSession("s1", "t1"))
+    await waitFor(() => mgr!.hasSession("s2", "t1"))
+
+    await mgr.killAllForSession("s1")
+    expect(await mgr.hasSession("s1", "t1")).toBe(false)
+    expect(await mgr.hasSession("s2", "t1")).toBe(true) // other session untouched
+  })
+
+  it("write/resize return false for a non-existent terminal", () => {
+    const made = makeMgr(); mgr = made.mgr
+    expect(mgr.write("dev1", "s1", "t1", new TextEncoder().encode("x"))).toBe(false)
+    expect(mgr.resize("dev1", "s1", "t1", 80, 24)).toBe(false)
   })
 })

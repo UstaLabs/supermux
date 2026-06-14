@@ -14,8 +14,9 @@ export interface UseTerminal {
   onExit: (cb: (code: number) => void) => void
 }
 
-export function useTerminal(sessionName: MaybeRefOrGetter<string>): UseTerminal {
+export function useTerminal(sessionName: MaybeRefOrGetter<string>, terminalId: MaybeRefOrGetter<string>): UseTerminal {
   const sessionId = computed(() => toValue(sessionName))
+  const termId = computed(() => toValue(terminalId))
   const status = ref<TerminalStatus>("disconnected")
 
   let ws: WebSocket | null = null
@@ -30,7 +31,7 @@ export function useTerminal(sessionName: MaybeRefOrGetter<string>): UseTerminal 
     status.value = "connecting"
     const proto = window.location.protocol === "https:" ? "wss" : "ws"
     ws = new WebSocket(
-      `${proto}://${window.location.host}/ws/term?session=${encodeURIComponent(sessionId.value)}`
+      `${proto}://${window.location.host}/ws/term?session=${encodeURIComponent(sessionId.value)}&terminal=${encodeURIComponent(termId.value)}`
     )
     ws.binaryType = "arraybuffer"
 

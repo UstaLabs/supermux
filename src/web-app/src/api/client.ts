@@ -319,4 +319,9 @@ export const api = {
   getUpdateStatus: () => request("GET", "/api/update/status") as Promise<UpdateStatusDTO>,
   runUpdate: () =>
     request("POST", "/api/update/run", {}) as Promise<{ started: boolean } | { error: string; instruction?: string }>,
+  // Web terminals (tmux-backed). Source of truth for the tab set is the broker.
+  listTerminals: (session: string) =>
+    request("GET", `/api/term/list?session=${encodeURIComponent(session)}`) as Promise<{ terminals: Array<{ id: string; createdAt: number }> }>,
+  closeTerminal: (session: string, terminal: string) =>
+    request("POST", "/api/term/close", { session, terminal }) as Promise<{ ok: boolean }>,
 }

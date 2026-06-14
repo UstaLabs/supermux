@@ -33,7 +33,7 @@ import { usePendingFirstMessage } from "@/stores/pendingFirstMessage"
 import { useComposerSubmit } from "@/composables/useComposerSubmit"
 import { useRenameRequest } from "@/composables/useRenameRequest"
 import { api } from "@/api/client"
-import TerminalPane from "@/components/TerminalPane.vue"
+import TerminalPanel from "@/components/TerminalPanel.vue"
 import EditorPane from "@/components/editor/EditorPane.vue"
 import SessionDisplayPanel from "@/components/SessionDisplayPanel.vue"
 
@@ -914,7 +914,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
             class="overflow-hidden flex-1 min-h-0"
             :class="{ 'hidden': !isDesktop && activeTab !== 'terminal' }"
           >
-            <TerminalPane
+            <TerminalPanel
               :session-name="props.id"
               :active="(isDesktop && panels.terminalOpen) || (!isDesktop && activeTab === 'terminal')"
             />
