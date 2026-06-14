@@ -145,6 +145,16 @@ export const useLayout = defineStore("layout", () => {
     panel.chatOpen = !panel.chatOpen
   }
 
+  function selectTab(sessionId: string, tab: ChatPanelTab) {
+    const panel = panelsFor(sessionId)
+    // Open the pane BEFORE setting activeTab so the synchronous blank-screen
+    // guard (watch, flush: "sync") doesn't bounce activeTab back to "chat".
+    if (tab === "terminal") panel.terminalOpen = true
+    else if (tab === "editor") panel.editorOpen = true
+    else if (tab === "display") panel.displayOpen = true
+    panel.activeTab = tab
+  }
+
   function resetSidebar() { state.sidebarWidth = SIDEBAR.default }
   function resetChatSplit() { state.chatSplitPct = CHAT_SPLIT.default }
   function resetEditorTermSplit() { state.editorTermSplitPct = EDITOR_TERM_SPLIT.default }
@@ -154,5 +164,5 @@ export const useLayout = defineStore("layout", () => {
   function showArchivedPage() { state.sidebarPage = "archived" }
   function showSessionsPage() { state.sidebarPage = "sessions" }
 
-  return { state, panelsFor, toggleTerminal, toggleEditor, toggleDisplay, toggleChat, resetSidebar, resetChatSplit, resetEditorTermSplit, resetWorkDisplaySplit, toggleSidebarCollapsed, expandSidebar, showArchivedPage, showSessionsPage }
+  return { state, panelsFor, selectTab, toggleTerminal, toggleEditor, toggleDisplay, toggleChat, resetSidebar, resetChatSplit, resetEditorTermSplit, resetWorkDisplaySplit, toggleSidebarCollapsed, expandSidebar, showArchivedPage, showSessionsPage }
 })
