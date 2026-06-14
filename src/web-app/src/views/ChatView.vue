@@ -39,6 +39,7 @@ import EditorPane from "@/components/editor/EditorPane.vue"
 import SessionDisplayPanel from "@/components/SessionDisplayPanel.vue"
 import TerminalPane from "@/components/TerminalPane.vue"
 import AgentViewToggle from "@/components/AgentViewToggle.vue"
+import PaneSwitcher from "@/components/PaneSwitcher.vue"
 
 import { Conversation, ConversationContent } from "@/components/ai-elements/conversation"
 import { Message, MessageContent } from "@/components/ai-elements/message"
@@ -649,35 +650,6 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
       Archived · Resume to continue
     </div>
 
-    <!-- Mobile tab bar (below header, above content) -->
-    <div
-      v-if="!isDesktop && (panels.terminalOpen || panels.editorOpen || panels.displayOpen)"
-      class="flex border-b border-border bg-[var(--cmux-header)]"
-    >
-      <button
-        class="flex-1 py-2 text-xs font-medium transition border-b-2"
-        :class="activeTab === 'chat' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground'"
-        @click="activeTab = 'chat'"
-      >Chat</button>
-      <button
-        v-if="panels.displayOpen"
-        class="flex-1 py-2 text-xs font-medium transition border-b-2"
-        :class="activeTab === 'display' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground'"
-        @click="activeTab = 'display'"
-      >Display</button>
-      <button
-        v-if="panels.editorOpen"
-        class="flex-1 py-2 text-xs font-medium transition border-b-2"
-        :class="activeTab === 'editor' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground'"
-        @click="activeTab = 'editor'"
-      >Editor</button>
-      <button
-        v-if="panels.terminalOpen"
-        class="flex-1 py-2 text-xs font-medium transition border-b-2"
-        :class="activeTab === 'terminal' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground'"
-        @click="activeTab = 'terminal'"
-      >Terminal</button>
-    </div>
 
     <!-- Content area: split on desktop, tabbed on mobile -->
     <div ref="contentRowRef" class="flex-1 flex overflow-hidden" :class="isDesktop && rightVisible ? 'flex-row' : 'flex-col'">
@@ -980,6 +952,11 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
         </div>
       </div>
     </div>
+    <PaneSwitcher
+      v-if="!isDesktop && !isArchived"
+      :session-id="props.id"
+      mode="bottom-bar"
+    />
     <ModelSwitcher :session-id="props.id" v-model:open="modelSwitcherOpen" />
     <EffortSwitcher :session-id="props.id" v-model:open="effortSwitcherOpen" />
     <KillConfirmDialog
