@@ -241,6 +241,86 @@ test("send() watchdog: a stalled prompt with no activity aborts and surfaces an 
   expect(abortCalls).toContain("sess_1") // the stalled turn was aborted
 })
 
+// --- serialization: a message sent mid-turn must not race the in-flight one ---
+
+/** A client whose prompt() stays pending until released, so a test can overlap
+ * two send()s and observe how many prompts run at once. Each reply echoes its
+ * own input text ("reply:<input>") so replies can be attributed to their turn. */
+function makeGatedClient() {
+  const promptCalls: PromptCall[] = []
+  const gates: Array<() => void> = []
+  let inFlight = 0
+  let maxInFlight = 0
+  const client: OpenCodeClientLike = {
+    session: {
+      async create() { return { data: { id: "sess_1" } } },
+      async update() { return { data: {} } },
+      prompt(o): Promise<{ data?: { parts?: any[] }; error?: unknown }> {
+        const idx = promptCalls.length
+        promptCalls.push({ id: o.path.id, body: o.body })
+        inFlight++; maxInFlight = Math.max(maxInFlight, inFlight)
+        const input = (o.body.parts[0] as unknown as { text: string }).text
+        return new Promise((resolve) => {
+          gates[idx] = () => { inFlight--; resolve({ data: { parts: [{ type: "text", text: `reply:${input}` }] } }) }
+        })
+      },
+      async abort() { return true },
+    },
+    listCommands: async () => [],
+    event: { async subscribe() { return { stream: (async function* () {})() } } },
+  }
+  return { client, promptCalls, release: (i: number) => gates[i]?.(), maxInFlight: () => maxInFlight }
+}
+
+test("send() serializes overlapping turns: one prompt() in flight, each turn keeps its own reply", async () => {
+  const g = makeGatedClient()
+  const adapter = new OpenCodeAdapter({
+    sessionName: "d", workdir: "/x", client: g.client, persistSessionId: async () => {},
+  })
+  await adapter.start()
+  const events = collect(adapter)
+
+  const p1 = adapter.send("A", { chat_id: "web" })
+  const p2 = adapter.send("B", { chat_id: "web" }) // arrives while A is still running
+  await tick()
+
+  // Only turn A is in flight; B is queued behind it.
+  expect(g.promptCalls.length).toBe(1)
+  expect((g.promptCalls[0]!.body.parts[0] as unknown as { text: string }).text).toBe("A")
+
+  g.release(0)            // finish A → B should now start
+  await p1
+  await tick()
+  expect(g.promptCalls.length).toBe(2)
+  expect((g.promptCalls[1]!.body.parts[0] as unknown as { text: string }).text).toBe("B")
+
+  g.release(1)
+  await p2
+
+  expect(g.maxInFlight()).toBe(1) // never two prompts at once
+  const msgs = events.filter((e) => e.kind === "assistant-message") as Extract<AgentEvent, { kind: "assistant-message" }>[]
+  expect(msgs.map((m) => m.text)).toEqual(["reply:A", "reply:B"]) // no clobber, in order
+})
+
+test("send() keeps each queued turn's chat_id (no cross-turn chat_id race)", async () => {
+  const g = makeGatedClient()
+  const adapter = new OpenCodeAdapter({
+    sessionName: "d", workdir: "/x", client: g.client, persistSessionId: async () => {},
+  })
+  await adapter.start()
+  const events = collect(adapter)
+
+  const p1 = adapter.send("A", { chat_id: "chatA" })
+  const p2 = adapter.send("B", { chat_id: "chatB" })
+  await tick()
+  g.release(0); await p1; await tick()
+  g.release(1); await p2
+
+  const msgs = events.filter((e) => e.kind === "assistant-message") as Extract<AgentEvent, { kind: "assistant-message" }>[]
+  expect(msgs.find((m) => m.text === "reply:A")!.chat_id).toBe("chatA")
+  expect(msgs.find((m) => m.text === "reply:B")!.chat_id).toBe("chatB")
+})
+
 test("send() watchdog: turn activity disarms it so a slow turn still completes", async () => {
   const ms = manualStream()
   let resolvePrompt!: (v: { data?: { parts?: any[] }; error?: unknown }) => void
