@@ -47,7 +47,6 @@ const log = makeLogger("channels/web")
 
 const RATE_LIMIT_WINDOW_MS = 5 * 60_000
 const RATE_LIMIT_MAX = 16
-const authFailures = new Map<string, { count: number; firstAt: number }>()
 
 function clientIp(req: Request): string {
   return req.headers.get("cf-connecting-ip")
@@ -55,9 +54,11 @@ function clientIp(req: Request): string {
       ?? "unknown"
 }
 
-export function __resetAuthFailures(): void {
-  authFailures.clear()
-}
+// Auth-failure rate-limit state is now per-WebChannel-instance (see the
+// `authFailures` field on the class), so there is no process-global bucket to
+// clear. Kept as an exported no-op for tests that build a fresh channel per
+// case — each new instance already starts with an empty bucket.
+export function __resetAuthFailures(): void {}
 
 const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/system", "/repos", "/forge"]
 const MAX_CLIENT_LOG_RING = 800
@@ -226,6 +227,11 @@ export class WebChannel implements Channel {
   private displaySockets = new WeakMap<object, import("bun").Socket>()
   private readonly fsWatcher?: FsWatcher
   private readonly clientLogRing: StoredClientLogEntry[] = []
+  // Per-instance auth-failure rate-limit buckets, keyed by client IP. Instance
+  // (not module) scope keeps concurrent channels — e.g. the many WebChannels a
+  // single `bun test` process spins up, all seeing clientIp() === "unknown" —
+  // from sharing one bucket and spuriously rate-limiting each other's requests.
+  private readonly authFailures = new Map<string, { count: number; firstAt: number }>()
 
   constructor(private readonly opts: WebChannelOpts) {
     this.store = new DeviceStore(opts.devicesFile)
@@ -246,9 +252,9 @@ export class WebChannel implements Channel {
   private checkRateLimit(req: Request): boolean {
     const ip = clientIp(req)
     const now = Date.now()
-    const rec = authFailures.get(ip)
+    const rec = this.authFailures.get(ip)
     if (!rec || now - rec.firstAt > RATE_LIMIT_WINDOW_MS) {
-      authFailures.set(ip, { count: 0, firstAt: now })
+      this.authFailures.set(ip, { count: 0, firstAt: now })
       return true
     }
     return rec.count < RATE_LIMIT_MAX
@@ -256,9 +262,9 @@ export class WebChannel implements Channel {
 
   private recordAuthFailure(req: Request): void {
     const ip = clientIp(req)
-    const rec = authFailures.get(ip) ?? { count: 0, firstAt: Date.now() }
+    const rec = this.authFailures.get(ip) ?? { count: 0, firstAt: Date.now() }
     rec.count++
-    authFailures.set(ip, rec)
+    this.authFailures.set(ip, rec)
   }
 
   async start(): Promise<void> {
@@ -334,7 +340,12 @@ export class WebChannel implements Channel {
   async stop(): Promise<void> {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
     this.heartbeatTimer = undefined
-    this.server?.stop()
+    // Force-close active/keep-alive connections (the `true`). A graceful stop
+    // leaves idle keep-alive sockets open, so a stopped channel keeps serving on
+    // them — which on an in-process restart (and across reused ports under
+    // `bun test`) lets a client's pooled connection hit the dead-but-not-closed
+    // old server and read its now-removed state, yielding stale/401 responses.
+    this.server?.stop(true)
   }
 
   async send(action: OutboundAction): Promise<OutboundResult> {
