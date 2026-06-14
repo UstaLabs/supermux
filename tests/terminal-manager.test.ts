@@ -1,117 +1,164 @@
-import { describe, it, expect, afterEach } from "bun:test"
-import { spawnSync } from "child_process"
+import { describe, it, expect } from "bun:test"
 import { mkdtempSync } from "fs"
 import { tmpdir } from "os"
-import { resolve as resolvePath, join } from "path"
-import { existsSync } from "fs"
-import { TerminalManager } from "../src/core/terminal/manager"
+import { join } from "path"
+import { TerminalManager, type TermProc, type SpawnFn } from "../src/core/terminal/manager"
+import type { TmuxRunner } from "../src/core/terminal/tmux-term"
 
-const PTY_HELPER = resolvePath(import.meta.dirname, "../src/core/terminal/pty-helper")
-const TMUX = Bun.which("tmux")
-const CAN_RUN = !!TMUX && existsSync(PTY_HELPER)
+// Hermetic: a fake subprocess + a fake tmux "world" sharing in-memory state, so
+// these tests spawn NOTHING real (no tmux, no shell, no pty-helper) and can't
+// hang the runner on live process handles. Real tmux persistence is covered by
+// the manual smoke test / e2e, not the unit suite.
 
-async function waitFor(fn: () => boolean | Promise<boolean>, timeoutMs = 4000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (await fn()) return
-    await new Promise((r) => setTimeout(r, 50))
+const STATE = mkdtempSync(join(tmpdir(), "muxterm-test-"))
+const flush = () => new Promise((r) => setTimeout(r, 0))
+
+interface FakeProc extends TermProc {
+  writes: Uint8Array[]
+  emit(s: string): void
+  end(code: number): void
+}
+
+function makeFakeProc(): FakeProc {
+  let ctrl!: ReadableStreamDefaultController<Uint8Array>
+  const stdout = new ReadableStream<Uint8Array>({ start(c) { ctrl = c } })
+  let resolve!: (n: number) => void
+  const exited = new Promise<number>((r) => { resolve = r })
+  let done = false
+  const finish = (code: number) => { if (done) return; done = true; try { ctrl.close() } catch {} ; resolve(code) }
+  const writes: Uint8Array[] = []
+  return {
+    pid: 4242,
+    writes,
+    stdin: { write: (d) => { writes.push(typeof d === "string" ? new TextEncoder().encode(d) : d) } },
+    stdout,
+    exited,
+    kill: () => finish(143),
+    emit: (s) => { try { ctrl.enqueue(new TextEncoder().encode(s)) } catch {} },
+    end: (code) => finish(code),
   }
 }
 
-describe("TerminalManager (tmux-backed)", () => {
-  let mgr: TerminalManager | undefined
-  const sockets: string[] = []
-  let n = 0
-
-  function makeMgr(): { mgr: TerminalManager; socket: string } {
-    const socket = `muxterm-test-${process.pid}-${n++}`
-    sockets.push(socket)
-    const stateDir = mkdtempSync(join(tmpdir(), "muxterm-test-"))
-    const m = new TerminalManager({ stateDir, socket })
-    return { mgr: m, socket }
-  }
-
-  afterEach(() => {
-    mgr?.shutdown()
-    mgr = undefined
-    // Tear down any tmux servers this test spun up so sessions don't leak.
-    for (const s of sockets.splice(0)) {
-      spawnSync("tmux", ["-L", s, "kill-server"], { stdio: "ignore" })
+/** In-memory stand-in for the muxterm tmux server: the fake spawn "creates" a
+ * session (mirroring `tmux new-session -A`) and the fake runner queries it. */
+function fakeTmuxWorld() {
+  const sessions = new Map<string, number>()
+  const procs: FakeProc[] = []
+  let clock = 100
+  const run: TmuxRunner = async (args) => {
+    const cmd = args[0]
+    const targetOf = () => args[args.indexOf("-t") + 1] ?? ""
+    if (cmd === "list-sessions") {
+      const stdout = [...sessions].map(([n, c]) => `${n}\t${c}`).join("\n")
+      return { code: sessions.size ? 0 : 1, stdout, stderr: sessions.size ? "" : "no server running" }
     }
+    if (cmd === "has-session") return { code: sessions.has(targetOf()) ? 0 : 1, stdout: "", stderr: "" }
+    if (cmd === "kill-session") { sessions.delete(targetOf()); return { code: 0, stdout: "", stderr: "" } }
+    return { code: 0, stdout: "", stderr: "" }
+  }
+  const spawn: SpawnFn = (cmd) => {
+    if (cmd.includes("new-session")) {
+      const name = cmd[cmd.indexOf("-s") + 1]!
+      if (!sessions.has(name)) sessions.set(name, clock++)
+    }
+    const p = makeFakeProc()
+    procs.push(p)
+    return p
+  }
+  return { sessions, procs, run, spawn }
+}
+
+function makeMgr(world = fakeTmuxWorld()) {
+  const mgr = new TerminalManager({ stateDir: STATE, socket: "test", run: world.run, spawn: world.spawn })
+  return { mgr, world }
+}
+
+const baseAttach = { workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} }
+
+describe("TerminalManager (hermetic)", () => {
+  it("attach creates a tmux session; detach keeps it; re-attach reuses it", async () => {
+    const { mgr } = makeMgr()
+    expect(mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach }).ok).toBe(true)
+    expect(mgr.has("d", "s", "t1")).toBe(true)
+    expect(await mgr.hasSession("s", "t1")).toBe(true)
+
+    mgr.detach("d", "s", "t1")
+    expect(mgr.has("d", "s", "t1")).toBe(false)
+    expect(await mgr.hasSession("s", "t1")).toBe(true) // ← persists across detach
+
+    expect(mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach }).ok).toBe(true)
+    expect(mgr.has("d", "s", "t1")).toBe(true)
   })
 
-  it("attaches a terminal whose tmux session outlives the viewer (detach)", async () => {
-    if (!CAN_RUN) return
-    const made = makeMgr(); mgr = made.mgr
-
-    const r = mgr.attach({ deviceName: "dev1", sessionName: "s1", terminalId: "t1", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
-    expect(r.ok).toBe(true)
-    expect(mgr.has("dev1", "s1", "t1")).toBe(true)
-
-    // tmux session comes up shortly after the viewer spawns.
-    await waitFor(() => mgr!.hasSession("s1", "t1"))
-    expect(await mgr.hasSession("s1", "t1")).toBe(true)
-
-    // Detach = kill the viewer only. The tmux session must survive.
-    mgr.detach("dev1", "s1", "t1")
-    expect(mgr.has("dev1", "s1", "t1")).toBe(false)
-    expect(await mgr.hasSession("s1", "t1")).toBe(true)
-
-    // Re-attach to the SAME terminal id reuses the surviving session.
-    const r2 = mgr.attach({ deviceName: "dev1", sessionName: "s1", terminalId: "t1", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
-    expect(r2.ok).toBe(true)
-    expect(mgr.has("dev1", "s1", "t1")).toBe(true)
+  it("close destroys the tmux session and viewer", async () => {
+    const { mgr } = makeMgr()
+    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach })
+    await mgr.close("s", "t1")
+    expect(mgr.has("d", "s", "t1")).toBe(false)
+    expect(await mgr.hasSession("s", "t1")).toBe(false)
   })
 
-  it("relays shell output through tmux", async () => {
-    if (!CAN_RUN) return
-    const made = makeMgr(); mgr = made.mgr
-    let received = ""
-    mgr.attach({ deviceName: "dev1", sessionName: "s1", terminalId: "t1", workdir: "/tmp", cols: 80, rows: 24, onData: (d) => { received += new TextDecoder().decode(d) }, onExit: () => {} })
-    await waitFor(() => mgr!.hasSession("s1", "t1"))
-    await new Promise((r) => setTimeout(r, 400)) // let the shell prompt settle
-    mgr.write("dev1", "s1", "t1", new TextEncoder().encode("echo TERMINAL_TMUX_OK\n"))
-    await waitFor(() => received.includes("TERMINAL_TMUX_OK"))
-    expect(received).toContain("TERMINAL_TMUX_OK")
+  it("supports multiple terminals per session and lists them sorted", async () => {
+    const { mgr } = makeMgr()
+    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach })
+    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t2", ...baseAttach })
+    const list = await mgr.listForSession("s")
+    expect(list.map((l) => l.id)).toEqual(["t1", "t2"])
   })
 
-  it("close destroys the tmux session", async () => {
-    if (!CAN_RUN) return
-    const made = makeMgr(); mgr = made.mgr
-    mgr.attach({ deviceName: "dev1", sessionName: "s1", terminalId: "t1", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
-    await waitFor(() => mgr!.hasSession("s1", "t1"))
-
-    await mgr.close("s1", "t1")
-    expect(mgr.has("dev1", "s1", "t1")).toBe(false)
-    expect(await mgr.hasSession("s1", "t1")).toBe(false)
-  })
-
-  it("supports multiple terminals per session and lists them", async () => {
-    if (!CAN_RUN) return
-    const made = makeMgr(); mgr = made.mgr
-    mgr.attach({ deviceName: "dev1", sessionName: "s1", terminalId: "t1", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
-    mgr.attach({ deviceName: "dev1", sessionName: "s1", terminalId: "t2", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
-    await waitFor(async () => (await mgr!.listForSession("s1")).length === 2)
-    const list = await mgr.listForSession("s1")
-    expect(list.map((l) => l.id).sort()).toEqual(["t1", "t2"])
-  })
-
-  it("killAllForSession removes all of a session's terminals", async () => {
-    if (!CAN_RUN) return
-    const made = makeMgr(); mgr = made.mgr
-    mgr.attach({ deviceName: "dev1", sessionName: "s1", terminalId: "t1", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
-    mgr.attach({ deviceName: "dev1", sessionName: "s2", terminalId: "t1", workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
-    await waitFor(() => mgr!.hasSession("s1", "t1"))
-    await waitFor(() => mgr!.hasSession("s2", "t1"))
-
+  it("killAllForSession clears one session, leaves others", async () => {
+    const { mgr } = makeMgr()
+    mgr.attach({ deviceName: "d", sessionName: "s1", terminalId: "t1", ...baseAttach })
+    mgr.attach({ deviceName: "d", sessionName: "s2", terminalId: "t1", ...baseAttach })
     await mgr.killAllForSession("s1")
     expect(await mgr.hasSession("s1", "t1")).toBe(false)
-    expect(await mgr.hasSession("s2", "t1")).toBe(true) // other session untouched
+    expect(await mgr.hasSession("s2", "t1")).toBe(true)
   })
 
-  it("write/resize return false for a non-existent terminal", () => {
-    const made = makeMgr(); mgr = made.mgr
-    expect(mgr.write("dev1", "s1", "t1", new TextEncoder().encode("x"))).toBe(false)
-    expect(mgr.resize("dev1", "s1", "t1", 80, 24)).toBe(false)
+  it("a natural exit fires onExit; an intentional detach does NOT", async () => {
+    const { mgr, world } = makeMgr()
+    const naturalExits: number[] = []
+    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach, onExit: (c) => { naturalExits.push(c) } })
+    world.procs[0]!.end(0) // shell/tmux ended on its own
+    await flush()
+    expect(naturalExits).toEqual([0])
+
+    const detachExits: number[] = []
+    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t2", ...baseAttach, onExit: (c) => { detachExits.push(c) } })
+    mgr.detach("d", "s", "t2")
+    await flush()
+    expect(detachExits).toEqual([]) // detach is intentional → no exit frame
+  })
+
+  it("relays viewer output to onData", async () => {
+    const { mgr, world } = makeMgr()
+    let received = ""
+    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach, onData: (d) => { received += new TextDecoder().decode(d) } })
+    world.procs[0]!.emit("hello world")
+    await flush()
+    expect(received).toContain("hello world")
+  })
+
+  it("write/resize target the viewer's stdin and reject unknown terminals", () => {
+    const { mgr, world } = makeMgr()
+    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach })
+    expect(mgr.write("d", "s", "t1", new TextEncoder().encode("ls\n"))).toBe(true)
+    expect(mgr.resize("d", "s", "t1", 120, 40)).toBe(true)
+    // stdin saw the input plus the NUL-prefixed resize escape
+    const all = world.procs[0]!.writes.map((w) => new TextDecoder().decode(w)).join("")
+    expect(all).toContain("ls\n")
+    expect(all).toContain("R120:40")
+    expect(mgr.write("d", "s", "nope", new TextEncoder().encode("x"))).toBe(false)
+    expect(mgr.resize("d", "s", "nope", 80, 24)).toBe(false)
+  })
+
+  it("shutdown detaches all viewers without destroying tmux sessions", async () => {
+    const { mgr } = makeMgr()
+    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach })
+    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t2", ...baseAttach })
+    expect(mgr.count()).toBe(2)
+    mgr.shutdown()
+    expect(mgr.count()).toBe(0)
+    expect(await mgr.hasSession("s", "t1")).toBe(true) // tmux sessions survive a broker stop
   })
 })

@@ -7,6 +7,20 @@ import { createTermTmux, type TmuxRunner, type TerminalSummary } from "./tmux-te
 
 const log = makeLogger("terminal")
 
+/** Minimal subprocess surface the manager needs (real impl: Bun.spawn). Kept
+ * narrow so tests can inject a fake and never spawn real tmux/shell processes. */
+export interface TermProc {
+  pid?: number
+  stdin: { write(data: Uint8Array | string): void }
+  stdout: ReadableStream<Uint8Array>
+  exited: Promise<number>
+  kill(signal?: number): void
+}
+export type SpawnFn = (cmd: string[]) => TermProc
+
+const defaultSpawn: SpawnFn = (cmd) =>
+  Bun.spawn(cmd, { stdin: "pipe", stdout: "pipe", stderr: "pipe" }) as unknown as TermProc
+
 // Config for the dedicated web-terminal tmux server. Sourced via `-f` when the
 // server starts, so history-limit applies to the very first pane. mouse/status
 // also take effect live on later invocations.
@@ -36,7 +50,7 @@ export interface TerminalInstance {
   deviceName: string
   sessionName: string
   terminalId: string
-  proc: ReturnType<typeof Bun.spawn>
+  proc: TermProc
   /** true once we kill the viewer on purpose (detach/close) — suppresses onExit. */
   intentional: boolean
   createdAt: number
@@ -55,11 +69,13 @@ export interface TerminalInstance {
 export class TerminalManager {
   private terminals = new Map<string, TerminalInstance>()
   private term: ReturnType<typeof createTermTmux>
+  private spawnFn: SpawnFn
 
-  constructor(opts?: { stateDir?: string; socket?: string; run?: TmuxRunner }) {
+  constructor(opts?: { stateDir?: string; socket?: string; run?: TmuxRunner; spawn?: SpawnFn }) {
     const stateDir = opts?.stateDir ?? STATE_DIR
     const confPath = ensureConf(stateDir)
     this.term = createTermTmux({ socket: opts?.socket, confPath, run: opts?.run })
+    this.spawnFn = opts?.spawn ?? defaultSpawn
   }
 
   private static key(device: string, session: string, terminal: string): string {
@@ -91,7 +107,8 @@ export class TerminalManager {
     }
 
     const ptyHelper = ptyHelperPath(STATE_DIR)
-    if (!existsSync(ptyHelper)) {
+    // Real spawns need the helper on disk; an injected (test) spawn does not.
+    if (this.spawnFn === defaultSpawn && !existsSync(ptyHelper)) {
       log.error("pty_helper_missing", { path: ptyHelper })
       return { ok: false, error: "pty-helper binary not found" }
     }
@@ -104,10 +121,7 @@ export class TerminalManager {
       rows: opts.rows,
     })
 
-    const proc = Bun.spawn(
-      [ptyHelper, String(opts.cols), String(opts.rows), opts.workdir, ...argv],
-      { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
-    )
+    const proc = this.spawnFn([ptyHelper, String(opts.cols), String(opts.rows), opts.workdir, ...argv])
 
     const inst: TerminalInstance = {
       key,
@@ -165,8 +179,7 @@ export class TerminalManager {
     if (!inst) return false
     inst.lastInputAt = Date.now()
     try {
-      const stdin = inst.proc.stdin as import("bun").FileSink
-      stdin.write(data)
+      inst.proc.stdin.write(data)
       return true
     } catch {
       return false
@@ -179,8 +192,7 @@ export class TerminalManager {
     inst.lastInputAt = Date.now()
     const cmd = `\x00R${cols}:${rows}\n`
     try {
-      const stdin = inst.proc.stdin as import("bun").FileSink
-      stdin.write(new TextEncoder().encode(cmd))
+      inst.proc.stdin.write(new TextEncoder().encode(cmd))
       return true
     } catch {
       return false
