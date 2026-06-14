@@ -99,24 +99,14 @@ onMounted(() => {
     terminal.sendInput(encoder.encode(data))
   })
 
-  // Handle paste via Ctrl+V / mobile paste menu
-  term.attachCustomKeyEventHandler((e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === "v" && e.type === "keydown") {
-      navigator.clipboard.readText().then((text) => {
-        if (text) term?.paste(text)
-      }).catch(() => {})
-      return false
-    }
-    return true
-  })
-
-  containerRef.value.addEventListener("paste", (e: ClipboardEvent) => {
-    const text = e.clipboardData?.getData("text")
-    if (text) {
-      term?.paste(text)
-      e.preventDefault()
-    }
-  })
+  // Paste is handled entirely by xterm's built-in clipboard support: Ctrl/Cmd+V,
+  // right-click, and the OS paste menu all fire a native `paste` event that xterm
+  // turns into a single term.paste() → onData above.
+  // Do NOT add a custom Ctrl+V key handler or a `paste` DOM listener here: xterm
+  // already pastes natively, so any extra path duplicates every paste (and
+  // navigator.clipboard.readText() also needs a permission grant and is missing
+  // in Firefox). For touch devices, the explicit paste button below is the
+  // reliable fallback.
 
   // Pipe WS binary → terminal
   terminal.onData((data: Uint8Array) => {
