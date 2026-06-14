@@ -753,7 +753,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
         <div
           v-if="!isArchived"
           class="px-3 pt-3 bg-[var(--cmux-chat)]"
-          style="padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem)"
+          :style="{ paddingBottom: isDesktop ? 'calc(env(safe-area-inset-bottom, 0px) + 0.5rem)' : '0.5rem' }"
         >
           <PromptInput
             class="relative"
@@ -821,7 +821,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
           <div
             v-if="isClaude"
             class="flex justify-center px-3 py-2 bg-[var(--cmux-chat)] border-t border-border"
-            style="padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem)"
+            :style="{ paddingBottom: isDesktop ? 'calc(env(safe-area-inset-bottom, 0px) + 0.5rem)' : '0.5rem' }"
           >
             <AgentViewToggle :session-id="props.id" />
           </div>
