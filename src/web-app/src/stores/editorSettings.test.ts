@@ -70,3 +70,14 @@ test("fontSize falls back to default when stored value is invalid", () => {
   expect(settings.state.fontSize).toBe(13)
   expect(settings.state.lineWrap).toBe(false)
 })
+
+test("treeWidth defaults to 192, clamps, and persists", async () => {
+  const settings = useEditorSettings()
+  expect(settings.state.treeWidth).toBe(192)
+  settings.setTreeWidth(9999)
+  expect(settings.state.treeWidth).toBe(600)
+  settings.setTreeWidth(260)
+  await nextTick()
+  setActivePinia(createPinia())
+  expect(useEditorSettings().state.treeWidth).toBe(260)
+})

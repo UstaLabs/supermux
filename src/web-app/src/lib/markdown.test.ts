@@ -1,6 +1,19 @@
 import { describe, expect, it } from "bun:test"
 import { marked } from "marked"
-import { injectCodeCopyButtons, linkifyFilePaths, linkifyMarkdownFileAnchors } from "./markdown"
+import { injectCodeCopyButtons, isMarkdownPath, linkifyFilePaths, linkifyMarkdownFileAnchors, wrapTables } from "./markdown"
+
+describe("isMarkdownPath", () => {
+  it("matches markdown extensions case-insensitively", () => {
+    for (const p of ["README.md", "/docs/Guide.MARKDOWN", "notes.mdown", "a.mkd", "x.mdx"]) {
+      expect(isMarkdownPath(p)).toBe(true)
+    }
+  })
+  it("rejects non-markdown files", () => {
+    for (const p of ["main.ts", "style.css", "mdfile", "readme.md.bak", "a.md.ts"]) {
+      expect(isMarkdownPath(p)).toBe(false)
+    }
+  })
+})
 
 function fileLink(
   display: string,
@@ -135,6 +148,34 @@ describe("injectCodeCopyButtons", () => {
     const html = "<pre><code>&lt;/pre&gt; is text\n</code></pre>"
     const out = injectCodeCopyButtons(html)
     expect(out.match(/code-copy-btn/g)?.length).toBe(1)
+  })
+})
+
+describe("wrapTables", () => {
+  it("wraps a table in a scrollable container, preserving it verbatim", () => {
+    const html = "<table><thead><tr><th>a</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table>"
+    const out = wrapTables(html)
+    expect(out).toContain('<div class="md-table-wrap">')
+    expect(out).toContain(html)
+    expect(out.indexOf('class="md-table-wrap"')).toBeLessThan(out.indexOf("<table>"))
+  })
+
+  it("wraps every table", () => {
+    const html = "<table><tr><td>1</td></tr></table>\n<table><tr><td>2</td></tr></table>"
+    const out = wrapTables(html)
+    expect(out.match(/class="md-table-wrap"/g)?.length).toBe(2)
+  })
+
+  it("leaves non-table HTML untouched", () => {
+    const html = "<p>Just a <code>paragraph</code>.</p>"
+    expect(wrapTables(html)).toBe(html)
+  })
+
+  it("does not match escaped </table> appearing as cell content", () => {
+    // marked escapes < and > inside cells, so a literal </table> can't close the table early
+    const html = "<table><tr><td>&lt;/table&gt; is text</td></tr></table>"
+    const out = wrapTables(html)
+    expect(out.match(/class="md-table-wrap"/g)?.length).toBe(1)
   })
 })
 

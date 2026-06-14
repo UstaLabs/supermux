@@ -21,7 +21,7 @@ beforeEach(async () => {
   runMigrations(db, join(import.meta.dir, "../src/core/storage/migrations"))
   store = new FileStore(db, join(tmpDir, "files"))
 
-  port = 38800 + Math.floor(Math.random() * 500)
+  port = 0
   const devicesFile = join(tmpDir, "devices.json")
   const ds = new DeviceStore(devicesFile)
   const minted = ds.mint("iphone")
@@ -38,6 +38,12 @@ beforeEach(async () => {
     fileStore: store,
   } as any)
   await channel.start()
+  // OS-assigned unique port, read back post-start. A fixed/random port collides
+  // across the ~1600-test suite (birthday paradox); a collision lets Bun's global
+  // fetch keep-alive pool reuse a socket left open by an already-stopped channel
+  // whose tmpDir is deleted → that dead handler reads an empty device list →
+  // spurious 401. Unique ports remove the collision precondition entirely.
+  port = channel.boundPort
 })
 afterEach(async () => {
   await channel.stop()
