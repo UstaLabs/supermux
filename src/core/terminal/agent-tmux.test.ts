@@ -13,6 +13,10 @@ describe("agent-tmux naming", () => {
     expect(splitTarget("mux:sess-1")).toEqual({ session: "mux", window: "sess-1" })
     expect(splitTarget("mux:a:b")).toEqual({ session: "mux", window: "a:b" })
   })
+
+  test("splitTarget with no colon yields an empty window", () => {
+    expect(splitTarget("baresession")).toEqual({ session: "baresession", window: "" })
+  })
 })
 
 describe("agent-tmux attachArgv", () => {

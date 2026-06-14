@@ -79,5 +79,5 @@ export function createAgentTmux(opts: { run?: TmuxRunner } = {}) {
     return r.code === 0
   }
 
-  return { run, attachArgv, killViewer, hasAgentWindow }
+  return { attachArgv, killViewer, hasAgentWindow }
 }
