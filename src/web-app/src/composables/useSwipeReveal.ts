@@ -8,6 +8,52 @@ export interface SwipeRevealOptions {
   velocityThreshold?: number
 }
 
+export type SwipeTargetState = "idle" | "open-left" | "open-right"
+
+export interface SwipeGeometry {
+  leftWidth: number
+  rightWidth: number
+  threshold: number
+  velocityThreshold: number
+}
+
+/**
+ * Decide where a swipe should settle once the finger lifts.
+ *
+ * `offset` is the cumulative horizontal translate of the row content (px):
+ * positive reveals the left-hand buttons, negative reveals the right-hand
+ * button. `velocity` is SIGNED px/ms (positive = finger moving right).
+ *
+ * A flick faster than `velocityThreshold` wins in its own direction. That is
+ * what lets a swipe back toward centre CLOSE an already-open row instead of
+ * flinging the opposite side open. Without a decisive flick, the row settles by
+ * distance: it only holds a side open once dragged past `threshold` of that
+ * side's width, so a partial drag back to centre closes.
+ */
+export function resolveSwipeTarget(
+  offset: number,
+  velocity: number,
+  geo: SwipeGeometry,
+): { target: number; state: SwipeTargetState } {
+  const { leftWidth, rightWidth, threshold, velocityThreshold } = geo
+
+  const settle = (target: number): { target: number; state: SwipeTargetState } => ({
+    target,
+    state: target > 0 ? "open-right" : target < 0 ? "open-left" : "idle",
+  })
+
+  // Decisive flick: snap in the direction of travel. From a closed row this
+  // opens the side being swiped toward; from a row open the other way it falls
+  // through to 0 and closes.
+  if (velocity >= velocityThreshold) return settle(offset >= 0 ? leftWidth : 0)
+  if (velocity <= -velocityThreshold) return settle(offset <= 0 ? -rightWidth : 0)
+
+  // Slow release: hold a side open only once dragged past its threshold.
+  if (offset > leftWidth * threshold) return settle(leftWidth)
+  if (offset < -rightWidth * threshold) return settle(-rightWidth)
+  return settle(0)
+}
+
 export function useSwipeReveal(
   el: Ref<HTMLElement | null>,
   options: SwipeRevealOptions = {},
@@ -16,7 +62,9 @@ export function useSwipeReveal(
     leftWidth = 140,
     rightWidth = 80,
     threshold = 0.3,
-    velocityThreshold = 0.5,
+    // Flick speed in px/ms (~300 px/s). A deliberate swipe clears this easily,
+    // so swiping back toward centre reliably closes the row.
+    velocityThreshold = 0.3,
   } = options
 
   const offset = ref(0)
@@ -26,6 +74,7 @@ export function useSwipeReveal(
   let startX = 0
   let startY = 0
   let startTime = 0
+  let baseOffset = 0
   let committed = false
   let pointerId: number | null = null
 
@@ -62,6 +111,9 @@ export function useSwipeReveal(
     startX = e.clientX
     startY = e.clientY
     startTime = Date.now()
+    // Resume from wherever the row currently rests so an open row drags
+    // continuously back toward centre instead of jumping.
+    baseOffset = offset.value
     committed = false
     pointerId = e.pointerId
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
@@ -85,7 +137,7 @@ export function useSwipeReveal(
 
     if (committed) {
       e.preventDefault()
-      offset.value = clamp(dx)
+      offset.value = clamp(baseOffset + dx)
       const content = el.value?.querySelector<HTMLElement>("[data-swipe-content]")
       if (content) {
         content.style.transition = ""
@@ -101,21 +153,17 @@ export function useSwipeReveal(
     if (!committed) return
 
     const dx = e.clientX - startX
-    const dt = (Date.now() - startTime) / 1000
-    const velocity = Math.abs(dx) / dt
-    const width = el.value?.offsetWidth ?? 300
-    const ratio = Math.abs(offset.value) / width
+    const dtMs = Math.max(Date.now() - startTime, 1)
+    const velocity = dx / dtMs // signed px/ms
 
-    if (offset.value < 0 && (ratio > threshold || velocity > velocityThreshold)) {
-      state.value = "open-left"
-      snapTo(-rightWidth)
-    } else if (offset.value > 0 && (ratio > threshold || velocity > velocityThreshold)) {
-      state.value = "open-right"
-      snapTo(leftWidth)
-    } else {
-      state.value = "idle"
-      snapTo(0)
-    }
+    const { target, state: next } = resolveSwipeTarget(offset.value, velocity, {
+      leftWidth,
+      rightWidth,
+      threshold,
+      velocityThreshold,
+    })
+    state.value = next
+    snapTo(target)
   }
 
   function attach(element: HTMLElement) {
