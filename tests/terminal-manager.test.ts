@@ -161,4 +161,39 @@ describe("TerminalManager (hermetic)", () => {
     expect(mgr.count()).toBe(0)
     expect(await mgr.hasSession("s", "t1")).toBe(true) // tmux sessions survive a broker stop
   })
+
+  it("agent kind: attach builds a grouped-viewer argv; detach kills the viewer, not the agent", async () => {
+    const { viewerSessionName } = await import("../src/core/terminal/agent-tmux")
+    const spawnedArgs: string[][] = []
+    const spawn = (cmd: string[]): TermProc => { spawnedArgs.push(cmd); return makeFakeProc() }
+    const agentCalls: string[][] = []
+    const mgr = new TerminalManager({
+      stateDir: STATE,
+      socket: "test",
+      run: async () => ({ code: 0, stdout: "", stderr: "" }),
+      spawn,
+      agentRun: async (a) => { agentCalls.push(a); return { code: 0, stdout: "", stderr: "" } },
+    })
+
+    const r = mgr.attach({
+      deviceName: "d", sessionName: "s", terminalId: "agent",
+      ...baseAttach, kind: "agent", agentTarget: "mux:s",
+    })
+    expect(r.ok).toBe(true)
+
+    // the spawned argv is an `sh -c` that builds the grouped viewer + attaches
+    const argv = spawnedArgs.at(-1)!
+    expect(argv).toContain("sh")
+    const script = argv[argv.indexOf("sh") + 2]!
+    expect(script).toContain("new-session -d")
+    expect(script).toContain("exec tmux attach")
+    expect(agentCalls.flat()).not.toContain("kill-session")
+
+    mgr.detach("d", "s", "agent")
+    await flush()
+    const kills = agentCalls.filter((c) => c[0] === "kill-session")
+    expect(kills.length).toBe(1)
+    expect(kills[0]![2]).toBe(viewerSessionName("d", "mux:s"))
+    expect(kills.flat()).not.toContain("mux:s")
+  })
 })

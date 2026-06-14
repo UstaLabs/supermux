@@ -4,6 +4,7 @@ import { join } from "path"
 import { STATE_DIR } from "../../shared/paths"
 import { ptyHelperPath } from "../runtime-assets"
 import { createTermTmux, type TmuxRunner, type TerminalSummary } from "./tmux-term"
+import { createAgentTmux, attachArgv as agentAttachArgv } from "./agent-tmux"
 
 const log = makeLogger("terminal")
 
@@ -50,6 +51,8 @@ export interface TerminalInstance {
   deviceName: string
   sessionName: string
   terminalId: string
+  kind: "scratch" | "agent"
+  agentTarget?: string
   proc: TermProc
   /** true once we kill the viewer on purpose (detach/close) — suppresses onExit. */
   intentional: boolean
@@ -69,12 +72,14 @@ export interface TerminalInstance {
 export class TerminalManager {
   private terminals = new Map<string, TerminalInstance>()
   private term: ReturnType<typeof createTermTmux>
+  private agentTerm: ReturnType<typeof createAgentTmux>
   private spawnFn: SpawnFn
 
-  constructor(opts?: { stateDir?: string; socket?: string; run?: TmuxRunner; spawn?: SpawnFn }) {
+  constructor(opts?: { stateDir?: string; socket?: string; run?: TmuxRunner; agentRun?: TmuxRunner; spawn?: SpawnFn }) {
     const stateDir = opts?.stateDir ?? STATE_DIR
     const confPath = ensureConf(stateDir)
     this.term = createTermTmux({ socket: opts?.socket, confPath, run: opts?.run })
+    this.agentTerm = createAgentTmux({ run: opts?.agentRun })
     this.spawnFn = opts?.spawn ?? defaultSpawn
   }
 
@@ -95,6 +100,8 @@ export class TerminalManager {
     rows: number
     onData: (data: Uint8Array) => void
     onExit: (code: number) => void
+    kind?: "scratch" | "agent"
+    agentTarget?: string
   }): { ok: true } | { ok: false; error: string } {
     const key = TerminalManager.key(opts.deviceName, opts.sessionName, opts.terminalId)
 
@@ -113,13 +120,16 @@ export class TerminalManager {
       return { ok: false, error: "pty-helper binary not found" }
     }
 
-    const argv = this.term.attachArgv({
-      agentSession: opts.sessionName,
-      terminalId: opts.terminalId,
-      workdir: opts.workdir,
-      cols: opts.cols,
-      rows: opts.rows,
-    })
+    const kind = opts.kind ?? "scratch"
+    const argv = kind === "agent"
+      ? agentAttachArgv({ device: opts.deviceName, agentTarget: opts.agentTarget! })
+      : this.term.attachArgv({
+          agentSession: opts.sessionName,
+          terminalId: opts.terminalId,
+          workdir: opts.workdir,
+          cols: opts.cols,
+          rows: opts.rows,
+        })
 
     const proc = this.spawnFn([ptyHelper, String(opts.cols), String(opts.rows), opts.workdir, ...argv])
 
@@ -128,6 +138,8 @@ export class TerminalManager {
       deviceName: opts.deviceName,
       sessionName: opts.sessionName,
       terminalId: opts.terminalId,
+      kind,
+      agentTarget: opts.agentTarget,
       proc,
       intentional: false,
       createdAt: Date.now(),
@@ -208,6 +220,11 @@ export class TerminalManager {
     inst.intentional = true
     this.terminals.delete(key)
     try { inst.proc.kill() } catch {}
+    // Agent terminals: also destroy the throwaway grouped viewer session (the
+    // agent window itself always survives).
+    if (inst.kind === "agent" && inst.agentTarget) {
+      void this.agentTerm.killViewer(deviceName, inst.agentTarget)
+    }
   }
 
   /** Permanently destroy a terminal: kill any viewers AND the tmux session. */
@@ -248,6 +265,9 @@ export class TerminalManager {
         inst.intentional = true
         this.terminals.delete(key)
         try { inst.proc.kill() } catch {}
+        if (inst.kind === "agent" && inst.agentTarget) {
+          void this.agentTerm.killViewer(deviceName, inst.agentTarget)
+        }
       }
     }
   }
