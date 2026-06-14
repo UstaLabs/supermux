@@ -37,6 +37,7 @@ import { api } from "@/api/client"
 import TerminalPanel from "@/components/TerminalPanel.vue"
 import EditorPane from "@/components/editor/EditorPane.vue"
 import SessionDisplayPanel from "@/components/SessionDisplayPanel.vue"
+import TerminalPane from "@/components/TerminalPane.vue"
 
 import { Conversation, ConversationContent } from "@/components/ai-elements/conversation"
 import { Message, MessageContent } from "@/components/ai-elements/message"
@@ -195,6 +196,11 @@ const panels = computed(() => layout.panelsFor(props.id))
 const activeTab = computed({
   get: () => panels.value.activeTab,
   set: (tab) => { panels.value.activeTab = tab },
+})
+const isClaude = computed(() => session.value?.agent === "claude")
+const mainView = computed<"chat" | "terminal">({
+  get: () => (isClaude.value && !isArchived.value ? panels.value.mainView : "chat"),
+  set: (v) => { if (isClaude.value) panels.value.mainView = v },
 })
 type PendingOpenFile = { path: string; line?: number; endLine?: number }
 const editorOpenFile = ref<((path: string, line?: number, endLine?: number) => void) | null>(null)
@@ -512,6 +518,29 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
       >
         {{ resuming ? "…" : "Resume" }}
       </button>
+      <div
+        v-if="!isArchived && isClaude"
+        class="inline-flex shrink-0 rounded-md border border-border overflow-hidden text-xs"
+        role="tablist"
+        aria-label="Main view"
+      >
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="mainView === 'chat'"
+          class="px-2.5 py-1 font-medium transition-colors"
+          :class="mainView === 'chat' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'"
+          @click="mainView = 'chat'"
+        >Chat</button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="mainView === 'terminal'"
+          class="px-2.5 py-1 font-medium transition-colors"
+          :class="mainView === 'terminal' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'"
+          @click="mainView = 'terminal'"
+        >Terminal</button>
+      </div>
       <button
         v-if="isDesktop && !isArchived"
         class="cmux-icon-button disabled:opacity-40 disabled:cursor-not-allowed"
@@ -683,6 +712,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
         }"
         :style="chatStyle"
       >
+        <template v-if="mainView === 'chat'">
         <!-- Skeletons live outside Conversation so the first real message render is the
              engine's initial (instant) scroll, not an animated skeleton→messages resize. -->
         <div v-if="loading" class="flex-1 overflow-hidden px-3 py-3 space-y-3">
@@ -853,6 +883,21 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
             </PromptInputFooter>
           </PromptInput>
         </div>
+        </template>
+        <template v-else>
+          <!-- flex-1 + min-h-0 guarantees the pane gets a real height inside the
+               flex column so xterm's FitAddon can measure it. -->
+          <div class="flex-1 min-h-0 relative">
+            <TerminalPane
+              :key="`agent:${props.id}`"
+              :session-name="props.id"
+              terminal-id="agent"
+              kind="agent"
+              :active="mainView === 'terminal'"
+              @exit="mainView = 'chat'"
+            />
+          </div>
+        </template>
       </div>
 
       <!-- Chat ↔ right-column resize handle (desktop only) -->

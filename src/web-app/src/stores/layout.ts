@@ -17,6 +17,7 @@ export interface ChatPanelState {
   editorOpen: boolean
   displayOpen: boolean
   activeTab: ChatPanelTab
+  mainView: "chat" | "terminal"
 }
 
 interface LayoutState {
@@ -53,6 +54,7 @@ function defaultPanelState(): ChatPanelState {
     editorOpen: false,
     displayOpen: false,
     activeTab: "chat",
+    mainView: "chat",
   }
 }
 
@@ -63,12 +65,14 @@ function loadPanelState(raw: unknown): ChatPanelState {
   const activeTab = p.activeTab === "terminal" || p.activeTab === "editor" || p.activeTab === "display"
     ? p.activeTab
     : base.activeTab
+  const mainView = p.mainView === "terminal" ? "terminal" : "chat"
   return {
     chatOpen: typeof p.chatOpen === "boolean" ? p.chatOpen : base.chatOpen,
     terminalOpen: typeof p.terminalOpen === "boolean" ? p.terminalOpen : base.terminalOpen,
     editorOpen: typeof p.editorOpen === "boolean" ? p.editorOpen : base.editorOpen,
     displayOpen: typeof p.displayOpen === "boolean" ? p.displayOpen : base.displayOpen,
     activeTab,
+    mainView,
   }
 }
 

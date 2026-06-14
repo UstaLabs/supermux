@@ -76,3 +76,16 @@ test("active tab is scoped per session and repaired when its pane closes", async
   expect(alpha.activeTab as string).toBe("chat")
   expect(beta.activeTab as string).toBe("editor")
 })
+
+test("mainView defaults to chat, persists per session, and reloads", async () => {
+  const layout = useLayout()
+  expect(layout.panelsFor("alpha").mainView).toBe("chat")
+  layout.panelsFor("alpha").mainView = "terminal"
+  await nextTick()
+
+  // re-create the store from persisted storage → value survives
+  setActivePinia(createPinia())
+  const reloaded = useLayout()
+  expect(reloaded.panelsFor("alpha").mainView).toBe("terminal")
+  expect(reloaded.panelsFor("beta").mainView).toBe("chat")
+})
