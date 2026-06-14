@@ -1188,10 +1188,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getSessionWorkdir: (id) => registry.get(id)?.workdir,
     getSessionTmuxTarget: (id) => {
       const s = registry.get(id)
-      if (!s || s.agent !== AgentKind.Claude) return undefined
-      // session:window form ("mux:<name>") — NOT claudeTmuxTarget(), which prefers
-      // the @window-id (no colon) and would break the grouped-session split.
-      return `${TMUX_SESSION}:${s.name}`
+      if (!s) return undefined
+      // Stable window-id when available (the same target the broker uses for
+      // send-keys), claude-gated. The agent terminal resolves the session+index
+      // from this id at attach time, so it survives renames / duplicate names.
+      const r = requireClaudeTmux(s)
+      return r.ok ? r.target : undefined
     },
     getSessionBaseCommits: (id) => registry.get(id)?.base_commits,
     getSessionCreatedAt: (id) => registry.get(id)?.created_at,

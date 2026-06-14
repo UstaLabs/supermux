@@ -23,32 +23,32 @@ export function viewerSessionName(device: string, agentTarget: string): string {
   return `${VIEW_PREFIX}${hex(device)}_${hex(agentTarget)}`
 }
 
-/** Split an agent target like "mux:sess-1" into { session, window }. The window
- * keeps any further colons (window names can contain them). */
-export function splitTarget(agentTarget: string): { session: string; window: string } {
-  const i = agentTarget.indexOf(":")
-  if (i === -1) return { session: agentTarget, window: "" }
-  return { session: agentTarget.slice(0, i), window: agentTarget.slice(i + 1) }
-}
-
 /** Single-quote for embedding in the `sh -c` script (handles embedded quotes). */
 function sq(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`
 }
 
 /**
- * argv for pty-helper to exec. The script (1) creates the grouped viewer
- * idempotently, (2) pins it to the agent's window, (3) exec-attaches.
- * `; ` runs each step regardless of the prior failing (so a lingering viewer is
- * reused). `exec` replaces the shell with tmux so SIGWINCH (resize) reaches it.
+ * argv for pty-helper to exec. The script resolves the target window's (session,
+ * index) from its STABLE window-id at attach time — never pinning by window NAME
+ * (names can be renamed and are not unique). `agentTarget` is normally a window-id
+ * like "@5"; `display-message` also accepts a "session:window" fallback. It then
+ * creates a grouped viewer session (shares the agent session's windows) and
+ * selects the target window by index. `; ` runs each step regardless of the prior
+ * failing (idempotent reuse); `exec` replaces the shell with tmux so SIGWINCH
+ * (resize) reaches it. Exits non-zero if the window is gone.
  */
 export function attachArgv(opts: { device: string; agentTarget: string }): string[] {
   const viewer = viewerSessionName(opts.device, opts.agentTarget)
-  const { session, window } = splitTarget(opts.agentTarget)
+  const tgt = sq(opts.agentTarget)
+  const v = sq(viewer)
   const script =
-    `tmux new-session -d -s ${sq(viewer)} -t ${sq(session)} 2>/dev/null; ` +
-    `tmux select-window -t ${sq(`${viewer}:${window}`)} 2>/dev/null; ` +
-    `exec tmux attach -t ${sq(viewer)}`
+    `s=$(tmux display-message -p -t ${tgt} '#{session_name}' 2>/dev/null); ` +
+    `w=$(tmux display-message -p -t ${tgt} '#{window_index}' 2>/dev/null); ` +
+    `[ -n "$s" ] && [ -n "$w" ] || exit 1; ` +
+    `tmux new-session -d -s ${v} -t "$s" 2>/dev/null; ` +
+    `tmux select-window -t ${v}:"$w" 2>/dev/null; ` +
+    `exec tmux attach -t ${v}`
   return ["sh", "-c", script]
 }
 

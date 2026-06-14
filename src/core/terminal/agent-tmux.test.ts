@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { viewerSessionName, splitTarget, attachArgv, createAgentTmux } from "./agent-tmux"
+import { viewerSessionName, attachArgv, createAgentTmux } from "./agent-tmux"
 
 describe("agent-tmux naming", () => {
   test("viewer name is prefixed + unique per (device, target)", () => {
@@ -9,26 +9,21 @@ describe("agent-tmux naming", () => {
     expect(viewerSessionName("phone", "mux:sess-1")).not.toBe(viewerSessionName("phone", "mux:sess-2"))
   })
 
-  test("splitTarget separates session and window", () => {
-    expect(splitTarget("mux:sess-1")).toEqual({ session: "mux", window: "sess-1" })
-    expect(splitTarget("mux:a:b")).toEqual({ session: "mux", window: "a:b" })
-  })
-
-  test("splitTarget with no colon yields an empty window", () => {
-    expect(splitTarget("baresession")).toEqual({ session: "baresession", window: "" })
-  })
 })
 
 describe("agent-tmux attachArgv", () => {
-  test("builds `sh -c` that creates a grouped viewer, pins the window, exec-attaches", () => {
-    const argv = attachArgv({ device: "d", agentTarget: "mux:sess-1" })
+  test("resolves the window by id (display-message), groups a viewer, exec-attaches", () => {
+    const argv = attachArgv({ device: "d", agentTarget: "@5" })
     expect(argv[0]).toBe("sh")
     expect(argv[1]).toBe("-c")
     const script = argv[2]!
-    const viewer = viewerSessionName("d", "mux:sess-1")
-    expect(script).toContain(`new-session -d -s '${viewer}' -t 'mux'`)
-    expect(script).toContain(`select-window -t '${viewer}:sess-1'`)
+    const viewer = viewerSessionName("d", "@5")
+    expect(script).toContain(`display-message -p -t '@5' '#{session_name}'`)
+    expect(script).toContain(`display-message -p -t '@5' '#{window_index}'`)
+    expect(script).toContain(`new-session -d -s '${viewer}' -t "$s"`)
+    expect(script).toContain(`select-window -t '${viewer}':"$w"`)
     expect(script).toContain(`exec tmux attach -t '${viewer}'`)
+    expect(script).not.toContain("window_name")
   })
 })
 
