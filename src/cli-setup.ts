@@ -22,6 +22,7 @@ import { IS_COMPILED } from "./shared/build-info"
 const AGENT_CLIS = ["claude", "codex", "cursor-agent", "opencode"] as const
 
 const UNIT_NAME = "supermux.service"
+const LAUNCHD_LABEL = "dev.supermux.broker"
 
 interface Flags {
   port: string
@@ -109,19 +110,9 @@ WantedBy=default.target
  * Install + enable the user systemd unit. Any systemctl failure is reported via
  * println, never thrown — setup keeps going and still returns 0.
  */
-function installSystemdUnit(flags: Flags, println: (s: string) => void): void {
-  // 1. Source-mode guard: the unit's ExecStart points at process.execPath, which
-  //    in compiled mode is the installed binary but in source mode is `bun`.
-  //    Skip unless explicitly forced (tests/advanced).
-  if (!IS_COMPILED && !flags.forceSourceUnit) {
-    println(
-      "Note: setup's systemd unit targets the compiled binary. This looks like a" +
-        " source install — use SETUP.md's bun unit instead. Skipping unit creation.",
-    )
-    return
-  }
-
-  // 2. Detect a usable `systemctl --user`.
+function installSystemdUnit(_flags: Flags, println: (s: string) => void): void {
+  // Detect a usable `systemctl --user`. (The shared source-mode guard lives in
+  // the installService dispatcher, alongside the macOS LaunchAgent path.)
   const hasSystemctl = Bun.which("systemctl") !== null
   const runtimeDir = process.env.XDG_RUNTIME_DIR
   if (!hasSystemctl || !runtimeDir) {
@@ -176,6 +167,164 @@ function installSystemdUnit(flags: Flags, println: (s: string) => void): void {
   }
 }
 
+/** Escape the values we interpolate into the LaunchAgent plist XML. */
+function xmlEscape(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+}
+
+const PLIST_TEMPLATE = (
+  execPath: string,
+  servicePath: string,
+  outLog: string,
+  errLog: string,
+): string =>
+  `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${LAUNCHD_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${execPath}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NODE_ENV</key>
+    <string>production</string>
+    <key>PATH</key>
+    <string>${servicePath}</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>${outLog}</string>
+  <key>StandardErrorPath</key>
+  <string>${errLog}</string>
+</dict>
+</plist>
+`
+
+/**
+ * Install + load the user LaunchAgent (the macOS analogue of installSystemdUnit).
+ * Writes ~/Library/LaunchAgents/dev.supermux.broker.plist pointing at this
+ * binary, then bootstraps/enables/kickstarts it via launchctl. Any launchctl
+ * failure is reported via println, never thrown — setup keeps going, returns 0.
+ *
+ * The plist bakes in a PATH (the user's current PATH ∪ Homebrew/npm-global/local
+ * bins) because launchd's default PATH is a bare /usr/bin:/bin — which hides
+ * /opt/homebrew/bin etc., where the agent CLIs live. Without this the broker's
+ * agent-CLI preflight fails and spawned sessions can't find claude/codex.
+ *
+ * Exported for unit testing (the plist-writing path); the dispatcher chooses it
+ * over installSystemdUnit only on darwin.
+ */
+export function installLaunchdAgent(_flags: Flags, println: (s: string) => void): void {
+  const home = process.env.HOME || homedir()
+  const agentsDir = join(home, "Library", "LaunchAgents")
+  const plistFile = join(agentsDir, `${LAUNCHD_LABEL}.plist`)
+  const stateDir = resolveStateDir()
+  const outLog = join(stateDir, "supermux.out.log")
+  const errLog = join(stateDir, "supermux.err.log")
+
+  const servicePath = [
+    process.env.PATH,
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    join(home, ".local", "bin"),
+  ]
+    .filter(Boolean)
+    .join(":")
+
+  // 1. Write the plist (+ ensure the log dir exists so launchd can open the logs).
+  try {
+    mkdirSync(agentsDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+    writeFileSync(
+      plistFile,
+      PLIST_TEMPLATE(
+        xmlEscape(process.execPath),
+        xmlEscape(servicePath),
+        xmlEscape(outLog),
+        xmlEscape(errLog),
+      ),
+    )
+    println(`Wrote ${plistFile}`)
+  } catch (e) {
+    println(`Could not write the LaunchAgent plist: ${String(e)}`)
+    return
+  }
+
+  // 2. Need launchctl to load it. Absent (e.g. non-macOS) → plist is in place and
+  //    will load on next login; nothing more we can do here.
+  if (Bun.which("launchctl") === null) {
+    println("launchctl not found; the plist is installed and will load on next login.")
+    return
+  }
+
+  // 3. Idempotent (re)load in the user's GUI domain: bootout any prior instance
+  //    (ignore failure — first run has none), then bootstrap + enable + kickstart.
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0
+  const domain = `gui/${uid}`
+  const target = `${domain}/${LAUNCHD_LABEL}`
+  const lc = (sub: string[]): boolean => {
+    try {
+      return Bun.spawnSync(["launchctl", ...sub]).exitCode === 0
+    } catch {
+      return false
+    }
+  }
+
+  lc(["bootout", target])
+  if (!lc(["bootstrap", domain, plistFile])) {
+    println("launchctl bootstrap reported an error; attempting to start it anyway.")
+  }
+  lc(["enable", target])
+  lc(["kickstart", "-k", target])
+
+  // 4. Give it a moment, then confirm it's loaded + running.
+  Bun.sleepSync(2000)
+  let running = false
+  try {
+    const r = Bun.spawnSync(["launchctl", "print", target])
+    running =
+      r.exitCode === 0 && new TextDecoder().decode(r.stdout).includes("state = running")
+  } catch {
+    running = false
+  }
+  if (running) {
+    println("supermux LaunchAgent running ✔")
+  } else {
+    println("supermux LaunchAgent loaded; if it isn't up yet, check the logs:")
+    println(`  tail -f ${errLog}`)
+  }
+}
+
+/**
+ * Install the always-on user service for this platform: a LaunchAgent on macOS,
+ * a systemd --user unit elsewhere. The source-mode guard is shared here: the
+ * service targets process.execPath, which is the installed binary when compiled
+ * but `bun` in source mode (use SETUP.md's manual unit for source installs).
+ */
+function installService(flags: Flags, println: (s: string) => void): void {
+  if (!IS_COMPILED && !flags.forceSourceUnit) {
+    println(
+      "Note: setup's service unit targets the compiled binary. This looks like a" +
+        " source install — use SETUP.md's manual unit instead. Skipping service setup.",
+    )
+    return
+  }
+  if (process.platform === "darwin") installLaunchdAgent(flags, println)
+  else installSystemdUnit(flags, println)
+}
+
 /**
  * `supermux setup`
  *
@@ -226,11 +375,11 @@ export async function runSetupCommand(
   // Always tighten perms (cheap, and fixes a stray loose mode on re-run).
   chmodSync(envPath, 0o600)
 
-  // ── systemd unit ─────────────────────────────────────────────────────────
+  // ── always-on service (systemd unit on Linux, LaunchAgent on macOS) ───────
   if (flags.noService) {
-    println("Skipping systemd unit (--no-service).")
+    println("Skipping service setup (--no-service).")
   } else {
-    installSystemdUnit(flags, println)
+    installService(flags, println)
   }
 
   // ── Agent-CLI report ─────────────────────────────────────────────────────
@@ -246,7 +395,14 @@ export async function runSetupCommand(
   }
 
   // ── Linger + final ───────────────────────────────────────────────────────
-  println("Headless/SSH? Run `loginctl enable-linger $USER` so the broker survives logout.")
+  if (process.platform === "darwin") {
+    println(
+      "Headless Mac mini? Enable Automatic Login (System Settings ▸ Users & Groups) so" +
+        " the LaunchAgent runs after a reboot — or install it as a system LaunchDaemon.",
+    )
+  } else {
+    println("Headless/SSH? Run `loginctl enable-linger $USER` so the broker survives logout.")
+  }
   println(`Web UI: ${flags.publicUrl}`)
   println(
     "The first browser to connect pairs automatically; headless: `supermux pair <name>`.",

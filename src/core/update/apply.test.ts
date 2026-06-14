@@ -15,7 +15,10 @@ import { tmpdir } from "os"
 import {
   applyUpdate,
   archAssetKeyFor,
+  assetKeyFor,
   resolveAndApply,
+  restartService,
+  restartViaLaunchd,
   restartViaSystemd,
   rollback,
   type UpdateApplyError,
@@ -105,6 +108,24 @@ describe("archAssetKeyFor", () => {
     expect(archAssetKeyFor("mips")).toBe(null)
     expect(archAssetKeyFor("ia32")).toBe(null)
     expect(archAssetKeyFor("")).toBe(null)
+  })
+})
+
+// ── assetKeyFor (platform × arch → release asset key) ─────────────────────────
+
+describe("assetKeyFor", () => {
+  test("maps linux + darwin × x64/arm64 to asset keys", () => {
+    expect(assetKeyFor("linux", "x64")).toBe("linux-x64")
+    expect(assetKeyFor("linux", "arm64")).toBe("linux-arm64")
+    expect(assetKeyFor("darwin", "x64")).toBe("darwin-x64")
+    expect(assetKeyFor("darwin", "arm64")).toBe("darwin-arm64")
+  })
+
+  test("returns null for unsupported platform or arch", () => {
+    expect(assetKeyFor("win32", "x64")).toBe(null)
+    expect(assetKeyFor("linux", "ia32")).toBe(null)
+    expect(assetKeyFor("darwin", "mips")).toBe(null)
+    expect(assetKeyFor("", "")).toBe(null)
   })
 })
 
@@ -651,6 +672,42 @@ describe("resolveAndApply — fresh fetch + stale-manifest guard", () => {
     if (!result.ok) return
     expect(result.newVersion).toBe("0.0.2") // fetched, not 0.9.9
     expect(await readFileText(fakeExec)).toBe(newBytes)
+  })
+})
+
+// ── restartViaLaunchd / restartService: false-path (not service-managed) ──────
+
+describe("restartViaLaunchd", () => {
+  const saved = process.env.XPC_SERVICE_NAME
+  afterEach(() => {
+    if (saved === undefined) delete process.env.XPC_SERVICE_NAME
+    else process.env.XPC_SERVICE_NAME = saved
+  })
+
+  test("returns false when XPC_SERVICE_NAME is absent or '0' (not launchd-managed)", () => {
+    delete process.env.XPC_SERVICE_NAME
+    expect(restartViaLaunchd({})).toBe(false)
+    process.env.XPC_SERVICE_NAME = "0"
+    expect(restartViaLaunchd({})).toBe(false)
+  })
+})
+
+describe("restartService", () => {
+  // On the Linux CI host this dispatches to restartViaSystemd; clearing both the
+  // systemd and launchd gates keeps it false (and side-effect-free) on either OS.
+  const savedInv = process.env.INVOCATION_ID
+  const savedXpc = process.env.XPC_SERVICE_NAME
+  afterEach(() => {
+    if (savedInv === undefined) delete process.env.INVOCATION_ID
+    else process.env.INVOCATION_ID = savedInv
+    if (savedXpc === undefined) delete process.env.XPC_SERVICE_NAME
+    else process.env.XPC_SERVICE_NAME = savedXpc
+  })
+
+  test("returns false when not service-managed", () => {
+    delete process.env.INVOCATION_ID
+    delete process.env.XPC_SERVICE_NAME
+    expect(restartService()).toBe(false)
   })
 })
 

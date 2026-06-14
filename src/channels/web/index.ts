@@ -26,7 +26,7 @@ import { AGENT_KINDS, isAgentKind } from "../../shared/agents"
 import type { SlashCommand } from "../../core/slash-commands/types"
 import type { UpdateChecker } from "../../core/update/checker"
 import { detectUpdateMode } from "../../core/update/mode"
-import { resolveAndApply, restartViaSystemd } from "../../core/update/apply"
+import { resolveAndApply, restartService } from "../../core/update/apply"
 import { BUILD_COMMIT, BUILD_VERSION } from "../../shared/build-info"
 
 const VALID_KINDS: AttachmentKind[] = ["photo", "document", "voice", "audio", "video_note"]
@@ -841,9 +841,9 @@ export class WebChannel implements Channel {
           onState: (s) => checker.setState(s),
         })
         if (result.ok) {
-          if (restartViaSystemd({})) {
-            // Process is about to die; systemd restarts → PWA reconnects to the
-            // new version. Nothing more to do here.
+          if (restartService()) {
+            // Process is about to die; systemd/launchd restarts → PWA reconnects
+            // to the new version. Nothing more to do here.
           } else {
             checker.setState("restart-required")
           }

@@ -13,7 +13,11 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
-#include <pty.h>
+#ifdef __APPLE__
+#include <util.h>   /* forkpty lives in <util.h> on macOS (there is no <pty.h>) */
+#else
+#include <pty.h>    /* forkpty on glibc/Linux */
+#endif
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>

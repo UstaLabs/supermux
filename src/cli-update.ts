@@ -6,7 +6,7 @@
 //   - return an exit code (0 = success, 1 = error) — never call process.exit()
 import { BUILD_COMMIT, BUILD_VERSION } from "./shared/build-info"
 import { UpdateChecker } from "./core/update/checker"
-import { resolveAndApply, restartViaSystemd, rollback } from "./core/update/apply"
+import { resolveAndApply, restartService, rollback } from "./core/update/apply"
 import { detectUpdateMode } from "./core/update/mode"
 
 const DEFAULT_URL = "https://supermux.dev/versions.json"
@@ -68,8 +68,8 @@ export async function runUpdateCommand(
 
   if (result.ok) {
     println(`Updated to v${result.newVersion} (previous kept at ${result.prevPath}).`)
-    if (restartViaSystemd({})) {
-      println("Broker restart initiated via systemd.")
+    if (restartService()) {
+      println("Broker restart initiated.")
     } else {
       println("Restart the broker to finish — the new binary is on disk.")
     }
@@ -111,8 +111,8 @@ export async function runRollbackCommand(
 
   if (result.ok) {
     println(`Rolled back (restored from ${result.restoredFrom}).`)
-    if (restartViaSystemd({})) {
-      println("Broker restart initiated via systemd.")
+    if (restartService()) {
+      println("Broker restart initiated.")
     } else {
       println("Restart the broker to finish — the previous binary is on disk.")
     }

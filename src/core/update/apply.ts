@@ -76,20 +76,26 @@ function errToString(err: unknown): string {
 }
 
 /**
- * Map a Node `process.arch` value to the release asset key used in versions.json.
- * Returns null for any arch we don't ship a binary for — the caller turns that
- * into an `arch-unsupported` error. Exported so the unmapped path is unit-testable
- * even on hosts where process.arch can't be faked.
+ * Map a (platform, arch) pair to the release asset key used in versions.json:
+ *   linux  + x64/arm64 → linux-x64  / linux-arm64
+ *   darwin + x64/arm64 → darwin-x64 / darwin-arm64
+ * Returns null for any pair we don't ship a binary for — the caller turns that
+ * into an `arch-unsupported` error.
+ */
+export function assetKeyFor(platform: string, arch: string): string | null {
+  const os = platform === "darwin" ? "darwin" : platform === "linux" ? "linux" : null
+  if (os === null) return null
+  if (arch !== "x64" && arch !== "arm64") return null
+  return `${os}-${arch}`
+}
+
+/**
+ * Back-compat shim: resolve the asset key for the CURRENT platform's `arch`.
+ * Exported so the unmapped path stays unit-testable on hosts where process.arch
+ * can't be faked. New code should call assetKeyFor(process.platform, …) directly.
  */
 export function archAssetKeyFor(arch: string): string | null {
-  switch (arch) {
-    case "x64":
-      return "linux-x64"
-    case "arm64":
-      return "linux-arm64"
-    default:
-      return null
-  }
+  return assetKeyFor(process.platform, arch)
 }
 
 function sha256Hex(bytes: Uint8Array): string {
@@ -193,7 +199,7 @@ export async function applyUpdate(opts: {
   if (opts.archAssetKey !== undefined) {
     assetKey = opts.archAssetKey
   } else {
-    const mapped = archAssetKeyFor(process.arch)
+    const mapped = assetKeyFor(process.platform, process.arch)
     if (mapped === null) {
       return { ok: false, error: { kind: "arch-unsupported", arch: process.arch } }
     }
@@ -564,4 +570,41 @@ export function restartViaSystemd(opts: { unit?: string }): boolean {
   )
   proc.unref()
   return true
+}
+
+/**
+ * macOS launchd analogue of restartViaSystemd. A launchd-managed LaunchAgent has
+ * XPC_SERVICE_NAME set to its label; a shell-launched process has it unset or
+ * "0". Gate on that so we only kickstart when actually service-managed, then
+ * schedule a detached `launchctl kickstart -k gui/<uid>/<label>` and return true.
+ */
+export function restartViaLaunchd(opts: { label?: string }): boolean {
+  const xpc = process.env.XPC_SERVICE_NAME
+  if (!xpc || xpc === "0") return false
+  const label = opts.label ?? process.env.MUX_SERVICE_LABEL ?? "dev.supermux.broker"
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0
+  // Detached; `sleep 1` lets this process exit before the kickstart -k restart.
+  // The label is passed as an ARGV positional ("$1"), never interpolated into the
+  // script, so a hostile label cannot inject shell (sh -c SCRIPT -- LABEL binds
+  // $0="--", $1=LABEL). The uid is a trusted integer from process.getuid().
+  const proc = Bun.spawn(
+    ["sh", "-c", `sleep 1; exec launchctl kickstart -k "gui/${uid}/$1"`, "--", label],
+    {
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "ignore",
+    },
+  )
+  proc.unref()
+  return true
+}
+
+/**
+ * Platform-dispatched broker restart: launchd on macOS, systemd elsewhere.
+ * Returns true if a restart was scheduled (the service brings the new binary
+ * back up), false if not service-managed (caller shows "restart required").
+ */
+export function restartService(opts: { unit?: string; label?: string } = {}): boolean {
+  if (process.platform === "darwin") return restartViaLaunchd({ label: opts.label })
+  return restartViaSystemd({ unit: opts.unit })
 }

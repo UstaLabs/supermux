@@ -19,9 +19,21 @@ jobs:
       matrix:
         include:
           - runner: ubuntu-24.04
+            os: linux
             arch: x64
           - runner: ubuntu-24.04-arm
+            os: linux
             arch: arm64
+          # macOS native binaries (Mach-O), built on GitHub's Apple-Silicon
+          # (macos-14) and Intel (macos-13) runners. The very same
+          # build-binary.sh runs unchanged, and smoke-binary.sh boots the real
+          # broker — so this validates macOS at RUNTIME, not just compilation.
+          - runner: macos-14
+            os: darwin
+            arch: arm64
+          - runner: macos-13
+            os: darwin
+            arch: x64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -33,9 +45,9 @@ jobs:
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
       - name: Build binary
-        run: scripts/build-binary.sh "dist/supermux-linux-${{ matrix.arch }}" "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
+        run: scripts/build-binary.sh "dist/supermux-${{ matrix.os }}-${{ matrix.arch }}" "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
       - name: Smoke test
-        run: scripts/smoke-binary.sh "dist/supermux-linux-${{ matrix.arch }}" 18791 "${{ steps.ver.outputs.version }}"
+        run: scripts/smoke-binary.sh "dist/supermux-${{ matrix.os }}-${{ matrix.arch }}" 18791 "${{ steps.ver.outputs.version }}"
       - name: Compiled asset probe
         # Proves the COMPILED binary can materialize embedded runtime-assets out
         # of $bunfs (pty-helper + prompt files) for spawned children — the exact
@@ -47,10 +59,19 @@ jobs:
           ./dist/asset-probe
           rm -f dist/asset-probe
       - name: Checksum
-        run: cd dist && sha256sum "supermux-linux-${{ matrix.arch }}" > "supermux-linux-${{ matrix.arch }}.sha256"
+        # macOS runners ship `shasum`, not `sha256sum`; both emit the same
+        # "<hash>  <file>" format the installer + versions generator parse.
+        run: |
+          cd dist
+          asset="supermux-${{ matrix.os }}-${{ matrix.arch }}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$asset" > "$asset.sha256"
+          else
+            shasum -a 256 "$asset" > "$asset.sha256"
+          fi
       - uses: actions/upload-artifact@v4
         with:
-          name: supermux-linux-${{ matrix.arch }}
+          name: supermux-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/*
           if-no-files-found: error
 
@@ -115,20 +136,16 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: supermux-linux-*
+          pattern: supermux-*-*
           merge-multiple: true
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          assets="dist/supermux-linux-x64 dist/supermux-linux-x64.sha256 dist/supermux-linux-arm64 dist/supermux-linux-arm64.sha256 dist/supermux-darwin-arm64 dist/supermux-darwin-arm64.sha256 dist/supermux-darwin-x64 dist/supermux-darwin-x64.sha256"
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 \
-            && gh release upload "${GITHUB_REF_NAME}" --clobber \
-                 dist/supermux-linux-x64 dist/supermux-linux-x64.sha256 \
-                 dist/supermux-linux-arm64 dist/supermux-linux-arm64.sha256 \
-            || gh release create "${GITHUB_REF_NAME}" \
-                 --generate-notes \
-                 dist/supermux-linux-x64 dist/supermux-linux-x64.sha256 \
-                 dist/supermux-linux-arm64 dist/supermux-linux-arm64.sha256
+            && gh release upload "${GITHUB_REF_NAME}" --clobber $assets \
+            || gh release create "${GITHUB_REF_NAME}" --generate-notes $assets
 
   publish-website:
     if: github.ref_type == 'tag'
@@ -140,7 +157,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: supermux-linux-*
+          pattern: supermux-*-*
           merge-multiple: true
       - name: Check website token
         id: tok
@@ -156,10 +173,12 @@ jobs:
           TOKEN: ${{ secrets.WEBSITE_PUSH_TOKEN }}
         run: |
           V="${GITHUB_REF_NAME#v}"
-          SHA_X64=$(cut -d' ' -f1 dist/supermux-linux-x64.sha256)
-          SHA_ARM64=$(cut -d' ' -f1 dist/supermux-linux-arm64.sha256)
+          SHA_LINUX_X64=$(cut -d' ' -f1 dist/supermux-linux-x64.sha256)
+          SHA_LINUX_ARM64=$(cut -d' ' -f1 dist/supermux-linux-arm64.sha256)
+          SHA_DARWIN_ARM64=$(cut -d' ' -f1 dist/supermux-darwin-arm64.sha256)
+          SHA_DARWIN_X64=$(cut -d' ' -f1 dist/supermux-darwin-x64.sha256)
           git clone "https://x-access-token:${TOKEN}@github.com/AhmetHuseyinDOK/supermux-website.git" site
-          bun scripts/generate-versions-json.ts "$V" "$SHA_X64" "$SHA_ARM64" > site/versions.json
+          bun scripts/generate-versions-json.ts "$V" "$SHA_LINUX_X64" "$SHA_LINUX_ARM64" "$SHA_DARWIN_ARM64" "$SHA_DARWIN_X64" > site/versions.json
           sed "s|__SUPERMUX_TAG__|v${V}|" .github/release-assets/docker-compose.release.yml > site/docker-compose.yml
           cd site
           git config user.name "supermux-release"

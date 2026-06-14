@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { runSetupCommand } from "./cli-setup"
+import { installLaunchdAgent, runSetupCommand } from "./cli-setup"
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -188,4 +188,41 @@ describe("runSetupCommand (state dir failure)", () => {
     expect(code).toBe(1)
     expect(lines.join("\n").toLowerCase()).toContain("error")
   })
+})
+
+// ── macOS LaunchAgent (installLaunchdAgent) ───────────────────────────────────
+// Skipped on a real macOS host: there launchctl exists and the function would
+// actually bootstrap a LaunchAgent into the user's gui domain (a side effect we
+// don't want in a test run). On Linux CI launchctl is absent, so it just writes
+// the plist + reports gracefully — which is exactly what we want to assert.
+describe("installLaunchdAgent (macOS service)", () => {
+  test.skipIf(process.platform === "darwin")(
+    "writes a LaunchAgent plist (label, RunAtLoad, baked PATH) and reports gracefully without launchctl",
+    () => {
+      const { lines, println } = collector()
+      installLaunchdAgent(
+        {
+          port: "8787",
+          publicUrl: "http://localhost:8787",
+          noService: false,
+          forceSourceUnit: false,
+        },
+        println,
+      )
+
+      const plist = join(home, "Library", "LaunchAgents", "dev.supermux.broker.plist")
+      expect(existsSync(plist)).toBe(true)
+
+      const xml = readFileSync(plist, "utf8")
+      expect(xml).toContain("<key>Label</key>")
+      expect(xml).toContain("dev.supermux.broker")
+      expect(xml).toContain("<key>RunAtLoad</key>")
+      // PATH is baked in so the launchd-spawned broker can find the agent CLIs.
+      expect(xml).toContain("<key>PATH</key>")
+
+      // launchctl is absent on Linux CI → no throw, and it reports the plist path.
+      const out = lines.join("\n").toLowerCase()
+      expect(out).toContain("library/launchagents")
+    },
+  )
 })
