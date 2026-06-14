@@ -3,6 +3,7 @@ import type { MessageStore } from "./session-manager/messages"
 import { fetchAllUsage } from "./usage/index"
 import { formatUsageTelegram } from "./usage/format"
 import { AGENT_KINDS, AgentKind, isAgentKind } from "../shared/agents"
+import { buildProxyPublicUrl } from "../channels/web/proxy"
 
 export type CommandCtx = {
   registry: Registry
@@ -18,6 +19,7 @@ export type CommandCtx = {
   listReasoningLevels?: (agent: AgentKind, model?: string) => { id: string; description?: string }[]
   resolveReasoningLevel?: (sessionId: string) => string | undefined
   proxyBaseDomain?: string
+  proxyPublicUrl?: string
   resumeFromArchive?: (id: string) => Promise<{ ok: boolean; name?: string; error?: string }>
   /** Soft-interrupt a running session: stop the current turn, keep it alive. */
   interrupt?: (sessionId: string) => Promise<{ ok: boolean; reason?: string }>
@@ -395,9 +397,8 @@ function cmdShow(rest: string, ctx: CommandCtx): SlashReply {
 function cmdProxies(ctx: CommandCtx): SlashReply {
   const proxies = ctx.registry.listProxies()
   if (proxies.length === 0) return { text: "no active proxies" }
-  const base = ctx.proxyBaseDomain ?? "localhost"
   const lines = proxies.map(p =>
-    `${p.domain}.${base} → localhost:${p.port}  [${p.sessionName}]`
+    `${buildProxyPublicUrl(p.domain, { baseDomain: ctx.proxyBaseDomain, publicUrl: ctx.proxyPublicUrl })} → localhost:${p.port}  [${p.sessionName}]`
   )
   return { text: lines.join("\n") }
 }
@@ -410,7 +411,6 @@ async function cmdProxy(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   if (!session) return { text: `no such session: ${sessionName}` }
   const port = parseInt(portStr, 10)
   if (!port || port < 1 || port > 65535) return { text: "port must be 1-65535" }
-  const base = ctx.proxyBaseDomain ?? "localhost"
   let finalDomain = domain
   if (!finalDomain) {
     const { randomBytes } = await import("crypto")
@@ -418,7 +418,7 @@ async function cmdProxy(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   }
   try {
     const entry = ctx.registry.addProxy({ domain: finalDomain, sessionId: session.id, port })
-    return { text: `proxy created: https://${entry.domain}.${base} → localhost:${port}` }
+    return { text: `proxy created: ${buildProxyPublicUrl(entry.domain, { baseDomain: ctx.proxyBaseDomain, publicUrl: ctx.proxyPublicUrl })} → localhost:${port}` }
   } catch (err: any) {
     return { text: `proxy failed: ${err?.message ?? String(err)}` }
   }

@@ -9,8 +9,12 @@ import { useTerminal } from "@/composables/useTerminal"
 
 const props = defineProps<{
   sessionName: string
+  terminalId: string
   active: boolean
+  kind?: "scratch" | "agent"
 }>()
+
+const emit = defineEmits<{ exit: [] }>()
 
 const containerRef = ref<HTMLElement | null>(null)
 
@@ -19,7 +23,7 @@ let fitAddon: FitAddon | null = null
 let ro: ResizeObserver | null = null
 let lastSentSize: { cols: number; rows: number } | null = null
 
-const terminal = useTerminal(toRef(() => props.sessionName))
+const terminal = useTerminal(toRef(() => props.sessionName), toRef(() => props.terminalId), toRef(() => props.kind ?? "scratch"))
 
 function cssVar(name: string, fallback: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
@@ -119,12 +123,14 @@ onMounted(() => {
     term?.write(data)
   })
 
-  // Handle session exit
+  // Handle session exit — the shell/tmux session actually ended (a detach does
+  // NOT fire this), so let the panel drop this tab.
   terminal.onExit((code: number) => {
     const msg = code === 0
       ? "\r\n\x1b[90mSession ended.\x1b[0m\r\n"
       : `\r\n\x1b[90mSession ended (exit ${code}).\x1b[0m\r\n`
     term?.write(msg)
+    emit("exit")
   })
 
   // ResizeObserver to refit when container size changes

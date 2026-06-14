@@ -7,6 +7,7 @@ export interface Proxy {
   port: number
   createdAt: string
   isPublic: boolean
+  url: string
 }
 
 export const useProxies = defineStore("proxies", () => {

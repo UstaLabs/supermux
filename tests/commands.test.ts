@@ -227,7 +227,7 @@ describe("proxy commands", () => {
     r.addProxy({ domain: "myapp", sessionId: zoomId, port: 3000 })
     const ctxWithBase = { ...ctx, proxyBaseDomain: "example.com" }
     const result = await handleSlash({ command: "proxies", rest: "" }, ctxWithBase)
-    expect(result.text).toContain("myapp.example.com")
+    expect(result.text).toContain("https://myapp.example.com")
     expect(result.text).toContain("3000")
     expect(result.text).toContain("zoom")
   })
@@ -237,14 +237,32 @@ describe("proxy commands", () => {
     expect(result.text).toBe("no active proxies")
   })
 
+  test("/proxies in path mode uses publicUrl", async () => {
+    r.addProxy({ domain: "myapp", sessionId: zoomId, port: 3000 })
+    const ctxPathMode = { ...ctx, proxyPublicUrl: "https://broker.example.com" }
+    const result = await handleSlash({ command: "proxies", rest: "" }, ctxPathMode)
+    expect(result.text).toContain("https://broker.example.com/p/myapp/")
+    expect(result.text).toContain("3000")
+    expect(result.text).toContain("zoom")
+  })
+
   test("/proxy s1 3000 myapp creates a proxy with explicit domain", async () => {
-    const result = await handleSlash({ command: "proxy", rest: "zoom 3000 myapp" }, ctx)
+    const ctxWithBase = { ...ctx, proxyBaseDomain: "example.com" }
+    const result = await handleSlash({ command: "proxy", rest: "zoom 3000 myapp" }, ctxWithBase)
     expect(result.text).toContain("proxy created")
-    expect(result.text).toContain("myapp")
+    expect(result.text).toContain("https://myapp.example.com")
     expect(result.text).toContain("3000")
     expect(r.getProxy("myapp")).toBeDefined()
     expect(r.getProxy("myapp")?.sessionId).toBe(zoomId)
     expect(r.getProxy("myapp")?.port).toBe(3000)
+  })
+
+  test("/proxy s1 3000 myapp in path mode uses publicUrl", async () => {
+    const ctxPathMode = { ...ctx, proxyPublicUrl: "https://broker.example.com" }
+    const result = await handleSlash({ command: "proxy", rest: "zoom 3000 myapp" }, ctxPathMode)
+    expect(result.text).toContain("proxy created")
+    expect(result.text).toContain("https://broker.example.com/p/myapp/")
+    expect(result.text).toContain("3000")
   })
 
   test("/proxy s1 3000 (no domain) creates with random px- domain", async () => {

@@ -2,7 +2,7 @@
 import { ref, onMounted } from "vue"
 import { ArrowLeft, Plus, ExternalLink, Trash2, Network } from "lucide-vue-next"
 import { useProxies, type Proxy as ProxyRow } from "@/stores/proxies"
-import { proxyUrl, proxyHostname } from "@/lib/proxy-url"
+import { displayUrl } from "@/lib/proxy-url"
 import { api } from "@/api/client"
 import { toast } from "vue-sonner"
 import DeleteProxyDialog from "@/components/DeleteProxyDialog.vue"
@@ -113,12 +113,12 @@ onMounted(refresh)
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2 min-w-0">
               <a
-                :href="proxyUrl(p.domain)"
+                :href="p.url"
                 target="_blank"
                 rel="noopener noreferrer"
                 class="font-medium text-primary hover:underline truncate flex items-center gap-1 min-w-0"
               >
-                <span class="truncate">{{ proxyHostname(p.domain) }}</span>
+                <span class="truncate">{{ displayUrl(p.url) }}</span>
                 <ExternalLink class="size-3 shrink-0" />
               </a>
               <span

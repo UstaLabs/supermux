@@ -2,11 +2,6 @@ import { makeLogger } from "../../shared/log"
 
 const log = makeLogger("proxy")
 
-// --- Types ---
-
-export type ProxyLookup = (domain: string) => { port: number; sessionName: string } | undefined
-export type ProxyAuth = (req: Request) => boolean
-
 // --- Subdomain extraction ---
 
 /**
@@ -51,6 +46,74 @@ export function buildUpstreamWsUrl(port: number, pathAndQuery: string): string {
   return `ws://127.0.0.1:${port}${pathAndQuery}`
 }
 
+// --- Path-based proxy: /p/<slug>/... ---
+
+/**
+ * Matches a path-based proxy URL. Returns the slug and `rest` (the path AFTER
+ * the `/p/<slug>` prefix), or null when `pathname` is not a proxy path.
+ *   /p/app          -> { slug: "app", rest: null }   (caller 301s to add "/")
+ *   /p/app/         -> { slug: "app", rest: "/" }
+ *   /p/app/assets/x -> { slug: "app", rest: "/assets/x" }
+ *   /pair, /proxies -> null
+ */
+export function matchProxyPath(pathname: string): { slug: string; rest: string | null } | null {
+  const m = pathname.match(/^\/p\/([^/?#]+)(\/.*)?$/)
+  if (!m) return null
+  return { slug: m[1]!, rest: m[2] ?? null }
+}
+
+/**
+ * Builds a proxy's public URL. Subdomain mode (unchanged) when a base domain is
+ * set; path mode under the broker's own public URL otherwise.
+ */
+export function buildProxyPublicUrl(
+  slug: string,
+  opts: { baseDomain?: string; publicUrl?: string },
+): string {
+  if (opts.baseDomain) return `https://${slug}.${opts.baseDomain}`
+  const base = (opts.publicUrl ?? "").replace(/\/+$/, "")
+  return `${base}/p/${slug}/`
+}
+
+/**
+ * Path mode only: re-add the proxy prefix to a redirect Location. Absolute paths
+ * (single leading slash) and absolute URLs pointing back at the loopback upstream
+ * are rewritten; relative, protocol-relative, and off-host Locations pass through.
+ */
+export function rewriteLocation(loc: string, prefix: string, upstreamHost: string): string {
+  let path = loc
+  for (const scheme of ["http://", "https://"]) {
+    if (loc.startsWith(scheme + upstreamHost)) {
+      path = loc.slice((scheme + upstreamHost).length) || "/"
+      break
+    }
+  }
+  if (path.startsWith("/") && !path.startsWith("//")) {
+    // Idempotent: an already-prefixed path (e.g. a base-aware upstream) is left as-is.
+    if (path === prefix || path.startsWith(prefix + "/")) return path
+    return prefix + path
+  }
+  return loc
+}
+
+/**
+ * Path mode only: scope an upstream Set-Cookie to the proxy prefix so each app's
+ * cookies stay under its own /p/<slug>/ path and don't leak across apps sharing
+ * the broker origin.
+ */
+export function rewriteSetCookiePath(setCookie: string, prefix: string): string {
+  if (/;\s*path=/i.test(setCookie)) {
+    return setCookie.replace(/;(\s*)path=([^;]*)/i, (_m, sp: string, p: string) => {
+      const orig = p.trim() || "/"
+      // Idempotent: a cookie already scoped under the prefix is left as-is.
+      if (orig === prefix || orig.startsWith(prefix + "/")) return `;${sp}Path=${orig}`
+      const np = orig === "/" ? `${prefix}/` : `${prefix}${orig.startsWith("/") ? "" : "/"}${orig}`
+      return `;${sp}Path=${np}`
+    })
+  }
+  return `${setCookie}; Path=${prefix}/`
+}
+
 // --- Cookie parsing ---
 
 export function parseCookie(cookieHeader: string | null, name: string): string | null {
@@ -76,9 +139,10 @@ const STRIP_RESPONSE_HEADERS = new Set(["transfer-encoding"])
 export async function handleProxyRequest(
   req: Request,
   upstream: { port: number; sessionName: string },
+  pathOpts?: { prefix: string; upstreamPath: string },
 ): Promise<Response> {
   const url = new URL(req.url)
-  const pathAndQuery = url.pathname + (url.search || "")
+  const pathAndQuery = pathOpts ? pathOpts.upstreamPath : url.pathname + (url.search || "")
   const upstreamUrl = buildUpstreamUrl(upstream.port, pathAndQuery)
 
   // Build forwarded headers
@@ -101,6 +165,7 @@ export async function handleProxyRequest(
       method: req.method,
       headers: forwardedHeaders,
       body: req.body,
+      redirect: pathOpts ? "manual" : "follow",
       // @ts-ignore — Bun supports signal-based timeout via AbortSignal.timeout
       signal: AbortSignal.timeout(30_000),
     })
@@ -140,6 +205,20 @@ export async function handleProxyRequest(
   // (Cloudflare) and browsers don't serve stale bundles.
   if (!responseHeaders.has("cache-control")) {
     responseHeaders.set("cache-control", "no-store")
+  }
+
+  // Path mode: re-anchor redirects and cookies under the /p/<slug> prefix.
+  if (pathOpts) {
+    const upstreamHost = `127.0.0.1:${upstream.port}`
+    const loc = responseHeaders.get("location")
+    if (loc) responseHeaders.set("location", rewriteLocation(loc, pathOpts.prefix, upstreamHost))
+    const setCookies = upstreamRes.headers.getSetCookie?.() ?? []
+    if (setCookies.length) {
+      responseHeaders.delete("set-cookie")
+      for (const c of setCookies) {
+        responseHeaders.append("set-cookie", rewriteSetCookiePath(c, pathOpts.prefix))
+      }
+    }
   }
 
   return new Response(upstreamRes.body, {

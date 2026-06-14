@@ -6,7 +6,7 @@ import { home } from "../../shared/home"
 import { existsSync, writeFileSync, mkdirSync } from "fs"
 import { join } from "path"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
-import { extractSubdomain, handleProxyRequest, parseCookie } from "./proxy"
+import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
 import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOriginOk } from "./cookies"
 import { FsService } from "../../core/editor/fs-service"
 import { computeWorkdirDiff } from "../../core/editor/workdir-diff"
@@ -47,7 +47,6 @@ const log = makeLogger("channels/web")
 
 const RATE_LIMIT_WINDOW_MS = 5 * 60_000
 const RATE_LIMIT_MAX = 16
-const authFailures = new Map<string, { count: number; firstAt: number }>()
 
 function clientIp(req: Request): string {
   return req.headers.get("cf-connecting-ip")
@@ -55,9 +54,11 @@ function clientIp(req: Request): string {
       ?? "unknown"
 }
 
-export function __resetAuthFailures(): void {
-  authFailures.clear()
-}
+// Auth-failure rate-limit state is now per-WebChannel-instance (see the
+// `authFailures` field on the class), so there is no process-global bucket to
+// clear. Kept as an exported no-op for tests that build a fresh channel per
+// case — each new instance already starts with an empty bucket.
+export function __resetAuthFailures(): void {}
 
 const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/system", "/repos", "/forge"]
 const MAX_CLIENT_LOG_RING = 800
@@ -73,7 +74,7 @@ export type StoredClientLogEntry = {
 }
 const MUTATING_METHODS = new Set(["POST", "PUT", "DELETE", "PATCH"])
 
-type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalSession?: string; display?: true; scrcpy?: true; displayStreamId?: string }
+type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalAgentTarget?: string; display?: true; scrcpy?: true; displayStreamId?: string }
 
 export interface SessionSnapshot {
   id?: string
@@ -156,11 +157,15 @@ export interface WebChannelOpts {
   listChatIds?: () => string[]
   createProxy?: (args: { sessionName: string; port: number; domain?: string }) => { url: string; domain: string; port: number }
   removeProxy?: (domain: string) => void
-  listProxies?: () => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean }[]
+  listProxies?: () => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean; url: string }[]
   updateProxy?: (domain: string, isPublic: boolean) => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean }
   terminalManager?: import("../../core/terminal/manager").TerminalManager
   fsWatcher?: FsWatcher
   getSessionWorkdir?: (name: string) => string | undefined
+  /** Resolve a claude session's tmux "session:window" target (for kind=agent
+   * terminals). Returns undefined for non-claude/unknown sessions. When this opt
+   * is absent, all kind=agent requests return 404 (the feature is opt-in). */
+  getSessionTmuxTarget?: (name: string) => string | undefined
   getSessionBaseCommits?: (name: string) => Record<string, string> | undefined
   getSessionCreatedAt?: (name: string) => string | undefined
   listArchivedSessions?: () => ArchivedSessionSnapshot[]
@@ -226,6 +231,11 @@ export class WebChannel implements Channel {
   private displaySockets = new WeakMap<object, import("bun").Socket>()
   private readonly fsWatcher?: FsWatcher
   private readonly clientLogRing: StoredClientLogEntry[] = []
+  // Per-instance auth-failure rate-limit buckets, keyed by client IP. Instance
+  // (not module) scope keeps concurrent channels — e.g. the many WebChannels a
+  // single `bun test` process spins up, all seeing clientIp() === "unknown" —
+  // from sharing one bucket and spuriously rate-limiting each other's requests.
+  private readonly authFailures = new Map<string, { count: number; firstAt: number }>()
 
   constructor(private readonly opts: WebChannelOpts) {
     this.store = new DeviceStore(opts.devicesFile)
@@ -246,9 +256,9 @@ export class WebChannel implements Channel {
   private checkRateLimit(req: Request): boolean {
     const ip = clientIp(req)
     const now = Date.now()
-    const rec = authFailures.get(ip)
+    const rec = this.authFailures.get(ip)
     if (!rec || now - rec.firstAt > RATE_LIMIT_WINDOW_MS) {
-      authFailures.set(ip, { count: 0, firstAt: now })
+      this.authFailures.set(ip, { count: 0, firstAt: now })
       return true
     }
     return rec.count < RATE_LIMIT_MAX
@@ -256,9 +266,9 @@ export class WebChannel implements Channel {
 
   private recordAuthFailure(req: Request): void {
     const ip = clientIp(req)
-    const rec = authFailures.get(ip) ?? { count: 0, firstAt: Date.now() }
+    const rec = this.authFailures.get(ip) ?? { count: 0, firstAt: Date.now() }
     rec.count++
-    authFailures.set(ip, rec)
+    this.authFailures.set(ip, rec)
   }
 
   async start(): Promise<void> {
@@ -334,7 +344,12 @@ export class WebChannel implements Channel {
   async stop(): Promise<void> {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
     this.heartbeatTimer = undefined
-    this.server?.stop()
+    // Force-close active/keep-alive connections (the `true`). A graceful stop
+    // leaves idle keep-alive sockets open, so a stopped channel keeps serving on
+    // them — which on an in-process restart (and across reused ports under
+    // `bun test`) lets a client's pooled connection hit the dead-but-not-closed
+    // old server and read its now-removed state, yielding stale/401 responses.
+    this.server?.stop(true)
   }
 
   async send(action: OutboundAction): Promise<OutboundResult> {
@@ -362,14 +377,27 @@ export class WebChannel implements Channel {
   }
 
   private async routeRequestOrUpgrade(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
+    const url = new URL(req.url)
     if (this.opts.proxyBaseDomain) {
       const host = req.headers.get("host") ?? ""
       const sub = extractSubdomain(host, this.opts.proxyBaseDomain, this.opts.proxyMainHost)
       if (sub) {
         return this.handleProxyRoute(req, sub, server)
       }
+    } else if (this.opts.proxyLookup) {
+      // Path-based proxy (active only when no base domain is configured).
+      const pm = matchProxyPath(url.pathname)
+      if (pm) {
+        if (pm.rest === null) {
+          // bare /p/<slug> → 301 so the browser anchors relative URLs correctly
+          return new Response(null, { status: 301, headers: { location: `/p/${pm.slug}/${url.search}` } })
+        }
+        return this.handleProxyRoute(req, pm.slug, server, {
+          prefix: `/p/${pm.slug}`,
+          upstreamPath: pm.rest + url.search,
+        })
+      }
     }
-    const url = new URL(req.url)
     if (url.pathname === "/ws") {
       const token = authToken(req)
       if (!this.checkRateLimit(req)) return new Response("rate limited", { status: 429 })
@@ -383,6 +411,12 @@ export class WebChannel implements Channel {
     if (url.pathname === "/ws/term") {
       const token = authToken(req)
       const sessionName = url.searchParams.get("session") ?? ""
+      const kind = url.searchParams.get("kind") === "agent" ? "agent" : "scratch"
+      // Per-terminal id (multiple scratch terminals per session). Agent terminals
+      // are singular → fixed id "agent". Sanitized: it becomes a tmux name.
+      const terminalId = kind === "agent"
+        ? "agent"
+        : ((url.searchParams.get("terminal") ?? "").replace(/[^A-Za-z0-9]/g, "").slice(0, 64) || "main")
       if (!this.checkRateLimit(req)) return new Response("rate limited", { status: 429 })
       const dev = this.store.verify(token)
       if (!dev) { this.recordAuthFailure(req); return new Response("unauthorized", { status: 401 }) }
@@ -390,8 +424,15 @@ export class WebChannel implements Channel {
       if (!sessionName || !this.opts.getSessionWorkdir?.(sessionName)) {
         return new Response("session not found", { status: 404 })
       }
+      // Agent terminals are claude-only: getSessionTmuxTarget returns undefined
+      // for non-claude / unknown sessions (see main.ts).
+      let agentTarget: string | undefined
+      if (kind === "agent") {
+        agentTarget = this.opts.getSessionTmuxTarget?.(sessionName)
+        if (!agentTarget) return new Response("agent terminal unsupported", { status: 404 })
+      }
       const upgraded = server.upgrade(req, {
-        data: { deviceName: dev.name, openedAt: Date.now(), terminal: true, terminalSession: sessionName } as WSData,
+        data: { deviceName: dev.name, openedAt: Date.now(), terminal: true, terminalKind: kind, terminalSession: sessionName, terminalId, terminalAgentTarget: agentTarget } as WSData,
       })
       if (upgraded) return undefined
       return new Response("upgrade failed", { status: 500 })
@@ -466,14 +507,18 @@ export class WebChannel implements Channel {
     const tm = this.opts.terminalManager
     if (!tm) { ws.close(1011, "terminal not configured"); return }
     const sessionName = ws.data.terminalSession!
+    const terminalId = ws.data.terminalId!
     const workdir = this.opts.getSessionWorkdir?.(sessionName)
     if (!workdir) { ws.close(1011, "session not found"); return }
-    const result = tm.spawn({
+    const result = tm.attach({
       deviceName: ws.data.deviceName,
       sessionName,
+      terminalId,
       workdir,
       cols: 80,
       rows: 24,
+      kind: ws.data.terminalKind ?? "scratch",
+      agentTarget: ws.data.terminalAgentTarget,
       onData: (data) => { try { ws.sendBinary(data) } catch {} },
       onExit: (code) => { try { ws.send(JSON.stringify({ type: "exit", code })); ws.close() } catch {} },
     })
@@ -487,21 +532,27 @@ export class WebChannel implements Channel {
     const tm = this.opts.terminalManager
     if (!tm) return
     const sessionName = ws.data.terminalSession!
+    const terminalId = ws.data.terminalId!
     if (typeof msg === "string") {
       try {
         const frame = JSON.parse(msg)
         if (frame.type === "resize" && typeof frame.cols === "number" && typeof frame.rows === "number") {
-          tm.resize(ws.data.deviceName, sessionName, frame.cols, frame.rows)
+          tm.resize(ws.data.deviceName, sessionName, terminalId, frame.cols, frame.rows)
+        } else if (frame.type === "close") {
+          // Explicit close: destroy the tmux session, then drop the socket.
+          void tm.close(sessionName, terminalId)
+          try { ws.close() } catch {}
         }
       } catch {}
       return
     }
     const data = msg instanceof ArrayBuffer ? new Uint8Array(msg) : new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength)
-    tm.write(ws.data.deviceName, sessionName, data)
+    tm.write(ws.data.deviceName, sessionName, terminalId, data)
   }
 
   private onTerminalWsClose(ws: import("bun").ServerWebSocket<WSData>): void {
-    this.opts.terminalManager?.kill(ws.data.deviceName, ws.data.terminalSession!)
+    // Socket dropped (reload / nav / network): DETACH — the tmux session lives on.
+    this.opts.terminalManager?.detach(ws.data.deviceName, ws.data.terminalSession!, ws.data.terminalId!)
   }
 
   private onDisplayWsOpen(ws: import("bun").ServerWebSocket<WSData>): void {
@@ -886,15 +937,20 @@ export class WebChannel implements Channel {
     while (this.clientLogRing.length > MAX_CLIENT_LOG_RING) this.clientLogRing.shift()
   }
 
-  private async handleProxyRoute(req: Request, subdomain: string, server?: import("bun").Server<WSData>): Promise<Response | undefined> {
+  private async handleProxyRoute(
+    req: Request,
+    slug: string,
+    server?: import("bun").Server<WSData>,
+    pathOpts?: { prefix: string; upstreamPath: string },
+  ): Promise<Response | undefined> {
     if (!this.opts.proxyLookup) return new Response("proxy not configured", { status: 500 })
-    const upstream = this.opts.proxyLookup(subdomain)
+    const upstream = this.opts.proxyLookup(slug)
     if (!upstream) return new Response("not found", { status: 404 })
 
     if (!upstream.isPublic) {
-      // The cmux_token cookie is Domain=.<base>, so a paired device already sends
-      // it to proxy subdomains — no token-transfer page needed. A static 401 (no
-      // reflected input) replaces the old /proxy-auth redirect dance.
+      // The cmux_token cookie is host-only (path mode) or Domain=.<base>
+      // (subdomain mode), so a paired device already sends it here. A static
+      // 401 (no reflected input) replaces the old /proxy-auth redirect dance.
       const token = authToken(req)
       if (!token || !this.opts.proxyAuth?.(token)) {
         const mainUrl = this.opts.publicUrl.replace(/\/$/, "")
@@ -914,14 +970,15 @@ export class WebChannel implements Channel {
       // back in the 101 so strict clients accept the handshake. The full list is
       // forwarded to the upstream dial in the websocket `open` handler.
       const selectedProtocol = wsProtocol?.split(",")[0]?.trim()
+      const wsPath = pathOpts ? pathOpts.upstreamPath : url.pathname + url.search
       const upgraded = server.upgrade(req, {
-        data: { proxyUpstream: upstream, proxyPath: url.pathname + url.search, proxyWsProtocol: wsProtocol } as any,
+        data: { proxyUpstream: upstream, proxyPath: wsPath, proxyWsProtocol: wsProtocol } as any,
         ...(selectedProtocol ? { headers: { "Sec-WebSocket-Protocol": selectedProtocol } } : {}),
       })
       return upgraded ? undefined : new Response("ws upgrade failed", { status: 500 })
     }
 
-    return handleProxyRequest(req, upstream)
+    return handleProxyRequest(req, upstream, pathOpts)
   }
 
   private async routeRequest(req: Request): Promise<Response> {
@@ -1918,6 +1975,25 @@ export class WebChannel implements Channel {
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
+    }
+
+    // ── Web terminals ────────────────────────────────────────────────────────
+    // List a session's persisted terminals (source of truth: the muxterm tmux
+    // server) so the PWA can rebuild its tab strip across reloads.
+    if (method === "GET" && path === "/api/term/list") {
+      const session = url.searchParams.get("session") ?? ""
+      if (!session || !this.opts.getSessionWorkdir?.(session)) return this.json({ error: "session not found" }, 404)
+      const terminals = (await this.opts.terminalManager?.listForSession(session)) ?? []
+      return this.json({ terminals })
+    }
+    // Explicitly destroy one terminal (its tmux session + any viewers).
+    if (method === "POST" && path === "/api/term/close") {
+      const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
+      const session = typeof body.session === "string" ? body.session : ""
+      const terminal = typeof body.terminal === "string" ? body.terminal : ""
+      if (!session || !terminal) return this.json({ error: "session and terminal required" }, 400)
+      await this.opts.terminalManager?.close(session, terminal)
+      return this.json({ ok: true })
     }
 
     // ── In-app updater ──────────────────────────────────────────────────────

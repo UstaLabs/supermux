@@ -116,6 +116,9 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   private closed = false
   /** tool callIDs we've already emitted a `started` for (dedupe the running stream). */
   private startedTools = new Set<string>()
+  /** Inbound turns run one at a time — see send()/drain(). */
+  private queue: Array<{ text: string; meta?: InboundMeta; resolve: () => void; reject: (e: Error) => void }> = []
+  private draining = false
 
   /** Minimal client slice for slash-command discovery. */
   get commandClient(): Pick<OpenCodeClientLike, "listCommands"> {
@@ -177,7 +180,39 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     this.closed = true
   }
 
+  // Inbound turns are queued and drained one at a time. opencode serializes
+  // prompts per session server-side anyway, and firing a second prompt() while
+  // one is in flight makes BOTH HTTP calls resolve to the session's *last*
+  // assistant message — so an un-queued second send would clobber the first
+  // turn's reply (and race lastChatId). The FIFO keeps a single prompt() in
+  // flight so each turn returns its own reply, attributed to its own chat.
+  // Mirrors CursorAdapter's queue/drain.
   async send(text: string, meta?: InboundMeta): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      this.queue.push({ text, meta, resolve, reject })
+      if (!this.draining) void this.drain()
+    })
+  }
+
+  private async drain(): Promise<void> {
+    if (this.draining) return
+    this.draining = true
+    try {
+      while (this.queue.length) {
+        const next = this.queue.shift()!
+        try {
+          await this.runTurn(next.text, next.meta)
+          next.resolve()
+        } catch (err) {
+          next.reject(err instanceof Error ? err : new Error(String(err)))
+        }
+      }
+    } finally {
+      this.draining = false
+    }
+  }
+
+  private async runTurn(text: string, meta?: InboundMeta): Promise<void> {
     if (!this.sessionId) throw new Error("opencode adapter: not started")
     this.lastChatId = meta?.chat_id
     const prompt = await this.buildPrompt(text, meta)
@@ -185,7 +220,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     const model = this.parseModel()
     if (model) body.model = model
 
-    // send() brackets the turn: the prompt() call resolves with the completed
+    // runTurn brackets the turn: the prompt() call resolves with the completed
     // assistant message, so the authoritative reply text comes from its return
     // value (no fragile streaming reconstruction). The event subscription only
     // adds live tool-call activity cards.

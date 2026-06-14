@@ -44,15 +44,37 @@ function openSheet(kind?: Kind) {
   sheetOpen.value = true
 }
 
+/** Host from the optional self-hosted base URL (empty for SaaS). */
+const tokenHost = computed(() => baseUrl.value.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, ""))
+
+/** Encode params with %20 for spaces, matching GitHub/GitLab template-URL docs. */
+function enc(p: Record<string, string>): string {
+  return new URLSearchParams(p).toString().replace(/\+/g, "%20")
+}
+
+const TOKEN_NAME = "supermux"
+const TOKEN_DESC = "Clone, create & push repos from supermux"
+
+/** Token-creation link, pre-filled with the name + exact scopes supermux needs. */
 const tokenDocsUrl = computed(() => {
-  const host = baseUrl.value.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "")
-  if (addKind.value === "github")
-    return host && host !== "github.com" ? `https://${host}/settings/tokens` : "https://github.com/settings/personal-access-tokens/new"
-  return host && host !== "gitlab.com" ? `https://${host}/-/user_settings/personal_access_tokens` : "https://gitlab.com/-/user_settings/personal_access_tokens"
+  const host = tokenHost.value
+  if (addKind.value === "github") {
+    // Self-hosted GHES: classic tokens prefill on all versions (fine-grained template URLs need ≥3.19).
+    if (host && host !== "github.com")
+      return `https://${host}/settings/tokens/new?${enc({ description: TOKEN_DESC, scopes: "repo,read:org" })}`
+    // github.com: fine-grained template URL — one query param per permission (GA Aug 2025).
+    return `https://github.com/settings/personal-access-tokens/new?${enc({ name: TOKEN_NAME, description: TOKEN_DESC, contents: "write", administration: "write" })}`
+  }
+  // GitLab (SaaS or self-hosted ≥14.1): name + scopes prefill.
+  const base = host && host !== "gitlab.com" ? `https://${host}` : "https://gitlab.com"
+  return `${base}/-/user_settings/personal_access_tokens?${enc({ name: TOKEN_NAME, scopes: "api", description: TOKEN_DESC })}`
 })
-const scopesHint = computed(() => addKind.value === "github"
-  ? "Contents (RW), Administration (RW, to create), read:org"
-  : "api — or read_api + write_repository")
+
+const scopesHint = computed(() => {
+  if (addKind.value === "github")
+    return tokenHost.value && tokenHost.value !== "github.com" ? "repo, read:org" : "Contents + Administration (read & write)"
+  return "api"
+})
 
 async function submit() {
   if (!token.value.trim()) return
@@ -161,7 +183,7 @@ async function disconnect(id: string) {
 
           <div>
             <Input v-model="token" type="password" :placeholder="addKind === 'github' ? 'github_pat_…' : 'glpat-…'" class="font-mono" />
-            <p class="text-xs text-muted-foreground mt-1.5"><a :href="tokenDocsUrl" target="_blank" rel="noreferrer" class="text-primary">Create a fine-grained token ↗</a> · needs {{ scopesHint }}</p>
+            <p class="text-xs text-muted-foreground mt-1.5"><a :href="tokenDocsUrl" target="_blank" rel="noreferrer" class="text-primary">Create a pre-filled token ↗</a> · needs {{ scopesHint }}</p>
           </div>
 
           <div class="border-t border-border pt-3">

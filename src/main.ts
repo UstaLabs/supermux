@@ -1,6 +1,7 @@
 // src/main.ts
 import { TelegramChannel } from "./channels/telegram"
 import { WebChannel } from "./channels/web"
+import { buildProxyPublicUrl } from "./channels/web/proxy"
 import { EMBEDDED_STATIC } from "./channels/web/static-manifest.generated"
 import { requireAtLeastOneChannel } from "./shared/channels"
 import { handleWebInbound } from "./channels/web/inbound-handler"
@@ -17,6 +18,10 @@ function proxyWsPayload(entry: ProxyEntry) {
     port: entry.port,
     createdAt: entry.createdAt,
     isPublic: entry.isPublic,
+    url: buildProxyPublicUrl(entry.domain, {
+      baseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
+      publicUrl: process.env.MUX_WEB_PUBLIC_URL,
+    }),
   }
 }
 
@@ -1143,10 +1148,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const store = new DeviceStore(DEVICES_FILE)
       return !!store.verify(token)
     },
-    listProxies: () => registry.listProxies(),
+    listProxies: () => registry.listProxies().map(proxyWsPayload),
     createProxy: (args) => {
-      const baseDomain = process.env.MUX_PROXY_BASE_DOMAIN
-      if (!baseDomain) throw new Error("MUX_PROXY_BASE_DOMAIN not configured")
       const session = registry.resolveName(args.sessionName)
       if (!session) throw new Error(`no such session: ${args.sessionName}`)
       let domain = args.domain
@@ -1155,7 +1158,14 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       }
       const entry = registry.addProxy({ domain, sessionId: session.id, port: args.port })
       webChannel?.broadcastToAll({ type: "proxy_created", proxy: proxyWsPayload(entry) })
-      return { url: `https://${entry.domain}.${baseDomain}`, domain: entry.domain, port: entry.port }
+      return {
+        url: buildProxyPublicUrl(entry.domain, {
+          baseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
+          publicUrl: process.env.MUX_WEB_PUBLIC_URL,
+        }),
+        domain: entry.domain,
+        port: entry.port,
+      }
     },
     updateProxy: (domain, isPublic) => {
       const entry = registry.setProxyPublic(domain, isPublic)
@@ -1176,6 +1186,15 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     stopDisplay: (id) => displayManager.stop(id),
     fsWatcher,
     getSessionWorkdir: (id) => registry.get(id)?.workdir,
+    getSessionTmuxTarget: (id) => {
+      const s = registry.get(id)
+      if (!s) return undefined
+      // Stable window-id when available (the same target the broker uses for
+      // send-keys), claude-gated. The agent terminal resolves the session+index
+      // from this id at attach time, so it survives renames / duplicate names.
+      const r = requireClaudeTmux(s)
+      return r.ok ? r.target : undefined
+    },
     getSessionBaseCommits: (id) => registry.get(id)?.base_commits,
     getSessionCreatedAt: (id) => registry.get(id)?.created_at,
     listArchivedSessions: () =>
@@ -1940,8 +1959,6 @@ const server = await startSocketServer({
           if (!s) return { ok: false, error: "unknown session" }
           const port = optionalNumberArg(op.args, "port")
           if (!port || port < 1 || port > 65535) return { ok: false, error: "port must be 1-65535" }
-          const baseDomain = process.env.MUX_PROXY_BASE_DOMAIN
-          if (!baseDomain) return { ok: false, error: "MUX_PROXY_BASE_DOMAIN not configured" }
           let domain = optionalStringArg(op.args, "domain")
           if (!domain) {
             const { randomBytes } = await import("crypto")
@@ -1950,7 +1967,10 @@ const server = await startSocketServer({
           try {
             const isPublic = optionalBooleanArg(op.args, "public") === true
             const entry = registry.addProxy({ domain, sessionId: s.id, port, isPublic })
-            const url = `https://${entry.domain}.${baseDomain}`
+            const url = buildProxyPublicUrl(entry.domain, {
+              baseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
+              publicUrl: process.env.MUX_WEB_PUBLIC_URL,
+            })
             webChannel?.broadcastToAll({ type: "proxy_created", proxy: proxyWsPayload(entry) })
             return { ok: true, value: { url, domain: entry.domain, port: entry.port, isPublic: entry.isPublic } }
           } catch (err: any) {
@@ -2410,6 +2430,7 @@ _tg.on("inbound", async (msg: InboundMessage) => {
         return s ? sessionEffort(s) : undefined
       },
       proxyBaseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
+      proxyPublicUrl: process.env.MUX_WEB_PUBLIC_URL,
       resumeFromArchive: (id: string) => resumeFromArchive(id),
       spawnPA: async (args: { name: string; agent?: AgentKind; model?: string; focus?: string }) => {
         const workdir = join(home(), ".mux", "workspace", args.name)
