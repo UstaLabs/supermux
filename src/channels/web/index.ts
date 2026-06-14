@@ -162,6 +162,9 @@ export interface WebChannelOpts {
   terminalManager?: import("../../core/terminal/manager").TerminalManager
   fsWatcher?: FsWatcher
   getSessionWorkdir?: (name: string) => string | undefined
+  /** Resolve a claude session's tmux "session:window" target (for kind=agent
+   * terminals). Returns undefined for non-claude/unknown sessions. When this opt
+   * is absent, all kind=agent requests return 404 (the feature is opt-in). */
   getSessionTmuxTarget?: (name: string) => string | undefined
   getSessionBaseCommits?: (name: string) => Record<string, string> | undefined
   getSessionCreatedAt?: (name: string) => string | undefined

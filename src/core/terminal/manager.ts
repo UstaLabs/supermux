@@ -230,17 +230,29 @@ export class TerminalManager {
     }
   }
 
-  /** Permanently destroy a terminal: kill any viewers AND the tmux session. */
+  /** Destroy a terminal. For scratch terminals this kills viewers AND the backing
+   * tmux session. For AGENT terminals "close" == detach: only the grouped viewer
+   * session is destroyed; the agent window always survives. */
   async close(sessionName: string, terminalId: string): Promise<void> {
+    const agentViewers: Array<{ device: string; target: string }> = []
     for (const [key, inst] of this.terminals) {
       if (inst.sessionName === sessionName && inst.terminalId === terminalId) {
         inst.intentional = true
         this.terminals.delete(key)
         try { inst.proc.kill() } catch {}
+        if (inst.kind === "agent" && inst.agentTarget) {
+          agentViewers.push({ device: inst.deviceName, target: inst.agentTarget })
+        }
       }
     }
     log.info("terminal_close", { sessionName, terminalId })
-    try { await this.term.killTerminal(sessionName, terminalId) } catch {}
+    if (agentViewers.length > 0) {
+      for (const v of agentViewers) {
+        try { await this.agentTerm.killViewer(v.device, v.target) } catch {}
+      }
+    } else {
+      try { await this.term.killTerminal(sessionName, terminalId) } catch {}
+    }
   }
 
   /** List the (persisted) terminals for a session — source of truth is tmux. */

@@ -197,6 +197,23 @@ describe("TerminalManager (hermetic)", () => {
     expect(kills.flat()).not.toContain("mux:s")
   })
 
+  it("agent kind: close destroys the grouped viewer, not the agent", async () => {
+    const { viewerSessionName } = await import("../src/core/terminal/agent-tmux")
+    const agentCalls: string[][] = []
+    const mgr = new TerminalManager({
+      stateDir: STATE, socket: "test",
+      run: async () => ({ code: 0, stdout: "", stderr: "" }),
+      spawn: () => makeFakeProc(),
+      agentRun: async (a) => { agentCalls.push(a); return { code: 0, stdout: "", stderr: "" } },
+    })
+    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "agent", ...baseAttach, kind: "agent", agentTarget: "mux:s" })
+    await mgr.close("s", "agent")
+    await flush()
+    const kills = agentCalls.filter((c) => c[0] === "kill-session")
+    expect(kills.length).toBe(1)
+    expect(kills[0]![2]).toBe(viewerSessionName("d", "mux:s"))
+  })
+
   it("scratch detach does NOT call killViewer (agent cleanup is agent-only)", async () => {
     const agentCalls: string[][] = []
     const mgr = new TerminalManager({
