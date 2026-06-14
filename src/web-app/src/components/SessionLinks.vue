@@ -11,7 +11,7 @@ import {
   DropdownMenuItem,
 } from "reka-ui"
 import { useProxies } from "@/stores/proxies"
-import { proxyUrl, proxyHostname } from "@/lib/proxy-url"
+import { displayUrl } from "@/lib/proxy-url"
 
 const props = defineProps<{ sessionName: string }>()
 const proxies = useProxies()
@@ -33,12 +33,12 @@ const single = computed(() => (links.value.length === 1 ? links.value[0]! : null
     <!-- Single link: the icon is itself the link, opens directly. -->
     <a
       v-if="single"
-      :href="proxyUrl(single.domain)"
+      :href="single.url"
       target="_blank"
       rel="noopener noreferrer"
       class="cmux-icon-button"
-      :title="proxyHostname(single.domain)"
-      :aria-label="`Open ${proxyHostname(single.domain)}`"
+      :title="displayUrl(single.url)"
+      :aria-label="`Open ${displayUrl(single.url)}`"
     >
       <Link2 class="size-4" />
     </a>
@@ -58,13 +58,13 @@ const single = computed(() => (links.value.length === 1 ? links.value[0]! : null
         >
           <DropdownMenuItem v-for="link in links" :key="link.domain" as-child>
             <a
-              :href="proxyUrl(link.domain)"
+              :href="link.url"
               target="_blank"
               rel="noopener noreferrer"
               class="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-sm outline-none focus:bg-accent"
             >
               <ExternalLink class="size-4 shrink-0 text-muted-foreground" />
-              <span class="min-w-0 flex-1 truncate">{{ proxyHostname(link.domain) }}</span>
+              <span class="min-w-0 flex-1 truncate">{{ displayUrl(link.url) }}</span>
               <span class="shrink-0 text-[11px] tabular-nums text-muted-foreground">:{{ link.port }}</span>
               <span
                 v-if="link.isPublic"

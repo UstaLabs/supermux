@@ -6,7 +6,7 @@ import { home } from "../../shared/home"
 import { existsSync, writeFileSync, mkdirSync } from "fs"
 import { join } from "path"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
-import { extractSubdomain, handleProxyRequest, parseCookie } from "./proxy"
+import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
 import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOriginOk } from "./cookies"
 import { FsService } from "../../core/editor/fs-service"
 import { computeWorkdirDiff } from "../../core/editor/workdir-diff"
@@ -47,7 +47,6 @@ const log = makeLogger("channels/web")
 
 const RATE_LIMIT_WINDOW_MS = 5 * 60_000
 const RATE_LIMIT_MAX = 16
-const authFailures = new Map<string, { count: number; firstAt: number }>()
 
 function clientIp(req: Request): string {
   return req.headers.get("cf-connecting-ip")
@@ -55,9 +54,11 @@ function clientIp(req: Request): string {
       ?? "unknown"
 }
 
-export function __resetAuthFailures(): void {
-  authFailures.clear()
-}
+// Auth-failure rate-limit state is now per-WebChannel-instance (see the
+// `authFailures` field on the class), so there is no process-global bucket to
+// clear. Kept as an exported no-op for tests that build a fresh channel per
+// case — each new instance already starts with an empty bucket.
+export function __resetAuthFailures(): void {}
 
 const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/system", "/repos", "/forge"]
 const MAX_CLIENT_LOG_RING = 800
@@ -156,7 +157,7 @@ export interface WebChannelOpts {
   listChatIds?: () => string[]
   createProxy?: (args: { sessionName: string; port: number; domain?: string }) => { url: string; domain: string; port: number }
   removeProxy?: (domain: string) => void
-  listProxies?: () => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean }[]
+  listProxies?: () => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean; url: string }[]
   updateProxy?: (domain: string, isPublic: boolean) => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean }
   terminalManager?: import("../../core/terminal/manager").TerminalManager
   fsWatcher?: FsWatcher
@@ -226,6 +227,11 @@ export class WebChannel implements Channel {
   private displaySockets = new WeakMap<object, import("bun").Socket>()
   private readonly fsWatcher?: FsWatcher
   private readonly clientLogRing: StoredClientLogEntry[] = []
+  // Per-instance auth-failure rate-limit buckets, keyed by client IP. Instance
+  // (not module) scope keeps concurrent channels — e.g. the many WebChannels a
+  // single `bun test` process spins up, all seeing clientIp() === "unknown" —
+  // from sharing one bucket and spuriously rate-limiting each other's requests.
+  private readonly authFailures = new Map<string, { count: number; firstAt: number }>()
 
   constructor(private readonly opts: WebChannelOpts) {
     this.store = new DeviceStore(opts.devicesFile)
@@ -246,9 +252,9 @@ export class WebChannel implements Channel {
   private checkRateLimit(req: Request): boolean {
     const ip = clientIp(req)
     const now = Date.now()
-    const rec = authFailures.get(ip)
+    const rec = this.authFailures.get(ip)
     if (!rec || now - rec.firstAt > RATE_LIMIT_WINDOW_MS) {
-      authFailures.set(ip, { count: 0, firstAt: now })
+      this.authFailures.set(ip, { count: 0, firstAt: now })
       return true
     }
     return rec.count < RATE_LIMIT_MAX
@@ -256,9 +262,9 @@ export class WebChannel implements Channel {
 
   private recordAuthFailure(req: Request): void {
     const ip = clientIp(req)
-    const rec = authFailures.get(ip) ?? { count: 0, firstAt: Date.now() }
+    const rec = this.authFailures.get(ip) ?? { count: 0, firstAt: Date.now() }
     rec.count++
-    authFailures.set(ip, rec)
+    this.authFailures.set(ip, rec)
   }
 
   async start(): Promise<void> {
@@ -334,7 +340,12 @@ export class WebChannel implements Channel {
   async stop(): Promise<void> {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
     this.heartbeatTimer = undefined
-    this.server?.stop()
+    // Force-close active/keep-alive connections (the `true`). A graceful stop
+    // leaves idle keep-alive sockets open, so a stopped channel keeps serving on
+    // them — which on an in-process restart (and across reused ports under
+    // `bun test`) lets a client's pooled connection hit the dead-but-not-closed
+    // old server and read its now-removed state, yielding stale/401 responses.
+    this.server?.stop(true)
   }
 
   async send(action: OutboundAction): Promise<OutboundResult> {
@@ -362,14 +373,27 @@ export class WebChannel implements Channel {
   }
 
   private async routeRequestOrUpgrade(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
+    const url = new URL(req.url)
     if (this.opts.proxyBaseDomain) {
       const host = req.headers.get("host") ?? ""
       const sub = extractSubdomain(host, this.opts.proxyBaseDomain, this.opts.proxyMainHost)
       if (sub) {
         return this.handleProxyRoute(req, sub, server)
       }
+    } else if (this.opts.proxyLookup) {
+      // Path-based proxy (active only when no base domain is configured).
+      const pm = matchProxyPath(url.pathname)
+      if (pm) {
+        if (pm.rest === null) {
+          // bare /p/<slug> → 301 so the browser anchors relative URLs correctly
+          return new Response(null, { status: 301, headers: { location: `/p/${pm.slug}/${url.search}` } })
+        }
+        return this.handleProxyRoute(req, pm.slug, server, {
+          prefix: `/p/${pm.slug}`,
+          upstreamPath: pm.rest + url.search,
+        })
+      }
     }
-    const url = new URL(req.url)
     if (url.pathname === "/ws") {
       const token = authToken(req)
       if (!this.checkRateLimit(req)) return new Response("rate limited", { status: 429 })
@@ -886,15 +910,20 @@ export class WebChannel implements Channel {
     while (this.clientLogRing.length > MAX_CLIENT_LOG_RING) this.clientLogRing.shift()
   }
 
-  private async handleProxyRoute(req: Request, subdomain: string, server?: import("bun").Server<WSData>): Promise<Response | undefined> {
+  private async handleProxyRoute(
+    req: Request,
+    slug: string,
+    server?: import("bun").Server<WSData>,
+    pathOpts?: { prefix: string; upstreamPath: string },
+  ): Promise<Response | undefined> {
     if (!this.opts.proxyLookup) return new Response("proxy not configured", { status: 500 })
-    const upstream = this.opts.proxyLookup(subdomain)
+    const upstream = this.opts.proxyLookup(slug)
     if (!upstream) return new Response("not found", { status: 404 })
 
     if (!upstream.isPublic) {
-      // The cmux_token cookie is Domain=.<base>, so a paired device already sends
-      // it to proxy subdomains — no token-transfer page needed. A static 401 (no
-      // reflected input) replaces the old /proxy-auth redirect dance.
+      // The cmux_token cookie is host-only (path mode) or Domain=.<base>
+      // (subdomain mode), so a paired device already sends it here. A static
+      // 401 (no reflected input) replaces the old /proxy-auth redirect dance.
       const token = authToken(req)
       if (!token || !this.opts.proxyAuth?.(token)) {
         const mainUrl = this.opts.publicUrl.replace(/\/$/, "")
@@ -914,14 +943,15 @@ export class WebChannel implements Channel {
       // back in the 101 so strict clients accept the handshake. The full list is
       // forwarded to the upstream dial in the websocket `open` handler.
       const selectedProtocol = wsProtocol?.split(",")[0]?.trim()
+      const wsPath = pathOpts ? pathOpts.upstreamPath : url.pathname + url.search
       const upgraded = server.upgrade(req, {
-        data: { proxyUpstream: upstream, proxyPath: url.pathname + url.search, proxyWsProtocol: wsProtocol } as any,
+        data: { proxyUpstream: upstream, proxyPath: wsPath, proxyWsProtocol: wsProtocol } as any,
         ...(selectedProtocol ? { headers: { "Sec-WebSocket-Protocol": selectedProtocol } } : {}),
       })
       return upgraded ? undefined : new Response("ws upgrade failed", { status: 500 })
     }
 
-    return handleProxyRequest(req, upstream)
+    return handleProxyRequest(req, upstream, pathOpts)
   }
 
   private async routeRequest(req: Request): Promise<Response> {
