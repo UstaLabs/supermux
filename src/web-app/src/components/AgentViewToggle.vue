@@ -9,7 +9,7 @@ const layout = useLayout()
 const panel = computed(() => layout.panelsFor(props.sessionId))
 
 function set(v: "chat" | "terminal") {
-  panel.value.mainView = v
+  layout.setMainView(props.sessionId, v)
 }
 </script>
 

@@ -155,6 +155,10 @@ export const useLayout = defineStore("layout", () => {
     panel.activeTab = tab
   }
 
+  function setMainView(sessionId: string, view: "chat" | "terminal") {
+    panelsFor(sessionId).mainView = view
+  }
+
   function resetSidebar() { state.sidebarWidth = SIDEBAR.default }
   function resetChatSplit() { state.chatSplitPct = CHAT_SPLIT.default }
   function resetEditorTermSplit() { state.editorTermSplitPct = EDITOR_TERM_SPLIT.default }
@@ -164,5 +168,5 @@ export const useLayout = defineStore("layout", () => {
   function showArchivedPage() { state.sidebarPage = "archived" }
   function showSessionsPage() { state.sidebarPage = "sessions" }
 
-  return { state, panelsFor, selectTab, toggleTerminal, toggleEditor, toggleDisplay, toggleChat, resetSidebar, resetChatSplit, resetEditorTermSplit, resetWorkDisplaySplit, toggleSidebarCollapsed, expandSidebar, showArchivedPage, showSessionsPage }
+  return { state, panelsFor, selectTab, setMainView, toggleTerminal, toggleEditor, toggleDisplay, toggleChat, resetSidebar, resetChatSplit, resetEditorTermSplit, resetWorkDisplaySplit, toggleSidebarCollapsed, expandSidebar, showArchivedPage, showSessionsPage }
 })

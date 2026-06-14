@@ -43,7 +43,7 @@ function onClusterClick(key: ChatPanelTab) {
 
 <template>
   <!-- Mobile: fixed bottom tab bar — pick exactly one pane -->
-  <nav
+  <div
     v-if="mode === 'bottom-bar'"
     class="flex border-t border-border bg-[var(--cmux-header)]"
     style="padding-bottom: env(safe-area-inset-bottom, 0px)"
@@ -64,7 +64,7 @@ function onClusterClick(key: ChatPanelTab) {
       <component :is="p.icon" class="size-5" />
       {{ p.label }}
     </button>
-  </nav>
+  </div>
 
   <!-- Desktop: header toggle cluster — show/hide tiled panes -->
   <div
