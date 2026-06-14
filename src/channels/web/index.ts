@@ -74,7 +74,7 @@ export type StoredClientLogEntry = {
 }
 const MUTATING_METHODS = new Set(["POST", "PUT", "DELETE", "PATCH"])
 
-type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalSession?: string; terminalId?: string; display?: true; scrcpy?: true; displayStreamId?: string }
+type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalAgentTarget?: string; display?: true; scrcpy?: true; displayStreamId?: string }
 
 export interface SessionSnapshot {
   id?: string
@@ -162,6 +162,7 @@ export interface WebChannelOpts {
   terminalManager?: import("../../core/terminal/manager").TerminalManager
   fsWatcher?: FsWatcher
   getSessionWorkdir?: (name: string) => string | undefined
+  getSessionTmuxTarget?: (name: string) => string | undefined
   getSessionBaseCommits?: (name: string) => Record<string, string> | undefined
   getSessionCreatedAt?: (name: string) => string | undefined
   listArchivedSessions?: () => ArchivedSessionSnapshot[]
@@ -407,9 +408,12 @@ export class WebChannel implements Channel {
     if (url.pathname === "/ws/term") {
       const token = authToken(req)
       const sessionName = url.searchParams.get("session") ?? ""
-      // Per-terminal id (multiple terminals per session). Sanitized to a safe
-      // charset since it becomes part of a tmux session name; defaults to "main".
-      const terminalId = (url.searchParams.get("terminal") ?? "").replace(/[^A-Za-z0-9]/g, "").slice(0, 64) || "main"
+      const kind = url.searchParams.get("kind") === "agent" ? "agent" : "scratch"
+      // Per-terminal id (multiple scratch terminals per session). Agent terminals
+      // are singular → fixed id "agent". Sanitized: it becomes a tmux name.
+      const terminalId = kind === "agent"
+        ? "agent"
+        : ((url.searchParams.get("terminal") ?? "").replace(/[^A-Za-z0-9]/g, "").slice(0, 64) || "main")
       if (!this.checkRateLimit(req)) return new Response("rate limited", { status: 429 })
       const dev = this.store.verify(token)
       if (!dev) { this.recordAuthFailure(req); return new Response("unauthorized", { status: 401 }) }
@@ -417,8 +421,15 @@ export class WebChannel implements Channel {
       if (!sessionName || !this.opts.getSessionWorkdir?.(sessionName)) {
         return new Response("session not found", { status: 404 })
       }
+      // Agent terminals are claude-only: getSessionTmuxTarget returns undefined
+      // for non-claude / unknown sessions (see main.ts).
+      let agentTarget: string | undefined
+      if (kind === "agent") {
+        agentTarget = this.opts.getSessionTmuxTarget?.(sessionName)
+        if (!agentTarget) return new Response("agent terminal unsupported", { status: 404 })
+      }
       const upgraded = server.upgrade(req, {
-        data: { deviceName: dev.name, openedAt: Date.now(), terminal: true, terminalSession: sessionName, terminalId } as WSData,
+        data: { deviceName: dev.name, openedAt: Date.now(), terminal: true, terminalKind: kind, terminalSession: sessionName, terminalId, terminalAgentTarget: agentTarget } as WSData,
       })
       if (upgraded) return undefined
       return new Response("upgrade failed", { status: 500 })
@@ -503,6 +514,8 @@ export class WebChannel implements Channel {
       workdir,
       cols: 80,
       rows: 24,
+      kind: ws.data.terminalKind ?? "scratch",
+      agentTarget: ws.data.terminalAgentTarget,
       onData: (data) => { try { ws.sendBinary(data) } catch {} },
       onExit: (code) => { try { ws.send(JSON.stringify({ type: "exit", code })); ws.close() } catch {} },
     })

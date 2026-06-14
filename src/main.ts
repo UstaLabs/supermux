@@ -1186,6 +1186,13 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     stopDisplay: (id) => displayManager.stop(id),
     fsWatcher,
     getSessionWorkdir: (id) => registry.get(id)?.workdir,
+    getSessionTmuxTarget: (id) => {
+      const s = registry.get(id)
+      if (!s || s.agent !== AgentKind.Claude) return undefined
+      // session:window form ("mux:<name>") — NOT claudeTmuxTarget(), which prefers
+      // the @window-id (no colon) and would break the grouped-session split.
+      return `${TMUX_SESSION}:${s.name}`
+    },
     getSessionBaseCommits: (id) => registry.get(id)?.base_commits,
     getSessionCreatedAt: (id) => registry.get(id)?.created_at,
     listArchivedSessions: () =>
