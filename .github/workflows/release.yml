@@ -24,16 +24,14 @@ jobs:
           - runner: ubuntu-24.04-arm
             os: linux
             arch: arm64
-          # macOS native binaries (Mach-O), built on GitHub's Apple-Silicon
-          # (macos-14) and Intel (macos-13) runners. The very same
-          # build-binary.sh runs unchanged, and smoke-binary.sh boots the real
-          # broker — so this validates macOS at RUNTIME, not just compilation.
+          # macOS native binary (Mach-O), Apple-Silicon only (macos-14). The
+          # same build-binary.sh runs unchanged and smoke-binary.sh boots the
+          # real broker, so this validates macOS at RUNTIME, not just compile.
+          # Intel macOS is omitted on purpose: free Intel runners are scarce and
+          # would stall releases — Intel Macs can use --docker / --source.
           - runner: macos-14
             os: darwin
             arch: arm64
-          - runner: macos-13
-            os: darwin
-            arch: x64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -142,7 +140,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          assets="dist/supermux-linux-x64 dist/supermux-linux-x64.sha256 dist/supermux-linux-arm64 dist/supermux-linux-arm64.sha256 dist/supermux-darwin-arm64 dist/supermux-darwin-arm64.sha256 dist/supermux-darwin-x64 dist/supermux-darwin-x64.sha256"
+          assets="dist/supermux-linux-x64 dist/supermux-linux-x64.sha256 dist/supermux-linux-arm64 dist/supermux-linux-arm64.sha256 dist/supermux-darwin-arm64 dist/supermux-darwin-arm64.sha256"
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 \
             && gh release upload "${GITHUB_REF_NAME}" --clobber $assets \
             || gh release create "${GITHUB_REF_NAME}" --generate-notes $assets
@@ -176,9 +174,8 @@ jobs:
           SHA_LINUX_X64=$(cut -d' ' -f1 dist/supermux-linux-x64.sha256)
           SHA_LINUX_ARM64=$(cut -d' ' -f1 dist/supermux-linux-arm64.sha256)
           SHA_DARWIN_ARM64=$(cut -d' ' -f1 dist/supermux-darwin-arm64.sha256)
-          SHA_DARWIN_X64=$(cut -d' ' -f1 dist/supermux-darwin-x64.sha256)
           git clone "https://x-access-token:${TOKEN}@github.com/AhmetHuseyinDOK/supermux-website.git" site
-          bun scripts/generate-versions-json.ts "$V" "$SHA_LINUX_X64" "$SHA_LINUX_ARM64" "$SHA_DARWIN_ARM64" "$SHA_DARWIN_X64" > site/versions.json
+          bun scripts/generate-versions-json.ts "$V" "$SHA_LINUX_X64" "$SHA_LINUX_ARM64" "$SHA_DARWIN_ARM64" > site/versions.json
           sed "s|__SUPERMUX_TAG__|v${V}|" .github/release-assets/docker-compose.release.yml > site/docker-compose.yml
           cd site
           git config user.name "supermux-release"

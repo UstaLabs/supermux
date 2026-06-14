@@ -87,13 +87,16 @@ echo "PASS 1/3: version"
 # Both MUX_WEB_PORT and MUX_WEB_PUBLIC_URL are required for the web channel; the
 # isolated MUX_HOME/MUX_STATE_DIR guarantee we never read/write real state.
 #
-# The broker's preflight FATALS unless at least one agent CLI (claude/codex/
-# cursor-agent) is on PATH. CI runners have none, and this smoke never spawns a
-# session — so satisfy the presence check with an inert stub on a private PATH
-# prefix. Locally the real CLIs are found first; the stub is just a no-op shadow.
+# The broker's preflight FATALS unless BOTH (a) at least one agent CLI (claude/
+# codex/cursor-agent) AND (b) tmux are on PATH. ubuntu runners ship tmux; macOS
+# runners do NOT — and this smoke never spawns a session — so satisfy both
+# presence checks with inert stubs on a PATH SUFFIX. Real binaries (tmux on
+# Linux, the real CLIs locally) are found first; the stubs are no-op shadows
+# only where nothing else exists.
 mkdir -p "$TMP/stubbin"
 printf '#!/bin/sh\nexit 0\n' > "$TMP/stubbin/claude"
-chmod +x "$TMP/stubbin/claude"
+printf '#!/bin/sh\ncase "$1" in -V) echo "tmux 3.4";; esac\nexit 0\n' > "$TMP/stubbin/tmux"
+chmod +x "$TMP/stubbin/claude" "$TMP/stubbin/tmux"
 
 PATH="$PATH:$TMP/stubbin" \
 MUX_HOME="$TMP" \
