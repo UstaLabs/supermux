@@ -196,4 +196,18 @@ describe("TerminalManager (hermetic)", () => {
     expect(kills[0]![2]).toBe(viewerSessionName("d", "mux:s"))
     expect(kills.flat()).not.toContain("mux:s")
   })
+
+  it("scratch detach does NOT call killViewer (agent cleanup is agent-only)", async () => {
+    const agentCalls: string[][] = []
+    const mgr = new TerminalManager({
+      stateDir: STATE, socket: "test",
+      run: async () => ({ code: 0, stdout: "", stderr: "" }),
+      spawn: () => makeFakeProc(),
+      agentRun: async (a) => { agentCalls.push(a); return { code: 0, stdout: "", stderr: "" } },
+    })
+    mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach })
+    mgr.detach("d", "s", "t1")
+    await flush()
+    expect(agentCalls.flat()).not.toContain("kill-session")
+  })
 })

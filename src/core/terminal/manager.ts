@@ -121,6 +121,9 @@ export class TerminalManager {
     }
 
     const kind = opts.kind ?? "scratch"
+    if (kind === "agent" && !opts.agentTarget) {
+      return { ok: false, error: "agentTarget is required for kind=agent" }
+    }
     const argv = kind === "agent"
       ? agentAttachArgv({ device: opts.deviceName, agentTarget: opts.agentTarget! })
       : this.term.attachArgv({
