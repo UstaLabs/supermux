@@ -200,7 +200,7 @@ const activeTab = computed({
 const isClaude = computed(() => session.value?.agent === "claude")
 const mainView = computed<"chat" | "terminal">({
   get: () => (isClaude.value ? panels.value.mainView : "chat"),
-  set: (v) => { panels.value.mainView = v },
+  set: (v) => { if (isClaude.value) panels.value.mainView = v },
 })
 type PendingOpenFile = { path: string; line?: number; endLine?: number }
 const editorOpenFile = ref<((path: string, line?: number, endLine?: number) => void) | null>(null)
@@ -526,12 +526,16 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
       >
         <button
           type="button"
+          role="tab"
+          :aria-selected="mainView === 'chat'"
           class="px-2.5 py-1 font-medium transition-colors"
           :class="mainView === 'chat' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'"
           @click="mainView = 'chat'"
         >Chat</button>
         <button
           type="button"
+          role="tab"
+          :aria-selected="mainView === 'terminal'"
           class="px-2.5 py-1 font-medium transition-colors"
           :class="mainView === 'terminal' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'"
           @click="mainView = 'terminal'"
