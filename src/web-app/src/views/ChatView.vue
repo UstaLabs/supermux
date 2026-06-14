@@ -3,7 +3,7 @@ defineOptions({ name: "ChatView" })
 
 import { computed, ref, provide, onMounted, onBeforeUnmount, nextTick, watch } from "vue"
 import { useRouter } from "vue-router"
-import { ChevronLeft, TerminalSquare, FileCode2, MessageSquare, Monitor, GitMerge } from "@lucide/vue"
+import { ChevronLeft, GitMerge } from "@lucide/vue"
 import { AlertTriangleIcon, Loader2Icon, SendHorizonalIcon, SquareIcon } from "lucide-vue-next"
 import { useMessages } from "@/stores/messages"
 import { useWS } from "@/api/ws"
@@ -520,43 +520,11 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
       >
         {{ resuming ? "…" : "Resume" }}
       </button>
-      <button
+      <PaneSwitcher
         v-if="isDesktop && !isArchived"
-        class="cmux-icon-button disabled:opacity-40 disabled:cursor-not-allowed"
-        :class="{ 'cmux-icon-button-active': panels.chatOpen }"
-        :disabled="!panels.editorOpen && !panels.terminalOpen && !panels.displayOpen"
-        aria-label="Toggle chat"
-        @click="layout.toggleChat(props.id)"
-      >
-        <MessageSquare class="size-4" />
-      </button>
-      <button
-        v-if="!isArchived"
-        class="cmux-icon-button"
-        :class="{ 'cmux-icon-button-active': panels.terminalOpen }"
-        aria-label="Toggle terminal"
-        @click="layout.toggleTerminal(props.id); if (panels.terminalOpen) activeTab = 'terminal'"
-      >
-        <TerminalSquare class="size-4" />
-      </button>
-      <button
-        v-if="!isArchived"
-        class="cmux-icon-button"
-        :class="{ 'cmux-icon-button-active': panels.editorOpen }"
-        aria-label="Toggle editor"
-        @click="layout.toggleEditor(props.id); if (panels.editorOpen) activeTab = 'editor'"
-      >
-        <FileCode2 class="size-4" />
-      </button>
-      <button
-        v-if="!isArchived"
-        class="cmux-icon-button"
-        :class="{ 'cmux-icon-button-active': panels.displayOpen }"
-        aria-label="Toggle display"
-        @click="layout.toggleDisplay(props.id); if (panels.displayOpen) activeTab = 'display'"
-      >
-        <Monitor class="size-4" />
-      </button>
+        :session-id="props.id"
+        mode="header-cluster"
+      />
       <button
         v-if="!isArchived && session?.session_branch"
         type="button"
