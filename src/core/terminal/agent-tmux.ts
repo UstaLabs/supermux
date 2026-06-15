@@ -47,6 +47,11 @@ export function attachArgv(opts: { device: string; agentTarget: string }): strin
     `w=$(tmux display-message -p -t ${tgt} '#{window_index}' 2>/dev/null); ` +
     `[ -n "$s" ] && [ -n "$w" ] || exit 1; ` +
     `tmux new-session -d -s ${v} -t "$s" 2>/dev/null; ` +
+    // Per-viewer: hide the default tmux status bar so the agent's TUI gets the
+    // full height and no tmux chrome (the green status line) leaks into the
+    // Native view. Scoped to the grouped viewer session — the base `mux` session
+    // and other viewers are unaffected.
+    `tmux set-option -t ${v} status off 2>/dev/null; ` +
     `tmux select-window -t ${v}:"$w" 2>/dev/null; ` +
     `exec tmux attach -t ${v}`
   return ["sh", "-c", script]
