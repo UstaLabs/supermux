@@ -35,5 +35,13 @@ struct RootView: View {
         }
         .tint(Theme.teal)
         .task { broker.start() }
+        .task(id: broker.synced) {
+            // Debug convenience: auto-open a session once synced (SM_OPEN_SESSION=name).
+            guard broker.synced, selected == nil else { return }
+            let want = ProcessInfo.processInfo.environment["SM_OPEN_SESSION"]
+            selected = broker.sessions.first(where: { want != nil && $0.name == want })
+                ?? broker.sessions.first(where: { !(broker.messages[$0.id]?.isEmpty ?? true) })
+                ?? broker.sessions.first
+        }
     }
 }
