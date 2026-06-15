@@ -49,8 +49,11 @@ class BrokerClient(
         while (true) {
             try {
                 println("[BrokerClient] connecting $baseUrl/ws")
+                val wsUrl = baseUrl
+                    .replaceFirst("https://", "wss://")
+                    .replaceFirst("http://", "ws://")
                 http.webSocket(
-                    urlString = "$baseUrl/ws",
+                    urlString = "$wsUrl/ws",
                     request = { header("Authorization", "Bearer $token") },
                 ) {
                     attempt = 0

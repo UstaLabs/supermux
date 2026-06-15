@@ -1,0 +1,6 @@
+Supermux.xcodeproj/
+build/
+DerivedData/
+*.xcuserstate
+.DS_Store
+local.properties

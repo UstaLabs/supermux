@@ -12,3 +12,4 @@ src/channels/web/static/
 
 # Internal planning/spec docs (kept local, never published)
 docs/superpowers/
+.superpowers/

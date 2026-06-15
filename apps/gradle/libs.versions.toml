@@ -1,8 +1,8 @@
 [versions]
-kotlin = "2.3.0"
+kotlin = "2.3.21"
 coroutines = "1.9.0"
 serialization = "1.7.3"
-ktor = "3.0.1"
+ktor = "3.5.0"
 androidSecurity = "1.1.0-alpha06"
 agp = "8.9.1"
 androidMinSdk = "26"
@@ -11,6 +11,7 @@ composeBom = "2024.12.01"
 activityCompose = "1.9.3"
 lifecycle = "2.8.7"
 termlib = "0.0.35"
+skie = "0.10.12"
 
 [libraries]
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -42,3 +43,4 @@ android-application = { id = "com.android.application", version.ref = "agp" }
 android-library = { id = "com.android.library", version.ref = "agp" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+skie = { id = "co.touchlab.skie", version.ref = "skie" }

@@ -1,0 +1,71 @@
+import Foundation
+import Shared
+
+/// Observable wrapper over the shared `BrokerClient` — mirrors the Android
+/// `AppViewModel`: collect `client.frames` into UI state, run the socket loop,
+/// and expose `BrokerApi` for REST actions. SKIE gives us `async` + typed enums.
+@MainActor
+@Observable
+final class BrokerSession {
+    let baseURL: String
+    let api: BrokerApi
+    private let client: BrokerClient
+
+    private(set) var sessions: [SessionInfo] = []
+    private(set) var messages: [String: [LogEntry]] = [:]
+    private(set) var activity: [String: [ActivityEvent]] = [:]
+    private(set) var agentPhase: [String: String] = [:]
+    private(set) var synced = false
+
+    init(baseURL: String, token: String) {
+        self.baseURL = baseURL
+        let http = IosClientKt.iosHttpClient()
+        self.api = BrokerApi(baseUrl: baseURL, token: token, http: http)
+        self.client = BrokerClient(baseUrl: baseURL, token: token, http: http,
+                                   policy: ReconnectPolicy(baseMs: 500, maxMs: 8000))
+    }
+
+    func start() {
+        Task { [weak self] in
+            guard let self else { return }
+            for await frame in self.client.frames {
+                self.reduce(frame)
+            }
+        }
+        Task { [weak self] in try? await self?.client.run() }
+    }
+
+    private func reduce(_ frame: ServerFrame) {
+        switch onEnum(of: frame) {
+        case .snapshot(let s):
+            sessions = s.sessions
+            messages = s.logs
+            activity = s.activity
+            agentPhase = s.agentState.mapValues { $0.phase }
+            synced = true
+        case .sessionAdded(let a): sessions.append(a.session)
+        case .sessionRemoved(let r): sessions.removeAll { $0.id == r.id }
+        case .messageAppend(let m): messages[m.session, default: []].append(m.entry)
+        case .activityAppend(let a): activity[a.session, default: []].append(a.event)
+        case .agentState(let st): agentPhase[st.session] = st.phase
+        case .commandsChanged: break
+        case .agentError: break
+        }
+    }
+
+    func send(_ sessionId: String, _ text: String) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        let frame = ClientFrameSend(session: sessionId, op: "reply",
+                                    args: SendArgs(text: t, attachments: nil))
+        Task { [client] in try? await client.send(frame: frame) }
+    }
+
+    /// PWA-identical grouping (Personal Assistants + per-workdir) via the shared helper.
+    func groups() -> [SessionGroup] {
+        let home = inferHomeDir(workdir: sessions.first?.workdir) ?? ""
+        return groupSessions(sessions: sessions, home: home, lastTs: { [messages] s in
+            messages[s.id]?.last?.ts ?? ""
+        })
+    }
+}

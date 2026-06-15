@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.multiplatform)
     alias(libs.plugins.serialization)
     alias(libs.plugins.android.library)
+    alias(libs.plugins.skie)
 }
 
 kotlin {
@@ -13,8 +14,12 @@ kotlin {
     // iOS targets are declared so the iosMain source set + Apple actuals exist;
     // their compile/link tasks run on a Mac (Spec 2). On this Linux host they
     // are disabled (see kotlin.native.ignoreDisabledTargets in gradle.properties).
-    iosArm64()
-    iosSimulatorArm64()
+    listOf(iosArm64(), iosSimulatorArm64()).forEach { t ->
+        t.binaries.framework {
+            baseName = "Shared"
+            isStatic = false
+        }
+    }
 
     sourceSets {
         commonMain.dependencies {
