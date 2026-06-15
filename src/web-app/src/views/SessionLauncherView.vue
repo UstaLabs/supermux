@@ -36,6 +36,7 @@ import {
 } from "@/components/ai-elements/prompt-input"
 import PromptInputActionAddCamera from "@/components/ai-elements/prompt-input/PromptInputActionAddCamera.vue"
 import SlashCommandMenu from "@/components/SlashCommandMenu.vue"
+import LauncherComposeLock from "@/components/LauncherComposeLock.vue"
 import { useLauncherCommands } from "@/composables/useLauncherCommands"
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input"
 
@@ -49,6 +50,10 @@ const sortedSessions = useSortedSessions()
 
 const workdir = ref("~")
 const workdirTouched = ref(false)
+// Flips once the user starts composing (typing / attaching / recording). After
+// that we stop following the recency order so the project can't change under
+// them while they compose — see chooseDefaultProject and the watcher below.
+const composeStarted = ref(false)
 const agent = ref<"claude" | "codex" | "cursor" | "opencode">("claude")
 const model = ref("")
 const LS_KEY = "cmux:launcher-prefs"
@@ -139,9 +144,15 @@ const orderedProjects = computed(() => orderProjectsByRecency(recentWorkdirs.val
 const { commands: launcherCommands, loading: launcherCommandsLoading } = useLauncherCommands(agent, workdir)
 
 // Follow the most-recently-used project as session/message data hydrates, but
-// never override a path the user has chosen themselves.
+// stop once the user engages (picks a path or starts composing) so a late
+// recency reshuffle can't swap the project out from under them.
 watch(recentWorkdirs, (recent) => {
-  workdir.value = chooseDefaultProject(workdir.value, workdirTouched.value, recent)
+  workdir.value = chooseDefaultProject({
+    current: workdir.value,
+    recent,
+    picked: workdirTouched.value,
+    composing: composeStarted.value,
+  })
 }, { immediate: true })
 
 function onPickWorkdir(path: string) {
@@ -183,6 +194,7 @@ async function loadProjects() {
 watch(() => sessions.homeDir, loadProjects, { immediate: true })
 
 function startRecording() {
+  composeStarted.value = true
   isRecording.value = true
 }
 
@@ -295,6 +307,7 @@ function goBack() {
           :global-drop="isDesktop"
           @submit="onPromptSubmit"
         >
+          <LauncherComposeLock @engaged="composeStarted = true" />
           <SlashCommandMenu
             :commands="launcherCommands"
             :loading="launcherCommandsLoading"
