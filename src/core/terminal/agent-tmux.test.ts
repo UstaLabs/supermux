@@ -39,6 +39,13 @@ describe("agent-tmux attachArgv", () => {
     // POSIX escape: x'y -> 'x'\''y'  (the quote can't terminate the string early)
     expect(argv[2]!).toContain("'x'\\''y'")
   })
+
+  test("turns the viewer session's status bar off", () => {
+    const argv = attachArgv({ device: "d", agentTarget: "@5" })
+    const script = argv[2]!
+    const viewer = viewerSessionName("d", "@5")
+    expect(script).toContain(`set-option -t '${viewer}' status off`)
+  })
 })
 
 describe("agent-tmux control ops (mock runner)", () => {

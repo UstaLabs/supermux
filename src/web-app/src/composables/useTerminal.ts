@@ -26,6 +26,17 @@ export function useTerminal(sessionName: MaybeRefOrGetter<string>, terminalId: M
 
   let dataCallback: ((data: Uint8Array) => void) | null = null
   let exitCallback: ((code: number) => void) | null = null
+  // Remember the latest requested size so we can (re)send it the moment the
+  // socket opens. fit() frequently runs before connect() opens the socket (and
+  // again after a reconnect), when readyState isn't OPEN yet; without this flush
+  // that size is silently dropped and the terminal stays at its initial 80x24.
+  let lastSize: { cols: number; rows: number } | null = null
+
+  function sendResize(cols: number, rows: number) {
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "resize", cols, rows }))
+    }
+  }
 
   function open() {
     if (stopped) return
@@ -40,6 +51,7 @@ export function useTerminal(sessionName: MaybeRefOrGetter<string>, terminalId: M
     ws.onopen = () => {
       attempt = 0
       status.value = "connected"
+      if (lastSize) sendResize(lastSize.cols, lastSize.rows)
     }
 
     ws.onmessage = (e) => {
@@ -92,9 +104,8 @@ export function useTerminal(sessionName: MaybeRefOrGetter<string>, terminalId: M
   }
 
   function resize(cols: number, rows: number) {
-    if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "resize", cols, rows }))
-    }
+    lastSize = { cols, rows }
+    sendResize(cols, rows)
   }
 
   function onData(cb: (data: Uint8Array) => void) {
