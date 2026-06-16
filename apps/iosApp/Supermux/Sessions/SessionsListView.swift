@@ -8,6 +8,7 @@ struct SessionsListView: View {
     let broker: BrokerSession
     @Binding var selected: String?
     var onNewSession: () -> Void
+    var onArchived: () -> Void
 
     @State private var collapsed: Set<String> = SessionsListView.loadCollapsed()
     @State private var renameTarget: SessionInfo?
@@ -18,10 +19,23 @@ struct SessionsListView: View {
         List(selection: $selected) {
             Section {
                 Button(action: onNewSession) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "plus.circle.fill").font(.title2).foregroundStyle(Theme.teal)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Start a new session").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                            Text("Start a project and send your first message")
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, 3)
+                }
+                .buttonStyle(.plain)
+                Button(action: onArchived) {
                     Label {
-                        Text("New session").fontWeight(.medium).foregroundStyle(.primary)
+                        Text("Archived").foregroundStyle(.primary)
                     } icon: {
-                        Image(systemName: "plus.circle.fill").foregroundStyle(Theme.teal)
+                        Image(systemName: "archivebox").foregroundStyle(.secondary)
                     }
                 }
                 .buttonStyle(.plain)

@@ -51,7 +51,12 @@ final class BrokerSession {
             synced = true
         case .sessionAdded(let a): sessions.append(a.session)
         case .sessionRemoved(let r): sessions.removeAll { $0.id == r.id }
-        case .messageAppend(let m): messages[m.session, default: []].append(m.entry)
+        case .messageAppend(let m):
+            // Drop the optimistic local echo when the real inbound message arrives.
+            if m.entry.direction.hasPrefix("in") {
+                messages[m.session]?.removeAll { $0.id.hasPrefix("local-") && $0.text == m.entry.text }
+            }
+            messages[m.session, default: []].append(m.entry)
         case .activityAppend(let a): activity[a.session, default: []].append(a.event)
         case .agentState(let st):
             agentPhase[st.session] = st.phase
@@ -61,12 +66,30 @@ final class BrokerSession {
         }
     }
 
-    func send(_ sessionId: String, _ text: String) {
+    func send(_ sessionId: String, _ text: String, attachments: [String]? = nil) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty else { return }
+        let atts = attachments ?? []
+        guard !t.isEmpty || !atts.isEmpty else { return }
+        // Optimistic local echo so the message appears instantly (web parity).
+        // The broker's real inbound echo replaces it (deduped in reduce()).
+        if !t.isEmpty {
+            let optimistic = LogEntry(
+                id: "local-\(messages[sessionId]?.count ?? 0)-\(abs(t.hashValue))",
+                ts: ISO8601DateFormatter().string(from: Date()),
+                direction: "inbound", text: t,
+                op: nil, channel: nil, chat_id: nil, message_id: nil, attachments: nil
+            )
+            messages[sessionId, default: []].append(optimistic)
+        }
         let frame = ClientFrameSend(session: sessionId, op: "reply",
-                                    args: SendArgs(text: t, attachments: nil))
+                                    args: SendArgs(text: t, attachments: atts.isEmpty ? nil : atts))
         Task { [client] in try? await client.send(frame: frame) }
+    }
+
+    /// Upload bytes (base64 over the wire) → file id, for composing attachments.
+    func upload(_ sessionId: String, data: Data, filename: String, mime: String, kind: String? = nil) async -> String? {
+        let b64 = data.base64EncodedString()
+        return (try? await api.uploadBase64(session: sessionId, base64: b64, filename: filename, mime: mime, kind: kind))?.file_id
     }
 
     /// PWA-identical grouping (Personal Assistants + per-workdir) via the shared helper.
@@ -90,10 +113,27 @@ final class BrokerSession {
     func kill(_ id: String) {
         Task { [api] in try? await api.kill(id: id) }
     }
+    func interrupt(_ id: String) {
+        Task { [api] in try? await api.interrupt(id: id) }
+    }
+
+    // Git status + finish (chat header).
+    func gitStatus(_ id: String) async -> GitRemoteStatus? { try? await api.gitStatus(id: id) }
+    func gitFetch(_ id: String) async -> GitOpResult? { try? await api.gitFetch(id: id) }
+    func gitPublish(_ id: String) async -> GitOpResult? { try? await api.gitPublish(id: id) }
+    func gitPush(_ id: String) async -> GitOpResult? { try? await api.gitPush(id: id) }
+    func gitPull(_ id: String) async -> GitOpResult? { try? await api.gitPull(id: id) }
+    func finish(_ id: String, skipVerify: Bool? = nil, commitFirst: Bool? = nil, commitMessage: String? = nil) async -> FinishResult? {
+        try? await api.finish(id: id, skipVerify: skipVerify?.kb, commitFirst: commitFirst?.kb, commitMessage: commitMessage)
+    }
+    func sendMessage(_ id: String, _ text: String) { Task { [api] in try? await api.sendMessage(id: id, text: text) } }
     func projects() async -> [String] { (try? await api.listProjects()) ?? [] }
-    func spawn(workdir: String, agent: String?, name: String?) async -> String? {
-        let req = SpawnRequest(workdir: workdir, name: name, agent: agent, model: nil)
+    func spawn(workdir: String, agent: String?, name: String?, model: String? = nil) async -> String? {
+        let req = SpawnRequest(workdir: workdir, name: name, agent: agent, model: model)
         return (try? await api.spawn(req: req))?.id
+    }
+    func listModels(_ agent: String) async -> [ModelInfo] {
+        (try? await api.listModels(agent: agent))?.models ?? []
     }
 
     func models(_ id: String) async -> ModelsResponse? { try? await api.models(id: id) }
@@ -107,6 +147,20 @@ final class BrokerSession {
 
     func archived() async -> [ArchivedDto] { (try? await api.archived()) ?? [] }
     func resume(_ id: String) { Task { [api] in try? await api.resume(id: id) } }
+    func archivedLogs(_ id: String) async -> [LogEntry] { (try? await api.archivedLogs(sessionId: id)) ?? [] }
+
+    // Usage (typed), device mint/revoke, proxy privacy — mirror the web pages.
+    func usage() async -> UsageResponse? { try? await api.usage() }
+    func addDevice(_ name: String) async -> AddDeviceResponse? { try? await api.addDevice(name: name) }
+    func revokeDevice(_ name: String) async { try? await api.revokeDevice(name: name) }
+    func setProxyPublic(_ domain: String, _ isPublic: Bool) async { try? await api.setProxyPublic(domain: domain, isPublic: isPublic) }
+    func removeProxy(_ domain: String) async { try? await api.removeProxy(domain: domain) }
+
+    // Personal Assistants.
+    func pas() async -> [PADto] { (try? await api.listPAs()) ?? [] }
+    func createPA(name: String, agent: String?, model: String?, focusText: String?) async {
+        try? await api.createPA(name: name, agent: agent, model: model, focusText: focusText)
+    }
 
     func config() async -> AppConfigDto? { try? await api.getConfig() }
     func setPAName(_ name: String) { Task { [api] in try? await api.putConfig(paName: name) } }
@@ -123,4 +177,9 @@ final class BrokerSession {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         return try? await URLSession.shared.data(for: req).0
     }
+}
+
+private extension Bool {
+    /// Box for SKIE-bridged Kotlin `Boolean?` parameters.
+    var kb: KotlinBoolean { KotlinBoolean(bool: self) }
 }
