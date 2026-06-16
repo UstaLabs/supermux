@@ -68,4 +68,23 @@ final class BrokerSession {
             messages[s.id]?.last?.ts ?? ""
         })
     }
+
+    // MARK: - Session actions (mirror the web SessionListView)
+    func toggleMute(_ s: SessionInfo) {
+        let next = !(s.mute?.boolValue ?? false)
+        Task { [api] in try? await api.setMute(id: s.id, muted: next) }
+    }
+    func rename(_ id: String, to name: String) {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !n.isEmpty else { return }
+        Task { [api] in try? await api.rename(id: id, name: n) }
+    }
+    func kill(_ id: String) {
+        Task { [api] in try? await api.kill(id: id) }
+    }
+    func projects() async -> [String] { (try? await api.listProjects()) ?? [] }
+    func spawn(workdir: String, agent: String?, name: String?) async -> String? {
+        let req = SpawnRequest(workdir: workdir, name: name, agent: agent, model: nil)
+        return (try? await api.spawn(req: req))?.id
+    }
 }

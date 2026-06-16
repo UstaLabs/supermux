@@ -7,6 +7,7 @@ struct RootView: View {
     @State private var broker: BrokerSession
     @State private var selected: SessionInfo?
     @State private var sheet: InfoSheet?
+    @State private var showLauncher = false
     var onUnpair: () -> Void
 
     init(baseURL: String, token: String, onUnpair: @escaping () -> Void) {
@@ -16,7 +17,8 @@ struct RootView: View {
 
     var body: some View {
         NavigationSplitView {
-            SessionsListView(broker: broker, onSelect: { selected = $0 })
+            SessionsListView(broker: broker, onSelect: { selected = $0 },
+                             onNewSession: { showLauncher = true })
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
@@ -58,6 +60,19 @@ struct RootView: View {
                             Button("Done") { sheet = nil }
                         }
                     }
+            }
+            .tint(Theme.teal)
+        }
+        .sheet(isPresented: $showLauncher) {
+            NavigationStack {
+                NewSessionView(broker: broker, onSpawned: { id in
+                    selected = broker.sessions.first(where: { $0.id == id })
+                })
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Cancel") { showLauncher = false }
+                    }
+                }
             }
             .tint(Theme.teal)
         }
