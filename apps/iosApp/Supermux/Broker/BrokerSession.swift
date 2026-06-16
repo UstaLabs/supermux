@@ -17,6 +17,7 @@ final class BrokerSession {
     private(set) var activity: [String: [ActivityEvent]] = [:]
     private(set) var agentPhase: [String: String] = [:]
     private(set) var agentSince: [String: Int64] = [:]
+    private(set) var commands: [String: [SlashCommand]] = [:]
     private(set) var synced = false
 
     init(baseURL: String, token: String) {
@@ -46,6 +47,7 @@ final class BrokerSession {
             activity = s.activity
             agentPhase = s.agentState.mapValues { $0.phase }
             agentSince = s.agentState.compactMapValues { $0.since?.int64Value }
+            commands = s.commands
             synced = true
         case .sessionAdded(let a): sessions.append(a.session)
         case .sessionRemoved(let r): sessions.removeAll { $0.id == r.id }
@@ -54,7 +56,7 @@ final class BrokerSession {
         case .agentState(let st):
             agentPhase[st.session] = st.phase
             agentSince[st.session] = (st.since ?? st.workingSince)?.int64Value
-        case .commandsChanged: break
+        case .commandsChanged(let c): commands[c.session] = c.commands
         case .agentError: break
         }
     }

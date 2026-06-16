@@ -27,6 +27,7 @@ struct ChatView: View {
         }
         .navigationTitle(session.name)
         .navigationBarTitleDisplayMode(.inline)
+        .task { if draft.isEmpty, let d = ProcessInfo.processInfo.environment["SM_DRAFT"] { draft = d } }
         .sheet(isPresented: $modelSheet) {
             OptionSwitchSheet(title: "Model", broker: broker, session: session, kind: .model)
         }
@@ -122,6 +123,7 @@ struct ChatView: View {
 
     private var dock: some View {
         VStack(spacing: 8) {
+            if !slashMatches.isEmpty { slashMenu }
             HStack(spacing: 3) {
                 pillSeg("Chat", system: "bubble.left", on: true)
                 pillSeg("Native", system: "terminal", on: false).opacity(0.5)
@@ -146,6 +148,35 @@ struct ChatView: View {
             .padding(.horizontal, 14).padding(.vertical, 6)
             .foregroundStyle(on ? .white : .secondary)
             .background(on ? Theme.teal : .clear, in: Capsule())
+    }
+
+    private var slashMatches: [SlashCommand] {
+        guard draft.hasPrefix("/") else { return [] }
+        let q = String(draft.dropFirst()).lowercased()
+        return Array((broker.commands[session.id] ?? [])
+            .filter { q.isEmpty || $0.name.lowercased().hasPrefix(q) }.prefix(6))
+    }
+    private var slashMenu: some View {
+        VStack(spacing: 0) {
+            ForEach(slashMatches, id: \.id) { cmd in
+                Button { applyCommand(cmd) } label: {
+                    HStack(spacing: 8) {
+                        Text(cmd.sigil + cmd.name).font(.callout.weight(.semibold)).foregroundStyle(Theme.teal)
+                        Text(cmd.family).font(.caption2).foregroundStyle(.tertiary)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 9).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if cmd.id != slashMatches.last?.id { Divider() }
+            }
+        }
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 1))
+    }
+    private func applyCommand(_ cmd: SlashCommand) {
+        if let insert = cmd.insertText, !insert.isEmpty { draft = insert }
+        else { draft = cmd.sigil + cmd.name + " " }
     }
 
     // Always-present pane bar (Chat active; Terminal/Editor/Display are later phases).
