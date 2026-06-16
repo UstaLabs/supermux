@@ -6,6 +6,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links"
 import { ClipboardPaste } from "lucide-vue-next"
 import "@xterm/xterm/css/xterm.css"
 import { useTerminal } from "@/composables/useTerminal"
+import { linesFromPixels } from "@/lib/touch-scroll"
 
 const props = defineProps<{
   sessionName: string
@@ -22,6 +23,14 @@ let term: Terminal | null = null
 let fitAddon: FitAddon | null = null
 let ro: ResizeObserver | null = null
 let lastSentSize: { cols: number; rows: number } | null = null
+
+// Touch-drag scrolling. xterm v6 ships a gesture engine but never registers the
+// terminal as a target, so finger swipes are ignored; we drive scrollLines()
+// directly instead. State for the in-progress drag:
+let touchSurface: HTMLElement | null = null
+let touchActive = false
+let touchLastY = 0
+let touchAccumPx = 0
 
 const terminal = useTerminal(toRef(() => props.sessionName), toRef(() => props.terminalId), toRef(() => props.kind ?? "scratch"))
 
@@ -63,6 +72,44 @@ async function pasteFromClipboard() {
       term?.focus()
     }
   } catch {}
+}
+
+/** Rendered height of one terminal row, for converting drag pixels → lines. */
+function rowHeightPx(): number {
+  const screen = containerRef.value?.querySelector<HTMLElement>(".xterm-screen")
+  if (screen && term && term.rows > 0) {
+    const h = screen.clientHeight / term.rows
+    if (h > 0) return h
+  }
+  // Before first paint, fall back to the configured fontSize × lineHeight.
+  return 13 * 1.2
+}
+
+function onTouchStart(e: TouchEvent) {
+  if (e.touches.length !== 1) {
+    touchActive = false
+    return
+  }
+  touchActive = true
+  touchLastY = e.touches[0]!.clientY
+  touchAccumPx = 0
+}
+
+function onTouchMove(e: TouchEvent) {
+  if (!touchActive || e.touches.length !== 1 || !term) return
+  const y = e.touches[0]!.clientY
+  touchAccumPx += touchLastY - y
+  touchLastY = y
+  const { lines, remainderPx } = linesFromPixels(touchAccumPx, rowHeightPx())
+  touchAccumPx = remainderPx
+  if (lines !== 0) term.scrollLines(lines)
+  // The terminal owns vertical drags — stop the PWA viewport from scrolling or
+  // rubber-banding underneath. Requires the non-passive listener registered below.
+  if (e.cancelable) e.preventDefault()
+}
+
+function endTouch() {
+  touchActive = false
 }
 
 onMounted(() => {
@@ -127,11 +174,26 @@ onMounted(() => {
   ro = new ResizeObserver(() => { fit() })
   ro.observe(containerRef.value)
 
+  // Touch-drag scrolling (see notes by the touch state above). touchmove must be
+  // non-passive so preventDefault() can stop the page from scrolling instead.
+  touchSurface = containerRef.value
+  touchSurface.addEventListener("touchstart", onTouchStart, { passive: true })
+  touchSurface.addEventListener("touchmove", onTouchMove, { passive: false })
+  touchSurface.addEventListener("touchend", endTouch, { passive: true })
+  touchSurface.addEventListener("touchcancel", endTouch, { passive: true })
+
   terminal.connect()
 })
 
 onUnmounted(() => {
   ro?.disconnect()
+  if (touchSurface) {
+    touchSurface.removeEventListener("touchstart", onTouchStart)
+    touchSurface.removeEventListener("touchmove", onTouchMove)
+    touchSurface.removeEventListener("touchend", endTouch)
+    touchSurface.removeEventListener("touchcancel", endTouch)
+    touchSurface = null
+  }
   terminal.disconnect()
   term?.dispose()
   term = null
