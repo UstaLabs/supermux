@@ -103,4 +103,12 @@ final class BrokerSession {
 
     func archived() async -> [ArchivedDto] { (try? await api.archived()) ?? [] }
     func resume(_ id: String) { Task { [api] in try? await api.resume(id: id) } }
+
+    func config() async -> AppConfigDto? { try? await api.getConfig() }
+    func setPAName(_ name: String) { Task { [api] in try? await api.putConfig(paName: name) } }
+    func curatorSettings() async -> CuratorSettingsResponse? { try? await api.getCuratorSettings() }
+    func saveCurator(enabled: Bool, hour: Int, minute: Int) {
+        Task { [api] in _ = try? await api.saveCuratorSettings(enabled: enabled, hour: Int32(hour), minute: Int32(minute)) }
+    }
+    func runCuratorNow() { Task { [api] in try? await api.runCuratorNow() } }
 }

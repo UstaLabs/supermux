@@ -3,7 +3,7 @@ import Shared
 
 /// The quick read-only pages reachable from the list header ⋮ menu.
 enum InfoSheet: String, Identifiable, CaseIterable {
-    case archived, usage, proxies, displays, devices
+    case archived, usage, proxies, displays, devices, settings
     var id: String { rawValue }
     var title: String { rawValue.capitalized }
     var systemImage: String {
@@ -13,6 +13,7 @@ enum InfoSheet: String, Identifiable, CaseIterable {
         case .proxies: return "network"
         case .displays: return "display"
         case .devices: return "ipad.and.iphone"
+        case .settings: return "gearshape"
         }
     }
     @ViewBuilder func view(broker: BrokerSession) -> some View {
@@ -22,6 +23,7 @@ enum InfoSheet: String, Identifiable, CaseIterable {
         case .proxies: ProxiesView(broker: broker)
         case .displays: DisplaysView(broker: broker)
         case .devices: DevicesView(broker: broker)
+        case .settings: SettingsView(broker: broker)
         }
     }
 }

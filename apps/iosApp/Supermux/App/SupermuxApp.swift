@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct SupermuxApp: App {
     @State private var paired: Bool
+    @AppStorage("appearance") private var appearance = "system"
 
     init() {
         // Debug/testing convenience: auto-pair from launch env
@@ -36,6 +37,7 @@ struct SupermuxApp: App {
                     paired = true
                 }
             }
+            .preferredColorScheme(appearance == "light" ? .light : appearance == "dark" ? .dark : nil)
         }
     }
 }

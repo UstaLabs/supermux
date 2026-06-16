@@ -56,6 +56,11 @@ struct RootView: View {
                 ?? broker.sessions.first(where: { !(broker.messages[$0.id]?.isEmpty ?? true) })?.id
                 ?? broker.sessions.first?.id
         }
+        .task {
+            // Debug: auto-present a header-menu page for headless screenshots.
+            if let s = ProcessInfo.processInfo.environment["SM_OPEN_SHEET"],
+               let page = InfoSheet(rawValue: s) { sheet = page }
+        }
         .sheet(item: $sheet) { page in
             NavigationStack {
                 page.view(broker: broker)
