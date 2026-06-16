@@ -13,18 +13,39 @@ data class SessionGroup(val label: String, val workdir: String, val sessions: Li
  * [lastTs] returns an ISO-8601 timestamp string for a session's most recent
  * message (or "" when it has none); ISO-8601 strings sort lexicographically by time.
  */
+/** Sentinel key for the pinned Personal Assistants group (never a real path). */
+const val PA_GROUP_KEY = "__pas__"
+
 fun groupSessions(
     sessions: List<SessionInfo>,
     home: String,
     lastTs: (SessionInfo) -> String = { "" },
 ): List<SessionGroup> {
+    // Personal assistants are not project work: a dedicated pinned group.
+    val pas = sessions.filter { it.role == "personal_assistant" }
+    val rest = sessions.filter { it.role != "personal_assistant" }
+
+    // Worktree-backed sessions group under their project (repo_root), not the
+    // internal worktree path.
     val byPath = LinkedHashMap<String, MutableList<SessionInfo>>()
-    for (s in sessions) byPath.getOrPut(s.workdir) { mutableListOf() }.add(s)
-    val groups = byPath.map { (workdir, list) ->
+    for (s in rest) byPath.getOrPut(s.repo_root ?: s.workdir) { mutableListOf() }.add(s)
+    val projectGroups = byPath.map { (key, list) ->
         val sorted = list.sortedWith(compareByDescending { lastTs(it) })
-        SessionGroup(label = formatWorkdir(workdir, home), workdir = workdir, sessions = sorted)
+        SessionGroup(label = formatWorkdir(key, home), workdir = key, sessions = sorted)
+    }.sortedWith(compareByDescending { g -> g.sessions.maxOfOrNull { lastTs(it) } ?: "" })
+
+    val result = ArrayList<SessionGroup>(projectGroups.size + 1)
+    if (pas.isNotEmpty()) {
+        result.add(
+            SessionGroup(
+                label = "Personal Assistants",
+                workdir = PA_GROUP_KEY,
+                sessions = pas.sortedWith(compareByDescending { lastTs(it) }),
+            ),
+        )
     }
-    return groups.sortedWith(compareByDescending { g -> g.sessions.maxOfOrNull { lastTs(it) } ?: "" })
+    result.addAll(projectGroups)
+    return result
 }
 
 /** Format a workdir for display: ~/… when under home, otherwise a shortened absolute path. */

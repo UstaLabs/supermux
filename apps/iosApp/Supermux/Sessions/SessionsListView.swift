@@ -44,13 +44,7 @@ struct SessionRow: View {
 
     var body: some View {
         HStack(spacing: 11) {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Theme.teal.opacity(0.14))
-                .frame(width: 34, height: 34)
-                .overlay(
-                    Image(systemName: "cube.transparent")
-                        .font(.system(size: 15)).foregroundStyle(Theme.teal)
-                )
+            AgentLogo(agent: session.agent)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(session.name).font(.subheadline.weight(.semibold)).lineLimit(1)

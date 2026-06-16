@@ -15,6 +15,8 @@ data class SessionInfo(
     val mute: Boolean? = null,
     val connected: Boolean? = null,
     val model: String? = null,
+    val repo_root: String? = null,
+    val role: String? = null,
 )
 
 @Serializable

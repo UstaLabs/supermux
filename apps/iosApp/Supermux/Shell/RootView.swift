@@ -6,6 +6,7 @@ import Shared
 struct RootView: View {
     @State private var broker: BrokerSession
     @State private var selected: SessionInfo?
+    @State private var sheet: InfoSheet?
     var onUnpair: () -> Void
 
     init(baseURL: String, token: String, onUnpair: @escaping () -> Void) {
@@ -19,6 +20,12 @@ struct RootView: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
+                            ForEach(InfoSheet.allCases) { page in
+                                Button { sheet = page } label: {
+                                    Label(page.title, systemImage: page.systemImage)
+                                }
+                            }
+                            Divider()
                             Button("Unpair", role: .destructive, action: onUnpair)
                         } label: {
                             Image(systemName: "ellipsis.circle")
@@ -42,6 +49,17 @@ struct RootView: View {
             selected = broker.sessions.first(where: { want != nil && $0.name == want })
                 ?? broker.sessions.first(where: { !(broker.messages[$0.id]?.isEmpty ?? true) })
                 ?? broker.sessions.first
+        }
+        .sheet(item: $sheet) { page in
+            NavigationStack {
+                page.view(broker: broker)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done") { sheet = nil }
+                        }
+                    }
+            }
+            .tint(Theme.teal)
         }
     }
 }
