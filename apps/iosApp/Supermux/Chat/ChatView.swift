@@ -1,5 +1,6 @@
 import SwiftUI
 import Shared
+import UIKit
 
 /// Document-style transcript + info bar (agent · workdir · model/reasoning pills)
 /// + live "Working…" indicator + glass composer with the Chat∣Native pill.
@@ -67,7 +68,7 @@ struct ChatView: View {
                     starterPrompts
                 } else {
                     LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(log, id: \.id) { MessageRow(entry: $0).id($0.id) }
+                        ForEach(log, id: \.id) { MessageRow(entry: $0, broker: broker).id($0.id) }
                         if working { workingIndicator.id("__working__") }
                     }
                     .padding(16)
@@ -171,17 +172,23 @@ struct ChatView: View {
 
 private struct MessageRow: View {
     let entry: LogEntry
+    let broker: BrokerSession
     private var isAgent: Bool { (entry.direction ?? "").hasPrefix("out") }
 
     var body: some View {
-        let text = entry.text ?? ""
-        Group {
-            if isAgent {
-                markdown(text).font(.subheadline)
-                    .frame(maxWidth: .infinity, alignment: .leading).transcriptCard()
-            } else {
-                Text(text).font(.subheadline.weight(.medium))
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 6) {
+            let text = entry.text ?? ""
+            if !text.isEmpty {
+                if isAgent {
+                    markdown(text).font(.subheadline)
+                        .frame(maxWidth: .infinity, alignment: .leading).transcriptCard()
+                } else {
+                    Text(text).font(.subheadline.weight(.medium))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            if let atts = entry.attachments, !atts.isEmpty {
+                ForEach(atts, id: \.file_id) { AttachmentView(att: $0, broker: broker) }
             }
         }
     }
@@ -190,6 +197,39 @@ private struct MessageRow: View {
             markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) { return Text(a) }
         return Text(s)
+    }
+}
+
+private struct AttachmentView: View {
+    let att: Attachment
+    let broker: BrokerSession
+    @State private var image: UIImage?
+    private var isImage: Bool {
+        (att.mime ?? "").hasPrefix("image") || (att.kind ?? "") == "photo"
+    }
+    var body: some View {
+        Group {
+            if isImage {
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: 240, alignment: .leading)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                } else {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color(.secondarySystemBackground)).frame(height: 140)
+                        .overlay(ProgressView())
+                }
+            } else {
+                Label(att.name ?? "file", systemImage: "doc")
+                    .font(.caption).padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(Color(.secondarySystemBackground), in: Capsule())
+            }
+        }
+        .task {
+            if isImage, image == nil, let data = await broker.loadFile(att.file_id) {
+                image = UIImage(data: data)
+            }
+        }
     }
 }
 

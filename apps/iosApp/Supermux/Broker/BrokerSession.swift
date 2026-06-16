@@ -8,6 +8,7 @@ import Shared
 @Observable
 final class BrokerSession {
     let baseURL: String
+    private let token: String
     let api: BrokerApi
     private let client: BrokerClient
 
@@ -20,6 +21,7 @@ final class BrokerSession {
 
     init(baseURL: String, token: String) {
         self.baseURL = baseURL
+        self.token = token
         let http = IosClientKt.iosHttpClient()
         self.api = BrokerApi(baseUrl: baseURL, token: token, http: http)
         self.client = BrokerClient(baseUrl: baseURL, token: token, http: http,
@@ -111,4 +113,12 @@ final class BrokerSession {
         Task { [api] in _ = try? await api.saveCuratorSettings(enabled: enabled, hour: Int32(hour), minute: Int32(minute)) }
     }
     func runCuratorNow() { Task { [api] in try? await api.runCuratorNow() } }
+
+    /// Load an attachment's bytes (Bearer-authed) — used for inline images.
+    func loadFile(_ id: String) async -> Data? {
+        guard let url = URL(string: "\(baseURL)/files/\(id)") else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        return try? await URLSession.shared.data(for: req).0
+    }
 }
