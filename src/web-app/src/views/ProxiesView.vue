@@ -125,6 +125,10 @@ onMounted(refresh)
                 v-if="p.isPublic"
                 class="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400"
               >Public</span>
+              <span
+                v-if="p.status === 'down'"
+                class="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-red-500/15 text-red-600 dark:text-red-400"
+              >Down</span>
             </div>
             <div class="text-[11px] text-muted-foreground truncate">
               {{ p.sessionName }} · port {{ p.port }}

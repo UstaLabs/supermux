@@ -8,6 +8,7 @@ export interface Proxy {
   createdAt: string
   isPublic: boolean
   url: string
+  status?: "up" | "down" | "unknown"
 }
 
 export const useProxies = defineStore("proxies", () => {
@@ -21,5 +22,9 @@ export const useProxies = defineStore("proxies", () => {
   function remove(domain: string) {
     list.value = list.value.filter(x => x.domain !== domain)
   }
-  return { list, replace, add, remove }
+  function setStatus(domain: string, status: Proxy["status"]) {
+    const entry = list.value.find(x => x.domain === domain)
+    if (entry) entry.status = status
+  }
+  return { list, replace, add, remove, setStatus }
 })

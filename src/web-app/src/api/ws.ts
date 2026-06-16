@@ -126,6 +126,7 @@ export const useWS = defineStore("ws", () => {
     else if   (frame.type === "proxy_created")    proxies.add(frame.proxy)
     else if   (frame.type === "proxy_updated")    proxies.add(frame.proxy)
     else if   (frame.type === "proxy_removed")    proxies.remove(frame.domain)
+    else if   (frame.type === "proxy_status")     proxies.setStatus(frame.domain, frame.status)
     else if   (frame.type === "display_added")    displays.add(frame.display)
     else if   (frame.type === "display_removed")  displays.remove(frame.id)
     else if (frame.type === "fs_changed") {

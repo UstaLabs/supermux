@@ -10,14 +10,16 @@ import { classifyInbound, transformOutbound } from "./core/routing"
 import { handleSlash } from "./core/commands"
 import { Registry, type ProxyEntry } from "./core/session-manager/registry"
 import { makeReadAdvancer } from "./core/session-manager/read-status"
+import { ProxyLivenessMonitor, type ProxyStatus } from "./core/proxy/liveness"
 
-function proxyWsPayload(entry: ProxyEntry) {
+function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
   return {
     domain: entry.domain,
     sessionName: entry.sessionName,
     port: entry.port,
     createdAt: entry.createdAt,
     isPublic: entry.isPublic,
+    status,
     url: buildProxyPublicUrl(entry.domain, {
       baseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
       publicUrl: process.env.MUX_WEB_PUBLIC_URL,
@@ -724,6 +726,15 @@ if (channelCheck.error) { log.error("no_channel_configured", { error: channelChe
 const MUX_WEB_PORT = process.env.MUX_WEB_PORT ? parseInt(process.env.MUX_WEB_PORT, 10) : undefined
 const MUX_WEB_PUBLIC_URL = process.env.MUX_WEB_PUBLIC_URL
 let webChannel: WebChannel | undefined
+// Background liveness poller for exposed proxies. Constructed BEFORE the
+// WebChannel so the channel opts (listProxies/createProxy/updateProxy) can call
+// monitor.getStatus; its onChange closes over webChannel (assigned just below)
+// and only fires after start(), well after webChannel is set — same pattern the
+// proxy create/remove opts already use. Started after webChannel.start().
+const proxyLivenessMonitor = new ProxyLivenessMonitor({
+  listTargets: () => registry.listProxies().map((p) => ({ domain: p.domain, port: p.port })),
+  onChange: (domain, status) => webChannel?.broadcastToAll({ type: "proxy_status", domain, status }),
+})
 // loginManager is declared here (before webChannel opts, which close over it) and
 // assigned after webChannel is constructed (so its onChange can reference webChannel).
 // Both closures are arrow functions that run at request/event time — well after both
@@ -1157,7 +1168,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const store = new DeviceStore(DEVICES_FILE)
       return !!store.verify(token)
     },
-    listProxies: () => registry.listProxies().map(proxyWsPayload),
+    listProxies: () => registry.listProxies().map((e) => proxyWsPayload(e, proxyLivenessMonitor.getStatus(e.domain))),
     createProxy: (args) => {
       const session = registry.resolveName(args.sessionName)
       if (!session) throw new Error(`no such session: ${args.sessionName}`)
@@ -1166,7 +1177,11 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         domain = "px-" + randomBytes(4).toString("hex")
       }
       const entry = registry.addProxy({ domain, sessionId: session.id, port: args.port })
-      webChannel?.broadcastToAll({ type: "proxy_created", proxy: proxyWsPayload(entry) })
+      webChannel?.broadcastToAll({ type: "proxy_created", proxy: proxyWsPayload(entry, proxyLivenessMonitor.getStatus(entry.domain)) })
+      // Probe the new exposure promptly so its badge reflects reality within a
+      // tick instead of waiting for the next poll interval (a live port → up,
+      // so no false "Down" flash).
+      void proxyLivenessMonitor.refresh()
       return {
         url: buildProxyPublicUrl(entry.domain, {
           baseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
@@ -1178,8 +1193,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
     updateProxy: (domain, isPublic) => {
       const entry = registry.setProxyPublic(domain, isPublic)
-      webChannel?.broadcastToAll({ type: "proxy_updated", proxy: proxyWsPayload(entry) })
-      return proxyWsPayload(entry)
+      const status = proxyLivenessMonitor.getStatus(entry.domain)
+      webChannel?.broadcastToAll({ type: "proxy_updated", proxy: proxyWsPayload(entry, status) })
+      return proxyWsPayload(entry, status)
     },
     removeProxy: (domain) => {
       const existing = registry.getProxy(domain)
@@ -1980,7 +1996,8 @@ const server = await startSocketServer({
               baseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
               publicUrl: process.env.MUX_WEB_PUBLIC_URL,
             })
-            webChannel?.broadcastToAll({ type: "proxy_created", proxy: proxyWsPayload(entry) })
+            webChannel?.broadcastToAll({ type: "proxy_created", proxy: proxyWsPayload(entry, proxyLivenessMonitor.getStatus(entry.domain)) })
+            void proxyLivenessMonitor.refresh()
             return { ok: true, value: { url, domain: entry.domain, port: entry.port, isPublic: entry.isPublic } }
           } catch (err: any) {
             return { ok: false, error: err?.message ?? String(err) }
@@ -2008,7 +2025,7 @@ const server = await startSocketServer({
           if (existing.sessionName !== s.name) return { ok: false, error: "can only update your own proxies" }
           try {
             const entry = registry.setProxyPublic(domain, publicValue)
-            webChannel?.broadcastToAll({ type: "proxy_updated", proxy: proxyWsPayload(entry) })
+            webChannel?.broadcastToAll({ type: "proxy_updated", proxy: proxyWsPayload(entry, proxyLivenessMonitor.getStatus(entry.domain)) })
             return { ok: true, value: { domain: entry.domain, isPublic: entry.isPublic } }
           } catch (err: any) {
             return { ok: false, error: err?.message ?? String(err) }
@@ -2899,6 +2916,10 @@ try {
 } catch (err) { log.warn("runtime_assets_sweep_failed", { err: String(err) }) }
 await refreshTelegramMenu()
 if (webChannel) await webChannel.start()
+// Begin probing exposed proxies (kicks an immediate refresh, then polls). Only
+// meaningful with a web channel, but harmless otherwise; onChange no-ops when
+// webChannel is undefined.
+proxyLivenessMonitor.start()
 refreshModels().catch((err) => log.warn("model_cache_init_failed", { err: String(err) }))
 const modelRefreshInterval = setInterval(() => {
   refreshModels({ [AgentKind.Claude]: discoverClaudeModels })
@@ -2982,6 +3003,9 @@ async function gracefulShutdown(signal: string) {
   try {
     await displayManager.stopAll()
   } catch (err: any) { log.warn("display_shutdown_failed", { err: err?.message }) }
+  try {
+    proxyLivenessMonitor.stop()
+  } catch (err: any) { log.warn("proxy_liveness_stop_failed", { err: err?.message }) }
   try {
     if (webChannel) await webChannel.stop()
   } catch (err: any) { log.warn("webChannel_stop_failed", { err: err?.message }) }
