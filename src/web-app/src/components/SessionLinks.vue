@@ -25,30 +25,46 @@ const links = computed(() =>
 
 // When there's exactly one link the icon opens it directly (no menu).
 const single = computed(() => (links.value.length === 1 ? links.value[0]! : null))
+
+// A red status dot on the trigger surfaces a dead exposure without opening the menu.
+const anyDown = computed(() => links.value.some((l) => l.status === "down"))
 </script>
 
 <template>
   <!-- Nothing to show until this session has at least one exposed link. -->
   <template v-if="links.length">
     <!-- Single link: the icon is itself the link, opens directly. -->
-    <a
-      v-if="single"
-      :href="single.url"
-      target="_blank"
-      rel="noopener noreferrer"
-      class="cmux-icon-button"
-      :title="displayUrl(single.url)"
-      :aria-label="`Open ${displayUrl(single.url)}`"
-    >
-      <Link2 class="size-4" />
-    </a>
+    <span v-if="single" class="relative inline-flex">
+      <a
+        :href="single.url"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="cmux-icon-button"
+        :title="displayUrl(single.url)"
+        :aria-label="`Open ${displayUrl(single.url)}`"
+      >
+        <Link2 class="size-4" />
+      </a>
+      <span
+        v-if="anyDown"
+        class="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-red-500 ring-2 ring-background"
+        aria-hidden="true"
+      />
+    </span>
 
     <!-- Multiple links: a small dropdown, each item opens its link. -->
     <DropdownMenuRoot v-else>
       <DropdownMenuTrigger as-child>
-        <button class="cmux-icon-button" :aria-label="`${links.length} links`" title="Links">
-          <Link2 class="size-4" />
-        </button>
+        <span class="relative inline-flex">
+          <button class="cmux-icon-button" :aria-label="`${links.length} links`" title="Links">
+            <Link2 class="size-4" />
+          </button>
+          <span
+            v-if="anyDown"
+            class="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-red-500 ring-2 ring-background"
+            aria-hidden="true"
+          />
+        </span>
       </DropdownMenuTrigger>
       <DropdownMenuPortal>
         <DropdownMenuContent
@@ -70,6 +86,10 @@ const single = computed(() => (links.value.length === 1 ? links.value[0]! : null
                 v-if="link.isPublic"
                 class="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400"
               >Public</span>
+              <span
+                v-if="link.status === 'down'"
+                class="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-red-500/15 text-red-600 dark:text-red-400"
+              >Down</span>
             </a>
           </DropdownMenuItem>
         </DropdownMenuContent>
