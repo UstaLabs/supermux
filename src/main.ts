@@ -89,6 +89,7 @@ import { makeRealCursorRunner } from "./core/agents/cursor/runner"
 import { CursorAdapter } from "./core/agents/cursor/adapter"
 import { ModelCache } from "./core/models/cache"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels } from "./core/models/discovery"
+import { refreshModelCache, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
 import { OpenCodeAdapter } from "./core/agents/opencode/adapter"
 import type { OpenCodeSpawnHandle } from "./core/agents/opencode/spawn"
@@ -320,17 +321,25 @@ function stopClaudeTailer(sessionUuid: string): void {
 
 const modelCache = new ModelCache()
 
-async function refreshModelCache(): Promise<void> {
-  const [claude, codex, cursor, opencode] = await Promise.all([
-    discoverClaudeModels(),
-    discoverCodexModels(),
-    discoverCursorModels(),
-    discoverOpenCodeModels(),
-  ])
-  modelCache.set(AgentKind.Claude, claude)
-  modelCache.set(AgentKind.Codex, codex)
-  modelCache.set(AgentKind.Cursor, cursor)
-  modelCache.set(AgentKind.OpenCode, opencode)
+const modelDiscoverers: ModelDiscoverers = {
+  [AgentKind.Claude]: discoverClaudeModels,
+  [AgentKind.Codex]: discoverCodexModels,
+  [AgentKind.Cursor]: discoverCursorModels,
+  [AgentKind.OpenCode]: discoverOpenCodeModels,
+}
+
+// The model cache is otherwise frozen at boot. If discovery fails transiently
+// at startup (OAuth token not yet refreshed, network not ready), the picker
+// would stay empty until the next broker restart. Re-discover Claude on a
+// timer to recover. Only Claude is polled: it is the only agent fetched over
+// the network; the CLI-based discoverers use blocking execSync and their
+// availability does not change without a restart.
+const MODEL_REFRESH_INTERVAL_MS = 15 * 60_000
+
+function refreshModels(discoverers: ModelDiscoverers = modelDiscoverers): Promise<void> {
+  return refreshModelCache(modelCache, discoverers, {
+    onEmpty: (agent) => log.warn("model_discovery_empty", { agent }),
+  })
 }
 
 function lookupModels(agent: AgentKind) {
@@ -2890,7 +2899,11 @@ try {
 } catch (err) { log.warn("runtime_assets_sweep_failed", { err: String(err) }) }
 await refreshTelegramMenu()
 if (webChannel) await webChannel.start()
-refreshModelCache().catch((err) => log.warn("model_cache_init_failed", { err: String(err) }))
+refreshModels().catch((err) => log.warn("model_cache_init_failed", { err: String(err) }))
+const modelRefreshInterval = setInterval(() => {
+  refreshModels({ [AgentKind.Claude]: discoverClaudeModels })
+    .catch((err) => log.warn("model_refresh_failed", { err: String(err) }))
+}, MODEL_REFRESH_INTERVAL_MS)
 // --- Nightly knowledge curator ---------------------------------------------
 // At MUX_CURATOR_HOUR:00 local, spawn a short-lived claude session that reads the
 // last 24h of sessions and curates ~/.mux (commit + push + digest to the
@@ -2987,6 +3000,7 @@ async function gracefulShutdown(signal: string) {
   try {
     clearInterval(gcInterval)
     clearInterval(stallInterval)
+    clearInterval(modelRefreshInterval)
   } catch (err: any) { log.warn("gc_interval_clear_failed", { err: err?.message ?? String(err) }) }
   try {
     db.close()
