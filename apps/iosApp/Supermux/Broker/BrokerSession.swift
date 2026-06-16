@@ -15,6 +15,7 @@ final class BrokerSession {
     private(set) var messages: [String: [LogEntry]] = [:]
     private(set) var activity: [String: [ActivityEvent]] = [:]
     private(set) var agentPhase: [String: String] = [:]
+    private(set) var agentSince: [String: Int64] = [:]
     private(set) var synced = false
 
     init(baseURL: String, token: String) {
@@ -42,12 +43,15 @@ final class BrokerSession {
             messages = s.logs
             activity = s.activity
             agentPhase = s.agentState.mapValues { $0.phase }
+            agentSince = s.agentState.compactMapValues { $0.since?.int64Value }
             synced = true
         case .sessionAdded(let a): sessions.append(a.session)
         case .sessionRemoved(let r): sessions.removeAll { $0.id == r.id }
         case .messageAppend(let m): messages[m.session, default: []].append(m.entry)
         case .activityAppend(let a): activity[a.session, default: []].append(a.event)
-        case .agentState(let st): agentPhase[st.session] = st.phase
+        case .agentState(let st):
+            agentPhase[st.session] = st.phase
+            agentSince[st.session] = (st.since ?? st.workingSince)?.int64Value
         case .commandsChanged: break
         case .agentError: break
         }
@@ -86,5 +90,14 @@ final class BrokerSession {
     func spawn(workdir: String, agent: String?, name: String?) async -> String? {
         let req = SpawnRequest(workdir: workdir, name: name, agent: agent, model: nil)
         return (try? await api.spawn(req: req))?.id
+    }
+
+    func models(_ id: String) async -> ModelsResponse? { try? await api.models(id: id) }
+    func switchModel(_ id: String, _ model: String) {
+        Task { [api] in try? await api.switchModel(id: id, model: model) }
+    }
+    func reasoning(_ id: String) async -> ReasoningResponse? { try? await api.reasoningLevels(id: id) }
+    func switchReasoning(_ id: String, _ level: String) {
+        Task { [api] in try? await api.switchReasoning(id: id, level: level) }
     }
 }
