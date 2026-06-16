@@ -22,6 +22,7 @@ struct ChatView: View {
             Divider().opacity(0.4)
             transcript
             dock
+            paneBar
         }
         .navigationTitle(session.name)
         .navigationBarTitleDisplayMode(.inline)
@@ -144,6 +145,27 @@ struct ChatView: View {
             .padding(.horizontal, 14).padding(.vertical, 6)
             .foregroundStyle(on ? .white : .secondary)
             .background(on ? Theme.teal : .clear, in: Capsule())
+    }
+
+    // Always-present pane bar (Chat active; Terminal/Editor/Display are later phases).
+    private var paneBar: some View {
+        HStack(spacing: 0) {
+            paneTab("Chat", "bubble.left", on: true, enabled: true)
+            paneTab("Terminal", "terminal", on: false, enabled: false)
+            paneTab("Editor", "chevron.left.forwardslash.chevron.right", on: false, enabled: false)
+            paneTab("Display", "display", on: false, enabled: false)
+        }
+        .padding(.top, 6).padding(.bottom, 2)
+        .background(.bar)
+    }
+    private func paneTab(_ t: String, _ icon: String, on: Bool, enabled: Bool) -> some View {
+        VStack(spacing: 3) {
+            Image(systemName: icon).font(.system(size: 18))
+            Text(t).font(.system(size: 9.5, weight: .medium))
+        }
+        .frame(maxWidth: .infinity)
+        .foregroundStyle(on ? Theme.teal : .secondary)
+        .opacity(enabled ? 1 : 0.4)
     }
 }
 

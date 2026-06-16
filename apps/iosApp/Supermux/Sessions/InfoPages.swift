@@ -3,11 +3,12 @@ import Shared
 
 /// The quick read-only pages reachable from the list header ⋮ menu.
 enum InfoSheet: String, Identifiable, CaseIterable {
-    case usage, proxies, displays, devices
+    case archived, usage, proxies, displays, devices
     var id: String { rawValue }
     var title: String { rawValue.capitalized }
     var systemImage: String {
         switch self {
+        case .archived: return "archivebox"
         case .usage: return "chart.bar"
         case .proxies: return "network"
         case .displays: return "display"
@@ -16,6 +17,7 @@ enum InfoSheet: String, Identifiable, CaseIterable {
     }
     @ViewBuilder func view(broker: BrokerSession) -> some View {
         switch self {
+        case .archived: ArchivedView(broker: broker)
         case .usage: UsageView(broker: broker)
         case .proxies: ProxiesView(broker: broker)
         case .displays: DisplaysView(broker: broker)
@@ -119,5 +121,32 @@ struct UsageView: View {
             }
         }
         .task { raw = (try? await broker.api.usageRaw()) ?? ""; loading = false }
+    }
+}
+
+struct ArchivedView: View {
+    let broker: BrokerSession
+    @State private var items: [ArchivedDto] = []
+    @State private var loading = true
+    var body: some View {
+        Loadable(title: "Archived", loading: loading, isEmpty: items.isEmpty) {
+            List(items, id: \.id) { a in
+                HStack(spacing: 11) {
+                    AgentLogo(agent: a.agent, size: 30)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(a.name).font(.subheadline.weight(.medium)).lineLimit(1)
+                        Text(formatWorkdir(workdir: a.workdir, home: inferHomeDir(workdir: a.workdir)))
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    Button("Resume") {
+                        broker.resume(a.id)
+                        items.removeAll { $0.id == a.id }
+                    }
+                    .buttonStyle(.borderedProminent).tint(Theme.teal).controlSize(.small)
+                }
+            }
+        }
+        .task { items = await broker.archived(); loading = false }
     }
 }

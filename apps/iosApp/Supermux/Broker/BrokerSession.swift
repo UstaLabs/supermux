@@ -100,4 +100,7 @@ final class BrokerSession {
     func switchReasoning(_ id: String, _ level: String) {
         Task { [api] in try? await api.switchReasoning(id: id, level: level) }
     }
+
+    func archived() async -> [ArchivedDto] { (try? await api.archived()) ?? [] }
+    func resume(_ id: String) { Task { [api] in try? await api.resume(id: id) } }
 }

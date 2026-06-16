@@ -1,12 +1,12 @@
 import SwiftUI
 import Shared
 
-/// The sidebar / root list — sessions grouped by Personal Assistants + project
-/// (shared `groupSessions`), with swipe + context actions and collapsible groups,
-/// mirroring the web SessionListView.
+/// Sidebar / root list — grouped (PA + project), swipe + context actions,
+/// collapsible groups. Uses `List(selection:)` so NavigationSplitView pushes the
+/// chat on iPhone (compact) and shows it in the detail column on iPad.
 struct SessionsListView: View {
     let broker: BrokerSession
-    var onSelect: (SessionInfo) -> Void
+    @Binding var selected: String?
     var onNewSession: () -> Void
 
     @State private var collapsed: Set<String> = SessionsListView.loadCollapsed()
@@ -15,7 +15,7 @@ struct SessionsListView: View {
     @State private var killTarget: SessionInfo?
 
     var body: some View {
-        List {
+        List(selection: $selected) {
             Section {
                 Button(action: onNewSession) {
                     Label {
@@ -30,21 +30,9 @@ struct SessionsListView: View {
             ForEach(broker.groups(), id: \.workdir) { group in
                 Section {
                     if !collapsed.contains(group.workdir) {
-                        ForEach(group.sessions, id: \.id) { row($0) }
+                        ForEach(group.sessions, id: \.id) { s in row(s).tag(s.id) }
                     }
-                } header: {
-                    Button { toggle(group.workdir) } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: collapsed.contains(group.workdir) ? "chevron.right" : "chevron.down")
-                                .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
-                            Text(group.label).textCase(nil)
-                            Spacer()
-                            Text("\(group.sessions.count)").foregroundStyle(.tertiary)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
+                } header: { header(group) }
             }
         }
         .listStyle(.insetGrouped)
@@ -75,27 +63,38 @@ struct SessionsListView: View {
         }
     }
 
-    @ViewBuilder private func row(_ s: SessionInfo) -> some View {
-        let muted = s.mute?.boolValue ?? false
-        Button { onSelect(s) } label: {
-            SessionRow(session: s, preview: broker.messages[s.id]?.last?.text,
-                       phase: broker.agentPhase[s.id], muted: muted)
+    private func header(_ group: SessionGroup) -> some View {
+        Button { toggle(group.workdir) } label: {
+            HStack(spacing: 6) {
+                Image(systemName: collapsed.contains(group.workdir) ? "chevron.right" : "chevron.down")
+                    .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+                Text(group.label).textCase(nil)
+                Spacer()
+                Text("\(group.sessions.count)").foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            Button(role: .destructive) { killTarget = s } label: { Label("Kill", systemImage: "xmark.circle") }
-            Button { renameText = s.name; renameTarget = s } label: { Label("Rename", systemImage: "pencil") }.tint(.gray)
-            Button { broker.toggleMute(s) } label: {
-                Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
-            }.tint(Theme.teal)
-        }
-        .contextMenu {
-            Button { broker.toggleMute(s) } label: {
-                Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
+    }
+
+    @ViewBuilder private func row(_ s: SessionInfo) -> some View {
+        let muted = s.mute?.boolValue ?? false
+        SessionRow(session: s, preview: broker.messages[s.id]?.last?.text,
+                   phase: broker.agentPhase[s.id], muted: muted)
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button(role: .destructive) { killTarget = s } label: { Label("Kill", systemImage: "xmark.circle") }
+                Button { renameText = s.name; renameTarget = s } label: { Label("Rename", systemImage: "pencil") }.tint(.gray)
+                Button { broker.toggleMute(s) } label: {
+                    Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
+                }.tint(Theme.teal)
             }
-            Button { renameText = s.name; renameTarget = s } label: { Label("Rename", systemImage: "pencil") }
-            Button(role: .destructive) { killTarget = s } label: { Label("Kill", systemImage: "xmark.circle") }
-        }
+            .contextMenu {
+                Button { broker.toggleMute(s) } label: {
+                    Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
+                }
+                Button { renameText = s.name; renameTarget = s } label: { Label("Rename", systemImage: "pencil") }
+                Button(role: .destructive) { killTarget = s } label: { Label("Kill", systemImage: "xmark.circle") }
+            }
     }
 
     private func toggle(_ wd: String) {
@@ -137,6 +136,5 @@ struct SessionRow: View {
             }
         }
         .padding(.vertical, 3)
-        .contentShape(Rectangle())
     }
 }
