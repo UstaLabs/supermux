@@ -10,7 +10,7 @@
 
 import type { ConnectCtx, TunnelProvider, TunnelResult } from "./types"
 import { resolveMode } from "./types"
-import { which } from "./run"
+import { which, extractFirstUrl } from "./run"
 
 /** Pull the tailnet host out of `tailscale status --json`, trailing dot stripped. */
 function parseDnsName(stdout: string): string | undefined {
@@ -21,6 +21,16 @@ function parseDnsName(stdout: string): string | undefined {
   } catch {
     return undefined
   }
+}
+
+/** tailscale CLI refusing for lack of root / operator (Linux). */
+function needsElevation(out: string): boolean {
+  return /access denied|prefs write access denied|sudo tailscale|--operator|permission denied/i.test(out)
+}
+
+/** serve/funnel refusing because the feature isn't enabled on the tailnet. */
+function notEnabled(out: string): boolean {
+  return /not enabled|to enable|enable https/i.test(out)
 }
 
 export const tailscaleProvider: TunnelProvider = {
@@ -75,10 +85,30 @@ export const tailscaleProvider: TunnelProvider = {
    * the user must visit — surface its stdout/stderr so they can act on it.
    */
   async login(ctx: ConnectCtx): Promise<boolean> {
-    const r = await ctx.run(["tailscale", "up"])
-    const out = `${r.stdout}${r.stderr}`.trim()
+    let r = await ctx.run(["tailscale", "up"])
+    let out = `${r.stdout}${r.stderr}`.trim()
     if (out) ctx.println(out)
-    return r.code === 0
+    if (r.code === 0) return true
+
+    // On Linux, tailscale CLI ops need root or a one-time operator grant. Try to
+    // grant the current user operator rights (silent when sudo is passwordless)
+    // and retry; otherwise hand them the single exact command to run.
+    if (needsElevation(out)) {
+      const user = process.env.USER || process.env.LOGNAME || ""
+      if (user) {
+        const set = await ctx.run(["sudo", "tailscale", "set", `--operator=${user}`])
+        if (set.code === 0) {
+          r = await ctx.run(["tailscale", "up"])
+          out = `${r.stdout}${r.stderr}`.trim()
+          if (out) ctx.println(out)
+          if (r.code === 0) return true
+        }
+      }
+      ctx.println("Tailscale needs elevated access once. Run this, then re-run `supermux connect tailscale`:")
+      ctx.println(`  sudo tailscale set --operator=${user || "$(whoami)"}`)
+      return false
+    }
+    return false
   },
 
   /**
@@ -89,10 +119,24 @@ export const tailscaleProvider: TunnelProvider = {
   async up(ctx: ConnectCtx): Promise<TunnelResult> {
     const mode = resolveMode(this, ctx)
 
-    if (mode.id === "funnel") {
-      await ctx.run(["tailscale", "funnel", "--bg", ctx.port])
-    } else {
-      await ctx.run(["tailscale", "serve", "--bg", ctx.port])
+    // serve/funnel can BLOCK on tailscale's interactive "enable this feature"
+    // prompt when the tailnet hasn't turned it on. Time-bound the call and detect
+    // the not-enabled message so we surface the exact enable link rather than
+    // hang forever (realRun returns code 124 on timeout).
+    const cmd =
+      mode.id === "funnel"
+        ? ["tailscale", "funnel", "--bg", ctx.port]
+        : ["tailscale", "serve", "--bg", ctx.port]
+    const sf = await ctx.run(cmd, { timeoutMs: 15000 })
+    const sfOut = `${sf.stdout}${sf.stderr}`
+    if (notEnabled(sfOut) || sf.code === 124) {
+      const enableUrl =
+        extractFirstUrl(sfOut, /login\.tailscale\.com/) ??
+        "your Tailscale admin console (enable Serve/Funnel + HTTPS)"
+      throw new Error(
+        `Tailscale ${mode.id} isn't enabled on your tailnet. Enable it once: ${enableUrl}\n` +
+          `Then re-run \`supermux connect tailscale --mode ${mode.id}\`.`,
+      )
     }
 
     const r = await ctx.run(["tailscale", "status", "--json"])

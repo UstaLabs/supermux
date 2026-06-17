@@ -171,3 +171,64 @@ test("status reports down + no URL when the CLI errors", async () => {
   expect(s.up).toBe(false)
   expect(s.url).toBeUndefined()
 })
+
+// ── live-smoke findings: sudo/operator + not-enabled handling ──────────────────
+
+test("login: on 'access denied', sets the operator and retries (passwordless sudo)", async () => {
+  let ups = 0
+  const { run, calls } = fakeRun((argv) => {
+    if (argv[0] === "tailscale" && argv[1] === "up") {
+      ups++
+      return ups === 1
+        ? { code: 1, stderr: "Access denied: prefs write access denied.\nUse 'sudo tailscale up'." }
+        : { code: 0 }
+    }
+    return {} // `sudo tailscale set --operator=…` → code 0
+  })
+  expect(await tailscaleProvider.login(makeCtx(run))).toBe(true)
+  expect(
+    calls.some((c) => c[0] === "sudo" && c.includes("set") && c.some((a) => a.startsWith("--operator="))),
+  ).toBe(true)
+  expect(ups).toBe(2) // retried after elevating
+})
+
+test("login: guides with the exact one-time command when it can't elevate", async () => {
+  const lines: string[] = []
+  const { run } = fakeRun((argv) => {
+    if (argv[1] === "up") return { code: 1, stderr: "prefs write access denied" }
+    if (argv[0] === "sudo") return { code: 1, stderr: "sudo: a password is required" }
+    return {}
+  })
+  const ok = await tailscaleProvider.login(makeCtx(run, { println: (s) => lines.push(s) }))
+  expect(ok).toBe(false)
+  expect(lines.join("\n")).toMatch(/sudo tailscale set --operator/)
+})
+
+test("up(funnel): a not-enabled tailnet throws with the enable link instead of hanging", async () => {
+  const { run } = fakeRun((argv) => {
+    if (argv[1] === "funnel")
+      return {
+        code: 124, // realRun's timeout code — the call was bounded, not hung
+        stdout:
+          "Funnel is not enabled on your tailnet.\nTo enable, visit:\nhttps://login.tailscale.com/f/funnel?node=abc",
+      }
+    return statusRoutes(argv)
+  })
+  await expect(tailscaleProvider.up(makeCtx(run, { mode: "funnel" }))).rejects.toThrow(
+    /isn.t enabled.*login\.tailscale\.com\/f\/funnel\?node=abc/s,
+  )
+})
+
+test("up: bounds the serve/funnel call with a timeout (no infinite hang)", async () => {
+  let opts: { timeoutMs?: number } | undefined
+  const run: Run = async (argv, o) => {
+    if (argv[1] === "serve" || argv[1] === "funnel") {
+      opts = o
+      return { code: 0, stdout: "", stderr: "" }
+    }
+    if (argv[1] === "status") return { code: 0, stdout: STATUS_JSON, stderr: "" }
+    return { code: 0, stdout: "", stderr: "" }
+  }
+  await tailscaleProvider.up(makeCtx(run, { mode: "serve" }))
+  expect(opts?.timeoutMs).toBeGreaterThan(0)
+})
