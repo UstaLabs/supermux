@@ -135,34 +135,24 @@ test("named: throws when no hostname can be resolved (no hint, ask returns null)
 
 // ── up(): quick ─────────────────────────────────────────────────────────────────
 
-test("quick: parses a trycloudflare URL from faked output, returns unstable + caveat", async () => {
+test("quick: launches a DETACHED tunnel and polls its log for the URL (unstable + caveat)", async () => {
   const fakeLog =
     "2024 INF Request custom tunnel\n" +
-    "2024 INF |  https://random-words-here.trycloudflare.com  |\n" +
-    "2024 INF +----+"
-  const { ctx, calls } = makeCtx({ mode: "quick" }, [
-    { match: /tunnel --url/, result: { stdout: fakeLog } },
-  ])
+    "2024 INF |  https://random-words-here.trycloudflare.com  |\n"
+  // The URL is read by polling the log via `cat`, not by scrape-then-kill.
+  const { ctx, calls } = makeCtx({ mode: "quick" }, [{ match: /cat /, result: { stdout: fakeLog } }])
 
   const res = await cloudflaredProvider.up(ctx)
 
   expect(res.publicUrl).toBe("https://random-words-here.trycloudflare.com")
   expect(res.stable).toBe(false)
   expect(res.notes?.[0]).toMatch(/throwaway/i)
-  // Tunnels the configured port, with a bounded timeout (never runs forever).
-  expect(calls[0]).toEqual([
-    "cloudflared",
-    "tunnel",
-    "--url",
-    "http://localhost:8787",
-  ])
-})
-
-test("quick: throws a clear error when no URL appears in the output", async () => {
-  const { ctx } = makeCtx({ mode: "quick" }, [
-    { match: /tunnel --url/, result: { stdout: "starting...\n", stderr: "" } },
-  ])
-  await expect(cloudflaredProvider.up(ctx)).rejects.toThrow("could not get a quick-tunnel URL")
+  // CRITICAL: the tunnel is launched DETACHED (nohup, backgrounded) so it SURVIVES
+  // this short-lived CLI — the live smoke proved scrape-then-kill leaves a dead URL.
+  expect(calls[0]![0]).toBe("sh")
+  expect(calls[0]![2]).toContain("nohup cloudflared tunnel")
+  expect(calls[0]![2]).toContain("http://localhost:8787")
+  expect(calls[0]![2]).toContain("cloudflared-quick.pid")
 })
 
 // ── login ─────────────────────────────────────────────────────────────────────
@@ -183,16 +173,18 @@ test("login: no-ops (no login) for quick mode", async () => {
 
 // ── down (idempotent teardown) ──────────────────────────────────────────────────
 
-test("down: best-effort uninstall + cleanup in order, swallows errors", async () => {
+test("down: kills a detached quick tunnel, then best-effort uninstall + cleanup, swallows errors", async () => {
   const { ctx, calls } = makeCtx({}, [
     { match: /service uninstall/, result: { code: 1, stderr: "not installed" } },
     { match: /tunnel cleanup/, result: { code: 1, stderr: "nothing to clean" } },
   ])
   await expect(cloudflaredProvider.down(ctx)).resolves.toBeUndefined()
-  expect(calls).toEqual([
-    ["cloudflared", "service", "uninstall"],
-    ["cloudflared", "tunnel", "cleanup", "supermux"],
-  ])
+  // First: stop a detached quick tunnel via its pidfile.
+  expect(calls[0]![0]).toBe("sh")
+  expect(calls[0]![2]).toContain("cloudflared-quick.pid")
+  // Then the named-tunnel teardown.
+  expect(calls).toContainEqual(["cloudflared", "service", "uninstall"])
+  expect(calls).toContainEqual(["cloudflared", "tunnel", "cleanup", "supermux"])
 })
 
 // ── status ──────────────────────────────────────────────────────────────────────

@@ -123,20 +123,38 @@ export const cloudflaredProvider: TunnelProvider = {
       return { publicUrl: `https://${host}`, stable: true }
     }
 
-    // quick: spin up an anonymous tunnel and scrape its *.trycloudflare.com URL.
-    // It logs the URL within a couple seconds; the 15s timeout bounds the wait
-    // (the process would otherwise run forever serving the tunnel).
-    const r = await ctx.run(["cloudflared", "tunnel", "--url", `http://localhost:${ctx.port}`], {
-      timeoutMs: 15000,
-    })
-    const url = extractFirstUrl(r.stdout + r.stderr, /trycloudflare\.com/)
-    if (!url) throw new Error("could not get a quick-tunnel URL")
+    // quick: an anonymous, PERSISTENT tunnel. We must NOT scrape-then-kill — that
+    // kills the very tunnel we need. Launch it DETACHED (nohup ⇒ survives this
+    // short-lived CLI, reparented to init), log to a file, record its PID for
+    // down(), then poll the log for the *.trycloudflare.com URL it prints.
+    const log = `${ctx.stateDir}/cloudflared-quick.log`
+    const pidFile = `${ctx.stateDir}/cloudflared-quick.pid`
+    await ctx.run([
+      "sh",
+      "-c",
+      `mkdir -p "${ctx.stateDir}"; : > "${log}"; ` +
+        `nohup cloudflared tunnel --no-autoupdate --url http://localhost:${ctx.port} > "${log}" 2>&1 < /dev/null & ` +
+        `echo $! > "${pidFile}"`,
+    ])
+
+    // Poll the log for the URL (cloudflared reports it within a few seconds).
+    let url: string | undefined
+    for (let i = 0; i < 20; i++) {
+      const r = await ctx.run(["sh", "-c", `cat "${log}" 2>/dev/null`])
+      url = extractFirstUrl(r.stdout, /trycloudflare\.com/)
+      if (url) break
+      await Bun.sleep(1000)
+    }
+    if (!url) {
+      throw new Error("could not get a quick-tunnel URL (cloudflared didn't report one in time)")
+    }
 
     return {
       publicUrl: url,
       stable: false,
       notes: [
-        "⚠️ Throwaway URL — it changes every restart and you'll re-pair. Keep the cloudflared process running. Not for an always-on box.",
+        "⚠️ Throwaway URL — it changes every restart and you'll re-pair. Not for an always-on box.",
+        `Tunnel runs in the background (pid in ${pidFile}); stop it with \`supermux connect --off\`.`,
       ],
     }
   },
@@ -146,6 +164,17 @@ export const cloudflaredProvider: TunnelProvider = {
    * steps are safe to run when nothing exists, and any error is swallowed.
    */
   async down(ctx: ConnectCtx): Promise<void> {
+    // Stop a detached quick tunnel if we started one (kill the recorded PID).
+    try {
+      const pidFile = `${ctx.stateDir}/cloudflared-quick.pid`
+      await ctx.run([
+        "sh",
+        "-c",
+        `[ -f "${pidFile}" ] && kill "$(cat "${pidFile}")" 2>/dev/null; rm -f "${pidFile}"`,
+      ])
+    } catch {
+      // nothing to stop
+    }
     try {
       await ctx.run(["cloudflared", "service", "uninstall"])
     } catch {

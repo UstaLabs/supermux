@@ -101,6 +101,8 @@ export const ngrokProvider: TunnelProvider = {
   /** Provision the tunnel for the resolved mode and return its public URL. */
   async up(ctx: ConnectCtx): Promise<TunnelResult> {
     const mode = resolveMode(this, ctx)
+    const pidFile = `${ctx.stateDir}/ngrok.pid`
+    const log = `${ctx.stateDir}/ngrok.log`
 
     if (mode.id === "reserved") {
       // Domain: prefer the user-supplied hint, else ask. (No TTY ⇒ ask ⇒ null.)
@@ -109,39 +111,46 @@ export const ngrokProvider: TunnelProvider = {
         hostFromHint((await ctx.ask("Your reserved ngrok domain (e.g. mux.ngrok.app): ")) ?? undefined)
       if (!domain) throw new Error("a reserved domain is required for a stable ngrok tunnel")
 
-      // Best-effort: install ngrok as an OS service so the durable run survives
-      // reboots. Tolerate failure (not all platforms / first-run setups support it).
-      try {
-        await ctx.run(["ngrok", "service", "install"])
-      } catch {
-        // optional — the foreground run below still serves the tunnel
+      // The durable run serves the tunnel FOREVER — we must NOT await it (that
+      // would hang the command). Launch it DETACHED (nohup ⇒ survives this CLI),
+      // record its PID for down(). The URL is deterministic: https://<domain>.
+      await ctx.run([
+        "sh",
+        "-c",
+        `mkdir -p "${ctx.stateDir}"; : > "${log}"; ` +
+          `nohup ngrok http --domain=${domain} ${ctx.port} > "${log}" 2>&1 < /dev/null & echo $! > "${pidFile}"`,
+      ])
+      return {
+        publicUrl: `https://${domain}`,
+        stable: true,
+        notes: [
+          `Tunnel runs in the background (pid in ${pidFile}); stop it with \`supermux connect --off\`.`,
+          "For reboot-survival, configure the tunnel in ngrok.yml and `ngrok service install`.",
+        ],
       }
-
-      // The durable run binds the reserved domain to the local port. It's long-
-      // running (serves the tunnel), so we don't await its output — the URL is
-      // simply https://<domain>. Kick it off best-effort.
-      try {
-        await ctx.run(["ngrok", "http", `--domain=${domain}`, ctx.port])
-      } catch {
-        // long-running / may not return promptly — the URL is deterministic anyway
-      }
-
-      return { publicUrl: `https://${domain}`, stable: true }
     }
 
-    // random: start an anonymous tunnel, then read its URL from the local 4040 API.
-    // `ngrok http` is long-running; the 8s timeout bounds the wait (the process
-    // would otherwise run forever serving the tunnel) while the API comes up.
-    await ctx.run(["ngrok", "http", ctx.port], { timeoutMs: 8000 })
+    // random: launch an anonymous tunnel DETACHED (same reasoning — it serves
+    // forever), then read its URL from the local 4040 API once it's up.
+    await ctx.run([
+      "sh",
+      "-c",
+      `mkdir -p "${ctx.stateDir}"; : > "${log}"; ` +
+        `nohup ngrok http ${ctx.port} > "${log}" 2>&1 < /dev/null & echo $! > "${pidFile}"`,
+    ])
 
-    const api = await ctx.run(["curl", "-s", LOCAL_API])
     let url: string | undefined
-    try {
-      const parsed = JSON.parse(api.stdout) as { tunnels?: Array<{ public_url?: string }> }
-      url = parsed.tunnels?.[0]?.public_url ?? undefined
-    } catch {
-      // Fall back to scraping a URL out of whatever the API returned.
-      url = extractFirstUrl(api.stdout)
+    for (let i = 0; i < 15; i++) {
+      const api = await ctx.run(["curl", "-s", LOCAL_API])
+      try {
+        const parsed = JSON.parse(api.stdout) as { tunnels?: Array<{ public_url?: string }> }
+        url = parsed.tunnels?.[0]?.public_url ?? undefined
+      } catch {
+        // Fall back to scraping a URL out of whatever the API returned.
+        url = extractFirstUrl(api.stdout)
+      }
+      if (url) break
+      await Bun.sleep(1000)
     }
     if (!url) throw new Error("could not read the ngrok tunnel URL from the local API")
 
@@ -155,10 +164,20 @@ export const ngrokProvider: TunnelProvider = {
   },
 
   /**
-   * Tear down the persistent ngrok service. Idempotent and best-effort: safe to
-   * run when nothing is installed, and any error is swallowed.
+   * Tear down the tunnel. Idempotent + best-effort: kill the detached run we
+   * started (via its pidfile), then uninstall any ngrok service. Errors swallowed.
    */
   async down(ctx: ConnectCtx): Promise<void> {
+    try {
+      const pidFile = `${ctx.stateDir}/ngrok.pid`
+      await ctx.run([
+        "sh",
+        "-c",
+        `[ -f "${pidFile}" ] && kill "$(cat "${pidFile}")" 2>/dev/null; rm -f "${pidFile}"`,
+      ])
+    } catch {
+      // nothing to stop
+    }
     try {
       await ctx.run(["ngrok", "service", "uninstall"])
     } catch {

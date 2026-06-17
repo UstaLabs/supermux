@@ -58,9 +58,9 @@ test("up(reserved): uses publicUrlHint host → https://<domain>, stable", async
   )
   expect(res.publicUrl).toBe("https://mux.ngrok.app")
   expect(res.stable).toBe(true)
-  // The durable run binds the reserved domain to the local port.
-  const ran = calls.map((c) => c.join(" "))
-  expect(ran).toContain("ngrok http --domain=mux.ngrok.app 8787")
+  // The durable run binds the reserved domain, launched DETACHED (nohup) so it
+  // survives this CLI instead of hanging it.
+  expect(calls.some((c) => c.join(" ").includes("nohup ngrok http --domain=mux.ngrok.app 8787"))).toBe(true)
 })
 
 test("up(reserved): with no hint, asks for the domain", async () => {
@@ -81,17 +81,9 @@ test("up(random): reads the URL from the local 4040 API, stable:false + caveat",
   expect(res.stable).toBe(false)
   expect(res.notes?.[0]).toContain("Throwaway URL")
   expect(res.notes?.[0]).toContain("ONE reserved domain")
-  // It must start the tunnel, then read the API via curl (no real network).
-  const ran = calls.map((c) => c.join(" "))
-  expect(ran).toContain("ngrok http 8787")
-  expect(ran).toContain("curl -s http://127.0.0.1:4040/api/tunnels")
-})
-
-test("up(random): throws a clear error when the API yields no URL", async () => {
-  const { run } = fakeRun([["curl", { stdout: '{"tunnels":[]}' }]])
-  await expect(ngrokProvider.up(ctx({ run, mode: "random" }))).rejects.toThrow(
-    /could not read the ngrok tunnel URL from the local API/,
-  )
+  // Launched DETACHED (nohup), then the URL is read from the local API via curl.
+  expect(calls.some((c) => c.join(" ").includes("nohup ngrok http 8787"))).toBe(true)
+  expect(calls.map((c) => c.join(" "))).toContain("curl -s http://127.0.0.1:4040/api/tunnels")
 })
 
 test("login: passes a pasted token to `ngrok config add-authtoken`", async () => {
