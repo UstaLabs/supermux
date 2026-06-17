@@ -78,8 +78,6 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            infoBar
-            Divider().opacity(0.4)
             transcript
             if let banner { bannerView(banner) }
             dock.layoutPriority(1)   // the composer wins height so the field can grow over the keyboard
@@ -88,16 +86,22 @@ struct ChatView: View {
         .navigationTitle(session.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if let g = git, g.isRepo {
-                ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .topBarLeading) {
+                HStack(spacing: 7) {
+                    AgentLogo(agent: session.agent, size: 20)
+                    if let g = git, g.isRepo, let b = g.branch { branchPill(g, b) }
+                }
+            }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                linksButton
+                if let g = git, g.isRepo {
                     Button { runFinish() } label: { Label("Finish", systemImage: "arrow.triangle.merge") }
                         .tint(Theme.teal)
                 }
-            }
-            if hSize != .compact {
-                ToolbarItem(placement: .topBarTrailing) { paneCluster }
+                if hSize != .compact { paneCluster }
             }
         }
+        .toolbarTitleDisplayMode(.inline)
         .task { if draft.isEmpty, let d = ProcessInfo.processInfo.environment["SM_DRAFT"] { draft = d } }
         // Load per-session state on EVERY appearance — `.task(id:)` doesn't re-fire when
         // re-opening the *same* session (id unchanged), which left git/branch unloaded.
@@ -187,22 +191,6 @@ struct ChatView: View {
             }
             git = await broker.gitStatus(session.id)
         }
-    }
-
-    private var infoBar: some View {
-        HStack(spacing: 8) {
-            AgentLogo(agent: session.agent, size: 22)
-            if let g = git, g.isRepo, let b = g.branch {
-                branchPill(g, b)
-            } else {
-                Text(formatWorkdir(workdir: session.workdir, home: inferHomeDir(workdir: session.workdir)))
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer()
-            linksButton
-        }
-        .padding(.horizontal, 14).padding(.vertical, 6)
-        .background(.bar)
     }
 
     private func branchPill(_ g: GitRemoteStatus, _ branch: String) -> some View {
