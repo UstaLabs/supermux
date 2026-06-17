@@ -5,6 +5,13 @@
 
 export type ExposureMode = "local" | "public"
 
+/** The tunnel chosen by `supermux connect`, for --status/--switch/--off. */
+export interface TunnelRecord {
+  provider: string // "cloudflared" | "tailscale" | "netbird" | "ngrok" | "manual"
+  mode: string // provider-specific mode id (e.g. "named", "serve")
+  publicUrl: string
+}
+
 export interface AppConfig {
   paName: string
   paWorkdir: string
@@ -19,6 +26,8 @@ export interface AppConfig {
   codexApiKey: string
   cursorApiKey: string
   onboarded: boolean
+  // Set by `supermux connect`; absent when no tunnel is configured. Store-only.
+  tunnel?: TunnelRecord
 }
 
 export const SETTINGS_KEY_APP = "app"
@@ -40,6 +49,16 @@ export const defaultAppConfig: AppConfig = {
 
 function str(v: unknown, fallback: string): string {
   return typeof v === "string" ? v : fallback
+}
+
+/** Coerce arbitrary input into a TunnelRecord, or undefined if shape is wrong. */
+function parseTunnelRecord(v: unknown): TunnelRecord | undefined {
+  if (!v || typeof v !== "object") return undefined
+  const t = v as Record<string, unknown>
+  if (typeof t.provider !== "string" || typeof t.mode !== "string" || typeof t.publicUrl !== "string") {
+    return undefined
+  }
+  return { provider: t.provider, mode: t.mode, publicUrl: t.publicUrl }
 }
 
 export interface AppConfigEnv {
@@ -77,6 +96,7 @@ export function resolveAppConfig(stored: Partial<AppConfig>, env: AppConfigEnv):
     codexApiKey: firstNonEmpty(stored.codexApiKey),
     cursorApiKey: firstNonEmpty(stored.cursorApiKey),
     onboarded: stored.onboarded === undefined ? defaultAppConfig.onboarded : Boolean(stored.onboarded),
+    tunnel: parseTunnelRecord(stored.tunnel), // store-only, no env source
   }
 }
 
@@ -102,6 +122,10 @@ export function sanitizeAppConfigPatch(input: unknown): Partial<AppConfig> {
   if (typeof o.codexApiKey === "string") out.codexApiKey = o.codexApiKey
   if (typeof o.cursorApiKey === "string") out.cursorApiKey = o.cursorApiKey
   if (o.onboarded !== undefined) out.onboarded = Boolean(o.onboarded)
+  if (o.tunnel !== undefined) {
+    const t = parseTunnelRecord(o.tunnel)
+    if (t) out.tunnel = t
+  }
   return out
 }
 
@@ -125,6 +149,7 @@ export function parseAppConfig(input: unknown, base: AppConfig = defaultAppConfi
     codexApiKey: str(o.codexApiKey, base.codexApiKey),
     cursorApiKey: str(o.cursorApiKey, base.cursorApiKey),
     onboarded: o.onboarded === undefined ? base.onboarded : Boolean(o.onboarded),
+    tunnel: parseTunnelRecord(o.tunnel) ?? base.tunnel,
   }
 }
 

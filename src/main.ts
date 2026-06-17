@@ -35,7 +35,7 @@ import { spawnSession as spawnSessionHelper, spawnPA, resumeOpenCodeSession } fr
 import { RuntimeRegistry, type SessionRuntime } from "./core/session-manager/runtime"
 import { buildClaudeSpawnCommand } from "./core/session-manager/spawn-command"
 import { cursorSpawnArgs, codexSpawnArgs, claudeSpawnArgs, codexPrepareGlobal, codexPrepareSessionHome, opencodeConfigEntries, ensureOpenCodePluginScopes } from "./core/plugins"
-import { ensureMuxCoreSkills } from "./core/plugins/mux-core"
+import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider } from "./core/slash-commands"
 import { AgentKind, isAgentKind } from "./shared/agents"
 import { sendChannelConsentEnter } from "./core/session-manager/post-spawn-keys"
@@ -2876,6 +2876,11 @@ async function resumeNonClaudeAdapters(): Promise<void> {
 try {
   if (ensureMuxCoreSkills()) {
     log.info("mux_core_skills_synced")
+  }
+  // Register + enable mux-core in plugins.json if absent — without this a fresh
+  // install spawns sessions with zero plugins (no /mux:soul, no mux skills).
+  if (ensureMuxCoreRegistered()) {
+    log.info("mux_core_plugin_registered")
   }
   if (ensureOpenCodePluginScopes()) {
     log.info("opencode_plugin_scopes_synced")
