@@ -28,8 +28,7 @@ extension View {
             .background(Theme.userTint, in: RoundedRectangle(cornerRadius: Theme.cardCorner, style: .continuous))
     }
 
-    /// Compat alias — legacy call sites (InfoPages.swift) still compile.
-    @_disfavoredOverload
+    /// Compat alias — legacy call sites (InfoPages.swift, ArchivedMessageRow) still use this.
     func transcriptCard() -> some View {
         let shape = RoundedRectangle(cornerRadius: Theme.cardCorner, style: .continuous)
         return padding(.horizontal, 12)

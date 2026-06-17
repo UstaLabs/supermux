@@ -85,7 +85,6 @@ struct ChatView: View {
         transcript
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomCluster }
         .navigationTitle(session.name)
-        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 HStack(spacing: 7) {
@@ -372,7 +371,13 @@ struct ChatView: View {
 
     // Slim resting pill: tap to focus → expands into the full controls.
     private var restingComposer: some View {
-        Button { composing = true } label: {
+        Button {
+            composing = true
+            // Re-assert once expandedComposer (which owns the focusable TextField) has mounted —
+            // focusing a not-yet-rendered field no-ops on the first pass, so the first tap would
+            // expand the composer but fail to raise the keyboard without this.
+            DispatchQueue.main.async { composing = true }
+        } label: {
             HStack(spacing: 10) {
                 Image(systemName: "plus").font(.body.weight(.medium)).foregroundStyle(.secondary)
                 Text(draft.isEmpty ? "Message \(session.name)…" : draft)
