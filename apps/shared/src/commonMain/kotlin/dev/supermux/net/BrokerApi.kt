@@ -18,6 +18,7 @@ import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.SlashCommand
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -264,6 +265,12 @@ data class ProjectEntry(val path: String)
 data class ProjectsResponse(val projects: List<ProjectEntry> = emptyList())
 
 @Serializable
+data class LauncherCommands(
+    val commands: List<SlashCommand> = emptyList(),
+    val resolved: Boolean = false,
+)
+
+@Serializable
 data class PathValidation(val ok: Boolean = false, val path: String? = null, val error: String? = null)
 
 @Serializable
@@ -423,6 +430,10 @@ class BrokerApi(
     /** GET /models?agent= — models for the launcher (no session). */
     suspend fun listModels(agent: String): LauncherModels =
         getJson("$httpBase/models?agent=${urlEncode(agent)}")
+
+    /** GET /commands/preview?agent=&workdir= — agent slash commands for the launcher (no session). */
+    suspend fun previewCommands(agent: String, workdir: String): LauncherCommands =
+        getJson("$httpBase/commands/preview?agent=${urlEncode(agent)}&workdir=${urlEncode(workdir)}")
 
     /** POST /sessions/<id>/model {"model": ...} */
     suspend fun switchModel(id: String, model: String) =
