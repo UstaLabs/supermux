@@ -37,7 +37,8 @@ test("happy path: writes .env, restarts the broker, prints a pair link", async (
   })
   expect(code).toBe(0)
   expect(readFileSync(join(dir, ".env"), "utf8")).toContain("MUX_WEB_PUBLIC_URL=https://fake.example.com")
-  expect(calls.some((c) => c.join(" ").includes("systemctl"))).toBe(true)
+  // restart uses systemctl on Linux, launchctl on macOS — accept either
+  expect(calls.some((c) => /systemctl|launchctl/.test(c.join(" ")))).toBe(true)
   expect(existsSync(join(dir, "devices.json"))).toBe(true)
   expect(out.join("\n")).toContain("https://fake.example.com/pair?t=")
 })
@@ -50,7 +51,7 @@ test("--no-restart and --no-pair skip those steps", async () => {
     providers: [fake()], stateDir: dir, tty: false, run, println() {},
   })
   expect(code).toBe(0)
-  expect(calls.some((c) => c.join(" ").includes("systemctl"))).toBe(false)
+  expect(calls.some((c) => /systemctl|launchctl/.test(c.join(" ")))).toBe(false)
   expect(existsSync(join(dir, "devices.json"))).toBe(false)
 })
 
