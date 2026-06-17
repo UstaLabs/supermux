@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
 import { dirname, join } from "path"
 import { PLUGINS_DIR } from "../../shared/paths"
+import { loadPluginsRegistry, savePluginsRegistry } from "./registry"
+import type { CliScope } from "./types"
 
 const MANIFEST = {
   name: "mux",
@@ -159,6 +161,43 @@ export function ensureMuxCoreSkills(opts: { pluginDir?: string } = {}): boolean 
   changed = writeIfChanged(join(pluginDir, "skills", "soul", "SKILL.md"), MUX_SOUL_SKILL) || changed
   changed = writeIfChanged(join(pluginDir, "skills", "new-personal-agent", "SKILL.md"), MUX_NEW_PERSONAL_AGENT_SKILL) || changed
   return changed
+}
+
+const MUX_CORE_DIR_NAME = "mux-core"
+const MUX_CORE_SCOPES: CliScope[] = ["claude", "codex", "cursor", "opencode"]
+
+/**
+ * Ensure the mux-core plugin is REGISTERED + enabled in the plugins registry
+ * (~/.mux/plugins.json). `ensureMuxCoreSkills` only writes the plugin *files* —
+ * without an enabled registry entry, `loadPluginsForSpawn` returns [] and a
+ * fresh install spawns sessions with ZERO plugins (no `/mux:soul`, no mux
+ * skills). Run at boot alongside ensureMuxCoreSkills.
+ *
+ * Idempotent + non-destructive: if a `mux-core` entry already exists it is left
+ * exactly as-is (an explicitly-disabled plugin is never re-enabled). A malformed
+ * plugins.json is left untouched. Returns true only when it adds the entry.
+ */
+export function ensureMuxCoreRegistered(opts: { file?: string; pluginsDir?: string } = {}): boolean {
+  const pluginsDir = opts.pluginsDir ?? PLUGINS_DIR
+  let reg
+  try {
+    reg = loadPluginsRegistry({ file: opts.file, pluginsDir })
+  } catch {
+    // Malformed plugins.json — never clobber the user's registry.
+    return false
+  }
+  if (reg.plugins.some((p) => p.name === MUX_CORE_DIR_NAME)) return false
+  const dir = join(pluginsDir, MUX_CORE_DIR_NAME)
+  reg.plugins.push({
+    name: MUX_CORE_DIR_NAME,
+    version: MANIFEST.version,
+    source: { type: "local", path: dir },
+    enabled: true,
+    scopes: MUX_CORE_SCOPES,
+    dir,
+  })
+  savePluginsRegistry(reg, { file: opts.file, pluginsDir })
+  return true
 }
 
 /** @deprecated use ensureMuxCoreSkills */
