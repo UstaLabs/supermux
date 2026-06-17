@@ -82,12 +82,8 @@ struct ChatView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            transcript
-            if let banner { bannerView(banner) }
-            dock.layoutPriority(1)   // the composer wins height so the field can grow over the keyboard
-            if hSize == .compact && !composing { paneBar }   // free space (+ tablet shows it in the header)
-        }
+        transcript
+        .safeAreaInset(edge: .bottom, spacing: 0) { bottomCluster }
         .navigationTitle(session.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -143,6 +139,22 @@ struct ChatView: View {
         } message: {
             Text("Enable microphone access for supermux in Settings to record voice messages.")
         }
+    }
+
+    // Floating glass chrome pinned to the bottom safe area: optional banner, then the
+    // morphing composer + (compact-only, when not typing) the pane tab bar — both in one
+    // GlassEffectContainer so Liquid Glass blends and morphs them as a single cluster.
+    private var bottomCluster: some View {
+        VStack(spacing: 8) {
+            if let banner { bannerView(banner) }
+            GlassEffectContainer(spacing: 10) {
+                VStack(spacing: 8) {
+                    dock
+                    if hSize == .compact && !composing { paneBar }
+                }
+            }
+        }
+        .padding(.bottom, 4)
     }
 
     private func bannerView(_ text: String) -> some View {
@@ -274,6 +286,8 @@ struct ChatView: View {
             // constant scrolling during a busy session was blanking the transcript).
             .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)
+            .scrollEdgeEffectStyle(.soft, for: .top)
+            .scrollEdgeEffectStyle(.soft, for: .bottom)
             .simultaneousGesture(TapGesture().onEnded { composing = false })   // tap transcript to dismiss keyboard
             .onChange(of: log.count) { _, _ in scrollToBottom(proxy) }
             .task(id: session.id) {
@@ -563,8 +577,9 @@ struct ChatView: View {
             paneTab("Editor", "chevron.left.forwardslash.chevron.right", on: false, enabled: false)
             paneTab("Display", "display", on: false, enabled: false)
         }
-        .padding(.top, 6).padding(.bottom, 2)
-        .background(.bar)
+        .padding(.horizontal, 8).padding(.vertical, 6)
+        .glassEffect(.regular, in: Capsule())
+        .padding(.horizontal, 12)
     }
     private func paneTab(_ t: String, _ icon: String, on: Bool, enabled: Bool) -> some View {
         VStack(spacing: 3) {
