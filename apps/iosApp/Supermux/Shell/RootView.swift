@@ -8,6 +8,7 @@ struct RootView: View {
     @State private var broker: BrokerSession
     @State private var selected: String?
     @State private var route: NavRoute?
+    @State private var debugArchived: ArchivedItem?    // SM_OPEN_ARCHIVED headless repro
     @Environment(\.horizontalSizeClass) private var hSize
     var onUnpair: () -> Void
 
@@ -89,6 +90,17 @@ struct RootView: View {
                 selected = first                                 // reopen the SAME session
             }
         }
+        .task(id: broker.synced) {
+            // Debug: open an ARCHIVED session's read-only transcript headlessly.
+            guard broker.synced, debugArchived == nil else { return }
+            if let want = ProcessInfo.processInfo.environment["SM_OPEN_ARCHIVED"],
+               let a = (await broker.archived()).first(where: { $0.name == want }) {
+                debugArchived = ArchivedItem(id: a.id, dto: a)
+            }
+        }
+        .fullScreenCover(item: $debugArchived) { item in
+            NavigationStack { ArchivedChatView(broker: broker, archived: item.dto) }
+        }
     }
 
     @ViewBuilder private func page(_ r: NavRoute) -> some View {
@@ -104,6 +116,8 @@ struct RootView: View {
         }
     }
 }
+
+private struct ArchivedItem: Identifiable { let id: String; let dto: ArchivedDto }
 
 private extension RootView.NavRoute {
     init?(debugName: String) {
