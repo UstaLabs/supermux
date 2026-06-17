@@ -39,7 +39,12 @@ struct ChatView: View {
     @State private var recorder = AudioRecorder()
     @State private var micDenied = false
     @FocusState private var composing: Bool
+    @Namespace private var glassNS
     @Environment(\.horizontalSizeClass) private var hSize
+
+    /// Composer is expanded (full controls) when focused, when there's a draft or a
+    /// staged attachment, or while recording; otherwise it rests as a slim glass pill.
+    private var composerExpanded: Bool { composing || !draft.isEmpty || !pending.isEmpty || recorder.isRecording }
 
     private var sessionLinks: [ProxyDto] { proxies.filter { $0.sessionName == session.name } }
     private var draftKey: String { "cmux:draft:\(session.id)" }
@@ -329,57 +334,85 @@ struct ChatView: View {
 
     private var dock: some View {
         VStack(spacing: 8) {
-            if !slashMatches.isEmpty { slashMenu }
-            HStack(spacing: 3) {
-                pillSeg("Chat", system: "bubble.left", on: true)
-                pillSeg("Native", system: "terminal", on: false).opacity(0.5)
-            }
-            .padding(3).background(.quaternary, in: Capsule())
-
-            VStack(spacing: 8) {
-                if !pending.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) { ForEach(pending) { attachmentChip($0) } }
-                    }
+            if composerExpanded {
+                if !slashMatches.isEmpty { slashMenu }
+                HStack(spacing: 3) {
+                    pillSeg("Chat", system: "bubble.left", on: true)
+                    pillSeg("Native", system: "terminal", on: false).opacity(0.5)
                 }
-                if recorder.isRecording {
-                    RecordingBar(elapsed: recorder.elapsed) { recorder.cancel() }
-                }
-                TextField("Message \(session.name)…", text: $draft, axis: .vertical)
-                    .lineLimit(1...12)
-                    .focused($composing)
-                HStack(spacing: 12) {
-                    Menu {
-                        Button { showPhotos = true } label: { Label("Photos", systemImage: "photo") }
-                        Button { showFiles = true } label: { Label("Files", systemImage: "folder") }
-                        Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
-                    } label: {
-                        Image(systemName: "plus").font(.body.weight(.medium)).foregroundStyle(.secondary)
-                    }
-                    micButton
-                    if let m = session.model, !m.isEmpty { pill(m, system: "cpu") { modelSheet = true } }
-                    if reasoning?.visible ?? false {
-                        pill(reasoning?.current ?? "reasoning", system: "brain") { reasoningSheet = true }
-                    }
-                    Spacer()
-                    Button { sendMessage() } label: {
-                        Image(systemName: "arrow.up")
-                            .font(.headline.weight(.bold)).foregroundStyle(.white)
-                            .frame(width: 34, height: 34)
-                            .background(canSend ? Theme.teal : Color.gray.opacity(0.4), in: Circle())
-                    }
-                    .disabled(!canSend)
-                }
+                .padding(3).glassEffect(.regular, in: Capsule())
+                expandedComposer
+            } else {
+                restingComposer
             }
-            .padding(12).glassSurface(cornerRadius: 20)
-            .onChange(of: photoItems) { _, items in loadPhotos(items) }
-            .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .images)
-            .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
-                handleFiles(result)
-            }
-            .fullScreenCover(isPresented: $showCamera) { CameraPicker { addCameraImage($0) } }
         }
-        .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 6).background(.bar)
+        .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 2)
+        .animation(.smooth(duration: 0.28), value: composerExpanded)
+        .onChange(of: photoItems) { _, items in loadPhotos(items) }
+        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .images)
+        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            handleFiles(result)
+        }
+        .fullScreenCover(isPresented: $showCamera) { CameraPicker { addCameraImage($0) } }
+    }
+
+    // Slim resting pill: tap to focus → expands into the full controls.
+    private var restingComposer: some View {
+        Button { composing = true } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "plus").font(.body.weight(.medium)).foregroundStyle(.secondary)
+                Text(draft.isEmpty ? "Message \(session.name)…" : draft)
+                    .font(.subheadline).foregroundStyle(draft.isEmpty ? .secondary : .primary)
+                    .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "mic").font(.body.weight(.medium)).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular, in: Capsule())
+        .glassEffectID("composer", in: glassNS)
+    }
+
+    // Expanded card: the full control row (attachments, mic, model/reasoning, send).
+    private var expandedComposer: some View {
+        VStack(spacing: 8) {
+            if !pending.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) { ForEach(pending) { attachmentChip($0) } }
+                }
+            }
+            if recorder.isRecording {
+                RecordingBar(elapsed: recorder.elapsed) { recorder.cancel() }
+            }
+            TextField("Message \(session.name)…", text: $draft, axis: .vertical)
+                .lineLimit(1...12)
+                .focused($composing)
+            HStack(spacing: 12) {
+                Menu {
+                    Button { showPhotos = true } label: { Label("Photos", systemImage: "photo") }
+                    Button { showFiles = true } label: { Label("Files", systemImage: "folder") }
+                    Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
+                } label: {
+                    Image(systemName: "plus").font(.body.weight(.medium)).foregroundStyle(.secondary)
+                }
+                micButton
+                if let m = session.model, !m.isEmpty { pill(m, system: "cpu") { modelSheet = true } }
+                if reasoning?.visible ?? false {
+                    pill(reasoning?.current ?? "reasoning", system: "brain") { reasoningSheet = true }
+                }
+                Spacer()
+                Button { sendMessage() } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.headline.weight(.bold)).foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(canSend ? Theme.teal : Color.gray.opacity(0.4), in: Circle())
+                }
+                .disabled(!canSend)
+            }
+        }
+        .padding(12)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .glassEffectID("composer", in: glassNS)
     }
     private var canSend: Bool { !draft.trimmingCharacters(in: .whitespaces).isEmpty || !pending.isEmpty }
 
