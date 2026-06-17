@@ -135,6 +135,10 @@ final class BrokerSession {
     func listModels(_ agent: String) async -> [ModelInfo] {
         (try? await api.listModels(agent: agent))?.models ?? []
     }
+    /// Agent slash commands for the new-session launcher (no live session yet).
+    func previewCommands(_ agent: String, _ workdir: String) async -> [SlashCommand] {
+        (try? await api.previewCommands(agent: agent, workdir: workdir))?.commands ?? []
+    }
 
     func models(_ id: String) async -> ModelsResponse? { try? await api.models(id: id) }
     func switchModel(_ id: String, _ model: String) {

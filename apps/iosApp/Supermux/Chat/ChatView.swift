@@ -36,6 +36,8 @@ struct ChatView: View {
     @State private var commitPrompt = false
     @State private var commitMsg = ""
     @State private var loadedSessionId: String?
+    @State private var recorder = AudioRecorder()
+    @State private var micDenied = false
     @FocusState private var composing: Bool
     @Environment(\.horizontalSizeClass) private var hSize
 
@@ -127,6 +129,11 @@ struct ChatView: View {
             Button("Cancel", role: .cancel) {}
             Button("Commit & finish") { runFinish(commitFirst: true, commitMessage: commitMsg.isEmpty ? "wip" : commitMsg) }
         } message: { Text("Commit the session's changes, then finish.") }
+        .alert("Microphone access needed", isPresented: $micDenied) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Enable microphone access for supermux in Settings to record voice messages.")
+        }
     }
 
     private func bannerView(_ text: String) -> some View {
@@ -347,6 +354,9 @@ struct ChatView: View {
                         HStack(spacing: 8) { ForEach(pending) { attachmentChip($0) } }
                     }
                 }
+                if recorder.isRecording {
+                    RecordingBar(elapsed: recorder.elapsed) { recorder.cancel() }
+                }
                 TextField("Message \(session.name)…", text: $draft, axis: .vertical)
                     .lineLimit(1...12)
                     .focused($composing)
@@ -358,6 +368,7 @@ struct ChatView: View {
                     } label: {
                         Image(systemName: "plus").font(.body.weight(.medium)).foregroundStyle(.secondary)
                     }
+                    micButton
                     if let m = session.model, !m.isEmpty { pill(m, system: "cpu") { modelSheet = true } }
                     if reasoning?.visible ?? false {
                         pill(reasoning?.current ?? "reasoning", system: "brain") { reasoningSheet = true }
@@ -384,9 +395,25 @@ struct ChatView: View {
     }
     private var canSend: Bool { !draft.trimmingCharacters(in: .whitespaces).isEmpty || !pending.isEmpty }
 
+    private var micButton: some View {
+        Button {
+            if recorder.isRecording {
+                if let (data, name) = recorder.stop() {
+                    pending.append(PendingAttachment(data: data, filename: name, mime: "audio/mp4"))
+                }
+            } else {
+                Task { if case .denied = await recorder.start() { micDenied = true } }
+            }
+        } label: {
+            Image(systemName: recorder.isRecording ? "stop.circle.fill" : "mic")
+                .font(.body.weight(.medium))
+                .foregroundStyle(recorder.isRecording ? .red : .secondary)
+        }
+    }
+
     private func attachmentChip(_ p: PendingAttachment) -> some View {
         HStack(spacing: 5) {
-            Image(systemName: "photo").font(.caption2)
+            Image(systemName: p.mime.hasPrefix("audio") ? "waveform" : "photo").font(.caption2)
             Text(p.filename).font(.caption2).lineLimit(1)
             Button { pending.removeAll { $0.id == p.id } } label: {
                 Image(systemName: "xmark.circle.fill").font(.caption2)
@@ -432,7 +459,8 @@ struct ChatView: View {
         Task {
             var ids: [String] = []
             for p in toUpload {
-                if let id = await broker.upload(session.id, data: p.data, filename: p.filename, mime: p.mime) {
+                let kind = p.mime.hasPrefix("audio") ? "voice" : nil
+                if let id = await broker.upload(session.id, data: p.data, filename: p.filename, mime: p.mime, kind: kind) {
                     ids.append(id)
                 }
             }

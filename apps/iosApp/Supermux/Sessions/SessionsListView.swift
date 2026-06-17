@@ -11,6 +11,7 @@ struct SessionsListView: View {
     var onArchived: () -> Void
 
     @State private var collapsed: Set<String> = SessionsListView.loadCollapsed()
+    @State private var showArchived = false
     @State private var renameTarget: SessionInfo?
     @State private var renameText = ""
     @State private var killTarget: SessionInfo?
@@ -31,14 +32,21 @@ struct SessionsListView: View {
                     .padding(.vertical, 3)
                 }
                 .buttonStyle(.plain)
-                Button(action: onArchived) {
-                    Label {
-                        Text("Archived").foregroundStyle(.primary)
-                    } icon: {
-                        Image(systemName: "archivebox").foregroundStyle(.secondary)
+                // Mail-style: hidden until you pull the list down past the top.
+                if showArchived {
+                    Button(action: onArchived) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "archivebox").font(.title3).foregroundStyle(.secondary)
+                                .frame(width: 26)
+                            Text("Archived").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.vertical, 3)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .transition(.move(edge: .top).combined(with: .opacity))
                 }
-                .buttonStyle(.plain)
             }
 
             ForEach(broker.groups(), id: \.workdir) { group in
@@ -50,6 +58,17 @@ struct SessionsListView: View {
             }
         }
         .listStyle(.insetGrouped)
+        // Reveal "Archived" on pull-down (offset is measured against the content
+        // inset, so the resting top reads as 0); hide it once scrolled back in.
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            geo.contentOffset.y + geo.contentInsets.top
+        } action: { _, top in
+            if top < -70 {
+                if !showArchived { withAnimation(.easeOut(duration: 0.2)) { showArchived = true } }
+            } else if top > 40 {
+                if showArchived { withAnimation(.easeOut(duration: 0.2)) { showArchived = false } }
+            }
+        }
         .navigationTitle("supermux")
         .overlay {
             if !broker.synced && broker.sessions.isEmpty {

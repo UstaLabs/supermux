@@ -47,6 +47,7 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         NSCameraUsageDescription: supermux scans the pairing QR code printed by your broker.
+        NSMicrophoneUsageDescription: supermux records voice messages you send to your agents.
         ITSAppUsesNonExemptEncryption: false
         # Dev builds connect to a self-hosted broker (LAN / Tailscale, often plain http).
         NSAppTransportSecurity:
