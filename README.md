@@ -5,92 +5,61 @@
   </picture>
 </p>
 
-# supermux
+<h1 align="center">supermux</h1>
 
-> **AFK. Still shipping.**
-> supermux runs **Claude Code, Codex, Cursor & OpenCode** around the clock on a box you own — and puts every session on every screen you carry.
+<p align="center"><strong>AFK. Still shipping.</strong></p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-![Self-hosted](https://img.shields.io/badge/self--hosted-2ea44f)
-![No vendor cloud](https://img.shields.io/badge/no%20vendor%20cloud-1f6feb)
-![Built with supermux](https://img.shields.io/badge/built%20with%20supermux-blueviolet)
+<p align="center">
+  supermux runs <strong>Claude Code, Codex, Cursor &amp; OpenCode</strong> 24/7 on a box you own —<br>
+  every session, on every screen you carry.
+</p>
 
-<!-- hero demo GIF (planned): push lands on phone → open web app → review diff → inline comment → agent fixes → merge -->
+<p align="center">
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/self--hosted-2ea44f" alt="Self-hosted">
+  <img src="https://img.shields.io/badge/no%20vendor%20cloud-1f6feb" alt="No vendor cloud">
+  <img src="https://img.shields.io/badge/built%20with%20supermux-blueviolet" alt="Built with supermux">
+</p>
+
+<p align="center">
+  <a href="https://supermux.dev"><strong>Website</strong></a> ·
+  <a href="#install"><strong>Install</strong></a> ·
+  <a href="./SETUP.md"><strong>Setup guide</strong></a>
+</p>
 
 ---
 
+## Agents only work while you watch
+
 Coding agents only make progress while you sit in front of them. Close the laptop and the session dies; a finished diff waits hours for review; one question stalls a task until evening.
 
-**supermux** gives your agents a box of their own — a VPS, a mini PC, the spare laptop in a drawer — where they run around the clock. The **web app** is your window into all of them: spawn a session from your phone, answer a worker's question from the train, review the diff after dinner, merge when it's right. **Telegram** is there too, when chat is all you need.
+**supermux** gives your agents a box of their own — a VPS, a mini PC, the spare laptop in a drawer — where they run around the clock. The web app (and Telegram) is your window into all of them: spawn a session from your phone, answer a worker's question from the train, review the diff after dinner, merge when it's right.
 
-None of it touches a vendor cloud. supermux runs no servers and requires no account — your agent subscriptions, your code, your box. And we trust it with our own work: **supermux is built with supermux** ([see below](#built-with-supermux)).
+No vendor cloud, no account. Your agent subscriptions, your code, your box.
+
+```sh
+curl -fsSL https://supermux.dev/install.sh | sh
+```
+
+<sub>Windows (PowerShell): <code>irm https://supermux.dev/install.ps1 | iex</code> — more options under <a href="#install">Install</a>.</sub>
 
 ## What changes for you
 
-- **Leave whenever.** Sessions live on the box, not in your laptop — the lid closing changes nothing.
-- **Never babysit.** Push notifications find you when a worker finishes or asks something; one tap opens that exact session.
-- **Review from your phone.** Each session works in its own git worktree; you read the diff, leave inline comments, the agent addresses them, and finishing fast-forwards `main` only when you say so.
-- **Delegate the fan-out.** An always-on personal-assistant session spawns, names, routes, and coordinates worker sessions — you describe the work, it runs the room.
-- **Full autonomy, sane blast radius.** Agents don't stop to ask permission. They run on a dedicated box, in isolated worktrees, and nothing merges unreviewed.
-- **It learns your stack.** A file-based shared memory plus a `soul.md` identity you define — knowledge compounds across sessions instead of resetting with each one.
+- **Leave whenever.** Sessions live on the box, not your laptop — the lid closing changes nothing.
+- **Never babysit.** A push finds you when a worker finishes or asks; one tap opens that exact session.
+- **Review from your phone.** Each session works in its own git worktree — read the diff, comment inline, the agent fixes, and `main` moves only on your word.
+- **Autonomous, not reckless.** No permission prompts; isolated worktrees, a dedicated box, and nothing merges unreviewed.
+- **It learns your stack.** Shared memory across sessions plus a `soul.md` identity you write — knowledge compounds instead of resetting.
 
-## Quick start (Docker)
+## Your window into every session
 
-The fastest way to try it — no VPS required, no system changes:
-
-```bash
-git clone https://github.com/UstaLabs/supermux.git && cd supermux
-docker compose up -d
-# open http://localhost:8787 — the setup wizard launches automatically
-```
-
-The **setup wizard** runs on first open and walks you through four steps:
-
-1. **Welcome** — a quick intro.
-2. **Agents** — paste a `CLAUDE_CODE_OAUTH_TOKEN` (get one via `claude setup-token`), an Anthropic or OpenAI API key, or use the Codex/Cursor device-flow ("authorize via link").
-3. **Connectivity** — optionally add a Telegram bot token, set a public URL (ready-to-paste Caddy, nginx, and Cloudflare Tunnel snippets + a reachability test), and pair more devices.
-4. **Done** — spawn your first session.
-
-Your assistant's **identity is set up automatically** afterward: on first spawn it walks you through writing its own `soul.md` (no preset persona) via the `/mux:soul` skill — revise it anytime.
-
-**First-run pairing is automatic:** the first browser to open a fresh instance is paired. On a headless box, `bun run pair <name>` does the same.
-
-- Broker state (`~/.mux`) survives restarts via named volumes; `./workspace` is the directory your sessions edit — drop the repos you want worked on there.
-- `http://localhost` is a browser **secure context**, so the installable PWA and push notifications work without HTTPS or a tunnel.
-- **Prebuilt image:** uncomment `image: ghcr.io/ustalabs/supermux:latest` in `docker-compose.yml` to skip the local build.
-
-> **Prefer guided setup?** Paste [`SETUP.md`](./SETUP.md) into Claude Code, Claude.ai, or ChatGPT — it asks **where** you want supermux to run (this computer, a mini PC / VPS over SSH, or a throwaway Docker container) and walks you through it step by step. On the SSH path, an agent with a shell (e.g. Claude Code) connects to the box and runs the install for you.
-
-## A full workspace, in the browser
-
-- **Code editor** — CodeMirror with a file tree, search, multi-tab editing, symbol navigation, and save-to-disk — plus a reload prompt when an agent edits the file you have open.
-- **Git diff + review** — every uncommitted change since the session started, grouped by repo (nested repos included). Expand a file, leave an inline comment, send — the agent picks it up from there.
-- **Terminal** — a genuine PTY (xterm.js) in the session's working directory; paste works, even on iOS.
-- **Session launcher** — compose-first: pick the agent, the model, the thinking level, and the working directory, then go.
-- **Usage dashboard** — rate limits and spend across Claude, Codex, and Cursor in one view.
+- **A chat per session.** An installable PWA with one thread per session — voice input with a live waveform, photos, camera, and push that stays quiet while you're already looking. Telegram works too, when chat is all you need.
+- **Code review, pocket-sized.** Read the full diff grouped by repo, drop inline comments, the agent addresses them — `main` fast-forwards only when you say so.
+- **A full workspace in the browser.** File tree, editor with search, and a real terminal (xterm.js PTY) in the session's directory. Rate limits and spend across every agent in one dashboard.
 
 ## Four agents, one interface
 
-**Claude Code, Codex, Cursor, and OpenCode** drive identically: same chat, same workspace, same orchestration. Switch models live mid-session, dial thinking effort up for the hard problems, and mix agents freely across sessions — one per project, one per task, however you slice it. If your subscription changes, your workflow doesn't.
-
-## AFK. Still in the loop.
-
-- **Web app** — the primary surface. An installable PWA with a separate chat per session, push notifications that know when you're already looking (and stay quiet), voice input with a live waveform, photos, files, camera.
-- **Telegram** — available when chat is all you need: one chat multiplexed across every session, `/switch` between them, voice notes, photos, reactions, message edits.
-
-## Yours
-
-- **No vendor cloud.** supermux runs no servers and has no account system. Your phone reaches your box through a door you pick — LAN, your own reverse proxy, a tunnel, or your VPN — and the setup wizard configures it with you. (Telegram messages are as private as Telegram; the web app over your own domain or VPN is the fully-private path.)
-- **Your credentials stay home.** Agent tokens, code, and session state live on your box and nowhere else.
-- **Preview what they build.** The built-in reverse proxy gives any dev server a public HTTPS URL — device-paired by default, WebSocket/HMR included.
-
-## Experimental
-
-Moving fast, rough edges expected:
-
-- **Android app** — a native client: chat, terminal, editor.
-- **Screen streaming** — watch the host display, or an Android device via scrcpy, live in the chat.
-- **Nightly knowledge curator** — an agent that tends the shared memory while you sleep.
+**Claude Code, Codex, Cursor, and OpenCode** drive identically — same chat, same workspace, same orchestration. Switch models live mid-session, dial thinking effort up for the hard problems, and mix agents freely across sessions. If your subscription changes, your workflow doesn't.
 
 ## How it works
 
@@ -107,19 +76,32 @@ Moving fast, rough edges expected:
                             └──────────────────────────────────────┘
 ```
 
-- **Broker** — one daemon that owns your channel credentials and supervises every session in tmux. Control commands (`/sessions`, `/spawn`, `/switch`, …) are handled by the broker itself, so routing burns no agent tokens.
-- **Sessions** — each agent runs in its own tmux window; a small MCP shim proxies messages between broker and agent. Assistant sessions persist and orchestrate; workers are spawned per task and resume with full history after a restart.
-- **Channels** — the web app and/or Telegram. Each session is its own thread; replies are pushed to your devices.
+- **One daemon, your keys.** The broker owns your channel credentials and supervises every session in tmux. Control commands (`/spawn`, `/switch`, …) run in the broker itself, so routing burns no agent tokens.
+- **Sessions that survive.** Restart the broker or reboot the box — every session resumes with full history. Assistant sessions persist and orchestrate; workers are spawned per task.
+- **Yours, end to end.** No vendor cloud, no account. Reach your box over LAN, your own reverse proxy, a tunnel, or a VPN — your call.
 
-## Built with supermux
+## Install
 
-Every feature above was designed, implemented, and reviewed by agent sessions running inside supermux — the market research, the design specs, the code, the code review. This README itself was brainstormed, drafted, and shipped through a supermux session, steered from a tablet. We are the first users of every build.
+One command, and it walks you through the rest.
 
-## Requirements
+**Mac / Linux**
 
-- **Linux** (or the Docker image above on any host). An always-on box — a VPS, mini PC, or home server — is where it shines; your daily machine works too.
-- **tmux** on `PATH`, plus at least one agent CLI logged in: `claude`, `codex`, `cursor-agent`, or `opencode`.
-- A native install also needs [`bun`](https://bun.sh) and `git`. The broker runs fine **web-only** (no Telegram token) — set `MUX_WEB_PORT` + `MUX_WEB_PUBLIC_URL`.
+```sh
+curl -fsSL https://supermux.dev/install.sh | sh
+```
+
+**Windows** (PowerShell)
+
+```powershell
+irm https://supermux.dev/install.ps1 | iex
+```
+
+The installer offers Docker or a native install, configures connectivity, and pairs your first device. Prefer to do it by hand? Either of these also works:
+
+- **Docker** — `git clone https://github.com/UstaLabs/supermux.git && cd supermux && docker compose up -d`, then open `http://localhost:8787`. State persists in named volumes; drop the repos you want worked on into `./workspace`. Uncomment `image: ghcr.io/ustalabs/supermux:latest` to skip the local build.
+- **Guided** — paste [`SETUP.md`](./SETUP.md) into Claude Code, Claude.ai, or ChatGPT; it asks *where* to run supermux (this computer, a mini PC / VPS over SSH, or a throwaway container) and walks you through it.
+
+On first open, a **setup wizard** covers agents (paste a `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`, an Anthropic/OpenAI API key, or a device-flow login), connectivity (optional Telegram token, a public URL with ready-to-paste Caddy / nginx / Cloudflare Tunnel snippets), and your first session. The first browser to open a fresh instance is paired automatically; on a headless box, `bun run pair <name>` does the same.
 
 ## Configuration
 
@@ -133,7 +115,15 @@ Set these in `~/.mux/state/.env` (native) or `.env` (Docker):
 | `MUX_HOME`, `MUX_STATE_DIR` | Override where state lives (default `~/.mux` / `~/.mux/state`). |
 | `MUX_PROXY_BASE_DOMAIN` | Enable the reverse proxy / public-URL feature (advanced). |
 
-For a persistent native deployment there's a `systemd/mux.service` template; [`SETUP.md`](./SETUP.md) covers the whole native path.
+## Requirements
+
+- **macOS (Apple Silicon) or Linux** natively — or the **Docker** image on any host. Windows runs it through WSL2 (the PowerShell installer sets that up). An always-on box — VPS, mini PC, or home server — is where it shines; your daily machine works too.
+- **tmux** on `PATH`, plus at least one agent CLI logged in: `claude`, `codex`, `cursor-agent`, or `opencode`.
+- Native installs also need [`bun`](https://bun.sh) and `git`. The broker runs fine web-only (no Telegram token) — just set `MUX_WEB_PORT` + `MUX_WEB_PUBLIC_URL`.
+
+## Built with supermux
+
+Every feature above was designed, implemented, and reviewed by agent sessions running inside supermux — the research, the specs, the code, the review. This README included, steered from a tablet. We're the first users of every build.
 
 ## License
 
