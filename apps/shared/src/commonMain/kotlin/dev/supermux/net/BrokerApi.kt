@@ -291,6 +291,15 @@ data class FsSearchResult(
 )
 
 @Serializable
+data class TerminalSummary(val id: String, val createdAt: Long)
+
+@Serializable
+data class TerminalListResponse(val terminals: List<TerminalSummary> = emptyList())
+
+@Serializable
+data class TermCloseBody(val session: String, val terminal: String)
+
+@Serializable
 data class DisplayStream(
     val id: String,
     val sessionName: String = "",
@@ -434,6 +443,14 @@ class BrokerApi(
     /** GET /commands/preview?agent=&workdir= — agent slash commands for the launcher (no session). */
     suspend fun previewCommands(agent: String, workdir: String): LauncherCommands =
         getJson("$httpBase/commands/preview?agent=${urlEncode(agent)}&workdir=${urlEncode(workdir)}")
+
+    /** GET /api/term/list?session= — scratch terminals (source of truth = tmux). */
+    suspend fun listTerminals(session: String): List<TerminalSummary> =
+        getJson<TerminalListResponse>("$httpBase/api/term/list?session=${urlEncode(session)}").terminals
+
+    /** POST /api/term/close {"session","terminal"} — destroy one scratch terminal. */
+    suspend fun closeTerminal(session: String, terminal: String) =
+        postJson("$httpBase/api/term/close", TermCloseBody(session, terminal))
 
     /** POST /sessions/<id>/model {"model": ...} */
     suspend fun switchModel(id: String, model: String) =

@@ -186,4 +186,20 @@ class BrokerApiTest {
         assertEquals(false, r.resolved)
         assertEquals(0, r.commands.size)
     }
+
+    @Test
+    fun terminal_list_response_parses() {
+        val r = json.decodeFromString<TerminalListResponse>(
+            """{"terminals":[{"id":"main","createdAt":1700000000000},{"id":"abc","createdAt":1700000001000}]}"""
+        )
+        assertEquals(2, r.terminals.size)
+        assertEquals("main", r.terminals[0].id)
+        assertEquals(1700000000000L, r.terminals[0].createdAt)
+    }
+
+    @Test
+    fun terminal_list_response_defaults_empty() {
+        val r = json.decodeFromString<TerminalListResponse>("""{}""")
+        assertEquals(0, r.terminals.size)
+    }
 }
