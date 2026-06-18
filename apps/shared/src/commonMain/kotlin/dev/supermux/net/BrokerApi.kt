@@ -290,6 +290,8 @@ data class FsSearchResult(
     val ignored: Boolean = false,
 )
 
+// createdAt is epoch-millis (a JSON number), NOT an ISO string like the other
+// *createdAt fields here — keep it Long so decoding the /api/term/list response works.
 @Serializable
 data class TerminalSummary(val id: String, val createdAt: Long)
 
