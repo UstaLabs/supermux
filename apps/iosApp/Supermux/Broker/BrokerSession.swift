@@ -29,6 +29,19 @@ final class BrokerSession {
                                    policy: ReconnectPolicy(baseMs: 500, maxMs: 8000))
     }
 
+    /// Build a terminal WS client for a session. Centralized here so the device
+    /// token stays private (mirrors how `api`/`client` are constructed).
+    func terminalClient(sessionName: String, kind: String, terminalId: String?) -> TerminalClient {
+        TerminalClient(
+            baseUrl: baseURL,
+            token: token,
+            http: IosClientKt.iosHttpClient(),
+            sessionId: sessionName,
+            kind: kind,
+            terminalId: terminalId
+        )
+    }
+
     func start() {
         Task { [weak self] in
             guard let self else { return }
