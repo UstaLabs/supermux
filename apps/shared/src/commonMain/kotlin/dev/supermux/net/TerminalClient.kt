@@ -18,6 +18,20 @@ import kotlinx.coroutines.flow.StateFlow
 enum class TerminalStatus { CONNECTING, CONNECTED, DISCONNECTED }
 
 /**
+ * Build the /ws/term URL. Pure + testable. Mirrors the broker handler
+ * (channels/web/index.ts): `kind=agent` forces the singular agent terminal and
+ * ignores terminalId; scratch may name a terminal (broker defaults to "main").
+ */
+internal fun termWsUrl(baseUrl: String, sessionId: String, kind: String, terminalId: String?): String {
+    val base = "$baseUrl/ws/term?session=$sessionId"
+    return when {
+        kind == "agent" -> "$base&kind=agent"
+        terminalId != null -> "$base&terminal=$terminalId"
+        else -> base
+    }
+}
+
+/**
  * Websocket client for a session's pty (/ws/term). Binary frames carry raw pty
  * bytes both directions; a JSON text frame carries resize and exit/error. Mirrors
  * BrokerClient's reconnect-with-backoff structure.
@@ -27,6 +41,8 @@ class TerminalClient(
     private val token: String,
     private val http: HttpClient,
     private val sessionId: String,
+    private val kind: String = "scratch",      // "scratch" | "agent"
+    private val terminalId: String? = null,    // scratch only; broker defaults to "main"
 ) {
     private val _output = MutableSharedFlow<ByteArray>(extraBufferCapacity = 512)
     val output: SharedFlow<ByteArray> = _output
@@ -44,7 +60,7 @@ class TerminalClient(
             try {
                 _status.value = TerminalStatus.CONNECTING
                 http.webSocket(
-                    urlString = "$baseUrl/ws/term?session=$sessionId",
+                    urlString = termWsUrl(baseUrl, sessionId, kind, terminalId),
                     request = { header("Authorization", "Bearer $token") },
                 ) {
                     attempt = 0
