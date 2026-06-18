@@ -14,16 +14,18 @@ type Canned = { match: RegExp; result: Partial<RunResult> }
 function makeCtx(
   over: Partial<ConnectCtx> = {},
   canned: Canned[] = [],
-): { ctx: ConnectCtx; calls: string[][]; out: string[] } {
+): { ctx: ConnectCtx; calls: string[][]; out: string[]; opts: Array<Parameters<ConnectCtx["run"]>[1]> } {
   const calls: string[][] = []
   const out: string[] = []
+  const opts: Array<Parameters<ConnectCtx["run"]>[1]> = []
   const ctx: ConnectCtx = {
     port: "8787",
     stateDir: "/tmp/mux-test",
     tty: false,
     yes: true,
-    run: async (argv) => {
+    run: async (argv, o) => {
       calls.push(argv)
+      opts.push(o)
       const hit = canned.find((c) => c.match.test(argv.join(" ")))
       return { code: 0, stdout: "", stderr: "", ...hit?.result }
     },
@@ -33,7 +35,7 @@ function makeCtx(
     confirm: async (_p, def) => def,
     ...over,
   }
-  return { ctx, calls, out }
+  return { ctx, calls, out, opts }
 }
 
 // ── modes / identity ───────────────────────────────────────────────────────────
@@ -157,11 +159,13 @@ test("quick: launches a DETACHED tunnel and polls its log for the URL (unstable 
 
 // ── login ─────────────────────────────────────────────────────────────────────
 
-test("login: runs `tunnel login` for named mode", async () => {
-  const { ctx, calls } = makeCtx({ mode: "named" })
+test("login: streams `tunnel login` live for named mode (browser auth URL must show immediately)", async () => {
+  const { ctx, calls, opts } = makeCtx({ mode: "named" })
   const ok = await cloudflaredProvider.login(ctx)
   expect(ok).toBe(true)
   expect(calls).toContainEqual(["cloudflared", "tunnel", "login"])
+  const i = calls.findIndex((c) => c.join(" ") === "cloudflared tunnel login")
+  expect(opts[i]?.stream).toBe(true)
 })
 
 test("login: no-ops (no login) for quick mode", async () => {

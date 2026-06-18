@@ -10,8 +10,18 @@ export interface RunResult {
   stderr: string
 }
 
-/** Spawn a process. Injected everywhere so tests can fake it (no real network). */
-export type Run = (argv: string[], opts?: { input?: string; timeoutMs?: number }) => Promise<RunResult>
+/**
+ * Spawn a process. Injected everywhere so tests can fake it (no real network).
+ *
+ * `stream: true` tees the child's stdout/stderr to this process's stdout/stderr
+ * live (instead of buffering until exit) and inherits stdin — required for any
+ * INTERACTIVE step (e.g. `tailscale up` prints an auth URL then blocks on the
+ * browser). Without it the URL stays buffered and the command looks frozen.
+ */
+export type Run = (
+  argv: string[],
+  opts?: { input?: string; timeoutMs?: number; stream?: boolean },
+) => Promise<RunResult>
 
 /** Output sink (defaults to console.log in production; captured in tests). */
 export type Println = (s: string) => void

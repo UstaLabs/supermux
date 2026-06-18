@@ -35,17 +35,19 @@ function makeCtx(
   return { ctx, out }
 }
 
-/** A fake `run` that returns a canned result per command and records calls. */
+/** A fake `run` that returns a canned result per command and records calls (+ opts). */
 function fakeRun(
   handler: (argv: string[]) => { code?: number; stdout?: string; stderr?: string },
-): { run: Run; calls: string[][] } {
+): { run: Run; calls: string[][]; opts: Array<Parameters<Run>[1]> } {
   const calls: string[][] = []
-  const run: Run = async (argv) => {
+  const opts: Array<Parameters<Run>[1]> = []
+  const run: Run = async (argv, o) => {
     calls.push(argv)
+    opts.push(o)
     const r = handler(argv)
     return { code: r.code ?? 0, stdout: r.stdout ?? "", stderr: r.stderr ?? "" }
   }
-  return { run, calls }
+  return { run, calls, opts }
 }
 
 test("provider identity matches the contract", () => {
@@ -104,11 +106,13 @@ test("up() throws a clear error when no overlay IP is present", async () => {
   await expect(netbirdProvider.up(ctx)).rejects.toThrow(/NetBird overlay IP/)
 })
 
-test("login() runs `netbird up` and maps a clean exit to true", async () => {
-  const { run, calls } = fakeRun(() => ({ code: 0 }))
+test("login() streams `netbird up` live and maps a clean exit to true", async () => {
+  const { run, calls, opts } = fakeRun(() => ({ code: 0 }))
   const { ctx } = makeCtx(run)
   expect(await netbirdProvider.login(ctx)).toBe(true)
   expect(calls).toEqual([["netbird", "up"]])
+  // `netbird up` can open a browser SSO flow — stream it so the prompt is visible.
+  expect(opts[0]?.stream).toBe(true)
 })
 
 test("login() returns false on a non-zero exit", async () => {

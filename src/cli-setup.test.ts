@@ -96,6 +96,17 @@ describe("runSetupCommand (fresh)", () => {
     expect(out).toContain("http://localhost:8787")
     expect(out).toContain("enable-linger")
   })
+
+  test("the linger hint resolves a real username and never prints a literal $USER", async () => {
+    const { username } = await import("./shared/home")
+    const { lines, println } = collector()
+    await runSetupCommand(["--no-service"], println)
+    const out = lines.join("\n")
+    // The user shouldn't have to hand-edit a copy-pasted command — it must carry
+    // their actual username, not the unexpanded shell variable.
+    expect(out).not.toContain("$USER")
+    expect(out).toContain(`enable-linger ${username()}`)
+  })
 })
 
 // ── idempotency: never clobber existing values ────────────────────────────────
