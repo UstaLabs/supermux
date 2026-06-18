@@ -46,6 +46,17 @@ describe("agent-tmux attachArgv", () => {
     const viewer = viewerSessionName("d", "@5")
     expect(script).toContain(`set-option -t '${viewer}' status off`)
   })
+
+  test("enables mouse on the viewer so wheel/touch scroll reaches tmux history", () => {
+    const argv = attachArgv({ device: "d", agentTarget: "@5" })
+    const script = argv[2]!
+    const viewer = viewerSessionName("d", "@5")
+    // Agents run on the DEFAULT tmux server, where mouse is off. Without this the
+    // web terminal's wheel-forwarding never engages (xterm sees mouseTrackingMode
+    // 'none'), so touch scroll falls back to a no-op in tmux's alt-screen buffer.
+    // Scoped to the grouped viewer session — the base `mux` session stays mouse-off.
+    expect(script).toContain(`set-option -t '${viewer}' mouse on`)
+  })
 })
 
 describe("agent-tmux control ops (mock runner)", () => {

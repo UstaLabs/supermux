@@ -106,6 +106,12 @@ struct ChatView: View {
         .onAppear { if loadedSessionId != session.id { loadSession() } }
         .onChange(of: session.id) { _, _ in loadSession() }
         .onChange(of: draft) { _, new in UserDefaults.standard.set(new, forKey: draftKey) }
+        .task(id: session.id) {
+            // Debug: raise the keyboard (focus composer) to repro the keyboard-relayout blank.
+            guard ProcessInfo.processInfo.environment["SM_FOCUS"] == "1" else { return }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            composing = true
+        }
         .sheet(isPresented: $modelSheet) {
             OptionSwitchSheet(title: "Model", broker: broker, session: session, kind: .model)
         }
@@ -258,12 +264,16 @@ struct ChatView: View {
 
     private var transcript: some View {
         ScrollViewReader { proxy in
-            ScrollView {
+            List {
                 if blocks.isEmpty {
                     starterPrompts
+                        .frame(maxWidth: .infinity)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
                 } else {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(blocks) { block in
+                    ForEach(blocks) { block in
+                        Group {
                             switch block {
                             case .message(let m): MessageRow(entry: m, broker: broker)
                             case .tools(let rows):
@@ -272,26 +282,43 @@ struct ChatView: View {
                                 }
                             }
                         }
-                        if working { workingIndicator }
-                        Color.clear.frame(height: 1).id("__bottom__")
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                        .listRowBackground(Color.clear)
                     }
-                    .padding(16)
+                    if working {
+                        workingIndicator
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                            .listRowBackground(Color.clear)
+                    }
+                    Color.clear.frame(height: 1).id("__bottom__")
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
                 }
             }
-            // .defaultScrollAnchor keeps the bottom pinned as activity streams; only
-            // explicitly scroll on a NEW message (not every tool-activity tick — that
-            // constant scrolling during a busy session was blanking the transcript).
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            // List (collection-view-backed) re-displays its rows correctly on every
+            // relayout — including the keyboard-avoidance shrink — instead of blanking
+            // like ScrollView+LazyVStack did (blank-on-keyboard, blank-on-open). Keyed
+            // per session so each open builds fresh and defaultScrollAnchor lands at bottom.
             .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)
             .scrollEdgeEffectStyle(.soft, for: .top)
             .scrollEdgeEffectStyle(.soft, for: .bottom)
-            .simultaneousGesture(TapGesture().onEnded { composing = false })   // tap transcript to dismiss keyboard
             .onChange(of: log.count) { _, _ in scrollToBottom(proxy) }
             .task(id: session.id) {
-                try? await Task.sleep(nanoseconds: 120_000_000)
+                // List needs an explicit initial scroll to the bottom — it doesn't honor
+                // defaultScrollAnchor for first positioning the way ScrollView does, and
+                // onChange(log.count) doesn't fire on open (count unchanged). List's
+                // scroll-to-row is reliable, so this can't race/blank like LazyVStack did.
+                try? await Task.sleep(nanoseconds: 100_000_000)
                 scrollToBottom(proxy, animated: false)
             }
         }
+        .id(session.id)
     }
 
     private var workingIndicator: some View {
