@@ -9,7 +9,9 @@ import io.ktor.websocket.readBytes
 import io.ktor.websocket.readText
 import kotlin.concurrent.Volatile
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -58,6 +60,14 @@ class TerminalClient(
 
     private var liveSession: DefaultClientWebSocketSession? = null
     @Volatile private var stopped = false
+    // Pty input, drained FIFO by a single per-connection sender so rapid keystrokes
+    // never race out of order (the UI enqueues them synchronously). Named to avoid
+    // clashing with the WebSocket session's own `outgoing` SendChannel<Frame>.
+    private val inputQueue = Channel<ByteArray>(Channel.UNLIMITED)
+    // Last requested size, re-sent on (re)connect: the view often reports its size
+    // before the socket is open, so that first resize would otherwise be dropped.
+    @Volatile private var lastCols = 0
+    @Volatile private var lastRows = 0
 
     suspend fun run() {
         var attempt = 0
@@ -71,6 +81,18 @@ class TerminalClient(
                     attempt = 0
                     liveSession = this
                     _status.value = TerminalStatus.CONNECTED
+                    // Flush the last known size (the initial resize is usually reported
+                    // before the socket opens and would otherwise be lost).
+                    if (lastCols > 0 && lastRows > 0) {
+                        send(Frame.Text("{\"type\":\"resize\",\"cols\":$lastCols,\"rows\":$lastRows}"))
+                    }
+                    // Single FIFO sender for pty input → preserves keystroke order.
+                    val ws = this
+                    val sender = launch {
+                        try {
+                            while (true) ws.send(Frame.Binary(true, inputQueue.receive()))
+                        } catch (_: Throwable) { /* outgoing closed or sender cancelled */ }
+                    }
                     try {
                         for (frame in incoming) {
                             when (frame) {
@@ -85,6 +107,7 @@ class TerminalClient(
                             }
                         }
                     } finally {
+                        sender.cancel()
                         liveSession = null
                     }
                 }
@@ -101,13 +124,16 @@ class TerminalClient(
         }
     }
 
-    suspend fun sendInput(bytes: ByteArray) {
-        liveSession?.send(Frame.Binary(true, bytes))
+    /** Enqueue pty input (FIFO, non-suspending) so callers can't reorder keystrokes. */
+    fun sendInput(bytes: ByteArray) {
+        inputQueue.trySend(bytes)
     }
 
     suspend fun resize(cols: Int, rows: Int) {
+        lastCols = cols
+        lastRows = rows
         liveSession?.send(Frame.Text("{\"type\":\"resize\",\"cols\":$cols,\"rows\":$rows}"))
     }
 
-    fun stop() { stopped = true }
+    fun stop() { stopped = true; inputQueue.close() }
 }

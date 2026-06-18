@@ -52,7 +52,9 @@ final class TerminalSession {
     }
 
     func sendInput(_ bytes: [UInt8]) {
-        Task { [client] in try? await client.sendInput(bytes: bytes.toKotlin()) }
+        // client.sendInput is a non-suspending FIFO enqueue — call it directly (no
+        // Task) so keystrokes keep the order SwiftTerm delivered them.
+        client.sendInput(bytes: bytes.toKotlin())
     }
 
     func resize(cols: Int, rows: Int) {
