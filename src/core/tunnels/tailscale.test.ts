@@ -6,18 +6,21 @@ import type { ConnectCtx, Run, RunResult } from "./types"
 // which the provider must strip.
 const STATUS_JSON = JSON.stringify({ Self: { DNSName: "box.tailnet.ts.net." } })
 
-/** A fake Run that records every argv and answers per a small route table. */
+/** A fake Run that records every argv (and its opts) and answers per a route table. */
 function fakeRun(routes: (argv: string[]) => Partial<RunResult> | undefined): {
   run: Run
   calls: string[][]
+  opts: Array<Parameters<Run>[1]>
 } {
   const calls: string[][] = []
-  const run: Run = async (argv) => {
+  const opts: Array<Parameters<Run>[1]> = []
+  const run: Run = async (argv, o) => {
     calls.push(argv)
+    opts.push(o)
     const r = routes(argv) ?? {}
     return { code: r.code ?? 0, stdout: r.stdout ?? "", stderr: r.stderr ?? "" }
   }
-  return { run, calls }
+  return { run, calls, opts }
 }
 
 /** Default route table: `status --json` returns the canned blob, all else ok. */
@@ -101,17 +104,21 @@ test("up throws when Self.DNSName is missing", async () => {
   )
 })
 
-test("login runs `tailscale up`, surfaces output, and maps exit code → boolean", async () => {
-  const lines: string[] = []
-  const { run, calls } = fakeRun(() => ({
+test("login streams `tailscale up` live so the interactive auth URL is visible (not buffered until exit)", async () => {
+  // The hang bug: `tailscale up` prints an auth URL then BLOCKS until the user
+  // completes browser auth. A buffered capture only returns after exit — so the
+  // URL stays invisible and the command looks frozen at "authenticating". Login
+  // must run it in stream mode (tee live + inherit stdin), not buffered.
+  const { run, calls, opts } = fakeRun(() => ({
     code: 0,
     stdout: "To authenticate, visit:\n  https://login.tailscale.com/a/abc123",
   }))
-  const ok = await tailscaleProvider.login(makeCtx(run, { println: (s) => lines.push(s) }))
+  const ok = await tailscaleProvider.login(makeCtx(run))
 
   expect(calls).toContainEqual(["tailscale", "up"])
+  const i = calls.findIndex((c) => c[0] === "tailscale" && c[1] === "up")
+  expect(opts[i]?.stream).toBe(true)
   expect(ok).toBe(true)
-  expect(lines.join("\n")).toContain("https://login.tailscale.com/a/abc123")
 })
 
 test("login returns false on a non-zero exit", async () => {

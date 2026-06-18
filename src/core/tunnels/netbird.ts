@@ -61,7 +61,8 @@ export const netbirdProvider: TunnelProvider = {
   async login(ctx: ConnectCtx): Promise<boolean> {
     // `netbird up` joins the network (browser SSO or a configured setup key) and
     // brings the overlay interface online. It's also the persistent connect step.
-    const r = await ctx.run(["netbird", "up"])
+    // Stream live: the SSO flow prints a URL and waits, so it must not be buffered.
+    const r = await ctx.run(["netbird", "up"], { stream: true })
     return r.code === 0
   },
 

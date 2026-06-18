@@ -11,6 +11,7 @@
 import type { ConnectCtx, TunnelProvider, TunnelResult } from "./types"
 import { resolveMode } from "./types"
 import { which, extractFirstUrl } from "./run"
+import { username } from "../../shared/home"
 
 /** Pull the tailnet host out of `tailscale status --json`, trailing dot stripped. */
 function parseDnsName(stdout: string): string | undefined {
@@ -85,23 +86,27 @@ export const tailscaleProvider: TunnelProvider = {
    * the user must visit — surface its stdout/stderr so they can act on it.
    */
   async login(ctx: ConnectCtx): Promise<boolean> {
-    let r = await ctx.run(["tailscale", "up"])
-    let out = `${r.stdout}${r.stderr}`.trim()
-    if (out) ctx.println(out)
+    // Stream live: `tailscale up` prints a browser auth URL then BLOCKS until the
+    // user finishes auth. Buffered, that URL is invisible until exit — which never
+    // comes — so the command looks frozen at "authenticating". Streaming tees the
+    // URL out immediately and inherits stdin so Ctrl-C still works.
+    let r = await ctx.run(["tailscale", "up"], { stream: true })
     if (r.code === 0) return true
+    let out = `${r.stdout}${r.stderr}`.trim()
 
     // On Linux, tailscale CLI ops need root or a one-time operator grant. Try to
     // grant the current user operator rights (silent when sudo is passwordless)
     // and retry; otherwise hand them the single exact command to run.
     if (needsElevation(out)) {
-      const user = process.env.USER || process.env.LOGNAME || ""
+      const user = username()
       if (user) {
-        const set = await ctx.run(["sudo", "tailscale", "set", `--operator=${user}`])
+        const set = await ctx.run(["sudo", "tailscale", "set", `--operator=${user}`], {
+          stream: true,
+        })
         if (set.code === 0) {
-          r = await ctx.run(["tailscale", "up"])
-          out = `${r.stdout}${r.stderr}`.trim()
-          if (out) ctx.println(out)
+          r = await ctx.run(["tailscale", "up"], { stream: true })
           if (r.code === 0) return true
+          out = `${r.stdout}${r.stderr}`.trim()
         }
       }
       ctx.println("Tailscale needs elevated access once. Run this, then re-run `supermux connect tailscale`:")

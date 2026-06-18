@@ -3,10 +3,43 @@
 
 import type { Run, RunResult } from "./types"
 
+/**
+ * Drain a child stream to a string, optionally teeing each chunk to a live sink
+ * (process.stdout/stderr) as it arrives. Teeing is what makes an interactive
+ * command's output visible immediately instead of buffered until the process
+ * exits — the difference between "I see an auth URL" and a silent hang.
+ */
+async function drain(
+  stream: ReadableStream<Uint8Array> | null,
+  sink: { write: (chunk: Uint8Array) => unknown } | null,
+): Promise<string> {
+  if (!stream) return ""
+  const reader = stream.getReader()
+  const decoder = new TextDecoder()
+  let acc = ""
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value && value.length) {
+        if (sink) sink.write(value)
+        acc += decoder.decode(value, { stream: true })
+      }
+    }
+  } finally {
+    acc += decoder.decode()
+    reader.releaseLock()
+  }
+  return acc
+}
+
 /** Production Run: spawn a process, capture stdout/stderr, honor a timeout. */
 export const realRun: Run = async (argv, opts) => {
+  const stream = opts?.stream === true
   const proc = Bun.spawn(argv, {
-    stdin: opts?.input !== undefined ? "pipe" : "ignore",
+    // Interactive (streamed) calls inherit stdin so the user can answer prompts;
+    // a piped input still wins. Otherwise stdin is closed.
+    stdin: opts?.input !== undefined ? "pipe" : stream ? "inherit" : "ignore",
     stdout: "pipe",
     stderr: "pipe",
   })
@@ -29,8 +62,8 @@ export const realRun: Run = async (argv, opts) => {
   }
 
   const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
+    drain(proc.stdout, stream ? process.stdout : null),
+    drain(proc.stderr, stream ? process.stderr : null),
   ])
   const code = await proc.exited
   if (timer) clearTimeout(timer)

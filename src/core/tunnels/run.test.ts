@@ -1,5 +1,44 @@
 import { test, expect } from "bun:test"
-import { extractFirstUrl, which } from "./run"
+import { extractFirstUrl, realRun, which } from "./run"
+
+/** Run `fn` while capturing everything written to process.stdout (restored after). */
+async function captureStdout(fn: () => Promise<void>): Promise<string> {
+  const chunks: string[] = []
+  const orig = process.stdout.write.bind(process.stdout)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ;(process.stdout as any).write = (chunk: any) => {
+    chunks.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk))
+    return true
+  }
+  try {
+    await fn()
+  } finally {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(process.stdout as any).write = orig
+  }
+  return chunks.join("")
+}
+
+test("realRun streams output live to process.stdout AND still captures it when stream:true", async () => {
+  let res: Awaited<ReturnType<typeof realRun>> | undefined
+  const live = await captureStdout(async () => {
+    res = await realRun(["sh", "-c", "printf 'live-output-marker'"], { stream: true })
+  })
+  // Teed to the terminal as it happened — the user can see an auth URL mid-run.
+  expect(live).toContain("live-output-marker")
+  // …and still returned to the caller for the provider's own logic.
+  expect(res?.stdout).toContain("live-output-marker")
+  expect(res?.code).toBe(0)
+})
+
+test("realRun captures silently (no terminal echo) when stream is off", async () => {
+  let res: Awaited<ReturnType<typeof realRun>> | undefined
+  const live = await captureStdout(async () => {
+    res = await realRun(["sh", "-c", "printf 'quiet-marker'"])
+  })
+  expect(live).not.toContain("quiet-marker")
+  expect(res?.stdout).toContain("quiet-marker")
+})
 
 test("extractFirstUrl finds a trycloudflare URL amid noise", () => {
   const out =
