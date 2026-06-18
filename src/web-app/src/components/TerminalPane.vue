@@ -6,7 +6,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links"
 import { ClipboardPaste } from "lucide-vue-next"
 import "@xterm/xterm/css/xterm.css"
 import { useTerminal } from "@/composables/useTerminal"
-import { linesFromPixels } from "@/lib/touch-scroll"
+import { linesFromPixels, wheelEventsFromLines } from "@/lib/touch-scroll"
 
 const props = defineProps<{
   sessionName: string
@@ -85,6 +85,27 @@ function rowHeightPx(): number {
   return 13 * 1.2
 }
 
+/**
+ * Scroll by whole rows. A plain shell has xterm's own scrollback, so we scroll
+ * that locally. But under a full-screen app that grabbed the mouse (tmux with
+ * `mouse on`, the default for both terminal kinds) the screen lives in the
+ * alternate buffer, which has NO xterm scrollback — scrollLines() is a silent
+ * no-op. There we forward mouse-wheel events to the app instead, exactly like
+ * the desktop mouse wheel does, and let it scroll its own history. The wheel
+ * coordinate just has to land in the pane; our windows are single-pane.
+ */
+function scrollByLines(lines: number) {
+  if (!term) return
+  if (term.modes.mouseTrackingMode !== "none") {
+    const col = Math.max(1, Math.ceil(term.cols / 2))
+    const row = Math.max(1, Math.ceil(term.rows / 2))
+    const seq = wheelEventsFromLines(lines, col, row)
+    if (seq) terminal.sendInput(new TextEncoder().encode(seq))
+  } else {
+    term.scrollLines(lines)
+  }
+}
+
 function onTouchStart(e: TouchEvent) {
   if (e.touches.length !== 1) {
     touchActive = false
@@ -102,7 +123,7 @@ function onTouchMove(e: TouchEvent) {
   touchLastY = y
   const { lines, remainderPx } = linesFromPixels(touchAccumPx, rowHeightPx())
   touchAccumPx = remainderPx
-  if (lines !== 0) term.scrollLines(lines)
+  if (lines !== 0) scrollByLines(lines)
   // The terminal owns vertical drags — stop the PWA viewport from scrolling or
   // rubber-banding underneath. Requires the non-passive listener registered below.
   if (e.cancelable) e.preventDefault()

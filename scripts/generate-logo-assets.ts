@@ -34,6 +34,8 @@ const variants: Variant[] = [
   { out: "src/web-app/public/icons/icon-mask.png",        size: 512, tile: "#0b0b0b",     color: "#fafafa", safeZonePadding: 64 },
   { out: "src/web-app/public/icons/apple-touch-icon.png", size: 180, tile: "#0a0a0a",     color: "#fafafa" },
   { out: "assets/logo/telegram-avatar.png",               size: 640, tile: "#0a0a0a",     color: "#fafafa" },
+  // Native iOS app icon (no alpha; opaque dark tile + light mark — matches apple-touch-icon).
+  { out: "apps/iosApp/Supermux/Assets.xcassets/AppIcon.appiconset/icon-1024.png", size: 1024, tile: "#0a0a0a", color: "#fafafa" },
 ]
 
 // Transient — used to assemble favicon.ico only

@@ -534,11 +534,20 @@ struct ArchivedChatView: View {
             } else if logs.isEmpty {
                 ContentUnavailableView("No transcript", systemImage: "doc.text")
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(logs, id: \.id) { ArchivedMessageRow(entry: $0) }
-                    }.padding(16)
+                // List (collection-view-backed) materializes rows reliably even on a
+                // fresh, large transcript — unlike ScrollView+LazyVStack, which could
+                // render blank until a manual scroll (intermittent on slower devices).
+                // Read-only, so no scroll-to-bottom needed.
+                List {
+                    ForEach(logs, id: \.id) { entry in
+                        ArchivedMessageRow(entry: entry)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                            .listRowBackground(Color.clear)
+                    }
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
             }
         }
         .navigationTitle(archived.name).navigationBarTitleDisplayMode(.inline)

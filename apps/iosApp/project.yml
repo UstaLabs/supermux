@@ -22,12 +22,19 @@ settings:
     # Gradle pre-build phase needs filesystem access outside the sandbox.
     ENABLE_USER_SCRIPT_SANDBOXING: "NO"
 
+packages:
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    from: "1.13.0"
+
 targets:
   Supermux:
     type: application
     platform: iOS
     sources:
       - path: Supermux
+    dependencies:
+      - package: SwiftTerm
     info:
       path: Supermux/Info.plist
       properties:
@@ -47,6 +54,7 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         NSCameraUsageDescription: supermux scans the pairing QR code printed by your broker.
+        NSMicrophoneUsageDescription: supermux records voice messages you send to your agents.
         ITSAppUsesNonExemptEncryption: false
         # Dev builds connect to a self-hosted broker (LAN / Tailscale, often plain http).
         NSAppTransportSecurity:

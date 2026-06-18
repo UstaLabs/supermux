@@ -11,9 +11,15 @@ struct SessionsListView: View {
     var onArchived: () -> Void
 
     @State private var collapsed: Set<String> = SessionsListView.loadCollapsed()
+    // Continuous pull-to-reveal: bar height tracks the live overscroll; latches open past a threshold.
+    @State private var revealHeight: CGFloat = 0
+    @State private var archivedLatched = false
     @State private var renameTarget: SessionInfo?
     @State private var renameText = ""
     @State private var killTarget: SessionInfo?
+
+    private let archivedRevealMax: CGFloat = 52
+    private let archivedLatchAt: CGFloat = 46
 
     var body: some View {
         List(selection: $selected) {
@@ -31,14 +37,6 @@ struct SessionsListView: View {
                     .padding(.vertical, 3)
                 }
                 .buttonStyle(.plain)
-                Button(action: onArchived) {
-                    Label {
-                        Text("Archived").foregroundStyle(.primary)
-                    } icon: {
-                        Image(systemName: "archivebox").foregroundStyle(.secondary)
-                    }
-                }
-                .buttonStyle(.plain)
             }
 
             ForEach(broker.groups(), id: \.workdir) { group in
@@ -50,7 +48,29 @@ struct SessionsListView: View {
             }
         }
         .listStyle(.insetGrouped)
+        // Continuous Mail-style reveal: the "Archived" bar lives in a top safeAreaInset (outside
+        // the scroll content) and its height tracks the live overscroll 1:1. The offset signal
+        // (contentOffset.y + contentInsets.top) is invariant to the inset's own height, so the
+        // bar growing can't feed back into the scroll. Past a threshold it latches open so it
+        // stays tappable; scrolling back down tucks it away.
+        .safeAreaInset(edge: .top, spacing: 0) { archivedBar }
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            geo.contentOffset.y + geo.contentInsets.top
+        } action: { _, top in
+            let pull = max(0, -top)
+            if archivedLatched {
+                if top > 24 { withAnimation(.snappy(duration: 0.25)) { archivedLatched = false; revealHeight = 0 } }
+            } else if pull >= archivedLatchAt {
+                archivedLatched = true
+                withAnimation(.snappy(duration: 0.2)) { revealHeight = archivedRevealMax }
+            } else {
+                revealHeight = pull
+            }
+        }
         .navigationTitle("supermux")
+        // Inline title: a persistent top reveal bar can't coexist with a large title (the
+        // safeAreaInset eats the large title's space and squashes it).
+        .navigationBarTitleDisplayMode(.inline)
         .overlay {
             if !broker.synced && broker.sessions.isEmpty {
                 ProgressView("Connecting…").tint(Theme.teal)
@@ -74,6 +94,31 @@ struct SessionsListView: View {
                 killTarget = nil
             }
             Button("Cancel", role: .cancel) { killTarget = nil }
+        }
+    }
+
+    // The reveal bar itself. Empty (zero-height) until pulled, so there's no resting footprint.
+    @ViewBuilder private var archivedBar: some View {
+        if revealHeight > 0.5 {
+            Button {
+                withAnimation(.snappy(duration: 0.2)) { archivedLatched = false; revealHeight = 0 }
+                onArchived()
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "archivebox").font(.title3).foregroundStyle(.secondary).frame(width: 26)
+                    Text("Archived").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: revealHeight)
+                .opacity(min(1, revealHeight / archivedLatchAt))
+                .contentShape(Rectangle())
+                .clipped()
+            }
+            .buttonStyle(.plain)
+            .background(.bar)
         }
     }
 

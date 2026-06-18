@@ -15,6 +15,10 @@ struct NewSessionView: View {
     @State private var models: [ModelInfo] = []
     @State private var projectSearch = false
     @State private var draft = ""
+    @State private var launcherCommands: [SlashCommand] = []
+    @State private var pending: [PendingAttachment] = []
+    @State private var recorder = AudioRecorder()
+    @State private var micDenied = false
     @State private var spawning = false
     @FocusState private var composing: Bool
 
@@ -45,8 +49,17 @@ struct NewSessionView: View {
             models = await broker.listModels(agent)
             model = nil
         }
+        // Agent slash commands depend on both the agent and the chosen project.
+        .task(id: "\(agent)|\(workdir)") {
+            launcherCommands = workdir.isEmpty ? [] : await broker.previewCommands(agent, workdir)
+        }
         .sheet(isPresented: $projectSearch) {
             ProjectPickerSheet(projects: projects, current: workdir) { workdir = $0 }
+        }
+        .alert("Microphone access needed", isPresented: $micDenied) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Enable microphone access for supermux in Settings to record voice messages.")
         }
     }
 
@@ -70,8 +83,17 @@ struct NewSessionView: View {
 
     private var composeCard: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if !pending.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) { ForEach(pending) { attachmentChip($0) } }
+                }
+            }
+            if recorder.isRecording {
+                RecordingBar(elapsed: recorder.elapsed) { recorder.cancel() }
+            }
             TextField("What should the agent do?", text: $draft, axis: .vertical)
                 .lineLimit(3...8).focused($composing)
+            if !slashMatches.isEmpty { slashMenu }
             HStack(spacing: 16) {
                 Menu {
                     ForEach(agents, id: \.self) { a in Button(a.capitalized) { agent = a } }
@@ -93,6 +115,7 @@ struct NewSessionView: View {
                         }.foregroundStyle(.secondary)
                     }
                 }
+                micButton
                 Spacer()
                 Button(action: spawn) {
                     if spawning {
@@ -115,15 +138,103 @@ struct NewSessionView: View {
     private func spawn() {
         spawning = true
         let firstMsg = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let toUpload = pending
         Task {
             let id = await broker.spawn(workdir: workdir, agent: agent, name: nil, model: model)
             if let id, !id.isEmpty {
-                if !firstMsg.isEmpty { broker.send(id, firstMsg) }
+                // Attachments need a session id, so upload after spawn (like the first message).
+                var ids: [String] = []
+                for p in toUpload {
+                    let kind = p.mime.hasPrefix("audio") ? "voice" : nil
+                    if let fid = await broker.upload(id, data: p.data, filename: p.filename, mime: p.mime, kind: kind) {
+                        ids.append(fid)
+                    }
+                }
+                if !firstMsg.isEmpty || !ids.isEmpty {
+                    broker.send(id, firstMsg, attachments: ids.isEmpty ? nil : ids)
+                }
                 onSpawned(id)
             }
             spawning = false
         }
     }
+
+    private var micButton: some View {
+        Button {
+            if recorder.isRecording {
+                if let (data, name) = recorder.stop() {
+                    pending.append(PendingAttachment(data: data, filename: name, mime: "audio/mp4"))
+                }
+            } else {
+                Task { if case .denied = await recorder.start() { micDenied = true } }
+            }
+        } label: {
+            Image(systemName: recorder.isRecording ? "stop.circle.fill" : "mic")
+                .font(.body.weight(.medium))
+                .foregroundStyle(recorder.isRecording ? .red : .secondary)
+        }
+    }
+
+    private func attachmentChip(_ p: PendingAttachment) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: p.mime.hasPrefix("audio") ? "waveform" : "photo").font(.caption2)
+            Text(p.filename).font(.caption2).lineLimit(1)
+            Button { pending.removeAll { $0.id == p.id } } label: {
+                Image(systemName: "xmark.circle.fill").font(.caption2)
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .background(Color(.tertiarySystemFill), in: Capsule())
+        .foregroundStyle(.secondary)
+    }
+
+    // MARK: - Slash commands (mirror ChatView, against launcher preview commands)
+
+    // Active `/command` token at the end of the draft (cursor assumed at the end).
+    private var slashQuery: String? {
+        guard let r = draft.range(of: #"(?:^|\s)(/[^\s]*)$"#, options: .regularExpression) else { return nil }
+        let token = draft[r].drop(while: { $0 == " " || $0 == "\n" || $0 == "\t" })
+        return String(token.dropFirst()).lowercased()
+    }
+    private var slashMatches: [SlashCommand] {
+        guard let q = slashQuery else { return [] }
+        return Array(launcherCommands
+            .filter { q.isEmpty || $0.name.lowercased().contains(q) || $0.family.lowercased().contains(q) }
+            .prefix(8))
+    }
+    private var slashMenu: some View {
+        VStack(spacing: 0) {
+            ForEach(slashMatches, id: \.id) { cmd in
+                Button { applyCommand(cmd) } label: {
+                    HStack(spacing: 8) {
+                        Text(cmd.sigil + cmd.name).font(.callout.weight(.semibold)).foregroundStyle(Theme.teal)
+                        Text(cmd.family).font(.caption2).foregroundStyle(.tertiary)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 9).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if cmd.id != slashMatches.last?.id { Divider() }
+            }
+        }
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 1))
+    }
+    private func applyCommand(_ cmd: SlashCommand) {
+        // Launcher preview commands are insert-only — control actions need a live session.
+        guard cmd.action == nil else { clearSlashToken(); return }
+        replaceSlashToken(with: (cmd.insertText.flatMap { $0.isEmpty ? nil : $0 }) ?? (cmd.sigil + cmd.name + " "))
+    }
+    private func replaceSlashToken(with insert: String) {
+        if let r = draft.range(of: #"(?:^|\s)/[^\s]*$"#, options: .regularExpression) {
+            let lead = draft[r].prefix(while: { $0 == " " || $0 == "\n" || $0 == "\t" })
+            let prefixEnd = draft.index(r.lowerBound, offsetBy: lead.count)
+            draft = String(draft[draft.startIndex..<prefixEnd]) + insert
+        } else {
+            draft = insert
+        }
+    }
+    private func clearSlashToken() { replaceSlashToken(with: "") }
 }
 
 /// Searchable project picker — filter the list or type an arbitrary path.

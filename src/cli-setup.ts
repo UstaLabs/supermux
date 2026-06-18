@@ -17,6 +17,7 @@ import { existsSync, chmodSync, mkdirSync, readFileSync, writeFileSync } from "f
 import { homedir } from "os"
 import { join } from "path"
 import { IS_COMPILED } from "./shared/build-info"
+import { username } from "./shared/home"
 
 // Agent CLIs we report on (PATH presence only — the user owns these logins).
 const AGENT_CLIS = ["claude", "codex", "cursor-agent", "opencode"] as const
@@ -160,11 +161,32 @@ function installSystemdUnit(_flags: Flags, println: (s: string) => void): void {
   }
   if (active) {
     println("supermux service running ✔")
-    println("(headless/SSH: run `loginctl enable-linger $USER` so it survives logout.)")
+    enableLinger(println)
   } else {
     println("supermux service did not come up ✖")
     println("Check logs with: journalctl --user -u supermux -n 50")
   }
+}
+
+/**
+ * Keep the broker alive across logout without making the user do anything.
+ * Enabling linger for your OWN user needs no sudo on a normal systemd box, so we
+ * just do it (best-effort). Only if the auto-run can't do we fall back to a
+ * copy-pasteable command — with the REAL username, never a literal `$USER`.
+ */
+function enableLinger(println: (s: string) => void): void {
+  const user = username()
+  if (user) {
+    try {
+      if (Bun.spawnSync(["loginctl", "enable-linger", user]).exitCode === 0) {
+        println("Enabled lingering so the broker survives logout ✔")
+        return
+      }
+    } catch {
+      // loginctl absent or refused — fall through to the manual hint.
+    }
+  }
+  println(`If the broker should survive logout, run: loginctl enable-linger ${user || "$(whoami)"}`)
 }
 
 /** Escape the values we interpolate into the LaunchAgent plist XML. */
@@ -395,13 +417,21 @@ export async function runSetupCommand(
   }
 
   // ── Linger + final ───────────────────────────────────────────────────────
+  // When we actually installed the systemd service, installSystemdUnit already
+  // enabled lingering for the user — so only hint here when we DIDN'T (--no-service
+  // or a source install). And resolve the real username: a literal `$USER` is the
+  // exact rough edge a user shouldn't have to hand-fix.
+  const willManageService = !flags.noService && (IS_COMPILED || flags.forceSourceUnit)
   if (process.platform === "darwin") {
     println(
       "Headless Mac mini? Enable Automatic Login (System Settings ▸ Users & Groups) so" +
         " the LaunchAgent runs after a reboot — or install it as a system LaunchDaemon.",
     )
-  } else {
-    println("Headless/SSH? Run `loginctl enable-linger $USER` so the broker survives logout.")
+  } else if (!willManageService) {
+    const user = username()
+    println(
+      `Headless/SSH? Run \`loginctl enable-linger ${user || "$(whoami)"}\` so the broker survives logout.`,
+    )
   }
   println(`Web UI: ${flags.publicUrl}`)
   println(

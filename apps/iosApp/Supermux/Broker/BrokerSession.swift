@@ -29,6 +29,19 @@ final class BrokerSession {
                                    policy: ReconnectPolicy(baseMs: 500, maxMs: 8000))
     }
 
+    /// Build a terminal WS client for a session. Centralized here so the device
+    /// token stays private (mirrors how `api`/`client` are constructed).
+    func terminalClient(sessionId: String, kind: String, terminalId: String?) -> TerminalClient {
+        TerminalClient(
+            baseUrl: baseURL,
+            token: token,
+            http: IosClientKt.iosHttpClient(),
+            sessionId: sessionId,
+            kind: kind,
+            terminalId: terminalId
+        )
+    }
+
     func start() {
         Task { [weak self] in
             guard let self else { return }
@@ -134,6 +147,10 @@ final class BrokerSession {
     }
     func listModels(_ agent: String) async -> [ModelInfo] {
         (try? await api.listModels(agent: agent))?.models ?? []
+    }
+    /// Agent slash commands for the new-session launcher (no live session yet).
+    func previewCommands(_ agent: String, _ workdir: String) async -> [SlashCommand] {
+        (try? await api.previewCommands(agent: agent, workdir: workdir))?.commands ?? []
     }
 
     func models(_ id: String) async -> ModelsResponse? { try? await api.models(id: id) }

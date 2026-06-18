@@ -4,7 +4,7 @@ import { serveStatic } from "./static-serve"
 import { makeLogger } from "../../shared/log"
 import { home } from "../../shared/home"
 import { existsSync, writeFileSync, mkdirSync } from "fs"
-import { join } from "path"
+import { join, sep } from "path"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
 import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOriginOk } from "./cookies"
@@ -17,6 +17,7 @@ import { encodeTouch, encodeKey, encodeText, TouchAction } from "../../core/disp
 import { redactAppConfig } from "../../core/settings/app-config"
 import { pairJsonResponse } from "./pair-json"
 import { normalizeExistingWorkdir, uniqueKnownWorkdirs } from "../../core/session-manager/workdir-paths"
+import { worktreesRoot } from "../../core/worktree/manager"
 import { hooksFileUsesHookSecret } from "../../core/agents/claude/hooks-settings"
 import { getRepoInfo } from "../../core/git/repo-info"
 import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from "../../core/git/remote"
@@ -1708,9 +1709,15 @@ export class WebChannel implements Channel {
       return this.json({ ok: true, status: result.status }, result.status === "queued" ? 202 : 200)
     }
     if (method === "GET" && path === "/projects") {
-      const active = this.opts.getSessionsSnapshot().map((s) => s.workdir)
+      // A worktree-backed session lives under ~/.mux/worktrees; surface its real
+      // checkout (repo_root) instead, and drop any leftover worktree paths so the
+      // project picker only ever shows real repos.
+      const wtRoot = worktreesRoot()
+      const active = this.opts.getSessionsSnapshot().map((s) => s.repo_root ?? s.workdir)
       const archived = this.opts.listArchivedSessions?.().map((s) => s.workdir) ?? []
-      const projects = uniqueKnownWorkdirs([...active, ...archived], home()).map((p) => ({ path: p }))
+      const projects = uniqueKnownWorkdirs([...active, ...archived], home())
+        .filter((p) => p !== wtRoot && !p.startsWith(wtRoot + sep))
+        .map((p) => ({ path: p }))
       return this.json({ projects })
     }
     if (method === "POST" && path === "/paths/validate") {

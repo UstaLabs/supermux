@@ -86,7 +86,9 @@ export const cloudflaredProvider: TunnelProvider = {
    */
   async login(ctx: ConnectCtx): Promise<boolean> {
     if (resolveMode(this, ctx).id !== "named") return true
-    const r = await ctx.run(["cloudflared", "tunnel", "login"])
+    // Stream live: `tunnel login` opens/prints a browser auth URL and waits — a
+    // buffered capture would hide it until exit, making the step look frozen.
+    const r = await ctx.run(["cloudflared", "tunnel", "login"], { stream: true })
     return r.code === 0
   },
 
