@@ -23,7 +23,12 @@ enum class TerminalStatus { CONNECTING, CONNECTED, DISCONNECTED }
  * ignores terminalId; scratch may name a terminal (broker defaults to "main").
  */
 internal fun termWsUrl(baseUrl: String, sessionId: String, kind: String, terminalId: String?): String {
-    val base = "$baseUrl/ws/term?session=$sessionId"
+    // Darwin's (iOS) WebSocket requires a ws/wss scheme; the broker base may be an
+    // http(s) pair URL. Normalize exactly like BrokerClient before opening the socket.
+    val wsBase = baseUrl
+        .replaceFirst("https://", "wss://")
+        .replaceFirst("http://", "ws://")
+    val base = "$wsBase/ws/term?session=$sessionId"
     return when {
         kind == "agent" -> "$base&kind=agent"
         terminalId != null -> "$base&terminal=$terminalId"

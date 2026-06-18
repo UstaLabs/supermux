@@ -31,4 +31,18 @@ class TerminalClientUrlTest {
             termWsUrl("ws://h:1", "s", "agent", "abc123"),
         )
     }
+
+    @Test fun http_base_is_converted_to_ws() {
+        assertEquals(
+            "ws://h:1/ws/term?session=s",
+            termWsUrl("http://h:1", "s", "scratch", null),
+        )
+    }
+
+    @Test fun https_base_is_converted_to_wss() {
+        assertEquals(
+            "wss://h/ws/term?session=s&kind=agent",
+            termWsUrl("https://h", "s", "agent", null),
+        )
+    }
 }
