@@ -39,7 +39,6 @@ struct ChatView: View {
     @State private var recorder = AudioRecorder()
     @State private var micDenied = false
     @FocusState private var composing: Bool
-    @Namespace private var glassNS
     @Environment(\.horizontalSizeClass) private var hSize
 
     /// Composer is expanded (full controls) when focused, when there's a draft or a
@@ -85,20 +84,18 @@ struct ChatView: View {
         transcript
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomCluster }
         .navigationTitle(session.name)
+        .navigationSubtitle(navSubtitle)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                HStack(spacing: 7) {
-                    AgentLogo(agent: session.agent, size: 20)
-                    if let g = git, g.isRepo, let b = g.branch { branchPill(g, b) }
-                }
+                AgentLogo(agent: session.agent, size: 20)
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                linksButton
+                if hSize != .compact { paneCluster }
                 if let g = git, g.isRepo {
                     Button { runFinish() } label: { Label("Finish", systemImage: "arrow.triangle.merge") }
                         .tint(Theme.teal)
                 }
-                if hSize != .compact { paneCluster }
+                if (git?.isRepo ?? false) || !sessionLinks.isEmpty { navMenu }
             }
         }
         .toolbarTitleDisplayMode(.inline)
@@ -209,38 +206,39 @@ struct ChatView: View {
         }
     }
 
-    private func branchPill(_ g: GitRemoteStatus, _ branch: String) -> some View {
-        Menu {
-            Button("Fetch") { gitAction { await broker.gitFetch(session.id) } }
-            Button("Push") { gitAction { await broker.gitPush(session.id) } }
-            Button("Pull") { gitAction { await broker.gitPull(session.id) } }
-            if g.upstream == nil { Button("Publish") { gitAction { await broker.gitPublish(session.id) } } }
-        } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "arrow.triangle.branch").font(.caption2)
-                Text(branch).font(.caption2.weight(.medium)).lineLimit(1)
-                if g.upstream == nil {
-                    Text("· not published").font(.caption2).foregroundStyle(.tertiary)
-                } else {
-                    if g.ahead > 0 { Text("↑\(g.ahead)").font(.caption2) }
-                    if g.behind > 0 { Text("↓\(g.behind)").font(.caption2) }
-                }
-            }
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(Color(.tertiarySystemFill), in: Capsule())
+    /// Subtitle under the inline title: branch + sync status when in a repo, else the workdir.
+    /// Kept off the title row so a long session name can't crowd it (it truncates on its own line).
+    private var navSubtitle: String {
+        if let g = git, g.isRepo, let b = g.branch {
+            if g.upstream == nil { return "\(b) · not published" }
+            var s = b
+            if g.ahead > 0 { s += " ↑\(g.ahead)" }
+            if g.behind > 0 { s += " ↓\(g.behind)" }
+            return s
         }
+        return formatWorkdir(workdir: session.workdir, home: inferHomeDir(workdir: session.workdir))
     }
 
-    @ViewBuilder private var linksButton: some View {
-        if sessionLinks.count == 1, let u = linkURL(sessionLinks[0]) {
-            Link(destination: u) { Image(systemName: "link").font(.subheadline) }.tint(Theme.teal)
-        } else if sessionLinks.count > 1 {
-            Menu {
-                ForEach(sessionLinks, id: \.domain) { p in
-                    if let u = linkURL(p) { Link(proxyDisplayUrl(proxy: p), destination: u) }
+    /// Overflow menu (•••): git actions (when a repo) + session links. Folded out of the
+    /// title row so the bar stays one tidy line regardless of session-name length.
+    @ViewBuilder private var navMenu: some View {
+        Menu {
+            if let g = git, g.isRepo {
+                Button { gitAction { await broker.gitFetch(session.id) } } label: { Label("Fetch", systemImage: "arrow.down") }
+                Button { gitAction { await broker.gitPush(session.id) } } label: { Label("Push", systemImage: "arrow.up") }
+                Button { gitAction { await broker.gitPull(session.id) } } label: { Label("Pull", systemImage: "arrow.down.to.line") }
+                if g.upstream == nil {
+                    Button { gitAction { await broker.gitPublish(session.id) } } label: { Label("Publish", systemImage: "arrow.up.to.line") }
                 }
-            } label: { Image(systemName: "link").font(.subheadline) }.tint(Theme.teal)
+            }
+            if !sessionLinks.isEmpty {
+                if git?.isRepo ?? false { Divider() }
+                ForEach(sessionLinks, id: \.domain) { p in
+                    if let u = linkURL(p) { Link(destination: u) { Label(proxyDisplayUrl(proxy: p), systemImage: "link") } }
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
         }
     }
     private func linkURL(_ p: ProxyDto) -> URL? { URL(string: proxyUrl(proxy: p)) }
@@ -354,10 +352,8 @@ struct ChatView: View {
                     pillSeg("Native", system: "terminal", on: false).opacity(0.5)
                 }
                 .padding(3).glassEffect(.regular, in: Capsule())
-                expandedComposer
-            } else {
-                restingComposer
             }
+            composerField
         }
         .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 2)
         .animation(.smooth(duration: 0.28), value: composerExpanded)
@@ -369,69 +365,61 @@ struct ChatView: View {
         .fullScreenCover(isPresented: $showCamera) { CameraPicker { addCameraImage($0) } }
     }
 
-    // Slim resting pill: tap to focus → expands into the full controls.
-    private var restingComposer: some View {
-        Button {
-            composing = true
-            // Re-assert once expandedComposer (which owns the focusable TextField) has mounted —
-            // focusing a not-yet-rendered field no-ops on the first pass, so the first tap would
-            // expand the composer but fail to raise the keyboard without this.
-            DispatchQueue.main.async { composing = true }
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "plus").font(.body.weight(.medium)).foregroundStyle(.secondary)
-                Text(draft.isEmpty ? "Message \(session.name)…" : draft)
-                    .font(.subheadline).foregroundStyle(draft.isEmpty ? .secondary : .primary)
-                    .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                Image(systemName: "mic").font(.body.weight(.medium)).foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 16).padding(.vertical, 12)
-        }
-        .buttonStyle(.plain)
-        .glassEffect(.regular, in: Capsule())
-        .glassEffectID("composer", in: glassNS)
-    }
-
-    // Expanded card: the full control row (attachments, mic, model/reasoning, send).
-    private var expandedComposer: some View {
+    // ONE glass card with an always-present TextField: tapping it focuses natively, so
+    // there's no button→field handoff and no focus race (the earlier first-tap bug). The
+    // extra controls fade in around the field when it's active (focused / non-empty / recording),
+    // and the card morphs (corner radius + padding) between the slim resting pill and the card.
+    private var composerField: some View {
         VStack(spacing: 8) {
-            if !pending.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) { ForEach(pending) { attachmentChip($0) } }
+            if composerExpanded {
+                if !pending.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) { ForEach(pending) { attachmentChip($0) } }
+                    }
+                }
+                if recorder.isRecording {
+                    RecordingBar(elapsed: recorder.elapsed) { recorder.cancel() }
                 }
             }
-            if recorder.isRecording {
-                RecordingBar(elapsed: recorder.elapsed) { recorder.cancel() }
-            }
-            TextField("Message \(session.name)…", text: $draft, axis: .vertical)
-                .lineLimit(1...12)
-                .focused($composing)
-            HStack(spacing: 12) {
-                Menu {
-                    Button { showPhotos = true } label: { Label("Photos", systemImage: "photo") }
-                    Button { showFiles = true } label: { Label("Files", systemImage: "folder") }
-                    Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
-                } label: {
+            HStack(alignment: .center, spacing: 10) {
+                if !composerExpanded {
                     Image(systemName: "plus").font(.body.weight(.medium)).foregroundStyle(.secondary)
                 }
-                micButton
-                if let m = session.model, !m.isEmpty { pill(m, system: "cpu") { modelSheet = true } }
-                if reasoning?.visible ?? false {
-                    pill(reasoning?.current ?? "reasoning", system: "brain") { reasoningSheet = true }
+                TextField("Message \(session.name)…", text: $draft, axis: .vertical)
+                    .lineLimit(composerExpanded ? (1...12) : (1...1))
+                    .focused($composing)
+                if !composerExpanded {
+                    micButton
                 }
-                Spacer()
-                Button { sendMessage() } label: {
-                    Image(systemName: "arrow.up")
-                        .font(.headline.weight(.bold)).foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
-                        .background(canSend ? Theme.teal : Color.gray.opacity(0.4), in: Circle())
+            }
+            if composerExpanded {
+                HStack(spacing: 12) {
+                    Menu {
+                        Button { showPhotos = true } label: { Label("Photos", systemImage: "photo") }
+                        Button { showFiles = true } label: { Label("Files", systemImage: "folder") }
+                        Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
+                    } label: {
+                        Image(systemName: "plus").font(.body.weight(.medium)).foregroundStyle(.secondary)
+                    }
+                    micButton
+                    if let m = session.model, !m.isEmpty { pill(m, system: "cpu") { modelSheet = true } }
+                    if reasoning?.visible ?? false {
+                        pill(reasoning?.current ?? "reasoning", system: "brain") { reasoningSheet = true }
+                    }
+                    Spacer()
+                    Button { sendMessage() } label: {
+                        Image(systemName: "arrow.up")
+                            .font(.headline.weight(.bold)).foregroundStyle(.white)
+                            .frame(width: 34, height: 34)
+                            .background(canSend ? Theme.teal : Color.gray.opacity(0.4), in: Circle())
+                    }
+                    .disabled(!canSend)
                 }
-                .disabled(!canSend)
             }
         }
-        .padding(12)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .glassEffectID("composer", in: glassNS)
+        .padding(.horizontal, composerExpanded ? 12 : 16)
+        .padding(.vertical, composerExpanded ? 12 : 10)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: composerExpanded ? 20 : 24, style: .continuous))
     }
     private var canSend: Bool { !draft.trimmingCharacters(in: .whitespaces).isEmpty || !pending.isEmpty }
 
