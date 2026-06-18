@@ -27,7 +27,7 @@ struct TerminalPane: View {
         }
         .onAppear {
             guard term == nil else { return }
-            let t = TerminalSession(broker: broker, sessionName: session.name,
+            let t = TerminalSession(broker: broker, sessionId: session.id,
                                     kind: kind, terminalId: terminalId)
             t.onExit = {
                 ended = true

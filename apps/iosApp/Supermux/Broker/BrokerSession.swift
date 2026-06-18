@@ -31,12 +31,12 @@ final class BrokerSession {
 
     /// Build a terminal WS client for a session. Centralized here so the device
     /// token stays private (mirrors how `api`/`client` are constructed).
-    func terminalClient(sessionName: String, kind: String, terminalId: String?) -> TerminalClient {
+    func terminalClient(sessionId: String, kind: String, terminalId: String?) -> TerminalClient {
         TerminalClient(
             baseUrl: baseURL,
             token: token,
             http: IosClientKt.iosHttpClient(),
-            sessionId: sessionName,
+            sessionId: sessionId,
             kind: kind,
             terminalId: terminalId
         )

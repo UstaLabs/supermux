@@ -80,7 +80,7 @@ struct TerminalPanel: View {
         let idx = tabs.firstIndex(of: id)
         tabs.removeAll { $0 == id }
         pickActiveAfterRemoval(idx ?? 0)
-        Task { try? await broker.api.closeTerminal(session: session.name, terminal: id) }
+        Task { try? await broker.api.closeTerminal(session: session.id, terminal: id) }
     }
 
     /// Shell exited (tmux already gone): drop the tab, no close call needed.
@@ -97,7 +97,7 @@ struct TerminalPanel: View {
     }
 
     private func refresh() async {
-        let ids = ((try? await broker.api.listTerminals(session: session.name)) ?? []).map { $0.id }
+        let ids = ((try? await broker.api.listTerminals(session: session.id)) ?? []).map { $0.id }
         tabs = ids
         if tabs.isEmpty {
             addTab()                                  // first open → one usable terminal

@@ -19,8 +19,8 @@ final class TerminalSession {
 
     private var tasks: [Task<Void, Never>] = []
 
-    init(broker: BrokerSession, sessionName: String, kind: String, terminalId: String?) {
-        self.client = broker.terminalClient(sessionName: sessionName, kind: kind, terminalId: terminalId)
+    init(broker: BrokerSession, sessionId: String, kind: String, terminalId: String?) {
+        self.client = broker.terminalClient(sessionId: sessionId, kind: kind, terminalId: terminalId)
     }
 
     func start() {
