@@ -8,6 +8,9 @@ enum Theme {
     static let barCorner: CGFloat = 22
     /// Subtle fill marking the user's own turns (no border, not a heavy bubble).
     static let userTint = teal.opacity(0.10)
+    /// Terminal surface colors (dark, match the web `--cmux-terminal` / its foreground).
+    static let terminalBackground = Color(red: 0.07, green: 0.07, blue: 0.09)
+    static let terminalForeground = Color(red: 0.90, green: 0.90, blue: 0.92)
 }
 
 extension View {
