@@ -41,6 +41,10 @@ struct ChatView: View {
     @FocusState private var composing: Bool
     @Environment(\.horizontalSizeClass) private var hSize
 
+    enum Pane { case chat, terminal, agent }
+    @State private var pane: Pane = .chat
+    private var agentViewAvailable: Bool { (session.agent ?? "claude") == "claude" }
+
     /// Composer is expanded (full controls) when focused, when there's a draft or a
     /// staged attachment, or while recording; otherwise it rests as a slim glass pill.
     private var composerExpanded: Bool { composing || !draft.isEmpty || !pending.isEmpty || recorder.isRecording }
@@ -66,6 +70,7 @@ struct ChatView: View {
     /// and session switch — git status is retried so the branch reliably appears.
     private func loadSession() {
         loadedSessionId = session.id
+        pane = .chat
         draft = UserDefaults.standard.string(forKey: draftKey)
             ?? ProcessInfo.processInfo.environment["SM_DRAFT"] ?? ""
         git = nil
@@ -81,7 +86,15 @@ struct ChatView: View {
     }
 
     var body: some View {
-        transcript
+        Group {
+            switch pane {
+            case .chat: transcript
+            case .terminal: TerminalPanel(broker: broker, session: session)
+            case .agent:
+                TerminalPane(broker: broker, session: session, kind: "agent", terminalId: nil,
+                             onExit: { pane = .chat })
+            }
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomCluster }
         .navigationTitle(session.name)
         .navigationSubtitle(navSubtitle)
@@ -106,6 +119,18 @@ struct ChatView: View {
         .onAppear { if loadedSessionId != session.id { loadSession() } }
         .onChange(of: session.id) { _, _ in loadSession() }
         .onChange(of: draft) { _, new in UserDefaults.standard.set(new, forKey: draftKey) }
+        .task(id: session.id) {
+            if ProcessInfo.processInfo.environment["SM_OPEN_TERMINAL"] == "1" {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                pane = .terminal
+            }
+        }
+        .task(id: session.id) {
+            if ProcessInfo.processInfo.environment["SM_OPEN_NATIVE"] == "1" {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                pane = .agent
+            }
+        }
         .task(id: session.id) {
             // Debug: raise the keyboard (focus composer) to repro the keyboard-relayout blank.
             guard ProcessInfo.processInfo.environment["SM_FOCUS"] == "1" else { return }
@@ -151,8 +176,9 @@ struct ChatView: View {
             if let banner { bannerView(banner) }
             GlassEffectContainer(spacing: 10) {
                 VStack(spacing: 8) {
-                    dock
-                    if hSize == .compact && !composing { paneBar }
+                    if pane != .terminal && agentViewAvailable { chatNativePill }
+                    if pane == .chat { dock }
+                    if hSize == .compact { paneBar }
                 }
             }
         }
@@ -370,15 +396,20 @@ struct ChatView: View {
         .padding(20)
     }
 
+    @ViewBuilder private var chatNativePill: some View {
+        HStack(spacing: 3) {
+            Button { pane = .chat } label: { pillSeg("Chat", system: "bubble.left", on: pane != .agent) }
+                .buttonStyle(.plain)
+            Button { pane = .agent } label: { pillSeg("Native", system: "terminal", on: pane == .agent) }
+                .buttonStyle(.plain)
+        }
+        .padding(3).glassEffect(.regular, in: Capsule())
+    }
+
     private var dock: some View {
         VStack(spacing: 8) {
             if composerExpanded {
                 if !slashMatches.isEmpty { slashMenu }
-                HStack(spacing: 3) {
-                    pillSeg("Chat", system: "bubble.left", on: true)
-                    pillSeg("Native", system: "terminal", on: false).opacity(0.5)
-                }
-                .padding(3).glassEffect(.regular, in: Capsule())
             }
             composerField
         }
@@ -592,8 +623,10 @@ struct ChatView: View {
     // Always-present pane bar (Chat active; Terminal/Editor/Display are later phases).
     private var paneBar: some View {
         HStack(spacing: 0) {
-            paneTab("Chat", "bubble.left", on: true, enabled: true)
-            paneTab("Terminal", "terminal", on: false, enabled: false)
+            Button { pane = .chat } label: { paneTab("Chat", "bubble.left", on: pane == .chat, enabled: true) }
+                .buttonStyle(.plain)
+            Button { pane = .terminal } label: { paneTab("Terminal", "terminal", on: pane == .terminal, enabled: true) }
+                .buttonStyle(.plain)
             paneTab("Editor", "chevron.left.forwardslash.chevron.right", on: false, enabled: false)
             paneTab("Display", "display", on: false, enabled: false)
         }
@@ -614,8 +647,10 @@ struct ChatView: View {
     // Tablet/desktop: the pane switcher sits in the header as a segmented cluster.
     private var paneCluster: some View {
         HStack(spacing: 0) {
-            paneIcon("bubble.left", on: true, enabled: true)
-            paneIcon("terminal", on: false, enabled: false)
+            Button { pane = .chat } label: { paneIcon("bubble.left", on: pane == .chat, enabled: true) }
+                .buttonStyle(.plain)
+            Button { pane = .terminal } label: { paneIcon("terminal", on: pane == .terminal, enabled: true) }
+                .buttonStyle(.plain)
             paneIcon("chevron.left.forwardslash.chevron.right", on: false, enabled: false)
             paneIcon("display", on: false, enabled: false)
         }
