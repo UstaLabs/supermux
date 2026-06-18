@@ -52,6 +52,13 @@ export function attachArgv(opts: { device: string; agentTarget: string }): strin
     // Native view. Scoped to the grouped viewer session — the base `mux` session
     // and other viewers are unaffected.
     `tmux set-option -t ${v} status off 2>/dev/null; ` +
+    // Enable mouse on the viewer session so the web terminal's wheel-forwarding
+    // (touch-drag → SGR wheel) reaches tmux and scrolls the pane history. The
+    // DEFAULT tmux server is mouse-off (unlike the scratch `-L muxterm` server),
+    // which leaves xterm's mouseTrackingMode 'none' → touch scroll falls back to
+    // a no-op in tmux's alt-screen buffer. Scoped to the grouped viewer session,
+    // so the base `mux` session (and the agent itself) stay mouse-off.
+    `tmux set-option -t ${v} mouse on 2>/dev/null; ` +
     `tmux select-window -t ${v}:"$w" 2>/dev/null; ` +
     `exec tmux attach -t ${v}`
   return ["sh", "-c", script]
