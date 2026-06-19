@@ -30,6 +30,16 @@ test("nothingToLand when branch has no commits beyond base", async () => {
   expect(r.nothingToLand).toBe(true)
 })
 
+test("not nothingToLand when the worktree is dirty even with no commits", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "wip.txt"), "uncommitted work")  // dirty, NOT committed
+  const r = computeReadiness({ repoRoot: repo, worktreeDir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" })
+  expect(r.ahead).toBe(0)
+  expect(r.dirtyFiles.length).toBeGreaterThan(0)
+  expect(r.nothingToLand).toBe(false)  // there IS work to commit + merge
+})
+
 test("defaultAction override forces the recommendation", async () => {
   const repo = tmpRepo()
   const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })

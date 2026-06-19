@@ -21,7 +21,11 @@ export interface ReadinessInput {
 
 export function computeReadiness(s: ReadinessInput): FinishReadiness {
   const ab = aheadBehind(s.worktreeDir, s.baseBranch)
-  const nothingToLand = ab.ahead === 0
+  const dirty = dirtyFiles(s.worktreeDir)
+  // "Nothing to land" only when there are no commits AND nothing uncommitted — a
+  // dirty-but-no-commits worktree still has work to commit + merge, so the menu
+  // must keep offering Merge/PR (the commit-first flow handles it).
+  const nothingToLand = ab.ahead === 0 && dirty.length === 0
   const stats = diffStats(s.repoRoot, s.baseBranch, s.sessionBranch)
   const rs = remoteStatus(s.worktreeDir)
   const baseHasUpstream = rs.hasRemote && gitOk(s.repoRoot, ["rev-parse", "--verify", `refs/remotes/origin/${s.baseBranch}`])
@@ -32,7 +36,7 @@ export function computeReadiness(s: ReadinessInput): FinishReadiness {
   else recommended = rs.hasRemote && baseHasUpstream ? "pr" : "merge"
   return {
     base: s.baseBranch, branch: s.sessionBranch, ahead: ab.ahead, behind: ab.behind,
-    dirtyFiles: dirtyFiles(s.worktreeDir), filesChanged: stats.filesChanged,
+    dirtyFiles: dirty, filesChanged: stats.filesChanged,
     insertions: stats.insertions, deletions: stats.deletions,
     hasRemote: rs.hasRemote, baseHasUpstream, ghAvailable: gh,
     conflictPreflight, recommended, nothingToLand,

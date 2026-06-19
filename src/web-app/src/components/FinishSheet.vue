@@ -75,7 +75,7 @@ function keep() { void run({ action: "keep" }); setOpen(false) }
 function confirmDiscard() { confirmingDiscard.value = true }
 function doDiscard() { confirmingDiscard.value = false; void run({ action: "discard" }) }
 function mergeAnyway() { void run({ action: "merge", skipVerify: true }) }
-function commitAndMerge() { void run({ action: "merge", commitFirst: true, commitMessage: commitMessage.value }) }
+function commitAndContinue() { void run({ action: job.value?.action === "pr" ? "pr" : "merge", commitFirst: true, commitMessage: commitMessage.value }) }
 function retryPr() { void run({ action: "pr" }) }
 
 function issueMessage(o: any): string {
@@ -145,6 +145,12 @@ function dismiss() { finishJob.clear(props.sessionId); setOpen(false) }
               v-else-if="readiness.conflictPreflight === 'clean'"
               class="inline-flex items-center gap-1 text-emerald-400"
             >✓ no conflict</span>
+            <span
+              v-if="readiness.dirtyFiles.length > 0"
+              class="inline-flex items-center gap-1 text-amber-400"
+            >
+              <TriangleAlert class="size-3" /> {{ readiness.dirtyFiles.length }} uncommitted
+            </span>
           </div>
 
           <!-- Nothing to land: only Keep + Discard -->
@@ -398,8 +404,8 @@ function dismiss() { finishJob.clear(props.sessionId); setOpen(false) }
                 type="button"
                 :disabled="busy"
                 class="text-[12px] px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors"
-                @click="commitAndMerge"
-              >Commit &amp; merge</button>
+                @click="commitAndContinue"
+              >Commit &amp; {{ job?.action === 'pr' ? 'open PR' : 'merge' }}</button>
             </div>
           </template>
 
