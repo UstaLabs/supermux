@@ -50,10 +50,10 @@ export async function createWorktree(opts: {
   return { worktreeDir, sessionBranch, baseBranch: opts.baseBranch, repoRoot: opts.repoRoot }
 }
 
-export async function removeWorktree(repoRoot: string, worktreeDir: string, sessionBranch: string, opts?: { force?: boolean }): Promise<void> {
+export async function removeWorktree(repoRoot: string, worktreeDir: string, sessionBranch: string, opts?: { force?: boolean; keepBranch?: boolean }): Promise<void> {
   try { git(repoRoot, ["worktree", "remove", ...(opts?.force ? ["--force"] : []), worktreeDir]) } catch { /* may already be gone */ }
   try { git(repoRoot, ["worktree", "prune"]) } catch {}
-  try { git(repoRoot, ["branch", "-D", sessionBranch]) } catch {}
+  if (!opts?.keepBranch) { try { git(repoRoot, ["branch", "-D", sessionBranch]) } catch {} }
 }
 
 function copyWorktreeIncludes(repoRoot: string, worktreeDir: string): void {

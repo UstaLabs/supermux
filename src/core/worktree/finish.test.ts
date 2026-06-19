@@ -1,11 +1,11 @@
 // src/core/worktree/finish.test.ts
 import { test, expect } from "bun:test"
 import { execFileSync } from "child_process"
-import { mkdtempSync, writeFileSync } from "fs"
+import { existsSync, mkdtempSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { createWorktree } from "./manager"
-import { finishWorktree } from "./finish"
+import { finishWorktree, openPrForSession, discardSession } from "./finish"
 
 function g(cwd: string, ...a: string[]) { return execFileSync("git", ["-C", cwd, ...a], { encoding: "utf-8" }).trim() }
 function tmpRepo(): string {
@@ -100,4 +100,50 @@ test("commitFirst commits the worktree (incl. untracked), then integrates", asyn
   expect(g(repo, "rev-parse", "main")).toBe(g(repo, "rev-parse", h.sessionBranch)) // base advanced to branch
   expect(g(repo, "log", "-1", "--pretty=%s", "main")).toBe("my work")                // our message
   expect(g(repo, "show", "main:u.txt")).toBe("new")                                  // untracked got integrated
+})
+
+test("merge then atomic cleanup removes worktree and branch", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "a.txt"), "x"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "w")
+  const r = await finishWorktree({ repoRoot: repo, worktreeDir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" }, { skipVerify: true, cleanup: true })
+  expect(r.status).toBe("integrated")
+  if (r.status === "integrated") expect(r.cleanedUp).toBe(true)
+  expect(existsSync(h.worktreeDir)).toBe(false)
+  expect(() => g(repo, "rev-parse", "--verify", h.sessionBranch)).toThrow()
+})
+
+test("merge with deleteBranch:false keeps the branch but removes the worktree", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "a.txt"), "x"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "w")
+  const r = await finishWorktree({ repoRoot: repo, worktreeDir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" }, { skipVerify: true, cleanup: true, deleteBranch: false })
+  expect(r.status).toBe("integrated")
+  expect(existsSync(h.worktreeDir)).toBe(false)
+  expect(g(repo, "rev-parse", "--verify", h.sessionBranch)).toBeTruthy()  // branch still exists
+})
+
+test("cleanup is skipped when MUX_DISABLE_WORKTREE_CLEANUP is set", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "a.txt"), "x"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "w")
+  process.env.MUX_DISABLE_WORKTREE_CLEANUP = "1"
+  try {
+    const r = await finishWorktree({ repoRoot: repo, worktreeDir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" }, { skipVerify: true, cleanup: true })
+    expect(r.status).toBe("integrated")
+    if (r.status === "integrated") expect(r.cleanedUp).toBe(false)
+    expect(existsSync(h.worktreeDir)).toBe(true)
+  } finally { delete process.env.MUX_DISABLE_WORKTREE_CLEANUP }
+})
+
+test("discardSession force-removes worktree + branch without merging", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "a.txt"), "x")  // dirty, uncommitted
+  const baseBefore = g(repo, "rev-parse", "main")
+  const r = await discardSession({ repoRoot: repo, worktreeDir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" })
+  expect(r.status).toBe("discarded")
+  expect(existsSync(h.worktreeDir)).toBe(false)
+  expect(g(repo, "rev-parse", "main")).toBe(baseBefore)  // base untouched
+  expect(() => g(repo, "rev-parse", "--verify", h.sessionBranch)).toThrow()
 })

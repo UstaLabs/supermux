@@ -1,13 +1,22 @@
 // src/core/worktree/finish.ts
 import { execFileSync } from "child_process"
+import { resolve } from "path"
 import { syncBaseIntoBranch, integrateFastForward, dirtyFiles, mergeInProgress } from "../git/integrate"
 import { resolveVerifyCommand, runVerify } from "./verify"
+import { removeWorktree, worktreesRoot } from "./manager"
+import { publishBranch } from "../git/remote"
+import { openPullRequest, compareUrl } from "../git/pr"
 
 export interface FinishSession { repoRoot: string; worktreeDir: string; sessionBranch: string; baseBranch: string }
-export interface FinishOpts { skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string }
+export interface FinishOpts { skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; cleanup?: boolean; deleteBranch?: boolean; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }
 
 export type FinishResult =
-  | { status: "integrated"; base: string; branch: string; mergedSha: string; verified: string | null }
+  | { status: "integrated"; base: string; branch: string; mergedSha: string; verified: string | null; cleanedUp: boolean }
+  | { status: "pr_opened"; branch: string; prUrl: string; draft: boolean; verified: string | null }
+  | { status: "branch_published"; branch: string; compareUrl: string | null; verified: string | null }
+  | { status: "kept"; branch: string }
+  | { status: "discarded"; branch: string }
+  | { status: "push_auth_failed"; message: string }
   | { status: "nothing_to_do" }
   | { status: "sync_conflict"; files: string[] }
   | { status: "tests_failed"; command: string; output: string }
@@ -21,6 +30,11 @@ function hasCommitsToIntegrate(repoRoot: string, base: string, branch: string): 
   try {
     return execFileSync("git", ["-C", repoRoot, "rev-list", "--count", `${base}..${branch}`], { encoding: "utf-8" }).trim() !== "0"
   } catch { return false }
+}
+
+/** Only worktrees mux itself created (under worktreesRoot()) may be auto-removed. */
+function isMuxOwned(worktreeDir: string): boolean {
+  return resolve(worktreeDir).startsWith(resolve(worktreesRoot()) + "/")
 }
 
 /** Re-entrant finish: sync base in → verify → ff-only integrate. Returns the
@@ -73,8 +87,72 @@ export async function finishWorktree(s: FinishSession, opts?: FinishOpts, onProg
   // 4) Integrate ff-only, checkout-aware.
   await progress("Merging…")
   const r = integrateFastForward(s.repoRoot, s.baseBranch, s.sessionBranch)
-  if (r.status === "integrated") return { status: "integrated", base: s.baseBranch, branch: s.sessionBranch, mergedSha: r.mergedSha, verified }
+  if (r.status === "integrated") {
+    // Cleanup is atomic with a *successful* merge: only ever runs after the base
+    // branch advanced. Gated on opt-in + env escape hatch + mux-owned provenance.
+    let cleanedUp = false
+    if (opts?.cleanup && !process.env.MUX_DISABLE_WORKTREE_CLEANUP && isMuxOwned(s.worktreeDir)) {
+      try { await removeWorktree(s.repoRoot, s.worktreeDir, s.sessionBranch, { keepBranch: opts.deleteBranch === false }); cleanedUp = true }
+      catch { cleanedUp = false }
+    }
+    return { status: "integrated", base: s.baseBranch, branch: s.sessionBranch, mergedSha: r.mergedSha, verified, cleanedUp }
+  }
   if (r.status === "dirty_overlap") return { status: "dirty_overlap", files: r.files }
   if (r.status === "non_ff") return { status: "non_ff" }
   return { status: "error", message: r.message }
+}
+
+/** PR variant of finish: commit (opt-in) → sync base → verify → push → open PR.
+ *  Mirrors finishWorktree's gating, but instead of fast-forwarding the base it
+ *  publishes the branch and opens a PR (draft when tests are red, unless
+ *  prRequiresGreen, which hard-blocks instead). Falls back to a compare URL when
+ *  gh is unavailable. The worktree is left intact (no cleanup). */
+export async function openPrForSession(s: FinishSession, opts?: FinishOpts, onProgress?: (stage: string) => void): Promise<FinishResult> {
+  if (!s.baseBranch || s.baseBranch === "HEAD") return { status: "error", message: "session has no known base branch" }
+  const progress = async (stage: string) => { onProgress?.(stage); await new Promise<void>((r) => setImmediate(r)) }
+
+  // commit dirty work if opted in (same as merge)
+  const dirty = mergeInProgress(s.worktreeDir) ? [] : dirtyFiles(s.worktreeDir)
+  if (dirty.length) {
+    if (!opts?.commitFirst) return { status: "uncommitted", files: dirty }
+    await progress("Committing…")
+    try {
+      execFileSync("git", ["-C", s.worktreeDir, "add", "-A"], { encoding: "utf-8" })
+      execFileSync("git", ["-C", s.worktreeDir, "commit", "-m", opts.commitMessage?.trim() || "Session changes", "--no-verify"], { encoding: "utf-8" })
+    } catch (e: any) { return { status: "error", message: `commit failed: ${String(e?.stderr ?? e?.message ?? e).trim()}` } }
+  }
+
+  await progress(`Syncing ${s.baseBranch}…`)
+  const sync = syncBaseIntoBranch(s.worktreeDir, s.baseBranch)
+  if (sync.status === "conflict") return { status: "sync_conflict", files: sync.files }
+  if (!hasCommitsToIntegrate(s.repoRoot, s.baseBranch, s.sessionBranch)) return { status: "nothing_to_do" }
+
+  let verified: string | null = null
+  let red = false
+  if (!opts?.skipVerify) {
+    const cmd = resolveVerifyCommand(s.worktreeDir)
+    if (!cmd) return { status: "no_verify" }
+    await progress("Running tests…")
+    const res = runVerify(s.worktreeDir, cmd)
+    if (!res.ok) { if (opts?.prRequiresGreen) return { status: "tests_failed", command: cmd, output: res.output.slice(-4000) }; red = true }
+    else verified = cmd
+  }
+
+  await progress("Pushing…")
+  const pub = publishBranch(s.worktreeDir)
+  if (pub.status === "auth_failed") return { status: "push_auth_failed", message: pub.message }
+  if (pub.status === "error") return { status: "error", message: pub.message }
+
+  await progress("Opening PR…")
+  const draft = red || !!opts?.draft
+  const pr = openPullRequest(s.worktreeDir, { title: opts?.prTitle || s.sessionBranch, body: opts?.prBody || "", base: s.baseBranch, draft })
+  if (pr.status === "opened") return { status: "pr_opened", branch: s.sessionBranch, prUrl: pr.url, draft, verified }
+  return { status: "branch_published", branch: s.sessionBranch, compareUrl: compareUrl(s.worktreeDir, s.baseBranch, s.sessionBranch), verified }
+}
+
+/** Throw the session away: force-remove the (mux-owned) worktree + its branch
+ *  without integrating anything. The base branch is never touched. */
+export async function discardSession(s: FinishSession): Promise<FinishResult> {
+  if (isMuxOwned(s.worktreeDir)) await removeWorktree(s.repoRoot, s.worktreeDir, s.sessionBranch, { force: true })
+  return { status: "discarded", branch: s.sessionBranch }
 }
