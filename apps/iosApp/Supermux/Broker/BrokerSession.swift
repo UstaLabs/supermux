@@ -141,9 +141,40 @@ final class BrokerSession {
     }
     func sendMessage(_ id: String, _ text: String) { Task { [api] in try? await api.sendMessage(id: id, text: text) } }
     func projects() async -> [String] { (try? await api.listProjects()) ?? [] }
-    func spawn(workdir: String, agent: String?, name: String?, model: String? = nil) async -> String? {
-        let req = SpawnRequest(workdir: workdir, name: name, agent: agent, model: model)
+    func spawn(workdir: String, agent: String?, name: String?, model: String? = nil,
+               worktree: Bool? = nil, baseBranch: String? = nil) async -> String? {
+        // Resolve ~ to an absolute path so the worktree is cut from the real repo root (web parity).
+        let resolved = (try? await api.validatePath(path: workdir)).flatMap { $0.ok ? $0.path : nil } ?? workdir
+        let req = SpawnRequest(workdir: resolved, name: name, agent: agent, model: model,
+                               worktree: worktree?.kb, baseBranch: baseBranch)
         return (try? await api.spawn(req: req))?.id
+    }
+
+    // MARK: - Launcher: worktree + git-hosting parity with the web SessionLauncherView
+
+    /// Validate (resolve ~) then load git repo info — drives the launcher's worktree picker.
+    /// Returns nil when the path isn't a resolvable directory (→ no worktree option, like web).
+    func repoInfo(_ path: String, fetch: Bool = false) async -> RepoInfo? {
+        guard let resolved = (try? await api.validatePath(path: path)).flatMap({ $0.ok ? $0.path : nil })
+        else { return nil }
+        return try? await api.getRepoInfo(path: resolved, fetch: fetch)
+    }
+
+    /// Configured GitHub/GitLab connections (for clone/create in the project picker).
+    func forges() async -> [ForgeConnection] { (try? await api.listForges())?.connections ?? [] }
+    /// Matching remote repos across all connections (caller debounces).
+    func searchForge(_ query: String) async -> [RemoteRepo] { (try? await api.searchForge(query: query))?.repos ?? [] }
+    /// Clone a remote repo → local checkout path.
+    func cloneForge(connectionId: String, owner: String, name: String) async -> String? {
+        (try? await api.cloneForge(connectionId: connectionId, owner: owner, name: name))?.localPath
+    }
+    /// Create a remote repo on a forge (always private, web parity) then clone → local path.
+    func createForge(connectionId: String, name: String) async -> String? {
+        (try? await api.createForge(connectionId: connectionId, name: name, isPrivate: true))?.localPath
+    }
+    /// `git init` a fresh local repo under the projects root → local path.
+    func createLocalRepo(_ name: String) async -> String? {
+        (try? await api.createLocalRepo(name: name))?.localPath
     }
     func listModels(_ agent: String) async -> [ModelInfo] {
         (try? await api.listModels(agent: agent))?.models ?? []

@@ -202,4 +202,85 @@ class BrokerApiTest {
         val r = json.decodeFromString<TerminalListResponse>("""{}""")
         assertEquals(0, r.terminals.size)
     }
+
+    @Test
+    fun spawn_request_with_worktree_roundtrips() {
+        val req = SpawnRequest(workdir = "/home/user", agent = "claude", worktree = true, baseBranch = "dev")
+        val decoded = json.decodeFromString<SpawnRequest>(Json.encodeToString(SpawnRequest.serializer(), req))
+        assertEquals(req, decoded)
+        assertEquals(true, decoded.worktree)
+        assertEquals("dev", decoded.baseBranch)
+    }
+
+    @Test
+    fun spawn_request_omits_worktree_by_default() {
+        val req = SpawnRequest(workdir = "/home/user")
+        assertEquals(null, req.worktree)
+        assertEquals(null, req.baseBranch)
+    }
+
+    @Test
+    fun repo_info_parses_eligible_with_branches() {
+        val r = json.decodeFromString<RepoInfo>(
+            """{"isGitRepo":true,"eligible":true,"repoRoot":"/home/user/app","currentBranch":"dev",
+               |"branches":{"local":["dev","main"],"remote":["origin/feature"]}}""".trimMargin()
+        )
+        assertEquals(true, r.eligible)
+        assertEquals("dev", r.currentBranch)
+        assertEquals(listOf("dev", "main"), r.branches?.local)
+        assertEquals(listOf("origin/feature"), r.branches?.remote)
+    }
+
+    @Test
+    fun repo_info_defaults_when_not_a_repo() {
+        val r = json.decodeFromString<RepoInfo>("""{"isGitRepo":false,"eligible":false}""")
+        assertEquals(false, r.isGitRepo)
+        assertEquals(null, r.repoRoot)
+        assertEquals(null, r.branches)
+    }
+
+    @Test
+    fun forge_connections_parse_with_account() {
+        val r = json.decodeFromString<ForgeConnectionsResponse>(
+            """{"connections":[{"id":"c1","kind":"github","host":"github.com","apiBase":"https://api.github.com",
+               |"label":"GitHub","account":{"login":"octocat","name":"Octo"},"source":"cli","transport":"ssh",
+               |"status":"ok"}],"cli":{"github":{"available":true,"login":"octocat"},"gitlab":{"available":false}}}""".trimMargin()
+        )
+        assertEquals(1, r.connections.size)
+        assertEquals("github", r.connections[0].kind)
+        assertEquals("octocat", r.connections[0].account.login)
+        assertEquals(true, r.cli?.github?.available)
+        assertEquals(false, r.cli?.gitlab?.available)
+    }
+
+    @Test
+    fun forge_connections_default_empty() {
+        val r = json.decodeFromString<ForgeConnectionsResponse>("""{}""")
+        assertEquals(0, r.connections.size)
+        assertEquals(null, r.cli)
+    }
+
+    @Test
+    fun forge_search_response_parses_repos_and_errors() {
+        val r = json.decodeFromString<ForgeSearchResponse>(
+            """{"repos":[{"connectionId":"c1","kind":"github","host":"github.com","owner":"octocat",
+               |"name":"hello","fullName":"octocat/hello","private":false,"defaultBranch":"main",
+               |"cloneUrl":"https://github.com/octocat/hello.git","webUrl":"https://github.com/octocat/hello"}],
+               |"errors":[{"connectionId":"c2","code":"rate_limited","message":"slow down"}]}""".trimMargin()
+        )
+        assertEquals(1, r.repos.size)
+        assertEquals("octocat/hello", r.repos[0].fullName)
+        assertEquals("main", r.repos[0].defaultBranch)
+        assertEquals("rate_limited", r.errors[0].code)
+    }
+
+    @Test
+    fun resolved_and_created_repo_parse() {
+        assertEquals("/home/user/cloned", json.decodeFromString<ResolvedRepo>("""{"localPath":"/home/user/cloned"}""").localPath)
+        val created = json.decodeFromString<CreatedRepo>(
+            """{"repo":{"fullName":"me/new"},"localPath":"/home/user/new"}"""
+        )
+        assertEquals("/home/user/new", created.localPath)
+        assertEquals("me/new", created.repo?.fullName)
+    }
 }
