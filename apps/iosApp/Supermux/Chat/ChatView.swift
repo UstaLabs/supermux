@@ -128,7 +128,7 @@ struct ChatView: View {
                 TerminalPanel(broker: broker, session: session)
             }
             Tab("Editor", systemImage: "chevron.left.forwardslash.chevron.right", value: PaneTab.editor) {
-                ComingSoonPane(title: "Editor", systemImage: "chevron.left.forwardslash.chevron.right")
+                EditorPane(broker: broker, session: session)
             }
             Tab("Display", systemImage: "display", value: PaneTab.display) {
                 ComingSoonPane(title: "Display", systemImage: "display")
@@ -166,6 +166,12 @@ struct ChatView: View {
             if ProcessInfo.processInfo.environment["SM_OPEN_NATIVE"] == "1" {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 tab = .native
+            }
+        }
+        .task(id: session.id) {
+            if ProcessInfo.processInfo.environment["SM_OPEN_EDITOR"] == "1" {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                tab = .editor
             }
         }
         .task(id: session.id) {

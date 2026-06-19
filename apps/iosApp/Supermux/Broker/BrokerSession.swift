@@ -225,6 +225,32 @@ final class BrokerSession {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         return try? await URLSession.shared.data(for: req).0
     }
+
+    // MARK: - Editor filesystem (workdir-relative paths)
+    func fsList(_ id: String, _ path: String) async -> [FsEntry] { (try? await api.fsList(sessionId: id, path: path)) ?? [] }
+    func fsRead(_ id: String, _ path: String) async throws -> String { try await api.fsRead(sessionId: id, path: path) }
+    func fsWrite(_ id: String, _ path: String, _ content: String) async -> Bool { (try? await api.fsWrite(sessionId: id, path: path, content: content))?.boolValue ?? false }
+    func fsSearch(_ id: String, _ q: String) async -> [FsSearchResult] { (try? await api.fsSearch(sessionId: id, q: q)) ?? [] }
+
+    // MARK: - Editor state (one per session, cached so open tabs / tree expansion /
+    // scroll survive pane AND session switches — full state preservation is required).
+    @ObservationIgnored private var editorStates: [String: EditorState] = [:]
+    func editorState(for sessionId: String) -> EditorState {
+        if let existing = editorStates[sessionId] { return existing }
+        let state = EditorState(
+            sessionId: sessionId,
+            fsRead: { [weak self] path in
+                guard let self else { return "" }
+                return try await self.fsRead(sessionId, path)
+            },
+            fsWrite: { [weak self] path, content in
+                guard let self else { return false }
+                return await self.fsWrite(sessionId, path, content)
+            }
+        )
+        editorStates[sessionId] = state
+        return state
+    }
 }
 
 private extension Bool {
