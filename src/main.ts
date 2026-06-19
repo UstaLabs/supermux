@@ -1480,7 +1480,7 @@ async function ensureSessionWorktree(session: { id: string; name: string; workdi
   log.info("worktree_recreated", { id: session.id, name: session.name, workdir: session.workdir })
 }
 
-async function resumeSuspendedSession(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<boolean> {
+async function resumeSuspendedSession(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string; tmux_window_id?: string | null; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<boolean> {
   try {
     log.info("resume_suspended_begin", {
       name: session.name,
@@ -1492,17 +1492,16 @@ async function resumeSuspendedSession(session: { id: string; name: string; agent
     await ensureSessionWorktree(session)
     if (session.agent === "claude") {
       await server.bind(session.id)
-      const existingWindows = await listSessionWindows(TMUX_SESSION)
-      const spawnWindow = !existingWindows.includes(session.name)
-      log.info("resume_suspended_claude", {
-        name: session.name,
-        spawn_window: spawnWindow,
-        existing_windows: existingWindows.length,
-      })
       preAcceptTrust(session.workdir)
-      while ((await listSessionWindows(TMUX_SESSION)).includes(session.name)) {
-        await killSessionWindow({ session: TMUX_SESSION, window: session.name }).catch(() => {})
-      }
+      // Clear ONLY our own prior window, by id — never kill by name. The old
+      // `while (listSessionWindows().includes(name)) killSessionWindow({window:name})`
+      // loop could kill a sibling window that happens to share this display name;
+      // 65b1049 removed the same destructive pattern from the new-spawn path. Then
+      // pick a window name that doesn't collide with any live window (mirrors it).
+      if (session.tmux_window_id) await killWindowById(session.tmux_window_id).catch(() => {})
+      const { ensureUnique } = await import("./core/session-manager/naming")
+      const windowName = ensureUnique(session.name, new Set(await listSessionWindows(TMUX_SESSION)))
+      log.info("resume_suspended_claude", { name: session.name, window: windowName })
       const effort = sessionEffort(session as any)
       const cmd = buildClaudeSpawnCommand({
         name: session.name, model: session.model, effort, sessionId: session.id,
@@ -1511,12 +1510,12 @@ async function resumeSuspendedSession(session: { id: string; name: string; agent
       })
       const tmuxWindow = await spawnSessionWindow({
         session: TMUX_SESSION,
-        window: session.name,
+        window: windowName,
         workdir: session.workdir,
         command: cmd,
       })
       if (tmuxWindow.windowId) registry.sessions.setTmuxWindowId(session.id, tmuxWindow.windowId)
-      const tmuxTarget = `${TMUX_SESSION}:${session.name}`
+      const tmuxTarget = `${TMUX_SESSION}:${windowName}`
       await sendChannelConsentEnter(tmuxTarget)
       await waitForSessionConnected(session.id, 25_000)
     } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
