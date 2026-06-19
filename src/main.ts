@@ -132,7 +132,8 @@ import { LoginManager } from "./core/agents/login/manager"
 import { getRepoInfo } from "./core/git/repo-info"
 import { createWorktree, removeWorktree, type WorktreeHandle } from "./core/worktree/manager"
 import { isWorktreeReclaimable } from "./core/worktree/gc"
-import { finishWorktree, type FinishResult } from "./core/worktree/finish"
+import { startFinishJob, getFinishJob, clearFinishJob, type FinishJob, type FinishJobOpts, type FinishAction } from "./core/worktree/finish-job"
+import { computeReadiness, type FinishReadiness } from "./core/worktree/readiness"
 import { suggestVerify } from "./core/worktree/verify-suggest"
 import { deriveName } from "./core/session-manager/naming"
 
@@ -682,15 +683,69 @@ async function interruptSessionById(sessionId: string): Promise<{ ok: boolean; r
   })
 }
 
-async function finishSessionById(sessionId: string, opts?: { skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string }): Promise<FinishResult> {
+type FinishRequest = { action: FinishAction; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }
+
+async function finishSessionById(sessionId: string, req: FinishRequest): Promise<FinishJob | { error: string }> {
   const s = registry.get(sessionId)
-  if (!s) return { status: "error", message: "no such session" }
-  if (!s.repo_root || !s.session_branch || !s.base_branch) return { status: "error", message: "session is not worktree-backed" }
-  return finishWorktree(
-    { repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch },
-    opts,
-    (stage) => webChannel?.broadcastToAll({ type: "finish_progress", session: sessionId, stage }),
-  )
+  if (!s) return { error: "no such session" }
+  if (!s.repo_root || !s.session_branch || !s.base_branch) return { error: "session is not worktree-backed" }
+  const prev = getFinishJob(sessionId)
+  if (prev && prev.status !== "running") clearFinishJob(sessionId)
+  // discard must stop the live agent BEFORE its worktree is force-removed
+  if (req.action === "discard") await killSession(sessionId).catch(() => {})
+  const session = { id: sessionId, repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch }
+  const opts: FinishJobOpts = { ...req, cleanup: false }  // worktree removal handled by the archive path below
+  const sessionName = s.name
+  return startFinishJob(session, opts, {
+    onUpdate: (job) => webChannel?.broadcastToAll({ type: "finish_job", session: sessionId, job }),
+    persist: (job) => { try { registry.sessions.setFinishJob(sessionId, job) } catch {} },
+    notify: (job) => { void onFinishTerminal(sessionId, sessionName, job) },
+  })
+}
+
+async function onFinishTerminal(sessionId: string, sessionName: string, job: FinishJob): Promise<void> {
+  fireFinishPush(sessionName, sessionId, job)
+  const status = job.outcome?.status
+  const archiveMerge = job.action === "merge" && status === "integrated"
+  const archiveDiscard = job.action === "discard" && status === "discarded"
+  if (archiveMerge || archiveDiscard) {
+    try {
+      if (archiveMerge) await killSession(sessionId).catch(() => {})  // discard already killed before the job
+      unregisterSession(sessionId)
+      await refreshTelegramMenu().catch(() => {})
+      webChannel?.broadcastToAll({ type: "session_removed", id: sessionId })
+    } catch (e) { log.warn("finish_archive_failed", { id: sessionId, err: String(e) }) }
+  }
+}
+
+function fireFinishPush(sessionName: string, sessionId: string, job: FinishJob): void {
+  const o = job.outcome
+  if (!o) return
+  let text: string | null = null
+  const br = sessionName
+  switch (o.status) {
+    case "integrated": text = `✅ Merged ${br} into ${o.base}`; break
+    case "pr_opened": text = `📤 PR opened for ${br}`; break
+    case "branch_published": text = `📤 Pushed ${br} — open the PR manually`; break
+    case "discarded": text = `🗑️ Discarded ${br}`; break
+    case "tests_failed": text = `❌ Tests failed in ${br}`; break
+    case "sync_conflict": case "dirty_overlap": text = `⚠️ Conflicts finishing ${br}`; break
+    case "push_auth_failed": text = `🔒 Push auth failed for ${br}`; break
+    case "push_rejected": text = `⚠️ Push rejected (diverged) for ${br}`; break
+    case "uncommitted": text = `⚠️ Uncommitted changes in ${br}`; break
+    case "no_verify": text = `⚠️ No verify configured for ${br}`; break
+    case "error": text = `❌ Finish failed for ${br}`; break
+    // kept / nothing_to_do → no push
+  }
+  if (!text) return
+  try { for (const sub of pushStore.all()) void pushSender.sendToDevice(sub.device, { session: sessionName, sessionId, text, ts: new Date().toISOString() }) } catch {}
+}
+
+function finishReadinessById(sessionId: string): FinishReadiness | { error: string } {
+  const s = registry.get(sessionId)
+  if (!s) return { error: "no such session" }
+  if (!s.repo_root || !s.session_branch || !s.base_branch) return { error: "session is not worktree-backed" }
+  return computeReadiness({ repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch })
 }
 
 // Wire a codex/cursor adapter's structured events into the agent-agnostic
@@ -887,6 +942,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         status: s.status,
         session_branch: s.session_branch || undefined,
         repo_root: s.repo_root || undefined,
+        finish_job: s.finish_job,
       })),
     getSessionLog: (id) => {
       const s = registry.get(id)
@@ -992,11 +1048,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       if (!s) return { ok: false, reason: "session not found" }
       return interruptSessionById(s.id)
     },
-    finishSession: async (id, opts) => {
-      const s = registry.get(id)
-      if (!s) return { status: "error" as const, message: "no such session" }
-      return finishSessionById(s.id, opts)
-    },
+    finishSession: async (id, req) => finishSessionById(id, req),
+    finishReadiness: (id) => finishReadinessById(id),
     spawnSession: async (args) => {
       const r = await spawnSession({
         workdir: args.workdir,
@@ -1026,6 +1079,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             reasoningLevel: sessionEffort(entry),
             repo_root: entry.repo_root || undefined,
             session_branch: entry.session_branch || undefined,
+            finish_job: entry.finish_job,
           },
         })
       }
@@ -1103,6 +1157,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             reasoningLevel: sessionEffort(entry),
             repo_root: entry.repo_root || undefined,
             session_branch: entry.session_branch || undefined,
+            finish_job: entry.finish_job,
           },
         })
       }
@@ -1597,7 +1652,7 @@ async function resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name
 
     webChannel?.broadcastToAll({
       type: "session_added",
-      session: { id: sessionId, name, workdir: session.workdir, agent: session.agent, status: "active", repo_root: session.repo_root || undefined, session_branch: session.session_branch || undefined },
+      session: { id: sessionId, name, workdir: session.workdir, agent: session.agent, status: "active", repo_root: session.repo_root || undefined, session_branch: session.session_branch || undefined, finish_job: session.finish_job },
     })
 
     await refreshTelegramMenu()
@@ -1914,7 +1969,7 @@ const server = await startSocketServer({
             if (entry) {
               webChannel?.broadcastToAll({
                 type: "session_added",
-                session: { id: entry.id, name: entry.name, workdir: entry.workdir, mute: !!entry.mute, connected: true, agent: entry.agent, model: entry.model, repo_root: entry.repo_root || undefined, session_branch: entry.session_branch || undefined },
+                session: { id: entry.id, name: entry.name, workdir: entry.workdir, mute: !!entry.mute, connected: true, agent: entry.agent, model: entry.model, repo_root: entry.repo_root || undefined, session_branch: entry.session_branch || undefined, finish_job: entry.finish_job },
               })
             }
             // Auto-bind the requesting chat to the new session if the
@@ -2526,6 +2581,7 @@ _tg.on("inbound", async (msg: InboundMessage) => {
               reasoningLevel: sessionEffort(entry),
               repo_root: entry.repo_root || undefined,
               session_branch: entry.session_branch || undefined,
+              finish_job: entry.finish_job,
             },
           })
         }

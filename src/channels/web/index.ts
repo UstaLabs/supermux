@@ -89,6 +89,7 @@ export interface SessionSnapshot {
   model?: string
   session_branch?: string
   repo_root?: string
+  finish_job?: import("../../core/worktree/finish-job").FinishJob
 }
 
 export interface ArchivedSessionSnapshot {
@@ -125,7 +126,8 @@ export interface WebChannelOpts {
   switchReasoningLevel?: (id: string, level: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
   getSessionAgent?: (name: string) => { agent: AgentKind; model?: string; reasoningLevel?: string } | undefined
   interruptSession?: (id: string) => Promise<{ ok: boolean; reason?: string }>
-  finishSession?: (id: string, opts?: { skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string }) => Promise<import("../../core/worktree/finish").FinishResult>
+  finishSession?: (id: string, req: { action: "merge"|"pr"|"keep"|"discard"; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }) => Promise<import("../../core/worktree/finish-job").FinishJob | { error: string }>
+  finishReadiness?: (id: string) => import("../../core/worktree/readiness").FinishReadiness | { error: string }
   reviewList?: (id: string) => import("../../core/review/store").Comment[]
   reviewAdd?: (id: string, c: Omit<import("../../core/review/store").NewComment, "sessionId">) => import("../../core/review/store").Comment
   reviewUpdate?: (commentId: string, patch: { status?: "open" | "submitted" | "resolved"; body?: string; resolvedBy?: string }) => void
@@ -1540,15 +1542,29 @@ export class WebChannel implements Channel {
       if (!result.ok) return this.json({ error: result.reason ?? "interrupt failed" }, 400)
       return this.json({ ok: true })
     }
+    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/finish\/readiness$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      if (!this.opts.finishReadiness) return this.json({ error: "not configured" }, 503)
+      const r = this.opts.finishReadiness(id)
+      if (r && typeof r === "object" && "error" in r) return this.json(r, 404)
+      return this.json(r)
+    }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/finish$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       if (!this.opts.finishSession) return this.json({ error: "not configured" }, 503)
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      const action = body.action === "pr" || body.action === "keep" || body.action === "discard" ? body.action : "merge"
       const result = await this.opts.finishSession(id, {
+        action,
         skipVerify: body.skipVerify === true,
         commitFirst: body.commitFirst === true,
         commitMessage: typeof body.commitMessage === "string" ? body.commitMessage : undefined,
+        draft: body.draft === true,
+        prRequiresGreen: body.prRequiresGreen === true,
+        prTitle: typeof body.prTitle === "string" ? body.prTitle : undefined,
+        prBody: typeof body.prBody === "string" ? body.prBody : undefined,
       })
+      if (result && typeof result === "object" && "error" in result) return this.json(result, 400)
       return this.json(result)
     }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/git\/status$/)) {
