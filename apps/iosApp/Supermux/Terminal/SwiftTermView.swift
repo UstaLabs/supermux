@@ -6,6 +6,7 @@ import SwiftTerm
 /// size changes are sent back through the session.
 struct SwiftTermView: UIViewRepresentable {
     let session: TerminalSession
+    var onMakeView: (TerminalView) -> Void = { _ in }   // hand the view up so its keyboard can be resigned
 
     func makeCoordinator() -> Coordinator { Coordinator(session: session) }
 
@@ -20,6 +21,7 @@ struct SwiftTermView: UIViewRepresentable {
         session.onBytes = { [weak tv] bytes in
             tv?.feed(byteArray: ArraySlice(bytes))
         }
+        DispatchQueue.main.async { onMakeView(tv) }
         return tv
     }
 
