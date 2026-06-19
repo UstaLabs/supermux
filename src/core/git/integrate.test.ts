@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, chmodSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { createWorktree } from "../worktree/manager"
-import { findBranchCheckout, isAncestor, syncBaseIntoBranch, integrateFastForward, changedFiles } from "./integrate"
+import { findBranchCheckout, isAncestor, syncBaseIntoBranch, integrateFastForward, changedFiles, aheadBehind, diffStats, mergeTreePreflight } from "./integrate"
 
 function g(cwd: string, ...a: string[]) { return execFileSync("git", ["-C", cwd, ...a], { encoding: "utf-8" }).trim() }
 function tmpRepo(): string {
@@ -56,4 +56,38 @@ test("sync completes despite a rejecting pre-commit hook (internal merge uses --
   const hook = join(repo, ".git", "hooks", "pre-commit")
   writeFileSync(hook, "#!/bin/sh\nexit 1\n"); chmodSync(hook, 0o755)
   expect(syncBaseIntoBranch(h.worktreeDir, "main").status).toBe("clean")
+})
+
+test("aheadBehind counts commits each side of base", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "a.txt"), "x"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "w1")
+  writeFileSync(join(h.worktreeDir, "b.txt"), "y"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "w2")
+  const ab = aheadBehind(h.worktreeDir, "main")
+  expect(ab).toEqual({ ahead: 2, behind: 0 })
+})
+
+test("diffStats reports files and line counts base..branch", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "a.txt"), "l1\nl2\n"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "w")
+  const s = diffStats(repo, "main", h.sessionBranch)
+  expect(s.filesChanged).toBe(1)
+  expect(s.insertions).toBeGreaterThanOrEqual(2)
+})
+
+test("mergeTreePreflight is clean for non-overlapping work", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "new.txt"), "x"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "w")
+  expect(mergeTreePreflight(repo, "main", h.sessionBranch)).toBe("clean")
+})
+
+test("mergeTreePreflight detects a conflict without mutating the repo", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "f.txt"), "branch\n"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "branch edit")
+  g(repo, "checkout", "main"); writeFileSync(join(repo, "f.txt"), "base\n"); g(repo, "add", "."); g(repo, "commit", "-m", "base edit")
+  expect(mergeTreePreflight(repo, "main", h.sessionBranch)).toBe("will_conflict")
+  expect(() => g(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD")).toThrow()  // no merge state left behind
 })
