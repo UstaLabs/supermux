@@ -98,6 +98,10 @@ data class SpawnRequest(
     val name: String? = null,
     val agent: String? = null,
     val model: String? = null,
+    /** Run the session in an isolated git worktree (only honored when the workdir is an eligible repo). */
+    val worktree: Boolean? = null,
+    /** Base branch the worktree is cut from (defaults to the repo's current branch when null). */
+    val baseBranch: String? = null,
 )
 
 @Serializable
@@ -273,6 +277,100 @@ data class LauncherCommands(
 @Serializable
 data class PathValidation(val ok: Boolean = false, val path: String? = null, val error: String? = null)
 
+// ─── Repo info + worktree branches (GET /repos/info) ─────────────────────────
+@Serializable
+data class RepoBranches(
+    val local: List<String> = emptyList(),
+    val remote: List<String> = emptyList(),
+)
+
+/** GET /repos/info?path=&fetch= → git status for the launcher's worktree picker.
+ *  `eligible` means the workdir is a repo we can cut an isolated worktree from. */
+@Serializable
+data class RepoInfo(
+    val isGitRepo: Boolean = false,
+    val eligible: Boolean = false,
+    val repoRoot: String? = null,
+    val currentBranch: String? = null,
+    val branches: RepoBranches? = null,
+)
+
+// ─── Git hosting / forges (GET/POST /forge/*) ────────────────────────────────
+@Serializable
+data class ForgeAccount(
+    val login: String = "",
+    val name: String? = null,
+    val avatarUrl: String? = null,
+)
+
+@Serializable
+data class ForgeSsh(val fingerprint: String = "", val registered: Boolean = false)
+
+/** A configured GitHub/GitLab connection. `kind` is "github" | "gitlab". */
+@Serializable
+data class ForgeConnection(
+    val id: String,
+    val kind: String = "github",
+    val host: String = "",
+    val apiBase: String = "",
+    val label: String = "",
+    val account: ForgeAccount = ForgeAccount(),
+    val source: String = "pat",        // "pat" | "cli"
+    val transport: String = "https",   // "https" | "ssh"
+    val ssh: ForgeSsh? = null,
+    val status: String = "ok",         // "ok" | "needs_reconnect"
+)
+
+@Serializable
+data class ForgeCliPresence(val available: Boolean = false, val login: String? = null)
+
+@Serializable
+data class ForgeCliStatus(
+    val github: ForgeCliPresence = ForgeCliPresence(),
+    val gitlab: ForgeCliPresence = ForgeCliPresence(),
+)
+
+@Serializable
+data class ForgeConnectionsResponse(
+    val connections: List<ForgeConnection> = emptyList(),
+    val cli: ForgeCliStatus? = null,
+)
+
+/** A repository on a remote forge (search result / create result). */
+@Serializable
+data class RemoteRepo(
+    val connectionId: String = "",
+    val kind: String = "",
+    val host: String = "",
+    val owner: String = "",
+    val name: String = "",
+    val fullName: String = "",
+    val private: Boolean = false,
+    val description: String? = null,
+    val defaultBranch: String = "",
+    val language: String? = null,
+    val updatedAt: String? = null,
+    val cloneUrl: String = "",
+    val webUrl: String = "",
+)
+
+@Serializable
+data class ForgeSearchError(val connectionId: String = "", val code: String = "", val message: String = "")
+
+@Serializable
+data class ForgeSearchResponse(
+    val repos: List<RemoteRepo> = emptyList(),
+    val errors: List<ForgeSearchError> = emptyList(),
+)
+
+/** Result of resolving a clone/create to a local checkout (POST /forge/clone, /forge/create-local). */
+@Serializable
+data class ResolvedRepo(val localPath: String = "")
+
+/** Result of creating a remote repo then cloning it (POST /forge/create). */
+@Serializable
+data class CreatedRepo(val repo: RemoteRepo? = null, val localPath: String = "")
+
 @Serializable
 data class FsEntry(
     val name: String,
@@ -367,6 +465,20 @@ private data class StartDisplayBody(
     val height: Int? = null,
 )
 
+@Serializable
+private data class ForgeSearchBody(val query: String)
+
+@Serializable
+private data class ForgeCloneBody(val connectionId: String, val owner: String, val name: String)
+
+@Serializable
+private data class ForgeCreateBody(
+    val connectionId: String, val name: String, val owner: String? = null, val private: Boolean = true,
+)
+
+@Serializable
+private data class ForgeCreateLocalBody(val name: String)
+
 // ─── Client ──────────────────────────────────────────────────────────────────
 
 /**
@@ -421,6 +533,16 @@ class BrokerApi(
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
         }
+    }
+
+    /** POST a JSON body and decode the JSON response (for endpoints that return data). */
+    private suspend inline fun <reified B, reified T> postReturningJson(url: String, body: B): T {
+        val text = http.post(url) {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(body))
+        }.bodyAsText()
+        return json.decodeFromString(text)
     }
 
     private fun urlEncode(s: String): String = s
@@ -690,6 +812,34 @@ class BrokerApi(
         }.bodyAsText()
         return json.decodeFromString(text)
     }
+
+    /** GET /repos/info?path=&fetch=1 — git repo status + branch lists for the worktree picker. */
+    suspend fun getRepoInfo(path: String, fetch: Boolean = false): RepoInfo =
+        getJson("$httpBase/repos/info?path=${urlEncode(path)}" + if (fetch) "&fetch=1" else "")
+
+    // ── Git hosting / forges ───────────────────────────────────────────────────
+
+    /** GET /forge/connections → configured GitHub/GitLab connections (+ CLI availability). */
+    suspend fun listForges(): ForgeConnectionsResponse =
+        getJson("$httpBase/forge/connections")
+
+    /** POST /forge/search {query} → matching remote repos across all connections. */
+    suspend fun searchForge(query: String): ForgeSearchResponse =
+        postReturningJson("$httpBase/forge/search", ForgeSearchBody(query))
+
+    /** POST /forge/clone {connectionId, owner, name} → { localPath } of the new local checkout. */
+    suspend fun cloneForge(connectionId: String, owner: String, name: String): ResolvedRepo =
+        postReturningJson("$httpBase/forge/clone", ForgeCloneBody(connectionId, owner, name))
+
+    /** POST /forge/create {connectionId, name, private} → creates the remote repo and clones it.
+     *  Param is `isPrivate` (not `private`) so the Swift call site isn't a keyword collision;
+     *  the JSON field stays `private` via [ForgeCreateBody]. */
+    suspend fun createForge(connectionId: String, name: String, isPrivate: Boolean = true): CreatedRepo =
+        postReturningJson("$httpBase/forge/create", ForgeCreateBody(connectionId, name, null, isPrivate))
+
+    /** POST /forge/create-local {name} → { localPath } of a freshly `git init`'d local repo. */
+    suspend fun createLocalRepo(name: String): ResolvedRepo =
+        postReturningJson("$httpBase/forge/create-local", ForgeCreateLocalBody(name))
 
     // ── Editor filesystem ──────────────────────────────────────────────────────
 
