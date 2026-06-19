@@ -271,8 +271,10 @@ export async function reconcileOnStartup(deps: {
   bindSocket: (session_id: string) => Promise<void>
   supervisor: Supervisor
   isAlive?: (pid: number) => boolean
+  livePanePid?: (windowId: string) => Promise<number | null>
 }): Promise<void> {
   const alive = deps.isAlive ?? isProcessAlive
+  const livePanePid = deps.livePanePid ?? (async () => null)
   for (const s of deps.registry.list()) {
     if (alive(s.pid)) continue
     // PA special-case: leave the stale row in place so ensurePersonalAssistants'
@@ -285,8 +287,22 @@ export async function reconcileOnStartup(deps: {
     // use pid=0 (no persistent process) and would survive isProcessAlive
     // by accident, but codex sessions use a real PID that's now dead.
     if ((s as any).agent && (s as any).agent !== "claude") continue
-    // Claude user sessions with a dead PID: mark suspended (not dropped).
-    // The session retains its history and can be lazily resumed on next message.
+    // The stored pid is dead, but a Claude pane survives in its OWN systemd scope
+    // across a broker restart. After a restart the pid is unreliable (a dead
+    // broker pid from a lazy-resume's `|| process.pid`, or pid=0 from a DB-only
+    // load), so trust the tmux pane: if it is still alive, adopt its pid and keep
+    // the session ACTIVE. Otherwise the live session is false-suspended and the
+    // next message would kill-and-respawn it, losing its in-progress state.
+    if (s.tmux_window_id) {
+      const panePid = await livePanePid(s.tmux_window_id)
+      if (panePid) {
+        deps.registry.sessions.activate(s.id, panePid)
+        log.info("session_pane_survived", { id: s.id, name: s.name, pane_pid: panePid, window: s.tmux_window_id })
+        continue
+      }
+    }
+    // Claude user session with a dead PID and no surviving pane: mark suspended
+    // (not dropped). It keeps its history and lazily resumes on the next message.
     log.info("session_suspended", { id: s.id, name: s.name, pid: s.pid, reason: "dead_on_startup" })
     deps.registry.sessions.suspend(s.id)
   }
