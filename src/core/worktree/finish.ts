@@ -103,6 +103,20 @@ export async function finishWorktree(s: FinishSession, opts?: FinishOpts, onProg
   return { status: "error", message: r.message }
 }
 
+/** Deterministic PR title/body from a branch's commits (no LLM). Title = the
+ *  oldest commit's subject (usually the headline change); body = a bullet list
+ *  of all subjects. Falls back to the branch name when there are no commits. */
+export function derivePrText(repoRoot: string, base: string, branch: string): { title: string; body: string } {
+  let subjects: string[] = []
+  try {
+    const out = execFileSync("git", ["-C", repoRoot, "log", "--reverse", "--format=%s", `${base}..${branch}`], { encoding: "utf-8" }).trim()
+    subjects = out ? out.split("\n").map((s) => s.trim()).filter(Boolean) : []
+  } catch { subjects = [] }
+  const title = subjects[0] || branch
+  const body = subjects.length ? subjects.map((s) => `- ${s}`).join("\n") : ""
+  return { title, body }
+}
+
 /** PR variant of finish: commit (opt-in) → sync base → verify → push → open PR.
  *  Mirrors finishWorktree's gating, but instead of fast-forwarding the base it
  *  publishes the branch and opens a PR (draft when tests are red, unless
@@ -147,7 +161,10 @@ export async function openPrForSession(s: FinishSession, opts?: FinishOpts, onPr
 
   await progress("Opening PR…")
   const draft = red || !!opts?.draft
-  const pr = openPullRequest(s.worktreeDir, { title: opts?.prTitle || s.sessionBranch, body: opts?.prBody || "", base: s.baseBranch, draft })
+  const drafted = (!opts?.prTitle || !opts?.prBody) ? derivePrText(s.repoRoot, s.baseBranch, s.sessionBranch) : null
+  const title = opts?.prTitle || drafted?.title || s.sessionBranch
+  const body = opts?.prBody || drafted?.body || ""
+  const pr = openPullRequest(s.worktreeDir, { title, body, base: s.baseBranch, draft })
   if (pr.status === "opened") return { status: "pr_opened", branch: s.sessionBranch, prUrl: pr.url, draft, verified }
   return { status: "branch_published", branch: s.sessionBranch, compareUrl: compareUrl(s.worktreeDir, s.baseBranch, s.sessionBranch), verified, prError: pr.status === "error" ? pr.message : undefined }
 }

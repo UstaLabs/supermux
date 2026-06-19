@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { createWorktree } from "./manager"
-import { finishWorktree, openPrForSession, discardSession } from "./finish"
+import { finishWorktree, openPrForSession, discardSession, derivePrText } from "./finish"
 
 function g(cwd: string, ...a: string[]) { return execFileSync("git", ["-C", cwd, ...a], { encoding: "utf-8" }).trim() }
 function tmpRepo(): string {
@@ -158,6 +158,24 @@ test("openPrForSession pushes the branch to origin (the reliable floor)", async 
   // gh may or may not be installed in CI; either way the branch MUST land on the remote.
   expect(["pr_opened", "branch_published"]).toContain(r.status)
   expect(g(bare, "rev-parse", "--verify", h.sessionBranch)).toBeTruthy()
+})
+
+test("derivePrText uses the first commit subject as title and lists commits in body", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "a.txt"), "x"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "Add feature A")
+  writeFileSync(join(h.worktreeDir, "b.txt"), "y"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "Wire feature A into B")
+  const t = derivePrText(repo, "main", h.sessionBranch)
+  expect(t.title).toBe("Add feature A")                 // oldest commit subject
+  expect(t.body).toContain("- Add feature A")
+  expect(t.body).toContain("- Wire feature A into B")
+})
+
+test("derivePrText falls back to the branch name when there are no commits", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  const t = derivePrText(repo, "main", h.sessionBranch)
+  expect(t.title).toBe(h.sessionBranch)
 })
 
 test("openPrForSession surfaces push_rejected when the remote branch diverged", async () => {
