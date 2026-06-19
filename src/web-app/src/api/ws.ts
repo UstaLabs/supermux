@@ -11,7 +11,6 @@ import { useCommandsStore } from "../stores/commands"
 import { useLsp } from "../stores/lsp"
 import { useOnboarding } from "../stores/onboarding"
 import { useSessionCache } from "../stores/sessionCache"
-import { useFinishProgress } from "../stores/finishProgress"
 import { useFinishJob } from "../stores/finishJob"
 import { useUnread } from "../stores/unread"
 import { useDrafts } from "../stores/drafts"
@@ -29,7 +28,6 @@ export const useWS = defineStore("ws", () => {
   const agentState = useAgentState()
   const commands = useCommandsStore()
   const onboarding = useOnboarding()
-  const finishProgress = useFinishProgress()
   const finishJob = useFinishJob()
   const unread = useUnread()
   const drafts = useDrafts()
@@ -107,7 +105,6 @@ export const useWS = defineStore("ws", () => {
       if (frame.drafts) drafts.seed(frame.drafts)
       onboarding.setOnboarded(frame.onboarded ?? false)
     } else if (frame.type === "session_added")    { sessions.add(frame.session); finishJob.fromSnapshot(frame.session.id, frame.session.finish_job) }
-    else if   (frame.type === "finish_progress")  finishProgress.set(frame.session, frame.stage)
     else if   (frame.type === "finish_job")        finishJob.set(frame.session, frame.job)
     else if   (frame.type === "commands_changed") commands.set(frame.session, frame.commands, frame.resolved ?? true)
     else if   (frame.type === "session_removed")  {

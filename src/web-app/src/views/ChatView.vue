@@ -8,7 +8,8 @@ import { AlertTriangleIcon, Loader2Icon, SendHorizonalIcon, SquareIcon } from "l
 import { useMessages } from "@/stores/messages"
 import { useWS } from "@/api/ws"
 import { useSessions } from "@/stores/sessions"
-import { useFinishProgress } from "@/stores/finishProgress"
+import { useFinishJob } from "@/stores/finishJob"
+import FinishSheet from "@/components/FinishSheet.vue"
 import { useLayout, CHAT_SPLIT, EDITOR_TERM_SPLIT, WORK_DISPLAY_SPLIT } from "@/stores/layout"
 import { useIsDesktop } from "@/composables/useIsDesktop"
 import { usePanelResize } from "@/composables/usePanelResize"
@@ -126,73 +127,15 @@ async function interrupt() {
   }
 }
 
-// Finish: sync base → verify → integrate (worktree-backed sessions only).
-const finishing = ref(false)
-type FinishResult = Awaited<ReturnType<typeof api.finish>>
-const finishResult = ref<FinishResult | null>(null)
-const finishSending = ref(false)
-const finishProgress = useFinishProgress()
-const finishStage = computed(() => finishProgress.stageBySession[props.id])
-
-const verifyDraft = ref<{ content: string; source: string } | null>(null)
-const verifySaving = ref(false)
-const commitMessage = ref("Session changes")
-
-async function generateVerify() {
-  try { verifyDraft.value = await api.verifySuggest(props.id) }
-  catch (e: any) { toast.error(e?.message ?? "Failed to suggest a verify script") }
-}
-async function saveVerify() {
-  if (!verifyDraft.value || verifySaving.value) return
-  verifySaving.value = true
-  try {
-    const r = await api.verifySave(props.id, verifyDraft.value.content)
-    if (!r.ok) { toast.error(r.reason ?? "Failed to save"); return }
-    toast.success("Saved .mux/verify.sh — click Finish to run it")
-    verifyDraft.value = null
-    finishResult.value = null
-  } catch (e: any) { toast.error(e?.message ?? "Failed to save") }
-  finally { verifySaving.value = false }
-}
-
-async function finish(opts?: { skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string }) {
-  if (finishing.value) return
-  finishing.value = true
-  try {
-    const r = await api.finish(props.id, opts)
-    if (r.status === "integrated") { toast.success(`Merged into ${r.base}${r.verified ? ` (verified: ${r.verified})` : ""}`); finishResult.value = null }
-    else if (r.status === "nothing_to_do") { toast.info("Nothing to finish — no new commits"); finishResult.value = null }
-    else if (r.status === "non_ff") { toast.message("Base moved — re-syncing, retrying…"); void finish(opts) }
-    else { finishResult.value = r } // sync_conflict / tests_failed / dirty_overlap / error → show the card
-  } catch (e: unknown) {
-    toast.error(e instanceof Error ? e.message : "Finish failed")
-  } finally { finishing.value = false; finishProgress.clear(props.id) }
-}
-
-function finishIssueMessage(r: FinishResult): string {
-  if (r.status === "sync_conflict")
-    return `The Finish step merged the base branch in and hit conflicts in:\n${r.files.map((f) => `- ${f}`).join("\n")}\n\nThe worktree is in a conflicted merge state — please resolve the conflicts and commit, then I'll run Finish again.`
-  if (r.status === "tests_failed")
-    return `The Finish step ran the tests (\`${r.command}\`) and they failed:\n\n\`\`\`\n${r.output}\n\`\`\`\n\nPlease fix them so the branch is green, then I'll run Finish again.`
-  if (r.status === "dirty_overlap")
-    return `The base checkout has unsaved changes in: ${r.files.join(", ")} — the same files my work touches. Please commit or stash them so Finish can fast-forward.`
-  return `Finish failed: ${(r as { message?: string }).message ?? r.status}`
-}
-
-async function sendFinishToAgent() {
-  const r = finishResult.value
-  if (!r || finishSending.value) return
-  finishSending.value = true
-  try {
-    await api.sendMessage(props.id, finishIssueMessage(r))
-    toast.success("Sent to the agent")
-    finishResult.value = null
-  } catch (e: any) {
-    toast.error(e?.message ?? "Failed to send to agent")
-  } finally { finishSending.value = false }
-}
-function mergeAnyway() { finishResult.value = null; verifyDraft.value = null; void finish({ skipVerify: true }) }
-function commitAndFinish() { finishResult.value = null; void finish({ commitFirst: true, commitMessage: commitMessage.value }) }
+// Finish: opens the FinishSheet (durable job runs in the broker). The header
+// button reflects the job state — running stage label, or a done/failed badge.
+const finishSheetOpen = ref(false)
+const finishJob = useFinishJob()
+const fjob = computed(() => finishJob.bySession[props.id])
+const finishRunning = computed(() => fjob.value?.status === "running")
+const finishUnacked = computed(() => finishJob.isUnacked(props.id))
+const finishBadge = computed(() => finishUnacked.value ? (fjob.value?.status === "failed" ? "failed" : "done") : null)
+const finishLabel = computed(() => finishRunning.value ? (fjob.value?.stage || "Finishing…") : "Finish")
 const layout = useLayout()
 const panels = computed(() => layout.panelsFor(props.id))
 const activeTab = computed({
@@ -528,91 +471,21 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
       <button
         v-if="!isArchived && session?.session_branch"
         type="button"
-        :disabled="finishing"
         aria-label="Finish: sync, verify, and merge into the base branch"
-        class="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] font-medium bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-80 disabled:cursor-not-allowed transition-colors"
-        @click="finish()"
+        class="relative inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] font-medium bg-emerald-600 text-white hover:bg-emerald-500 transition-colors"
+        @click="finishSheetOpen = true"
       >
-        <Loader2Icon v-if="finishing" class="size-3.5 animate-spin" />
+        <Loader2Icon v-if="finishRunning" class="size-3.5 animate-spin" />
         <GitMerge v-else class="size-3.5" />
-        <span :class="{ 'hidden sm:inline': !finishing }">{{ finishing ? (finishStage || 'Finishing…') : 'Finish' }}</span>
+        <span :class="{ 'hidden sm:inline': !finishRunning }">{{ finishLabel }}</span>
+        <span
+          v-if="finishBadge"
+          aria-hidden="true"
+          class="absolute -top-0.5 -right-0.5 size-2 rounded-full ring-2 ring-[var(--cmux-header)]"
+          :class="finishBadge === 'failed' ? 'bg-red-500' : 'bg-emerald-400'"
+        />
       </button>
     </header>
-
-    <!-- Finish failure result -->
-    <div
-      v-if="finishResult"
-      class="fixed inset-x-3 bottom-24 z-50 mx-auto max-w-lg rounded-xl border border-border bg-card shadow-xl"
-    >
-      <div class="flex items-center gap-2 px-4 py-2.5 border-b border-border">
-        <span class="text-[13px] font-semibold">
-          {{ finishResult.status === 'sync_conflict' ? 'Merge conflicts'
-            : finishResult.status === 'tests_failed' ? 'Tests failed'
-            : finishResult.status === 'dirty_overlap' ? 'Base has unsaved changes'
-            : finishResult.status === 'no_verify' ? 'No verify configured'
-            : finishResult.status === 'uncommitted' ? 'Uncommitted changes'
-            : 'Finish failed' }}
-        </span>
-        <button
-          class="ml-auto text-muted-foreground hover:text-foreground text-lg leading-none"
-          aria-label="Dismiss"
-          @click="finishResult = null; verifyDraft = null"
-        >&times;</button>
-      </div>
-      <div class="px-4 py-3 max-h-60 overflow-y-auto text-[12px]">
-        <ul v-if="finishResult.status === 'sync_conflict' || finishResult.status === 'dirty_overlap'" class="font-mono space-y-0.5">
-          <li v-for="f in finishResult.files" :key="f" class="truncate text-foreground/80">{{ f }}</li>
-        </ul>
-        <pre v-else-if="finishResult.status === 'tests_failed'" class="whitespace-pre-wrap break-all font-mono text-foreground/80">{{ finishResult.output }}</pre>
-        <template v-else-if="finishResult.status === 'no_verify'">
-          <p v-if="!verifyDraft" class="text-foreground/80">
-            This repo has no <code>.mux/verify.sh</code>, so there's nothing to run as a check.
-          </p>
-          <div v-else class="flex flex-col gap-1">
-            <span class="text-[10px] uppercase tracking-wide text-muted-foreground">Draft · {{ verifyDraft.source }}</span>
-            <textarea v-model="verifyDraft.content" rows="6"
-              class="w-full font-mono text-[12px] bg-[var(--input)] border border-border rounded-md px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50" />
-          </div>
-        </template>
-        <template v-else-if="finishResult.status === 'uncommitted'">
-          <p class="text-foreground/80 mb-2">These changes aren't committed yet — Finish merges commits, so commit them first:</p>
-          <ul class="font-mono space-y-0.5 mb-2">
-            <li v-for="f in finishResult.files" :key="f" class="truncate text-foreground/80">{{ f }}</li>
-          </ul>
-          <input v-model="commitMessage" placeholder="Commit message"
-            class="w-full text-[12px] bg-[var(--input)] border border-border rounded-md px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50" />
-        </template>
-        <p v-else class="text-foreground/80">{{ (finishResult as { message?: string }).message }}</p>
-      </div>
-      <div class="flex items-center justify-end gap-2 px-4 py-2.5 border-t border-border">
-        <button
-          class="text-[12px] px-2.5 py-1 rounded-md border border-border hover:bg-accent text-muted-foreground"
-          @click="finishResult = null; verifyDraft = null"
-        >Dismiss</button>
-        <template v-if="finishResult.status === 'no_verify'">
-          <button v-if="!verifyDraft" class="text-[12px] px-2.5 py-1 rounded-md bg-primary text-primary-foreground hover:bg-primary/90" @click="generateVerify">Generate verify</button>
-          <button v-else class="text-[12px] px-2.5 py-1 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50" :disabled="verifySaving" @click="saveVerify">Save</button>
-          <button class="text-[12px] px-2.5 py-1 rounded-md border border-amber-500/40 hover:bg-amber-500/10 text-amber-400" @click="mergeAnyway">Merge without verifying</button>
-        </template>
-        <button
-          v-if="finishResult.status === 'tests_failed'"
-          class="text-[12px] px-2.5 py-1 rounded-md border border-amber-500/40 hover:bg-amber-500/10 text-amber-400"
-          @click="mergeAnyway"
-        >Merge anyway</button>
-        <button
-          v-if="finishResult.status === 'uncommitted'"
-          class="text-[12px] px-2.5 py-1 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-          :disabled="finishing"
-          @click="commitAndFinish"
-        >Commit &amp; finish</button>
-        <button
-          v-if="finishResult.status !== 'error' && finishResult.status !== 'no_verify' && finishResult.status !== 'uncommitted'"
-          class="text-[12px] px-2.5 py-1 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-          :disabled="finishSending"
-          @click="sendFinishToAgent"
-        >Send to agent</button>
-      </div>
-    </div>
 
     <div v-if="isArchived" class="px-4 py-2 text-xs text-muted-foreground bg-muted/30 border-b border-border text-center">
       Archived · Resume to continue
@@ -927,6 +800,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
     />
     <ModelSwitcher :session-id="props.id" v-model:open="modelSwitcherOpen" />
     <EffortSwitcher :session-id="props.id" v-model:open="effortSwitcherOpen" />
+    <FinishSheet v-model:open="finishSheetOpen" :session-id="props.id" :branch="session?.session_branch" />
     <KillConfirmDialog
       :open="killConfirmOpen"
       :session-name="displayName"
