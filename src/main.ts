@@ -1745,6 +1745,17 @@ const server = await startSocketServer({
     const s = registry.get(session_id)
     webChannel?.broadcastToAll({ type: "session_state", session: session_id, connected, model: s?.model })
   },
+  // Safety net: a queued inbound that can't reach a live channel shim within the
+  // grace window means the session crashed / never came up. Tell the user in the
+  // chat that sent it, instead of silently dropping the message.
+  onUndeliverable: (session_id, payload) => {
+    const chat_id = payload.meta?.chat_id
+    if (!chat_id) return
+    const name = registry.get(session_id)?.name ?? session_id
+    const text = `⚠️ Couldn't deliver your message to "${name}" — it didn't come up (it may have crashed). Please try again.`
+    if (chat_id.startsWith("telegram")) void telegram?.send({ op: "reply", chat_id, text })
+    else void webChannel?.send({ op: "reply", chat_id, text })
+  },
   handler: {
     onRegister: async (msg) => {
       const sessionUuid = msg.session_id as string  // UUID from MUX_SESSION_ID
