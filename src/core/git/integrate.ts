@@ -114,7 +114,9 @@ export function diffStats(repoRoot: string, from: string, to: string): { filesCh
 
 export function mergeTreePreflight(repoRoot: string, base: string, branch: string): "clean" | "will_conflict" | "unknown" {
   // git 2.38+ `merge-tree --write-tree` is non-destructive (no MERGE_HEAD) and exits
-  // non-zero on conflict. Older git lacks the flag → return "unknown" rather than risk a mutation.
+  // NON-ZERO on conflict — so the primary conflict detection is in the non-ok branch
+  // (where "CONFLICT" text appears in r.out). The `<<<<<<<` check in the ok-branch is
+  // a defensive fallback. Older git lacks the flag → return "unknown" rather than risk a mutation.
   const r = git(repoRoot, ["merge-tree", "--write-tree", base, branch])
   if (r.ok) return r.out.includes("<<<<<<<") ? "will_conflict" : "clean"
   const lower = r.out.toLowerCase()

@@ -27,3 +27,9 @@ test("compareUrl returns null when there is no origin", () => {
   const dir = mkdtempSync(join(tmpdir(), "mux-pr-")); execFileSync("git", ["init", "-b", "main", dir])
   expect(compareUrl(dir, "main", "mux/foo")).toBeNull()
 })
+
+test("compareUrl builds a GitLab merge_requests link (nested group)", () => {
+  const dir = repoWithRemote("git@gitlab.com:acme/sub/widgets.git")
+  const u = compareUrl(dir, "main", "mux/foo")
+  expect(u).toContain("gitlab.com/acme/sub/widgets/-/merge_requests/new")
+})

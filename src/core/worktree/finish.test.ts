@@ -147,3 +147,27 @@ test("discardSession force-removes worktree + branch without merging", async () 
   expect(g(repo, "rev-parse", "main")).toBe(baseBefore)  // base untouched
   expect(() => g(repo, "rev-parse", "--verify", h.sessionBranch)).toThrow()
 })
+
+test("openPrForSession pushes the branch to origin (the reliable floor)", async () => {
+  const repo = tmpRepo()
+  const bare = mkdtempSync(join(tmpdir(), "mux-bare-")); execFileSync("git", ["init", "--bare", "-b", "main", bare])
+  g(repo, "remote", "add", "origin", bare); g(repo, "push", "origin", "main")
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "a.txt"), "x"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "w")
+  const r = await openPrForSession({ repoRoot: repo, worktreeDir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" }, { skipVerify: true })
+  // gh may or may not be installed in CI; either way the branch MUST land on the remote.
+  expect(["pr_opened", "branch_published"]).toContain(r.status)
+  expect(g(bare, "rev-parse", "--verify", h.sessionBranch)).toBeTruthy()
+})
+
+test("openPrForSession surfaces push_rejected when the remote branch diverged", async () => {
+  const repo = tmpRepo()
+  const bare = mkdtempSync(join(tmpdir(), "mux-bare-")); execFileSync("git", ["init", "--bare", "-b", "main", bare])
+  g(repo, "remote", "add", "origin", bare); g(repo, "push", "origin", "main")
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "a.txt"), "x"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "w1")
+  g(h.worktreeDir, "push", "-u", "origin", "HEAD")                 // remote branch now exists
+  writeFileSync(join(h.worktreeDir, "a.txt"), "y"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "--amend", "--no-edit")  // diverge (non-ff)
+  const r = await openPrForSession({ repoRoot: repo, worktreeDir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" }, { skipVerify: true })
+  expect(r.status).toBe("push_rejected")
+})

@@ -1,6 +1,6 @@
 // src/core/worktree/finish.ts
 import { execFileSync } from "child_process"
-import { resolve } from "path"
+import { resolve, sep } from "path"
 import { syncBaseIntoBranch, integrateFastForward, dirtyFiles, mergeInProgress } from "../git/integrate"
 import { resolveVerifyCommand, runVerify } from "./verify"
 import { removeWorktree, worktreesRoot } from "./manager"
@@ -13,7 +13,8 @@ export interface FinishOpts { skipVerify?: boolean; commitFirst?: boolean; commi
 export type FinishResult =
   | { status: "integrated"; base: string; branch: string; mergedSha: string; verified: string | null; cleanedUp: boolean }
   | { status: "pr_opened"; branch: string; prUrl: string; draft: boolean; verified: string | null }
-  | { status: "branch_published"; branch: string; compareUrl: string | null; verified: string | null }
+  | { status: "branch_published"; branch: string; compareUrl: string | null; verified: string | null; prError?: string }
+  | { status: "push_rejected"; branch: string; message: string }
   | { status: "kept"; branch: string }
   | { status: "discarded"; branch: string }
   | { status: "push_auth_failed"; message: string }
@@ -34,7 +35,7 @@ function hasCommitsToIntegrate(repoRoot: string, base: string, branch: string): 
 
 /** Only worktrees mux itself created (under worktreesRoot()) may be auto-removed. */
 function isMuxOwned(worktreeDir: string): boolean {
-  return resolve(worktreeDir).startsWith(resolve(worktreesRoot()) + "/")
+  return resolve(worktreeDir).startsWith(resolve(worktreesRoot()) + sep)
 }
 
 /** Re-entrant finish: sync base in → verify → ff-only integrate. Returns the
@@ -141,13 +142,14 @@ export async function openPrForSession(s: FinishSession, opts?: FinishOpts, onPr
   await progress("Pushing…")
   const pub = publishBranch(s.worktreeDir)
   if (pub.status === "auth_failed") return { status: "push_auth_failed", message: pub.message }
+  if (pub.status === "rejected_non_ff") return { status: "push_rejected", branch: s.sessionBranch, message: "Remote branch diverged — pull/rebase or force-push before opening a PR." }
   if (pub.status === "error") return { status: "error", message: pub.message }
 
   await progress("Opening PR…")
   const draft = red || !!opts?.draft
   const pr = openPullRequest(s.worktreeDir, { title: opts?.prTitle || s.sessionBranch, body: opts?.prBody || "", base: s.baseBranch, draft })
   if (pr.status === "opened") return { status: "pr_opened", branch: s.sessionBranch, prUrl: pr.url, draft, verified }
-  return { status: "branch_published", branch: s.sessionBranch, compareUrl: compareUrl(s.worktreeDir, s.baseBranch, s.sessionBranch), verified }
+  return { status: "branch_published", branch: s.sessionBranch, compareUrl: compareUrl(s.worktreeDir, s.baseBranch, s.sessionBranch), verified, prError: pr.status === "error" ? pr.message : undefined }
 }
 
 /** Throw the session away: force-remove the (mux-owned) worktree + its branch
