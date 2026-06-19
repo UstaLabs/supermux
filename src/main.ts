@@ -135,6 +135,7 @@ import { isWorktreeReclaimable } from "./core/worktree/gc"
 import { startFinishJob, getFinishJob, clearFinishJob, type FinishJob, type FinishJobOpts, type FinishAction } from "./core/worktree/finish-job"
 import { computeReadiness, type FinishReadiness } from "./core/worktree/readiness"
 import { suggestVerify } from "./core/worktree/verify-suggest"
+import { loadFinishConfig } from "./core/worktree/finish-config"
 import { deriveName } from "./core/session-manager/naming"
 
 const log = makeLogger("main")
@@ -694,7 +695,8 @@ async function finishSessionById(sessionId: string, req: FinishRequest): Promise
   // discard must stop the live agent BEFORE its worktree is force-removed
   if (req.action === "discard") await killSession(sessionId).catch(() => {})
   const session = { id: sessionId, repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch }
-  const opts: FinishJobOpts = { ...req, cleanup: false }  // worktree removal handled by the archive path below
+  const cfg = loadFinishConfig(s.repo_root)
+  const opts: FinishJobOpts = { ...req, cleanup: false, prRequiresGreen: req.prRequiresGreen ?? cfg.prRequiresGreen }  // worktree removal handled by the archive path below
   const sessionName = s.name
   return startFinishJob(session, opts, {
     onUpdate: (job) => webChannel?.broadcastToAll({ type: "finish_job", session: sessionId, job }),
@@ -706,7 +708,8 @@ async function finishSessionById(sessionId: string, req: FinishRequest): Promise
 async function onFinishTerminal(sessionId: string, sessionName: string, job: FinishJob): Promise<void> {
   fireFinishPush(sessionName, sessionId, job)
   const status = job.outcome?.status
-  const archiveMerge = job.action === "merge" && status === "integrated"
+  const s = registry.get(sessionId)
+  const archiveMerge = job.action === "merge" && status === "integrated" && (!s?.repo_root || loadFinishConfig(s.repo_root).archiveOnMerge)
   const archiveDiscard = job.action === "discard" && status === "discarded"
   if (archiveMerge || archiveDiscard) {
     try {
@@ -745,7 +748,8 @@ function finishReadinessById(sessionId: string): FinishReadiness | { error: stri
   const s = registry.get(sessionId)
   if (!s) return { error: "no such session" }
   if (!s.repo_root || !s.session_branch || !s.base_branch) return { error: "session is not worktree-backed" }
-  return computeReadiness({ repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch })
+  const cfg = loadFinishConfig(s.repo_root)
+  return computeReadiness({ repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch, defaultAction: cfg.defaultAction })
 }
 
 // Wire a codex/cursor adapter's structured events into the agent-agnostic
