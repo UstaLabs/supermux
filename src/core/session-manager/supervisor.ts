@@ -14,8 +14,10 @@ import { normalizeName } from "../../shared/slug"
 import { AgentKind } from "../../shared/agents"
 import { spawnPA } from "./spawn-helper"
 import type { Session } from "./types"
+import { makeLogger } from "../../shared/log"
 
 const TMUX_SESSION = process.env.MUX_TMUX_SESSION ?? "mux"
+const log = makeLogger("supervisor")
 
 export type Supervisor = {
   ensurePersonalAssistants: (bootstrapOpts?: BootstrapPAOpts) => Promise<void>
@@ -232,7 +234,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       if (s.agent !== "claude") continue
       if (!isProcessAlive(s.pid)) {
         if (s.role === "personal_assistant") await ensurePersonalAssistants()
-        else opts.registry.sessions.suspend(s.id)
+        else {
+          log.info("session_suspended", { id: s.id, name: s.name, pid: s.pid, reason: "process_dead" })
+          opts.registry.sessions.suspend(s.id)
+        }
       }
     }
   }
@@ -282,6 +287,7 @@ export async function reconcileOnStartup(deps: {
     if ((s as any).agent && (s as any).agent !== "claude") continue
     // Claude user sessions with a dead PID: mark suspended (not dropped).
     // The session retains its history and can be lazily resumed on next message.
+    log.info("session_suspended", { id: s.id, name: s.name, pid: s.pid, reason: "dead_on_startup" })
     deps.registry.sessions.suspend(s.id)
   }
   for (const s of deps.registry.list()) {
