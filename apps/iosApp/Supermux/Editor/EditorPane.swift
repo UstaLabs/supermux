@@ -14,6 +14,7 @@ struct EditorPane: View {
     @State private var showSettings = false
     @State private var webView: WKWebView?
     @State private var keyboardHeight: CGFloat = 0
+    @State private var previewMode = false
     @Environment(\.horizontalSizeClass) private var hSize
 
     /// Cached per-session — same instance every lookup, so returning to a session
@@ -21,6 +22,19 @@ struct EditorPane: View {
     private var state: EditorState { broker.editorState(for: session.id) }
     /// iPad / wide → tree is a side column; iPhone → full-screen overlay.
     private var isRegular: Bool { hSize == .regular }
+
+    // ── Markdown preview (parity with the PWA's Eye/Pencil toggle) ──────────────
+    private func isMarkdown(_ path: String) -> Bool {
+        let p = path.lowercased()
+        return p.hasSuffix(".md") || p.hasSuffix(".markdown")
+    }
+    private var activeIsMarkdown: Bool {
+        if let p = state.activeTab?.path { return isMarkdown(p) }
+        return false
+    }
+    /// Preview only takes effect for markdown tabs; a non-md file falls back to the editor.
+    private var showPreview: Bool { previewMode && activeIsMarkdown && !state.showDiff }
+    private var showPreviewToggle: Bool { activeIsMarkdown && !state.showDiff }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -49,6 +63,10 @@ struct EditorPane: View {
             guard let f = ProcessInfo.processInfo.environment["SM_OPEN_FILE"], !f.isEmpty else { return }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             openFile(f)
+            if ProcessInfo.processInfo.environment["SM_PREVIEW"] == "1" {
+                try? await Task.sleep(nanoseconds: 900_000_000)
+                previewMode = true
+            }
         }
         .task(id: session.id) {
             // Headless test hook: open the diff/review view on launch.
@@ -74,6 +92,16 @@ struct EditorPane: View {
 
             EditorSearchField(search: { await broker.fsSearch(session.id, $0) },
                               onOpen: { openFile($0) })
+
+            if showPreviewToggle {
+                Button { previewMode.toggle() } label: {
+                    Image(systemName: previewMode ? "pencil" : "eye")
+                        .font(.body)
+                        .foregroundStyle(previewMode ? Theme.teal : .secondary)
+                        .frame(width: 36, height: 36)
+                }
+                .accessibilityLabel(previewMode ? "Edit" : "Preview")
+            }
 
             Button {
                 Task { await state.loadDiff() }
@@ -147,13 +175,21 @@ struct EditorPane: View {
 
     @ViewBuilder private var editorOrEmpty: some View {
         if let tab = state.activeTab {
-            EditorWebView(content: tab.content, path: tab.path,
-                          lineWrap: settings.lineWrap, fontSize: settings.fontSize,
-                          onChange: { state.updateContent(tab.path, $0) },
-                          onSave: { Task { await state.saveActive() } },
-                          onMakeView: { webView = $0 })
-                .background(Color(red: 40/255, green: 44/255, blue: 52/255)) // #282c34, matches cm6 one-dark
-                .ignoresSafeArea(.container, edges: .bottom)
+            if showPreview {
+                ScrollView {
+                    MarkdownView(text: tab.content)
+                        .padding(16)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                EditorWebView(content: tab.content, path: tab.path,
+                              lineWrap: settings.lineWrap, fontSize: settings.fontSize,
+                              onChange: { state.updateContent(tab.path, $0) },
+                              onSave: { Task { await state.saveActive() } },
+                              onMakeView: { webView = $0 })
+                    .background(Color(red: 40/255, green: 44/255, blue: 52/255)) // #282c34, matches cm6 one-dark
+                    .ignoresSafeArea(.container, edges: .bottom)
+            }
         } else {
             ContentUnavailableView {
                 Label("No file open", systemImage: "doc.text")
