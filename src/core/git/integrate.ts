@@ -122,6 +122,8 @@ export function mergeTreePreflight(repoRoot: string, base: string, branch: strin
   return "unknown"
 }
 
+export function gitOk(cwd: string, args: string[]): boolean { return git(cwd, args).ok }
+
 /** Advance `baseBranch` to `sessionBranch`, fast-forward ONLY, checkout-aware.
  *  Never creates a merge commit, never moves base backward, never `checkout`s a
  *  dirty base. */
