@@ -56,6 +56,20 @@ export async function removeWorktree(repoRoot: string, worktreeDir: string, sess
   if (!opts?.keepBranch) { try { git(repoRoot, ["branch", "-D", sessionBranch]) } catch {} }
 }
 
+export async function ensureWorktreeAt(opts: {
+  repoRoot: string; workdir: string; sessionBranch: string; baseBranch: string
+}): Promise<void> {
+  if (existsSync(opts.workdir)) return
+  git(opts.repoRoot, ["worktree", "prune"])
+  if (existingBranchNames(opts.repoRoot).has(opts.sessionBranch)) {
+    // Branch survived (only the dir was removed) — check it out at the same path.
+    git(opts.repoRoot, ["worktree", "add", opts.workdir, opts.sessionBranch])
+  } else {
+    // Branch was deleted (e.g., after merge) — recreate it from the base so work can continue.
+    git(opts.repoRoot, ["worktree", "add", "-b", opts.sessionBranch, opts.workdir, opts.baseBranch])
+  }
+}
+
 function copyWorktreeIncludes(repoRoot: string, worktreeDir: string): void {
   const inc = join(repoRoot, ".worktreeinclude")
   if (!existsSync(inc)) return

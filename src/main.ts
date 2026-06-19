@@ -130,7 +130,7 @@ import { reverseProxySnippets } from "./core/settings/exposure"
 import { toActivityEvents } from "./core/agents/adapter-activity"
 import { LoginManager } from "./core/agents/login/manager"
 import { getRepoInfo } from "./core/git/repo-info"
-import { createWorktree, removeWorktree, type WorktreeHandle } from "./core/worktree/manager"
+import { createWorktree, removeWorktree, ensureWorktreeAt, type WorktreeHandle } from "./core/worktree/manager"
 import { isWorktreeReclaimable } from "./core/worktree/gc"
 import { startFinishJob, getFinishJob, clearFinishJob, type FinishJob, type FinishJobOpts, type FinishAction } from "./core/worktree/finish-job"
 import { computeReadiness, type FinishReadiness } from "./core/worktree/readiness"
@@ -1461,7 +1461,26 @@ async function waitForSessionConnected(sessionId: string, timeoutMs = 20_000): P
   return false
 }
 
-async function resumeSuspendedSession(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string }): Promise<boolean> {
+// When a session's worktree was removed (e.g. its branch was merged via finish),
+// the recorded workdir no longer exists. Spawning `claude --resume` into a missing
+// cwd makes it die on startup, and the inbound message is then silently queued to a
+// dead session (no reply, spinner forever). Recreate the worktree at the SAME path —
+// so claude's cwd-keyed transcript still matches — before any resume/respawn spawns
+// into it. No-op when the workdir is healthy or the session isn't worktree-backed.
+async function ensureSessionWorktree(session: { id: string; name: string; workdir: string; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<void> {
+  if (!session.repo_root || !session.session_branch) return
+  if (existsSync(session.workdir)) return
+  log.warn("worktree_missing_recreating", { id: session.id, name: session.name, workdir: session.workdir, branch: session.session_branch })
+  await ensureWorktreeAt({
+    repoRoot: session.repo_root,
+    workdir: session.workdir,
+    sessionBranch: session.session_branch,
+    baseBranch: session.base_branch || "HEAD",
+  })
+  log.info("worktree_recreated", { id: session.id, name: session.name, workdir: session.workdir })
+}
+
+async function resumeSuspendedSession(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<boolean> {
   try {
     log.info("resume_suspended_begin", {
       name: session.name,
@@ -1470,6 +1489,7 @@ async function resumeSuspendedSession(session: { id: string; name: string; agent
       status: registry.get(session.id)?.status,
       has_agent_session_id: !!session.agent_session_id,
     })
+    await ensureSessionWorktree(session)
     if (session.agent === "claude") {
       await server.bind(session.id)
       const existingWindows = await listSessionWindows(TMUX_SESSION)
@@ -1573,6 +1593,7 @@ async function resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name
 
   let resumedTmuxWindowId: string | undefined
   try {
+    await ensureSessionWorktree(session)
     if (session.agent === "claude") {
       await server.bind(sessionId)
       const effort = sessionEffort(session)
@@ -2306,6 +2327,7 @@ async function reapplySessionAgentConfig(sessionId: string): Promise<{ ok: true 
 
   if (session.agent === "claude") {
     try {
+      await ensureSessionWorktree(session)
       stopClaudeTailer(session.id)
       const tmux = requireClaudeTmux(session)
       if (!tmux.ok) return { ok: false, error: tmux.error }
