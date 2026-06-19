@@ -289,6 +289,11 @@ function dismiss() { finishJob.clear(props.sessionId); setOpen(false) }
               ><ExternalLink class="size-3.5" /> View PR</a>
               <button
                 type="button"
+                class="text-[12px] px-3 py-1.5 rounded-md border border-border text-muted-foreground hover:bg-accent transition-colors"
+                @click="dismiss"
+              >Dismiss</button>
+              <button
+                type="button"
                 class="text-[12px] px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
                 @click="setOpen(false)"
               >Done</button>
@@ -309,6 +314,11 @@ function dismiss() { finishJob.clear(props.sessionId); setOpen(false) }
                 rel="noopener noreferrer"
                 class="inline-flex items-center gap-1 text-[12px] px-3 py-1.5 rounded-md border border-border text-foreground hover:bg-accent transition-colors"
               ><ExternalLink class="size-3.5" /> Open a PR</a>
+              <button
+                type="button"
+                class="text-[12px] px-3 py-1.5 rounded-md border border-border text-muted-foreground hover:bg-accent transition-colors"
+                @click="dismiss"
+              >Dismiss</button>
               <button
                 type="button"
                 class="text-[12px] px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
@@ -474,6 +484,27 @@ function dismiss() { finishJob.clear(props.sessionId); setOpen(false) }
               class="self-end text-[12px] px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
               @click="setOpen(false)"
             >Done</button>
+          </template>
+
+          <!-- non_ff -->
+          <template v-else-if="oStatus === 'non_ff'">
+            <div class="flex items-center gap-2 text-[13px] font-medium text-foreground">
+              <TriangleAlert class="size-4 text-amber-400" /> Base branch moved
+            </div>
+            <p class="text-foreground/80">The base branch moved while finishing. Re-sync and merge again.</p>
+            <div class="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                class="text-[12px] px-3 py-1.5 rounded-md border border-border text-muted-foreground hover:bg-accent transition-colors"
+                @click="dismiss"
+              >Dismiss</button>
+              <button
+                type="button"
+                :disabled="busy"
+                class="text-[12px] px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                @click="merge"
+              >Merge again</button>
+            </div>
           </template>
 
           <!-- error (default) -->

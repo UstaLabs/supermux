@@ -737,6 +737,7 @@ function fireFinishPush(sessionName: string, sessionId: string, job: FinishJob):
     case "push_rejected": text = `⚠️ Push rejected (diverged) for ${br}`; break
     case "uncommitted": text = `⚠️ Uncommitted changes in ${br}`; break
     case "no_verify": text = `⚠️ No verify configured for ${br}`; break
+    case "non_ff": text = `⚠️ ${br} — base moved, retry the merge`; break
     case "error": text = `❌ Finish failed for ${br}`; break
     // kept / nothing_to_do → no push
   }
