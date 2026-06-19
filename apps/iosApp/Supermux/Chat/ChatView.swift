@@ -39,11 +39,38 @@ struct ChatView: View {
     @State private var recorder = AudioRecorder()
     @State private var micDenied = false
     @FocusState private var composing: Bool
-    @Environment(\.horizontalSizeClass) private var hSize
 
-    enum Pane { case chat, terminal, agent }
-    @State private var pane: Pane = .chat
+    enum PaneTab: Hashable { case chat, native, terminal, editor, display }
+    @State private var tab: PaneTab = .chat
     private var agentViewAvailable: Bool { (session.agent ?? "claude") == "claude" }
+    /// Asset-catalog logo for the session's agent — used as the Native tab's icon so it
+    /// shows the relevant brand (Claude/Codex/…), not a generic glyph. nil → fallback.
+    private var agentAssetName: String? {
+        switch session.agent.lowercased() {
+        case "claude": return "claude"
+        case "codex": return "codex"
+        case "cursor": return "cursor"
+        case "opencode": return "opencode"
+        default: return nil
+        }
+    }
+    /// The agent logo, pre-rendered to a tab-bar-sized padded image — the raw vector asset
+    /// renders far too large as a tab icon, and SwiftUI frame modifiers don't constrain it
+    /// in a Tab label. A UIImage's point size IS respected. Cached per agent.
+    private static var tabIconCache: [String: Image] = [:]
+    private var agentTabIcon: Image {
+        guard let asset = agentAssetName else { return Image(systemName: "cube.transparent") }
+        if let cached = Self.tabIconCache[asset] { return cached }
+        guard let ui = UIImage(named: asset) else { return Image(systemName: "cube.transparent") }
+        let canvas = CGSize(width: 26, height: 26)
+        let inset: CGFloat = 4
+        let rendered = UIGraphicsImageRenderer(size: canvas).image { _ in
+            ui.draw(in: CGRect(x: inset, y: inset, width: canvas.width - 2 * inset, height: canvas.height - 2 * inset))
+        }
+        let image = Image(uiImage: rendered.withRenderingMode(.alwaysOriginal))
+        Self.tabIconCache[asset] = image
+        return image
+    }
 
     /// Composer is expanded (full controls) when focused, when there's a draft or a
     /// staged attachment, or while recording; otherwise it rests as a slim glass pill.
@@ -70,7 +97,7 @@ struct ChatView: View {
     /// and session switch — git status is retried so the branch reliably appears.
     private func loadSession() {
         loadedSessionId = session.id
-        pane = .chat
+        tab = .chat
         draft = UserDefaults.standard.string(forKey: draftKey)
             ?? ProcessInfo.processInfo.environment["SM_DRAFT"] ?? ""
         git = nil
@@ -86,16 +113,27 @@ struct ChatView: View {
     }
 
     var body: some View {
-        Group {
-            switch pane {
-            case .chat: transcript
-            case .terminal: TerminalPanel(broker: broker, session: session)
-            case .agent:
-                TerminalPane(broker: broker, session: session, kind: "agent", terminalId: nil,
-                             onExit: { pane = .chat })
+        // Native iOS 26 TabView → the system draws the floating Liquid Glass bar and its
+        // selection (no hand-rolled chrome). Editor/Display are placeholders for now.
+        TabView(selection: $tab) {
+            Tab("Chat", systemImage: "bubble.left", value: PaneTab.chat) { chatPane }
+            if agentViewAvailable {
+                Tab(value: PaneTab.native) {
+                    nativePane
+                } label: {
+                    Label { Text("Native") } icon: { agentTabIcon }
+                }
+            }
+            Tab("Terminal", systemImage: "terminal", value: PaneTab.terminal) {
+                TerminalPanel(broker: broker, session: session)
+            }
+            Tab("Editor", systemImage: "chevron.left.forwardslash.chevron.right", value: PaneTab.editor) {
+                ComingSoonPane(title: "Editor", systemImage: "chevron.left.forwardslash.chevron.right")
+            }
+            Tab("Display", systemImage: "display", value: PaneTab.display) {
+                ComingSoonPane(title: "Display", systemImage: "display")
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) { bottomCluster }
         .navigationTitle(session.name)
         .navigationSubtitle(navSubtitle)
         .toolbar {
@@ -103,7 +141,6 @@ struct ChatView: View {
                 AgentLogo(agent: session.agent, size: 20)
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                if hSize != .compact { paneCluster }
                 if let g = git, g.isRepo {
                     Button { runFinish() } label: { Label("Finish", systemImage: "arrow.triangle.merge") }
                         .tint(Theme.teal)
@@ -122,13 +159,13 @@ struct ChatView: View {
         .task(id: session.id) {
             if ProcessInfo.processInfo.environment["SM_OPEN_TERMINAL"] == "1" {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
-                pane = .terminal
+                tab = .terminal
             }
         }
         .task(id: session.id) {
             if ProcessInfo.processInfo.environment["SM_OPEN_NATIVE"] == "1" {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
-                pane = .agent
+                tab = .native
             }
         }
         .task(id: session.id) {
@@ -168,21 +205,41 @@ struct ChatView: View {
         }
     }
 
-    // Floating glass chrome pinned to the bottom safe area: optional banner, then the
-    // morphing composer + (compact-only, when not typing) the pane tab bar — both in one
-    // GlassEffectContainer so Liquid Glass blends and morphs them as a single cluster.
-    private var bottomCluster: some View {
+    // The Chat tab: the transcript (or the raw agent terminal when "Native" is on), with
+    // the composer + Chat/Native toggle pinned above the system glass tab bar.
+    private var chatPane: some View {
+        transcript
+            .safeAreaInset(edge: .bottom, spacing: 0) { chatBottomCluster }
+    }
+
+    // The raw agent terminal — the "Native" view of a (claude) session, now its own tab.
+    private var nativePane: some View {
+        TerminalPane(broker: broker, session: session, kind: "agent", terminalId: nil,
+                     onExit: { tab = .chat })
+    }
+
+
+    // Composer + Chat/Native toggle as one morphing Liquid Glass cluster. The pane
+    // switcher itself is now the native TabView bar below this, not hand-drawn chrome.
+    private var chatBottomCluster: some View {
         VStack(spacing: 8) {
             if let banner { bannerView(banner) }
-            GlassEffectContainer(spacing: 10) {
-                VStack(spacing: 8) {
-                    if pane != .terminal && agentViewAvailable { chatNativePill }
-                    if pane == .chat { dock }
-                    if hSize == .compact { paneBar }
-                }
-            }
+            dock
         }
         .padding(.bottom, 4)
+    }
+
+    // Placeholder for panes that aren't built yet (Editor, Display).
+    private struct ComingSoonPane: View {
+        let title: String
+        let systemImage: String
+        var body: some View {
+            ContentUnavailableView {
+                Label(title, systemImage: systemImage)
+            } description: {
+                Text("Coming soon")
+            }
+        }
     }
 
     private func bannerView(_ text: String) -> some View {
@@ -332,6 +389,10 @@ struct ChatView: View {
             // per session so each open builds fresh and defaultScrollAnchor lands at bottom.
             .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)
+            // Tap anywhere on the transcript to dismiss the keyboard ("tap outside").
+            // simultaneousGesture fires alongside scrolling + row/link taps without blocking
+            // them, and is scoped to the transcript so composer controls are unaffected.
+            .simultaneousGesture(TapGesture().onEnded { if composing { composing = false } })
             .scrollEdgeEffectStyle(.soft, for: .top)
             .scrollEdgeEffectStyle(.soft, for: .bottom)
             .onChange(of: log.count) { _, _ in scrollToBottom(proxy) }
@@ -396,15 +457,7 @@ struct ChatView: View {
         .padding(20)
     }
 
-    @ViewBuilder private var chatNativePill: some View {
-        HStack(spacing: 3) {
-            Button { pane = .chat } label: { pillSeg("Chat", system: "bubble.left", on: pane != .agent) }
-                .buttonStyle(.plain)
-            Button { pane = .agent } label: { pillSeg("Native", system: "terminal", on: pane == .agent) }
-                .buttonStyle(.plain)
-        }
-        .padding(3).glassEffect(.regular, in: Capsule())
-    }
+    // Chat/Native is now a tab in the bottom bar (see `body`), not an in-view control.
 
     private var dock: some View {
         VStack(spacing: 8) {
@@ -553,13 +606,6 @@ struct ChatView: View {
             broker.send(session.id, text, attachments: ids.isEmpty ? nil : ids)
         }
     }
-    private func pillSeg(_ t: String, system: String, on: Bool) -> some View {
-        Label(t, systemImage: system).font(.caption.weight(.semibold))
-            .padding(.horizontal, 14).padding(.vertical, 6)
-            .foregroundStyle(on ? .white : .secondary)
-            .background(on ? Theme.teal : .clear, in: Capsule())
-    }
-
     // Active `/command` token at the end of the draft (cursor assumed at the end),
     // starting at the beginning or after whitespace — mirrors web activeSlashToken.
     private var slashQuery: String? {
@@ -620,49 +666,8 @@ struct ChatView: View {
     }
     private func clearSlashToken() { replaceSlashToken(with: "") }
 
-    // Always-present pane bar (Chat active; Terminal/Editor/Display are later phases).
-    private var paneBar: some View {
-        HStack(spacing: 0) {
-            Button { pane = .chat } label: { paneTab("Chat", "bubble.left", on: pane == .chat, enabled: true) }
-                .buttonStyle(.plain)
-            Button { pane = .terminal } label: { paneTab("Terminal", "terminal", on: pane == .terminal, enabled: true) }
-                .buttonStyle(.plain)
-            paneTab("Editor", "chevron.left.forwardslash.chevron.right", on: false, enabled: false)
-            paneTab("Display", "display", on: false, enabled: false)
-        }
-        .padding(.horizontal, 8).padding(.vertical, 6)
-        .glassEffect(.regular, in: Capsule())
-        .padding(.horizontal, 12)
-    }
-    private func paneTab(_ t: String, _ icon: String, on: Bool, enabled: Bool) -> some View {
-        VStack(spacing: 3) {
-            Image(systemName: icon).font(.system(size: 18))
-            Text(t).font(.system(size: 9.5, weight: .medium))
-        }
-        .frame(maxWidth: .infinity)
-        .foregroundStyle(on ? Theme.teal : .secondary)
-        .opacity(enabled ? 1 : 0.4)
-    }
-
-    // Tablet/desktop: the pane switcher sits in the header as a segmented cluster.
-    private var paneCluster: some View {
-        HStack(spacing: 0) {
-            Button { pane = .chat } label: { paneIcon("bubble.left", on: pane == .chat, enabled: true) }
-                .buttonStyle(.plain)
-            Button { pane = .terminal } label: { paneIcon("terminal", on: pane == .terminal, enabled: true) }
-                .buttonStyle(.plain)
-            paneIcon("chevron.left.forwardslash.chevron.right", on: false, enabled: false)
-            paneIcon("display", on: false, enabled: false)
-        }
-        .padding(2).background(.quaternary, in: Capsule())
-    }
-    private func paneIcon(_ icon: String, on: Bool, enabled: Bool) -> some View {
-        Image(systemName: icon).font(.system(size: 13))
-            .frame(width: 32, height: 24)
-            .foregroundStyle(on ? .white : .secondary)
-            .background(on ? Theme.teal : Color.clear, in: Capsule())
-            .opacity(enabled ? 1 : 0.45)
-    }
+    // Pane switching (incl. Chat/Native) is the native TabView bar (see `body`).
+    // The old hand-drawn paneBar / paneCluster / segmented pill were removed.
 }
 
 // MessageRow, AttachmentView, Lightbox, ShareSheet, CameraPicker → ChatMessages.swift

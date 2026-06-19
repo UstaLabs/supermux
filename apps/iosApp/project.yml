@@ -18,7 +18,7 @@ settings:
     TARGETED_DEVICE_FAMILY: "1,2"
     CODE_SIGN_STYLE: Automatic
     MARKETING_VERSION: "0.1"
-    CURRENT_PROJECT_VERSION: "1"
+    CURRENT_PROJECT_VERSION: "9"
     # Gradle pre-build phase needs filesystem access outside the sandbox.
     ENABLE_USER_SCRIPT_SANDBOXING: "NO"
 
@@ -39,6 +39,10 @@ targets:
       path: Supermux/Info.plist
       properties:
         CFBundleDisplayName: supermux
+        # Track the build-number/version settings so OTA installs actually supersede each other
+        # (XcodeGen's default Info.plist otherwise hardcodes CFBundleVersion=1).
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleURLTypes:
           - CFBundleURLName: dev.supermux.connect
             CFBundleURLSchemes:
