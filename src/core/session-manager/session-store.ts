@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto"
 import type { Database as Db } from "bun:sqlite"
 import { type Session, type SessionRecord, type SessionRow, type SessionStatus, type AgentKind, type SessionRole, rowToRecord } from "./types"
+import type { FinishJob } from "../worktree/finish-job"
 
 export type RegisterInput = {
   id?: string
@@ -198,6 +199,12 @@ export class SessionStore {
       [wt.repo_root, wt.base_branch, wt.session_branch, id])
     const session = this.getById(id)
     if (session) { session.repo_root = wt.repo_root; session.base_branch = wt.base_branch; session.session_branch = wt.session_branch }
+  }
+
+  setFinishJob(id: string, job: FinishJob | null): void {
+    this.db.run("UPDATE sessions SET finish_job = ? WHERE id = ?", [job ? JSON.stringify(job) : null, id])
+    const session = this.cache.get(id)
+    if (session) session.finish_job = job ?? undefined
   }
 
   // --- Read status & drafts (server-side, global per session; migration 017) ---
