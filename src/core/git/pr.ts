@@ -2,7 +2,7 @@
 import { execFileSync } from "child_process"
 
 function run(cmd: string, args: string[], cwd?: string, timeout = 60_000): { ok: boolean; out: string } {
-  try { return { ok: true, out: execFileSync(cmd, args, { cwd, encoding: "utf-8", timeout, stdio: ["pipe","pipe","pipe"] }).trim() } }
+  try { return { ok: true, out: execFileSync(cmd, args, { cwd, encoding: "utf-8", timeout, stdio: ["pipe","pipe","pipe"], env: process.env }).trim() } }
   catch (e: any) { return { ok: false, out: `${e?.stdout?.toString?.() ?? ""}${e?.stderr?.toString?.() ?? ""}`.trim() } }
 }
 
