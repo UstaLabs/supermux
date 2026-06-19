@@ -410,6 +410,68 @@ data class DisplayStream(
     val createdAt: String? = null,
 )
 
+// ─── Editor diff + code review (GET /sessions/<id>/fs/diff, /review/*) ────────
+@Serializable
+data class FsDiffResult(
+    val repos: List<RepoDiff> = emptyList(),
+    val comments: List<ReviewComment> = emptyList(),
+)
+
+@Serializable
+data class RepoDiff(
+    val repo: String,
+    val files: List<DiffFile> = emptyList(),
+)
+
+@Serializable
+data class DiffFile(
+    val path: String,
+    val status: String,
+    val diff: String,
+    val binary: Boolean = false,
+    val modeChange: Boolean = false,
+)
+
+@Serializable
+data class ReviewComment(
+    val id: String,
+    val repo: String,
+    val path: String,
+    val side: String,
+    val anchorLine: Int,
+    val anchorContext: String = "",
+    val body: String,
+    val author: String = "",
+    val status: String,
+    val currentLine: Int? = null,
+    val outdated: Boolean = false,
+)
+
+@Serializable
+data class AddCommentBody(
+    val repo: String,
+    val path: String,
+    val side: String,
+    val anchorLine: Int,
+    val anchorContext: String,
+    val body: String,
+    val diffHunkHeader: String? = null,
+)
+
+@Serializable
+data class UpdateCommentBody(
+    val status: String? = null,
+    val body: String? = null,
+    val resolvedBy: String? = null,
+)
+
+@Serializable
+data class ReviewSubmitResult(
+    val ok: Boolean = false,
+    val delivered: Int = 0,
+    val reason: String? = null,
+)
+
 // ─── Exceptions ────────────────────────────────────────────────────────────────
 
 class FsException(val status: Int, message: String) : Exception(message)
@@ -478,6 +540,10 @@ private data class ForgeCreateBody(
 
 @Serializable
 private data class ForgeCreateLocalBody(val name: String)
+
+/** Empty JSON object body (`{}`) for POSTs that take no params but return data. */
+@Serializable
+private class EmptyBody
 
 // ─── Client ──────────────────────────────────────────────────────────────────
 
@@ -872,6 +938,28 @@ class BrokerApi(
     /** GET /sessions/<id>/fs/search?q=<query> → filename matches relative to the workdir. */
     suspend fun fsSearch(sessionId: String, q: String): List<FsSearchResult> =
         getJson("$httpBase/sessions/$sessionId/fs/search?q=${urlEncode(q)}")
+
+    /** GET /sessions/<id>/fs/diff → { repos: RepoDiff[], comments: ReviewComment[] }. */
+    suspend fun fsDiff(sessionId: String): FsDiffResult =
+        getJson("$httpBase/sessions/$sessionId/fs/diff")
+
+    /** POST /sessions/<id>/review/comments {repo,path,side,anchorLine,anchorContext,body,diffHunkHeader?} → the created comment. */
+    suspend fun reviewAddComment(sessionId: String, body: AddCommentBody): ReviewComment =
+        postReturningJson("$httpBase/sessions/$sessionId/review/comments", body)
+
+    /** PATCH /sessions/<id>/review/comments/<commentId> {status?,body?,resolvedBy?} → true on success (response ignored). */
+    suspend fun reviewUpdateComment(sessionId: String, commentId: String, patch: UpdateCommentBody): Boolean {
+        val resp = http.patch("$httpBase/sessions/$sessionId/review/comments/${urlEncode(commentId)}") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(patch))
+        }
+        return resp.status.isSuccess()
+    }
+
+    /** POST /sessions/<id>/review/submit {} → { ok, delivered, reason? }. */
+    suspend fun reviewSubmit(sessionId: String): ReviewSubmitResult =
+        postReturningJson("$httpBase/sessions/$sessionId/review/submit", EmptyBody())
 
     // ── Displays ─────────────────────────────────────────────────────────────────
 

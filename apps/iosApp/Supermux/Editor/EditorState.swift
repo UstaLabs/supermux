@@ -32,18 +32,44 @@ final class EditorState {
     var treeVisible = true
     var searchQuery = ""
 
+    // Diff / code-review state — per-session, survives switches like the tree.
+    var showDiff = false
+    private(set) var diffRepos: [RepoDiff] = []
+    private(set) var diffComments: [ReviewComment] = []
+    private(set) var diffLoading = false
+
     let sessionId: String
     private let fsRead: (String) async throws -> String
     private let fsWrite: (String, String) async -> Bool
+    private let fsDiff: (() async -> FsDiffResult?)?
 
     var activeTab: Tab? { tabs.first { $0.path == activeTabPath } }
 
     init(sessionId: String,
          fsRead: @escaping (String) async throws -> String,
-         fsWrite: @escaping (String, String) async -> Bool) {
+         fsWrite: @escaping (String, String) async -> Bool,
+         fsDiff: (() async -> FsDiffResult?)? = nil) {
         self.sessionId = sessionId
         self.fsRead = fsRead
         self.fsWrite = fsWrite
+        self.fsDiff = fsDiff
+    }
+
+    func loadDiff() async {
+        guard let fsDiff else { showDiff = true; return }
+        diffLoading = true
+        if let res = await fsDiff() {
+            diffRepos = res.repos
+            diffComments = res.comments
+        }
+        diffLoading = false
+        showDiff = true
+    }
+
+    func reloadDiff() async {
+        guard let fsDiff, let res = await fsDiff() else { return }
+        diffRepos = res.repos
+        diffComments = res.comments
     }
 
     func openFile(_ path: String) async {

@@ -24,14 +24,18 @@ struct EditorPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            if !state.tabs.isEmpty {
-                EditorTabsView(state: state,
-                               onSelect: { state.activeTabPath = $0 },
-                               onClose: { state.closeTab($0) })
-                Divider()
+            if state.showDiff {
+                diffPane
+            } else {
+                header
+                if !state.tabs.isEmpty {
+                    EditorTabsView(state: state,
+                                   onSelect: { state.activeTabPath = $0 },
+                                   onClose: { state.closeTab($0) })
+                    Divider()
+                }
+                bodyContent
             }
-            bodyContent
         }
         .background(Color(.systemBackground))
         .overlay(alignment: .bottom) { keyboardDismissOverlay }
@@ -45,6 +49,12 @@ struct EditorPane: View {
             guard let f = ProcessInfo.processInfo.environment["SM_OPEN_FILE"], !f.isEmpty else { return }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             openFile(f)
+        }
+        .task(id: session.id) {
+            // Headless test hook: open the diff/review view on launch.
+            guard ProcessInfo.processInfo.environment["SM_OPEN_DIFF"] == "1" else { return }
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            await state.loadDiff()
         }
     }
 
@@ -64,6 +74,20 @@ struct EditorPane: View {
 
             EditorSearchField(search: { await broker.fsSearch(session.id, $0) },
                               onOpen: { openFile($0) })
+
+            Button {
+                Task { await state.loadDiff() }
+            } label: {
+                Group {
+                    if state.diffLoading {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Image(systemName: "plus.forwardslash.minus").font(.body).foregroundStyle(.secondary)
+                    }
+                }
+                .frame(width: 36, height: 36)
+            }
+            .accessibilityLabel("View changes")
 
             Button { showSettings = true } label: {
                 Image(systemName: "textformat.size")
@@ -102,6 +126,23 @@ struct EditorPane: View {
         FileTreeView(state: state,
                      loadDir: { await broker.fsList(session.id, $0) },
                      onOpenFile: { openFile($0) })
+    }
+
+    private var diffPane: some View {
+        DiffView(
+            repos: state.diffRepos,
+            comments: state.diffComments,
+            onAddComment: { repo, path, anchorLine, anchorContext, hunkHeader, body in
+                await broker.reviewAddComment(session.id,
+                    AddCommentBody(repo: repo, path: path, side: "RIGHT",
+                                   anchorLine: Int32(anchorLine), anchorContext: anchorContext,
+                                   body: body, diffHunkHeader: hunkHeader))
+            },
+            onResolve: { commentId in await broker.reviewResolve(session.id, commentId) },
+            onSubmit: { _ = await broker.reviewSubmit(session.id) },
+            onReload: { Task { await state.reloadDiff() } },
+            onClose: { state.showDiff = false }
+        )
     }
 
     @ViewBuilder private var editorOrEmpty: some View {

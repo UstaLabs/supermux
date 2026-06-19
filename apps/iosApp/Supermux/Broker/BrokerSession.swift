@@ -232,6 +232,15 @@ final class BrokerSession {
     func fsWrite(_ id: String, _ path: String, _ content: String) async -> Bool { (try? await api.fsWrite(sessionId: id, path: path, content: content))?.boolValue ?? false }
     func fsSearch(_ id: String, _ q: String) async -> [FsSearchResult] { (try? await api.fsSearch(sessionId: id, q: q)) ?? [] }
 
+    // MARK: - Editor diff + code review (workdir-relative paths)
+    func fsDiff(_ id: String) async -> FsDiffResult? { try? await api.fsDiff(sessionId: id) }
+    func reviewAddComment(_ id: String, _ body: AddCommentBody) async { _ = try? await api.reviewAddComment(sessionId: id, body: body) }
+    func reviewResolve(_ id: String, _ commentId: String) async {
+        _ = try? await api.reviewUpdateComment(sessionId: id, commentId: commentId,
+                                               patch: UpdateCommentBody(status: "resolved", body: nil, resolvedBy: "user"))
+    }
+    func reviewSubmit(_ id: String) async -> ReviewSubmitResult? { try? await api.reviewSubmit(sessionId: id) }
+
     // MARK: - Editor state (one per session, cached so open tabs / tree expansion /
     // scroll survive pane AND session switches — full state preservation is required).
     @ObservationIgnored private var editorStates: [String: EditorState] = [:]
@@ -246,6 +255,10 @@ final class BrokerSession {
             fsWrite: { [weak self] path, content in
                 guard let self else { return false }
                 return await self.fsWrite(sessionId, path, content)
+            },
+            fsDiff: { [weak self] in
+                guard let self else { return nil }
+                return await self.fsDiff(sessionId)
             }
         )
         editorStates[sessionId] = state
