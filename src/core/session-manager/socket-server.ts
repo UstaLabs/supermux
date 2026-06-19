@@ -156,6 +156,13 @@ export async function startSocketServer(opts: {
         if (m.kind === "register") {
           const reply = await opts.handler.onRegister({ ...m, session_id })
           socket.write(encodeFrame({ kind: "registered", display_name: reply.name, session_id: reply.session_id }))
+          // A shim that just registered is reachable NOW — mark the session
+          // connected immediately instead of waiting up to a full 15s ping→pong
+          // cycle for the first pong (that lag made fresh resumes hang ~10s in
+          // waitForSessionConnected). Seed lastPong so stale-detection has a baseline.
+          const registeredAt = Date.now()
+          lastPong.set(session_id, registeredAt)
+          opts.onStatusChange?.(session_id, true, registeredAt)
           if (m.channel_only) {
             trackChannelConn(session_id, socket, true)
             flushQueue(session_id)

@@ -137,6 +137,33 @@ test("broker fires onStatusChange(false) when socket closes", async () => {
   expect(statusEvents.some(e => e.sid === "sess-hb" && e.connected === false)).toBe(true)
 }, 5000)
 
+test("broker fires onStatusChange(true) the moment a shim REGISTERS, not waiting for the first pong", async () => {
+  // `connected` used to flip true only on a pong, which only arrives in reply to
+  // the broker's 15s-interval ping. So a freshly-resumed session looked
+  // disconnected for up to ~15s and waitForSessionConnected(10s) always timed
+  // out → ~10s delay (or, pre-worktree-fix, a silently-dropped message). A shim
+  // that just registered is reachable NOW, so registration must mark it connected.
+  const statusEvents: Array<{ sid: string; connected: boolean }> = []
+  server = await startSocketServer({
+    socketsDir: dir,
+    onStatusChange: (sid, connected) => statusEvents.push({ sid, connected }),
+    handler: {
+      onRegister: async () => ({ name: "auto-name", session_id: "sess-reg" }),
+      onOutbound: async () => ({ ok: true }),
+      onOrchestration: async () => ({ ok: false, error: "denied" }),
+    },
+  })
+  await server.bind("sess-reg")
+
+  const client = await connectShim({
+    socketsDir: dir, sessionId: "sess-reg", workdir: "/tmp", pid: 1,
+  })
+  // No pong has happened (broker pings every 15s); connected must already be true.
+  await new Promise(r => setTimeout(r, 50))
+  expect(statusEvents.some(e => e.sid === "sess-reg" && e.connected === true)).toBe(true)
+  await client.close()
+}, 5000)
+
 test("sendInbound during disconnect queues, flushes on reconnect", async () => {
   server = await startSocketServer({
     socketsDir: dir,
