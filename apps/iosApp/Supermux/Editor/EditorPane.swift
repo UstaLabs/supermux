@@ -48,10 +48,19 @@ struct EditorPane: View {
                                    onClose: { state.closeTab($0) })
                     Divider()
                 }
+                if let tab = state.activeTab, state.isStale(tab.path) {
+                    changedBanner(tab.path)
+                }
                 bodyContent
             }
         }
         .background(Color(.systemBackground))
+        .onAppear { broker.editorOpen(session.id) }
+        .onDisappear { broker.editorClose(session.id) }
+        .onChange(of: session.id) { old, new in
+            broker.editorClose(old)
+            broker.editorOpen(new)
+        }
         .overlay(alignment: .bottom) { keyboardDismissOverlay }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
             if let f = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect { keyboardHeight = f.height }
@@ -204,6 +213,20 @@ struct EditorPane: View {
             await state.openFile(path)
             if !isRegular { withAnimation(.snappy(duration: 0.2)) { state.treeVisible = false } }
         }
+    }
+
+    private func changedBanner(_ path: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
+            Text("File changed on disk").font(.caption)
+            Spacer()
+            Button { Task { await state.reload(path) } } label: {
+                Label("Reload", systemImage: "arrow.clockwise").font(.caption.weight(.medium))
+            }
+            .buttonStyle(.bordered).controlSize(.small).tint(Theme.teal)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(Color.orange.opacity(0.12))
     }
 
     // The WKWebView owns a UIKit keyboard SwiftUI's tap/scroll dismissal can't reach,

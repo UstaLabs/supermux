@@ -75,6 +75,7 @@ final class BrokerSession {
             agentPhase[st.session] = st.phase
             agentSince[st.session] = (st.since ?? st.workingSince)?.int64Value
         case .commandsChanged(let c): commands[c.session] = c.commands
+        case .fsChanged(let f): editorStates[f.session]?.markChanged(f.paths)
         case .agentError: break
         }
     }
@@ -240,6 +241,11 @@ final class BrokerSession {
                                                patch: UpdateCommentBody(status: "resolved", body: nil, resolvedBy: "user"))
     }
     func reviewSubmit(_ id: String) async -> ReviewSubmitResult? { try? await api.reviewSubmit(sessionId: id) }
+
+    /// Subscribe / unsubscribe the broker's filesystem watcher for a session's workdir,
+    /// driving the editor's "changed on disk" banner via fs_changed frames.
+    func editorOpen(_ id: String) { Task { [client] in try? await client.send(frame: ClientFrameEditorOpen(session: id)) } }
+    func editorClose(_ id: String) { Task { [client] in try? await client.send(frame: ClientFrameEditorClose(session: id)) } }
 
     // MARK: - Editor state (one per session, cached so open tabs / tree expansion /
     // scroll survive pane AND session switches — full state preservation is required).

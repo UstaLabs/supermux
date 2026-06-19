@@ -38,6 +38,9 @@ final class EditorState {
     private(set) var diffComments: [ReviewComment] = []
     private(set) var diffLoading = false
 
+    // Paths the broker reported changed on disk (fs_changed) → drives a reload banner.
+    private(set) var changedPaths: Set<String> = []
+
     let sessionId: String
     private let fsRead: (String) async throws -> String
     private let fsWrite: (String, String) async -> Bool
@@ -71,6 +74,13 @@ final class EditorState {
         diffRepos = res.repos
         diffComments = res.comments
     }
+
+    /// Record disk-change notifications (workdir-relative paths, leading slash optional).
+    func markChanged(_ paths: [String]) {
+        for p in paths { changedPaths.insert(Self.normPath(p)) }
+    }
+    func isStale(_ path: String) -> Bool { changedPaths.contains(Self.normPath(path)) }
+    private static func normPath(_ p: String) -> String { p.hasPrefix("/") ? String(p.dropFirst()) : p }
 
     func openFile(_ path: String) async {
         if tabs.contains(where: { $0.path == path }) {
@@ -125,6 +135,7 @@ final class EditorState {
                 tabs[idx].content = content
                 tabs[idx].savedContent = content
             }
+            changedPaths.remove(Self.normPath(path))
         } catch {
             loadError = error.localizedDescription
         }

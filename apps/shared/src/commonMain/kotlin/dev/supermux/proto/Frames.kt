@@ -119,6 +119,9 @@ sealed interface ServerFrame {
         val commands: List<SlashCommand> = emptyList(),
         val resolved: Boolean = false,
     ) : ServerFrame
+
+    @Serializable @SerialName("fs_changed")
+    data class FsChanged(val session: String, val paths: List<String> = emptyList()) : ServerFrame
 }
 
 @Serializable
@@ -136,4 +139,10 @@ sealed interface ClientFrame {
         @EncodeDefault(EncodeDefault.Mode.ALWAYS) val op: String = "reply",
         val args: SendArgs,
     ) : ClientFrame
+
+    @Serializable @SerialName("editor_open")
+    data class EditorOpen(val session: String) : ClientFrame
+
+    @Serializable @SerialName("editor_close")
+    data class EditorClose(val session: String) : ClientFrame
 }
