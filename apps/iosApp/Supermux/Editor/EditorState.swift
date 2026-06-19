@@ -59,13 +59,14 @@ final class EditorState {
     }
 
     func loadDiff() async {
-        guard let fsDiff else { showDiff = true; return }
+        guard let fsDiff else { return }
         diffLoading = true
-        if let res = await fsDiff() {
-            diffRepos = res.repos
-            diffComments = res.comments
-        }
+        let res = await fsDiff()
         diffLoading = false
+        // Only open the diff pane on success — never show an empty/stale diff for a failed fetch.
+        guard let res else { return }
+        diffRepos = res.repos
+        diffComments = res.comments
         showDiff = true
     }
 

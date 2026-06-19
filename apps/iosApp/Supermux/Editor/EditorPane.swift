@@ -201,9 +201,10 @@ struct EditorPane: View {
             }
         } else {
             ContentUnavailableView {
-                Label("No file open", systemImage: "doc.text")
+                Label(state.loadError == nil ? "No file open" : "Couldn't open file",
+                      systemImage: state.loadError == nil ? "doc.text" : "exclamationmark.triangle")
             } description: {
-                Text("Open a file from the tree or search.")
+                Text(state.loadError ?? "Open a file from the tree or search.")
             }
         }
     }

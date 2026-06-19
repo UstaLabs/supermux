@@ -564,7 +564,9 @@ class BrokerApi(
         .replaceFirst("wss://", "https://")
         .trimEnd('/')
 
-    private val json = Json { ignoreUnknownKeys = true }
+    // explicitNulls=false: partial PATCH bodies (e.g. review-comment resolve) must OMIT unset
+    // optional fields, not send them as JSON null — an explicit null would overwrite stored data.
+    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
