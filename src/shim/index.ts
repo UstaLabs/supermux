@@ -20,10 +20,11 @@ const AGENT_KIND: AgentKind =
 // instance runs CHANNEL-ONLY: zero tools, just the inbound pipe. Tools come solely
 // from the tools instance.
 const CHANNEL_ONLY = process.env.MUX_CHANNEL_ONLY === "1"
+const RPC_ONLY = process.env.MUX_RPC_ONLY === "1"
 
 async function main() {
   const mcp = new Server(
-    { name: CHANNEL_ONLY ? "mux-channel" : "mux-shim", version: "0.0.1" },
+    { name: RPC_ONLY ? "mux-rpc" : (CHANNEL_ONLY ? "mux-channel" : "mux-shim"), version: "0.0.1" },
     {
       capabilities: {
         tools: {},
@@ -85,9 +86,9 @@ async function main() {
     // Channel-only instance advertises ZERO tools (the tools instance is the sole
     // provider). The tools capability is still declared so Claude calls ListTools
     // here and mcpReady fires to flush pending inbound — it just gets an empty list.
-    return { tools: CHANNEL_ONLY ? [] : listTools(AGENT_KIND) }
+    return { tools: CHANNEL_ONLY ? [] : listTools(AGENT_KIND, RPC_ONLY) }
   })
-  mcp.setRequestHandler(CallToolRequestSchema, async (req) => callTool(req.params, shim, AGENT_KIND))
+  mcp.setRequestHandler(CallToolRequestSchema, async (req) => callTool(req.params, shim, AGENT_KIND, RPC_ONLY))
 
   await mcp.connect(new StdioServerTransport())
   // Fallback: on --resume, Claude may skip ListTools (tools cached), so
