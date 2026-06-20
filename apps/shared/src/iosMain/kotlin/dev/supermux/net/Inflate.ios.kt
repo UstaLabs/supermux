@@ -76,6 +76,6 @@ actual class ZlibInflater actual constructor() {
         if (closed) return
         closed = true
         inflateEnd(strm.ptr)
-        nativeHeap.free(strm.ptr)
+        nativeHeap.free(strm.ptr.rawValue)
     }
 }

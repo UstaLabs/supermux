@@ -175,6 +175,12 @@ struct ChatView: View {
             }
         }
         .task(id: session.id) {
+            if ProcessInfo.processInfo.environment["SM_OPEN_DISPLAY"] == "1" {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                tab = .display
+            }
+        }
+        .task(id: session.id) {
             // Debug: raise the keyboard (focus composer) to repro the keyboard-relayout blank.
             guard ProcessInfo.processInfo.environment["SM_FOCUS"] == "1" else { return }
             try? await Task.sleep(nanoseconds: 3_000_000_000)

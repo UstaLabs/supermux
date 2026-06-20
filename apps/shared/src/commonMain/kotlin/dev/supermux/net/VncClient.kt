@@ -74,7 +74,9 @@ class VncClient(
             try {
                 _status.value = VncStatus.CONNECTING
                 http.webSocket(
-                    urlString = "$baseUrl/ws/display?id=$streamId",
+                    // Darwin (iOS) WebSocket requires a ws/wss scheme; the broker base
+                    // may be an http(s) URL (same conversion as TerminalClient/BrokerClient).
+                    urlString = "${baseUrl.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://")}/ws/display?id=$streamId",
                     request = { header("Authorization", "Bearer $token") },
                 ) {
                     liveSession = this
