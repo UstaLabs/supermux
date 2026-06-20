@@ -18,6 +18,7 @@ final class BrokerSession {
     private(set) var agentPhase: [String: String] = [:]
     private(set) var agentSince: [String: Int64] = [:]
     private(set) var commands: [String: [SlashCommand]] = [:]
+    private(set) var displays: [DisplayStream] = []
     private(set) var synced = false
 
     init(baseURL: String, token: String) {
@@ -42,6 +43,16 @@ final class BrokerSession {
         )
     }
 
+    /// Build a VNC WS client for a display stream (token stays private, mirrors `terminalClient`).
+    func vncClient(streamId: String) -> VncClient {
+        VncClient(baseUrl: baseURL, token: token, http: IosClientKt.iosHttpClient(), streamId: streamId)
+    }
+
+    /// Build a scrcpy (H.264) WS client for a display stream (mirrors `terminalClient`).
+    func scrcpyClient(streamId: String) -> ScrcpyClient {
+        ScrcpyClient(baseUrl: baseURL, token: token, http: IosClientKt.iosHttpClient(), streamId: streamId)
+    }
+
     func start() {
         Task { [weak self] in
             guard let self else { return }
@@ -50,6 +61,8 @@ final class BrokerSession {
             }
         }
         Task { [weak self] in try? await self?.client.run() }
+        // Seed the display list (REST); the two frame cases below keep it live.
+        Task { [weak self] in await self?.refreshDisplays() }
     }
 
     private func reduce(_ frame: ServerFrame) {
@@ -76,6 +89,10 @@ final class BrokerSession {
             agentSince[st.session] = (st.since ?? st.workingSince)?.int64Value
         case .commandsChanged(let c): commands[c.session] = c.commands
         case .fsChanged(let f): editorStates[f.session]?.markChanged(f.paths)
+        case .displayAdded(let f):
+            displays.removeAll { $0.id == f.display.id }
+            displays.append(f.display)
+        case .displayRemoved(let f): displays.removeAll { $0.id == f.id }
         case .lspStatus(let f): lspBridges[f.session ?? ""]?.handleStatus(f)
         case .lspReady(let f): lspBridges[f.session]?.handleReady(f.serverId)
         case .lspError(let f): lspBridges[f.session ?? ""]?.handleError(f.serverId)
@@ -119,6 +136,21 @@ final class BrokerSession {
         return groupSessions(sessions: sessions, home: home, lastTs: { [messages] s in
             messages[s.id]?.last?.ts ?? ""
         })
+    }
+
+    // MARK: - Displays (live via display_added/removed frames; seeded by listDisplays)
+
+    /// The newest running display bound to a session name (newest `createdAt` wins; falls
+    /// back to the last-appended when timestamps are missing). Drives `DisplayPane`.
+    func runningDisplay(for name: String) -> DisplayStream? {
+        displays
+            .filter { $0.sessionName == name && $0.status == "running" }
+            .max { a, b in (a.createdAt ?? "") < (b.createdAt ?? "") }
+    }
+
+    /// Re-seed the display list from REST (called on `start()` and by management views).
+    func refreshDisplays() async {
+        displays = (try? await api.listDisplays()) ?? []
     }
 
     // MARK: - Session actions (mirror the web SessionListView)

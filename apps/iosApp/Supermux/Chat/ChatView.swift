@@ -131,7 +131,7 @@ struct ChatView: View {
                 EditorPane(broker: broker, session: session)
             }
             Tab("Display", systemImage: "display", value: PaneTab.display) {
-                ComingSoonPane(title: "Display", systemImage: "display")
+                DisplayPane(broker: broker, session: session)
             }
         }
         .navigationTitle(session.name)
