@@ -25,7 +25,7 @@ export interface AgentRpcDeps {
   defaultTimeoutMs?: number
 }
 
-interface Pending { resolve: (d: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout>; workerKey: string }
+interface Pending { resolve: (d: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
 interface QueuedCall { call: AgentRpcCall; resolve: (d: unknown) => void; reject: (e: Error) => void }
 interface Worker { key: string; sessionId: string; busy: boolean; queue: QueuedCall[]; lastUsedAt: number }
 
@@ -71,12 +71,14 @@ export function createAgentRpc(deps: AgentRpcDeps): AgentRpc {
     const timeoutMs = next.call.timeoutMs ?? deps.defaultTimeoutMs ?? 30_000
     const timer = setTimeout(() => {
       pending.delete(requestId)
-      finishWorker(w)
+      w.busy = false
       next.reject(new Error(`agent-rpc timeout after ${timeoutMs}ms`))
+      // The worker is being recycled — reject any other queued calls rather than
+      // delivering them to a session we're about to kill (they'd hang).
+      while (w.queue.length) w.queue.shift()!.reject(new Error("agent-rpc worker recycled after timeout"))
       void recycle(w)
     }, timeoutMs)
     pending.set(requestId, {
-      workerKey: w.key,
       resolve: (d) => { finishWorker(w); next.resolve(d) },
       reject: (e) => { finishWorker(w); next.reject(e) },
       timer,

@@ -79,10 +79,33 @@ test("reapIdle kills idle workers but not busy ones", async () => {
   const h = harness({ now: () => t, killWorker: async (id) => { killed.push(id) } })
   const p = h.rpc.callAgent({ key: "idle", taskType: "t", payload: {} })
   await tick(); h.rpc.settle("req-1", {}); await p     // now idle
-  h.rpc.callAgent({ key: "busy", taskType: "t", payload: {} })  // left in-flight (busy)
+  h.rpc.callAgent({ key: "busy", taskType: "t", payload: {} }).catch(() => {})  // left in-flight (busy)
   await tick()
   t = 1000 + 60_000
   await h.rpc.reapIdle(10_000)
   expect(killed).toContain("sess-idle-1")
   expect(killed).not.toContain("sess-busy-2")
+})
+
+test("on timeout, queued calls for the same worker are rejected, not left hanging", async () => {
+  const h = harness({ defaultTimeoutMs: 5 })
+  const p1 = h.rpc.callAgent({ key: "k", taskType: "t", payload: { n: 1 } })
+  const p2 = h.rpc.callAgent({ key: "k", taskType: "t", payload: { n: 2 } })
+  // p1 (in-flight) and p2 (queued) are both rejected synchronously inside the
+  // timeout handler. Capture p2's outcome with a handler attached at creation so
+  // its rejection can't surface as an unhandled rejection before we assert on it.
+  const p2settled = p2.then(() => "resolved", () => "rejected")
+  await expect(p1).rejects.toThrow(/timeout/)
+  expect(await p2settled).toBe("rejected")   // queued call rejected too, not stuck
+})
+
+test("a dead worker is evicted and respawned on the next call", async () => {
+  let alive = true
+  const h = harness({ isAlive: () => alive })
+  const p1 = h.rpc.callAgent({ key: "k", taskType: "t", payload: {} })
+  await tick(); h.rpc.settle("req-1", { a: 1 }); await p1
+  alive = false                                   // worker dies
+  const p2 = h.rpc.callAgent({ key: "k", taskType: "t", payload: {} })
+  await tick(); h.rpc.settle("req-2", { a: 2 }); await p2
+  expect(h.spawnCount).toBe(2)                     // respawned because the first was dead
 })
