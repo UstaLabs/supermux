@@ -14,6 +14,7 @@ const waveform = useWaveform()
 const previews = useVoicePreviews()
 const promptInput = usePromptInput()
 const { addFiles, setTextInput } = promptInput
+const { transcribe } = useTranscriber()
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 // While transcription is in flight we swap the recorder bar for a small spinner
@@ -63,7 +64,6 @@ onBeforeUnmount(() => {
 })
 
 async function finalize(clip: RecordedClip) {
-  const snapshot = waveform.snapshot()
   waveform.detach()
   // Pause any currently-playing <audio> elements so they don't pick up our output
   document.querySelectorAll("audio").forEach((a) => a.pause())
@@ -77,9 +77,10 @@ async function finalize(clip: RecordedClip) {
   if (props.sessionId) {
     cleaning.value = true
     try {
-      const { text } = await useTranscriber().transcribe(props.sessionId, clip.blob, filename)
+      const { text, degraded } = await transcribe(props.sessionId, clip.blob, filename)
       const prev = promptInput.textInput.value
       setTextInput(prev ? prev + " " + text : text)
+      if (degraded) toast.warning("Transcription may be rough")
     } catch (err: any) {
       toast.error("Transcription failed", { description: err?.message })
     } finally {
@@ -90,6 +91,7 @@ async function finalize(clip: RecordedClip) {
   }
 
   // LEGACY (launcher, no session id): attach the recording as a voice file.
+  const snapshot = waveform.snapshot()
   const file = new File([clip.blob], filename, { type: clip.mime })
   ;(file as any)._cmuxKind = "voice"
   ;(file as any)._cmuxDurationMs = clip.durationMs
@@ -125,7 +127,7 @@ function onCancel() {
     <!-- Transcription in flight: small spinner + label, no controls -->
     <div v-if="cleaning" class="flex-1 min-w-0 flex items-center gap-3 h-10">
       <Loader2 class="size-4 shrink-0 animate-spin text-primary" />
-      <span class="text-sm text-muted-foreground">Cleaning up…</span>
+      <span class="text-sm text-muted-foreground">Transcribing…</span>
     </div>
 
     <template v-else>
