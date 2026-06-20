@@ -97,11 +97,30 @@ targets:
           # when signing headlessly over SSH. Running in-session keeps codesign working.
           ./gradlew --no-daemon :shared:embedAndSignAppleFrameworkForXcode
 
+  SupermuxTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: SupermuxTests
+    dependencies:
+      - target: Supermux
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+        FRAMEWORK_SEARCH_PATHS:
+          - $(inherited)
+          - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
+
 schemes:
   Supermux:
     build:
       targets:
         Supermux: all
+        SupermuxTests: [test]
+    test:
+      config: Debug
+      targets:
+        - SupermuxTests
     run:
       config: Debug
     archive:
