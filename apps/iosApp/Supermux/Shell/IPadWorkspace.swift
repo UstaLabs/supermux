@@ -22,6 +22,11 @@ struct IPadWorkspace: View {
 
     private var session: SessionInfo? { broker.sessions.first { $0.id == selected } }
 
+    /// The id of the current session's newest running display stream, or nil. Drives the
+    /// Display column's auto-open (PWA `SessionDisplayPanel` parity): nil→non-nil = a stream
+    /// just went live. Reading `broker.runningDisplay` tracks `broker.displays` for onChange.
+    private var liveDisplayId: String? { session.flatMap { broker.runningDisplay(for: $0.name)?.id } }
+
     var body: some View {
         HStack(spacing: 0) {
             sidebar
@@ -41,8 +46,11 @@ struct IPadWorkspace: View {
             Button("Kill session", role: .destructive) { if let s = session { broker.kill(s.id) } }
             Button("Cancel", role: .cancel) {}
         }
-        .onAppear(perform: applyOpenPanesEnv)
-        .onAppear(perform: applyPressEnv)
+        .onAppear(perform: applyEnvHooks)
+        // Auto-open the Display column on the no-stream → live edge for this session (PWA parity).
+        // Gated to nil→non-nil so a manual ⌘D close isn't resurrected by a second/restarted
+        // stream getting a new id while one was already live.
+        .onChange(of: liveDisplayId) { old, id in if old == nil, id != nil { layout.displayOpen = true } }
     }
 
     /// The leading column: a 56-pt avatar rail when collapsed, else the full grouped
@@ -164,6 +172,13 @@ struct IPadWorkspace: View {
                 Button { route = .settings } label: { Label("Settings", systemImage: "gearshape") }
             } label: { Image(systemName: "ellipsis.circle") }
         }
+    }
+
+    /// Headless screenshot/verification hooks, applied once on launch in a fixed order:
+    /// SM_IPAD_OPEN_PANES sets the pane flags, then SM_IPAD_PRESS applies ⌘ commands on top.
+    private func applyEnvHooks() {
+        applyOpenPanesEnv()
+        applyPressEnv()
     }
 
     /// Headless screenshot hook: SM_IPAD_OPEN_PANES=editor,terminal,display opens those panes on launch.
