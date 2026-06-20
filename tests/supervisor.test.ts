@@ -151,4 +151,16 @@ test("bootstrapPA forwards model and reasoningLevel to registry", async () => {
   expect(captured.reasoningLevel).toBe("high")
 })
 
+test("reconcile invokes the internal-worker reaper each tick", async () => {
+  let reapCalls = 0
+  const registry = new Registry(db)
+  const sup = createSupervisor({
+    registry,
+    bindSocket: async () => {},
+    spawnTmux: async () => {},
+    reapInternalWorkers: async () => { reapCalls++ },
+  })
+  await sup.reconcile()
+  expect(reapCalls).toBe(1)
+})
 

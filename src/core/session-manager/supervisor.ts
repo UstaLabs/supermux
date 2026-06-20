@@ -64,6 +64,7 @@ export type SupervisorOpts = {
   cursorAdapterFactory?: Parameters<typeof spawnPA>[0]["cursorAdapterFactory"]
   opencodeSpawnServer?: Parameters<typeof spawnPA>[0]["opencodeSpawnServer"]
   opencodeAdapterFactory?: Parameters<typeof spawnPA>[0]["opencodeAdapterFactory"]
+  reapInternalWorkers?: () => Promise<void>
 }
 
 export function createSupervisor(opts: SupervisorOpts): Supervisor {
@@ -240,6 +241,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         }
       }
     }
+    await opts.reapInternalWorkers?.()
   }
 
   async function sweepArchivedWorktrees() {

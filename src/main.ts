@@ -2856,8 +2856,6 @@ agentRpc = createAgentRpc({
     return { sessionId: r.session_id }
   },
 })
-void RPC_WORKER_IDLE_MS  // reaper wired separately; keep the configured value referenced
-
 const supervisor = createSupervisor({
   registry,
   bindSocket: (sid) => server.bind(sid),
@@ -2872,6 +2870,7 @@ const supervisor = createSupervisor({
   shouldAutoSpawnPA: () => settings.getAppConfig(appConfigEnv).onboarded,
   paWorkdir: appConfig.paWorkdir || undefined,
   resolveEffort: (s) => sessionEffort(s),
+  reapInternalWorkers: () => agentRpc.reapIdle(RPC_WORKER_IDLE_MS),
 })
 // Existing installs (any prior sessions, active/suspended/archived) are implicitly
 // onboarded — they keep their auto-PA and skip the wizard. Only a pristine instance
