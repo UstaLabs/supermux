@@ -17,6 +17,11 @@ export const VOICE_CLEANUP_MODEL =
   process.env.MUX_VOICE_CLEANUP_MODEL ||
   (VOICE_CLEANUP_ENGINE === "cursor" ? "composer-2.5-fast" : "opencode/deepseek-v4-flash-free")
 
+// Reliable fallback when the primary engine returns empty/errors (e.g. opencode's
+// occasional cold-start miss): cursor completes cleanly under the broker context.
+export const FALLBACK_ENGINE: CleanupEngine = "cursor"
+export const FALLBACK_MODEL = process.env.MUX_VOICE_CLEANUP_FALLBACK_MODEL || "composer-2.5-fast"
+
 const OPENCODE_BIN = process.env.MUX_OPENCODE_BIN ?? "opencode"
 const CURSOR_BIN = process.env.MUX_CURSOR_BIN ?? "cursor-agent"
 const DEFAULT_TIMEOUT_MS = Number(process.env.MUX_VOICE_CLEANUP_TIMEOUT_MS ?? 30_000)
@@ -77,21 +82,31 @@ async function spawnOneShot(argv: string[], cwd: string, timeoutMs: number): Pro
   }
 }
 
-// Returns the cleaned text. THROWS on failure (non-zero exit / empty output) so
-// the caller degrades to the raw draft — a failed cleanup must never lose it.
-export async function cleanupDraft(input: CleanupInput, opts: CleanupOpts = {}): Promise<{ text: string }> {
-  if (!input.draft.trim()) return { text: "" }
-  const engine = opts.engine || VOICE_CLEANUP_ENGINE
-  const model = opts.model || VOICE_CLEANUP_MODEL
+// Tries the primary engine, then falls back to cursor on empty/error (so a cold
+// miss never leaves the user with the raw draft). Returns the cleaned text and
+// which engine produced it. THROWS only if EVERY engine fails — then the caller
+// degrades to the raw draft (a failed cleanup must never lose it).
+export async function cleanupDraft(
+  input: CleanupInput,
+  opts: CleanupOpts = {},
+): Promise<{ text: string; engine: CleanupEngine | "none" }> {
+  if (!input.draft.trim()) return { text: "", engine: "none" }
   const cwd = opts.cwd ?? tmpdir()
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const argv = cleanupArgv(engine, model, buildCleanupPrompt(input))
+  const prompt = buildCleanupPrompt(input)
   const run = opts.run ?? spawnOneShot
-  const { code, out } = await run(argv, cwd, timeoutMs)
-  const text = (out ?? "").trim()
-  if (code !== 0 || !text) {
-    log.warn("voice_cleanup_failed", { engine, model, code, hasText: !!text })
-    throw new Error(`voice cleanup failed (engine=${engine}, code=${code}${text ? "" : ", empty output"})`)
+  const primary = { engine: opts.engine || VOICE_CLEANUP_ENGINE, model: opts.model || VOICE_CLEANUP_MODEL }
+  // Primary first, then the cursor fallback (skipped if the primary already is cursor).
+  const chain = primary.engine === FALLBACK_ENGINE ? [primary] : [primary, { engine: FALLBACK_ENGINE, model: FALLBACK_MODEL }]
+  for (const { engine, model } of chain) {
+    try {
+      const { code, out } = await run(cleanupArgv(engine, model, prompt), cwd, timeoutMs)
+      const text = (out ?? "").trim()
+      if (code === 0 && text) return { text, engine }
+      log.warn("voice_cleanup_engine_miss", { engine, model, code, hasText: !!text })
+    } catch (e) {
+      log.warn("voice_cleanup_engine_error", { engine, model, err: String(e) })
+    }
   }
-  return { text }
+  throw new Error(`voice cleanup failed on all engines (${chain.map((c) => c.engine).join(", ")})`)
 }

@@ -1416,7 +1416,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         const out = await cleanupDraft({ draft, recentMessages: payload.context.recentMessages, skills })
         const cleanupMs = Date.now() - t1
         const text = out.text || draft
-        log.info("voice_transcribe_out", { sessionId, draft, text, whisperMs, cleanupMs, engine: VOICE_CLEANUP_ENGINE, model: VOICE_CLEANUP_MODEL })
+        log.info("voice_transcribe_out", { sessionId, draft, text, whisperMs, cleanupMs, engine: out.engine, model: VOICE_CLEANUP_MODEL })
         return { text }
       } catch (e) {
         log.warn("voice_cleanup_failed", { sessionId, draft, whisperMs, err: String(e) })

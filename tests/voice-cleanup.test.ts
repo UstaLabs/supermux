@@ -25,12 +25,27 @@ test("cleanupArgv builds a cursor one-shot (-p, text output, --force)", () => {
   expect(argv[argv.indexOf("--model") + 1]).toBe("composer-2.5-fast")
 })
 
-test("cleanupDraft returns the trimmed engine output", async () => {
+test("cleanupDraft returns the trimmed output + which engine produced it", async () => {
   const r = await cleanupDraft(
     { draft: "Clouds High-Q model", recentMessages: [], skills: [] },
-    { run: async () => ({ code: 0, out: "Claude's Haiku model\n" }) },
+    { engine: "opencode", model: "opencode/deepseek-v4-flash-free", run: async () => ({ code: 0, out: "Claude's Haiku model\n" }) },
   )
   expect(r.text).toBe("Claude's Haiku model")
+  expect(r.engine).toBe("opencode")
+})
+
+test("cleanupDraft falls back to cursor when the primary engine returns empty", async () => {
+  const r = await cleanupDraft(
+    { draft: "Clouds High-Q model", recentMessages: [], skills: [] },
+    {
+      engine: "opencode",
+      model: "opencode/deepseek-v4-flash-free",
+      // primary (opencode) returns empty; the cursor fallback returns the text.
+      run: async (argv) => (argv[0] === "cursor-agent" ? { code: 0, out: "Claude Haiku model" } : { code: 0, out: "" }),
+    },
+  )
+  expect(r.text).toBe("Claude Haiku model")
+  expect(r.engine).toBe("cursor")
 })
 
 test("cleanupDraft passes the engine+model into the argv handed to the runner", async () => {
