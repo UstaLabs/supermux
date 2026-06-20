@@ -18,6 +18,7 @@ export type SessionRecord = {
   can_orchestrate: boolean
   role: SessionRole
   is_default: boolean
+  internal: boolean
   tmux_target: string
   tmux_window_id?: string
   agent_session_id?: string
@@ -49,6 +50,7 @@ export type SessionRow = {
   can_orchestrate: number
   role: string
   is_default: number
+  internal: number
   tmux_target: string | null
   tmux_window_id: string | null
   agent_session_id: string | null
@@ -87,6 +89,7 @@ export function rowToRecord(row: SessionRow): SessionRecord {
     can_orchestrate: row.can_orchestrate === 1,
     role: (row.role as SessionRole) ?? "worker",
     is_default: row.is_default === 1,
+    internal: row.internal === 1,
     tmux_target: row.tmux_target ?? "",
     tmux_window_id: row.tmux_window_id ?? undefined,
     agent_session_id: row.agent_session_id ?? undefined,
