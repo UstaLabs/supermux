@@ -1852,7 +1852,7 @@ const server = await startSocketServer({
         })(),
       })
 
-      webChannel?.broadcastToAll({
+      if (!wasInternal) webChannel?.broadcastToAll({
         type: "session_added",
         session: { id: session.id, name: finalName, workdir, mute: false, connected: true, agent: session.agent },
       })
