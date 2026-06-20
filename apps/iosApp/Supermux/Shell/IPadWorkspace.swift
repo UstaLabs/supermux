@@ -16,18 +16,18 @@ struct IPadWorkspace: View {
     @State private var renameText = ""
     @State private var showKillConfirm = false
     @State private var banner: String?
+    // Sidebar-width drag: width captured at gesture start so the cumulative translation
+    // is applied once (no double-counting), mirroring `PaneDivider`.
+    @State private var dragStartWidth: Double?
 
     private var session: SessionInfo? { broker.sessions.first { $0.id == selected } }
 
     var body: some View {
         HStack(spacing: 0) {
-            SessionsListView(broker: broker, selected: $selected,
-                             onNewSession: { route = .newSession },
-                             onArchived: { route = .archived })
-                .frame(width: CGFloat(layout.sidebarWidth))
-            Divider()
+            sidebar
             detail.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .animation(.snappy(duration: 0.25), value: layout.sidebarCollapsed)
         .workspaceShortcuts(layout: layout) { route = .newSession }
         .navigationTitle(session?.name ?? "supermux")
         .navigationBarTitleDisplayMode(.inline)
@@ -42,6 +42,48 @@ struct IPadWorkspace: View {
             Button("Cancel", role: .cancel) {}
         }
         .onAppear(perform: applyOpenPanesEnv)
+    }
+
+    /// The leading column: a 56-pt avatar rail when collapsed, else the full grouped
+    /// list at `sidebarWidth` followed by a drag-resizable divider. ⌘B toggles `sidebarCollapsed`.
+    @ViewBuilder private var sidebar: some View {
+        if layout.sidebarCollapsed {
+            SessionsRailView(broker: broker, selected: $selected,
+                             onExpand: { layout.sidebarCollapsed = false },
+                             onNewSession: { route = .newSession })
+                .frame(width: WorkspaceLayoutModel.B.rail)
+            Divider()
+        } else {
+            SessionsListView(broker: broker, selected: $selected,
+                             onNewSession: { route = .newSession },
+                             onArchived: { route = .archived })
+                .frame(width: CGFloat(layout.sidebarWidth))
+            sidebarDivider
+        }
+    }
+
+    /// A 1pt visible rule with a ~24pt hit area; dragging adjusts `sidebarWidth`. Captures the
+    /// width at gesture start so the cumulative `DragGesture.translation` applies once; the model's
+    /// didSet clamps to 220...560, so no manual clamp here.
+    private var sidebarDivider: some View {
+        Rectangle()
+            .fill(Color.secondary.opacity(0.25))
+            .frame(width: 1)
+            .hoverEffect(.highlight)
+            .overlay {
+                Color.clear
+                    .frame(width: 24)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 1)
+                            .onChanged { g in
+                                let start = dragStartWidth ?? layout.sidebarWidth
+                                if dragStartWidth == nil { dragStartWidth = start }
+                                layout.sidebarWidth = start + Double(g.translation.width)
+                            }
+                            .onEnded { _ in dragStartWidth = nil }
+                    )
+            }
     }
 
     @ViewBuilder private var detail: some View {
