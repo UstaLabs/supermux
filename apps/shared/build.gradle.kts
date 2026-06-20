@@ -35,6 +35,12 @@ kotlin {
             implementation(libs.coroutines.test)
         }
         jvmMain.dependencies { implementation(libs.ktor.client.cio) }
+        jvmTest.dependencies {
+            // A throwaway local WebSocket server to drive VncClient end-to-end
+            // against the captured RFB fixture (JVM-only test harness; not shipped).
+            implementation(libs.ktor.server.cio)
+            implementation(libs.ktor.server.websockets)
+        }
         iosMain.dependencies { implementation(libs.ktor.client.darwin) }
         androidMain.dependencies { implementation(libs.androidx.security.crypto) }
     }

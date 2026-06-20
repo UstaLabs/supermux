@@ -1,5 +1,6 @@
 package dev.supermux.proto
 
+import dev.supermux.net.DisplayStream
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
@@ -122,6 +123,14 @@ sealed interface ServerFrame {
 
     @Serializable @SerialName("fs_changed")
     data class FsChanged(val session: String, val paths: List<String> = emptyList()) : ServerFrame
+
+    // Display stream lifecycle: the broker broadcasts these on the control WS
+    // (src/main.ts: `{type:"display_added",display}` / `{type:"display_removed",id}`).
+    @Serializable @SerialName("display_added")
+    data class DisplayAdded(val display: DisplayStream) : ServerFrame
+
+    @Serializable @SerialName("display_removed")
+    data class DisplayRemoved(val id: String) : ServerFrame
 
     @Serializable @SerialName("lsp_status")
     data class LspStatus(

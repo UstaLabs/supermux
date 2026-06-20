@@ -27,6 +27,16 @@ class ContractTest {
                 is ServerFrame.MessageAppend -> {}
                 is ServerFrame.ActivityAppend -> {}
                 is ServerFrame.CommandsChanged -> {}
+                is ServerFrame.FsChanged -> {}
+                is ServerFrame.LspStatus -> {}
+                is ServerFrame.LspReady -> {}
+                is ServerFrame.LspError -> {}
+                is ServerFrame.LspRpcIn -> {}
+                is ServerFrame.LspExit -> {}
+                is ServerFrame.LspInstallProgress -> {}
+                is ServerFrame.LspInstallDone -> {}
+                is ServerFrame.DisplayAdded -> {}
+                is ServerFrame.DisplayRemoved -> {}
             }
         }
     }
