@@ -37,6 +37,8 @@ struct ChatView: View {
     @State private var commitMsg = ""
     @State private var loadedSessionId: String?
     @State private var recorder = AudioRecorder()
+    @State private var dictation = SpeechDictation()
+    @State private var transcribing = false
     @State private var micDenied = false
     @FocusState private var composing: Bool
 
@@ -74,7 +76,7 @@ struct ChatView: View {
 
     /// Composer is expanded (full controls) when focused, when there's a draft or a
     /// staged attachment, or while recording; otherwise it rests as a slim glass pill.
-    private var composerExpanded: Bool { composing || !draft.isEmpty || !pending.isEmpty || recorder.isRecording }
+    private var composerExpanded: Bool { composing || !draft.isEmpty || !pending.isEmpty || recorder.isRecording || dictation.isListening || transcribing }
 
     private var sessionLinks: [ProxyDto] { proxies.filter { $0.sessionName == session.name } }
     private var draftKey: String { "cmux:draft:\(session.id)" }
@@ -154,7 +156,8 @@ struct ChatView: View {
         // re-opening the *same* session (id unchanged), which left git/branch unloaded.
         // onAppear covers first-open + reopen; onChange covers switching (reused view).
         .onAppear { if loadedSessionId != session.id { loadSession() } }
-        .onChange(of: session.id) { _, _ in loadSession() }
+        .onDisappear { dictation.cancel(); recorder.cancel() }
+        .onChange(of: session.id) { _, _ in dictation.cancel(); recorder.cancel(); loadSession() }
         .onChange(of: draft) { _, new in UserDefaults.standard.set(new, forKey: draftKey) }
         .task(id: session.id) {
             if ProcessInfo.processInfo.environment["SM_OPEN_TERMINAL"] == "1" {
@@ -500,8 +503,12 @@ struct ChatView: View {
                         HStack(spacing: 8) { ForEach(pending) { attachmentChip($0) } }
                     }
                 }
-                if recorder.isRecording {
+                if dictation.isListening {
+                    RecordingBar(elapsed: dictation.elapsed) { dictation.cancel() }
+                } else if recorder.isRecording {
                     RecordingBar(elapsed: recorder.elapsed) { recorder.cancel() }
+                } else if transcribing {
+                    transcribingBar
                 }
             }
             HStack(alignment: .center, spacing: 10) {
@@ -546,19 +553,74 @@ struct ChatView: View {
     }
     private var canSend: Bool { !draft.trimmingCharacters(in: .whitespaces).isEmpty || !pending.isEmpty }
 
+    // Mic → on-device dictation. Tap to start listening (RecordingBar), tap to stop →
+    // POST the recognized draft to /transcribe → drop the cleaned text into the composer
+    // (appended, never auto-sent). Falls back to audio recording + multipart /transcribe
+    // when the device locale can't recognize on-device.
+    private var micActive: Bool { dictation.isListening || recorder.isRecording }
     private var micButton: some View {
         Button {
-            if recorder.isRecording {
-                if let (data, name) = recorder.stop() {
-                    pending.append(PendingAttachment(data: data, filename: name, mime: "audio/mp4"))
-                }
-            } else {
-                Task { if case .denied = await recorder.start() { micDenied = true } }
-            }
+            Task { await toggleMic() }
         } label: {
-            Image(systemName: recorder.isRecording ? "stop.circle.fill" : "mic")
+            Image(systemName: micActive ? "stop.circle.fill" : "mic")
                 .font(.body.weight(.medium))
-                .foregroundStyle(recorder.isRecording ? .red : .secondary)
+                .foregroundStyle(micActive ? .red : .secondary)
+        }
+        .disabled(transcribing)
+    }
+
+    private var transcribingBar: some View {
+        HStack(spacing: 10) {
+            ProgressView().controlSize(.small)
+            Text("Transcribing…").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Color(.tertiarySystemFill), in: Capsule())
+    }
+
+    /// Drive the mic: stop→transcribe if already capturing, otherwise start dictation
+    /// (with audio-upload fallback). Always sets the composer text; never sends.
+    private func toggleMic() async {
+        if recorder.isRecording {
+            // Fallback path was active — finish the clip and transcribe via multipart.
+            guard let (data, name) = recorder.stop() else { return }
+            await runTranscription { try await broker.transcribeAudio(sessionId: session.id, data: data, filename: name) }
+            return
+        }
+        if dictation.isListening {
+            let (text, _) = await dictation.stop()
+            guard !text.isEmpty else { return }
+            await runTranscription { try await broker.transcribeDraft(sessionId: session.id, draft: text) }
+            return
+        }
+        // Not capturing yet → start on-device dictation, or fall back to recording.
+        switch await dictation.start() {
+        case .started:
+            break
+        case .denied:
+            micDenied = true
+        case .unavailable, .failed:
+            // On-device recognition isn't available for this locale (or engine failed to
+            // start) — fall back to recording audio for a server-side (multipart) transcribe.
+            if case .denied = await recorder.start() { micDenied = true }
+        }
+    }
+
+    /// Run a transcribe call with the "Transcribing…" state, then append the cleaned text
+    /// to the composer (a space joins it to any existing draft). Errors → banner.
+    private func runTranscription(_ call: @escaping () async throws -> String) async {
+        transcribing = true
+        defer { transcribing = false }
+        do {
+            let text = try await call()
+            let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { return }
+            let existing = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+            draft = existing.isEmpty ? cleaned : existing + " " + cleaned
+            composing = true
+        } catch {
+            showBanner("Transcription failed")
         }
     }
 

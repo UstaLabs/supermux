@@ -266,6 +266,57 @@ final class BrokerSession {
         return try? await URLSession.shared.data(for: req).0
     }
 
+    // MARK: - Dictation transcribe (POST /sessions/:id/transcribe → { text, degraded? })
+    // Bearer-authed direct HTTP (same shape as `loadFile`), since there's no shared
+    // Kotlin helper for this endpoint. The on-device path POSTs the recognized draft as
+    // JSON; the fallback POSTs the recorded clip as multipart (field "audio").
+
+    private struct TranscribeResponse: Decodable { let text: String; let degraded: Bool? }
+
+    /// JSON `{ draft }` → cleaned `text`. Used for the on-device-recognition result.
+    func transcribeDraft(sessionId: String, draft: String) async throws -> String {
+        guard let url = URL(string: "\(baseURL)/sessions/\(sessionId)/transcribe") else {
+            throw URLError(.badURL)
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["draft": draft])
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode(TranscribeResponse.self, from: data).text
+    }
+
+    /// Multipart (field "audio") → cleaned `text`. Fallback when on-device recognition
+    /// isn't available for the device locale; the broker stores + transcribes the clip.
+    func transcribeAudio(sessionId: String, data audioData: Data, filename: String) async throws -> String {
+        guard let url = URL(string: "\(baseURL)/sessions/\(sessionId)/transcribe") else {
+            throw URLError(.badURL)
+        }
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var body = Data()
+        let dashes = "--\(boundary)\r\n"
+        body.append(dashes.data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"audio\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: audio/mp4\r\n\r\n".data(using: .utf8)!)
+        body.append(audioData)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.httpBody = body
+        let (respData, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode(TranscribeResponse.self, from: respData).text
+    }
+
     // MARK: - Editor filesystem (workdir-relative paths)
     func fsList(_ id: String, _ path: String) async -> [FsEntry] { (try? await api.fsList(sessionId: id, path: path)) ?? [] }
     func fsRead(_ id: String, _ path: String) async throws -> String { try await api.fsRead(sessionId: id, path: path) }
