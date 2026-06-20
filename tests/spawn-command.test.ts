@@ -189,6 +189,20 @@ test("still emits the agent-hook commands (disabling telegram must not drop hook
   expect(settings.hooks?.UserPromptSubmit).toBeDefined()
 })
 
+// agent-rpc spawn flags — rpcMcpConfig wires the worker to a strict mcp config
+test("includes MUX_RPC_ONLY=1 and --strict-mcp-config when rpcMcpConfig is set", () => {
+  const cmd = buildClaudeSpawnCommand({ name: "rpc-worker", rpcMcpConfig: "/tmp/rpc.json" })
+  expect(cmd).toContain("MUX_RPC_ONLY=1")
+  expect(cmd).toContain("--strict-mcp-config")
+  expect(cmd).toContain("--mcp-config /tmp/rpc.json")
+})
+
+test("omits MUX_RPC_ONLY and --strict-mcp-config when rpcMcpConfig is not set", () => {
+  const cmd = buildClaudeSpawnCommand({ name: "regular-worker" })
+  expect(cmd).not.toContain("MUX_RPC_ONLY")
+  expect(cmd).not.toContain("--strict-mcp-config")
+})
+
 test("workdir soul.md and focus.md are injected into the memory preamble", () => {
   const workdir = mkdtempSync(join(tmpdir(), "mux-workdir-"))
   mkdirSync(workdir, { recursive: true })
