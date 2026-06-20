@@ -111,6 +111,12 @@ async function request(method: string, path: string, body?: unknown): Promise<an
   return res.json()
 }
 
+export interface AppConfig {
+  voiceCleanupModel?: string
+  whisperLang?: string
+  [key: string]: unknown
+}
+
 export const api = {
   listDevices: () => request("GET", "/devices"),
   addDevice:   (name: string) => request("POST", "/devices", { name }),
@@ -232,8 +238,8 @@ export const api = {
   setOpenCodeKey: (providerId: string, key: string) => request("POST", "/opencode/auth/key", { providerId, key }),
   startOpenCodeOAuth: (providerId: string, method: number) => request("POST", "/opencode/auth/oauth/start", { providerId, method }) as Promise<{ url: string; instructions?: string }>,
   finishOpenCodeOAuth: (providerId: string, method: number, code: string) => request("POST", "/opencode/auth/oauth/finish", { providerId, method, code }),
-  getAppConfig: () => request("GET", "/settings/config"),
-  saveAppConfig: (patch: Record<string, unknown>) => request("PUT", "/settings/config", patch),
+  getAppConfig: () => request("GET", "/settings/config") as Promise<AppConfig>,
+  saveAppConfig: (patch: Partial<AppConfig>) => request("PUT", "/settings/config", patch),
   claimPair: (name = "setup") => request("POST", "/pair/claim", { name }),
   getSoul: async (): Promise<string> => { const r = await fetch("/settings/soul"); if (!r.ok) throw new Error(`GET /settings/soul → ${r.status}`); return r.text() },
   saveSoul: async (content: string): Promise<void> => { const r = await fetch("/settings/soul", { method: "PUT", headers: { "content-type": "text/plain" }, body: content }); if (!r.ok) throw new Error(`PUT /settings/soul → ${r.status}`) },
