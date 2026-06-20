@@ -122,6 +122,46 @@ sealed interface ServerFrame {
 
     @Serializable @SerialName("fs_changed")
     data class FsChanged(val session: String, val paths: List<String> = emptyList()) : ServerFrame
+
+    @Serializable @SerialName("lsp_status")
+    data class LspStatus(
+        val session: String? = null,
+        val path: String? = null,
+        val supported: Boolean = false,
+        val serverId: String? = null,
+        val label: String? = null,
+        val languageId: String? = null,
+        val state: String? = null,
+        val installLabel: String? = null,
+        val requires: String? = null,
+        val error: String? = null,
+    ) : ServerFrame
+
+    @Serializable @SerialName("lsp_ready")
+    data class LspReady(val session: String, val serverId: String) : ServerFrame
+
+    @Serializable @SerialName("lsp_error")
+    data class LspError(
+        val session: String? = null,
+        val serverId: String? = null,
+        val error: String? = null,
+    ) : ServerFrame
+
+    @Serializable @SerialName("lsp_rpc")
+    data class LspRpcIn(val session: String, val serverId: String, val message: String) : ServerFrame
+
+    @Serializable @SerialName("lsp_exit")
+    data class LspExit(val session: String, val serverId: String) : ServerFrame
+
+    @Serializable @SerialName("lsp_install_progress")
+    data class LspInstallProgress(val serverId: String, val line: String = "") : ServerFrame
+
+    @Serializable @SerialName("lsp_install_done")
+    data class LspInstallDone(
+        val serverId: String,
+        val ok: Boolean = false,
+        val error: String? = null,
+    ) : ServerFrame
 }
 
 @Serializable
@@ -145,4 +185,19 @@ sealed interface ClientFrame {
 
     @Serializable @SerialName("editor_close")
     data class EditorClose(val session: String) : ClientFrame
+
+    @Serializable @SerialName("lsp_status_query")
+    data class LspStatusQuery(val session: String, val path: String) : ClientFrame
+
+    @Serializable @SerialName("lsp_open")
+    data class LspOpen(val session: String, val serverId: String) : ClientFrame
+
+    @Serializable @SerialName("lsp_rpc")
+    data class LspRpcOut(val session: String, val serverId: String, val message: String) : ClientFrame
+
+    @Serializable @SerialName("lsp_install")
+    data class LspInstall(val serverId: String) : ClientFrame
+
+    @Serializable @SerialName("lsp_close")
+    data class LspClose(val session: String, val serverId: String) : ClientFrame
 }

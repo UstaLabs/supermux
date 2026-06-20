@@ -22,6 +22,9 @@ struct EditorWebView: UIViewRepresentable {
     /// (the web content owns a UIKit keyboard that SwiftUI dismissal can't reach —
     /// mirrors `SwiftTermView.onMakeView` / `TerminalPane`'s dismiss button).
     var onMakeView: (WKWebView) -> Void = { _ in }
+    /// JS->Swift LSP relay: the webview's CodeMirror LSP client posts outbound
+    /// JSON-RPC `{serverId, message}` here; the parent forwards it to the broker.
+    var onLspOut: (_ serverId: String, _ message: String) -> Void = { _, _ in }
 
     /// CodeMirror's one-dark canvas color (#282c34). Painted on the web view and
     /// its scroll view so the file:// page doesn't flash white before first paint.
@@ -30,7 +33,7 @@ struct EditorWebView: UIViewRepresentable {
     )
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onChange: onChange, onSave: onSave)
+        Coordinator(onChange: onChange, onSave: onSave, onLspOut: onLspOut)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -52,6 +55,7 @@ struct EditorWebView: UIViewRepresentable {
         let controller = WKUserContentController()
         controller.addUserScript(userScript)
         controller.add(coordinator, name: "editor")
+        controller.add(coordinator, name: "lsp")
 
         let config = WKWebViewConfiguration()
         config.userContentController = controller
@@ -85,6 +89,7 @@ struct EditorWebView: UIViewRepresentable {
         // re-make; the long-lived coordinator must call the latest ones.
         coordinator.onChange = onChange
         coordinator.onSave = onSave
+        coordinator.onLspOut = onLspOut
 
         let newFilename = filename(from: path)
         let pathChanged = coordinator.lastPath != path
@@ -121,6 +126,7 @@ struct EditorWebView: UIViewRepresentable {
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
         // Break the retain cycle WebKit holds on the message handler.
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "editor")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "lsp")
     }
 
     /// `cm6.js` keys the language off the file's basename (extension), so we only
@@ -140,6 +146,7 @@ struct EditorWebView: UIViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var onChange: (String) -> Void
         var onSave: () -> Void
+        var onLspOut: (String, String) -> Void
 
         /// Held so the parent can resign the keyboard and so we can reload after a
         /// renderer crash. Not owned (WebKit/SwiftUI own the view).
@@ -155,9 +162,11 @@ struct EditorWebView: UIViewRepresentable {
         var lineWrap = true
         var fontSize = 13
 
-        init(onChange: @escaping (String) -> Void, onSave: @escaping () -> Void) {
+        init(onChange: @escaping (String) -> Void, onSave: @escaping () -> Void,
+             onLspOut: @escaping (String, String) -> Void) {
             self.onChange = onChange
             self.onSave = onSave
+            self.onLspOut = onLspOut
         }
 
         func cache(content: String, filename: String, scrollTop: Int) {
@@ -190,6 +199,10 @@ struct EditorWebView: UIViewRepresentable {
 
         func userContentController(_ controller: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
+            if message.name == "lsp" {
+                handleLspOut(message.body)
+                return
+            }
             guard message.name == "editor",
                   let body = message.body as? [String: Any],
                   let t = body["t"] as? String else { return }
@@ -206,6 +219,17 @@ struct EditorWebView: UIViewRepresentable {
             default:
                 break
             }
+        }
+
+        /// The webview LSP client posts `JSON.stringify({serverId, message})` to the `lsp`
+        /// handler; parse it and hand the outbound JSON-RPC to the parent relay.
+        private func handleLspOut(_ body: Any) {
+            guard let raw = body as? String,
+                  let data = raw.data(using: .utf8),
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let serverId = obj["serverId"] as? String,
+                  let msg = obj["message"] as? String else { return }
+            onLspOut(serverId, msg)
         }
 
         // MARK: Swift -> JS

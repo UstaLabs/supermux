@@ -76,6 +76,13 @@ final class BrokerSession {
             agentSince[st.session] = (st.since ?? st.workingSince)?.int64Value
         case .commandsChanged(let c): commands[c.session] = c.commands
         case .fsChanged(let f): editorStates[f.session]?.markChanged(f.paths)
+        case .lspStatus(let f): lspBridges[f.session ?? ""]?.handleStatus(f)
+        case .lspReady(let f): lspBridges[f.session]?.handleReady(f.serverId)
+        case .lspError(let f): lspBridges[f.session ?? ""]?.handleError(f.serverId)
+        case .lspRpcIn(let f): lspBridges[f.session]?.handleRpcIn(f.serverId, f.message)
+        case .lspExit: break
+        case .lspInstallProgress: break
+        case .lspInstallDone: break
         case .agentError: break
         }
     }
@@ -269,6 +276,18 @@ final class BrokerSession {
         )
         editorStates[sessionId] = state
         return state
+    }
+
+    // MARK: - LSP bridge (one per session; the Swift control-plane + relay for the
+    // webview's CodeMirror LSP client — the broker is a dumb JSON-RPC pipe).
+    @ObservationIgnored private var lspBridges: [String: LspBridge] = [:]
+    func lspBridge(for sessionId: String) -> LspBridge {
+        if let existing = lspBridges[sessionId] { return existing }
+        let bridge = LspBridge(sessionId: sessionId, send: { [client] frame in
+            Task { try? await client.send(frame: frame) }
+        })
+        lspBridges[sessionId] = bridge
+        return bridge
     }
 }
 

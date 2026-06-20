@@ -83,6 +83,56 @@ struct EditorPane: View {
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             await state.loadDiff()
         }
+        // (Re)wire code intelligence whenever the active file (or editor/diff/preview
+        // mode) changes — query the server, start it, and connect the webview LSP client.
+        .task(id: lspTaskKey) { await connectLspForActiveFile() }
+    }
+
+    private var lspTaskKey: String { "\(state.activeTab?.path ?? "")|\(state.showDiff)|\(previewMode)" }
+
+    /// Drive LSP for the active editor file: tear down any prior client, then (if a
+    /// language server is installed + ready) open it and connect the webview's LSP client.
+    /// All real LSP protocol runs in the webview; Swift just relays + orchestrates.
+    private func connectLspForActiveFile() async {
+        webView?.evaluateJavaScript("window.cmLspDisconnect && window.cmLspDisconnect()", completionHandler: nil)
+        guard !state.showDiff, !showPreview, let tab = state.activeTab, !workdir.isEmpty else { return }
+        try? await Task.sleep(nanoseconds: 1_200_000_000)   // let the webview reach `ready`
+        if Task.isCancelled { return }
+        let bridge = broker.lspBridge(for: session.id)
+        bridge.onRpcIn = { [weak webView] serverId, message in
+            webView?.evaluateJavaScript("window.cmLspMessage(\(Self.jsLit(serverId)),\(Self.jsLit(message)))", completionHandler: nil)
+        }
+        let status = await bridge.queryStatus(tab.path)
+        guard status.isReady, let serverId = status.serverId, !Task.isCancelled else { return }
+        guard await bridge.open(serverId), !Task.isCancelled else { return }
+        let root = Self.dirURI(workdir)
+        let file = Self.pathToURI(Self.joinPath(workdir, tab.path))
+        let lang = status.languageId ?? ""
+        webView?.evaluateJavaScript(
+            "window.cmLspConnect(\(Self.jsLit(serverId)),\(Self.jsLit(root)),\(Self.jsLit(file)),\(Self.jsLit(lang)))",
+            completionHandler: nil)
+    }
+
+    private var workdir: String { session.workdir }
+    private static func joinPath(_ dir: String, _ rel: String) -> String {
+        let d = dir.hasSuffix("/") ? String(dir.dropLast()) : dir
+        let r = rel.hasPrefix("/") ? String(rel.dropFirst()) : rel
+        return "\(d)/\(r)"
+    }
+    private static func pathToURI(_ abs: String) -> String {
+        "file://" + (abs.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? abs)
+    }
+    private static func dirURI(_ workdir: String) -> String {
+        let u = pathToURI(workdir.hasSuffix("/") ? String(workdir.dropLast()) : workdir)
+        return u + "/"
+    }
+    /// JS string literal (quoted + escaped) for safe interpolation into evaluateJavaScript.
+    private static func jsLit(_ s: String) -> String {
+        if let d = try? JSONSerialization.data(withJSONObject: [s]),
+           let a = String(data: d, encoding: .utf8) {
+            return String(a.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+        }
+        return "\"\""
     }
 
     // Header: files toggle · filename search · settings gear.
@@ -195,7 +245,10 @@ struct EditorPane: View {
                               lineWrap: settings.lineWrap, fontSize: settings.fontSize,
                               onChange: { state.updateContent(tab.path, $0) },
                               onSave: { Task { await state.saveActive() } },
-                              onMakeView: { webView = $0 })
+                              onMakeView: { webView = $0 },
+                              onLspOut: { serverId, message in
+                                  broker.lspBridge(for: session.id).rpcOut(serverId, message)
+                              })
                     .background(Color(red: 40/255, green: 44/255, blue: 52/255)) // #282c34, matches cm6 one-dark
                     .ignoresSafeArea(.container, edges: .bottom)
             }

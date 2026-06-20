@@ -5,7 +5,7 @@ import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLi
 import { EditorState, Compartment } from "@codemirror/state"
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands"
 import { syntaxHighlighting, defaultHighlightStyle, foldGutter, bracketMatching, indentOnInput, StreamLanguage } from "@codemirror/language"
-import { closeBrackets, closeBracketsKeymap, completionKeymap } from "@codemirror/autocomplete"
+import { closeBrackets, closeBracketsKeymap, completionKeymap, autocompletion, startCompletion } from "@codemirror/autocomplete"
 import { lintGutter, lintKeymap } from "@codemirror/lint"
 import { searchKeymap, highlightSelectionMatches } from "@codemirror/search"
 import { oneDark } from "@codemirror/theme-one-dark"
@@ -26,6 +26,21 @@ import { xml } from "@codemirror/lang-xml"
 import { yaml } from "@codemirror/lang-yaml"
 import { shell } from "@codemirror/legacy-modes/mode/shell"
 import { kotlin } from "@codemirror/legacy-modes/mode/clike"
+
+// LSP (language-server) support — additive and gated. Inactive unless a native
+// host opens an LSP bridge via window.cmLspConnect (no bridge → plain editor).
+import {
+  LSPClient,
+  LSPPlugin,
+  serverDiagnostics,
+  serverCompletionSource,
+  hoverTooltips,
+  signatureHelp,
+  formatKeymap,
+  renameKeymap,
+  jumpToDefinitionKeymap,
+  findReferencesKeymap,
+} from "@codemirror/lsp-client"
 
 function langFor(filename) {
   const ext = (String(filename || "").split(".").pop() || "").toLowerCase()
@@ -57,6 +72,7 @@ let view = null
 const wrapC = new Compartment()
 const fontC = new Compartment()
 const langC = new Compartment()
+const lspC = new Compartment()
 const bridge = () => (typeof window !== "undefined" ? window.AndroidEditor : null)
 const wrapExt = (on) => (on ? EditorView.lineWrapping : [])
 const fontExt = (px) => EditorView.theme({ "&": { fontSize: (px || 13) + "px" } })
@@ -77,6 +93,7 @@ window.cmInit = function (content, filename, lineWrap, fontSize) {
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       oneDark,
       langC.of(langFor(filename)),
+      lspC.of([]),
       keymap.of([
         ...closeBracketsKeymap, ...completionKeymap, ...lintKeymap,
         ...defaultKeymap, ...searchKeymap, ...historyKeymap, indentWithTab,
@@ -108,3 +125,135 @@ window.cmGetContent = function () { return view ? view.state.doc.toString() : ""
 window.cmSetLineWrap = function (on) { if (view) view.dispatch({ effects: wrapC.reconfigure(wrapExt(!!on)) }) }
 window.cmSetFontSize = function (px) { if (view) view.dispatch({ effects: fontC.reconfigure(fontExt(px)) }) }
 window.cmSetLanguage = function (filename) { if (view) view.dispatch({ effects: langC.reconfigure(langFor(filename)) }) }
+
+// ---------------------------------------------------------------------------
+// LSP (language-server) support — ported 1:1 from the web app's
+// lsp-editor-extensions.ts (sans the debug logging + symbol-navigation panel).
+// All of this is dormant until a native host calls window.cmLspConnect; on a
+// plain Android WebView (no window.webkit.messageHandlers.lsp) it never runs.
+// ---------------------------------------------------------------------------
+
+// Characters that should open member/import completion.
+const LSP_COMPLETION_TRIGGER_CHARS = new Set([".", ":", '"', "'", "`", "<", "/", "@", "#"])
+
+// Find the live LSP plugin on a view by instance, not facet id — bundlers can
+// dedupe poorly so LSPPlugin.get() returns null while the plugin is running,
+// which breaks sync + completion. (Mirrors the web's getLSPPlugin.)
+function getLSPPlugin(v) {
+  const insts = (v && v.plugins) || []
+  for (const p of insts) {
+    if (p.value instanceof LSPPlugin) return p.value
+  }
+  return null
+}
+
+// Patch once so @codemirror/lsp-client internals (sync, completion, hover)
+// resolve the plugin even when the facet lookup misses.
+let lspPluginPatched = false
+function patchLSPPluginGet() {
+  if (lspPluginPatched) return
+  lspPluginPatched = true
+  const fallback = LSPPlugin.get.bind(LSPPlugin)
+  LSPPlugin.get = (v) => getLSPPlugin(v) || fallback(v)
+}
+
+function lspAutocompletion() {
+  return autocompletion({
+    override: [serverCompletionSource],
+    activateOnTyping: true,
+    activateOnTypingDelay: 50,
+    interactionDelay: 0,
+  })
+}
+
+// Force completion after `.` etc. Sync first, then a brief delay so the server
+// sees the latest didChange before textDocument/completion.
+function completionOnTriggerChars() {
+  return EditorView.updateListener.of((update) => {
+    if (!update.docChanged) return
+    const pos = update.state.selection.main.head
+    const ch = update.state.sliceDoc(pos - 1, pos)
+    if (!LSP_COMPLETION_TRIGGER_CHARS.has(ch)) return
+    const plugin = getLSPPlugin(update.view)
+    if (!plugin) return
+    window.setTimeout(() => {
+      if (getLSPPlugin(update.view) !== plugin) return
+      plugin.client.sync()
+      startCompletion(update.view)
+    }, 80)
+  })
+}
+
+// Bundled LSP editor extensions. Keep `client.plugin()` as a nested array —
+// same shape as upstream tests; spreading a pre-flattened list can prevent the
+// ViewPlugin facet from registering.
+function lspEditorExtensions(client, fileUri, languageId) {
+  return [
+    client.plugin(fileUri, languageId),
+    lspAutocompletion(),
+    hoverTooltips(),
+    signatureHelp(),
+    completionOnTriggerChars(),
+    keymap.of([
+      ...formatKeymap,
+      ...renameKeymap,
+      ...jumpToDefinitionKeymap,
+      ...findReferencesKeymap,
+    ]),
+  ]
+}
+
+// serverId -> { client, handlers } for every connected language server.
+const lspClients = new Map()
+
+// Open an LSP connection for the current editor. The native host pumps inbound
+// JSON-RPC back in via cmLspMessage. No-op (stays a plain editor) when there is
+// no native LSP bridge — e.g. on Android.
+window.cmLspConnect = async function (serverId, rootUri, fileUri, languageId) {
+  if (!view) return
+  const lspBridge = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.lsp
+  if (!lspBridge) return // no native bridge → stay plain
+  patchLSPPluginGet()
+  if (lspClients.has(serverId)) return // already connected for this server
+
+  const handlers = new Set()
+  const transport = {
+    send: (m) => lspBridge.postMessage(JSON.stringify({ serverId, message: m })),
+    subscribe: (h) => handlers.add(h),
+    unsubscribe: (h) => handlers.delete(h),
+  }
+  const client = new LSPClient({
+    rootUri,
+    extensions: [serverDiagnostics()],
+    timeout: 15000,
+  })
+  lspClients.set(serverId, { client, handlers })
+
+  client.connect(transport)
+  try {
+    await client.initializing
+  } catch (e) {
+    lspClients.delete(serverId)
+    try { client.disconnect() } catch (e2) {}
+    return
+  }
+  if (!view) return
+  view.dispatch({ effects: lspC.reconfigure(lspEditorExtensions(client, fileUri, languageId)) })
+}
+
+// Deliver an inbound JSON-RPC message (string) from the native host to the
+// LSPClient for the given server.
+window.cmLspMessage = function (serverId, message) {
+  const entry = lspClients.get(serverId)
+  if (!entry || typeof message !== "string") return
+  for (const h of entry.handlers) h(message)
+}
+
+// Tear down all LSP connections and revert the editor to plain mode.
+window.cmLspDisconnect = function () {
+  for (const entry of lspClients.values()) {
+    try { entry.client.disconnect() } catch (e) {}
+  }
+  lspClients.clear()
+  if (view) view.dispatch({ effects: lspC.reconfigure([]) })
+}
