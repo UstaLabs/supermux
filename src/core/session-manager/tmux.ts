@@ -102,6 +102,22 @@ export function createTmuxClient(run: TmuxRunner = runTmux, runRaw: CmdRunner = 
     return r.stdout.split("\n").map(s => s.trim()).filter(Boolean)
   }
 
+  // Liveness of a window's pane by tmux window id (@N). Returns the live pane's
+  // pid, or null if the window is gone or every pane is dead. reconcileOnStartup
+  // uses this to trust a surviving pane over a stale stored pid after a restart.
+  async function livePanePid(windowId: string): Promise<number | null> {
+    const r = await run(["list-panes", "-t", windowId, "-F", "#{pane_dead} #{pane_pid}"])
+    if (r.code !== 0) return null
+    for (const line of r.stdout.split("\n")) {
+      const [dead, pid] = line.trim().split(/\s+/)
+      if (dead === "0" && pid) {
+        const n = Number(pid)
+        if (Number.isFinite(n) && n > 0) return n
+      }
+    }
+    return null
+  }
+
   async function sendKeys(target: string, keys: string[]): Promise<void> {
     const r = await run(["send-keys", "-t", target, ...keys])
     if (r.code !== 0) throw new Error(`tmux send-keys failed: ${r.stderr}`)
@@ -112,7 +128,7 @@ export function createTmuxClient(run: TmuxRunner = runTmux, runRaw: CmdRunner = 
     if (r.code !== 0) throw new Error(`tmux send-keys failed: ${r.stderr}`)
   }
 
-  return { spawnSessionWindow, killSessionWindow, killWindowById, listSessionWindows, sendKeys, sendKeysToWindowId }
+  return { spawnSessionWindow, killSessionWindow, killWindowById, listSessionWindows, livePanePid, sendKeys, sendKeysToWindowId }
 }
 
 export const {
@@ -120,6 +136,7 @@ export const {
   killSessionWindow,
   killWindowById,
   listSessionWindows,
+  livePanePid,
   sendKeys,
   sendKeysToWindowId,
 } = createTmuxClient()

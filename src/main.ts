@@ -30,7 +30,7 @@ function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
 import { startSocketServer } from "./core/session-manager/socket-server"
 import { createSupervisor, reconcileOnStartup } from "./core/session-manager/supervisor"
 import { acquirePidFile, releasePidFile } from "./core/session-manager/pid-file"
-import { spawnSessionWindow, killSessionWindow, killWindowById, listSessionWindows, sendKeys, sendKeysToWindowId } from "./core/session-manager/tmux"
+import { spawnSessionWindow, killSessionWindow, killWindowById, listSessionWindows, livePanePid, sendKeys, sendKeysToWindowId } from "./core/session-manager/tmux"
 import { spawnSession as spawnSessionHelper, spawnPA, resumeOpenCodeSession } from "./core/session-manager/spawn-helper"
 import { RuntimeRegistry, type SessionRuntime } from "./core/session-manager/runtime"
 import { buildClaudeSpawnCommand } from "./core/session-manager/spawn-command"
@@ -1480,7 +1480,7 @@ async function ensureSessionWorktree(session: { id: string; name: string; workdi
   log.info("worktree_recreated", { id: session.id, name: session.name, workdir: session.workdir })
 }
 
-async function resumeSuspendedSession(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<boolean> {
+async function resumeSuspendedSession(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string; tmux_window_id?: string | null; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<boolean> {
   try {
     log.info("resume_suspended_begin", {
       name: session.name,
@@ -1492,17 +1492,16 @@ async function resumeSuspendedSession(session: { id: string; name: string; agent
     await ensureSessionWorktree(session)
     if (session.agent === "claude") {
       await server.bind(session.id)
-      const existingWindows = await listSessionWindows(TMUX_SESSION)
-      const spawnWindow = !existingWindows.includes(session.name)
-      log.info("resume_suspended_claude", {
-        name: session.name,
-        spawn_window: spawnWindow,
-        existing_windows: existingWindows.length,
-      })
       preAcceptTrust(session.workdir)
-      while ((await listSessionWindows(TMUX_SESSION)).includes(session.name)) {
-        await killSessionWindow({ session: TMUX_SESSION, window: session.name }).catch(() => {})
-      }
+      // Clear ONLY our own prior window, by id — never kill by name. The old
+      // `while (listSessionWindows().includes(name)) killSessionWindow({window:name})`
+      // loop could kill a sibling window that happens to share this display name;
+      // 65b1049 removed the same destructive pattern from the new-spawn path. Then
+      // pick a window name that doesn't collide with any live window (mirrors it).
+      if (session.tmux_window_id) await killWindowById(session.tmux_window_id).catch(() => {})
+      const { ensureUnique } = await import("./core/session-manager/naming")
+      const windowName = ensureUnique(session.name, new Set(await listSessionWindows(TMUX_SESSION)))
+      log.info("resume_suspended_claude", { name: session.name, window: windowName })
       const effort = sessionEffort(session as any)
       const cmd = buildClaudeSpawnCommand({
         name: session.name, model: session.model, effort, sessionId: session.id,
@@ -1511,12 +1510,12 @@ async function resumeSuspendedSession(session: { id: string; name: string; agent
       })
       const tmuxWindow = await spawnSessionWindow({
         session: TMUX_SESSION,
-        window: session.name,
+        window: windowName,
         workdir: session.workdir,
         command: cmd,
       })
       if (tmuxWindow.windowId) registry.sessions.setTmuxWindowId(session.id, tmuxWindow.windowId)
-      const tmuxTarget = `${TMUX_SESSION}:${session.name}`
+      const tmuxTarget = `${TMUX_SESSION}:${windowName}`
       await sendChannelConsentEnter(tmuxTarget)
       await waitForSessionConnected(session.id, 25_000)
     } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
@@ -1744,6 +1743,17 @@ const server = await startSocketServer({
     registry.sessions.setConnectionStatus(session_id, connected, last_pong_at)
     const s = registry.get(session_id)
     webChannel?.broadcastToAll({ type: "session_state", session: session_id, connected, model: s?.model })
+  },
+  // Safety net: a queued inbound that can't reach a live channel shim within the
+  // grace window means the session crashed / never came up. Tell the user in the
+  // chat that sent it, instead of silently dropping the message.
+  onUndeliverable: (session_id, payload) => {
+    const chat_id = payload.meta?.chat_id
+    if (!chat_id) return
+    const name = registry.get(session_id)?.name ?? session_id
+    const text = `⚠️ Couldn't deliver your message to "${name}" — it didn't come up (it may have crashed). Please try again.`
+    if (chat_id.startsWith("telegram")) void telegram?.send({ op: "reply", chat_id, text })
+    else void webChannel?.send({ op: "reply", chat_id, text })
   },
   handler: {
     onRegister: async (msg) => {
@@ -2823,7 +2833,7 @@ if (!settings.getAppConfig(appConfigEnv).onboarded &&
   settings.setAppConfig({ onboarded: true })
   log.info("onboarded_seeded_existing_install", {})
 }
-await reconcileOnStartup({ registry, bindSocket: (sid) => server.bind(sid), supervisor })
+await reconcileOnStartup({ registry, bindSocket: (sid) => server.bind(sid), supervisor, livePanePid: (wid) => livePanePid(wid) })
 
 // Assign the PA respawn implementation now that supervisor is available.
 // Called by setAppConfig when onboarding transitions false → true, so the PA

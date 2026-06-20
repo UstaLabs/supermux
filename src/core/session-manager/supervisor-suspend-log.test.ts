@@ -84,4 +84,42 @@ describe("session-death observability (suspend logging)", () => {
     expect(logged).toContain("session_suspended")
     expect(logged).toContain(s.id)
   })
+
+  test("reconcileOnStartup KEEPS a claude session whose pid is dead but its tmux pane survived, adopting the pane pid", async () => {
+    // After a broker restart the stored pid is stale (a dead broker pid from a
+    // lazy-resume, or pid=0 from a DB-only load), but the claude pane lives on in
+    // its own systemd scope. Trust the pane, not the pid — otherwise the live
+    // session is false-suspended and the next message kill-and-respawns it.
+    const registry = freshRegistry()
+    const s = registry.register({ name: "ztest-pane-survived", workdir: "/tmp", tmux_target: "mux:z3", pid: 1 })
+    registry.sessions.setTmuxWindowId(s.id, "@42")
+
+    await reconcileOnStartup({
+      registry,
+      bindSocket: async () => {},
+      supervisor: supervisorStub,
+      isAlive: () => false,                                   // stored pid is dead
+      livePanePid: async (wid) => (wid === "@42" ? 4242 : null), // but the pane survived
+    })
+
+    const after = registry.get(s.id)
+    expect(after?.status).toBe("active")   // NOT suspended — the pane is alive
+    expect(after?.pid).toBe(4242)          // pid adopted from the surviving pane
+  })
+
+  test("reconcileOnStartup still suspends a claude session whose pid AND pane are both dead", async () => {
+    const registry = freshRegistry()
+    const s = registry.register({ name: "ztest-both-dead", workdir: "/tmp", tmux_target: "mux:z4", pid: 1 })
+    registry.sessions.setTmuxWindowId(s.id, "@99")
+
+    await reconcileOnStartup({
+      registry,
+      bindSocket: async () => {},
+      supervisor: supervisorStub,
+      isAlive: () => false,
+      livePanePid: async () => null,   // pane gone too
+    })
+
+    expect(registry.get(s.id)?.status).toBe("suspended")
+  })
 })
