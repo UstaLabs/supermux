@@ -34,12 +34,14 @@ import { spawnSessionWindow, killSessionWindow, killWindowById, listSessionWindo
 import { spawnSession as spawnSessionHelper, spawnPA, resumeOpenCodeSession } from "./core/session-manager/spawn-helper"
 import { RuntimeRegistry, type SessionRuntime } from "./core/session-manager/runtime"
 import { buildClaudeSpawnCommand } from "./core/session-manager/spawn-command"
+import { createAgentRpc } from "./core/agent-rpc"
+import { buildRpcPrompt } from "./core/agent-rpc/prompts"
 import { cursorSpawnArgs, codexSpawnArgs, claudeSpawnArgs, codexPrepareGlobal, codexPrepareSessionHome, opencodeConfigEntries, ensureOpenCodePluginScopes } from "./core/plugins"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider } from "./core/slash-commands"
 import { AgentKind, isAgentKind } from "./shared/agents"
 import { sendChannelConsentEnter } from "./core/session-manager/post-spawn-keys"
-import { preAcceptTrust } from "./core/session-manager/trust"
+import { preAcceptTrust, writeRpcWorkerMcpConfig } from "./core/session-manager/trust"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
 import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
 import { resolveDownloadAttachment } from "./core/session-manager/download"
@@ -70,7 +72,7 @@ import {
 } from "./shared/paths"
 import { validateWebEnv } from "./shared/web-env"
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chmodSync } from "fs"
-import { randomBytes } from "crypto"
+import { randomBytes, randomUUID } from "crypto"
 import { execSync as _execSync, spawn as nodeSpawn } from "child_process"
 import { makeLogger } from "./shared/log"
 import { checkPreflight, hasBinary } from "./shared/preflight"
@@ -409,6 +411,15 @@ const replyOwner = new Map<string, string>()              // key: `${chat_id}:${
 const pendingSpawnActive = new Map<string, string>()      // expectedName → channelChatId
 const pendingClaudeSessionId = new Map<string, string>()  // brokerSessionId → claudeSessionId
 const pendingTmuxWindowId = new Map<string, string>()      // brokerSessionId → tmux window id
+// Claude sessions register asynchronously via the shim's onRegister (not in the
+// spawn helper), so a worker that must be marked broker-internal records the
+// intent here keyed by broker session id; onRegister consumes it. Same deferred
+// pattern as pendingTmuxWindowId/pendingClaudeSessionId above.
+const pendingInternal = new Set<string>()                  // brokerSessionId (internal=true)
+// agent-rpc registry. Assigned once below, after spawnSession/killSession/
+// deliverInbound (its deps) are all defined; declared here so it's in scope for
+// the orchestration dispatch (rpc_resolve / rpc_reject) further up.
+let agentRpc: ReturnType<typeof createAgentRpc>
 
 const telegram: TelegramChannel | undefined = hasTelegram
   ? new TelegramChannel({ token: TG_TOKEN!, fileStore })
@@ -1820,6 +1831,7 @@ const server = await startSocketServer({
       // re-registers as PA → can_orchestrate stays true via policy. Brand-new sessions
       // default to worker/false.
       const prior = registry.get(sessionUuid)
+      const wasInternal = pendingInternal.delete(sessionUuid)
       const session = registry.register({
         id: sessionUuid,  // Use the UUID from the socket
         name: finalName,
@@ -1829,6 +1841,7 @@ const server = await startSocketServer({
         agent_session_id: agentSessionId,
         role: prior?.role ?? "worker",
         is_default: prior?.is_default ?? false,
+        internal: wasInternal,
         base_commits: (() => {
           const out: Record<string, string> = {}
           for (const repo of scanRepos(workdir)) {
@@ -1985,7 +1998,7 @@ const server = await startSocketServer({
       const fromSession = msg.session_id
       const s = registry.get(fromSession)  // Look up by UUID
       const op = msg.op
-      const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices"])
+      const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject"])
       if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
         return { ok: false, error: "permission denied (can_orchestrate=false)" }
       }
@@ -2153,6 +2166,8 @@ const server = await startSocketServer({
           await displayManager.stop(id)
           return { ok: true, value: { stopped: true } }
         }
+        case "rpc_resolve": { agentRpc.settle(String(op.args.request_id), op.args.data); return { ok: true, value: "ok" } }
+        case "rpc_reject":  { agentRpc.fail(String(op.args.request_id), String(op.args.error ?? "rejected")); return { ok: true, value: "ok" } }
       }
       return { ok: false, error: "unknown orchestration op" }
       } catch (err) {
@@ -2224,7 +2239,7 @@ async function deliverUserMessage(sessionId: string, text: string): Promise<{ ok
   return { ok: true }
 }
 
-async function spawnSession(args: { workdir: string; requestedName?: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string }) {
+async function spawnSession(args: { workdir: string; requestedName?: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string; internal?: boolean; rpcMcpConfig?: string }) {
   const agent = args.agent ?? AgentKind.Claude
   const workdir = normalizeExistingWorkdir(args.workdir)
   // Worktree-by-default: when the path is a single git repo and worktree isn't
@@ -2298,8 +2313,12 @@ async function spawnSession(args: { workdir: string; requestedName?: string; age
     },
     // Worktree-backed: derive the session name from the ORIGINAL repo, not the
     // worktree dir (whose basename is a uuid) — otherwise the session is named after the uuid.
-    { workdir: effectiveWorkdir, requestedName: args.requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, effort },
+    { workdir: effectiveWorkdir, requestedName: args.requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig },
   )
+  // Claude registers async via the shim — record the internal intent so
+  // onRegister can stamp the row. Non-claude agents are already registered
+  // synchronously by the helper (internal threaded through there).
+  if (args.internal && (args.agent ?? AgentKind.Claude) === AgentKind.Claude) pendingInternal.add(r.session_id)
   let registered = registry.get(r.session_id)
   if ((args.agent ?? "claude") === "claude") {
     // No blind sleep: wait for the shim to register (proof the window survived
@@ -2808,6 +2827,35 @@ if (webChannel) {
     })
   })
 }
+
+// Wire the agent-rpc registry now that all its broker-side deps exist
+// (spawnSession, killSession, deliverInbound). Workers are claude/haiku sessions
+// spawned with a strict rpc-only mcp config, marked internal, and run in a
+// neutral scratch workdir. The orchestration dispatch (rpc_resolve/rpc_reject,
+// above) settles/fails pending calls against this instance.
+const RPC_WORKER_IDLE_MS = Number(process.env.RPC_WORKER_IDLE_SEC ?? 600) * 1000
+const RPC_WORKERS_DIR = join(STATE_DIR, "rpc-workers")        // neutral scratch workdir
+mkdirSync(RPC_WORKERS_DIR, { recursive: true })
+agentRpc = createAgentRpc({
+  defaultAgent: AgentKind.Claude,
+  defaultModel: "haiku",
+  defaultTimeoutMs: 30_000,
+  newRequestId: () => randomUUID(),
+  now: () => Date.now(),
+  buildPrompt: buildRpcPrompt,
+  isAlive: (sessionId) => !!registry.get(sessionId)?.connected,
+  killWorker: async (sessionId) => { await killSession(sessionId) },
+  deliver: async (sessionId, text) => { await deliverInbound(sessionId, text, {}) },
+  spawnWorker: async ({ key, agent, model }) => {
+    const safe = key.replace(/[^a-z0-9_-]/gi, "_")
+    mkdirSync(join(STATE_DIR, "agents", "rpc"), { recursive: true })
+    const mcpPath = join(STATE_DIR, "agents", "rpc", `${safe}.json`)
+    writeRpcWorkerMcpConfig(mcpPath)
+    const r = await spawnSession({ workdir: RPC_WORKERS_DIR, requestedName: `rpc-${safe}`, agent, model, internal: true, rpcMcpConfig: mcpPath })
+    return { sessionId: r.session_id }
+  },
+})
+void RPC_WORKER_IDLE_MS  // reaper wired separately; keep the configured value referenced
 
 const supervisor = createSupervisor({
   registry,

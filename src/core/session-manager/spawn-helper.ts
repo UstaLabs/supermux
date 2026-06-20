@@ -90,6 +90,14 @@ export type SpawnArgs = {
   reasoningLevel?: string
   /** Resolved CLI value (highest when unset). Passed by the broker caller. */
   effort?: string
+  /** Mark the session as broker-internal (e.g. an agent-rpc worker) so it's
+   *  hidden from user-facing lists. For claude the row is created async via the
+   *  shim's onRegister, so the broker applies this there (see main.ts). For the
+   *  synchronously-registered agents it's forwarded into registry.register(). */
+  internal?: boolean
+  /** When set (agent-rpc worker), claude is pinned to this strict mcp config
+   *  and launched in MUX_RPC_ONLY mode. */
+  rpcMcpConfig?: string
 }
 
 export type SpawnResult = {
@@ -394,7 +402,7 @@ async function spawnClaudeSession(deps: SpawnDeps, args: SpawnArgs): Promise<Spa
       session: deps.tmuxSession,
       window: name,
       workdir: args.workdir,
-      command: buildClaudeSpawnCommand({ name, model: args.model, effort: args.effort, sessionId: id, claudeSessionId, workdir: args.workdir }),
+      command: buildClaudeSpawnCommand({ name, model: args.model, effort: args.effort, sessionId: id, claudeSessionId, workdir: args.workdir, rpcMcpConfig: args.rpcMcpConfig }),
     })
     if (tmuxWindow?.windowId) deps.onTmuxWindowId?.(id, tmuxWindow.windowId)
     await (deps.postSpawnReady ?? sendChannelConsentEnter)(`${deps.tmuxSession}:${name}`)
@@ -457,6 +465,7 @@ export async function spawnCodexSession(deps: SpawnDeps, args: SpawnArgs): Promi
       agent: AgentKind.Codex,
       agent_home: sessionHome,
       base_commits: captureBaseCommits(args.workdir),
+      internal: args.internal,
     } as any)
 
     const adapter = (deps.codexAdapterFactory ?? ((opts) => new CodexAdapter(opts)))({
@@ -531,6 +540,7 @@ export async function spawnCursorSession(deps: SpawnDeps, args: SpawnArgs): Prom
       agent: AgentKind.Cursor,
       agent_home: sessionHome,
       base_commits: captureBaseCommits(args.workdir),
+      internal: args.internal,
     })
 
     deps.registerAdapter?.(name, adapter, { onExit: () => {} })
@@ -618,6 +628,7 @@ export async function spawnOpenCodeSession(deps: SpawnDeps, args: SpawnArgs): Pr
       agent: AgentKind.OpenCode,
       agent_home: sessionHome,
       base_commits: captureBaseCommits(args.workdir),
+      internal: args.internal,
     } as any)
 
     const adapter = new OpenCodeAdapter({
