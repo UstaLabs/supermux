@@ -38,6 +38,7 @@ import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
 import { transcribeAudio } from "./core/transcription/whisper"
 import { buildVoicePayload } from "./core/transcription/voice-context"
+import { cleanupViaCursor, VOICE_CLEANUP_MODEL } from "./core/transcription/cursor-cleanup"
 import { cursorSpawnArgs, codexSpawnArgs, claudeSpawnArgs, codexPrepareGlobal, codexPrepareSessionHome, opencodeConfigEntries, ensureOpenCodePluginScopes } from "./core/plugins"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider } from "./core/slash-commands"
@@ -1396,24 +1397,29 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const s = registry.get(sessionId)
       const cfg = settings.getAppConfig(appConfigEnv)
       let draft = input.draft ?? ""
+      let whisperMs = 0
       if (input.audioPath) {
+        const t0 = Date.now()
         const r = await transcribeAudio(input.audioPath, { model: cfg.whisperModel, lang: cfg.whisperLang })
+        whisperMs = Date.now() - t0
         draft = r.text
       }
       const source = input.audioPath ? "whisper" : "client"
-      if (!draft.trim()) { log.info("voice_transcribe_empty", { sessionId, source }); return { text: "" } }
+      if (!draft.trim()) { log.info("voice_transcribe_empty", { sessionId, source, whisperMs }); return { text: "" } }
       const skills = s ? commandRegistry.get(s.name).filter((c) => c.family === "agent").map((c) => c.name) : []
       const messages = messageLog.get(s?.id ?? sessionId, 10)
-      // Full visibility into exactly what the cleanup worker is fed.
-      log.info("voice_transcribe_in", { sessionId, source, draft, ctxMsgs: messages.length, skills })
       const payload = buildVoicePayload(draft, messages, skills)
+      // Full visibility into exactly what the cleanup is fed + the whisper/cleanup timing split.
+      log.info("voice_transcribe_in", { sessionId, source, draft, whisperMs, ctxMsgs: messages.length, skills, model: VOICE_CLEANUP_MODEL })
       try {
-        const out = await agentRpc.callAgent({ key: `voice:${sessionId}`, taskType: "voice", payload, model: cfg.voiceCleanupModel })
-        const text = (out && typeof out === "object" && "text" in out && typeof (out as any).text === "string") ? (out as any).text : draft
-        log.info("voice_transcribe_out", { sessionId, draft, text, model: cfg.voiceCleanupModel ?? "haiku" })
+        const t1 = Date.now()
+        const out = await cleanupViaCursor({ draft, recentMessages: payload.context.recentMessages, skills })
+        const cleanupMs = Date.now() - t1
+        const text = out.text || draft
+        log.info("voice_transcribe_out", { sessionId, draft, text, whisperMs, cleanupMs, model: VOICE_CLEANUP_MODEL })
         return { text }
       } catch (e) {
-        log.warn("voice_cleanup_failed", { sessionId, draft, err: String(e) })
+        log.warn("voice_cleanup_failed", { sessionId, draft, whisperMs, err: String(e) })
         return { text: draft, degraded: true }
       }
     },
