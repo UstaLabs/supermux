@@ -5,17 +5,27 @@ import Shared
 /// Sessions sidebar │ Chat │ (Editor over Terminal) │ Display, every divider drag-resizable
 /// via `ResizableSplit`. Which work panes are visible is driven by `layout`'s open flags;
 /// chat is always present. `RootView` swaps to `ChatView`'s tab bar at compact width.
+///
+/// The session header (name · branch/sync · links · pane toggles · Finish · ⋯) is a custom
+/// bar at the top of the **detail** column only (`WorkspaceDetail`) — mirroring the PWA,
+/// where the header spans the detail, not the sidebar. The `NavigationStack`'s own nav bar is
+/// hidden for the workspace (the sidebar keeps its in-list "Archived" pull-bar, which is a
+/// `safeAreaInset`, not the nav bar). Navigation to management pages is driven by the `route`
+/// binding via `RootView`'s `.navigationDestination`, so it keeps working with the bar hidden.
 struct IPadWorkspace: View {
     let broker: BrokerSession
     @Binding var selected: String?
     @Binding var route: RootView.NavRoute?
     @Bindable var layout: WorkspaceLayoutModel
 
-    // Session-action state shared with ChatPane (slash /rename, /kill) + banner.
+    // Session-action state shared with ChatPane (slash /rename, /kill).
     @State private var showRename = false
     @State private var renameText = ""
     @State private var showKillConfirm = false
-    @State private var banner: String?
+    // Git status / proxies / finish flow / result banner — one source of truth, the same
+    // SessionChrome the compact ChatView uses. Optional: there may be no selected session.
+    // It's the lifecycle owner; `WorkspaceDetail` receives the unwrapped value as `@Bindable`.
+    @State private var chrome: SessionChrome?
     // Sidebar-width drag: width captured at gesture start so the cumulative translation
     // is applied once (no double-counting), mirroring `PaneDivider`.
     @State private var dragStartWidth: Double?
@@ -34,9 +44,9 @@ struct IPadWorkspace: View {
         }
         .animation(.snappy(duration: 0.25), value: layout.sidebarCollapsed)
         .workspaceShortcuts(layout: layout) { route = .newSession }
-        .navigationTitle(session?.name ?? "supermux")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar { workspaceToolbar }
+        // The session header lives in the detail column (see `WorkspaceDetail`), so the stack's
+        // own nav bar is hidden — it would otherwise span both columns and double the chrome.
+        .toolbar(.hidden, for: .navigationBar)
         .alert("Rename session", isPresented: $showRename) {
             TextField("Name", text: $renameText)
             Button("Cancel", role: .cancel) {}
@@ -46,11 +56,21 @@ struct IPadWorkspace: View {
             Button("Kill session", role: .destructive) { if let s = session { broker.kill(s.id) } }
             Button("Cancel", role: .cancel) {}
         }
-        .onAppear(perform: applyEnvHooks)
+        .onAppear { applyEnvHooks(); syncChrome() }
+        // Keep the chrome pointed at the selected session (load git/proxies on switch).
+        .onChange(of: selected) { _, _ in syncChrome() }
         // Auto-open the Display column on the no-stream → live edge for this session (PWA parity).
         // Gated to nil→non-nil so a manual ⌘D close isn't resurrected by a second/restarted
         // stream getting a new id while one was already live.
         .onChange(of: liveDisplayId) { old, id in if old == nil, id != nil { layout.displayOpen = true } }
+    }
+
+    /// Ensure `chrome` exists for the selected session and (re)load its git/proxy state.
+    /// Reuses one chrome across switches; `load(for:)` is idempotent per session id.
+    private func syncChrome() {
+        guard let s = session else { return }
+        if chrome == nil { chrome = SessionChrome(broker: broker, session: s) }
+        chrome?.load(for: s)
     }
 
     /// The leading column: a 56-pt avatar rail when collapsed, else the full grouped
@@ -96,81 +116,14 @@ struct IPadWorkspace: View {
     }
 
     @ViewBuilder private var detail: some View {
-        if let s = session {
-            VStack(spacing: 0) {
-                if let banner {
-                    Text(banner).font(.footnote).padding(8)
-                        .frame(maxWidth: .infinity).background(.thinMaterial)
-                }
-                content(s)
-            }
+        // The header + finish dialogs need a non-nil chrome bound for two-way state, so the
+        // detail content lives in `WorkspaceDetail` and is rendered only once chrome exists.
+        if let s = session, let chrome {
+            WorkspaceDetail(broker: broker, session: s, layout: layout, chrome: chrome, route: $route,
+                            showRename: $showRename, renameText: $renameText,
+                            showKillConfirm: $showKillConfirm)
         } else {
             ContentUnavailableView("Pick a session", systemImage: "bubble.left.and.bubble.right")
-        }
-    }
-
-    @ViewBuilder private func content(_ s: SessionInfo) -> some View {
-        let hasWork = layout.editorOpen || layout.terminalOpen || layout.displayOpen
-        if layout.chatOpen && hasWork {
-            ResizableSplit(axis: .horizontal, pct: $layout.chatPct, range: 20...80) {
-                chat(s)
-            } second: {
-                rightArea(s)
-            }
-        } else if layout.chatOpen {
-            chat(s)
-        } else {
-            rightArea(s)   // invariant: chat is hidden only while hasWork, so rightArea is non-empty
-        }
-    }
-
-    private func chat(_ s: SessionInfo) -> some View {
-        ChatPane(broker: broker, session: s,
-                 showRename: $showRename, renameText: $renameText,
-                 showKillConfirm: $showKillConfirm, banner: $banner)
-    }
-
-    @ViewBuilder private func rightArea(_ s: SessionInfo) -> some View {
-        if layout.displayOpen && (layout.editorOpen || layout.terminalOpen) {
-            ResizableSplit(axis: .horizontal, pct: $layout.workDisplayPct, range: 25...75) {
-                workColumn(s)
-            } second: {
-                DisplayPane(broker: broker, session: s)
-            }
-        } else if layout.displayOpen {
-            DisplayPane(broker: broker, session: s)
-        } else {
-            workColumn(s)
-        }
-    }
-
-    @ViewBuilder private func workColumn(_ s: SessionInfo) -> some View {
-        if layout.editorOpen && layout.terminalOpen {
-            ResizableSplit(axis: .vertical, pct: $layout.editorTermPct, range: 20...80) {
-                EditorPane(broker: broker, session: s)
-            } second: {
-                TerminalPanel(broker: broker, session: s)
-            }
-        } else if layout.editorOpen {
-            EditorPane(broker: broker, session: s)
-        } else if layout.terminalOpen {
-            TerminalPanel(broker: broker, session: s)
-        }
-    }
-
-    @ToolbarContentBuilder private var workspaceToolbar: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
-            if let s = session { AgentLogo(agent: s.agent, size: 20) }
-        }
-        ToolbarItem(placement: .topBarTrailing) {
-            Menu {
-                Button { route = .personalAssistants } label: { Label("Assistants", systemImage: "person.2") }
-                Button { route = .usage } label: { Label("Usage", systemImage: "chart.bar") }
-                Button { route = .devices } label: { Label("Devices", systemImage: "ipad.and.iphone") }
-                Button { route = .proxies } label: { Label("Proxies", systemImage: "network") }
-                Button { route = .displays } label: { Label("Displays", systemImage: "display") }
-                Button { route = .settings } label: { Label("Settings", systemImage: "gearshape") }
-            } label: { Image(systemName: "ellipsis.circle") }
         }
     }
 
@@ -201,6 +154,170 @@ struct IPadWorkspace: View {
         ]
         for k in raw.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) }) {
             if k == "n" { route = .newSession } else if let cmd = map[k] { cmd.apply(to: layout) }
+        }
+    }
+}
+
+/// The detail column for a selected session: the PWA-parity session header (name · branch/sync ·
+/// links · pane toggles · Finish · ⋯) over the optional git/finish banner over the multi-pane
+/// content. Holds the finish-flow dialogs (bound to the non-optional `chrome`).
+private struct WorkspaceDetail: View {
+    let broker: BrokerSession
+    let session: SessionInfo
+    @Bindable var layout: WorkspaceLayoutModel
+    @Bindable var chrome: SessionChrome
+    @Binding var route: RootView.NavRoute?
+    @Binding var showRename: Bool
+    @Binding var renameText: String
+    @Binding var showKillConfirm: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            sessionHeader
+            if let banner = chrome.banner {
+                Text(banner).font(.footnote).padding(8)
+                    .frame(maxWidth: .infinity).background(.thinMaterial)
+                Divider()
+            }
+            content
+        }
+        // Finish-flow dialogs (parity with ChatView), bound to the shared chrome.
+        .confirmationDialog("No verify script found", isPresented: $chrome.noVerifyConfirm, titleVisibility: .visible) {
+            Button("Merge without verifying") { chrome.runFinish(skipVerify: true) }
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert("Uncommitted changes", isPresented: $chrome.commitPrompt) {
+            TextField("Commit message", text: $chrome.commitMsg)
+            Button("Cancel", role: .cancel) {}
+            Button("Commit & finish") { chrome.runFinish(commitFirst: true, commitMessage: chrome.commitMsg.isEmpty ? "wip" : chrome.commitMsg) }
+        } message: { Text("Commit the session's changes, then finish.") }
+    }
+
+    // MARK: - Session header bar
+
+    /// The detail-only header (PWA `ChatView.vue` parity): AgentLogo + 2-line title
+    /// (name · branch/sync) | links | pane toggles | Finish | ⋯ menu. A single ~52pt row on
+    /// a `.bar` material with a bottom divider, spanning the detail column only.
+    private var sessionHeader: some View {
+        HStack(spacing: 12) {
+            AgentLogo(agent: session.agent, size: 30)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(session.name).font(.headline).lineLimit(1)
+                Text(chrome.navSubtitle)
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            sessionLinksMenu
+            PaneToggleCluster(layout: layout)
+            if chrome.isRepo {
+                Button { chrome.runFinish() } label: {
+                    Label("Finish", systemImage: "arrow.triangle.merge")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.teal)
+                .controlSize(.small)
+                .hoverEffect(.highlight)
+            }
+            overflowMenu
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 52)
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    /// Session proxy links — a `link` menu shown only when the session has proxies
+    /// (kept separate from the overflow ⋯ so the links are one tap away, like the PWA).
+    @ViewBuilder private var sessionLinksMenu: some View {
+        if !chrome.sessionLinks.isEmpty {
+            Menu {
+                ForEach(chrome.sessionLinks, id: \.domain) { p in
+                    if let u = chrome.linkURL(p) { Link(destination: u) { Label(proxyDisplayUrl(proxy: p), systemImage: "link") } }
+                }
+            } label: {
+                Image(systemName: "link").font(.body)
+            }
+            .hoverEffect(.highlight)
+        }
+    }
+
+    /// The overflow ⋯ menu: git ops (when the session is a repo) + the management pages that
+    /// used to live in the stack's toolbar (now route-driven, since the nav bar is hidden).
+    @ViewBuilder private var overflowMenu: some View {
+        Menu {
+            if let g = chrome.git, g.isRepo {
+                Section("Git") {
+                    Button { chrome.fetch() } label: { Label("Fetch", systemImage: "arrow.down") }
+                    Button { chrome.push() } label: { Label("Push", systemImage: "arrow.up") }
+                    Button { chrome.pull() } label: { Label("Pull", systemImage: "arrow.down.to.line") }
+                    if g.upstream == nil {
+                        Button { chrome.publish() } label: { Label("Publish", systemImage: "arrow.up.to.line") }
+                    }
+                }
+            }
+            Section {
+                Button { route = .personalAssistants } label: { Label("Assistants", systemImage: "person.2") }
+                Button { route = .usage } label: { Label("Usage", systemImage: "chart.bar") }
+                Button { route = .devices } label: { Label("Devices", systemImage: "ipad.and.iphone") }
+                Button { route = .proxies } label: { Label("Proxies", systemImage: "network") }
+                Button { route = .displays } label: { Label("Displays", systemImage: "display") }
+                Button { route = .settings } label: { Label("Settings", systemImage: "gearshape") }
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle").font(.body)
+        }
+        .hoverEffect(.highlight)
+    }
+
+    // MARK: - Multi-pane content
+
+    @ViewBuilder private var content: some View {
+        let hasWork = layout.editorOpen || layout.terminalOpen || layout.displayOpen
+        if layout.chatOpen && hasWork {
+            ResizableSplit(axis: .horizontal, pct: $layout.chatPct, range: 20...80) {
+                chat
+            } second: {
+                rightArea
+            }
+        } else if layout.chatOpen {
+            chat
+        } else {
+            rightArea   // invariant: chat is hidden only while hasWork, so rightArea is non-empty
+        }
+    }
+
+    private var chat: some View {
+        ChatPane(broker: broker, session: session,
+                 showRename: $showRename, renameText: $renameText,
+                 showKillConfirm: $showKillConfirm, banner: $chrome.banner)
+    }
+
+    @ViewBuilder private var rightArea: some View {
+        if layout.displayOpen && (layout.editorOpen || layout.terminalOpen) {
+            ResizableSplit(axis: .horizontal, pct: $layout.workDisplayPct, range: 25...75) {
+                workColumn
+            } second: {
+                DisplayPane(broker: broker, session: session)
+            }
+        } else if layout.displayOpen {
+            DisplayPane(broker: broker, session: session)
+        } else {
+            workColumn
+        }
+    }
+
+    @ViewBuilder private var workColumn: some View {
+        if layout.editorOpen && layout.terminalOpen {
+            ResizableSplit(axis: .vertical, pct: $layout.editorTermPct, range: 20...80) {
+                EditorPane(broker: broker, session: session)
+            } second: {
+                TerminalPanel(broker: broker, session: session)
+            }
+        } else if layout.editorOpen {
+            EditorPane(broker: broker, session: session)
+        } else if layout.terminalOpen {
+            TerminalPanel(broker: broker, session: session)
         }
     }
 }

@@ -18,17 +18,20 @@ struct ChatView: View {
     let broker: BrokerSession
     let session: SessionInfo
 
+    init(broker: BrokerSession, session: SessionInfo) {
+        self.broker = broker
+        self.session = session
+        _chrome = State(initialValue: SessionChrome(broker: broker, session: session))
+    }
+
     // MARK: - Toolbar / finish state
     @State private var showRename = false
     @State private var renameText = ""
     @State private var showKillConfirm = false
-    @State private var git: GitRemoteStatus?
-    @State private var banner: String?
-    @State private var noVerifyConfirm = false
-    @State private var commitPrompt = false
-    @State private var commitMsg = ""
-    @State private var loadedSessionId: String?
-    @State private var proxies: [ProxyDto] = []
+    // Git status, proxies, finish flow, and the result banner live in SessionChrome — one
+    // source of truth shared with the iPad header. Created per ChatView; `load(for:)` is
+    // idempotent per session id, so re-appearing the same session doesn't refetch.
+    @State private var chrome: SessionChrome
 
     // MARK: - Tab state
     enum PaneTab: Hashable { case chat, native, terminal, editor, display }
@@ -64,7 +67,7 @@ struct ChatView: View {
         return image
     }
 
-    private var sessionLinks: [ProxyDto] { proxies.filter { $0.sessionName == session.name } }
+    private var sessionLinks: [ProxyDto] { chrome.sessionLinks }
 
     // MARK: - Body
 
@@ -77,7 +80,7 @@ struct ChatView: View {
                          showRename: $showRename,
                          renameText: $renameText,
                          showKillConfirm: $showKillConfirm,
-                         banner: $banner)
+                         banner: $chrome.banner)
             }
             if agentViewAvailable {
                 Tab(value: PaneTab.native) {
@@ -97,25 +100,26 @@ struct ChatView: View {
             }
         }
         .navigationTitle(session.name)
-        .navigationSubtitle(navSubtitle)
+        .navigationSubtitle(chrome.navSubtitle)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 AgentLogo(agent: session.agent, size: 20)
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                if let g = git, g.isRepo {
-                    Button { runFinish() } label: { Label("Finish", systemImage: "arrow.triangle.merge") }
+                if chrome.isRepo {
+                    Button { chrome.runFinish() } label: { Label("Finish", systemImage: "arrow.triangle.merge") }
                         .tint(Theme.teal)
                 }
-                if (git?.isRepo ?? false) || !sessionLinks.isEmpty { navMenu }
+                if chrome.isRepo || !sessionLinks.isEmpty { navMenu }
             }
         }
         .toolbarTitleDisplayMode(.inline)
         // Load per-session state on EVERY appearance — `.task(id:)` doesn't re-fire when
         // re-opening the *same* session (id unchanged), which left git/branch unloaded.
         // onAppear covers first-open + reopen; onChange covers switching (reused view).
-        .onAppear { if loadedSessionId != session.id { loadSession() } }
-        .onChange(of: session.id) { _, _ in loadSession() }
+        // `load(for:)` is idempotent per id, so re-appearing the same session is a no-op.
+        .onAppear { chrome.load(for: session) }
+        .onChange(of: session.id) { _, _ in tab = .chat; chrome.load(for: session) }
         .task(id: session.id) {
             if ProcessInfo.processInfo.environment["SM_OPEN_TERMINAL"] == "1" {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -149,14 +153,14 @@ struct ChatView: View {
             Button("Kill session", role: .destructive) { broker.kill(session.id) }
             Button("Cancel", role: .cancel) {}
         }
-        .confirmationDialog("No verify script found", isPresented: $noVerifyConfirm, titleVisibility: .visible) {
-            Button("Merge without verifying") { runFinish(skipVerify: true) }
+        .confirmationDialog("No verify script found", isPresented: $chrome.noVerifyConfirm, titleVisibility: .visible) {
+            Button("Merge without verifying") { chrome.runFinish(skipVerify: true) }
             Button("Cancel", role: .cancel) {}
         }
-        .alert("Uncommitted changes", isPresented: $commitPrompt) {
-            TextField("Commit message", text: $commitMsg)
+        .alert("Uncommitted changes", isPresented: $chrome.commitPrompt) {
+            TextField("Commit message", text: $chrome.commitMsg)
             Button("Cancel", role: .cancel) {}
-            Button("Commit & finish") { runFinish(commitFirst: true, commitMessage: commitMsg.isEmpty ? "wip" : commitMsg) }
+            Button("Commit & finish") { chrome.runFinish(commitFirst: true, commitMessage: chrome.commitMsg.isEmpty ? "wip" : chrome.commitMsg) }
         } message: { Text("Commit the session's changes, then finish.") }
     }
 
@@ -168,111 +172,29 @@ struct ChatView: View {
                      onExit: { tab = .chat })
     }
 
-    // MARK: - Session load
-
-    /// (Re)load everything tied to the current session. Runs on first open, reopen,
-    /// and session switch — git status is retried so the branch reliably appears.
-    private func loadSession() {
-        loadedSessionId = session.id
-        tab = .chat
-        git = nil
-        Task {
-            for _ in 0..<8 {
-                if let g = await broker.gitStatus(session.id) { git = g; return }
-                if Task.isCancelled { return }
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-            }
-        }
-        Task { proxies = (try? await broker.api.proxies()) ?? [] }
-    }
-
-    // MARK: - Navigation subtitle
-
-    /// Subtitle under the inline title: branch + sync status when in a repo, else the workdir.
-    /// Kept off the title row so a long session name can't crowd it (it truncates on its own line).
-    private var navSubtitle: String {
-        if let g = git, g.isRepo, let b = g.branch {
-            if g.upstream == nil { return "\(b) · not published" }
-            var s = b
-            if g.ahead > 0 { s += " ↑\(g.ahead)" }
-            if g.behind > 0 { s += " ↓\(g.behind)" }
-            return s
-        }
-        return formatWorkdir(workdir: session.workdir, home: inferHomeDir(workdir: session.workdir))
-    }
-
     // MARK: - Navigation menu
 
     /// Overflow menu (•••): git actions (when a repo) + session links. Folded out of the
-    /// title row so the bar stays one tidy line regardless of session-name length.
+    /// title row so the bar stays one tidy line regardless of session-name length. Git/finish
+    /// state + actions live in `chrome` (shared with the iPad header).
     @ViewBuilder private var navMenu: some View {
         Menu {
-            if let g = git, g.isRepo {
-                Button { gitAction { await broker.gitFetch(session.id) } } label: { Label("Fetch", systemImage: "arrow.down") }
-                Button { gitAction { await broker.gitPush(session.id) } } label: { Label("Push", systemImage: "arrow.up") }
-                Button { gitAction { await broker.gitPull(session.id) } } label: { Label("Pull", systemImage: "arrow.down.to.line") }
+            if let g = chrome.git, g.isRepo {
+                Button { chrome.fetch() } label: { Label("Fetch", systemImage: "arrow.down") }
+                Button { chrome.push() } label: { Label("Push", systemImage: "arrow.up") }
+                Button { chrome.pull() } label: { Label("Pull", systemImage: "arrow.down.to.line") }
                 if g.upstream == nil {
-                    Button { gitAction { await broker.gitPublish(session.id) } } label: { Label("Publish", systemImage: "arrow.up.to.line") }
+                    Button { chrome.publish() } label: { Label("Publish", systemImage: "arrow.up.to.line") }
                 }
             }
             if !sessionLinks.isEmpty {
-                if git?.isRepo ?? false { Divider() }
+                if chrome.isRepo { Divider() }
                 ForEach(sessionLinks, id: \.domain) { p in
-                    if let u = linkURL(p) { Link(destination: u) { Label(proxyDisplayUrl(proxy: p), systemImage: "link") } }
+                    if let u = chrome.linkURL(p) { Link(destination: u) { Label(proxyDisplayUrl(proxy: p), systemImage: "link") } }
                 }
             }
         } label: {
             Image(systemName: "ellipsis.circle")
-        }
-    }
-    private func linkURL(_ p: ProxyDto) -> URL? { URL(string: proxyUrl(proxy: p)) }
-
-    // MARK: - Git helpers
-
-    private func showBanner(_ text: String) {
-        banner = text
-        Task { try? await Task.sleep(nanoseconds: 4_000_000_000); banner = nil }
-    }
-    private func gitAction(_ op: @escaping () async -> GitOpResult?) {
-        Task {
-            let r = await op()
-            showBanner(gitResultText(r))
-            git = await broker.gitStatus(session.id)
-        }
-    }
-    private func gitResultText(_ r: GitOpResult?) -> String {
-        guard let r else { return "Failed" }
-        switch r.status {
-        case "pushed": return "Pushed"
-        case "up_to_date": return "Up to date"
-        case "clean": return "Pulled"
-        case "rejected_non_ff": return "Push rejected — pull first"
-        case "conflict": return "Conflict in \(r.files.count) file(s)"
-        case "dirty": return "Uncommitted changes block the pull"
-        case "auth_failed": return "Auth failed"
-        case "error": return r.message ?? "Error"
-        default: return r.status
-        }
-    }
-    private func runFinish(skipVerify: Bool? = nil, commitFirst: Bool? = nil, commitMessage: String? = nil) {
-        Task {
-            guard let r = await broker.finish(session.id, skipVerify: skipVerify,
-                                              commitFirst: commitFirst, commitMessage: commitMessage) else {
-                showBanner("Finish failed"); return
-            }
-            switch r.status {
-            case "integrated": showBanner("Merged into \(r.base ?? "base")")
-            case "nothing_to_do": showBanner("Nothing to merge")
-            case "no_verify": noVerifyConfirm = true; return
-            case "uncommitted": commitMsg = ""; commitPrompt = true; return
-            case "sync_conflict": showBanner("Sync conflict in \(r.files.count) file(s) — resolve via the agent")
-            case "tests_failed": showBanner("Verify failed: \(r.command ?? "tests")")
-            case "dirty_overlap": showBanner("Dirty overlap in \(r.files.count) file(s)")
-            case "non_ff": showBanner("Base moved — retry")
-            case "error": showBanner(r.message ?? "Error")
-            default: showBanner(r.status)
-            }
-            git = await broker.gitStatus(session.id)
         }
     }
 }
