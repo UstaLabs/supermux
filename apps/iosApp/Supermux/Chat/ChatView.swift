@@ -591,7 +591,12 @@ struct ChatView: View {
         if dictation.isListening {
             let (text, _) = await dictation.stop()
             guard !text.isEmpty else { showBanner("Didn't catch that"); return }
-            await runTranscription { try await broker.transcribeDraft(sessionId: session.id, draft: text) }
+            // We already have a usable on-device draft. Try the agent cleanup, but if the
+            // broker is unreachable / errors, fall back to the RAW draft so the dictated
+            // text still lands in the composer (cleanup is an enhancement, not a gate).
+            await runTranscription(rawFallback: text) {
+                try await broker.transcribeDraft(sessionId: session.id, draft: text)
+            }
             return
         }
         // Not capturing yet → start on-device dictation, or fall back to recording.
@@ -600,28 +605,53 @@ struct ChatView: View {
             break
         case .denied:
             micDenied = true
-        case .unavailable, .failed:
-            // On-device recognition isn't available for this locale (or engine failed to
-            // start) — fall back to recording audio for a server-side (multipart) transcribe.
+        case .unavailable, .downloading, .failed:
+            // On-device recognition isn't available for this locale, the language model is
+            // still downloading (first use), or the engine failed to start — fall back to
+            // recording audio for a server-side (multipart) transcribe.
             if case .denied = await recorder.start() { micDenied = true }
         }
     }
 
     /// Run a transcribe call with the "Transcribing…" state, then append the cleaned text
-    /// to the composer (a space joins it to any existing draft). Errors → banner.
-    private func runTranscription(_ call: @escaping () async throws -> String) async {
+    /// to the composer (a space joins it to any existing draft).
+    ///
+    /// `rawFallback` is the un-cleaned on-device draft (when we have one). On ANY failure
+    /// — broker unreachable, cleanup error — we still drop that raw text into the composer
+    /// so the dictation isn't lost; the agent cleanup is just an enhancement. We only show
+    /// an error when there's genuinely no text to keep at all.
+    private func runTranscription(rawFallback: String? = nil,
+                                  _ call: @escaping () async throws -> String) async {
         transcribing = true
         defer { transcribing = false }
+        let result: String
         do {
-            let text = try await call()
-            let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !cleaned.isEmpty else { return }
-            let existing = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-            draft = existing.isEmpty ? cleaned : existing + " " + cleaned
-            composing = true
+            result = try await call()
         } catch {
-            showBanner("Transcription failed")
+            // Cleanup failed — keep the raw draft if we have one, else surface the error.
+            if let raw = rawFallback?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+                appendToDraft(raw)
+            } else {
+                showBanner("Transcription failed")
+            }
+            return
         }
+        let cleaned = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Broker reachable but gave us nothing usable — fall back to the raw draft if any.
+        if cleaned.isEmpty {
+            if let raw = rawFallback?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+                appendToDraft(raw)
+            }
+            return
+        }
+        appendToDraft(cleaned)
+    }
+
+    /// Append text to the composer draft, space-joining onto any existing draft, and focus.
+    private func appendToDraft(_ text: String) {
+        let existing = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft = existing.isEmpty ? text : existing + " " + text
+        composing = true
     }
 
     private func attachmentChip(_ p: PendingAttachment) -> some View {
