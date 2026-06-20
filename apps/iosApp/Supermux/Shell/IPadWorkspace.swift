@@ -29,6 +29,10 @@ struct IPadWorkspace: View {
     // Sidebar-width drag: width captured at gesture start so the cumulative translation
     // is applied once (no double-counting), mirroring `PaneDivider`.
     @State private var dragStartWidth: Double?
+    // The SM_IPAD_OPEN_PANES / SM_IPAD_PRESS hooks mutate the SELECTED session's panes, but
+    // `selected` is populated asynchronously (RootView's `.task(id: broker.synced)`), well after
+    // onAppear. This one-shot guard defers the hooks until a session is selected, then runs them once.
+    @State private var didApplyEnvHooks = false
 
     private var session: SessionInfo? { broker.sessions.first { $0.id == selected } }
 
@@ -43,7 +47,7 @@ struct IPadWorkspace: View {
             detail.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .animation(.snappy(duration: 0.25), value: layout.sidebarCollapsed)
-        .workspaceShortcuts(layout: layout) { route = .newSession }
+        .workspaceShortcuts(layout: layout, session: selected) { route = .newSession }
         // The session header lives in the detail column (see `WorkspaceDetail`), so the stack's
         // own nav bar is hidden — it would otherwise span both columns and double the chrome.
         .toolbar(.hidden, for: .navigationBar)
@@ -56,13 +60,20 @@ struct IPadWorkspace: View {
             Button("Kill session", role: .destructive) { if let s = session { broker.kill(s.id) } }
             Button("Cancel", role: .cancel) {}
         }
-        .onAppear { applyEnvHooks(); syncChrome() }
-        // Keep the chrome pointed at the selected session (load git/proxies on switch).
-        .onChange(of: selected) { _, _ in syncChrome() }
+        .onAppear { syncChrome(); applyEnvHooksIfReady() }
+        // Keep the chrome pointed at the selected session (load git/proxies on switch). The env
+        // hooks need a selected session, which arrives async after onAppear — apply them here on
+        // the first selection too (the guard makes it one-shot, so a later switch won't re-fire).
+        .onChange(of: selected) { _, _ in syncChrome(); applyEnvHooksIfReady() }
         // Auto-open the Display column on the no-stream → live edge for this session (PWA parity).
         // Gated to nil→non-nil so a manual ⌘D close isn't resurrected by a second/restarted
-        // stream getting a new id while one was already live.
-        .onChange(of: liveDisplayId) { old, id in if old == nil, id != nil { layout.displayOpen = true } }
+        // stream getting a new id while one was already live. Writes the CURRENT session's pane.
+        .onChange(of: liveDisplayId) { old, id in
+            guard old == nil, id != nil, let s = session else { return }
+            var v = layout.panes(for: s.id)
+            v.displayOpen = true
+            layout.setPanes(v, for: s.id)
+        }
     }
 
     /// Ensure `chrome` exists for the selected session and (re)load its git/proxy state.
@@ -128,32 +139,47 @@ struct IPadWorkspace: View {
     }
 
     /// Headless screenshot/verification hooks, applied once on launch in a fixed order:
-    /// SM_IPAD_OPEN_PANES sets the pane flags, then SM_IPAD_PRESS applies ⌘ commands on top.
-    private func applyEnvHooks() {
-        applyOpenPanesEnv()
-        applyPressEnv()
+    /// SM_IPAD_OPEN_PANES sets the selected session's pane flags, then SM_IPAD_PRESS applies ⌘
+    /// commands on top. Both target the SELECTED session's panes (now per-session), so they no-op
+    /// until a session exists; the one-shot `didApplyEnvHooks` guard makes them fire exactly once.
+    ///
+    /// ORCHESTRATOR: timing. `selected` is set asynchronously by RootView's `.task(id:
+    /// broker.synced)` AFTER the broker syncs — long after this view's onAppear. So the hooks are
+    /// driven from BOTH onAppear (covers the rare case a session is already selected) and the
+    /// first `.onChange(of: selected)`; the guard ensures a later session switch never re-applies
+    /// them. If a hook ever appears not to fire, check that `selected` actually became non-nil
+    /// (e.g. SM_OPEN_SESSION matched a real session name) before suspecting the guard.
+    private func applyEnvHooksIfReady() {
+        guard !didApplyEnvHooks, let s = session else { return }
+        didApplyEnvHooks = true
+        applyOpenPanesEnv(for: s.id)
+        applyPressEnv(for: s.id)
     }
 
-    /// Headless screenshot hook: SM_IPAD_OPEN_PANES=editor,terminal,display opens those panes on launch.
-    private func applyOpenPanesEnv() {
+    /// Headless screenshot hook: SM_IPAD_OPEN_PANES=editor,terminal,display opens those panes on
+    /// launch for the selected session. Preserves chat-on + the never-empty invariant via `setPanes`.
+    private func applyOpenPanesEnv(for sessionId: String) {
         guard let raw = ProcessInfo.processInfo.environment["SM_IPAD_OPEN_PANES"] else { return }
         let panes = Set(raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
-        layout.editorOpen = panes.contains("editor")
-        layout.terminalOpen = panes.contains("terminal")
-        layout.displayOpen = panes.contains("display")
+        var v = layout.panes(for: sessionId)
+        v.editorOpen = panes.contains("editor")
+        v.terminalOpen = panes.contains("terminal")
+        v.displayOpen = panes.contains("display")
+        layout.setPanes(v, for: sessionId)
     }
 
     /// Headless verification hook: SM_IPAD_PRESS=b,e applies those ⌘ commands on launch — the
     /// SAME WorkspaceCommand.apply the keyboard shortcuts trigger — so the toggle + render path
     /// (and the rail, via "b") is screenshot-verifiable without injecting hardware key events.
-    private func applyPressEnv() {
+    /// Pane toggles act on the selected session; "b" is the global sidebar; "n" routes.
+    private func applyPressEnv(for sessionId: String) {
         guard let raw = ProcessInfo.processInfo.environment["SM_IPAD_PRESS"] else { return }
         let map: [String: WorkspaceCommand] = [
             "b": .toggleSidebar, "l": .toggleChat, "t": .toggleTerminal,
             "e": .toggleEditor, "d": .toggleDisplay,
         ]
         for k in raw.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) }) {
-            if k == "n" { route = .newSession } else if let cmd = map[k] { cmd.apply(to: layout) }
+            if k == "n" { route = .newSession } else if let cmd = map[k] { cmd.apply(to: layout, session: sessionId) }
         }
     }
 }
@@ -208,7 +234,7 @@ private struct WorkspaceDetail: View {
             }
             Spacer(minLength: 8)
             sessionLinksMenu
-            PaneToggleCluster(layout: layout)
+            PaneToggleCluster(layout: layout, sessionId: session.id)
             if chrome.isRepo {
                 Button { chrome.runFinish() } label: {
                     Label("Finish", systemImage: "arrow.triangle.merge")
@@ -272,15 +298,20 @@ private struct WorkspaceDetail: View {
 
     // MARK: - Multi-pane content
 
+    /// This session's open/closed pane state (PWA `panelsFor(sessionId)`). Split ratios stay
+    /// global on `layout`; only which panes show is per-session.
+    private var panes: PaneVisibility { layout.panes(for: session.id) }
+
     @ViewBuilder private var content: some View {
-        let hasWork = layout.editorOpen || layout.terminalOpen || layout.displayOpen
-        if layout.chatOpen && hasWork {
+        let p = panes
+        let hasWork = p.editorOpen || p.terminalOpen || p.displayOpen
+        if p.chatOpen && hasWork {
             ResizableSplit(axis: .horizontal, pct: $layout.chatPct, range: 20...80) {
                 chat
             } second: {
                 rightArea
             }
-        } else if layout.chatOpen {
+        } else if p.chatOpen {
             chat
         } else {
             rightArea   // invariant: chat is hidden only while hasWork, so rightArea is non-empty
@@ -294,13 +325,14 @@ private struct WorkspaceDetail: View {
     }
 
     @ViewBuilder private var rightArea: some View {
-        if layout.displayOpen && (layout.editorOpen || layout.terminalOpen) {
+        let p = panes
+        if p.displayOpen && (p.editorOpen || p.terminalOpen) {
             ResizableSplit(axis: .horizontal, pct: $layout.workDisplayPct, range: 25...75) {
                 workColumn
             } second: {
                 DisplayPane(broker: broker, session: session)
             }
-        } else if layout.displayOpen {
+        } else if p.displayOpen {
             DisplayPane(broker: broker, session: session)
         } else {
             workColumn
@@ -308,15 +340,16 @@ private struct WorkspaceDetail: View {
     }
 
     @ViewBuilder private var workColumn: some View {
-        if layout.editorOpen && layout.terminalOpen {
+        let p = panes
+        if p.editorOpen && p.terminalOpen {
             ResizableSplit(axis: .vertical, pct: $layout.editorTermPct, range: 20...80) {
                 EditorPane(broker: broker, session: session)
             } second: {
                 TerminalPanel(broker: broker, session: session)
             }
-        } else if layout.editorOpen {
+        } else if p.editorOpen {
             EditorPane(broker: broker, session: session)
-        } else if layout.terminalOpen {
+        } else if p.terminalOpen {
             TerminalPanel(broker: broker, session: session)
         }
     }

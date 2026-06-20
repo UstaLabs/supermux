@@ -12,42 +12,46 @@ enum WorkspaceCommand: CaseIterable {
     case toggleDisplay    // ⌘D  workspace.toggleDisplay
     case newSession       // ⌘N  workspace.newSession (routing, not layout)
 
-    /// Mutates `layout` per the PWA semantics. Never leaves the detail area empty:
-    /// chat may only be hidden while a work pane is open, and closing the last work
-    /// pane re-shows chat. `newSession` is a no-op here (routing is the caller's job).
-    func apply(to layout: WorkspaceLayoutModel) {
+    /// Mutates the layout per the PWA semantics. `toggleSidebar` flips the GLOBAL sidebar; the
+    /// pane toggles read/write only `sessionId`'s pane state (PWA `panels[sessionId]`), so they
+    /// never affect another session. Never leaves the detail area empty: chat may only be hidden
+    /// while a work pane is open, and closing the last work pane re-shows chat. `newSession` is a
+    /// no-op here (routing is the caller's job).
+    func apply(to layout: WorkspaceLayoutModel, session sessionId: String) {
+        if self == .toggleSidebar {
+            layout.sidebarCollapsed.toggle()   // still global
+            return
+        }
+        if self == .newSession { return }      // routing handled by the caller's closure
+
+        var v = layout.panes(for: sessionId)
         switch self {
-        case .toggleSidebar:
-            layout.sidebarCollapsed.toggle()
         case .toggleChat:
             // Chat can be hidden only when another pane is visible; it can always be re-shown.
-            if layout.chatOpen {
-                if layout.editorOpen || layout.terminalOpen || layout.displayOpen {
-                    layout.chatOpen = false
-                }
+            if v.chatOpen {
+                if v.editorOpen || v.terminalOpen || v.displayOpen { v.chatOpen = false }
             } else {
-                layout.chatOpen = true
+                v.chatOpen = true
             }
         case .toggleTerminal:
-            layout.terminalOpen.toggle()
-            ensureSomethingVisible(layout)
+            v.terminalOpen.toggle()
+            Self.ensureSomethingVisible(&v)
         case .toggleEditor:
-            layout.editorOpen.toggle()
-            ensureSomethingVisible(layout)
+            v.editorOpen.toggle()
+            Self.ensureSomethingVisible(&v)
         case .toggleDisplay:
-            layout.displayOpen.toggle()
-            ensureSomethingVisible(layout)
-        case .newSession:
-            break   // routing handled by the caller's closure
+            v.displayOpen.toggle()
+            Self.ensureSomethingVisible(&v)
+        case .toggleSidebar, .newSession:
+            return   // handled above
         }
+        layout.setPanes(v, for: sessionId)
     }
 
     /// Guards the invariant "the detail area is never empty": if every pane is closed,
     /// fall back to chat (so closing the last work pane while chat is hidden re-shows it).
-    private func ensureSomethingVisible(_ layout: WorkspaceLayoutModel) {
-        if !layout.chatOpen && !layout.editorOpen && !layout.terminalOpen && !layout.displayOpen {
-            layout.chatOpen = true
-        }
+    private static func ensureSomethingVisible(_ v: inout PaneVisibility) {
+        if !v.chatOpen && !v.editorOpen && !v.terminalOpen && !v.displayOpen { v.chatOpen = true }
     }
 
     /// Human-readable command name (parity with the PWA command labels). Used for the
@@ -81,6 +85,9 @@ enum WorkspaceCommand: CaseIterable {
 /// the buttons are collapsed to zero size and made non-interactive (no layout/hit-test impact).
 private struct WorkspaceShortcutsModifier: ViewModifier {
     @Bindable var layout: WorkspaceLayoutModel
+    /// The session the pane toggles act on, re-read on every press so it tracks `selected`.
+    /// Pane commands no-op when nil (no session selected); ⌘N (newSession) still fires.
+    let session: () -> String?
     let onNewSession: () -> Void
 
     func body(content: Content) -> some View {
@@ -88,8 +95,15 @@ private struct WorkspaceShortcutsModifier: ViewModifier {
             ZStack {
                 ForEach(Array(WorkspaceCommand.allCases.enumerated()), id: \.offset) { _, cmd in
                     Button(cmd.title) {
-                        if cmd == .newSession { onNewSession() }
-                        else { cmd.apply(to: layout) }
+                        switch cmd {
+                        case .newSession:
+                            onNewSession()
+                        case .toggleSidebar:
+                            cmd.apply(to: layout, session: "")   // global; session id is ignored
+                        default:
+                            // Pane toggles act on the selected session; no-op when none is selected.
+                            if let id = session() { cmd.apply(to: layout, session: id) }
+                        }
                     }
                     .keyboardShortcut(cmd.key, modifiers: .command)
                 }
@@ -104,11 +118,15 @@ private struct WorkspaceShortcutsModifier: ViewModifier {
 
 extension View {
     /// Wires the PWA-parity ⌘ shortcuts (⌘B/L/T/E/D/N) onto a workspace subtree.
-    /// `onNewSession` runs for ⌘N (routing); the others mutate `layout` via `apply(to:)`.
+    /// `onNewSession` runs for ⌘N (routing); the pane toggles mutate the CURRENT `session`'s
+    /// panes via `apply(to:session:)` and no-op when `session()` returns nil (⌘B sidebar still
+    /// works — it's global). `session` is a closure so it's re-evaluated per press, tracking
+    /// the live selection rather than a value captured when the modifier was created.
     func workspaceShortcuts(
         layout: WorkspaceLayoutModel,
+        session: @autoclosure @escaping () -> String?,
         onNewSession: @escaping () -> Void
     ) -> some View {
-        modifier(WorkspaceShortcutsModifier(layout: layout, onNewSession: onNewSession))
+        modifier(WorkspaceShortcutsModifier(layout: layout, session: session, onNewSession: onNewSession))
     }
 }
