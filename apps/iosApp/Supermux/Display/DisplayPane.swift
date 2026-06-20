@@ -108,7 +108,10 @@ private struct VncStreamView: View {
                         }
                     })
                     .contentShape(Rectangle())
-                    .gesture(pointerDrag(in: geo.size, session: session))
+                    // simultaneousGesture (not .gesture) so the floating controls/exit on
+                    // top still receive their taps — a full-bleed minimumDistance:0 drag
+                    // otherwise wins SwiftUI's arbitration and swallows button taps.
+                    .simultaneousGesture(pointerDrag(in: geo.size, session: session))
                 }
                 .ignoresSafeArea(.container, edges: .bottom)
 
@@ -152,12 +155,14 @@ private struct VncStreamView: View {
     private func pointerDrag(in viewSize: CGSize, session: VncSession) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
-                guard let remote = session.size else { return }
+                // Ignore touches that begin on the bottom control strip so tapping the
+                // keyboard / Ctrl-Alt-Del buttons doesn't also send a click to the remote.
+                guard value.startLocation.y < viewSize.height - 88, let remote = session.size else { return }
                 let p = DisplayInput.mapToRemote(point: value.location, viewSize: viewSize, remote: remote)
                 session.sendPointer(x: p.x, y: p.y, buttonMask: 1)
             }
             .onEnded { value in
-                guard let remote = session.size else { return }
+                guard value.startLocation.y < viewSize.height - 88, let remote = session.size else { return }
                 let p = DisplayInput.mapToRemote(point: value.location, viewSize: viewSize, remote: remote)
                 session.sendPointer(x: p.x, y: p.y, buttonMask: 0)
             }
@@ -170,6 +175,8 @@ private struct VncStreamView: View {
             extraLeading: {
                 Button { session.sendCtrlAltDel() } label: {
                     Text("⌃⌥⌦").font(.system(size: 13, weight: .semibold))
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
@@ -255,7 +262,7 @@ private struct ScrcpyStreamView: View {
                         }
                     })
                     .contentShape(Rectangle())
-                    .gesture(touchDrag(in: geo.size, session: session))
+                    .simultaneousGesture(touchDrag(in: geo.size, session: session))
                 }
                 .ignoresSafeArea(.container, edges: .bottom)
 
@@ -295,11 +302,14 @@ private struct ScrcpyStreamView: View {
     private func touchDrag(in viewSize: CGSize, session: ScrcpySession) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
+                // Skip the bottom control strip (keyboard button) — see VNC pointerDrag.
+                guard value.startLocation.y < viewSize.height - 88 else { return }
                 let action = dragStarted ? 2 : 0
                 dragStarted = true
                 send(value.location, action: action, viewSize: viewSize, session: session)
             }
             .onEnded { value in
+                guard value.startLocation.y < viewSize.height - 88 else { dragStarted = false; return }
                 send(value.location, action: 1, viewSize: viewSize, session: session)
                 dragStarted = false
             }
@@ -353,6 +363,8 @@ private struct DisplayControlBar<Leading: View>: View {
                 Button { keyboardActive.toggle() } label: {
                     Image(systemName: keyboardActive ? "keyboard.chevron.compact.down" : "keyboard")
                         .font(.system(size: 17, weight: .semibold))
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 Spacer()

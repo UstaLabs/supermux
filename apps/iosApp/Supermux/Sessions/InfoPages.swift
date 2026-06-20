@@ -381,7 +381,8 @@ private struct DisplayViewerSheet: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
                     .glassEffect(.regular, in: Circle())
             }
             .buttonStyle(.plain)
