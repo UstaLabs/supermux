@@ -1400,16 +1400,20 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         const r = await transcribeAudio(input.audioPath, { model: cfg.whisperModel, lang: cfg.whisperLang })
         draft = r.text
       }
-      if (!draft.trim()) return { text: "" }
+      const source = input.audioPath ? "whisper" : "client"
+      if (!draft.trim()) { log.info("voice_transcribe_empty", { sessionId, source }); return { text: "" } }
       const skills = s ? commandRegistry.get(s.name).filter((c) => c.family === "agent").map((c) => c.name) : []
       const messages = messageLog.get(s?.id ?? sessionId, 10)
+      // Full visibility into exactly what the cleanup worker is fed.
+      log.info("voice_transcribe_in", { sessionId, source, draft, ctxMsgs: messages.length, skills })
       const payload = buildVoicePayload(draft, messages, skills)
       try {
         const out = await agentRpc.callAgent({ key: `voice:${sessionId}`, taskType: "voice", payload, model: cfg.voiceCleanupModel })
         const text = (out && typeof out === "object" && "text" in out && typeof (out as any).text === "string") ? (out as any).text : draft
+        log.info("voice_transcribe_out", { sessionId, draft, text, model: cfg.voiceCleanupModel ?? "haiku" })
         return { text }
       } catch (e) {
-        log.warn("voice_cleanup_failed", { err: String(e) })
+        log.warn("voice_cleanup_failed", { sessionId, draft, err: String(e) })
         return { text: draft, degraded: true }
       }
     },
