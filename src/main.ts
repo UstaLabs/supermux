@@ -2845,7 +2845,7 @@ agentRpc = createAgentRpc({
   now: () => Date.now(),
   buildPrompt: buildRpcPrompt,
   isAlive: (sessionId) => !!registry.get(sessionId)?.connected,
-  killWorker: async (sessionId) => { await killSession(sessionId) },
+  killWorker: async (sessionId) => { await killSession(sessionId); unregisterSession(sessionId) },
   deliver: async (sessionId, text) => { await deliverInbound(sessionId, text, {}) },
   spawnWorker: async ({ key, agent, model }) => {
     const safe = key.replace(/[^a-z0-9_-]/gi, "_")

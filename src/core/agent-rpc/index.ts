@@ -34,7 +34,6 @@ export interface AgentRpc {
   settle: (requestId: string, data: unknown) => void
   fail: (requestId: string, error: string) => void
   reapIdle: (maxIdleMs: number) => Promise<void>
-  internalSessionIds: () => string[]
 }
 
 export function createAgentRpc(deps: AgentRpcDeps): AgentRpc {
@@ -119,6 +118,5 @@ export function createAgentRpc(deps: AgentRpcDeps): AgentRpc {
         if (!w.busy && w.queue.length === 0 && w.lastUsedAt < cutoff) await recycle(w)
       }
     },
-    internalSessionIds() { return [...workers.values()].map(w => w.sessionId) },
   }
 }
