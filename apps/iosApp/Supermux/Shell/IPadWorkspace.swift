@@ -42,6 +42,7 @@ struct IPadWorkspace: View {
             Button("Cancel", role: .cancel) {}
         }
         .onAppear(perform: applyOpenPanesEnv)
+        .onAppear(perform: applyPressEnv)
     }
 
     /// The leading column: a 56-pt avatar rail when collapsed, else the full grouped
@@ -172,5 +173,19 @@ struct IPadWorkspace: View {
         layout.editorOpen = panes.contains("editor")
         layout.terminalOpen = panes.contains("terminal")
         layout.displayOpen = panes.contains("display")
+    }
+
+    /// Headless verification hook: SM_IPAD_PRESS=b,e applies those ⌘ commands on launch — the
+    /// SAME WorkspaceCommand.apply the keyboard shortcuts trigger — so the toggle + render path
+    /// (and the rail, via "b") is screenshot-verifiable without injecting hardware key events.
+    private func applyPressEnv() {
+        guard let raw = ProcessInfo.processInfo.environment["SM_IPAD_PRESS"] else { return }
+        let map: [String: WorkspaceCommand] = [
+            "b": .toggleSidebar, "l": .toggleChat, "t": .toggleTerminal,
+            "e": .toggleEditor, "d": .toggleDisplay,
+        ]
+        for k in raw.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) }) {
+            if k == "n" { route = .newSession } else if let cmd = map[k] { cmd.apply(to: layout) }
+        }
     }
 }
