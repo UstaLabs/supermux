@@ -28,6 +28,7 @@ struct IPadWorkspace: View {
             Divider()
             detail.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .workspaceShortcuts(layout: layout) { route = .newSession }
         .navigationTitle(session?.name ?? "supermux")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { workspaceToolbar }
@@ -58,14 +59,17 @@ struct IPadWorkspace: View {
     }
 
     @ViewBuilder private func content(_ s: SessionInfo) -> some View {
-        if layout.editorOpen || layout.terminalOpen || layout.displayOpen {
+        let hasWork = layout.editorOpen || layout.terminalOpen || layout.displayOpen
+        if layout.chatOpen && hasWork {
             ResizableSplit(axis: .horizontal, pct: $layout.chatPct, range: 20...80) {
                 chat(s)
             } second: {
                 rightArea(s)
             }
-        } else {
+        } else if layout.chatOpen {
             chat(s)
+        } else {
+            rightArea(s)   // invariant: chat is hidden only while hasWork, so rightArea is non-empty
         }
     }
 
