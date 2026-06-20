@@ -145,7 +145,7 @@ struct ChatView: View {
             Button("Cancel", role: .cancel) {}
             Button("Rename") { broker.rename(session.id, to: renameText) }
         }
-        .confirmationDialog("Kill "\(session.name)"?", isPresented: $showKillConfirm, titleVisibility: .visible) {
+        .confirmationDialog("Kill \u{201C}\(session.name)\u{201D}?", isPresented: $showKillConfirm, titleVisibility: .visible) {
             Button("Kill session", role: .destructive) { broker.kill(session.id) }
             Button("Cancel", role: .cancel) {}
         }
