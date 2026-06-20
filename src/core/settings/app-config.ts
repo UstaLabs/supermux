@@ -28,6 +28,10 @@ export interface AppConfig {
   onboarded: boolean
   // Set by `supermux connect`; absent when no tunnel is configured. Store-only.
   tunnel?: TunnelRecord
+  // Voice pipeline settings. Store-only; absent when not configured.
+  voiceCleanupModel?: string // model used by the voice-cleanup agent
+  whisperModel?: string // path or name of the Whisper model file
+  whisperLang?: string // language code (e.g. "tr", "en") or "auto"
 }
 
 export const SETTINGS_KEY_APP = "app"
@@ -97,6 +101,9 @@ export function resolveAppConfig(stored: Partial<AppConfig>, env: AppConfigEnv):
     cursorApiKey: firstNonEmpty(stored.cursorApiKey),
     onboarded: stored.onboarded === undefined ? defaultAppConfig.onboarded : Boolean(stored.onboarded),
     tunnel: parseTunnelRecord(stored.tunnel), // store-only, no env source
+    ...(stored.voiceCleanupModel !== undefined ? { voiceCleanupModel: stored.voiceCleanupModel } : {}),
+    ...(stored.whisperModel !== undefined ? { whisperModel: stored.whisperModel } : {}),
+    ...(stored.whisperLang !== undefined ? { whisperLang: stored.whisperLang } : {}),
   }
 }
 
@@ -126,6 +133,9 @@ export function sanitizeAppConfigPatch(input: unknown): Partial<AppConfig> {
     const t = parseTunnelRecord(o.tunnel)
     if (t) out.tunnel = t
   }
+  if (typeof o.voiceCleanupModel === "string") out.voiceCleanupModel = o.voiceCleanupModel
+  if (typeof o.whisperModel === "string") out.whisperModel = o.whisperModel
+  if (typeof o.whisperLang === "string") out.whisperLang = o.whisperLang
   return out
 }
 
@@ -150,6 +160,9 @@ export function parseAppConfig(input: unknown, base: AppConfig = defaultAppConfi
     cursorApiKey: str(o.cursorApiKey, base.cursorApiKey),
     onboarded: o.onboarded === undefined ? base.onboarded : Boolean(o.onboarded),
     tunnel: parseTunnelRecord(o.tunnel) ?? base.tunnel,
+    ...(o.voiceCleanupModel !== undefined ? { voiceCleanupModel: str(o.voiceCleanupModel, base.voiceCleanupModel ?? "") || undefined } : base.voiceCleanupModel !== undefined ? { voiceCleanupModel: base.voiceCleanupModel } : {}),
+    ...(o.whisperModel !== undefined ? { whisperModel: str(o.whisperModel, base.whisperModel ?? "") || undefined } : base.whisperModel !== undefined ? { whisperModel: base.whisperModel } : {}),
+    ...(o.whisperLang !== undefined ? { whisperLang: str(o.whisperLang, base.whisperLang ?? "") || undefined } : base.whisperLang !== undefined ? { whisperLang: base.whisperLang } : {}),
   }
 }
 
