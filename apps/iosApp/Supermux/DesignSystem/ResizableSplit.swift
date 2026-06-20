@@ -73,7 +73,5 @@ struct PaneDivider: View {
                             .onEnded { _ in dragStartPct = nil }
                     )
             }
-            // ORCHESTRATOR: confirm pointerStyle API on iOS 26 SDK
-            .pointerStyle(axis == .horizontal ? .columnResize : .rowResize)
     }
 }
