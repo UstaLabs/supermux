@@ -13,5 +13,6 @@ final class ResizableSplitTests: XCTestCase {
     func testWidthForPct() {
         XCTAssertEqual(SplitMath.width(pct: 25, total: 800), 200, accuracy: 0.001)
         XCTAssertEqual(SplitMath.width(pct: 0,  total: 800), 0,   accuracy: 0.001)
+        XCTAssertEqual(SplitMath.width(pct: 50, total: 0), 0, accuracy: 0.001)
     }
 }

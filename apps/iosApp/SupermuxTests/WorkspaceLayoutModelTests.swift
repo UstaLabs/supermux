@@ -20,6 +20,8 @@ final class WorkspaceLayoutModelTests: XCTestCase {
         m.chatPct = 95;   XCTAssertEqual(m.chatPct, 80, accuracy: 0.001)
         m.workDisplayPct = 10; XCTAssertEqual(m.workDisplayPct, 25, accuracy: 0.001)
         m.workDisplayPct = 99; XCTAssertEqual(m.workDisplayPct, 75, accuracy: 0.001)
+        m.editorTermPct = 5;   XCTAssertEqual(m.editorTermPct, 20, accuracy: 0.001)
+        m.editorTermPct = 95;  XCTAssertEqual(m.editorTermPct, 80, accuracy: 0.001)
         m.sidebarWidth = 50;   XCTAssertEqual(m.sidebarWidth, 220, accuracy: 0.001)
         m.sidebarWidth = 9999; XCTAssertEqual(m.sidebarWidth, 560, accuracy: 0.001)
     }

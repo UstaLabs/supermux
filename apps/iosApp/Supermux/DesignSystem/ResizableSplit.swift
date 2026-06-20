@@ -55,11 +55,11 @@ struct PaneDivider: View {
         Rectangle()
             .fill(Color.secondary.opacity(0.25))
             .frame(width: axis == .horizontal ? 1 : nil, height: axis == .vertical ? 1 : nil)
+            .hoverEffect(.highlight)
             .overlay {
                 Color.clear
                     .frame(width: axis == .horizontal ? 24 : nil, height: axis == .vertical ? 24 : nil)
                     .contentShape(Rectangle())
-                    .hoverEffect(.highlight)
                     .gesture(
                         DragGesture(minimumDistance: 1)
                             .onChanged { g in

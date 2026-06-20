@@ -60,6 +60,7 @@ import Observation
         editorTermPct = Self.load(store, "ipad.split.editorTermPct", B.editorTerm.def, B.editorTerm.min, B.editorTerm.max)
         workDisplayPct = Self.load(store, "ipad.split.workDisplayPct", B.workDisplay.def, B.workDisplay.min, B.workDisplay.max)
         sidebarWidth = Self.load(store, "ipad.sidebar.width", B.sidebar.def, B.sidebar.min, B.sidebar.max)
+        // object(forKey:) as? Bool distinguishes "key absent → default false" from a stored false (which bool(forKey:) couldn't)
         sidebarCollapsed = store.object(forKey: "ipad.sidebar.collapsed") as? Bool ?? false
     }
 
