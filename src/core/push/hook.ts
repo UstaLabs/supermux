@@ -24,6 +24,8 @@ export interface FirePushArgs {
   sessionName: string
   sessionId: string
   isMuted: (id: string) => boolean
+  /** True for hidden internal RPC workers — they must never push to the user. */
+  isInternal?: (id: string) => boolean
   /** All subscribed web device names — the fan-out target. */
   devices: () => string[]
   /** True when the user is present for this session on ANY device (that session's
@@ -36,9 +38,10 @@ export interface FirePushArgs {
 // muted OR the user is already looking at it on any device (the session chat or
 // the chat list); otherwise push to ALL subscribed devices.
 export async function firePushForReply(args: FirePushArgs): Promise<void> {
-  const { sender, action, sessionName, sessionId, isMuted, devices, anyPresent } = args
+  const { sender, action, sessionName, sessionId, isMuted, isInternal, devices, anyPresent } = args
   if (action.op !== "reply") return
   if (action.chat_id !== "web") return
+  if (isInternal?.(sessionId)) return // hidden RPC worker → never push
   if (isMuted(sessionId)) return
   if (anyPresent(sessionId)) return // present on some device → no push anywhere
   const payload: PushPayload = {

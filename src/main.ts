@@ -610,6 +610,7 @@ async function onAssistantMessage(
       firePushForReply({
         sender: pushSender, action, sessionName, sessionId,
         isMuted: () => !!registry.get(sessionId)?.mute,
+        isInternal: () => !!registry.get(sessionId)?.internal,
         devices: () => pushStore.all().map((s) => s.device),
         anyPresent: (sid) => viewingTracker.isAnyPresentFor(sid),
       }).catch((err) => log.warn("push_hook_failed", { err: err?.message ?? String(err) }))
@@ -944,7 +945,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     listChatIds: () =>
       (db.query("SELECT DISTINCT chat_id FROM messages WHERE chat_id LIKE 'web:%' ORDER BY chat_id").all() as { chat_id: string }[]).map((r) => r.chat_id),
     getSessionsSnapshot: () =>
-      registry.list().map((s) => ({
+      registry.listVisible().map((s) => ({
         id: s.id,
         name: s.name,
         workdir: s.workdir,
@@ -2081,7 +2082,7 @@ const server = await startSocketServer({
           webChannel?.broadcastToAll({ type: "session_state", session: muted.id, mute: mutedValue })
           return { ok: true, value: "ok" }
         }
-        case "list_sessions":  { return { ok: true, value: registry.list().map((s: any) => ({ name: s.name, workdir: s.workdir, mute: s.mute })) } }
+        case "list_sessions":  { return { ok: true, value: registry.listVisible().map((s: any) => ({ name: s.name, workdir: s.workdir, mute: s.mute })) } }
         case "set_active":     { const t = registry.resolveName(stringArg(op.args, "name")); if (!t) return { ok: false, error: "no such session" }; registry.setActive(stringArg(op.args, "chat_id"), t.id); return { ok: true, value: "ok" } }
         case "get_active":     { return { ok: true, value: registry.getActive(stringArg(op.args, "chat_id")) } }
         case "expose_port": {

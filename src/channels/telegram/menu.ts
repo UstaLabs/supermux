@@ -23,7 +23,7 @@ const BASE: MenuEntry[] = [
 
 export function buildMenuEntries(registry: Registry): MenuEntry[] {
   const out: MenuEntry[] = [...BASE]
-  for (const s of registry.list()) {
+  for (const s of registry.listVisible()) {
     const safe = s.name.replace(/-/g, "_")
     const cmd = `switch_to_${safe}`.slice(0, 32)
     out.push({ command: cmd, description: `→ ${s.name}` })
