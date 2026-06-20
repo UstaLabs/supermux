@@ -5,7 +5,11 @@ import { tmpdir, homedir } from "os"
 import { makeLogger } from "../../shared/log"
 
 const log = makeLogger("whisper")
-const DEFAULT_MODEL = process.env.MUX_WHISPER_MODEL ?? join(homedir(), ".cache", "whisper-models", "ggml-small.bin")
+// Multilingual `base` is the speed/accuracy default (handles Turkish + English).
+// Benchmarked on this host (11s clip): tiny ~6s, base ~13.5s (auto-detect), small ~26-47s.
+// The agent cleanup pass corrects residual STT errors, so a fast/rough model is preferred.
+// Override with MUX_WHISPER_MODEL or the whisperModel app-config setting.
+const DEFAULT_MODEL = process.env.MUX_WHISPER_MODEL ?? join(homedir(), ".cache", "whisper-models", "ggml-base.bin")
 const WHISPER_BIN = process.env.MUX_WHISPER_BIN ?? join(homedir(), ".local", "bin", "whisper-cli")
 const FFMPEG_BIN = process.env.MUX_FFMPEG_BIN ?? "ffmpeg"
 
