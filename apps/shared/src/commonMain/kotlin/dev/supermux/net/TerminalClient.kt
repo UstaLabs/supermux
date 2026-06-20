@@ -27,9 +27,7 @@ enum class TerminalStatus { CONNECTING, CONNECTED, DISCONNECTED }
 internal fun termWsUrl(baseUrl: String, sessionId: String, kind: String, terminalId: String?): String {
     // Darwin's (iOS) WebSocket requires a ws/wss scheme; the broker base may be an
     // http(s) pair URL. Normalize exactly like BrokerClient before opening the socket.
-    val wsBase = baseUrl
-        .replaceFirst("https://", "wss://")
-        .replaceFirst("http://", "ws://")
+    val wsBase = wsBaseUrl(baseUrl)
     val base = "$wsBase/ws/term?session=$sessionId"
     return when {
         kind == "agent" -> "$base&kind=agent"

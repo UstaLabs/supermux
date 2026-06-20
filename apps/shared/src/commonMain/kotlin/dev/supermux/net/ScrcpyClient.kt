@@ -48,9 +48,7 @@ class ScrcpyClient(
             try {
                 _status.value = ScrcpyStatus.CONNECTING
                 http.webSocket(
-                    // Darwin (iOS) WebSocket requires a ws/wss scheme; the broker base
-                    // may be an http(s) URL (same conversion as TerminalClient/BrokerClient).
-                    urlString = "${baseUrl.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://")}/ws/scrcpy?id=$streamId",
+                    urlString = "${wsBaseUrl(baseUrl)}/ws/scrcpy?id=$streamId",
                     request = { header("Authorization", "Bearer $token") },
                 ) {
                     attempt = 0
