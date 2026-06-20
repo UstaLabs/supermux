@@ -9,6 +9,15 @@ import { randomBytes } from "crypto"
 import { makeLogger } from "../shared/log"
 const log = makeLogger("shim")
 
+// A `notifications/claude/channel` message sent the instant ListTools fires (i.e.
+// mid-init) is dropped by Claude — it isn't ready to inject channel messages yet.
+// Normal user messages never hit this (they arrive seconds after spawn, when the
+// session is long since ready). But an agent-RPC worker's prompt IS delivered the
+// moment it spawns, lands in the deferred queue, and would flush too early. So we
+// flush deferred inbound after a short grace, giving Claude time to be ready.
+// Tunable for slow/loaded hosts; warm sessions (mcpReady already true) never wait.
+const CHANNEL_INJECT_GRACE_MS = Number(process.env.MUX_CHANNEL_INJECT_GRACE_MS ?? 2500)
+
 const SESSION_ID = process.env.MUX_SESSION_ID ?? randomBytes(8).toString("hex")
 const CLAUDE_SESSION_ID = process.env.CLAUDE_SESSION_ID ?? undefined
 const WORKDIR = process.cwd()
@@ -75,13 +84,18 @@ async function main() {
     if (!mcpReady) {
       mcpReady = true
       mcpReadyResolve!()
-      for (const p of pendingInbound.splice(0)) {
-        log.info("on_inbound.deferred_flush", { content: p.content.slice(0, 80) })
-        void (mcp.notification as any)({
-          method: "notifications/claude/channel",
-          params: { content: p.content, meta: p.meta },
-        }).catch((err: unknown) => log.error("on_inbound.deferred_failed", { err: String(err) }))
-      }
+      // Flush after a grace — Claude drops channel notifications sent the instant
+      // ListTools fires (mid-init). See CHANNEL_INJECT_GRACE_MS above.
+      const toFlush = pendingInbound.splice(0)
+      if (toFlush.length) setTimeout(() => {
+        for (const p of toFlush) {
+          log.info("on_inbound.deferred_flush", { content: p.content.slice(0, 80) })
+          void (mcp.notification as any)({
+            method: "notifications/claude/channel",
+            params: { content: p.content, meta: p.meta },
+          }).catch((err: unknown) => log.error("on_inbound.deferred_failed", { err: String(err) }))
+        }
+      }, CHANNEL_INJECT_GRACE_MS)
     }
     // Channel-only instance advertises ZERO tools (the tools instance is the sole
     // provider). The tools capability is still declared so Claude calls ListTools

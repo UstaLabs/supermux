@@ -189,12 +189,16 @@ test("still emits the agent-hook commands (disabling telegram must not drop hook
   expect(settings.hooks?.UserPromptSubmit).toBeDefined()
 })
 
-// agent-rpc spawn flags — rpcMcpConfig wires the worker to a strict mcp config
-test("includes MUX_RPC_ONLY=1 and --strict-mcp-config when rpcMcpConfig is set", () => {
+// agent-rpc spawn flags — rpcMcpConfig wires the worker to a STRICT mcp config.
+// REGRESSION GUARD: MUX_RPC_ONLY must NOT be set on the claude process env — it
+// would be inherited by the mux-channel shim too, flipping it into rpc mode and
+// breaking inbound channel injection (worker never gets its prompt). It lives
+// per-server in the mcp-config file instead (see tests/trust-rpc-config.test.ts).
+test("rpcMcpConfig adds --strict-mcp-config without leaking MUX_RPC_ONLY to the process env", () => {
   const cmd = buildClaudeSpawnCommand({ name: "rpc-worker", rpcMcpConfig: "/tmp/rpc.json" })
-  expect(cmd).toContain("MUX_RPC_ONLY=1")
   expect(cmd).toContain("--strict-mcp-config")
   expect(cmd).toContain("--mcp-config /tmp/rpc.json")
+  expect(cmd).not.toContain("MUX_RPC_ONLY")
 })
 
 test("omits MUX_RPC_ONLY and --strict-mcp-config when rpcMcpConfig is not set", () => {
