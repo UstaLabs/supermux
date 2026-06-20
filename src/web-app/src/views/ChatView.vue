@@ -641,7 +641,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
               <PromptInputAttachments />
             </PromptInputHeader>
             <PromptInputBody>
-              <VoiceRecorder v-if="isRecording" @done="onRecordingDone" />
+              <VoiceRecorder v-if="isRecording" :session-id="props.id" @done="onRecordingDone" />
               <PromptInputTextarea v-else placeholder="Message…" />
             </PromptInputBody>
             <PromptInputFooter>
