@@ -140,6 +140,7 @@ export interface WebChannelOpts {
   spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string }>
   killSession?: (name: string) => Promise<void>
   renameSession?: (oldName: string, newName: string) => Promise<void>
+  transcribe?: (sessionId: string, input: { draft?: string; audioPath?: string }) => Promise<{ text: string; degraded?: boolean }>
   spawnPA?: (args: { name: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string }>
   listPAs?: () => SessionSnapshot[]
   updatePA?: (name: string, patch: { model?: string; reasoningLevel?: string }) => Promise<{ ok: boolean; error?: string }>
@@ -1837,6 +1838,28 @@ export class WebChannel implements Channel {
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
+    }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/transcribe$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      if (!this.opts.transcribe) return this.json({ error: "not configured" }, 503)
+      const ctype = req.headers.get("content-type") ?? ""
+      let input: { draft?: string; audioPath?: string }
+      if (ctype.includes("multipart/form-data")) {
+        if (!this.fileStore) return this.json({ error: "file store not mounted" }, 500)
+        const form = await req.formData().catch(() => null)
+        const file = form?.get("audio")
+        if (!(file instanceof Blob)) return this.json({ error: "audio field required" }, 400)
+        const bytes = new Uint8Array(await file.arrayBuffer())
+        const { file_id } = await this.fileStore.put({ kind: "voice", mime: file.type || undefined, name: (file as any).name, session: id, origin: "web-upload", device: "web", bytes })
+        const meta = await this.fileStore.get(file_id)
+        input = { audioPath: meta!.path }
+      } else {
+        const body = await req.json().catch(() => ({})) as { draft?: string }
+        if (typeof body.draft !== "string") return this.json({ error: "draft required" }, 400)
+        input = { draft: body.draft }
+      }
+      const result = await this.opts.transcribe(id, input)
+      return this.json(result)
     }
     if (method === "GET" && path === "/devices") {
       return this.json(this.store.list().map((d) => ({ name: d.name, created_at: d.created_at, last_seen_at: d.last_seen_at })))

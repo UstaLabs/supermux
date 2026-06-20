@@ -36,6 +36,8 @@ import { RuntimeRegistry, type SessionRuntime } from "./core/session-manager/run
 import { buildClaudeSpawnCommand } from "./core/session-manager/spawn-command"
 import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
+import { transcribeAudio } from "./core/transcription/whisper"
+import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cursorSpawnArgs, codexSpawnArgs, claudeSpawnArgs, codexPrepareGlobal, codexPrepareSessionHome, opencodeConfigEntries, ensureOpenCodePluginScopes } from "./core/plugins"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider } from "./core/slash-commands"
@@ -1387,6 +1389,30 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     listClonedRepos: () => forgeService.listCloned(),
     removeClonedRepo: (p) => forgeService.removeCloned(p),
     pullClonedRepo: (p) => forgeService.pullCloned(p),
+    // Voice: whisper STT (when audio) → agent cleanup pass → composer-ready text.
+    // Closes over the `agentRpc` `let` binding; runs at request time, by which
+    // point agentRpc is assigned (same pattern as the login closures below).
+    transcribe: async (sessionId, input) => {
+      const s = registry.get(sessionId)
+      const cfg = settings.getAppConfig(appConfigEnv)
+      let draft = input.draft ?? ""
+      if (input.audioPath) {
+        const r = await transcribeAudio(input.audioPath, { model: cfg.whisperModel, lang: cfg.whisperLang })
+        draft = r.text
+      }
+      if (!draft.trim()) return { text: "" }
+      const skills = s ? commandRegistry.get(s.name).filter((c) => c.family === "agent").map((c) => c.name) : []
+      const messages = messageLog.get(s?.id ?? sessionId, 10)
+      const payload = buildVoicePayload(draft, messages, skills)
+      try {
+        const out = await agentRpc.callAgent({ key: `voice:${sessionId}`, taskType: "voice", payload, model: cfg.voiceCleanupModel })
+        const text = (out && typeof out === "object" && "text" in out && typeof (out as any).text === "string") ? (out as any).text : draft
+        return { text }
+      } catch (e) {
+        log.warn("voice_cleanup_failed", { err: String(e) })
+        return { text: draft, degraded: true }
+      }
+    },
   })
   // loginManager constructed AFTER webChannel so its onChange can reference webChannel.
   // The startAgentLogin/getAgentLogin/cancelAgentLogin closures above close over `loginManager`
