@@ -1,8 +1,6 @@
 import SwiftUI
 import Shared
 import UIKit
-import PhotosUI
-import UniformTypeIdentifiers
 
 /// A photo staged in the composer, awaiting upload on send.
 struct PendingAttachment: Identifiable {
