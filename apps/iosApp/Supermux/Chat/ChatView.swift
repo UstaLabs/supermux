@@ -590,7 +590,7 @@ struct ChatView: View {
         }
         if dictation.isListening {
             let (text, _) = await dictation.stop()
-            guard !text.isEmpty else { return }
+            guard !text.isEmpty else { showBanner("Didn't catch that"); return }
             await runTranscription { try await broker.transcribeDraft(sessionId: session.id, draft: text) }
             return
         }

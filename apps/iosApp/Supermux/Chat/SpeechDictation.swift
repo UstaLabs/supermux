@@ -169,12 +169,4 @@ final class SpeechDictation {
         }
     }
 
-    deinit {
-        // Backstop only — the UI always drives teardown via stop()/cancel() (same lifecycle
-        // pattern as VncSession/TerminalSession, which have no deinit). Cancelling the
-        // outstanding tasks here just guarantees no recognition/ticker work outlives us;
-        // ARC releases `engine`/`request` and the engine stops when the input is released.
-        ticker?.cancel()
-        task?.cancel()
-    }
 }
