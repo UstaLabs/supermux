@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ≈ supermuxDark().background = oklch(0.14 0.006 130). Splash/window background. -->
+    <color name="supermux_window_background">#FF1E211D</color>
+</resources>

@@ -7,7 +7,7 @@
         android:label="supermux"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android:theme="@android:style/Theme.Material.NoActionBar"
+        android:theme="@style/Theme.Supermux"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true">
         <activity

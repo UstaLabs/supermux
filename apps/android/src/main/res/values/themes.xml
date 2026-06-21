@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Splash theme: the system shows this before installSplashScreen() hands off. -->
+    <style name="Theme.Supermux" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/supermux_window_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.Supermux.Main</item>
+    </style>
+
+    <!-- The real activity theme after splash. A dark windowBackground kills the
+         white flash before Compose draws; edge-to-edge handles the system bars. -->
+    <style name="Theme.Supermux.Main" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/supermux_window_background</item>
+    </style>
+</resources>

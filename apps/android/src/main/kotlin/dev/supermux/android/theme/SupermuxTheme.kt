@@ -1,5 +1,6 @@
 package dev.supermux.android.theme
 
+import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -11,11 +12,14 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
 import dev.supermux.ui.SupermuxColors
 import dev.supermux.ui.supermuxDark
 import dev.supermux.ui.supermuxLight
@@ -136,6 +140,15 @@ fun SupermuxTheme(
         AppearanceMode.DARK -> true
     }
     val ctx = LocalContext.current
+    // Status/nav-bar icon contrast follows the app theme (dark icons on a light app).
+    val view = LocalView.current
+    SideEffect {
+        (view.context as? Activity)?.window?.let { window ->
+            val controller = WindowCompat.getInsetsController(window, view)
+            controller.isAppearanceLightStatusBars = !dark
+            controller.isAppearanceLightNavigationBars = !dark
+        }
+    }
     val paneTones = if (dark) supermuxDark() else supermuxLight()
     val scheme = when {
         dynamicEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
