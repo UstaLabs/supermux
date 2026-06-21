@@ -1,47 +1,84 @@
 import SwiftUI
 import Shared
 
-/// Settings — assistant name, configured-agent status, Curator schedule, theme.
-/// (Mirrors the web settings that the shared BrokerApi already exposes.)
+/// Settings hub — mirrors the web PWA SettingsIndexView with NavigationLink rows
+/// for each sub-screen, plus an inline Appearance picker.
 struct SettingsView: View {
     let broker: BrokerSession
     @AppStorage("appearance") private var appearance = "system"
 
-    @State private var config: AppConfigDto?
-    @State private var paName = ""
-    @State private var curatorEnabled = false
-    @State private var curatorHour = 1
-    @State private var curatorMinute = 0
-    @State private var nextRun: String?
-
     var body: some View {
-        Form {
-            Section("Assistant") {
-                TextField("Assistant name", text: $paName)
-                    .autocorrectionDisabled()
-                    .onSubmit { broker.setPAName(paName) }
-                if let url = config?.webPublicUrl, !url.isEmpty {
-                    LabeledContent("Broker", value: url)
+        List {
+            Section {
+                NavigationLink {
+                    AssistantSettingsView(broker: broker)
+                } label: {
+                    SettingsRow(
+                        symbol: "person.crop.circle",
+                        title: "Assistant",
+                        subtitle: "PA name and soul.md"
+                    )
                 }
-            }
 
-            Section("Agents") {
-                agentRow("Claude", ok: config?.claudeConfigured ?? false)
-                agentRow("Codex", ok: config?.codexConfigured ?? false)
-                agentRow("Cursor", ok: config?.cursorConfigured ?? false)
-                agentRow("Telegram", ok: config?.telegramConfigured ?? false)
-            }
-
-            Section("Curator") {
-                Toggle("Daily knowledge digest", isOn: $curatorEnabled)
-                    .onChange(of: curatorEnabled) { _, v in
-                        broker.saveCurator(enabled: v, hour: curatorHour, minute: curatorMinute)
-                    }
-                if curatorEnabled {
-                    DatePicker("Time", selection: timeBinding, displayedComponents: .hourAndMinute)
-                    if let n = nextRun { LabeledContent("Next run", value: n) }
+                NavigationLink {
+                    AgentSettingsView(broker: broker)
+                } label: {
+                    SettingsRow(
+                        symbol: "terminal",
+                        title: "Agents",
+                        subtitle: "CLI authorization and API key fallback"
+                    )
                 }
-                Button("Run now") { broker.runCuratorNow() }
+
+                NavigationLink {
+                    CuratorSettingsView(broker: broker)
+                } label: {
+                    SettingsRow(
+                        symbol: "sparkles",
+                        title: "Curator",
+                        subtitle: "Nightly knowledge curation schedule"
+                    )
+                }
+
+                NavigationLink {
+                    VoiceSettingsView(broker: broker)
+                } label: {
+                    SettingsRow(
+                        symbol: "mic",
+                        title: "Voice",
+                        subtitle: "Dictation cleanup model"
+                    )
+                }
+
+                NavigationLink {
+                    EditorSettingsScreen(broker: broker)
+                } label: {
+                    SettingsRow(
+                        symbol: "doc.text",
+                        title: "Editor",
+                        subtitle: "Font, wrap, and language servers"
+                    )
+                }
+
+                NavigationLink {
+                    GitHostingSettingsView(broker: broker)
+                } label: {
+                    SettingsRow(
+                        symbol: "arrow.triangle.branch",
+                        title: "Git hosting",
+                        subtitle: "GitHub & GitLab connections"
+                    )
+                }
+
+                NavigationLink {
+                    SystemSettingsView(broker: broker)
+                } label: {
+                    SettingsRow(
+                        symbol: "gearshape.2",
+                        title: "System",
+                        subtitle: "Broker restart and status"
+                    )
+                }
             }
 
             Section("Appearance") {
@@ -55,38 +92,28 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .tint(Theme.teal)
-        .task { await load() }
     }
+}
 
-    private var timeBinding: Binding<Date> {
-        Binding(
-            get: { Calendar.current.date(from: DateComponents(hour: curatorHour, minute: curatorMinute)) ?? Date() },
-            set: { d in
-                let c = Calendar.current.dateComponents([.hour, .minute], from: d)
-                curatorHour = c.hour ?? 1
-                curatorMinute = c.minute ?? 0
-                broker.saveCurator(enabled: curatorEnabled, hour: curatorHour, minute: curatorMinute)
+// MARK: - Row helper
+
+private struct SettingsRow: View {
+    let symbol: String
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.body)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-        )
-    }
-
-    private func agentRow(_ name: String, ok: Bool) -> some View {
-        HStack {
-            Text(name)
-            Spacer()
-            Image(systemName: ok ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(ok ? Theme.teal : .secondary)
-        }
-    }
-
-    private func load() async {
-        config = await broker.config()
-        paName = config?.paName ?? ""
-        if let c = await broker.curatorSettings() {
-            curatorEnabled = c.config.enabled
-            curatorHour = Int(c.config.hour)
-            curatorMinute = Int(c.config.minute)
-            nextRun = c.nextRun
+        } icon: {
+            Image(systemName: symbol)
+                .foregroundStyle(Theme.teal)
         }
     }
 }
