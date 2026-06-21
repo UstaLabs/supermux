@@ -411,7 +411,7 @@ fun SessionListScreen(
                                 onClick = { menuExpanded = false; onNavigate("displays") },
                             )
                             DropdownMenuItem(
-                                text = { Text("Theme: System", color = LocalContentColor.current.copy(alpha = 0.4f)) },
+                                text = { Text("Appearance") },
                                 leadingIcon = {
                                     Icon(
                                         painter = painterResource(R.drawable.ic_monitor),
@@ -420,8 +420,7 @@ fun SessionListScreen(
                                         modifier = Modifier.size(18.dp),
                                     )
                                 },
-                                onClick = { menuExpanded = false; onNavigate("theme") },
-                                enabled = false,
+                                onClick = { menuExpanded = false; onNavigate("appearance") },
                             )
                             DropdownMenuItem(
                                 text = { Text("Settings") },

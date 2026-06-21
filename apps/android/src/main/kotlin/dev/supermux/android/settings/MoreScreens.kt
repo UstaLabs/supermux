@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
 import dev.supermux.android.chat.TimelineItemRow
 import dev.supermux.android.chat.mergeTimeline
+import dev.supermux.android.theme.AppearanceMode
 import dev.supermux.android.theme.LocalPanes
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.CuratorSettingsResponse
@@ -489,6 +490,82 @@ private fun StepperButton(text: String, enabled: Boolean, onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Text(text, color = Color(c.foreground).copy(alpha = alpha), fontSize = 18.sp)
+    }
+}
+
+// ─── Appearance page (light/dark + Material You) ──────────────────────────────
+//
+// Born native: reads MaterialTheme.colorScheme (not LocalPanes) so it reflects
+// dynamic colour, and uses the M3 SingleChoiceSegmentedButtonRow.
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AppearanceSettingsPage(
+    appearance: AppearanceMode,
+    dynamicColor: Boolean,
+    onAppearanceChange: (AppearanceMode) -> Unit,
+    onDynamicChange: (Boolean) -> Unit,
+    onBack: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    BackHandler { onBack() }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Appearance") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = cs.surfaceContainerHigh,
+                ),
+            )
+        },
+        containerColor = cs.background,
+    ) { padding ->
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Theme", style = MaterialTheme.typography.titleMedium, color = cs.onBackground)
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    val modes = AppearanceMode.entries
+                    modes.forEachIndexed { i, mode ->
+                        SegmentedButton(
+                            selected = appearance == mode,
+                            onClick = { onAppearanceChange(mode) },
+                            shape = SegmentedButtonDefaults.itemShape(i, modes.size),
+                        ) {
+                            Text(
+                                when (mode) {
+                                    AppearanceMode.SYSTEM -> "System"
+                                    AppearanceMode.LIGHT -> "Light"
+                                    AppearanceMode.DARK -> "Dark"
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Material You", style = MaterialTheme.typography.titleMedium, color = cs.onBackground)
+                    Text(
+                        "Use colours from your wallpaper (Android 12+).",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = cs.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(checked = dynamicColor, onCheckedChange = onDynamicChange)
+            }
+        }
     }
 }
 

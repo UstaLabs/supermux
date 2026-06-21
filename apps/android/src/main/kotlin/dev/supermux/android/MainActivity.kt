@@ -1,5 +1,6 @@
 package dev.supermux.android
 
+import android.content.Context
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -42,11 +43,13 @@ import dev.supermux.android.session.SessionKeepAliveTabletHost
 import dev.supermux.android.session.rememberVisitedSessions
 import dev.supermux.android.session.SessionLauncherScreen
 import dev.supermux.android.session.SessionListScreen
+import dev.supermux.android.settings.AppearanceSettingsPage
 import dev.supermux.android.settings.ArchivedScreen
 import dev.supermux.android.settings.DevicesScreen
 import dev.supermux.android.settings.ProxyScreen
 import dev.supermux.android.settings.SettingsScreen
 import dev.supermux.android.settings.UsageScreen
+import dev.supermux.android.theme.AppearanceMode
 import dev.supermux.android.theme.LocalPanes
 import dev.supermux.android.theme.SupermuxTheme
 import dev.supermux.android.DevConfig
@@ -64,7 +67,18 @@ class MainActivity : ComponentActivity() {
         SecureTokenStoreContext.init(applicationContext)
         enableEdgeToEdge()
         setContent {
-            SupermuxTheme {
+            val prefs = remember {
+                applicationContext.getSharedPreferences("cmux-editor-settings", Context.MODE_PRIVATE)
+            }
+            var appearance by remember {
+                mutableStateOf(
+                    runCatching {
+                        AppearanceMode.valueOf(prefs.getString("appearance", "SYSTEM") ?: "SYSTEM")
+                    }.getOrDefault(AppearanceMode.SYSTEM)
+                )
+            }
+            var dynamicColor by remember { mutableStateOf(prefs.getBoolean("dynamicColor", true)) }
+            SupermuxTheme(appearance = appearance, dynamicEnabled = dynamicColor) {
                 val vm = remember {
                     AppViewModel(DevConfig.brokerUrl(), DevConfig.resolveToken(applicationContext))
                 }
@@ -129,6 +143,22 @@ class MainActivity : ComponentActivity() {
                             onBack = { route = "list" },
                         )
                     }
+                    "appearance" -> {
+                        BackHandler { route = "list" }
+                        AppearanceSettingsPage(
+                            appearance = appearance,
+                            dynamicColor = dynamicColor,
+                            onAppearanceChange = {
+                                appearance = it
+                                prefs.edit().putString("appearance", it.name).apply()
+                            },
+                            onDynamicChange = {
+                                dynamicColor = it
+                                prefs.edit().putBoolean("dynamicColor", it).apply()
+                            },
+                            onBack = { route = "list" },
+                        )
+                    }
                     "new" -> {
                         BackHandler { route = "list" }
                         if (expanded) {
@@ -185,7 +215,6 @@ class MainActivity : ComponentActivity() {
                         if (route != "list") {
                             val label = when (route) {
                                 "displays" -> "Displays"
-                                "theme"    -> "Theme"
                                 else       -> route
                             }
                             Toast.makeText(this, "$label — coming soon", Toast.LENGTH_SHORT).show()
