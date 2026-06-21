@@ -18,7 +18,7 @@ settings:
     TARGETED_DEVICE_FAMILY: "1,2"
     CODE_SIGN_STYLE: Automatic
     MARKETING_VERSION: "0.1"
-    CURRENT_PROJECT_VERSION: "16"
+    CURRENT_PROJECT_VERSION: "17"
     # Gradle pre-build phase needs filesystem access outside the sandbox.
     ENABLE_USER_SCRIPT_SANDBOXING: "NO"
 
