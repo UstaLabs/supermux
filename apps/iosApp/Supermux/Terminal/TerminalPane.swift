@@ -3,8 +3,10 @@ import Shared
 import SwiftTerm
 import UIKit
 
-/// One terminal: a SwiftTerm view + a connection status chip, lifecycle-bound to
-/// a `TerminalSession`. Used for both scratch shells and the agent viewer.
+/// One terminal: a SwiftTerm view + a connection status chip. The live state (websocket
+/// + emulator scrollback) lives in a `TerminalHost` cached in `BrokerSession`, so toggling
+/// this pane off/on or remounting it (tab/session switch) REUSES the warm terminal instead
+/// of reconnecting + re-rendering. Used for both scratch shells and the agent viewer.
 struct TerminalPane: View {
     let broker: BrokerSession
     let session: SessionInfo
@@ -12,20 +14,24 @@ struct TerminalPane: View {
     let terminalId: String?          // scratch tab id; nil for agent
     var onExit: () -> Void = {}
 
-    @State private var term: TerminalSession?
     @State private var ended = false
-    @State private var termView: TerminalView?     // SwiftTerm view, for resigning its keyboard
     @State private var keyboardHeight: CGFloat = 0
+
+    // The cached, persistent terminal (live connection + scrollback). Computed, but always
+    // returns the SAME instance for this (session, kind, terminalId) — the cache owns it.
+    private var host: TerminalHost {
+        broker.terminalHost(sessionId: session.id, kind: kind, terminalId: terminalId)
+    }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Theme.terminalBackground.ignoresSafeArea()
             if ended {
                 endedState
-            } else if let term {
-                SwiftTermView(session: term, onMakeView: { termView = $0 })
+            } else {
+                SwiftTermView(view: host.view)
                     .ignoresSafeArea(.container, edges: .bottom)
-                StatusChip(status: term.status)
+                StatusChip(status: host.session.status)
                     .padding(8)
             }
         }
@@ -35,34 +41,28 @@ struct TerminalPane: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardHeight = 0 }
         .onAppear {
-            guard term == nil else { return }
-            let t = TerminalSession(broker: broker, sessionId: session.id,
-                                    kind: kind, terminalId: terminalId)
-            t.onExit = {
+            // The cache owns the connection lifecycle (created + started on first access).
+            // We only (re)point onExit at THIS mount's callback — the host outlives remounts.
+            host.session.onExit = {
                 ended = true
                 onExit()
+                broker.dropTerminalHost(sessionId: session.id, kind: kind, terminalId: terminalId)
             }
-            t.start()
-            term = t
         }
-        .onDisappear {
-            term?.stop()
-            term = nil
-            termView = nil
-        }
+        // No onDisappear stop(): toggling the pane off must NOT tear down the live terminal.
     }
 
     // Floating ⌄ button to dismiss the terminal keyboard. SwiftTerm owns a UIKit keyboard, so
-    // SwiftUI tap/scroll dismissal and the global resignFirstResponder don't reach it — we hold
-    // a ref to the TerminalView and resign it directly. Placed just above the keyboard via its
-    // frame height. SM_KBD=1 fakes a height for headless screenshot verification.
+    // SwiftUI tap/scroll dismissal and the global resignFirstResponder don't reach it — we
+    // resign the cached TerminalView directly. Placed just above the keyboard via its frame
+    // height. SM_KBD=1 fakes a height for headless screenshot verification.
     private var effectiveKbHeight: CGFloat {
         keyboardHeight > 0 ? keyboardHeight : (ProcessInfo.processInfo.environment["SM_KBD"] == "1" ? 320 : 0)
     }
     @ViewBuilder private var keyboardDismissOverlay: some View {
         if effectiveKbHeight > 0 && !ended {
             GeometryReader { geo in
-                Button { termView?.resignFirstResponder() } label: {
+                Button { host.view.resignFirstResponder() } label: {
                     Image(systemName: "keyboard.chevron.compact.down")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Theme.teal)

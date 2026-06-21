@@ -21,7 +21,9 @@ struct TerminalPanel: View {
                     TerminalPane(broker: broker, session: session,
                                  kind: "scratch", terminalId: activeId,
                                  onExit: { onPaneExit(activeId) })
-                        .id("\(session.id):\(activeId)")   // remount on tab switch → reconnect
+                        // Remount on tab switch is cheap now: each tab's live terminal is
+                        // cached in BrokerSession, so this reuses the warm host (no reconnect).
+                        .id("\(session.id):\(activeId)")
                 } else if loaded {
                     emptyState
                 }

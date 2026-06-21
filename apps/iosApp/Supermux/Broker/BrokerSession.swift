@@ -76,7 +76,9 @@ final class BrokerSession {
             commands = s.commands
             synced = true
         case .sessionAdded(let a): sessions.append(a.session)
-        case .sessionRemoved(let r): sessions.removeAll { $0.id == r.id }
+        case .sessionRemoved(let r):
+            sessions.removeAll { $0.id == r.id }
+            evictTerminalHosts(sessionId: r.id)   // session killed → tear down its live terminals
         case .messageAppend(let m):
             // Drop the optimistic local echo when the real inbound message arrives.
             if m.entry.direction.hasPrefix("in") {
@@ -320,6 +322,34 @@ final class BrokerSession {
         })
         lspBridges[sessionId] = bridge
         return bridge
+    }
+
+    // MARK: - Terminal hosts (one per (session, kind, terminalId); the live websocket +
+    // SwiftTerm emulator view, cached so the connection AND on-screen scrollback survive
+    // SwiftUI remounts / pane toggles. Sessions are bounded, so no LRU — just don't leak
+    // on kill (sessionRemoved) or shell exit (dropTerminalHost).
+    @ObservationIgnored private var terminalHosts: [String: TerminalHost] = [:]
+    private func terminalHostKey(_ sessionId: String, _ kind: String, _ terminalId: String?) -> String {
+        "\(sessionId)|\(kind)|\(terminalId ?? "agent")"
+    }
+    func terminalHost(sessionId: String, kind: String, terminalId: String?) -> TerminalHost {
+        let key = terminalHostKey(sessionId, kind, terminalId)
+        if let existing = terminalHosts[key] { return existing }
+        let host = TerminalHost(broker: self, sessionId: sessionId, kind: kind, terminalId: terminalId)
+        terminalHosts[key] = host
+        return host
+    }
+    /// Drop a single cached host (shell exited → a new tab with a new id should build fresh).
+    func dropTerminalHost(sessionId: String, kind: String, terminalId: String?) {
+        let key = terminalHostKey(sessionId, kind, terminalId)
+        terminalHosts.removeValue(forKey: key)?.stop()
+    }
+    /// Tear down ALL of a session's cached terminals (its hosts are keyed "\(id)|…").
+    private func evictTerminalHosts(sessionId: String) {
+        let prefix = "\(sessionId)|"
+        for key in terminalHosts.keys.filter({ $0.hasPrefix(prefix) }) {
+            terminalHosts.removeValue(forKey: key)?.stop()
+        }
     }
 }
 
