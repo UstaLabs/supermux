@@ -12,10 +12,15 @@ const log = makeLogger("voice-cleanup")
 export type CleanupEngine = "opencode" | "cursor"
 
 const ENV_ENGINE = process.env.MUX_VOICE_CLEANUP_ENGINE as CleanupEngine | undefined
-export const VOICE_CLEANUP_ENGINE: CleanupEngine = ENV_ENGINE === "cursor" ? "cursor" : "opencode"
+// Default cursor: it runs cleanly one-shot under the systemd broker (no TTY) and
+// returns plain text. opencode (deepseek-v4-flash-free) is faster + free but only
+// works WITH a pseudo-terminal — under the broker it's agentic (does tool calls
+// like web search) and its TUI output is unparseable — so it's opt-in via
+// MUX_VOICE_CLEANUP_ENGINE=opencode (e.g. a TTY context), not the broker default.
+export const VOICE_CLEANUP_ENGINE: CleanupEngine = ENV_ENGINE === "opencode" ? "opencode" : "cursor"
 export const VOICE_CLEANUP_MODEL =
   process.env.MUX_VOICE_CLEANUP_MODEL ||
-  (VOICE_CLEANUP_ENGINE === "cursor" ? "composer-2.5-fast" : "opencode/deepseek-v4-flash-free")
+  (VOICE_CLEANUP_ENGINE === "opencode" ? "opencode/deepseek-v4-flash-free" : "composer-2.5-fast")
 
 // Reliable fallback when the primary engine returns empty/errors (e.g. opencode's
 // occasional cold-start miss): cursor completes cleanly under the broker context.
