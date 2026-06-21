@@ -550,6 +550,8 @@ struct ChatView: View {
                         Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
                     } label: {
                         Image(systemName: "plus").font(.body.weight(.medium)).foregroundStyle(.secondary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                     micButton
                     if let m = session.model, !m.isEmpty { pill(m, system: "cpu") { modelSheet = true } }
@@ -584,6 +586,8 @@ struct ChatView: View {
             Image(systemName: "mic")
                 .font(.body.weight(.medium))
                 .foregroundStyle(.secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .disabled(transcribing)
     }
