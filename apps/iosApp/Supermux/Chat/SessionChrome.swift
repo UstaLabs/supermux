@@ -25,6 +25,10 @@ import Shared
     // Unacked-badge: the startedAt the user has already seen. A terminal job whose startedAt
     // differs is "unacked" → the toolbar Finish button shows a dot until the sheet opens.
     var ackedAt: Double?
+    // Set when kicking off a finish fails before any job is created (e.g. network error). The
+    // FinishSheet menu surfaces it — ChatView renders its own banner (not `chrome.banner`), so
+    // the menu is the reliable place to show a kickoff failure on both iPhone and iPad.
+    var runError: String?
 
     private var loadedSessionId: String?
     private var loadTask: Task<Void, Never>?
@@ -127,6 +131,11 @@ import Shared
     /// Mark the current job's result as seen (called when the sheet opens).
     func ack() { if let j = currentJob { ackedAt = j.startedAt } }
 
+    /// Drop this session's finish job so the sheet returns to the readiness menu (Dismiss/Done
+    /// in FinishSheet). Mirrors the web `finishJob.clear(sessionId)`; without it a terminal
+    /// outcome (esp. a `failed` one) is stuck on screen and can't be dismissed back to the menu.
+    func clearJob() { broker.clearFinishJob(session.id) }
+
     /// Load the preflight snapshot for the finish menu (branch sync / diff / conflict / dirty).
     func loadReadiness() async {
         readiness = await broker.finishReadiness(session.id)
@@ -136,10 +145,12 @@ import Shared
     /// real outcome arrives on the WS `finish_job` frame (BrokerSession keeps `finishJobs`
     /// fresh), so we don't branch on the result here — `currentJob` drives the sheet.
     func run(action: String, skipVerify: Bool? = nil, commitFirst: Bool? = nil, commitMessage: String? = nil) {
+        runError = nil
         Task {
             guard await broker.finish(session.id, action: action, skipVerify: skipVerify,
                                       commitFirst: commitFirst, commitMessage: commitMessage) != nil else {
-                showBanner("Finish failed"); return
+                // No job was created (kickoff failed) → the sheet stays on .menu; surface it there.
+                runError = "Couldn't start finish — check your connection and try again."; return
             }
             // Refresh git after terminal outcomes land (the WS frame updates currentJob; this
             // keeps the header's branch/sync in step once a merge/keep/discard settles).

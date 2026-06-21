@@ -50,8 +50,9 @@ struct FinishSheet: View {
                 }
             }
             .task {
-                // On open: ack the badge; (re)load readiness when there's no in-flight job
-                // (no job at all, or a previous one that already finished — web condition).
+                // On open: clear any stale kickoff error, ack the badge, and (re)load readiness
+                // when there's no in-flight job (no job at all, or one that already finished).
+                chrome.runError = nil
                 chrome.ack()
                 if job == nil || job?.status == "done" { await chrome.loadReadiness() }
             }
@@ -72,6 +73,12 @@ struct FinishSheet: View {
 
     @ViewBuilder private var menu: some View {
         List {
+            if let err = chrome.runError {
+                Section {
+                    Label(err, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote).foregroundStyle(.red)
+                }
+            }
             if let r = readiness {
                 Section { readinessCard(r) } header: { Text("\(r.branch) → \(r.base)") }
             } else {
@@ -317,12 +324,14 @@ struct FinishSheet: View {
 
     // MARK: - Outcome building blocks
 
-    private var doneRow: some View { Button("Done") { dismiss() } }
-    private var dismissRow: some View { Button("Dismiss") { dismiss() }.foregroundStyle(.secondary) }
+    // Done/Dismiss both clear the (terminal) job so reopening returns to the readiness menu
+    // instead of replaying the old outcome — and so a `failed` finish can be dismissed at all.
+    private var doneRow: some View { Button("Done") { chrome.clearJob(); dismiss() } }
+    private var dismissRow: some View { Button("Dismiss") { chrome.clearJob(); dismiss() }.foregroundStyle(.secondary) }
 
     private var letAgentFixRow: some View {
         Button {
-            if let o = outcome { chrome.letAgentFix(outcome: o); dismiss() }
+            if let o = outcome { chrome.letAgentFix(outcome: o); chrome.clearJob(); dismiss() }
         } label: { Label("Let the agent fix it", systemImage: "paperplane") }
     }
 

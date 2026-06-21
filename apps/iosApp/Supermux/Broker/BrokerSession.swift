@@ -22,6 +22,12 @@ final class BrokerSession {
     private(set) var finishJobs: [String: FinishJobDto] = [:]
     private(set) var synced = false
 
+    /// Drop a session's finish job (FinishSheet Dismiss/Done) so the sheet returns to the
+    /// readiness menu. The broker only ever ADDS/updates jobs over the WS `finish_job` frame —
+    /// it never broadcasts a cleared state — so the client clears its own copy. (web parity:
+    /// `finishJob.clear(sessionId)`.)
+    func clearFinishJob(_ id: String) { finishJobs.removeValue(forKey: id) }
+
     init(baseURL: String, token: String) {
         self.baseURL = baseURL
         self.token = token
