@@ -69,12 +69,16 @@ struct STTDebugView: View {
             return
         }
         result = ""; info = ""
-        switch await dictation.start() {
+        status = "Starting… (first run downloads the language model — may take a bit)"
+        busy = true
+        let r = await dictation.start()
+        busy = false
+        switch r {
         case .started: status = "Listening — speak, then tap stop"
         case .denied: status = "Microphone/speech permission denied (enable in Settings)"
-        case .downloading: status = "On-device language model is downloading — try again shortly"
-        case .unavailable: status = "On-device STT unavailable for this device/locale"
-        case .failed: status = "Failed to start on-device STT"
+        case .downloading: status = "Model still downloading — try again shortly"
+        case .unavailable: status = "On-device STT unavailable" + (dictation.lastError.map { ": \($0)" } ?? " for this device/locale")
+        case .failed: status = "Failed: " + (dictation.lastError ?? "unknown error")
         }
     }
 }

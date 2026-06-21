@@ -47,6 +47,7 @@ final class SpeechDictation {
     private(set) var transcript = ""
     private(set) var elapsed: TimeInterval = 0
     private(set) var usedLocale: String?   // the on-device locale actually chosen (debug)
+    private(set) var lastError: String?    // last failure reason, surfaced for the debug screen
 
     var isListening: Bool { phase == .listening }
 
@@ -164,7 +165,8 @@ final class SpeechDictation {
         switch await backend.prepare() {
         case .ready: break
         case .downloading: phase = .idle; return .downloading
-        case .unsupported, .failed: phase = .idle; return .unavailable
+        case .unsupported: phase = .idle; lastError = backend.lastError; return .unavailable
+        case .failed: phase = .idle; lastError = backend.lastError ?? "on-device setup failed"; return .failed
         }
 
         if !configureAudioSession() {
@@ -313,6 +315,7 @@ final class SpeechAnalyzerBackend {
     let preferred: [Locale]
     var onUpdate: ((String) -> Void)?
     private(set) var transcript = ""
+    private(set) var lastError: String?   // last on-device setup/download failure (debug)
 
     private var transcriber: SpeechTranscriber?
     private var analyzer: SpeechAnalyzer?
@@ -375,17 +378,21 @@ final class SpeechAnalyzerBackend {
         // ready synchronously, report `.downloading` so the caller falls back this time.
         do {
             if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-                // Asset isn't installed yet — kick off the download (assets for ALL the
-                // device's preferred supported languages, so switching needs no re-download).
-                // We don't block the UI on a potentially long first download; report
-                // `.downloading` and let it finish in the background so the *next* attempt is
-                // ready. Tear down first so this un-started analyzer doesn't hold a slot.
-                await teardown()
-                Task.detached { try? await request.downloadAndInstall() }
+                // Asset isn't installed yet — DOWNLOAD IT (awaited). The old code fired this
+                // off detached with `try?`, which swallowed any failure and stuck on
+                // "installing" forever. Awaiting installs the model for real and surfaces the
+                // real error; on success we fall through to reserve + start.
+                do {
+                    try await request.downloadAndInstall()
+                } catch {
+                    lastError = "model download failed: \(error)"
+                    await teardown()
+                    return .failed
+                }
                 await Self.installPreferredAssets(self.preferred)
-                return .downloading
             }
         } catch {
+            lastError = "asset request failed: \(error)"
             await teardown()
             return .failed
         }
