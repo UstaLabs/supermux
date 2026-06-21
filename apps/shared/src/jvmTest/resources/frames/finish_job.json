@@ -1,0 +1,19 @@
+{
+  "type": "finish_job",
+  "session": "550e8400-e29b-41d4-a716-446655440000",
+  "job": {
+    "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+    "action": "merge",
+    "status": "done",
+    "startedAt": 1717200000000,
+    "endedAt": 1717200005000,
+    "outcome": {
+      "status": "integrated",
+      "base": "main",
+      "branch": "feat/x",
+      "mergedSha": "abc1234",
+      "verified": "bun test",
+      "cleanedUp": true
+    }
+  }
+}

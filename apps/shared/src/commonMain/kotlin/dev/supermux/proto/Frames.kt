@@ -1,6 +1,7 @@
 package dev.supermux.proto
 
 import dev.supermux.net.DisplayStream
+import dev.supermux.net.FinishResult
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
@@ -18,6 +19,24 @@ data class SessionInfo(
     val model: String? = null,
     val repo_root: String? = null,
     val role: String? = null,
+    /** Worktree session's pinned branch (present only for worktree-backed sessions). */
+    val session_branch: String? = null,
+    /** Last/in-flight finish job for this session (mirrors the broker session record). */
+    val finish_job: FinishJobDto? = null,
+)
+
+/** A finish job's outcome/state machine, broadcast on the `finish_job` WS frame and
+ *  carried on the session snapshot. Mirrors the broker's `FinishJob`
+ *  (src/core/worktree/finish-job.ts): the terminal result lives in [outcome]. */
+@Serializable
+data class FinishJobDto(
+    val sessionId: String = "",
+    val action: String = "merge",     // merge | pr | keep | discard
+    val status: String = "running",   // running | done | failed
+    val stage: String? = null,
+    val outcome: FinishResult? = null,
+    val startedAt: Double = 0.0,       // epoch millis (Date.now())
+    val endedAt: Double? = null,
 )
 
 @Serializable
@@ -123,6 +142,11 @@ sealed interface ServerFrame {
 
     @Serializable @SerialName("fs_changed")
     data class FsChanged(val session: String, val paths: List<String> = emptyList()) : ServerFrame
+
+    // Finish job lifecycle: the broker broadcasts `{type:"finish_job",session,job}`
+    // on every job state change (running → done|failed) — src/main.ts:onUpdate.
+    @Serializable @SerialName("finish_job")
+    data class FinishJobFrame(val session: String = "", val job: FinishJobDto? = null) : ServerFrame
 
     // Display stream lifecycle: the broker broadcasts these on the control WS
     // (src/main.ts: `{type:"display_added",display}` / `{type:"display_removed",id}`).
