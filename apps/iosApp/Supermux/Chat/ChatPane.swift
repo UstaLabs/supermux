@@ -30,7 +30,12 @@ struct ChatPane: View {
     @State private var showFiles = false
     @State private var showCamera = false
     @State private var recorder = AudioRecorder()
+    @State private var dictation = SpeechDictation()
+    @State private var transcribing = false
     @State private var micDenied = false
+    // Voice glossary (project/technical terms), cached from the broker on appear and fed to
+    // on-device dictation as contextual hints so it spells them right at the source.
+    @State private var glossary: [String] = []
     @FocusState private var composing: Bool
 
     // MARK: - Model / reasoning sheet state
@@ -43,7 +48,7 @@ struct ChatPane: View {
 
     /// Composer is expanded (full controls) when focused, when there's a draft or a
     /// staged attachment, or while recording; otherwise it rests as a slim glass pill.
-    private var composerExpanded: Bool { composing || !draft.isEmpty || !pending.isEmpty || recorder.isRecording }
+    private var composerExpanded: Bool { composing || !draft.isEmpty || !pending.isEmpty || dictation.isListening || recorder.isRecording || transcribing }
 
     private var log: [LogEntry] { broker.messages[session.id] ?? [] }
     private var phase: String? { broker.agentPhase[session.id] }
@@ -77,7 +82,8 @@ struct ChatPane: View {
                 Text("Enable microphone access for supermux in Settings to record voice messages.")
             }
             .onAppear { loadPane() }
-            .onChange(of: session.id) { _, _ in loadPane() }
+            .onDisappear { dictation.cancel(); recorder.cancel() }
+            .onChange(of: session.id) { _, _ in dictation.cancel(); recorder.cancel(); loadPane() }
             .onChange(of: draft) { _, new in UserDefaults.standard.set(new, forKey: draftKey) }
     }
 
@@ -88,6 +94,13 @@ struct ChatPane: View {
         draft = UserDefaults.standard.string(forKey: draftKey)
             ?? ProcessInfo.processInfo.environment["SM_DRAFT"] ?? ""
         Task { reasoning = await broker.reasoning(session.id) }
+        Task { await loadGlossary() }
+    }
+
+    /// Cache the voice glossary from the broker (shared across sessions). Best-effort —
+    /// dictation still works without it; the terms are just contextual bias.
+    private func loadGlossary() async {
+        if let terms = try? await broker.fetchGlossary() { glossary = terms }
     }
 
     // MARK: - Scroll
@@ -258,22 +271,28 @@ struct ChatPane: View {
     // and the card morphs (corner radius + padding) between the slim resting pill and the card.
     private var composerField: some View {
         VStack(spacing: 8) {
+            if dictation.isListening || recorder.isRecording {
+                // Recording takes over the composer. On-device shows the live transcript above
+                // the big STOP / small cancel; the audio-fallback path just shows the timer.
+                if dictation.isListening && !dictation.transcript.isEmpty {
+                    ScrollView {
+                        Text(dictation.transcript)
+                            .font(.callout).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 120)
+                }
+                RecordingBar(elapsed: dictation.isListening ? dictation.elapsed : recorder.elapsed,
+                             onStop: { Task { await toggleMic() } },
+                             onCancel: { dictation.cancel(); recorder.cancel() })
+            } else {
             if composerExpanded {
                 if !pending.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) { ForEach(pending) { attachmentChip($0) } }
                     }
                 }
-                if recorder.isRecording {
-                    RecordingBar(
-                        elapsed: recorder.elapsed,
-                        onStop: {
-                            if let (data, name) = recorder.stop() {
-                                pending.append(PendingAttachment(data: data, filename: name, mime: "audio/mp4"))
-                            }
-                        },
-                        onCancel: { recorder.cancel() }
-                    )
+                if transcribing {
+                    transcribingBar
                 }
             }
             HStack(alignment: .center, spacing: 10) {
@@ -311,6 +330,7 @@ struct ChatPane: View {
                     .disabled(!canSend)
                 }
             }
+            }
         }
         .padding(.horizontal, composerExpanded ? 12 : 16)
         .padding(.vertical, composerExpanded ? 12 : 10)
@@ -318,22 +338,104 @@ struct ChatPane: View {
     }
     private var canSend: Bool { !draft.trimmingCharacters(in: .whitespaces).isEmpty || !pending.isEmpty }
 
-    // MARK: - Mic button
+    // MARK: - Mic / dictation
 
+    // Mic → on-device STT first (real-time → /transcribe draft → cleanup), falling back to
+    // audio recording → host whisper when on-device is unavailable. Cleaned text is appended
+    // to the composer (never sent). Stop/cancel live in the RecordingBar while recording.
     private var micButton: some View {
         Button {
-            if recorder.isRecording {
-                if let (data, name) = recorder.stop() {
-                    pending.append(PendingAttachment(data: data, filename: name, mime: "audio/mp4"))
-                }
-            } else {
-                Task { if case .denied = await recorder.start() { micDenied = true } }
-            }
+            Task { await toggleMic() }
         } label: {
-            Image(systemName: recorder.isRecording ? "stop.circle.fill" : "mic")
+            Image(systemName: "mic")
                 .font(.body.weight(.medium))
-                .foregroundStyle(recorder.isRecording ? .red : .secondary)
+                .foregroundStyle(.secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
+        .disabled(transcribing)
+    }
+
+    private var transcribingBar: some View {
+        HStack(spacing: 10) {
+            ProgressView().controlSize(.small)
+            Text("Transcribing…").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Color(.tertiarySystemFill), in: Capsule())
+    }
+
+    /// Drive the mic: on-device STT first (real-time → /transcribe draft → cleanup), falling
+    /// back to audio recording → host whisper when on-device is unavailable. Always sets the
+    /// composer text; never sends.
+    private func toggleMic() async {
+        if recorder.isRecording {
+            // Fallback audio path was active — finish + transcribe via multipart (whisper).
+            guard let (data, name) = recorder.stop() else { showBanner("Didn't catch that"); return }
+            await runTranscription { try await broker.transcribeAudio(sessionId: session.id, data: data, filename: name) }
+            return
+        }
+        if dictation.isListening {
+            // On-device path — stop, then clean the on-device draft. Raw draft is the fallback
+            // so the dictation still lands even if the cleanup call fails.
+            let (text, _) = await dictation.stop()
+            guard !text.isEmpty else { showBanner("Didn't catch that"); return }
+            await runTranscription(rawFallback: text) {
+                try await broker.transcribeDraft(sessionId: session.id, draft: text)
+            }
+            return
+        }
+        // Start on-device; fall back to audio recording if it's unavailable / model downloading.
+        // The glossary biases the recognizer toward our project/technical terms.
+        switch await dictation.start(contextualStrings: glossary) {
+        case .started: break
+        case .denied: micDenied = true
+        case .unavailable, .downloading, .failed:
+            if case .denied = await recorder.start() { micDenied = true }
+        }
+    }
+
+    /// Run a transcribe call with the "Transcribing…" state, then append the cleaned text
+    /// to the composer (a space joins it to any existing draft). On ANY failure we keep the
+    /// raw on-device draft (when we have one) so the dictation isn't lost; the agent cleanup
+    /// is just an enhancement. We only surface an error when there's no text to keep at all.
+    private func runTranscription(rawFallback: String? = nil,
+                                  _ call: @escaping () async throws -> String) async {
+        transcribing = true
+        defer { transcribing = false }
+        let result: String
+        do {
+            result = try await call()
+        } catch {
+            if let raw = rawFallback?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+                appendToDraft(raw)
+            } else {
+                showBanner("Transcription failed")
+            }
+            return
+        }
+        let cleaned = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty {
+            if let raw = rawFallback?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+                appendToDraft(raw)
+            }
+            return
+        }
+        appendToDraft(cleaned)
+    }
+
+    /// Append text to the composer draft, space-joining onto any existing draft, and focus.
+    private func appendToDraft(_ text: String) {
+        let existing = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft = existing.isEmpty ? text : existing + " " + text
+        composing = true
+    }
+
+    /// Show a transient status banner via the binding, auto-clearing after 4s.
+    private func showBanner(_ text: String) {
+        banner = text
+        Task { try? await Task.sleep(nanoseconds: 4_000_000_000); banner = nil }
     }
 
     // MARK: - Attachment chips
