@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- ≈ supermuxDark().background = oklch(0.14 0.006 130). Splash/window background. -->
-    <color name="supermux_window_background">#FF1E211D</color>
+    <!-- Window background — adapts light/dark (values-night overrides). ≈ supermuxLight/Dark background.
+         Fixes the dark status-bar inset strip in light mode. -->
+    <color name="supermux_window_background">#FFF3F1EB</color>
+    <!-- Splash background — fixed brand-dark (the launcher glyph is white, must stay visible). -->
+    <color name="supermux_splash_background">#FF1E211D</color>
 </resources>

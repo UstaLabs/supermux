@@ -2,7 +2,7 @@
 <resources>
     <!-- Splash theme: the system shows this before installSplashScreen() hands off. -->
     <style name="Theme.Supermux" parent="Theme.SplashScreen">
-        <item name="windowSplashScreenBackground">@color/supermux_window_background</item>
+        <item name="windowSplashScreenBackground">@color/supermux_splash_background</item>
         <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
         <item name="postSplashScreenTheme">@style/Theme.Supermux.Main</item>
     </style>
