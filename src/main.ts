@@ -1414,7 +1414,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       try {
         const t1 = Date.now()
         const out = await cleanupDraft(
-          { draft, recentMessages: payload.context.recentMessages, skills },
+          { draft, recentMessages: payload.context.recentMessages, skills, glossary: cfg.voiceCleanupGlossary ?? [] },
           { engine: cfg.voiceCleanupEngine, model: cfg.voiceCleanupModel },
         )
         const cleanupMs = Date.now() - t1

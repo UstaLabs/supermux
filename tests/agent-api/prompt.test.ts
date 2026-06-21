@@ -9,6 +9,7 @@ test("buildCleanupPrompt includes the draft, context, a skill name, and the outp
     draft: "helo wrld",
     recentMessages: [{ role: "user", text: "deploy the broker" }],
     skills: ["preview-broker", "watch-video"],
+    glossary: [],
   })
   // draft (JSON-encoded)
   expect(prompt).toContain(JSON.stringify("helo wrld"))
@@ -21,8 +22,22 @@ test("buildCleanupPrompt includes the draft, context, a skill name, and the outp
 })
 
 test("buildCleanupPrompt omits skills/context sections when empty", () => {
-  const prompt = buildCleanupPrompt({ draft: "hi", recentMessages: [], skills: [] })
+  const prompt = buildCleanupPrompt({ draft: "hi", recentMessages: [], skills: [], glossary: [] })
   expect(prompt).toContain(JSON.stringify("hi"))
   expect(prompt).not.toContain("Known commands/skills")
   expect(prompt).not.toContain("Conversation so far")
+  expect(prompt).not.toContain("Known terms")
+})
+
+test("buildCleanupPrompt includes the glossary line and a sample term when non-empty", () => {
+  const prompt = buildCleanupPrompt({
+    draft: "super max",
+    recentMessages: [],
+    skills: [],
+    glossary: ["Supermux", "Codex", "Whisper"],
+  })
+  // the load-bearing glossary line + a sample term
+  expect(prompt).toContain("Known terms")
+  expect(prompt).toContain("Supermux")
+  expect(prompt).toContain("Codex, Whisper")
 })

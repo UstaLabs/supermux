@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { sanitizeAppConfigPatch, resolveAppConfig } from "../src/core/settings/app-config"
+import { sanitizeAppConfigPatch, resolveAppConfig, DEFAULT_VOICE_CLEANUP_GLOSSARY } from "../src/core/settings/app-config"
 
 test("voice/whisper fields survive sanitize + resolve", () => {
   const patch = sanitizeAppConfigPatch({ voiceCleanupModel: "haiku", whisperModel: "/m/ggml-base.bin", whisperLang: "tr" })
@@ -47,4 +47,42 @@ test("voiceCleanupEngine: unknown string is rejected by the allowlist", () => {
   expect(patch.voiceCleanupEngine).toBeUndefined()
   const resolved = resolveAppConfig(patch, {} as any)
   expect(resolved.voiceCleanupEngine).toBeUndefined()
+})
+
+test("voiceCleanupGlossary: defaults to the built-in seed when not configured", () => {
+  const resolved = resolveAppConfig({}, {} as any)
+  expect(resolved.voiceCleanupGlossary).toEqual(DEFAULT_VOICE_CLEANUP_GLOSSARY)
+  // sanity: a known seed term is present
+  expect(resolved.voiceCleanupGlossary).toContain("Supermux")
+})
+
+test("voiceCleanupGlossary: a stored array survives sanitize + resolve", () => {
+  const patch = sanitizeAppConfigPatch({ voiceCleanupGlossary: ["Foo", "Bar"] })
+  expect(patch.voiceCleanupGlossary).toEqual(["Foo", "Bar"])
+  const resolved = resolveAppConfig(patch, {} as any)
+  expect(resolved.voiceCleanupGlossary).toEqual(["Foo", "Bar"])
+})
+
+test("voiceCleanupGlossary: a comma-separated string is coerced to an array", () => {
+  const patch = sanitizeAppConfigPatch({ voiceCleanupGlossary: "Foo, Bar ,Baz" })
+  expect(patch.voiceCleanupGlossary).toEqual(["Foo", "Bar", "Baz"])
+})
+
+test("voiceCleanupGlossary: array entries are trimmed and empties dropped; non-strings ignored", () => {
+  const patch = sanitizeAppConfigPatch({ voiceCleanupGlossary: [" Foo ", "", "Bar", 42, null] })
+  expect(patch.voiceCleanupGlossary).toEqual(["Foo", "Bar"])
+})
+
+test("voiceCleanupGlossary: a stored empty array is preserved (user cleared it)", () => {
+  const patch = sanitizeAppConfigPatch({ voiceCleanupGlossary: [] })
+  expect(patch.voiceCleanupGlossary).toEqual([])
+  const resolved = resolveAppConfig(patch, {} as any)
+  expect(resolved.voiceCleanupGlossary).toEqual([])
+})
+
+test("voiceCleanupGlossary: invalid (non-array/non-string) input is dropped → reveals default", () => {
+  const patch = sanitizeAppConfigPatch({ voiceCleanupGlossary: 42 })
+  expect(patch.voiceCleanupGlossary).toBeUndefined()
+  const resolved = resolveAppConfig(patch, {} as any)
+  expect(resolved.voiceCleanupGlossary).toEqual(DEFAULT_VOICE_CLEANUP_GLOSSARY)
 })

@@ -6,7 +6,7 @@ import { cleanupDraft } from "../src/core/transcription/voice-cleanup"
 // Adapter-specific wire details live in tests/agent-api/*.test.ts. This file only
 // covers cleanupDraft's engine-selection + cursor-cli fallback behavior.
 
-const INPUT = { draft: "Clouds High-Q model", recentMessages: [], skills: [] }
+const INPUT = { draft: "Clouds High-Q model", recentMessages: [], skills: [], glossary: [] }
 
 // A fake fetch returning an OpenAI-shaped chat completion (used by opencode adapters).
 const okFetch = (content: string): typeof fetch =>
@@ -62,7 +62,7 @@ test("cleanupDraft throws when BOTH the engine and cursor-cli fail (caller keeps
 })
 
 test("cleanupDraft short-circuits an empty draft", async () => {
-  const r = await cleanupDraft({ draft: "  ", recentMessages: [], skills: [] }, { engine: "opencode-zen", readFileFn: zenAuth })
+  const r = await cleanupDraft({ draft: "  ", recentMessages: [], skills: [], glossary: [] }, { engine: "opencode-zen", readFileFn: zenAuth })
   expect(r.text).toBe("")
   expect(r.engine).toBe("none")
 })
