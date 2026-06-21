@@ -37,6 +37,7 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation(libs.compose.material3.windowsize)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.ktor.client.cio)
