@@ -18,7 +18,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
-import dev.supermux.android.theme.LocalPanes
 import dev.supermux.android.theme.Space
 import dev.supermux.proto.SessionInfo
 import dev.supermux.session.formatWorkdir
@@ -34,7 +33,7 @@ fun SessionLauncherScreen(
     onSubmit: suspend (workdir: String, agent: String, model: String?, message: String) -> String,
     onOpenSession: (String) -> Unit,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     var workdir by remember { mutableStateOf("~") }
     var workdirTouched by remember { mutableStateOf(false) }
@@ -56,18 +55,18 @@ fun SessionLauncherScreen(
     }
 
     val fieldColors = OutlinedTextFieldDefaults.colors(
-        focusedTextColor = Color(c.foreground),
-        unfocusedTextColor = Color(c.foreground),
-        focusedBorderColor = Color(c.primary),
-        unfocusedBorderColor = Color(c.border),
-        focusedLabelColor = Color(c.primary),
-        unfocusedLabelColor = Color(c.mutedForeground),
+        focusedTextColor = cs.onSurface,
+        unfocusedTextColor = cs.onSurface,
+        focusedBorderColor = cs.primary,
+        unfocusedBorderColor = cs.outline,
+        focusedLabelColor = cs.primary,
+        unfocusedLabelColor = cs.onSurfaceVariant,
     )
 
     Column(
         Modifier
             .fillMaxSize()
-            .background(Color(c.sessionList)),
+            .background(cs.surfaceContainerHigh),
     ) {
         Row(
             Modifier
@@ -79,13 +78,13 @@ fun SessionLauncherScreen(
                 Icon(
                     painter = painterResource(R.drawable.ic_arrow_left),
                     contentDescription = "Back",
-                    tint = Color(c.foreground),
+                    tint = cs.onSurface,
                     modifier = Modifier.size(18.dp),
                 )
             }
-            Text("New session", color = Color(c.foreground), fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+            Text("New session", color = cs.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
         }
-        HorizontalDivider(color = Color(c.border).copy(alpha = 0.5f))
+        HorizontalDivider(color = cs.outlineVariant)
 
         Column(
             Modifier
@@ -95,18 +94,18 @@ fun SessionLauncherScreen(
             verticalArrangement = Arrangement.spacedBy(Space.lg),
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                Text("Let's build", color = Color(c.foreground), fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
+                Text("Let's build", color = cs.onSurface, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(Space.sm))
                 Text(
                     formatWorkdir(workdir, home),
-                    color = Color(c.primary),
+                    color = cs.primary,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Medium,
                 )
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
-                Text("Project", color = Color(c.mutedForeground), fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Text("Project", color = cs.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                 ProjectPathPicker(
                     value = workdir,
                     onValueChange = { workdir = it; workdirTouched = true; error = null },
@@ -119,7 +118,7 @@ fun SessionLauncherScreen(
             OutlinedTextField(
                 value = message,
                 onValueChange = { message = it; error = null },
-                placeholder = { Text("What should the agent do?", color = Color(c.mutedForeground)) },
+                placeholder = { Text("What should the agent do?", color = cs.onSurfaceVariant) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 140.dp),
@@ -129,7 +128,7 @@ fun SessionLauncherScreen(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .border(1.dp, Color(c.border), RoundedCornerShape(10.dp))
+                    .border(1.dp, cs.outline, RoundedCornerShape(10.dp))
                     .clip(RoundedCornerShape(10.dp)),
             ) {
                 agents.forEach { a ->
@@ -137,14 +136,14 @@ fun SessionLauncherScreen(
                     Box(
                         Modifier
                             .weight(1f)
-                            .background(if (selected) Color(c.primary) else Color.Transparent)
+                            .background(if (selected) cs.primary else Color.Transparent)
                             .clickable { agent = a }
                             .padding(vertical = 8.dp),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
                             a,
-                            color = if (selected) Color(c.primaryForeground) else Color(c.mutedForeground),
+                            color = if (selected) cs.onPrimary else cs.onSurfaceVariant,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Medium,
                         )
@@ -155,13 +154,13 @@ fun SessionLauncherScreen(
             OutlinedTextField(
                 value = model,
                 onValueChange = { model = it },
-                placeholder = { Text("Model (optional)", color = Color(c.mutedForeground)) },
+                placeholder = { Text("Model (optional)", color = cs.onSurfaceVariant) },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 colors = fieldColors,
             )
 
-            error?.let { Text(it, color = Color(c.destructive), fontSize = 12.sp) }
+            error?.let { Text(it, color = cs.error, fontSize = 12.sp) }
 
             Button(
                 onClick = {
@@ -186,15 +185,15 @@ fun SessionLauncherScreen(
                 enabled = !submitting && workdir.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(c.primary),
-                    contentColor = Color(c.primaryForeground),
+                    containerColor = cs.primary,
+                    contentColor = cs.onPrimary,
                 ),
             ) {
                 if (submitting) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(16.dp),
                         strokeWidth = 2.dp,
-                        color = Color(c.primaryForeground),
+                        color = cs.onPrimary,
                     )
                     Spacer(Modifier.width(8.dp))
                 }

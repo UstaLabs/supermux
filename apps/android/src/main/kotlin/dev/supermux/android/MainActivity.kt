@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
@@ -31,7 +32,6 @@ import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import androidx.compose.animation.AnimatedVisibilityScope
@@ -50,7 +50,6 @@ import dev.supermux.android.settings.ProxyScreen
 import dev.supermux.android.settings.SettingsScreen
 import dev.supermux.android.settings.UsageScreen
 import dev.supermux.android.theme.AppearanceMode
-import dev.supermux.android.theme.LocalPanes
 import dev.supermux.android.theme.SupermuxTheme
 import dev.supermux.android.DevConfig
 import dev.supermux.auth.SecureTokenStoreContext
@@ -94,7 +93,7 @@ class MainActivity : ComponentActivity() {
 
                 val windowSizeClass = calculateWindowSizeClass(this)
                 val expanded = windowSizeClass.widthSizeClass == WindowWidthSizeClass.Expanded
-                val c = LocalPanes.current
+                val cs = MaterialTheme.colorScheme
 
                 var route by remember { mutableStateOf("list") }
 
@@ -180,7 +179,7 @@ class MainActivity : ComponentActivity() {
                                     Modifier
                                         .width(1.dp)
                                         .fillMaxHeight()
-                                        .background(Color(c.border)),
+                                        .background(cs.outlineVariant),
                                 )
                                 Box(Modifier.weight(1f)) {
                                     SessionLauncherScreen(
@@ -241,17 +240,17 @@ class MainActivity : ComponentActivity() {
                                     Modifier
                                         .width(1.dp)
                                         .fillMaxHeight()
-                                        .background(Color(c.border))
+                                        .background(cs.outlineVariant)
                                 )
                                 Box(Modifier.weight(1f)) {
                                     if (selected == null) {
                                         Box(
                                             Modifier
                                                 .fillMaxSize()
-                                                .background(Color(c.chat)),
+                                                .background(cs.surfaceContainerLow),
                                             contentAlignment = Alignment.Center,
                                         ) {
-                                            Text("Select a session", color = Color(c.mutedForeground))
+                                            Text("Select a session", color = cs.onSurfaceVariant)
                                         }
                                     }
                                     SessionKeepAliveTabletHost(

@@ -93,27 +93,27 @@ private fun SettingsIndexPage(
     onOpenCurator: () -> Unit,
     onOpenEditor: () -> Unit,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     BackHandler { onBack() }
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Settings", color = Color(c.foreground)) },
+                title = { Text("Settings", color = cs.onSurface) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
-                            tint = Color(c.foreground),
+                            tint = cs.onSurface,
                         )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(c.sessionList),
+                    containerColor = cs.surfaceContainerHigh,
                 ),
             )
         },
-        containerColor = Color(c.background),
+        containerColor = cs.background,
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             SettingsNavRow(
@@ -122,7 +122,7 @@ private fun SettingsIndexPage(
                 desc = "Nightly knowledge curation schedule",
                 onClick = onOpenCurator,
             )
-            HorizontalDivider(color = Color(c.border))
+            HorizontalDivider(color = cs.outlineVariant)
             SettingsNavRow(
                 iconRes = R.drawable.ic_file,
                 label = "Editor",
@@ -136,19 +136,19 @@ private fun SettingsIndexPage(
 /** A 36dp rounded icon box used by index rows and Curator rows. */
 @Composable
 private fun SettingsIconBox(iconRes: Int) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     Box(
         Modifier
             .size(36.dp)
             .clip(RoundedCornerShape(10.dp))
-            .background(Color(c.card))
-            .border(1.dp, Color(c.border), RoundedCornerShape(10.dp)),
+            .background(cs.surfaceContainer)
+            .border(1.dp, cs.outline, RoundedCornerShape(10.dp)),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
             painterResource(iconRes),
             contentDescription = null,
-            tint = Color(c.mutedForeground),
+            tint = cs.onSurfaceVariant,
             modifier = Modifier.size(18.dp),
         )
     }
@@ -162,7 +162,7 @@ private fun SettingsNavRow(
     desc: String,
     onClick: () -> Unit,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     Row(
         Modifier
             .fillMaxWidth()
@@ -173,13 +173,13 @@ private fun SettingsNavRow(
     ) {
         SettingsIconBox(iconRes)
         Column(Modifier.weight(1f)) {
-            Text(label, color = Color(c.foreground), fontSize = 15.sp, fontWeight = FontWeight.Medium)
-            Text(desc, color = Color(c.mutedForeground), fontSize = 11.sp)
+            Text(label, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Text(desc, color = cs.onSurfaceVariant, fontSize = 11.sp)
         }
         Icon(
             painterResource(R.drawable.ic_chevron_right),
             contentDescription = null,
-            tint = Color(c.mutedForeground),
+            tint = cs.onSurfaceVariant,
             modifier = Modifier.size(18.dp),
         )
     }
@@ -195,7 +195,7 @@ private fun CuratorSettingsPage(
     curatorSave: suspend (Boolean, Int, Int) -> CuratorSettingsResponse?,
     curatorRunNow: suspend () -> Unit,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -223,29 +223,29 @@ private fun CuratorSettingsPage(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Curator", color = Color(c.foreground)) },
+                title = { Text("Curator", color = cs.onSurface) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
-                            tint = Color(c.foreground),
+                            tint = cs.onSurface,
                         )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(c.sessionList),
+                    containerColor = cs.surfaceContainerHigh,
                 ),
             )
         },
-        containerColor = Color(c.background),
+        containerColor = cs.background,
     ) { padding ->
         if (!loaded) {
             Box(
                 Modifier.fillMaxSize().padding(padding),
                 contentAlignment = Alignment.Center,
             ) {
-                CircularProgressIndicator(color = Color(c.primary))
+                CircularProgressIndicator(color = cs.primary)
             }
         } else {
             Column(Modifier.fillMaxSize().padding(padding)) {
@@ -259,12 +259,12 @@ private fun CuratorSettingsPage(
                         checked = enabled,
                         onCheckedChange = { enabled = it },
                         colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color(c.primaryForeground),
-                            checkedTrackColor = Color(c.primary),
+                            checkedThumbColor = cs.onPrimary,
+                            checkedTrackColor = cs.primary,
                         ),
                     )
                 }
-                HorizontalDivider(color = Color(c.border))
+                HorizontalDivider(color = cs.outlineVariant)
 
                 // 2. Run at — opens a TimePickerDialog
                 CuratorRow(
@@ -274,8 +274,8 @@ private fun CuratorSettingsPage(
                     Box(
                         Modifier
                             .clip(RoundedCornerShape(6.dp))
-                            .background(Color(c.card))
-                            .border(1.dp, Color(c.border), RoundedCornerShape(6.dp))
+                            .background(cs.surfaceContainer)
+                            .border(1.dp, cs.outline, RoundedCornerShape(6.dp))
                             .clickable {
                                 TimePickerDialog(
                                     context,
@@ -289,13 +289,13 @@ private fun CuratorSettingsPage(
                     ) {
                         Text(
                             String.format(Locale.US, "%02d:%02d", hour, minute),
-                            color = Color(c.foreground),
+                            color = cs.onSurface,
                             fontSize = 14.sp,
                             fontFamily = FontFamily.Monospace,
                         )
                     }
                 }
-                HorizontalDivider(color = Color(c.border))
+                HorizontalDivider(color = cs.outlineVariant)
 
                 // 3. Next run (read-only)
                 CuratorRow(
@@ -304,11 +304,11 @@ private fun CuratorSettingsPage(
                 ) {
                     Text(
                         curatorNextRunLabel(enabled, nextRun),
-                        color = Color(c.mutedForeground),
+                        color = cs.onSurfaceVariant,
                         fontSize = 14.sp,
                     )
                 }
-                HorizontalDivider(color = Color(c.border))
+                HorizontalDivider(color = cs.outlineVariant)
 
                 // Footer actions
                 Row(
@@ -327,9 +327,9 @@ private fun CuratorSettingsPage(
                         },
                         enabled = !saving,
                         modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(c.primary)),
+                        colors = ButtonDefaults.buttonColors(containerColor = cs.primary),
                     ) {
-                        Text(if (saving) "Saving…" else "Save", color = Color(c.primaryForeground))
+                        Text(if (saving) "Saving…" else "Save", color = cs.onPrimary)
                     }
                     OutlinedButton(
                         onClick = {
@@ -340,16 +340,16 @@ private fun CuratorSettingsPage(
                             }
                         },
                         enabled = !running,
-                        border = BorderStroke(1.dp, Color(c.border)),
+                        border = BorderStroke(1.dp, cs.outline),
                     ) {
                         Icon(
                             painterResource(R.drawable.ic_play),
                             contentDescription = null,
-                            tint = Color(c.foreground),
+                            tint = cs.onSurface,
                             modifier = Modifier.size(16.dp),
                         )
                         Spacer(Modifier.width(6.dp))
-                        Text(if (running) "Starting…" else "Run now", color = Color(c.foreground))
+                        Text(if (running) "Starting…" else "Run now", color = cs.onSurface)
                     }
                 }
             }
@@ -365,7 +365,7 @@ private fun CuratorRow(
     iconRes: Int? = null,
     trailing: @Composable () -> Unit,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -373,8 +373,8 @@ private fun CuratorRow(
     ) {
         if (iconRes != null) SettingsIconBox(iconRes)
         Column(Modifier.weight(1f)) {
-            Text(label, color = Color(c.foreground), fontSize = 15.sp, fontWeight = FontWeight.Medium)
-            Text(desc, color = Color(c.mutedForeground), fontSize = 11.sp)
+            Text(label, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Text(desc, color = cs.onSurfaceVariant, fontSize = 11.sp)
         }
         trailing()
     }
@@ -395,7 +395,7 @@ private fun curatorNextRunLabel(enabled: Boolean, nextRun: String?): String {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EditorSettingsPage(onBack: () -> Unit) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     val prefs = LocalContext.current
         .getSharedPreferences("cmux-editor-settings", Context.MODE_PRIVATE)
 
@@ -407,22 +407,22 @@ private fun EditorSettingsPage(onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Editor", color = Color(c.foreground)) },
+                title = { Text("Editor", color = cs.onSurface) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
-                            tint = Color(c.foreground),
+                            tint = cs.onSurface,
                         )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(c.sessionList),
+                    containerColor = cs.surfaceContainerHigh,
                 ),
             )
         },
-        containerColor = Color(c.background),
+        containerColor = cs.background,
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             // 1. Wrap long lines
@@ -437,12 +437,12 @@ private fun EditorSettingsPage(onBack: () -> Unit) {
                         prefs.edit().putBoolean("lineWrap", it).apply()
                     },
                     colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color(c.primaryForeground),
-                        checkedTrackColor = Color(c.primary),
+                        checkedThumbColor = cs.onPrimary,
+                        checkedTrackColor = cs.primary,
                     ),
                 )
             }
-            HorizontalDivider(color = Color(c.border))
+            HorizontalDivider(color = cs.outlineVariant)
 
             // 2. Font size stepper (clamp 10..24)
             CuratorRow(
@@ -460,7 +460,7 @@ private fun EditorSettingsPage(onBack: () -> Unit) {
                     }
                     Text(
                         fontSize.toString(),
-                        color = Color(c.foreground),
+                        color = cs.onSurface,
                         fontSize = 14.sp,
                         fontFamily = FontFamily.Monospace,
                     )
@@ -478,18 +478,18 @@ private fun EditorSettingsPage(onBack: () -> Unit) {
 /** Small bordered −/+ button for the font-size stepper. */
 @Composable
 private fun StepperButton(text: String, enabled: Boolean, onClick: () -> Unit) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     val alpha = if (enabled) 1f else 0.4f
     Box(
         Modifier
             .size(32.dp)
             .clip(RoundedCornerShape(6.dp))
-            .background(Color(c.card))
-            .border(1.dp, Color(c.border).copy(alpha = alpha), RoundedCornerShape(6.dp))
+            .background(cs.surfaceContainer)
+            .border(1.dp, cs.outline.copy(alpha = alpha), RoundedCornerShape(6.dp))
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, color = Color(c.foreground).copy(alpha = alpha), fontSize = 18.sp)
+        Text(text, color = cs.onSurface.copy(alpha = alpha), fontSize = 18.sp)
     }
 }
 
@@ -577,7 +577,7 @@ fun UsageScreen(
     onBack: () -> Unit,
     onLoad: suspend () -> String?,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     var usage by remember { mutableStateOf<UsageData?>(null) }
     var loading by remember { mutableStateOf(true) }
     var loadFailed by remember { mutableStateOf(false) }
@@ -598,13 +598,13 @@ fun UsageScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Usage", color = Color(c.foreground)) },
+                title = { Text("Usage", color = cs.onSurface) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
-                            tint = Color(c.foreground),
+                            tint = cs.onSurface,
                         )
                     }
                 },
@@ -613,29 +613,29 @@ fun UsageScreen(
                         Icon(
                             Icons.Filled.Refresh,
                             contentDescription = "Refresh",
-                            tint = if (loading) Color(c.mutedForeground) else Color(c.foreground),
+                            tint = if (loading) cs.onSurfaceVariant else cs.onSurface,
                         )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(c.sessionList),
+                    containerColor = cs.surfaceContainerHigh,
                 ),
             )
         },
-        containerColor = Color(c.background),
+        containerColor = cs.background,
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when {
                 loading && usage == null -> {
                     CircularProgressIndicator(
-                        color = Color(c.primary),
+                        color = cs.primary,
                         modifier = Modifier.align(Alignment.Center),
                     )
                 }
                 loadFailed && usage == null -> {
                     Text(
                         "Unable to load usage data.",
-                        color = Color(c.mutedForeground),
+                        color = cs.onSurfaceVariant,
                         modifier = Modifier.align(Alignment.Center),
                     )
                 }
@@ -773,11 +773,12 @@ private fun clampPct(v: Double): Double = v.coerceIn(0.0, 100.0)
 /** Bar colour by percentage: >=85 red, >=60 amber, else primary. */
 @Composable
 private fun barColor(pct: Double): Color {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
+    val panes = LocalPanes.current
     return when {
-        pct >= 85 -> Color(c.destructive)
-        pct >= 60 -> Color(c.warning)
-        else -> Color(c.primary)
+        pct >= 85 -> cs.error
+        pct >= 60 -> Color(panes.warning)
+        else -> cs.primary
     }
 }
 
@@ -826,14 +827,14 @@ private fun UsageCard(
     badge: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     val alpha = if (enabled) 1f else 0.5f
     Column(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(Color(c.card).copy(alpha = alpha))
-            .border(1.dp, Color(c.border).copy(alpha = alpha), RoundedCornerShape(12.dp))
+            .background(cs.surfaceContainer.copy(alpha = alpha))
+            .border(1.dp, cs.outline.copy(alpha = alpha), RoundedCornerShape(12.dp))
             .padding(16.dp),
     ) {
         Row(
@@ -841,8 +842,8 @@ private fun UsageCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text(title, color = Color(c.foreground), fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                Text(subtitle, color = Color(c.mutedForeground), fontSize = 12.sp)
+                Text(title, color = cs.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text(subtitle, color = cs.onSurfaceVariant, fontSize = 12.sp)
             }
             badge?.invoke()
         }
@@ -853,15 +854,15 @@ private fun UsageCard(
 /** A labelled usage window: label + "{pct}% used" + progress bar + reset line. */
 @Composable
 private fun UsageWindowRow(label: String, used: Double, resetsAt: String?, kind: ResetKind) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     val pct = clampPct(used)
     Column(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
         Row(
             Modifier.fillMaxWidth().padding(bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(label, color = Color(c.mutedForeground), fontSize = 12.sp, modifier = Modifier.weight(1f))
-            Text("${used.roundToInt()}% used", color = Color(c.foreground), fontSize = 12.sp)
+            Text(label, color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.weight(1f))
+            Text("${used.roundToInt()}% used", color = cs.onSurface, fontSize = 12.sp)
         }
         // Progress bar track + fill
         Box(
@@ -869,7 +870,7 @@ private fun UsageWindowRow(label: String, used: Double, resetsAt: String?, kind:
                 .fillMaxWidth()
                 .height(8.dp)
                 .clip(RoundedCornerShape(4.dp))
-                .background(Color(c.muted)),
+                .background(cs.surfaceVariant),
         ) {
             Box(
                 Modifier
@@ -881,7 +882,7 @@ private fun UsageWindowRow(label: String, used: Double, resetsAt: String?, kind:
         }
         val reset = formatReset(resetsAt, kind)
         if (reset.isNotEmpty()) {
-            Text(reset, color = Color(c.mutedForeground), fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
+            Text(reset, color = cs.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
         }
     }
 }
@@ -889,25 +890,25 @@ private fun UsageWindowRow(label: String, used: Double, resetsAt: String?, kind:
 /** A footer row separated by a top border (extra usage / credits / spend). */
 @Composable
 private fun UsageFooterRow(label: String, value: String) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-        HorizontalDivider(color = Color(c.border))
+        HorizontalDivider(color = cs.outlineVariant)
         Row(
             Modifier.fillMaxWidth().padding(top = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(label, color = Color(c.mutedForeground), fontSize = 12.sp, modifier = Modifier.weight(1f))
-            Text(value, color = Color(c.foreground), fontSize = 12.sp)
+            Text(label, color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.weight(1f))
+            Text(value, color = cs.onSurface, fontSize = 12.sp)
         }
     }
 }
 
 @Composable
 private fun ClaudeUsageCard(claude: ClaudeUsageData?, error: String?) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     UsageCard(title = "Claude", subtitle = "Pro plan", enabled = claude != null) {
         if (claude == null) {
-            Text(error ?: "Not available", color = Color(c.mutedForeground), fontSize = 12.sp)
+            Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
         } else {
             claude.fiveHour?.let { UsageWindowRow("5-hour window", it.used, it.resetsAt, ResetKind.CLAUDE) }
             claude.sevenDay?.let { UsageWindowRow("7-day window", it.used, it.resetsAt, ResetKind.CLAUDE) }
@@ -921,7 +922,7 @@ private fun ClaudeUsageCard(claude: ClaudeUsageData?, error: String?) {
 
 @Composable
 private fun CodexUsageCard(codex: CodexUsageData?, error: String?) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     UsageCard(
         title = "Codex",
         subtitle = codex?.plan ?: "unknown",
@@ -931,16 +932,16 @@ private fun CodexUsageCard(codex: CodexUsageData?, error: String?) {
                 Box(
                     Modifier
                         .clip(RoundedCornerShape(999.dp))
-                        .background(Color(c.destructive).copy(alpha = 0.1f))
+                        .background(cs.error.copy(alpha = 0.1f))
                         .padding(horizontal = 8.dp, vertical = 2.dp),
                 ) {
-                    Text("limit reached", color = Color(c.destructive), fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                    Text("limit reached", color = cs.error, fontSize = 10.sp, fontWeight = FontWeight.Medium)
                 }
             }
         } else null,
     ) {
         if (codex == null) {
-            Text(error ?: "Not available", color = Color(c.mutedForeground), fontSize = 12.sp)
+            Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
         } else {
             codex.primaryWindow?.let { UsageWindowRow("5-hour window", it.used, it.resetsAt, ResetKind.CODEX) }
             codex.secondaryWindow?.let { UsageWindowRow("7-day window", it.used, it.resetsAt, ResetKind.CODEX) }
@@ -953,10 +954,10 @@ private fun CodexUsageCard(codex: CodexUsageData?, error: String?) {
 
 @Composable
 private fun CursorUsageCard(cursor: CursorUsageData?, error: String?) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     UsageCard(title = "Cursor", subtitle = "Billing cycle", enabled = cursor != null) {
         if (cursor == null) {
-            Text(error ?: "Not available", color = Color(c.mutedForeground), fontSize = 12.sp)
+            Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
         } else {
             // Cursor uses cents + ISO billing cycle end; reset line tracks billingCycleEnd.
             UsageWindowRow("Usage", cursor.totalPercentUsed, cursor.billingCycleEnd, ResetKind.CURSOR)
@@ -974,7 +975,7 @@ fun DevicesScreen(
     onLoad: suspend () -> List<DeviceDto>,
     onRevoke: (String) -> Unit,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     var devices by remember { mutableStateOf<List<DeviceDto>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var revokeTarget by remember { mutableStateOf<String?>(null) }
@@ -987,32 +988,32 @@ fun DevicesScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Devices", color = Color(c.foreground)) },
+                title = { Text("Devices", color = cs.onSurface) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
-                            tint = Color(c.foreground),
+                            tint = cs.onSurface,
                         )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(c.sessionList),
+                    containerColor = cs.surfaceContainerHigh,
                 ),
             )
         },
-        containerColor = Color(c.background),
+        containerColor = cs.background,
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when {
                 loading -> CircularProgressIndicator(
-                    color = Color(c.primary),
+                    color = cs.primary,
                     modifier = Modifier.align(Alignment.Center),
                 )
                 devices.isEmpty() -> Text(
                     "No devices registered.",
-                    color = Color(c.mutedForeground),
+                    color = cs.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.Center),
                 )
                 else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
@@ -1021,7 +1022,7 @@ fun DevicesScreen(
                             device = device,
                             onRevoke = { revokeTarget = device.name },
                         )
-                        HorizontalDivider(color = Color(c.border).copy(alpha = 0.4f))
+                        HorizontalDivider(color = cs.outlineVariant)
                     }
                 }
             }
@@ -1039,7 +1040,7 @@ fun DevicesScreen(
                     onRevoke(name)
                     devices = devices.filterNot { it.name == name }
                     revokeTarget = null
-                }) { Text("Revoke", color = Color(c.destructive)) }
+                }) { Text("Revoke", color = cs.error) }
             },
             dismissButton = {
                 TextButton(onClick = { revokeTarget = null }) { Text("Cancel") }
@@ -1050,20 +1051,20 @@ fun DevicesScreen(
 
 @Composable
 private fun DeviceRow(device: DeviceDto, onRevoke: () -> Unit) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(device.name, color = Color(c.foreground), fontWeight = FontWeight.Medium, fontSize = 14.sp)
+            Text(device.name, color = cs.onSurface, fontWeight = FontWeight.Medium, fontSize = 14.sp)
             val lastSeen = relTime(device.last_seen_at)
             if (lastSeen.isNotEmpty()) {
-                Text("Last seen $lastSeen", color = Color(c.mutedForeground), fontSize = 11.sp)
+                Text("Last seen $lastSeen", color = cs.onSurfaceVariant, fontSize = 11.sp)
             }
         }
         TextButton(onClick = onRevoke) {
-            Text("Revoke", color = Color(c.destructive), fontSize = 13.sp)
+            Text("Revoke", color = cs.error, fontSize = 13.sp)
         }
     }
 }
@@ -1078,7 +1079,7 @@ fun ArchivedScreen(
     onResume: (String) -> Unit,
     loadLogs: suspend (String) -> List<LogEntry> = { emptyList() },
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     var sessions by remember { mutableStateOf<List<ArchivedDto>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var resumedIds by remember { mutableStateOf(setOf<String>()) }
@@ -1109,32 +1110,32 @@ fun ArchivedScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Archived", color = Color(c.foreground)) },
+                title = { Text("Archived", color = cs.onSurface) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
-                            tint = Color(c.foreground),
+                            tint = cs.onSurface,
                         )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(c.sessionList),
+                    containerColor = cs.surfaceContainerHigh,
                 ),
             )
         },
-        containerColor = Color(c.background),
+        containerColor = cs.background,
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when {
                 loading -> CircularProgressIndicator(
-                    color = Color(c.primary),
+                    color = cs.primary,
                     modifier = Modifier.align(Alignment.Center),
                 )
                 sessions.isEmpty() -> Text(
                     "No archived sessions.",
-                    color = Color(c.mutedForeground),
+                    color = cs.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.Center),
                 )
                 else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
@@ -1148,7 +1149,7 @@ fun ArchivedScreen(
                                 resumedIds = resumedIds + session.id
                             },
                         )
-                        HorizontalDivider(color = Color(c.border).copy(alpha = 0.4f))
+                        HorizontalDivider(color = cs.outlineVariant)
                     }
                 }
             }
@@ -1158,7 +1159,7 @@ fun ArchivedScreen(
 
 @Composable
 private fun ArchivedRow(session: ArchivedDto, resumed: Boolean, onOpen: () -> Unit, onResume: () -> Unit) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     Row(
         Modifier
             .fillMaxWidth()
@@ -1167,17 +1168,17 @@ private fun ArchivedRow(session: ArchivedDto, resumed: Boolean, onOpen: () -> Un
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(session.name, color = Color(c.foreground), fontWeight = FontWeight.Medium, fontSize = 14.sp)
+            Text(session.name, color = cs.onSurface, fontWeight = FontWeight.Medium, fontSize = 14.sp)
             Text(
                 session.workdir,
-                color = Color(c.mutedForeground),
+                color = cs.onSurfaceVariant,
                 fontSize = 11.sp,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
             )
             val killed = relTime(session.killed_at)
             if (killed.isNotEmpty()) {
-                Text("Ended $killed", color = Color(c.mutedForeground), fontSize = 10.sp)
+                Text("Ended $killed", color = cs.onSurfaceVariant, fontSize = 10.sp)
             }
         }
         TextButton(
@@ -1186,7 +1187,7 @@ private fun ArchivedRow(session: ArchivedDto, resumed: Boolean, onOpen: () -> Un
         ) {
             Text(
                 if (resumed) "Resumed" else "Resume",
-                color = if (resumed) Color(c.mutedForeground) else Color(c.primary),
+                color = if (resumed) cs.onSurfaceVariant else cs.primary,
                 fontSize = 13.sp,
             )
         }
@@ -1205,7 +1206,7 @@ private fun ArchivedChatScreen(
     onResume: () -> Unit,
     loadLogs: suspend (String) -> List<LogEntry>,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     var messages by remember { mutableStateOf<List<LogEntry>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
 
@@ -1221,8 +1222,8 @@ private fun ArchivedChatScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text(name, color = Color(c.foreground), fontSize = 16.sp, maxLines = 1)
-                        Text("archived", color = Color(c.mutedForeground), fontSize = 11.sp)
+                        Text(name, color = cs.onSurface, fontSize = 16.sp, maxLines = 1)
+                        Text("archived", color = cs.onSurfaceVariant, fontSize = 11.sp)
                     }
                 },
                 navigationIcon = {
@@ -1230,7 +1231,7 @@ private fun ArchivedChatScreen(
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
-                            tint = Color(c.foreground),
+                            tint = cs.onSurface,
                         )
                     }
                 },
@@ -1238,27 +1239,27 @@ private fun ArchivedChatScreen(
                     TextButton(onClick = onResume, enabled = !resumed) {
                         Text(
                             if (resumed) "Resumed" else "Resume",
-                            color = if (resumed) Color(c.mutedForeground) else Color(c.primary),
+                            color = if (resumed) cs.onSurfaceVariant else cs.primary,
                             fontSize = 13.sp,
                         )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(c.sessionList),
+                    containerColor = cs.surfaceContainerHigh,
                 ),
             )
         },
-        containerColor = Color(c.background),
+        containerColor = cs.background,
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when {
                 loading -> CircularProgressIndicator(
-                    color = Color(c.primary),
+                    color = cs.primary,
                     modifier = Modifier.align(Alignment.Center),
                 )
                 messages.isEmpty() -> Text(
                     "No messages.",
-                    color = Color(c.mutedForeground),
+                    color = cs.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.Center),
                 )
                 else -> {
@@ -1290,7 +1291,7 @@ fun ProxyScreen(
     onRemove: (domain: String) -> Unit,
     onBack: () -> Unit,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     val proxies = remember { mutableStateListOf<ProxyDto>() }
     var loading by remember { mutableStateOf(true) }
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -1308,35 +1309,35 @@ fun ProxyScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Proxies", color = Color(c.foreground)) },
+                title = { Text("Proxies", color = cs.onSurface) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
-                            tint = Color(c.foreground),
+                            tint = cs.onSurface,
                         )
                     }
                 },
                 actions = {
                     IconButton(onClick = { showCreateDialog = true }) {
-                        Icon(Icons.Filled.Add, contentDescription = "Expose port", tint = Color(c.foreground))
+                        Icon(Icons.Filled.Add, contentDescription = "Expose port", tint = cs.onSurface)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(c.sessionList)),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
             )
         },
-        containerColor = Color(c.background),
+        containerColor = cs.background,
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when {
                 loading -> CircularProgressIndicator(
-                    color = Color(c.primary),
+                    color = cs.primary,
                     modifier = Modifier.align(Alignment.Center),
                 )
                 proxies.isEmpty() -> Text(
                     "No proxies configured.",
-                    color = Color(c.mutedForeground),
+                    color = cs.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.Center),
                 )
                 else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
@@ -1350,7 +1351,7 @@ fun ProxyScreen(
                             },
                             onRemove = { removeTarget = proxy.domain },
                         )
-                        HorizontalDivider(color = Color(c.border).copy(alpha = 0.4f))
+                        HorizontalDivider(color = cs.outlineVariant)
                     }
                 }
             }
@@ -1381,7 +1382,7 @@ fun ProxyScreen(
                     onRemove(domain)
                     proxies.removeAll { it.domain == domain }
                     removeTarget = null
-                }) { Text("Remove", color = Color(c.destructive)) }
+                }) { Text("Remove", color = cs.error) }
             },
             dismissButton = {
                 TextButton(onClick = { removeTarget = null }) { Text("Cancel") }
@@ -1396,7 +1397,7 @@ private fun ProxyRow(
     onTogglePublic: (Boolean) -> Unit,
     onRemove: () -> Unit,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1404,7 +1405,7 @@ private fun ProxyRow(
         Column(Modifier.weight(1f)) {
             Text(
                 proxy.domain,
-                color = Color(c.foreground),
+                color = cs.onSurface,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Medium,
                 fontSize = 13.sp,
@@ -1412,14 +1413,14 @@ private fun ProxyRow(
             if (proxy.sessionName.isNotEmpty() || proxy.port != 0) {
                 Text(
                     "→ ${proxy.sessionName}:${proxy.port}",
-                    color = Color(c.mutedForeground),
+                    color = cs.onSurfaceVariant,
                     fontSize = 11.sp,
                 )
             }
         }
         Text(
             if (proxy.isPublic) "public" else "private",
-            color = Color(c.mutedForeground),
+            color = cs.onSurfaceVariant,
             fontSize = 11.sp,
             modifier = Modifier.padding(end = 4.dp),
         )
@@ -1427,15 +1428,15 @@ private fun ProxyRow(
             checked = proxy.isPublic,
             onCheckedChange = onTogglePublic,
             colors = SwitchDefaults.colors(
-                checkedThumbColor = Color(c.primaryForeground),
-                checkedTrackColor = Color(c.primary),
+                checkedThumbColor = cs.onPrimary,
+                checkedTrackColor = cs.primary,
             ),
         )
         IconButton(onClick = onRemove) {
             Icon(
                 Icons.Filled.Delete,
                 contentDescription = "Remove",
-                tint = Color(c.destructive),
+                tint = cs.error,
                 modifier = Modifier.size(20.dp),
             )
         }
@@ -1449,7 +1450,7 @@ private fun ExposePortDialog(
     onDismiss: () -> Unit,
     onCreate: (sessionName: String, port: Int, domain: String?) -> Unit,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     var selectedSession by remember { mutableStateOf(sessions.firstOrNull()?.name ?: "") }
     var portText by remember { mutableStateOf("") }
     var domainText by remember { mutableStateOf("") }
@@ -1477,12 +1478,12 @@ private fun ExposePortDialog(
                             }
                         },
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color(c.foreground),
-                            unfocusedTextColor = Color(c.foreground),
-                            focusedBorderColor = Color(c.primary),
-                            unfocusedBorderColor = Color(c.border),
-                            focusedLabelColor = Color(c.primary),
-                            unfocusedLabelColor = Color(c.mutedForeground),
+                            focusedTextColor = cs.onSurface,
+                            unfocusedTextColor = cs.onSurface,
+                            focusedBorderColor = cs.primary,
+                            unfocusedBorderColor = cs.outline,
+                            focusedLabelColor = cs.primary,
+                            unfocusedLabelColor = cs.onSurfaceVariant,
                         ),
                     )
                     DropdownMenu(
@@ -1500,7 +1501,7 @@ private fun ExposePortDialog(
                         }
                         if (sessions.isEmpty()) {
                             DropdownMenuItem(
-                                text = { Text("No sessions", color = Color(c.mutedForeground)) },
+                                text = { Text("No sessions", color = cs.onSurfaceVariant) },
                                 onClick = { sessionDropdownExpanded = false },
                             )
                         }
@@ -1517,13 +1518,13 @@ private fun ExposePortDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     isError = portText.isNotBlank() && !portValid,
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color(c.foreground),
-                        unfocusedTextColor = Color(c.foreground),
-                        focusedBorderColor = Color(c.primary),
-                        unfocusedBorderColor = Color(c.border),
-                        focusedLabelColor = Color(c.primary),
-                        unfocusedLabelColor = Color(c.mutedForeground),
-                        cursorColor = Color(c.primary),
+                        focusedTextColor = cs.onSurface,
+                        unfocusedTextColor = cs.onSurface,
+                        focusedBorderColor = cs.primary,
+                        unfocusedBorderColor = cs.outline,
+                        focusedLabelColor = cs.primary,
+                        unfocusedLabelColor = cs.onSurfaceVariant,
+                        cursorColor = cs.primary,
                     ),
                 )
 
@@ -1535,13 +1536,13 @@ private fun ExposePortDialog(
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color(c.foreground),
-                        unfocusedTextColor = Color(c.foreground),
-                        focusedBorderColor = Color(c.primary),
-                        unfocusedBorderColor = Color(c.border),
-                        focusedLabelColor = Color(c.primary),
-                        unfocusedLabelColor = Color(c.mutedForeground),
-                        cursorColor = Color(c.primary),
+                        focusedTextColor = cs.onSurface,
+                        unfocusedTextColor = cs.onSurface,
+                        focusedBorderColor = cs.primary,
+                        unfocusedBorderColor = cs.outline,
+                        focusedLabelColor = cs.primary,
+                        unfocusedLabelColor = cs.onSurfaceVariant,
+                        cursorColor = cs.primary,
                     ),
                 )
             }
@@ -1555,7 +1556,7 @@ private fun ExposePortDialog(
                 },
                 enabled = canCreate,
             ) {
-                Text("Create", color = if (canCreate) Color(c.primary) else Color(c.mutedForeground))
+                Text("Create", color = if (canCreate) cs.primary else cs.onSurfaceVariant)
             }
         },
         dismissButton = {

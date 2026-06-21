@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -16,7 +17,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.sp
-import dev.supermux.android.theme.LocalPanes
 import dev.supermux.android.theme.MonoFontFamily
 import dev.supermux.android.theme.Space
 import kotlinx.coroutines.delay
@@ -61,7 +61,7 @@ private fun NativeCodeEditor(
     onChange: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     val scroll = rememberScrollState()
 
     Box(
@@ -78,7 +78,7 @@ private fun NativeCodeEditor(
                 fontSize = fontSize.sp,
                 lineHeight = (fontSize + 6).sp,
             ),
-            cursorBrush = SolidColor(Color(c.primary)),
+            cursorBrush = SolidColor(cs.primary),
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(scroll)
@@ -86,7 +86,7 @@ private fun NativeCodeEditor(
         )
         Text(
             "Native editor (WebView unavailable)",
-            color = Color(c.mutedForeground),
+            color = cs.onSurfaceVariant,
             fontSize = 10.sp,
             modifier = Modifier
                 .fillMaxWidth()

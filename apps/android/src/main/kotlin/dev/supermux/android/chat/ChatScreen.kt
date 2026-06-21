@@ -88,7 +88,6 @@ import dev.supermux.android.editor.EditorPanel
 import dev.supermux.android.terminal.TerminalPanel
 import dev.supermux.android.session.SessionAvatar
 import dev.supermux.android.theme.HapticKind
-import dev.supermux.android.theme.LocalPanes
 import dev.supermux.android.theme.Space
 import dev.supermux.android.theme.rememberHaptics
 import dev.supermux.proto.ActivityEvent
@@ -130,7 +129,6 @@ fun ChatScreen(
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
 ) {
-    val c = LocalPanes.current
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val haptic = rememberHaptics()
@@ -245,7 +243,7 @@ fun ChatScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(c.chat))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .statusBarsPadding(),
     ) {
         // ----------------------------------------------------------------
@@ -255,7 +253,7 @@ fun ChatScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(c.header))
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
                     .padding(horizontal = 10.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -263,7 +261,7 @@ fun ChatScreen(
                 Icon(
                     painter = painterResource(R.drawable.ic_arrow_left),
                     contentDescription = "Back",
-                    tint = Color(c.foreground),
+                    tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier
                         .clickable(onClick = onBack)
                         .padding(end = 8.dp)
@@ -286,7 +284,7 @@ fun ChatScreen(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = session.name,
-                        color = Color(c.foreground),
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.titleLarge,
                         maxLines = 1,
                     )
@@ -300,7 +298,7 @@ fun ChatScreen(
                     }
                     Text(
                         text = subLabel,
-                        color = Color(c.mutedForeground),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelMedium,
                         maxLines = 1,
                     )
@@ -311,19 +309,19 @@ fun ChatScreen(
                     Row(
                         modifier = Modifier
                             .clip(RoundedCornerShape(20.dp))
-                            .background(Color(c.primary).copy(alpha = 0.16f))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
                             .padding(horizontal = 8.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(5.dp),
                     ) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(12.dp),
-                            color = Color(c.primary),
+                            color = MaterialTheme.colorScheme.primary,
                             strokeWidth = 2.dp,
                         )
                         Text(
                             text = agent.phase.replaceFirstChar { it.uppercaseChar() },
-                            color = Color(c.primary),
+                            color = MaterialTheme.colorScheme.primary,
                             fontSize = 12.sp,
                         )
                     }
@@ -334,7 +332,7 @@ fun ChatScreen(
                     Icon(
                         painter = painterResource(R.drawable.ic_more_vert),
                         contentDescription = "More",
-                        tint = Color(c.mutedForeground),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier
                             .clickable { headerMenuExpanded = true }
                             .padding(start = 4.dp)
@@ -350,7 +348,7 @@ fun ChatScreen(
                                 Icon(
                                     painter = painterResource(R.drawable.ic_pencil),
                                     contentDescription = null,
-                                    tint = Color(c.foreground),
+                                    tint = MaterialTheme.colorScheme.onSurface,
                                     modifier = Modifier.size(18.dp),
                                 )
                             },
@@ -369,7 +367,7 @@ fun ChatScreen(
                                         if (isMuted) R.drawable.ic_volume_2 else R.drawable.ic_volume_x
                                     ),
                                     contentDescription = null,
-                                    tint = Color(c.foreground),
+                                    tint = MaterialTheme.colorScheme.onSurface,
                                     modifier = Modifier.size(18.dp),
                                 )
                             },
@@ -379,12 +377,12 @@ fun ChatScreen(
                             },
                         )
                         DropdownMenuItem(
-                            text = { Text("Kill", color = Color(c.destructive)) },
+                            text = { Text("Kill", color = MaterialTheme.colorScheme.error) },
                             leadingIcon = {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_trash),
                                     contentDescription = null,
-                                    tint = Color(c.destructive),
+                                    tint = MaterialTheme.colorScheme.error,
                                     modifier = Modifier.size(18.dp),
                                 )
                             },
@@ -402,7 +400,7 @@ fun ChatScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(1.dp)
-                    .background(Color(c.border)),
+                    .background(MaterialTheme.colorScheme.outlineVariant),
             )
         }
 
@@ -410,7 +408,7 @@ fun ChatScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Color(c.header))
+                .background(MaterialTheme.colorScheme.surfaceContainerLow)
                 .padding(horizontal = 8.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -420,21 +418,21 @@ fun ChatScreen(
                     Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(8.dp))
-                        .background(if (selected) Color(c.primary).copy(alpha = 0.16f) else Color.Transparent)
+                        .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else Color.Transparent)
                         .clickable { activePanel = panel }
                         .padding(vertical = 6.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         panel.name,
-                        color = if (selected) Color(c.primary) else Color(c.mutedForeground),
+                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp,
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                     )
                 }
             }
         }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color(c.border)))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
 
         var openedPanels by remember { mutableStateOf(setOf(SessionPanel.Chat)) }
         LaunchedEffect(activePanel) { openedPanels = openedPanels + activePanel }
@@ -482,7 +480,7 @@ fun ChatScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(1.dp)
-                    .background(Color(c.border)),
+                    .background(MaterialTheme.colorScheme.outlineVariant),
             )
 
             var text by remember { mutableStateOf("") }
@@ -498,7 +496,7 @@ fun ChatScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = 240.dp)
-                        .background(Color(c.card))
+                        .background(MaterialTheme.colorScheme.surfaceContainer)
                         .verticalScroll(rememberScrollState())
                         .padding(vertical = 4.dp),
                 ) {
@@ -519,7 +517,7 @@ fun ChatScreen(
                         ) {
                             Text(
                                 text = "${cmd.sigil}${cmd.name}",
-                                color = Color(c.foreground),
+                                color = MaterialTheme.colorScheme.onSurface,
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium,
@@ -529,7 +527,7 @@ fun ChatScreen(
                             if (desc != null) {
                                 Text(
                                     text = desc,
-                                    color = Color(c.mutedForeground),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontSize = 12.sp,
                                     maxLines = 1,
                                 )
@@ -542,7 +540,7 @@ fun ChatScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(1.dp)
-                        .background(Color(c.border)),
+                        .background(MaterialTheme.colorScheme.outlineVariant),
                 )
             }
 
@@ -559,7 +557,7 @@ fun ChatScreen(
                         Row(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(16.dp))
-                                .background(Color(c.card))
+                                .background(MaterialTheme.colorScheme.surfaceContainer)
                                 .padding(horizontal = 10.dp, vertical = 5.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -567,13 +565,13 @@ fun ChatScreen(
                             if (att.uploading) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(12.dp),
-                                    color = Color(c.primary),
+                                    color = MaterialTheme.colorScheme.primary,
                                     strokeWidth = 1.5.dp,
                                 )
                             }
                             Text(
                                 text = att.name,
-                                color = Color(c.foreground),
+                                color = MaterialTheme.colorScheme.onSurface,
                                 fontSize = 12.sp,
                                 maxLines = 1,
                             )
@@ -581,7 +579,7 @@ fun ChatScreen(
                                 Icon(
                                     painter = painterResource(R.drawable.ic_x),
                                     contentDescription = "Remove",
-                                    tint = Color(c.mutedForeground),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier
                                         .clickable { pendingAttachments.removeAt(idx) }
                                         .padding(start = 2.dp)
@@ -611,11 +609,11 @@ fun ChatScreen(
             )
 
             // ── Composer card ────────────────────────────────────────────────
-            val focusBorderColor = Color(c.primary).copy(alpha = composerBorderAlpha)
+            val focusBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = composerBorderAlpha)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(c.chat))
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
                     .padding(horizontal = 10.dp, vertical = 10.dp),
             ) {
                 // ── Text input area (card background, animated focus border) ──
@@ -623,7 +621,7 @@ fun ChatScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .background(Color(c.card))
+                        .background(MaterialTheme.colorScheme.surfaceContainer)
                         .border(1.dp, focusBorderColor, RoundedCornerShape(12.dp))
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                 ) {
@@ -637,13 +635,13 @@ fun ChatScreen(
                                 modifier = Modifier
                                     .size(8.dp)
                                     .clip(RoundedCornerShape(4.dp))
-                                    .background(Color(0xFFDC2626)),
+                                    .background(MaterialTheme.colorScheme.error),
                             )
                             val mm = recordingSeconds / 60
                             val ss = recordingSeconds % 60
                             Text(
                                 text = "Recording %d:%02d".format(mm, ss),
-                                color = Color(0xFFDC2626),
+                                color = MaterialTheme.colorScheme.error,
                                 fontSize = 14.sp,
                             )
                         }
@@ -651,7 +649,7 @@ fun ChatScreen(
                         if (text.isEmpty()) {
                             Text(
                                 text = "Message ${session.name}…",
-                                color = Color(c.mutedForeground),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 14.sp,
                             )
                         }
@@ -659,10 +657,10 @@ fun ChatScreen(
                             value = text,
                             onValueChange = { text = it },
                             textStyle = TextStyle(
-                                color = Color(c.foreground),
+                                color = MaterialTheme.colorScheme.onSurface,
                                 fontSize = 14.sp,
                             ),
-                            cursorBrush = SolidColor(Color(c.primary)),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                             interactionSource = composerInteractionSource,
                             modifier = Modifier.fillMaxWidth(),
                         )
@@ -712,14 +710,14 @@ fun ChatScreen(
                         modifier = Modifier
                             .size(32.dp)
                             .clip(RoundedCornerShape(8.dp))
-                            .background(Color(c.card))
+                            .background(MaterialTheme.colorScheme.surfaceContainer)
                             .clickable { filePickerLauncher.launch("*/*") },
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
                             painter = painterResource(R.drawable.ic_plus),
                             contentDescription = "Add attachment",
-                            tint = Color(c.mutedForeground),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(18.dp),
                         )
                     }
@@ -730,8 +728,8 @@ fun ChatScreen(
                             .size(32.dp)
                             .clip(androidx.compose.foundation.shape.CircleShape)
                             .background(
-                                if (recording) Color(0xFFDC2626) // red while recording
-                                else Color(c.card)
+                                if (recording) MaterialTheme.colorScheme.error // red while recording
+                                else MaterialTheme.colorScheme.surfaceContainer
                             )
                             .clickable {
                                 if (recording) {
@@ -776,7 +774,7 @@ fun ChatScreen(
                         Icon(
                             painter = painterResource(R.drawable.ic_mic),
                             contentDescription = "Record voice",
-                            tint = Color(c.mutedForeground),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(16.dp),
                         )
                     }
@@ -788,8 +786,8 @@ fun ChatScreen(
                             .size(38.dp)
                             .clip(androidx.compose.foundation.shape.CircleShape)
                             .background(
-                                if (canSend) Color(c.primary)
-                                else Color(c.primary).copy(alpha = 0.35f),
+                                if (canSend) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
                             )
                             .clickable(
                                 interactionSource = sendInteractionSource,
@@ -813,7 +811,7 @@ fun ChatScreen(
                                 if (agentWorking) R.drawable.ic_square else R.drawable.ic_send
                             ),
                             contentDescription = if (agentWorking) "Stop" else "Send",
-                            tint = Color(c.primaryForeground),
+                            tint = MaterialTheme.colorScheme.onPrimary,
                             modifier = Modifier.size(18.dp),
                         )
                     }
@@ -839,7 +837,7 @@ fun ChatScreen(
                         TerminalPanel(connect = ct, modifier = Modifier.fillMaxSize())
                     } else {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("Terminal unavailable", color = Color(c.mutedForeground), fontSize = 13.sp)
+                            Text("Terminal unavailable", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                         }
                     }
                 }
@@ -857,7 +855,7 @@ fun ChatScreen(
                         )
                     } else {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("Display unavailable", color = Color(c.mutedForeground), fontSize = 13.sp)
+                            Text("Display unavailable", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                         }
                     }
                 }

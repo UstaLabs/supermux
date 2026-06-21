@@ -81,7 +81,7 @@ fun SessionAvatar(
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     val sharedModifier = if (sessionId != null && sharedScope != null && animScope != null) {
         with(sharedScope) {
             modifier.sharedElement(
@@ -98,7 +98,7 @@ fun SessionAvatar(
                 .size(40.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .background(Color(0xFFF7F4EE))
-                .border(1.dp, Color(c.border).copy(alpha = 0.7f), RoundedCornerShape(12.dp)),
+                .border(1.dp, cs.outline.copy(alpha = 0.7f), RoundedCornerShape(12.dp)),
             contentAlignment = Alignment.Center,
         ) {
             Image(
@@ -112,12 +112,12 @@ fun SessionAvatar(
             sharedModifier
                 .size(40.dp)
                 .clip(RoundedCornerShape(12.dp))
-                .background(Color(c.primary))
-                .border(1.dp, Color(c.border).copy(alpha = 0.7f), RoundedCornerShape(12.dp)),
+                .background(cs.primary)
+                .border(1.dp, cs.outline.copy(alpha = 0.7f), RoundedCornerShape(12.dp)),
             contentAlignment = Alignment.Center,
         ) {
             val initials = name.take(2).uppercase()
-            Text(initials, color = Color(0xFFFFFFFF), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            Text(initials, color = cs.onPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
         }
     }
 }
@@ -125,7 +125,7 @@ fun SessionAvatar(
 // Fix 3: path-group header with rotating ChevronDown matching the web app
 @Composable
 fun PathGroupHeader(label: String, count: Int, collapsed: Boolean = false) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     Row(
         Modifier
             .fillMaxWidth()
@@ -136,14 +136,14 @@ fun PathGroupHeader(label: String, count: Int, collapsed: Boolean = false) {
         Icon(
             painter = painterResource(R.drawable.ic_chevron_down),
             contentDescription = null,
-            tint = Color(c.mutedForeground),
+            tint = cs.onSurfaceVariant,
             modifier = Modifier
                 .size(14.dp)
                 .rotate(if (collapsed) -90f else 0f),
         )
         Text(
             label,
-            color = Color(c.mutedForeground),
+            color = cs.onSurfaceVariant,
             fontFamily = MonoFontFamily,
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium,
@@ -153,7 +153,7 @@ fun PathGroupHeader(label: String, count: Int, collapsed: Boolean = false) {
         if (count > 1) {
             Text(
                 "$count",
-                color = Color(c.mutedForeground).copy(alpha = 0.6f),
+                color = cs.onSurfaceVariant.copy(alpha = 0.6f),
                 fontFamily = MonoFontFamily,
                 fontSize = 10.sp,
             )
@@ -172,6 +172,7 @@ fun SessionRow(
     animScope: AnimatedVisibilityScope? = null,
 ) {
     val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     val haptic = rememberHaptics()
 
     // Unread indicator: inbound message that is the latest entry
@@ -183,7 +184,7 @@ fun SessionRow(
             .padding(horizontal = 8.dp, vertical = 4.dp)
             .softElevation(radius = Radii.md)
             .clip(RoundedCornerShape(6.dp))
-            .background(Color(c.card))
+            .background(cs.surfaceContainer)
             .clickable { haptic(HapticKind.Tick); onClick() }
     } else {
         Modifier
@@ -205,7 +206,7 @@ fun SessionRow(
                     .width(4.dp)
                     .height(20.dp)
                     .clip(RoundedCornerShape(2.dp))
-                    .background(Color(c.primary).copy(alpha = 0.7f))
+                    .background(cs.primary.copy(alpha = 0.7f))
                     .align(Alignment.CenterVertically),
             )
             Spacer(Modifier.width(Space.sm))
@@ -229,7 +230,7 @@ fun SessionRow(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     s.name,
-                    color = Color(c.foreground),
+                    color = cs.onSurface,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
@@ -241,7 +242,7 @@ fun SessionRow(
                     Spacer(Modifier.width(Space.sm))
                     Text(
                         timeStr,
-                        color = Color(c.mutedForeground),
+                        color = cs.onSurfaceVariant,
                         fontFamily = MonoFontFamily,
                         fontSize = 11.sp,
                     )
@@ -252,7 +253,7 @@ fun SessionRow(
             val status = s.status
             if (status != null && status != "active") {
                 val badgeColor = if (status == "suspended") Color(c.warning)
-                                 else Color(c.mutedForeground).copy(alpha = 0.6f)
+                                 else cs.onSurfaceVariant.copy(alpha = 0.6f)
                 Spacer(Modifier.height(2.dp))
                 Text(
                     status,
@@ -269,7 +270,7 @@ fun SessionRow(
             if (previewText != null) {
                 Text(
                     previewText,
-                    color = Color(c.mutedForeground),
+                    color = cs.onSurfaceVariant,
                     fontSize = 11.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -277,7 +278,7 @@ fun SessionRow(
             } else {
                 Text(
                     s.workdir,
-                    color = Color(c.mutedForeground),
+                    color = cs.onSurfaceVariant,
                     fontFamily = MonoFontFamily,
                     fontSize = 11.sp,
                     fontStyle = FontStyle.Italic,
@@ -304,7 +305,7 @@ fun SessionListScreen(
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     val groups = remember(sessions, home, lastBySession) {
         groupSessions(sessions, home) { lastBySession[it.id]?.ts ?: "" }
     }
@@ -325,27 +326,27 @@ fun SessionListScreen(
             Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
-                .background(Color(c.sessionList)),
+                .background(cs.surfaceContainerHigh),
         ) {
             item(key = "header") {
                 // Fix 1: brand header with MuxLogo mark before "supermux" wordmark
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .background(Color(c.header))
+                        .background(cs.surfaceContainerLow)
                         .padding(horizontal = Space.lg, vertical = Space.md),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.mux_logo),
                         contentDescription = "Supermux logo",
-                        tint = Color(c.foreground),
+                        tint = cs.onSurface,
                         modifier = Modifier.size(22.dp),
                     )
                     Spacer(Modifier.width(Space.sm))
                     Text(
                         "supermux",
-                        color = Color(c.foreground),
+                        color = cs.onSurface,
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.weight(1f),
                     )
@@ -354,7 +355,7 @@ fun SessionListScreen(
                             Icon(
                                 painter = painterResource(R.drawable.ic_more_vert),
                                 contentDescription = "Actions",
-                                tint = Color(c.mutedForeground),
+                                tint = cs.onSurfaceVariant,
                                 modifier = Modifier.size(20.dp),
                             )
                         }
@@ -368,7 +369,7 @@ fun SessionListScreen(
                                     Icon(
                                         painter = painterResource(R.drawable.ic_archive),
                                         contentDescription = null,
-                                        tint = Color(c.mutedForeground),
+                                        tint = cs.onSurfaceVariant,
                                         modifier = Modifier.size(18.dp),
                                     )
                                 },
@@ -380,7 +381,7 @@ fun SessionListScreen(
                                     Icon(
                                         painter = painterResource(R.drawable.ic_bar_chart),
                                         contentDescription = null,
-                                        tint = Color(c.mutedForeground),
+                                        tint = cs.onSurfaceVariant,
                                         modifier = Modifier.size(18.dp),
                                     )
                                 },
@@ -392,7 +393,7 @@ fun SessionListScreen(
                                     Icon(
                                         painter = painterResource(R.drawable.ic_network),
                                         contentDescription = null,
-                                        tint = Color(c.mutedForeground),
+                                        tint = cs.onSurfaceVariant,
                                         modifier = Modifier.size(18.dp),
                                     )
                                 },
@@ -404,7 +405,7 @@ fun SessionListScreen(
                                     Icon(
                                         painter = painterResource(R.drawable.ic_monitor),
                                         contentDescription = null,
-                                        tint = Color(c.mutedForeground),
+                                        tint = cs.onSurfaceVariant,
                                         modifier = Modifier.size(18.dp),
                                     )
                                 },
@@ -416,7 +417,7 @@ fun SessionListScreen(
                                     Icon(
                                         painter = painterResource(R.drawable.ic_monitor),
                                         contentDescription = null,
-                                        tint = Color(c.mutedForeground),
+                                        tint = cs.onSurfaceVariant,
                                         modifier = Modifier.size(18.dp),
                                     )
                                 },
@@ -428,7 +429,7 @@ fun SessionListScreen(
                                     Icon(
                                         painter = painterResource(R.drawable.ic_settings),
                                         contentDescription = null,
-                                        tint = Color(c.mutedForeground),
+                                        tint = cs.onSurfaceVariant,
                                         modifier = Modifier.size(18.dp),
                                     )
                                 },
@@ -440,7 +441,7 @@ fun SessionListScreen(
                                     Icon(
                                         painter = painterResource(R.drawable.ic_smartphone),
                                         contentDescription = null,
-                                        tint = Color(c.mutedForeground),
+                                        tint = cs.onSurfaceVariant,
                                         modifier = Modifier.size(18.dp),
                                     )
                                 },
@@ -450,7 +451,7 @@ fun SessionListScreen(
                     }
                 }
                 // Hairline bottom border for the header
-                HorizontalDivider(color = Color(c.border).copy(alpha = 0.5f), thickness = 0.5.dp)
+                HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
             }
 
             // Fix 5: notification banner — shown above first group until dismissed
@@ -461,20 +462,20 @@ fun SessionListScreen(
                             .fillMaxWidth()
                             .padding(horizontal = Space.md, vertical = Space.sm)
                             .clip(RoundedCornerShape(Radii.md))
-                            .background(Color(c.card))
+                            .background(cs.surfaceContainer)
                             .padding(horizontal = Space.md, vertical = Space.sm),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(
                             painter = painterResource(R.drawable.ic_bell),
                             contentDescription = null,
-                            tint = Color(c.primary),
+                            tint = cs.primary,
                             modifier = Modifier.size(18.dp),
                         )
                         Spacer(Modifier.width(Space.sm))
                         Text(
                             "Get notified when a session replies",
-                            color = Color(c.mutedForeground),
+                            color = cs.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.weight(1f),
                         )
@@ -491,14 +492,14 @@ fun SessionListScreen(
                         ) {
                             Text(
                                 "Enable",
-                                color = Color(c.primary),
+                                color = cs.primary,
                                 style = MaterialTheme.typography.labelMedium,
                             )
                         }
                         Icon(
                             painter = painterResource(R.drawable.ic_x),
                             contentDescription = "Clear",
-                            tint = Color(c.mutedForeground).copy(alpha = 0.6f),
+                            tint = cs.onSurfaceVariant.copy(alpha = 0.6f),
                             modifier = Modifier
                                 .clickable { notifyBannerDismissed = true }
                                 .padding(start = Space.xs, end = Space.xs)
@@ -539,13 +540,13 @@ fun SessionListScreen(
                 .size(56.dp)
                 .softElevation(radius = Radii.pill),
             shape = CircleShape,
-            containerColor = Color(c.primary),
-            contentColor = Color(c.primaryForeground),
+            containerColor = cs.primary,
+            contentColor = cs.onPrimary,
         ) {
             Icon(
                 painter = painterResource(R.drawable.ic_plus),
                 contentDescription = "New session",
-                tint = Color(c.primaryForeground),
+                tint = cs.onPrimary,
                 modifier = Modifier.size(24.dp),
             )
         }
@@ -555,14 +556,14 @@ fun SessionListScreen(
 
 @Composable
 fun NewSessionListRow(onClick: () -> Unit) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     Row(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = Space.md, vertical = Space.xs)
             .clip(RoundedCornerShape(Radii.md))
             .clickable(onClick = onClick)
-            .background(Color(c.card))
+            .background(cs.surfaceContainer)
             .padding(horizontal = Space.md, vertical = Space.md),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Space.md),
@@ -571,21 +572,21 @@ fun NewSessionListRow(onClick: () -> Unit) {
             Modifier
                 .size(36.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(Color(c.primary).copy(alpha = 0.12f)),
+                .background(cs.primary.copy(alpha = 0.12f)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 painter = painterResource(R.drawable.ic_plus),
                 contentDescription = null,
-                tint = Color(c.primary),
+                tint = cs.primary,
                 modifier = Modifier.size(18.dp),
             )
         }
         Column(Modifier.weight(1f)) {
-            Text("Start a new session", color = Color(c.foreground), fontWeight = FontWeight.Medium, fontSize = 14.sp)
+            Text("Start a new session", color = cs.onSurface, fontWeight = FontWeight.Medium, fontSize = 14.sp)
             Text(
                 "Pick a project and send your first message",
-                color = Color(c.mutedForeground),
+                color = cs.onSurfaceVariant,
                 fontSize = 11.sp,
             )
         }
@@ -605,7 +606,7 @@ internal fun ProjectPathPicker(
     home: String,
     fieldColors: TextFieldColors,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     var expanded by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
 
@@ -614,7 +615,7 @@ internal fun ProjectPathPicker(
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
-            placeholder = { Text("/path/to/project", color = Color(c.mutedForeground)) },
+            placeholder = { Text("/path/to/project", color = cs.onSurfaceVariant) },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             colors = fieldColors,
@@ -630,13 +631,13 @@ internal fun ProjectPathPicker(
                     Icon(
                         painter = painterResource(R.drawable.ic_folder_open),
                         contentDescription = "Select project",
-                        tint = Color(c.mutedForeground),
+                        tint = cs.onSurfaceVariant,
                         modifier = Modifier.size(18.dp),
                     )
                     Icon(
                         painter = painterResource(R.drawable.ic_chevron_down),
                         contentDescription = null,
-                        tint = Color(c.mutedForeground),
+                        tint = cs.onSurfaceVariant,
                         modifier = Modifier.size(14.dp),
                     )
                 }
@@ -648,19 +649,19 @@ internal fun ProjectPathPicker(
             onDismissRequest = { expanded = false },
             modifier = Modifier
                 .width(menuWidth)
-                .background(Color(c.card)),
+                .background(cs.surfaceContainer),
         ) {
             Column {
                 // Search field
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
-                    placeholder = { Text("Search projects...", color = Color(c.mutedForeground)) },
+                    placeholder = { Text("Search projects...", color = cs.onSurfaceVariant) },
                     leadingIcon = {
                         Icon(
                             painter = painterResource(R.drawable.ic_search),
                             contentDescription = null,
-                            tint = Color(c.mutedForeground),
+                            tint = cs.onSurfaceVariant,
                             modifier = Modifier.size(18.dp),
                         )
                     },
@@ -675,7 +676,7 @@ internal fun ProjectPathPicker(
                     projects.isEmpty() -> {
                         Text(
                             "No known projects yet.",
-                            color = Color(c.mutedForeground),
+                            color = cs.onSurfaceVariant,
                             fontSize = 13.sp,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -693,7 +694,7 @@ internal fun ProjectPathPicker(
                         if (filtered.isEmpty()) {
                             Text(
                                 "No projects found.",
-                                color = Color(c.mutedForeground),
+                                color = cs.onSurfaceVariant,
                                 fontSize = 13.sp,
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -718,7 +719,7 @@ internal fun ProjectPathPicker(
                                         Icon(
                                             painter = painterResource(R.drawable.ic_folder_open),
                                             contentDescription = null,
-                                            tint = Color(c.mutedForeground),
+                                            tint = cs.onSurfaceVariant,
                                             modifier = Modifier
                                                 .padding(top = 2.dp)
                                                 .size(16.dp),
@@ -726,7 +727,7 @@ internal fun ProjectPathPicker(
                                         Column(Modifier.weight(1f)) {
                                             Text(
                                                 formatWorkdir(path, home),
-                                                color = Color(c.foreground),
+                                                color = cs.onSurface,
                                                 fontSize = 14.sp,
                                                 fontWeight = FontWeight.Medium,
                                                 maxLines = 1,
@@ -734,7 +735,7 @@ internal fun ProjectPathPicker(
                                             )
                                             Text(
                                                 path,
-                                                color = Color(c.mutedForeground),
+                                                color = cs.onSurfaceVariant,
                                                 fontFamily = MonoFontFamily,
                                                 fontSize = 11.sp,
                                                 maxLines = 1,
@@ -745,7 +746,7 @@ internal fun ProjectPathPicker(
                                             Icon(
                                                 painter = painterResource(R.drawable.ic_check),
                                                 contentDescription = null,
-                                                tint = Color(c.primary),
+                                                tint = cs.primary,
                                                 modifier = Modifier
                                                     .padding(top = 2.dp)
                                                     .size(16.dp),

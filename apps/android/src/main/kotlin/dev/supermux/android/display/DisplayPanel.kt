@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -171,7 +172,7 @@ fun DisplayPanel(
     connect: (String) -> dev.supermux.net.ScrcpyClient,
     modifier: Modifier = Modifier,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
 
     var loading by remember { mutableStateOf(true) }
     var stream by remember { mutableStateOf<dev.supermux.net.DisplayStream?>(null) }
@@ -193,13 +194,13 @@ fun DisplayPanel(
     ) {
         val s = stream
         when {
-            loading -> CircularProgressIndicator(color = Color(c.primary))
+            loading -> CircularProgressIndicator(color = cs.primary)
 
             s != null && s.transport == "h264" -> ScrcpyView(s.id, connect)
 
             s != null && s.transport == "vnc" -> Text(
                 "VNC display — open it in the web app",
-                color = Color(c.mutedForeground),
+                color = cs.onSurfaceVariant,
                 fontFamily = MonoFontFamily,
                 fontSize = 13.sp,
             )
@@ -210,14 +211,14 @@ fun DisplayPanel(
             ) {
                 Text(
                     "No active display for this session",
-                    color = Color(c.mutedForeground),
+                    color = cs.onSurfaceVariant,
                     fontFamily = MonoFontFamily,
                     fontSize = 13.sp,
                 )
                 TextButton(onClick = { refreshKey++ }) {
                     Text(
                         "Refresh",
-                        color = Color(c.primary),
+                        color = cs.primary,
                         fontFamily = MonoFontFamily,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
@@ -237,7 +238,6 @@ fun DisplayPanel(
  */
 @Composable
 private fun ScrcpyView(streamId: String, connect: (String) -> dev.supermux.net.ScrcpyClient) {
-    val c = LocalPanes.current
     val client = remember(streamId) { connect(streamId) }
     val decoder = remember(streamId) { H264SurfaceDecoder() }
 
@@ -313,14 +313,15 @@ private fun ScrcpyView(streamId: String, connect: (String) -> dev.supermux.net.S
 @Composable
 private fun StatusChip(status: ScrcpyStatus, modifier: Modifier = Modifier) {
     val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     val (label, tint) = when (status) {
-        ScrcpyStatus.CONNECTING -> "Connecting…" to Color(c.primary)
+        ScrcpyStatus.CONNECTING -> "Connecting…" to cs.primary
         ScrcpyStatus.CONNECTED -> "Connected" to Color(c.warning)
-        ScrcpyStatus.DISCONNECTED -> "Disconnected" to Color(c.mutedForeground)
+        ScrcpyStatus.DISCONNECTED -> "Disconnected" to cs.onSurfaceVariant
     }
     Row(
         modifier
-            .background(Color(c.card).copy(alpha = 0.85f), RoundedCornerShape(Radii.pill))
+            .background(cs.surfaceContainer.copy(alpha = 0.85f), RoundedCornerShape(Radii.pill))
             .padding(horizontal = Space.sm, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Space.xs),

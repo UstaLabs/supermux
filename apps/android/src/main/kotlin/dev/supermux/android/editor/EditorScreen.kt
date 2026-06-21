@@ -22,6 +22,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
@@ -69,6 +70,7 @@ fun EditorPanel(
     modifier: Modifier = Modifier,
 ) {
     val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     val haptic = rememberHaptics()
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
@@ -147,7 +149,7 @@ fun EditorPanel(
                 Modifier
                     .fillMaxWidth()
                     .height(44.dp)
-                    .background(Color(c.header))
+                    .background(cs.surfaceContainerLow)
                     .padding(horizontal = Space.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -162,7 +164,7 @@ fun EditorPanel(
                             if (treeVisible) R.drawable.ic_chevron_down else R.drawable.ic_folder_open,
                         ),
                         contentDescription = if (treeVisible) "Hide file tree" else "Show file tree",
-                        tint = Color(c.foreground),
+                        tint = cs.onSurface,
                         modifier = Modifier.size(18.dp),
                     )
                 }
@@ -178,7 +180,7 @@ fun EditorPanel(
                         CircularProgressIndicator(
                             modifier = Modifier.size(16.dp),
                             strokeWidth = 2.dp,
-                            color = Color(c.primary),
+                            color = cs.primary,
                         )
                     }
                 } else {
@@ -193,16 +195,16 @@ fun EditorPanel(
                             painter = painterResource(R.drawable.ic_check),
                             contentDescription = "Save",
                             tint = if (editor.activeTab?.let { editor.isDirty(it.path) } == true) {
-                                Color(c.primary)
+                                cs.primary
                             } else {
-                                Color(c.mutedForeground).copy(alpha = 0.4f)
+                                cs.onSurfaceVariant.copy(alpha = 0.4f)
                             },
                             modifier = Modifier.size(18.dp),
                         )
                     }
                 }
             }
-            HorizontalDivider(color = Color(c.border).copy(alpha = 0.5f), thickness = 0.5.dp)
+            HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
 
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 Row(Modifier.fillMaxSize()) {
@@ -211,7 +213,7 @@ fun EditorPanel(
                             Modifier
                                 .width(192.dp)
                                 .fillMaxHeight()
-                                .background(Color(c.sessionList)),
+                                .background(cs.surfaceContainerHigh),
                         ) {
                             FileTree(fsList = fsList, editor = editor, onOpenFile = { revealFile(it) })
                         }
@@ -219,7 +221,7 @@ fun EditorPanel(
                             Modifier
                                 .width(1.dp)
                                 .fillMaxHeight()
-                                .background(Color(c.border).copy(alpha = 0.5f)),
+                                .background(cs.outlineVariant),
                         )
                     }
 
@@ -235,7 +237,7 @@ fun EditorPanel(
                             },
                             onClose = editor::closeTab,
                         )
-                        HorizontalDivider(color = Color(c.border).copy(alpha = 0.5f), thickness = 0.5.dp)
+                        HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
 
                         Box(Modifier.weight(1f).fillMaxWidth()) {
                             // Pre-warm WebView as soon as the editor panel opens.
@@ -261,7 +263,7 @@ fun EditorPanel(
                                 ) {
                                     Text(
                                         "Open a file from the tree or search",
-                                        color = Color(c.mutedForeground),
+                                        color = cs.onSurfaceVariant,
                                         fontSize = 13.sp,
                                     )
                                 }
@@ -275,7 +277,7 @@ fun EditorPanel(
                                         .padding(Space.xl),
                                     contentAlignment = Alignment.Center,
                                 ) {
-                                    Text(err, color = Color(c.mutedForeground), fontSize = 13.sp)
+                                    Text(err, color = cs.onSurfaceVariant, fontSize = 13.sp)
                                 }
                             }
 
@@ -291,11 +293,11 @@ fun EditorPanel(
                                         CircularProgressIndicator(
                                             modifier = Modifier.size(24.dp),
                                             strokeWidth = 2.dp,
-                                            color = Color(c.primary),
+                                            color = cs.primary,
                                         )
                                         Text(
                                             editor.loadingPath!!.substringAfterLast('/'),
-                                            color = Color(c.mutedForeground),
+                                            color = cs.onSurfaceVariant,
                                             fontSize = 12.sp,
                                             modifier = Modifier.padding(top = Space.sm),
                                         )
@@ -328,7 +330,7 @@ fun EditorPanel(
                             Modifier
                                 .fillMaxHeight()
                                 .width(280.dp)
-                                .background(Color(c.sessionList)),
+                                .background(cs.surfaceContainerHigh),
                         ) {
                             FileTree(fsList = fsList, editor = editor, onOpenFile = { revealFile(it) })
                         }
