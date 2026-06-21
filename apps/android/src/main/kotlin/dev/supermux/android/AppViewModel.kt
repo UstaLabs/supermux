@@ -11,6 +11,7 @@ import dev.supermux.net.CuratorSettingsResponse
 import dev.supermux.net.BrokerClient
 import dev.supermux.net.DeviceDto
 import dev.supermux.net.DisplayStream
+import dev.supermux.net.FinishReadiness
 import dev.supermux.net.FsEntry
 import dev.supermux.net.FsSearchResult
 import dev.supermux.net.ModelInfo
@@ -21,6 +22,8 @@ import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.ScrcpyClient
 import dev.supermux.net.SpawnRequest
 import dev.supermux.net.TerminalClient
+import dev.supermux.net.VerifySaveResult
+import dev.supermux.net.VerifySuggestResult
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.ClientFrame
@@ -76,6 +79,12 @@ class AppViewModel(private val baseUrl: String, private val token: String) : Vie
      *  the snapshot and updated by the `finish_job` frame. Drives the §B.5 finish sheet. */
     private val _finishJobs = MutableStateFlow<Map<String, FinishJobDto>>(emptyMap())
     val finishJobs: StateFlow<Map<String, FinishJobDto>> = _finishJobs
+
+    /** Drop a session's finish job so the Finish sheet returns to the readiness menu on
+     *  Dismiss/Done. Client-side only (mirrors web `finishJob.clear(id)` / iOS
+     *  `SessionChrome.clearJob()`); there is no broker "clear" endpoint and this never
+     *  cancels a running job — the sheet only offers clear on a terminal/failed outcome. */
+    fun clearFinishJob(id: String) { _finishJobs.update { it - id } }
 
     /** Filesystem-change pulses (session + changed paths). The editor file tree / diff tab
      *  re-fetch on each pulse. A SharedFlow (events, not retained state). */
@@ -246,6 +255,44 @@ class AppViewModel(private val baseUrl: String, private val token: String) : Vie
     suspend fun fetchReasoning(id: String): ReasoningResponse? = runCatching { api.reasoningLevels(id) }.getOrNull()
     fun switchModel(id: String, model: String) { viewModelScope.launch { runCatching { api.switchModel(id, model) } } }
     fun switchReasoning(id: String, level: String) { viewModelScope.launch { runCatching { api.switchReasoning(id, level) } } }
+
+    // ── Finish flow ──────────────────────────────────────────────────────────────
+    // The chat Finish sheet drives the whole job lifecycle off the `finishJobs` StateFlow;
+    // `finish` only kicks off the async job (the outcome arrives on the WS `finish_job`
+    // frame). `api.finish` throws CancellationException on a non-2xx (SKIE-safe decode),
+    // so runCatching{…}.isSuccess is the kickoff signal surfaced back via [onKickoff].
+
+    /** Kick off a finish job. `prTitle`/`prBody`/`draft`/`prRequiresGreen` are not surfaced by
+     *  the sheet, so they keep the broker defaults. [onKickoff] reports whether the POST was
+     *  accepted so the sheet can show a kickoff-failure message when no job ever appears. */
+    fun finish(
+        id: String,
+        action: String? = null,
+        skipVerify: Boolean? = null,
+        commitFirst: Boolean? = null,
+        commitMessage: String? = null,
+        onKickoff: (Boolean) -> Unit = {},
+    ) {
+        viewModelScope.launch {
+            val ok = runCatching { api.finish(id, action, skipVerify, commitFirst, commitMessage) }.isSuccess
+            onKickoff(ok)
+        }
+    }
+
+    /** Preflight snapshot for the finish menu (branch sync / diff / conflict / dirty). */
+    suspend fun finishReadiness(id: String): FinishReadiness? =
+        runCatching { api.finishReadiness(id) }.getOrNull()
+
+    /** Suggest a `.mux/verify.sh` for the no_verify recovery path. */
+    suspend fun verifySuggest(id: String): VerifySuggestResult? =
+        runCatching { api.verifySuggest(id) }.getOrNull()
+
+    /** Save an edited verify script; the sheet auto-runs merge when `ok`. */
+    suspend fun verifySave(id: String, content: String): VerifySaveResult? =
+        runCatching { api.verifySave(id, content) }.getOrNull()
+
+    /** Post a message to the agent (the finish sheet's "Let the agent fix it"). */
+    fun sendMessage(id: String, text: String) { viewModelScope.launch { runCatching { api.sendMessage(id, text) } } }
 
     data class PendingFirstMessage(val text: String, val attachments: List<String> = emptyList())
 

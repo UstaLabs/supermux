@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -206,6 +207,11 @@ private fun SessionChatLayer(
     var gestureProgress by remember(session.id) { mutableFloatStateOf(0f) }
     var editorConsumesBack by remember(session.id) { mutableStateOf(false) }
 
+    // Collect the finish-job flow once at this layer (consistent with messages/activity/agent);
+    // the per-session value drives ChatScreen's Finish button + sheet.
+    val finishJobs by vm.finishJobs.collectAsState()
+    val finishJob = finishJobs[session.id]
+
     if (visible) {
         BackHandler(enabled = !editorConsumesBack) { onBack() }
         PredictiveBackHandler(enabled = !editorConsumesBack) { backEvents ->
@@ -259,6 +265,15 @@ private fun SessionChatLayer(
             connectScrcpy = { vm.connectScrcpy(it) },
             consumePendingFirst = { vm.consumePendingFirst(it) },
             onEditorConsumesBackChange = { editorConsumesBack = it },
+            finishJob = finishJob,
+            onFinishReadiness = { vm.finishReadiness(session.id) },
+            onFinish = { action, skipVerify, commitFirst, commitMessage, onKickoff ->
+                vm.finish(session.id, action, skipVerify, commitFirst, commitMessage, onKickoff = onKickoff)
+            },
+            onClearFinishJob = { vm.clearFinishJob(session.id) },
+            onVerifySuggest = { vm.verifySuggest(session.id) },
+            onVerifySave = { vm.verifySave(session.id, it) },
+            onSendToAgent = { vm.sendMessage(session.id, it) },
             sharedScope = sharedScope,
             animScope = animScope,
         )

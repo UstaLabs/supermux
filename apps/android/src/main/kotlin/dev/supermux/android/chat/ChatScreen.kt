@@ -73,6 +73,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalContext
@@ -144,6 +145,14 @@ fun ChatScreen(
     connectScrcpy: ((String) -> dev.supermux.net.ScrcpyClient)? = null,
     consumePendingFirst: (String) -> dev.supermux.android.AppViewModel.PendingFirstMessage? = { null },
     onEditorConsumesBackChange: (Boolean) -> Unit = {},
+    // Finish flow — null/empty defaults keep the existing call (and ArchivedChatScreen) compiling.
+    finishJob: dev.supermux.proto.FinishJobDto? = null,                                  // finishJobs[session.id]
+    onFinishReadiness: suspend () -> dev.supermux.net.FinishReadiness? = { null },        // vm.finishReadiness(id)
+    onFinish: (action: String, skipVerify: Boolean?, commitFirst: Boolean?, commitMessage: String?, onKickoff: (Boolean) -> Unit) -> Unit = { _, _, _, _, cb -> cb(false) },
+    onClearFinishJob: () -> Unit = {},                                                    // vm.clearFinishJob(id)
+    onVerifySuggest: suspend () -> dev.supermux.net.VerifySuggestResult? = { null },      // vm.verifySuggest(id)
+    onVerifySave: suspend (String) -> dev.supermux.net.VerifySaveResult? = { null },      // vm.verifySave(id, content)
+    onSendToAgent: (String) -> Unit = {},                                                 // vm.sendMessage(id, text)
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
 ) {
@@ -445,6 +454,38 @@ fun ChatScreen(
                             text = agent.phase.replaceFirstChar { it.uppercaseChar() },
                             color = MaterialTheme.colorScheme.primary,
                             fontSize = 12.sp,
+                        )
+                    }
+                }
+
+                // Finish — only for worktree-backed sessions (iOS gates on session.session_branch).
+                if (session.session_branch != null) {
+                    var showFinishSheet by remember(session.id) { mutableStateOf(false) }
+                    // Acked startedAt survives rotation/process-death so a result stays "seen".
+                    var ackedStartedAt by rememberSaveable(session.id) { mutableStateOf(0.0) }
+                    val isUnacked = finishJob != null &&
+                        finishJob.status != "running" &&
+                        finishJob.startedAt != ackedStartedAt
+                    FinishButton(
+                        finishJob = finishJob,
+                        isUnacked = isUnacked,
+                        onClick = {
+                            ackedStartedAt = finishJob?.startedAt ?: ackedStartedAt
+                            showFinishSheet = true
+                        },
+                    )
+                    if (showFinishSheet) {
+                        FinishSheet(
+                            session = session,
+                            finishJob = finishJob,
+                            onReadiness = onFinishReadiness,
+                            onFinish = onFinish,
+                            onClearJob = onClearFinishJob,
+                            onVerifySuggest = onVerifySuggest,
+                            onVerifySave = onVerifySave,
+                            onSendToAgent = onSendToAgent,
+                            onAck = { ackedStartedAt = finishJob?.startedAt ?: ackedStartedAt },
+                            onDismiss = { showFinishSheet = false },
                         )
                     }
                 }
