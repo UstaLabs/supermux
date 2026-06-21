@@ -1,81 +1,68 @@
 import { test, expect } from "bun:test"
-import { buildCleanupPrompt, cleanupArgv, cleanupDraft } from "../src/core/transcription/voice-cleanup"
+import { cleanupDraft } from "../src/core/transcription/voice-cleanup"
 
-test("buildCleanupPrompt includes the draft, context, skills, and the only-text instruction", () => {
-  const p = buildCleanupPrompt({
-    draft: "Clouds High-Q model",
-    recentMessages: [{ role: "user", text: "tell me about Claude's Haiku" }],
-    skills: ["code-review", "brainstorming"],
-  })
-  expect(p).toContain("Clouds High-Q model")
-  expect(p).toContain("Claude's Haiku")
-  expect(p).toContain("code-review")
-  expect(p).toContain("Output ONLY the corrected text")
-})
+// NOTE: buildCleanupPrompt / CleanupInput are owned by src/core/agent-api/prompt.ts
+// and their shape is asserted authoritatively in tests/agent-api/prompt.test.ts.
+// This file only covers cleanupDraft's engine-selection/fallback behavior.
 
-test("cleanupArgv builds an opencode one-shot run (positional message, --pure)", () => {
-  const argv = cleanupArgv("opencode", "opencode/deepseek-v4-flash-free", "PROMPT")
-  expect(argv).toEqual(["opencode", "run", "--pure", "-m", "opencode/deepseek-v4-flash-free", "PROMPT"])
-})
+// A fake fetch that returns an OpenAI-shaped chat completion with the given content.
+const okFetch = (content: string): typeof fetch =>
+  (async () => new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 })) as unknown as typeof fetch
+const failFetch: typeof fetch = (async () => new Response("err", { status: 500 })) as unknown as typeof fetch
 
-test("cleanupArgv builds a cursor one-shot (-p, text output, --force)", () => {
-  const argv = cleanupArgv("cursor", "composer-2.5-fast", "PROMPT")
-  expect(argv).toContain("-p")
-  expect(argv).toContain("--force")
-  expect(argv[argv.indexOf("--model") + 1]).toBe("composer-2.5-fast")
-})
-
-test("cleanupDraft returns the trimmed output + which engine produced it", async () => {
+test("cleanupDraft uses the direct OpenCode Zen API and returns its content", async () => {
   const r = await cleanupDraft(
     { draft: "Clouds High-Q model", recentMessages: [], skills: [] },
-    { engine: "opencode", model: "opencode/deepseek-v4-flash-free", run: async () => ({ code: 0, out: "Claude's Haiku model\n" }) },
+    { readKey: () => "test-key", fetchFn: okFetch("Claude's Haiku model\n") },
   )
   expect(r.text).toBe("Claude's Haiku model")
-  expect(r.engine).toBe("opencode")
+  expect(r.engine).toBe("opencode-api")
 })
 
-test("cleanupDraft falls back to cursor when the primary engine returns empty", async () => {
+test("cleanupDraft falls back to the cursor CLI when the API errors", async () => {
   const r = await cleanupDraft(
     { draft: "Clouds High-Q model", recentMessages: [], skills: [] },
-    {
-      engine: "opencode",
-      model: "opencode/deepseek-v4-flash-free",
-      // primary (opencode) returns empty; the cursor fallback returns the text.
-      run: async (argv) => (argv[0] === "cursor-agent" ? { code: 0, out: "Claude Haiku model" } : { code: 0, out: "" }),
-    },
+    { readKey: () => "test-key", fetchFn: failFetch, run: async () => ({ code: 0, out: "Claude Haiku model" }) },
   )
   expect(r.text).toBe("Claude Haiku model")
   expect(r.engine).toBe("cursor")
 })
 
-test("cleanupDraft passes the engine+model into the argv handed to the runner", async () => {
-  let seen: string[] = []
-  await cleanupDraft(
-    { draft: "x", recentMessages: [], skills: [] },
-    { engine: "opencode", model: "opencode/deepseek-v4-flash-free", run: async (argv) => { seen = argv; return { code: 0, out: "x" } } },
-  )
-  expect(seen[0]).toBe("opencode")
-  expect(seen).toContain("opencode/deepseek-v4-flash-free")
-})
-
-test("cleanupDraft throws on non-zero exit (so the caller degrades to the raw draft)", async () => {
-  await expect(
-    cleanupDraft({ draft: "x", recentMessages: [], skills: [] }, { run: async () => ({ code: 1, out: "" }) }),
-  ).rejects.toThrow()
-})
-
-test("cleanupDraft throws on empty output", async () => {
-  await expect(
-    cleanupDraft({ draft: "x", recentMessages: [], skills: [] }, { run: async () => ({ code: 0, out: "  " }) }),
-  ).rejects.toThrow()
-})
-
-test("cleanupDraft short-circuits an empty draft without invoking the engine", async () => {
-  let called = false
+test("cleanupDraft falls back to the CLI when there is no opencode key", async () => {
   const r = await cleanupDraft(
-    { draft: " ", recentMessages: [], skills: [] },
-    { run: async () => { called = true; return { code: 0, out: "x" } } },
+    { draft: "x", recentMessages: [], skills: [] },
+    { readKey: () => null, run: async () => ({ code: 0, out: "fixed" }) },
   )
+  expect(r.engine).toBe("cursor")
+  expect(r.text).toBe("fixed")
+})
+
+test("cleanupDraft throws when BOTH the API and the CLI fail (caller keeps the raw draft)", async () => {
+  await expect(
+    cleanupDraft(
+      { draft: "x", recentMessages: [], skills: [] },
+      { readKey: () => "k", fetchFn: failFetch, run: async () => ({ code: 1, out: "" }) },
+    ),
+  ).rejects.toThrow()
+})
+
+test("cleanupDraft short-circuits an empty draft", async () => {
+  const r = await cleanupDraft({ draft: "  ", recentMessages: [], skills: [] }, { readKey: () => "k", fetchFn: okFetch("x") })
   expect(r.text).toBe("")
-  expect(called).toBe(false)
+  expect(r.engine).toBe("none")
+})
+
+test("prefer:cli skips the API entirely", async () => {
+  let apiCalled = false
+  const r = await cleanupDraft(
+    { draft: "x", recentMessages: [], skills: [] },
+    {
+      prefer: "cli",
+      fetchFn: (async () => { apiCalled = true; return new Response("{}", { status: 200 }) }) as unknown as typeof fetch,
+      run: async () => ({ code: 0, out: "cli-out" }),
+    },
+  )
+  expect(apiCalled).toBe(false)
+  expect(r.engine).toBe("cursor")
+  expect(r.text).toBe("cli-out")
 })

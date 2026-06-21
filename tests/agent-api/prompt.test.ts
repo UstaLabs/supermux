@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test"
 import { buildCleanupPrompt } from "../../src/core/agent-api/prompt"
 
+// AUTHORITATIVE tests for the shared buildCleanupPrompt / CleanupInput. The prompt
+// builder lives in src/core/agent-api/prompt.ts; voice-cleanup.ts only re-exports it.
+
 test("buildCleanupPrompt includes the draft, context, a skill name, and the output instruction", () => {
   const prompt = buildCleanupPrompt({
     draft: "helo wrld",

@@ -38,7 +38,7 @@ import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
 import { transcribeAudio } from "./core/transcription/whisper"
 import { buildVoicePayload } from "./core/transcription/voice-context"
-import { cleanupDraft, VOICE_CLEANUP_ENGINE, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
+import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
 import { cursorSpawnArgs, codexSpawnArgs, claudeSpawnArgs, codexPrepareGlobal, codexPrepareSessionHome, opencodeConfigEntries, ensureOpenCodePluginScopes } from "./core/plugins"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider } from "./core/slash-commands"
@@ -1410,7 +1410,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const messages = messageLog.get(s?.id ?? sessionId, 10)
       const payload = buildVoicePayload(draft, messages, skills)
       // Full visibility into exactly what the cleanup is fed + the whisper/cleanup timing split.
-      log.info("voice_transcribe_in", { sessionId, source, draft, whisperMs, ctxMsgs: messages.length, skills, engine: VOICE_CLEANUP_ENGINE, model: VOICE_CLEANUP_MODEL })
+      log.info("voice_transcribe_in", { sessionId, source, draft, whisperMs, ctxMsgs: messages.length, skills, model: VOICE_CLEANUP_MODEL })
       try {
         const t1 = Date.now()
         const out = await cleanupDraft({ draft, recentMessages: payload.context.recentMessages, skills })
