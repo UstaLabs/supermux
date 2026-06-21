@@ -29,3 +29,22 @@ test("sanitize drops non-string voice fields", () => {
   expect(patch.whisperModel).toBeUndefined()
   expect(patch.whisperLang).toBeUndefined()
 })
+
+test("voiceCleanupEngine: valid engine survives sanitize + resolve", () => {
+  const patch = sanitizeAppConfigPatch({ voiceCleanupEngine: "opencode-zen" })
+  expect(patch.voiceCleanupEngine).toBe("opencode-zen")
+  const resolved = resolveAppConfig(patch, {} as any)
+  expect(resolved.voiceCleanupEngine).toBe("opencode-zen")
+})
+
+test("voiceCleanupEngine: non-string input is dropped", () => {
+  const patch = sanitizeAppConfigPatch({ voiceCleanupEngine: 42 })
+  expect(patch.voiceCleanupEngine).toBeUndefined()
+})
+
+test("voiceCleanupEngine: unknown string is rejected by the allowlist", () => {
+  const patch = sanitizeAppConfigPatch({ voiceCleanupEngine: "not-a-real-engine" })
+  expect(patch.voiceCleanupEngine).toBeUndefined()
+  const resolved = resolveAppConfig(patch, {} as any)
+  expect(resolved.voiceCleanupEngine).toBeUndefined()
+})

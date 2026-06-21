@@ -3,6 +3,8 @@
 // (see resolveAppConfig). Mirrors curator-config.ts: a tolerant parser that
 // never throws, so a corrupt/old row degrades to safe defaults.
 
+import { ENGINES } from "../agent-api/index"
+
 export type ExposureMode = "local" | "public"
 
 /** The tunnel chosen by `supermux connect`, for --status/--switch/--off. */
@@ -135,7 +137,7 @@ export function sanitizeAppConfigPatch(input: unknown): Partial<AppConfig> {
     const t = parseTunnelRecord(o.tunnel)
     if (t) out.tunnel = t
   }
-  if (typeof o.voiceCleanupEngine === "string") out.voiceCleanupEngine = o.voiceCleanupEngine
+  if (typeof o.voiceCleanupEngine === "string" && (ENGINES as string[]).includes(o.voiceCleanupEngine)) out.voiceCleanupEngine = o.voiceCleanupEngine
   if (typeof o.voiceCleanupModel === "string") out.voiceCleanupModel = o.voiceCleanupModel
   if (typeof o.whisperModel === "string") out.whisperModel = o.whisperModel
   if (typeof o.whisperLang === "string") out.whisperLang = o.whisperLang

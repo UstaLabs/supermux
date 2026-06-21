@@ -1410,7 +1410,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const messages = messageLog.get(s?.id ?? sessionId, 10)
       const payload = buildVoicePayload(draft, messages, skills)
       // Full visibility into exactly what the cleanup is fed + the whisper/cleanup timing split.
-      log.info("voice_transcribe_in", { sessionId, source, draft, whisperMs, ctxMsgs: messages.length, skills, model: VOICE_CLEANUP_MODEL })
+      log.info("voice_transcribe_in", { sessionId, source, draft, whisperMs, ctxMsgs: messages.length, skills, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
       try {
         const t1 = Date.now()
         const out = await cleanupDraft(
@@ -1419,7 +1419,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         )
         const cleanupMs = Date.now() - t1
         const text = out.text || draft
-        log.info("voice_transcribe_out", { sessionId, draft, text, whisperMs, cleanupMs, engine: out.engine, model: VOICE_CLEANUP_MODEL })
+        log.info("voice_transcribe_out", { sessionId, draft, text, whisperMs, cleanupMs, engine: out.engine, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
         return { text }
       } catch (e) {
         log.warn("voice_cleanup_failed", { sessionId, draft, whisperMs, err: String(e) })
