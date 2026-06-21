@@ -317,6 +317,39 @@ final class BrokerSession {
         return try JSONDecoder().decode(TranscribeResponse.self, from: respData).text
     }
 
+    // MARK: - Voice-cleanup glossary (GET/PUT /config/voice-glossary → { glossary: [String] })
+    // Bearer-authed direct HTTP (same shape as transcribeDraft / loadFile) — the glossary of
+    // project/technical terms shared across devices: fed broker-side into the codex cleanup
+    // prompt AND, on-device, into the recognizer as contextual hints (see SpeechDictation).
+
+    private struct GlossaryResponse: Decodable { let glossary: [String] }
+
+    /// GET the current glossary. Returns the broker's list (default-seeded server-side).
+    func fetchGlossary() async throws -> [String] {
+        guard let url = URL(string: "\(baseURL)/config/voice-glossary") else { throw URLError(.badURL) }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode(GlossaryResponse.self, from: data).glossary
+    }
+
+    /// PUT the full glossary (body `{ glossary: [...] }`) — persisted broker-side.
+    func updateGlossary(_ terms: [String]) async throws {
+        guard let url = URL(string: "\(baseURL)/config/voice-glossary") else { throw URLError(.badURL) }
+        var req = URLRequest(url: url)
+        req.httpMethod = "PUT"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["glossary": terms])
+        let (_, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+    }
+
     // MARK: - Editor filesystem (workdir-relative paths)
     func fsList(_ id: String, _ path: String) async -> [FsEntry] { (try? await api.fsList(sessionId: id, path: path)) ?? [] }
     func fsRead(_ id: String, _ path: String) async throws -> String { try await api.fsRead(sessionId: id, path: path) }
