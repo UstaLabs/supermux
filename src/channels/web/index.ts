@@ -61,7 +61,7 @@ function clientIp(req: Request): string {
 // case — each new instance already starts with an empty bucket.
 export function __resetAuthFailures(): void {}
 
-const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/system", "/repos", "/forge"]
+const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/system", "/repos", "/forge"]
 const MAX_CLIENT_LOG_RING = 800
 
 export type StoredClientLogEntry = {
@@ -1337,6 +1337,22 @@ export class WebChannel implements Channel {
       const body = await req.json().catch(() => ({}))
       const updated = this.opts.setAppConfig(body as Partial<import("../../core/settings/app-config").AppConfig>)
       return this.json(redactAppConfig(updated))
+    }
+
+    // ── Voice cleanup glossary ──────────────────────────────────────────────
+    // The app reads/edits the project-term glossary fed to the voice-cleanup
+    // prompt (and, later, the on-device recognizer). Persisted via app-config;
+    // GET always returns a list (default-seeded by resolveAppConfig).
+    if (method === "GET" && path === "/config/voice-glossary") {
+      const cfg = this.opts.getAppConfig?.()
+      if (!cfg) return this.json({ error: "config unavailable" }, 503)
+      return this.json({ glossary: cfg.voiceCleanupGlossary ?? [] })
+    }
+    if (method === "PUT" && path === "/config/voice-glossary") {
+      if (!this.opts.setAppConfig) return this.json({ error: "config unavailable" }, 503)
+      const body = await req.json().catch(() => ({})) as { glossary?: unknown }
+      const updated = this.opts.setAppConfig({ voiceCleanupGlossary: body.glossary as string[] | undefined })
+      return this.json({ glossary: updated.voiceCleanupGlossary ?? [] })
     }
 
     // ── Settings: exposure ─────────────────────────────────────────────────
