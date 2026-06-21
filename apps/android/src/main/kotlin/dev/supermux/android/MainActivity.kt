@@ -68,7 +68,10 @@ import dev.supermux.android.settings.UsageScreen
 import dev.supermux.android.theme.AppearanceMode
 import dev.supermux.android.theme.SupermuxTheme
 import dev.supermux.android.DevConfig
+import dev.supermux.android.pairing.OnboardingScreen
+import dev.supermux.auth.SecureTokenStore
 import dev.supermux.auth.SecureTokenStoreContext
+import dev.supermux.net.PairUrl
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
@@ -76,11 +79,22 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 
 class MainActivity : ComponentActivity() {
+    // Current launch/deep-link intent, surfaced to Compose. Seeded in onCreate; updated by
+    // onNewIntent so a supermux://pair link delivered while foregrounded re-enters pairing.
+    private val intentState = mutableStateOf<android.content.Intent?>(null)
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intentState.value = intent
+    }
+
     @OptIn(ExperimentalMaterial3WindowSizeClassApi::class, ExperimentalSharedTransitionApi::class, ExperimentalComposeUiApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
         SecureTokenStoreContext.init(applicationContext)
+        intentState.value = intent
         enableEdgeToEdge()
         setContent {
             val prefs = remember {
@@ -95,8 +109,33 @@ class MainActivity : ComponentActivity() {
             }
             var dynamicColor by remember { mutableStateOf(prefs.getBoolean("dynamicColor", true)) }
             SupermuxTheme(appearance = appearance, dynamicEnabled = dynamicColor) {
-                val brokerUrl = remember { DevConfig.brokerUrl() }
-                val token = remember { DevConfig.resolveToken(applicationContext) }
+                val store = remember { SecureTokenStore() }
+                // Debug-only: seed token+baseUrl on debuggable builds so the already-paired
+                // emulator boots past the gate (no-op on release / when DEBUG_TOKEN is empty).
+                remember { DevConfig.seedDebugPairingIfEmpty(applicationContext); Unit }
+                // Paired ⇔ the encrypted store holds BOTH a token and a broker base URL.
+                var paired by rememberSaveable {
+                    mutableStateOf(
+                        store.load()?.isNotBlank() == true && store.loadBaseUrl()?.isNotBlank() == true,
+                    )
+                }
+                // Deep-link intake: parse supermux://pair (or a pasted https pair URL) from the
+                // current intent. Recomputed when onNewIntent swaps the intent in while foregrounded.
+                val currentIntent by intentState
+                val deepLink: PairUrl? = remember(currentIntent) {
+                    currentIntent?.data?.toString()?.let { PairUrl.parse(it, store.loadBaseUrl()) }
+                }
+
+                if (!paired) {
+                    OnboardingScreen(
+                        onPaired = { paired = true },
+                        initialDeepLink = deepLink,
+                    )
+                    return@SupermuxTheme
+                }
+
+                val brokerUrl = remember { store.loadBaseUrl()!! }   // gate guarantees both are present
+                val token = remember { store.load()!! }
                 val vm: AppViewModel = viewModel(factory = AppViewModel.factory(brokerUrl, token))
                 val sessions by vm.sessions.collectAsStateWithLifecycle()
                 val messages by vm.messages.collectAsStateWithLifecycle()

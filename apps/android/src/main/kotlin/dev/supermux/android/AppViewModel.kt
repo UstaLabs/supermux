@@ -23,6 +23,7 @@ import dev.supermux.net.TerminalClient
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.ClientFrame
+import dev.supermux.proto.FinishJobDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SendArgs
 import dev.supermux.proto.ServerFrame
@@ -31,8 +32,11 @@ import dev.supermux.proto.SlashCommand
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.websocket.WebSockets
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class AppViewModel(private val baseUrl: String, private val token: String) : ViewModel() {
@@ -56,6 +60,50 @@ class AppViewModel(private val baseUrl: String, private val token: String) : Vie
     val agentState: StateFlow<Map<String, AgentStatus>> = _agentState
     private val _commands = MutableStateFlow<Map<String, List<SlashCommand>>>(emptyMap())
     val commands: StateFlow<Map<String, List<SlashCommand>>> = _commands
+    /** Per-session resolution state of the slash-command set (true = fully resolved). */
+    private val _commandsResolved = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val commandsResolved: StateFlow<Map<String, Boolean>> = _commandsResolved
+
+    // ── ServerFrame reducer state (Phase 2 §C: read-side only; UI is Phase 3) ──
+
+    /** Last agent error per session (errorType/errorMessage); cleared when the agent
+     *  transitions to a non-error phase. Chat header surfaces this (parity with web). */
+    private val _agentErrors = MutableStateFlow<Map<String, ServerFrame.AgentError>>(emptyMap())
+    val agentErrors: StateFlow<Map<String, ServerFrame.AgentError>> = _agentErrors
+
+    /** Last/in-flight finish job per session. Seeded from each [SessionInfo.finish_job] on
+     *  the snapshot and updated by the `finish_job` frame. Drives the §B.5 finish sheet. */
+    private val _finishJobs = MutableStateFlow<Map<String, FinishJobDto>>(emptyMap())
+    val finishJobs: StateFlow<Map<String, FinishJobDto>> = _finishJobs
+
+    /** Filesystem-change pulses (session + changed paths). The editor file tree / diff tab
+     *  re-fetch on each pulse. A SharedFlow (events, not retained state). */
+    private val _fsChanges = MutableSharedFlow<ServerFrame.FsChanged>(extraBufferCapacity = 64)
+    val fsChanges: SharedFlow<ServerFrame.FsChanged> = _fsChanges
+
+    /** Live display streams, kept in sync via `display_added`/`display_removed` frames
+     *  (seeded on demand by [listDisplays]). */
+    private val _displays = MutableStateFlow<List<DisplayStream>>(emptyList())
+    val displays: StateFlow<List<DisplayStream>> = _displays
+
+    /** Language-server status keyed by "session|path"; updated by lsp_status/ready/error/exit.
+     *  The editor surfaces ready/missing/installing per file. */
+    private val _lspStatus = MutableStateFlow<Map<String, ServerFrame.LspStatus>>(emptyMap())
+    val lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>> = _lspStatus
+
+    /** Raw inbound LSP JSON-RPC messages forwarded to the editor's LSP bridge (Phase 3).
+     *  Phase 2 just exposes the flow; no decoding here. */
+    private val _lspRpc = MutableSharedFlow<ServerFrame.LspRpcIn>(extraBufferCapacity = 256)
+    val lspRpc: SharedFlow<ServerFrame.LspRpcIn> = _lspRpc
+
+    /** Live install log lines per LSP serverId. Drives the §B.2 install screen's live log. */
+    private val _lspInstallLog = MutableStateFlow<Map<String, List<String>>>(emptyMap())
+    val lspInstallLog: StateFlow<Map<String, List<String>>> = _lspInstallLog
+
+    /** Terminal install result per LSP serverId (ok/error); the install screen shows the
+     *  result and clears the progress log. */
+    private val _lspInstallDone = MutableStateFlow<Map<String, ServerFrame.LspInstallDone>>(emptyMap())
+    val lspInstallDone: StateFlow<Map<String, ServerFrame.LspInstallDone>> = _lspInstallDone
 
     init {
         viewModelScope.launch {
@@ -67,6 +115,11 @@ class AppViewModel(private val baseUrl: String, private val token: String) : Vie
                         _activity.value = f.activity
                         _agentState.value = f.agentState
                         _commands.value = f.commands
+                        _commandsResolved.value = f.commandsResolved
+                        // Seed finish jobs from each session's snapshot record.
+                        _finishJobs.value = f.sessions
+                            .mapNotNull { s -> s.finish_job?.let { s.id to it } }
+                            .toMap()
                     }
                     is ServerFrame.SessionAdded -> _sessions.value = _sessions.value + f.session
                     is ServerFrame.SessionRemoved -> _sessions.value = _sessions.value.filterNot { it.id == f.id }
@@ -84,17 +137,65 @@ class AppViewModel(private val baseUrl: String, private val token: String) : Vie
                         _agentState.value = _agentState.value.toMutableMap().apply {
                             this[f.session] = AgentStatus(f.phase, f.since ?: f.workingSince)
                         }
+                        // Clear a prior agent error once the agent leaves the error phase.
+                        if (f.phase != "error" && _agentErrors.value.containsKey(f.session)) {
+                            _agentErrors.update { it - f.session }
+                        }
                     }
                     is ServerFrame.CommandsChanged -> {
                         _commands.value = _commands.value.toMutableMap().apply {
                             this[f.session] = f.commands
                         }
+                        _commandsResolved.update { it + (f.session to f.resolved) }
                     }
+                    is ServerFrame.AgentError -> _agentErrors.update { it + (f.session to f) }
+                    is ServerFrame.FinishJobFrame -> {
+                        val job = f.job
+                        if (job != null) {
+                            _finishJobs.update { it + (f.session to job) }
+                            // Keep list rows in sync with the latest finish job.
+                            _sessions.value = _sessions.value.map { s ->
+                                if (s.id == f.session) s.copy(finish_job = job) else s
+                            }
+                        }
+                    }
+                    is ServerFrame.FsChanged -> _fsChanges.tryEmit(f)
+                    is ServerFrame.DisplayAdded ->
+                        _displays.update { list -> list.filterNot { it.id == f.display.id } + f.display }
+                    is ServerFrame.DisplayRemoved ->
+                        _displays.update { list -> list.filterNot { it.id == f.id } }
+                    is ServerFrame.LspStatus ->
+                        _lspStatus.update { it + ("${f.session}|${f.path}" to f) }
+                    is ServerFrame.LspReady -> markLspState(f.session, f.serverId, "ready")
+                    is ServerFrame.LspError -> markLspState(f.session, f.serverId, "error", f.error)
+                    is ServerFrame.LspRpcIn -> _lspRpc.tryEmit(f)
+                    is ServerFrame.LspExit -> markLspState(f.session, f.serverId, "exited")
+                    is ServerFrame.LspInstallProgress ->
+                        _lspInstallLog.update {
+                            it + (f.serverId to ((it[f.serverId] ?: emptyList()) + f.line))
+                        }
+                    is ServerFrame.LspInstallDone -> _lspInstallDone.update { it + (f.serverId to f) }
                     else -> {}
                 }
             }
         }
         viewModelScope.launch { client.run() }
+    }
+
+    /** Patch the `state` (and optionally `error`) of every [ServerFrame.LspStatus] entry
+     *  matching [session] + [serverId]; used by the lsp_ready/lsp_error/lsp_exit frames,
+     *  which only carry session+serverId while [_lspStatus] is keyed by "session|path". */
+    private fun markLspState(session: String?, serverId: String?, state: String, error: String? = null) {
+        if (serverId == null) return
+        _lspStatus.update { map ->
+            map.mapValues { (_, status) ->
+                if (status.session == session && status.serverId == serverId) {
+                    status.copy(state = state, error = error ?: status.error)
+                } else {
+                    status
+                }
+            }
+        }
     }
 
     fun send(sessionId: String, text: String) {

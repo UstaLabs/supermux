@@ -14,6 +14,7 @@ coreSplashscreen = "1.0.1"
 navigationCompose = "2.8.5"
 termlib = "0.0.35"
 skie = "0.10.12"
+zxingEmbedded = "4.3.0"
 
 [libraries]
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -43,6 +44,7 @@ compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
 compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
 compose-animation = { module = "androidx.compose.animation:animation" }
 termlib = { module = "org.connectbot:termlib", version.ref = "termlib" }
+zxing-android-embedded = { module = "com.journeyapps:zxing-android-embedded", version.ref = "zxingEmbedded" }
 
 [plugins]
 multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

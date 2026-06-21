@@ -16,15 +16,27 @@ object DevConfig {
 
     fun brokerUrl(): String = if (isEmulator()) EMULATOR_BROKER else PHYSICAL_BROKER
 
-    fun resolveToken(context: Context): String {
-        val store = SecureTokenStore()
-        store.load()?.let { return it }
+    /**
+     * Debug-only convenience: if this is a debuggable build, a [DEBUG_TOKEN] is set, and the
+     * [SecureTokenStore] is empty, seed BOTH the token and the broker base URL so a dev build
+     * boots straight past the pairing gate (the already-paired emulator keeps working).
+     *
+     * This is NOT the production pairing path — the MainActivity gate + onboarding flow own
+     * that now. On release builds, or when [DEBUG_TOKEN] is empty, this is a no-op and the
+     * gate shows [dev.supermux.android.pairing.OnboardingScreen].
+     */
+    fun seedDebugPairingIfEmpty(context: Context) {
+        if (DEBUG_TOKEN.isEmpty()) return
         val debuggable = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-        if (debuggable && DEBUG_TOKEN.isNotEmpty()) {
+        if (!debuggable) return
+        val store = SecureTokenStore()
+        if (store.load().isNullOrBlank()) {
             store.save(DEBUG_TOKEN)
-            return DEBUG_TOKEN
+            store.saveBaseUrl(brokerUrl())
+        } else if (store.loadBaseUrl().isNullOrBlank()) {
+            // Token present from an earlier build that predates base-url persistence — backfill it.
+            store.saveBaseUrl(brokerUrl())
         }
-        return ""
     }
 
     private fun isEmulator(): Boolean {

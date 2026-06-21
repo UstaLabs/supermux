@@ -27,6 +27,14 @@ import kotlinx.serialization.json.Json
 
 // ─── DTOs ────────────────────────────────────────────────────────────────────
 
+/** GET /pair.json?t=<token> → confirmed device bearer + its display name. */
+@Serializable
+data class PairJsonResult(val token: String = "", val name: String = "")
+
+/** GET /me → bearer-validity probe. paired=true with the device name when the token is good. */
+@Serializable
+data class MeResult(val paired: Boolean = false, val device: String? = null)
+
 @Serializable
 data class AppConfigDto(
     val paName: String = "",
@@ -866,6 +874,18 @@ class BrokerApi(
         .replace(" ", "%20")
 
     // ── public API ───────────────────────────────────────────────────────────
+
+    /**
+     * GET /pair.json?t=<token> — confirms the candidate token against the broker
+     * and echoes {token,name} (the native pairing shim; /pair only sets a cookie).
+     * 401 → CancellationException (graceful) → caller treats as an invalid token.
+     */
+    suspend fun pairJson(token: String): PairJsonResult =
+        getJson("$httpBase/pair.json?t=${urlEncode(token)}")
+
+    /** GET /me — bearer-validity probe; {paired, device?}. Used to validate a manually-typed token. */
+    suspend fun me(): MeResult =
+        getJson("$httpBase/me")
 
     /** GET /sessions/<id>/models */
     suspend fun models(id: String): ModelsResponse =

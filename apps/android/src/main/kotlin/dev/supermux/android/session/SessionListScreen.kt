@@ -1,9 +1,5 @@
 package dev.supermux.android.session
 
-import android.Manifest
-import android.os.Build
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
@@ -315,15 +311,6 @@ fun SessionListScreen(
 
     var menuExpanded by remember { mutableStateOf(false) }
 
-    // Fix 5: notification banner — local dismissed state (no persistence needed)
-    var notifyBannerDismissed by remember { mutableStateOf(false) }
-    val notifyPermLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-    ) { _ ->
-        // Whether granted or denied, dismiss the banner
-        notifyBannerDismissed = true
-    }
-
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -474,60 +461,6 @@ fun SessionListScreen(
                 .padding(innerPadding)
                 .background(cs.surfaceContainerHigh),
         ) {
-            // Fix 5: notification banner — shown above first group until dismissed
-            if (!notifyBannerDismissed) {
-                item(key = "notify_banner") {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = Space.md, vertical = Space.sm)
-                            .clip(RoundedCornerShape(Radii.md))
-                            .background(cs.surfaceContainer)
-                            .padding(horizontal = Space.md, vertical = Space.sm),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_bell),
-                            contentDescription = null,
-                            tint = cs.primary,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Spacer(Modifier.width(Space.sm))
-                        Text(
-                            "Get notified when a session replies",
-                            color = cs.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Spacer(Modifier.width(Space.sm))
-                        TextButton(
-                            onClick = {
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                    notifyPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                } else {
-                                    notifyBannerDismissed = true
-                                }
-                            },
-                            contentPadding = PaddingValues(horizontal = Space.sm, vertical = 2.dp),
-                        ) {
-                            Text(
-                                "Enable",
-                                color = cs.primary,
-                                style = MaterialTheme.typography.labelMedium,
-                            )
-                        }
-                        IconButton(onClick = { notifyBannerDismissed = true }) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_x),
-                                contentDescription = "Dismiss",
-                                tint = cs.onSurfaceVariant.copy(alpha = 0.6f),
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
-                    }
-                }
-            }
-
             item(key = "new_session_row") {
                 NewSessionListRow(
                     onClick = onNewSession,
