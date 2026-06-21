@@ -5,12 +5,12 @@ import { tmpdir, homedir } from "os"
 import { makeLogger } from "../../shared/log"
 
 const log = makeLogger("whisper")
-// Multilingual `tiny` is the default — fastest (handles Turkish + English).
-// Benchmarked on this host (11s clip): tiny ~6s, base ~13.5s (auto-detect), small ~26-47s;
-// a longer clip pushed base to ~21s. The cleanup pass corrects residual STT errors,
-// so a fast/rough model is preferred. Override with MUX_WHISPER_MODEL or the
-// whisperModel app-config setting (path or name: ggml-tiny.bin / ggml-base.bin / …).
-const DEFAULT_MODEL = process.env.MUX_WHISPER_MODEL ?? join(homedir(), ".cache", "whisper-models", "ggml-tiny.bin")
+// Multilingual `base` is the default — best accuracy/speed balance (Turkish + English).
+// Benchmarked here: tiny ~6-8s but noticeably rougher — it mangles words the cleanup
+// can't always recover (e.g. "resolve reject" → tiny "resort reject" → cleanup "REST API").
+// base ~13-21s and much more accurate, so the cleanup has less to fix. Override with
+// MUX_WHISPER_MODEL or the whisperModel app-config setting (ggml-base.bin / ggml-tiny.bin / …).
+const DEFAULT_MODEL = process.env.MUX_WHISPER_MODEL ?? join(homedir(), ".cache", "whisper-models", "ggml-base.bin")
 const WHISPER_BIN = process.env.MUX_WHISPER_BIN ?? join(homedir(), ".local", "bin", "whisper-cli")
 const FFMPEG_BIN = process.env.MUX_FFMPEG_BIN ?? "ffmpeg"
 
