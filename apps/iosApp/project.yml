@@ -17,10 +17,21 @@ settings:
     IPHONEOS_DEPLOYMENT_TARGET: "26.0"
     TARGETED_DEVICE_FAMILY: "1,2"
     CODE_SIGN_STYLE: Automatic
-    MARKETING_VERSION: "0.1"
-    CURRENT_PROJECT_VERSION: "25"
+    DEVELOPMENT_TEAM: "57L7J9XA89"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "27"
     # Gradle pre-build phase needs filesystem access outside the sandbox.
     ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+  # App Store distribution signing is Release-only so Debug/simulator builds stay automatic.
+  # Manual + identity at project level (SwiftPM deps like SwiftTerm sign with the identity but
+  # take NO provisioning profile); the profile is set only on the app target below.
+  configs:
+    Release:
+      CODE_SIGN_STYLE: Manual
+      CODE_SIGN_IDENTITY: "Apple Distribution"
+      # SDK-qualified key is required — it overrides Xcode's built-in
+      # CODE_SIGN_IDENTITY[sdk=iphoneos*]=iPhone Developer default, which otherwise wins.
+      "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
 
 packages:
   SwiftTerm:
@@ -68,13 +79,14 @@ targets:
         NSCameraUsageDescription: supermux scans the pairing QR code printed by your broker.
         NSMicrophoneUsageDescription: supermux records voice messages you send to your agents.
         NSSpeechRecognitionUsageDescription: supermux uses on-device speech recognition to turn your voice into editable text.
+        NSLocalNetworkUsageDescription: Supermux connects to the broker server running on your own computer when you reach it by its LAN address (for example 192.168.1.50). It does not scan or collect information about other devices on your network.
         ITSAppUsesNonExemptEncryption: false
         # Dev builds connect to a self-hosted broker (LAN / Tailscale, often plain http).
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.ios
+        PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app
         FRAMEWORK_SEARCH_PATHS:
           - $(inherited)
           - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
@@ -85,6 +97,11 @@ targets:
         LD_RUNPATH_SEARCH_PATHS:
           - $(inherited)
           - "@executable_path/Frameworks"
+      configs:
+        Release:
+          PROVISIONING_PROFILE_SPECIFIER: "Supermux App Store"
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
     preBuildScripts:
       - name: Build Kotlin Shared.framework (embed and sign)
         basedOnDependencyAnalysis: false
