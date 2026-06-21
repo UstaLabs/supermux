@@ -82,36 +82,74 @@ struct DisplayStreamView: View {
     }
 }
 
+// MARK: - Persistent surface hosts (re-parent the cached host's backing view)
+
+/// Thin SwiftUI host for a PERSISTENT VNC Metal surface. The view (its `CAMetalLayer` +
+/// framebuffer texture + renderer wiring) is owned by a `VncHost` cached in `BrokerSession`;
+/// this representable only re-parents that one instance into the current mount — it creates
+/// nothing and tears nothing down. Keeping the same `MetalLayerView` alive is what preserves
+/// the rendered framebuffer across remounts. Mirrors `SwiftTermView`.
+private struct VncSurfaceView: UIViewRepresentable {
+    let view: VncMetalView.MetalLayerView
+
+    func makeUIView(context: Context) -> VncMetalView.MetalLayerView {
+        // Detach from any prior mount before SwiftUI re-parents this cached, reused view —
+        // guards the toggle / split transition from a "view already has a superview" assertion.
+        view.removeFromSuperview()
+        return view
+    }
+
+    func updateUIView(_ uiView: VncMetalView.MetalLayerView, context: Context) {}
+}
+
+/// Thin SwiftUI host for a PERSISTENT scrcpy video surface. The view (its
+/// `AVSampleBufferDisplayLayer` + decoder state) is owned by a `ScrcpyHost` cached in
+/// `BrokerSession`; this representable only re-parents that one instance. Mirrors `SwiftTermView`.
+private struct ScrcpySurfaceView: UIViewRepresentable {
+    let view: ScrcpyVideoView.SampleBufferView
+
+    func makeUIView(context: Context) -> ScrcpyVideoView.SampleBufferView {
+        view.removeFromSuperview()
+        return view
+    }
+
+    func updateUIView(_ uiView: ScrcpyVideoView.SampleBufferView, context: Context) {}
+}
+
 // MARK: - VNC surface
 
 private struct VncStreamView: View {
     let broker: BrokerSession
     let stream: DisplayStream
 
-    @State private var session: VncSession?
     @State private var keyboardActive = false
     @State private var passwordSheet = false
     @State private var password = ""
 
     private var isMacScreen: Bool { stream.provider == "macos-screen" }
 
+    // The cached, persistent VNC host (live RFB connection + framebuffer texture). Computed,
+    // but always returns the SAME instance for this stream.id — the cache owns its lifecycle,
+    // so toggling the pane / switching sessions REUSES the warm stream instead of re-streaming.
+    private var host: VncHost? {
+        if case .vnc(let h) = broker.displayHost(for: stream) { return h }
+        return nil   // impossible: DisplayStreamView only builds this for non-h264 transports
+    }
+
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Color.black.ignoresSafeArea()
-            if let session {
+            if let host {
+                let session = host.session
                 GeometryReader { geo in
-                    VncMetalView(size: session.size, onMakeCoordinator: { coord in
-                        // Pump decoded framebuffer rects straight into the Metal renderer.
-                        // VncSession fires `onUpdate` on the main actor (per its contract).
-                        session.onUpdate = { rects in
-                            MainActor.assumeIsolated { coord.applyUpdate(rects) }
-                        }
-                    })
-                    .contentShape(Rectangle())
-                    // simultaneousGesture (not .gesture) so the floating controls/exit on
-                    // top still receive their taps — a full-bleed minimumDistance:0 drag
-                    // otherwise wins SwiftUI's arbitration and swallows button taps.
-                    .simultaneousGesture(pointerDrag(in: geo.size, session: session))
+                    // Re-parent the host's persistent Metal surface (the framebuffer + its
+                    // renderer live on; the session's onUpdate is already wired to it).
+                    VncSurfaceView(view: host.view)
+                        .contentShape(Rectangle())
+                        // simultaneousGesture (not .gesture) so the floating controls/exit on
+                        // top still receive their taps — a full-bleed minimumDistance:0 drag
+                        // otherwise wins SwiftUI's arbitration and swallows button taps.
+                        .simultaneousGesture(pointerDrag(in: geo.size, session: session))
                 }
                 .ignoresSafeArea(.container, edges: .bottom)
 
@@ -120,25 +158,18 @@ private struct VncStreamView: View {
 
                 controls(session: session)
             }
-            keyboardField(session: session)
-        }
-        .onAppear {
-            guard session == nil else { return }
-            let s = VncSession(broker: broker, streamId: stream.id)
-            s.start()
-            session = s
+            keyboardField(session: host?.session)
         }
         .onChange(of: vncNeedsPassword) { _, needs in
             if needs && isMacScreen { passwordSheet = true }
         }
-        .onDisappear {
-            session?.stop()
-            session = nil
-        }
+        // No onAppear create+start / onDisappear stop: the BrokerSession cache owns the
+        // connection lifecycle (started on first access, torn down only on display/session
+        // removal). Toggling the pane off must NOT tear down the live stream.
         .sheet(isPresented: $passwordSheet) { passwordSheetBody }
     }
 
-    private var vncNeedsPassword: Bool { session?.status == .needsPassword }
+    private var vncNeedsPassword: Bool { host?.session.status == .needsPassword }
 
     // Map the RFB connection state into the shared chip's 4-state enum.
     private func chip(for status: VncSession.Status) -> DisplayStatusChip {
@@ -228,7 +259,7 @@ private struct VncStreamView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Connect") {
-                        session?.setPassword(password)
+                        host?.session.setPassword(password)
                         password = ""
                         passwordSheet = false
                     }
@@ -246,23 +277,27 @@ private struct ScrcpyStreamView: View {
     let broker: BrokerSession
     let stream: DisplayStream
 
-    @State private var session: ScrcpySession?
     @State private var keyboardActive = false
+
+    // The cached, persistent scrcpy host (live H.264 connection + VideoToolbox decoder).
+    // Computed, but always the SAME instance for this stream.id — the cache owns lifecycle, so
+    // toggling the pane / switching sessions REUSES the warm stream instead of re-streaming.
+    private var host: ScrcpyHost? {
+        if case .scrcpy(let h) = broker.displayHost(for: stream) { return h }
+        return nil   // impossible: DisplayStreamView only builds this for the h264 transport
+    }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Color.black.ignoresSafeArea()
-            if let session {
+            if let host {
+                let session = host.session
                 GeometryReader { geo in
-                    ScrcpyVideoView(onMakeCoordinator: { coord in
-                        // Pump decoded Annex-B access units into the AVSampleBufferDisplayLayer.
-                        // ScrcpySession fires `onFrame` on the main actor (per its contract).
-                        session.onFrame = { isKey, annexB in
-                            MainActor.assumeIsolated { coord.enqueue(isKey: isKey, annexB: annexB) }
-                        }
-                    })
-                    .contentShape(Rectangle())
-                    .simultaneousGesture(touchDrag(in: geo.size, session: session))
+                    // Re-parent the host's persistent video surface (the decoder + last frame
+                    // live on; the session's onFrame is already wired to it).
+                    ScrcpySurfaceView(view: host.view)
+                        .contentShape(Rectangle())
+                        .simultaneousGesture(touchDrag(in: geo.size, session: session))
                 }
                 .ignoresSafeArea(.container, edges: .bottom)
 
@@ -271,18 +306,10 @@ private struct ScrcpyStreamView: View {
 
                 DisplayControlBar(keyboardActive: $keyboardActive)
             }
-            keyboardField(session: session)
+            keyboardField(session: host?.session)
         }
-        .onAppear {
-            guard session == nil else { return }
-            let s = ScrcpySession(broker: broker, streamId: stream.id)
-            s.start()
-            session = s
-        }
-        .onDisappear {
-            session?.stop()
-            session = nil
-        }
+        // No onAppear create+start / onDisappear stop: the BrokerSession cache owns the
+        // connection lifecycle. Toggling the pane off must NOT tear down the live stream.
     }
 
     private func chip(for status: ScrcpySession.Status) -> DisplayStatusChip {

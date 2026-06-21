@@ -20,6 +20,9 @@ struct EditorPane: View {
     /// Cached per-session — same instance every lookup, so returning to a session
     /// restores its open tabs/tree (the dictionary lives on the broker, app-lifetime).
     private var state: EditorState { broker.editorState(for: session.id) }
+    /// Persistent CodeMirror webview + bridge, cached per session on the broker, so the
+    /// loaded page + open document survive editor-pane toggles / remounts (no white flash).
+    private var host: EditorHost { broker.editorHost(for: session.id) }
     /// iPad / wide → tree is a side column; iPhone → full-screen overlay.
     private var isRegular: Bool { hSize == .regular }
 
@@ -241,7 +244,7 @@ struct EditorPane: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             } else {
-                EditorWebView(content: tab.content, path: tab.path,
+                EditorWebView(host: host, content: tab.content, path: tab.path,
                               lineWrap: settings.lineWrap, fontSize: settings.fontSize,
                               onChange: { state.updateContent(tab.path, $0) },
                               onSave: { Task { await state.saveActive() } },

@@ -77,8 +77,12 @@ final class BrokerSession {
             synced = true
         case .sessionAdded(let a): sessions.append(a.session)
         case .sessionRemoved(let r):
+            // Resolve the name BEFORE dropping the session — display hosts are keyed by it.
+            let removedName = sessions.first { $0.id == r.id }?.name
             sessions.removeAll { $0.id == r.id }
             evictTerminalHosts(sessionId: r.id)   // session killed → tear down its live terminals
+            dropEditorHost(sessionId: r.id)       // …its editor webview (stop() breaks the bridge cycle)
+            if let removedName { evictDisplayHosts(sessionName: removedName) }  // …and its displays
         case .messageAppend(let m):
             // Drop the optimistic local echo when the real inbound message arrives.
             if m.entry.direction.hasPrefix("in") {
@@ -94,7 +98,9 @@ final class BrokerSession {
         case .displayAdded(let f):
             displays.removeAll { $0.id == f.display.id }
             displays.append(f.display)
-        case .displayRemoved(let f): displays.removeAll { $0.id == f.id }
+        case .displayRemoved(let f):
+            displays.removeAll { $0.id == f.id }
+            dropDisplayHost(streamId: f.id)   // stream stopped → tear down its live host
         case .lspStatus(let f): lspBridges[f.session ?? ""]?.handleStatus(f)
         case .lspReady(let f): lspBridges[f.session]?.handleReady(f.serverId)
         case .lspError(let f): lspBridges[f.session ?? ""]?.handleError(f.serverId)
@@ -349,6 +355,52 @@ final class BrokerSession {
         let prefix = "\(sessionId)|"
         for key in terminalHosts.keys.filter({ $0.hasPrefix(prefix) }) {
             terminalHosts.removeValue(forKey: key)?.stop()
+        }
+    }
+
+    // MARK: - Editor hosts (one per session.id; the live CodeMirror WKWebView + its bridge
+    // coordinator, cached so the loaded page AND the open document survive SwiftUI remounts /
+    // editor-pane toggles — that's what removes the reload/white-flash. Bounded by sessions,
+    // so no LRU — just don't leak on kill (sessionRemoved → stop() removes the script-message
+    // handlers, breaking the webView↔coordinator retain cycle).
+    @ObservationIgnored private var editorHosts: [String: EditorHost] = [:]
+    func editorHost(for sessionId: String) -> EditorHost {
+        if let existing = editorHosts[sessionId] { return existing }
+        let host = EditorHost()
+        editorHosts[sessionId] = host
+        return host
+    }
+    /// Drop a session's cached editor host and tear down its bridge (stop() removes the
+    /// script-message handlers so the webview↔coordinator cycle doesn't leak).
+    private func dropEditorHost(sessionId: String) {
+        editorHosts.removeValue(forKey: sessionId)?.stop()
+    }
+
+    // MARK: - Display hosts (one per stream.id; the live VNC/scrcpy websocket + the native
+    // surface — framebuffer texture / video decoder — cached so the connection AND the
+    // rendered picture survive Display-pane toggles / session switches / management remounts.
+    // The cached `sessionName` lets us evict a killed session's streams even after they've
+    // dropped out of `displays`. Bounded by running streams, so no LRU — just don't leak on
+    // display stop (displayRemoved) or session kill (sessionRemoved).
+    @ObservationIgnored private var displayHosts: [String: (host: DisplayHost, sessionName: String)] = [:]
+    /// Lazily build + cache the host for a stream (transport picked inside `DisplayHost.make`,
+    /// matching `DisplayStreamView`'s branch). Keyed by `stream.id`, so the chat Display tab and
+    /// the management viewer share one warm stream.
+    func displayHost(for stream: DisplayStream) -> DisplayHost {
+        if let existing = displayHosts[stream.id] { return existing.host }
+        let host = DisplayHost.make(broker: self, stream: stream)
+        displayHosts[stream.id] = (host, stream.sessionName)
+        return host
+    }
+    /// Drop a single cached display host (e.g. its stream errored/stopped → rebuild fresh).
+    func dropDisplayHost(streamId: String) {
+        displayHosts.removeValue(forKey: streamId)?.host.stop()
+    }
+    /// Tear down ALL cached display hosts bound to a session name (its streams die with it).
+    private func evictDisplayHosts(sessionName: String) {
+        let ids = displayHosts.filter { $0.value.sessionName == sessionName }.map(\.key)
+        for id in ids {
+            displayHosts.removeValue(forKey: id)?.host.stop()
         }
     }
 }

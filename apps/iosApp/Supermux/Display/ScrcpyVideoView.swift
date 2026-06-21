@@ -1,4 +1,4 @@
-import SwiftUI
+import UIKit
 import AVFoundation
 import CoreMedia
 import VideoToolbox
@@ -8,20 +8,11 @@ import VideoToolbox
 /// slice NALs are repackaged into AVCC (4-byte big-endian length prefixes), wrapped in a
 /// `CMBlockBuffer` + `CMSampleBuffer` (display-immediately), and enqueued. VideoToolbox
 /// owns the decode inside the layer — no explicit `VTDecompressionSession` needed.
-struct ScrcpyVideoView: UIViewRepresentable {
-    /// Hand the coordinator up so `DisplayPane` can push frames into it.
-    var onMakeCoordinator: (Coordinator) -> Void = { _ in }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeUIView(context: Context) -> SampleBufferView {
-        let view = SampleBufferView()
-        context.coordinator.attach(layer: view.displayLayer)
-        DispatchQueue.main.async { onMakeCoordinator(context.coordinator) }
-        return view
-    }
-
-    func updateUIView(_ uiView: SampleBufferView, context: Context) {}
+///
+/// A pure namespace: the `SampleBufferView` (backing view) and `Coordinator` (decoder feed)
+/// are created + kept warm by a `ScrcpyHost` in `BrokerSession`, then re-parented by
+/// `ScrcpySurfaceView`.
+enum ScrcpyVideoView {
 
     // MARK: - Backing UIView (its layer IS an AVSampleBufferDisplayLayer)
 
