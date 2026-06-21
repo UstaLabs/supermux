@@ -17,8 +17,11 @@ test("buildCleanupPrompt includes the draft, context, a skill name, and the outp
   expect(prompt).toContain("user: deploy the broker")
   // a skill name
   expect(prompt).toContain("preview-broker")
-  // the load-bearing output instruction
-  expect(prompt).toContain("Output ONLY the corrected text")
+  // the load-bearing output instruction + the improve-framing
+  expect(prompt).toContain("Output ONLY the improved message")
+  expect(prompt).toContain("rewrite a rough speech-to-text draft")
+  // the guard: improve the phrasing, but never answer / add content / change intent
+  expect(prompt).toContain("Do NOT answer the message")
 })
 
 test("buildCleanupPrompt omits skills/context sections when empty", () => {
