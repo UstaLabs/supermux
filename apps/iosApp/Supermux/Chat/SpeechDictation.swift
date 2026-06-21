@@ -15,6 +15,12 @@ import Speech
 /// off-locale speech into phonetic gibberish). iOS 25 and earlier fall back to
 /// `SFSpeechRecognizer`.
 ///
+/// ## Contextual hints (voice glossary)
+/// `start(contextualStrings:)` biases recognition toward domain/proper-noun terms (e.g.
+/// "Supermux", "Codex"). BOTH engines support this: iOS 26 `SpeechAnalyzer` via
+/// `AnalysisContext.contextualStrings[.general]` (set on the analyzer before it starts),
+/// and the legacy path via `SFSpeechAudioBufferRecognitionRequest.contextualStrings`.
+///
 /// ## Language — DEVICE-DRIVEN, nothing hardcoded
 /// The candidate language(s) come entirely from the **device**: `Locale.preferredLanguages`
 /// is the ordered list of languages the user configured in iOS Settings. We intersect that
@@ -68,14 +74,19 @@ final class SpeechDictation {
     private var legacyRequest: SFSpeechAudioBufferRecognitionRequest?
     private var legacyTask: SFSpeechRecognitionTask?
 
-    func start() async -> StartResult {
+    /// `contextualStrings` are domain/proper-noun hints (the voice glossary — e.g.
+    /// "Supermux", "Codex") the recognizer is biased toward so it spells them right at the
+    /// source. Applied on BOTH engines: iOS 26 `SpeechAnalyzer` via `AnalysisContext`
+    /// (`.contextualStrings[.general]`), and legacy via
+    /// `SFSpeechAudioBufferRecognitionRequest.contextualStrings`.
+    func start(contextualStrings: [String] = []) async -> StartResult {
         phase = .requesting
         guard await requestMicPermission() else { phase = .idle; return .denied }
 
         if #available(iOS 26.0, *) {
-            return await startModern()
+            return await startModern(contextualStrings: contextualStrings)
         } else {
-            return await startLegacy()
+            return await startLegacy(contextualStrings: contextualStrings)
         }
     }
 
@@ -143,7 +154,7 @@ final class SpeechDictation {
     // MARK: - Modern (iOS 26 SpeechAnalyzer)
 
     @available(iOS 26.0, *)
-    private func startModern() async -> StartResult {
+    private func startModern(contextualStrings: [String]) async -> StartResult {
         guard SpeechTranscriber.isAvailable else { phase = .idle; return .unavailable }
         guard await requestSpeechAuth() else { phase = .idle; return .denied }
 
@@ -157,7 +168,8 @@ final class SpeechDictation {
         }
         usedLocale = "\(primary)"
 
-        let backend = SpeechAnalyzerBackend(primary: primary, preferred: plan.preferred)
+        let backend = SpeechAnalyzerBackend(primary: primary, preferred: plan.preferred,
+                                            contextualStrings: contextualStrings)
         // Ensure the language model is installed/reserved. On first use this may need a
         // download; if it's not ready, surface `.downloading` so the caller can fall back
         // this time rather than getting an empty transcript. `prepare()` tears down its own
@@ -203,7 +215,7 @@ final class SpeechDictation {
 
     // MARK: - Legacy (<iOS 26, SFSpeechRecognizer)
 
-    private func startLegacy() async -> StartResult {
+    private func startLegacy(contextualStrings: [String]) async -> StartResult {
         guard let recognizer = legacyRecognizer, recognizer.isAvailable,
               recognizer.supportsOnDeviceRecognition else {
             phase = .idle
@@ -215,6 +227,8 @@ final class SpeechDictation {
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
         req.requiresOnDeviceRecognition = true   // never upload audio for this path
+        // Bias recognition toward the glossary (project/technical terms).
+        if !contextualStrings.isEmpty { req.contextualStrings = contextualStrings }
         legacyRequest = req
 
         let input = engine.inputNode
@@ -313,6 +327,8 @@ final class SpeechAnalyzerBackend {
     /// includes `primary`) is the full set whose assets we keep installed/reserved.
     let primary: Locale
     let preferred: [Locale]
+    /// Voice-glossary terms biased into recognition via the analyzer's `AnalysisContext`.
+    let contextualStrings: [String]
     var onUpdate: ((String) -> Void)?
     private(set) var transcript = ""
     private(set) var lastError: String?   // last on-device setup/download failure (debug)
@@ -326,9 +342,10 @@ final class SpeechAnalyzerBackend {
 
     private var finalized: AttributedString = ""
 
-    init(primary: Locale, preferred: [Locale]) {
+    init(primary: Locale, preferred: [Locale], contextualStrings: [String] = []) {
         self.primary = primary
         self.preferred = preferred
+        self.contextualStrings = contextualStrings
     }
 
     /// The device-driven language plan, computed at runtime from `Locale.preferredLanguages`
@@ -433,6 +450,17 @@ final class SpeechAnalyzerBackend {
             } catch {
                 // Stream ended/failed; whatever we accumulated stands.
             }
+        }
+
+        // Bias recognition toward the voice glossary (project/technical terms). iOS 26's
+        // SpeechAnalyzer DOES support contextual strings — via `AnalysisContext`
+        // (`.contextualStrings[.general]`), set on the analyzer before it starts. (This is
+        // the modern equivalent of the legacy `SFSpeechAudioBufferRecognitionRequest
+        // .contextualStrings`.) Best-effort: a failure here must not abort dictation.
+        if !contextualStrings.isEmpty {
+            let context = AnalysisContext()
+            context.contextualStrings = [.general: contextualStrings]
+            try? await analyzer?.setContext(context)
         }
 
         do {

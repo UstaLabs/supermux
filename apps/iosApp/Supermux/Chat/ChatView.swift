@@ -31,6 +31,10 @@ struct ChatView: View {
     @State private var renameText = ""
     @State private var showKillConfirm = false
     @State private var showSTTDebug = false
+    @State private var showGlossary = false
+    // Voice glossary (project/technical terms), cached from the broker on appear and fed to
+    // on-device dictation as contextual hints so it spells them right at the source.
+    @State private var glossary: [String] = []
     @State private var git: GitRemoteStatus?
     @State private var banner: String?
     @State private var noVerifyConfirm = false
@@ -113,6 +117,13 @@ struct ChatView: View {
         }
         Task { reasoning = await broker.reasoning(session.id) }
         Task { proxies = (try? await broker.api.proxies()) ?? [] }
+        Task { await loadGlossary() }
+    }
+
+    /// Cache the voice glossary from the broker (shared across sessions). Best-effort —
+    /// dictation still works without it; the terms are just contextual bias.
+    private func loadGlossary() async {
+        if let terms = try? await broker.fetchGlossary() { glossary = terms }
     }
 
     var body: some View {
@@ -145,6 +156,7 @@ struct ChatView: View {
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button { showSTTDebug = true } label: { Image(systemName: "waveform.badge.mic") }
+                Button { showGlossary = true } label: { Image(systemName: "text.book.closed") }
                 if let g = git, g.isRepo {
                     Button { runFinish() } label: { Label("Finish", systemImage: "arrow.triangle.merge") }
                         .tint(Theme.teal)
@@ -154,6 +166,9 @@ struct ChatView: View {
         }
         .toolbarTitleDisplayMode(.inline)
         .sheet(isPresented: $showSTTDebug) { STTDebugView() }
+        .sheet(isPresented: $showGlossary, onDismiss: { Task { await loadGlossary() } }) {
+            GlossaryView(broker: broker)
+        }
         .task { if draft.isEmpty, let d = ProcessInfo.processInfo.environment["SM_DRAFT"] { draft = d } }
         // Load per-session state on EVERY appearance — `.task(id:)` doesn't re-fire when
         // re-opening the *same* session (id unchanged), which left git/branch unloaded.
@@ -612,7 +627,8 @@ struct ChatView: View {
             return
         }
         // Start on-device; fall back to audio recording if it's unavailable / model downloading.
-        switch await dictation.start() {
+        // The glossary biases the recognizer toward our project/technical terms.
+        switch await dictation.start(contextualStrings: glossary) {
         case .started: break
         case .denied: micDenied = true
         case .unavailable, .downloading, .failed:
