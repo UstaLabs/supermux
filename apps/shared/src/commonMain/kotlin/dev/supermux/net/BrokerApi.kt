@@ -38,6 +38,8 @@ data class AppConfigDto(
     val codexConfigured: Boolean = false,
     val cursorConfigured: Boolean = false,
     val onboarded: Boolean = false,
+    /** Model the voice-cleanup agent uses (null/empty = broker default, Haiku). */
+    val voiceCleanupModel: String? = null,
 )
 
 @Serializable
@@ -519,6 +521,109 @@ data class ReviewSubmitResult(
     val reason: String? = null,
 )
 
+// ─── Agents: install status + link/code login (GET/POST /agents/*) ─────────────
+/** GET /agents/status → per-CLI install + auth state (detectAllAgents).
+ *  Named `AgentInstallStatus` to avoid colliding with proto.AgentStatus (which is
+ *  the agent's *runtime phase*). `kind`: "claude" | "codex" | "cursor" | "opencode". */
+@Serializable
+data class AgentInstallStatus(
+    val kind: String = "",
+    val installed: Boolean = false,
+    val authed: Boolean = false,
+)
+
+/** State of an in-progress agent CLI login (POST/GET /agents/<kind>/login).
+ *  Mirrors the broker `LoginState` (src/core/agents/login/session.ts):
+ *  `phase`: "starting" | "awaiting_user" | "success" | "failed" | "cancelled".
+ *  `url`/`code` are the device-flow auth URL + code to show; `needsCode` means the
+ *  CLI is waiting for the user to paste a code back (POST .../login/code). */
+@Serializable
+data class AgentLoginState(
+    val kind: String = "",
+    val phase: String = "",
+    val url: String? = null,
+    val code: String? = null,
+    val needsCode: Boolean = false,
+    val error: String? = null,
+)
+
+// ─── opencode providers (GET/POST /opencode/*) ────────────────────────────────
+/** One auth method on an opencode provider. `index` is the method's position,
+ *  passed back as the `method` arg to oauth start/finish. `type`: "oauth" | "api". */
+@Serializable
+data class OpenCodeAuthMethod(
+    val type: String = "",
+    val label: String = "",
+    val index: Int = 0,
+)
+
+/** GET /opencode/providers → providers with their auth methods + configured flag.
+ *  (There is NO top-level `label`; render `id` / a method's `label`.) */
+@Serializable
+data class OpenCodeProvider(
+    val id: String = "",
+    val configured: Boolean = false,
+    val methods: List<OpenCodeAuthMethod> = emptyList(),
+)
+
+/** POST /opencode/auth/oauth/start → the authorization URL (+ optional instructions). */
+@Serializable
+data class OpenCodeOAuthStart(val url: String = "", val instructions: String? = null)
+
+// ─── Editor / LSP settings (GET/PUT /settings/editor) ─────────────────────────
+/** One language server row. `state`: "ready" | "missing" | "prereq-missing". */
+@Serializable
+data class LspServer(
+    val id: String = "",
+    val label: String = "",
+    val extensions: List<String> = emptyList(),
+    val enabled: Boolean = false,
+    val state: String = "",
+    val installLabel: String? = null,
+    val installable: Boolean = false,
+    val requires: String? = null,
+    val custom: Boolean = false,
+    val command: String? = null,
+)
+
+@Serializable
+data class LspConfig(val servers: List<LspServer> = emptyList())
+
+/** GET /settings/editor → { lsp: { servers: [...] } }. */
+@Serializable
+data class EditorSettingsResponse(val lsp: LspConfig = LspConfig())
+
+/** POST /settings/editor/lsp/<id>/install → { ok, lines }. */
+@Serializable
+data class LspInstallResult(val ok: Boolean = false, val lines: List<String> = emptyList())
+
+/** Result of add/remove custom LSP → { ok, error?, lsp? }. */
+@Serializable
+data class LspMutationResult(
+    val ok: Boolean = false,
+    val error: String? = null,
+    val lsp: LspConfig? = null,
+)
+
+// ─── System: in-app updater (GET /api/update/status) ──────────────────────────
+/** Mirrors the broker UpdateStatus (src/core/update/checker.ts).
+ *  `mode`: "binary" | "source" | "docker".
+ *  `state`: "idle" | "checking" | "downloading" | "swapping" | "restart-required" | "failed".
+ *  `lastChecked` is epoch-millis. `disabled` is true only in the no-checker fallback. */
+@Serializable
+data class UpdateStatus(
+    val current: String = "",
+    val commit: String = "",
+    val latest: String? = null,
+    val updateAvailable: Boolean = false,
+    val notesUrl: String? = null,
+    val mode: String = "",
+    val state: String = "",
+    val lastChecked: Double? = null,
+    val lastError: String? = null,
+    val disabled: Boolean = false,
+)
+
 // ─── Exceptions ────────────────────────────────────────────────────────────────
 
 class FsException(val status: Int, message: String) : Exception(message)
@@ -597,6 +702,63 @@ private data class ForgeCreateBody(
 
 @Serializable
 private data class ForgeCreateLocalBody(val name: String)
+
+// Agent login / opencode / config-patch / forge-write request bodies.
+@Serializable
+private data class AgentCodeBody(val code: String)
+
+@Serializable
+private data class OpenCodeKeyBody(val providerId: String, val key: String)
+
+@Serializable
+private data class OpenCodeOAuthStartBody(val providerId: String, val method: Int)
+
+@Serializable
+private data class OpenCodeOAuthFinishBody(val providerId: String, val method: Int, val code: String)
+
+/** Partial PUT /settings/config body. explicitNulls=false omits unset fields, so
+ *  this never clobbers config the caller didn't touch. */
+@Serializable
+private data class ConfigPatchBody(
+    val paName: String? = null,
+    val voiceCleanupModel: String? = null,
+    val claudeOauthToken: String? = null,
+    val anthropicApiKey: String? = null,
+    val codexApiKey: String? = null,
+    val cursorApiKey: String? = null,
+)
+
+@Serializable
+private data class LspServerEnable(val enabled: Boolean)
+
+@Serializable
+private data class LspEnablePatch(val servers: Map<String, LspServerEnable>)
+
+@Serializable
+private data class LspTogglePatch(val lsp: LspEnablePatch)
+
+@Serializable
+private data class AddCustomLspBody(
+    val id: String,
+    val label: String,
+    val command: String,
+    val args: List<String> = emptyList(),
+    val extensions: List<String> = emptyList(),
+    val languageId: String? = null,
+    val installCmd: String? = null,
+)
+
+@Serializable
+private data class AddForgeBody(
+    val kind: String,
+    val token: String,
+    val host: String? = null,
+    val source: String = "pat",
+    val transport: String = "https",
+)
+
+@Serializable
+private data class ImportForgeBody(val kind: String, val transport: String = "https")
 
 /** Empty JSON object body (`{}`) for POSTs that take no params but return data. */
 @Serializable
@@ -764,9 +926,137 @@ class BrokerApi(
     suspend fun getConfig(): AppConfigDto =
         getJson("$httpBase/settings/config")
 
-    /** PUT /settings/config {"paName": ...} */
+    /** PUT /settings/config {"paName": ...} — back-compat shim; prefer [saveConfig]. */
     suspend fun putConfig(paName: String) =
         putJson("$httpBase/settings/config", PaNameBody(paName))
+
+    /**
+     * PUT /settings/config — partial patch. Only non-null args are serialized
+     * (explicitNulls=false), so unset fields are never overwritten on the broker.
+     * Secret fields (tokens) are write-only — they read back redacted, not echoed.
+     */
+    suspend fun saveConfig(
+        paName: String? = null,
+        voiceCleanupModel: String? = null,
+        claudeOauthToken: String? = null,
+        anthropicApiKey: String? = null,
+        codexApiKey: String? = null,
+        cursorApiKey: String? = null,
+    ) = putJson(
+        "$httpBase/settings/config",
+        ConfigPatchBody(paName, voiceCleanupModel, claudeOauthToken, anthropicApiKey, codexApiKey, cursorApiKey),
+    )
+
+    /** GET /settings/soul → soul.md text ("" on any failure — never throws). */
+    suspend fun getSoul(): String {
+        val resp = http.get("$httpBase/settings/soul") { header("Authorization", bearerHeader()) }
+        return if (resp.status.isSuccess()) resp.bodyAsText() else ""
+    }
+
+    /** PUT /settings/soul (text/plain body) → true on success. */
+    suspend fun putSoul(text: String): Boolean {
+        val resp = http.put("$httpBase/settings/soul") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Text.Plain)
+            setBody(text)
+        }
+        return resp.status.isSuccess()
+    }
+
+    // ── Agents: install status + link/code login ───────────────────────────────
+
+    /** GET /agents/status → install + auth state per agent CLI. */
+    suspend fun agentStatuses(): List<AgentInstallStatus> =
+        getJson("$httpBase/agents/status")
+
+    /** POST /agents/<kind>/login → starts a CLI login, returns the initial state. */
+    suspend fun startAgentLogin(kind: String): AgentLoginState =
+        postReturningJson("$httpBase/agents/${urlEncode(kind)}/login", EmptyBody())
+
+    /** GET /agents/<kind>/login → poll the current login state. */
+    suspend fun agentLoginState(kind: String): AgentLoginState =
+        getJson("$httpBase/agents/${urlEncode(kind)}/login")
+
+    /** POST /agents/<kind>/login/code {code} — hand the CLI a pasted device code. */
+    suspend fun sendAgentLoginCode(kind: String, code: String) =
+        postJson("$httpBase/agents/${urlEncode(kind)}/login/code", AgentCodeBody(code))
+
+    /** POST /agents/<kind>/login/cancel — abort an in-progress login. */
+    suspend fun cancelAgentLogin(kind: String) {
+        http.post("$httpBase/agents/${urlEncode(kind)}/login/cancel") {
+            header("Authorization", bearerHeader())
+        }
+    }
+
+    // ── opencode providers (key + oauth) ───────────────────────────────────────
+
+    /** GET /opencode/providers → providers with their auth methods (bare array). */
+    suspend fun openCodeProviders(): List<OpenCodeProvider> =
+        getJson("$httpBase/opencode/providers")
+
+    /** POST /opencode/auth/key {providerId, key} — save an API key for a provider. */
+    suspend fun setOpenCodeKey(providerId: String, key: String) =
+        postJson("$httpBase/opencode/auth/key", OpenCodeKeyBody(providerId, key))
+
+    /** POST /opencode/auth/oauth/start {providerId, method} → { url, instructions? }.
+     *  `method` is the [OpenCodeAuthMethod.index] of the oauth method. */
+    suspend fun startOpenCodeOAuth(providerId: String, method: Int): OpenCodeOAuthStart =
+        postReturningJson("$httpBase/opencode/auth/oauth/start", OpenCodeOAuthStartBody(providerId, method))
+
+    /** POST /opencode/auth/oauth/finish {providerId, method, code} — complete oauth. */
+    suspend fun finishOpenCodeOAuth(providerId: String, method: Int, code: String) =
+        postJson("$httpBase/opencode/auth/oauth/finish", OpenCodeOAuthFinishBody(providerId, method, code))
+
+    // ── Editor / LSP settings ──────────────────────────────────────────────────
+
+    /** GET /settings/editor → { lsp: { servers } }. */
+    suspend fun getEditorSettings(): EditorSettingsResponse =
+        getJson("$httpBase/settings/editor")
+
+    /** PUT /settings/editor {lsp:{servers:{<id>:{enabled}}}} → updated settings.
+     *  Partial: only the named server's `enabled` is changed. */
+    suspend fun setLspEnabled(id: String, enabled: Boolean): EditorSettingsResponse =
+        decode(http.put("$httpBase/settings/editor") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(LspTogglePatch(LspEnablePatch(mapOf(id to LspServerEnable(enabled))))))
+        })
+
+    /** POST /settings/editor/lsp/<id>/install → { ok, lines } (install log). */
+    suspend fun installEditorLsp(id: String): LspInstallResult =
+        postReturningJson("$httpBase/settings/editor/lsp/${urlEncode(id)}/install", EmptyBody())
+
+    /** POST /settings/editor/lsp/custom — register a custom LSP server → { ok, error?, lsp? }. */
+    suspend fun addCustomEditorLsp(
+        id: String,
+        label: String,
+        command: String,
+        extensions: List<String>,
+        args: List<String> = emptyList(),
+        languageId: String? = null,
+        installCmd: String? = null,
+    ): LspMutationResult =
+        postReturningJson(
+            "$httpBase/settings/editor/lsp/custom",
+            AddCustomLspBody(id, label, command, args, extensions, languageId, installCmd),
+        )
+
+    /** DELETE /settings/editor/lsp/custom/<id> → { ok, error?, lsp? }. */
+    suspend fun removeCustomEditorLsp(id: String): LspMutationResult =
+        decode(http.delete("$httpBase/settings/editor/lsp/custom/${urlEncode(id)}") {
+            header("Authorization", bearerHeader())
+        })
+
+    // ── System: restart + update status ────────────────────────────────────────
+
+    /** POST /system/restart — restart the broker service (fire-and-forget). */
+    suspend fun restartBroker() {
+        http.post("$httpBase/system/restart") { header("Authorization", bearerHeader()) }
+    }
+
+    /** GET /api/update/status → in-app updater state. */
+    suspend fun updateStatus(): UpdateStatus =
+        getJson("$httpBase/api/update/status")
 
     /** GET /settings/curator → {config:{enabled,hour,minute}, nextRun} */
     suspend fun getCuratorSettings(): CuratorSettingsResponse =
@@ -1004,6 +1294,24 @@ class BrokerApi(
     /** POST /forge/create-local {name} → { localPath } of a freshly `git init`'d local repo. */
     suspend fun createLocalRepo(name: String): ResolvedRepo =
         postReturningJson("$httpBase/forge/create-local", ForgeCreateLocalBody(name))
+
+    /** POST /forge/connections {kind, token, host?, source:"pat", transport} → the new connection.
+     *  `host` is set for self-hosted GitLab/GitHub Enterprise; null = the public host. */
+    suspend fun addForge(
+        kind: String, token: String, host: String? = null, transport: String = "https",
+    ): ForgeConnection =
+        postReturningJson("$httpBase/forge/connections", AddForgeBody(kind, token, host, "pat", transport))
+
+    /** POST /forge/connections/import {kind, transport} → connection imported from the CLI's auth. */
+    suspend fun importForge(kind: String, transport: String = "https"): ForgeConnection =
+        postReturningJson("$httpBase/forge/connections/import", ImportForgeBody(kind, transport))
+
+    /** DELETE /forge/connections/<id> — disconnect a forge account. */
+    suspend fun removeForge(id: String) {
+        http.delete("$httpBase/forge/connections/${urlEncode(id)}") {
+            header("Authorization", bearerHeader())
+        }
+    }
 
     // ── Editor filesystem ──────────────────────────────────────────────────────
 
