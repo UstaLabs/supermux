@@ -1,4 +1,4 @@
-import SwiftUI
+import UIKit
 import Shared
 import Metal
 import QuartzCore
@@ -11,25 +11,12 @@ import simd
 /// Pixel format is pinned to `.bgra8Unorm` to match `VncClient`'s 32-bit BGRA output,
 /// so a Raw rect is a straight `texture.replace`. CopyRect is handled on a CPU mirror of
 /// the framebuffer (v1 simplicity) and the destination region is re-uploaded.
-struct VncMetalView: UIViewRepresentable {
-    /// Remote framebuffer size in pixels. Drives texture allocation.
-    let size: (Int, Int)?
-    /// Hand the coordinator up so `DisplayPane` can push updates / resize into it.
-    var onMakeCoordinator: (Coordinator) -> Void = { _ in }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeUIView(context: Context) -> MetalLayerView {
-        let view = MetalLayerView()
-        context.coordinator.attach(layer: view.metalLayer)
-        if let size { context.coordinator.resize(width: size.0, height: size.1) }
-        DispatchQueue.main.async { onMakeCoordinator(context.coordinator) }
-        return view
-    }
-
-    func updateUIView(_ uiView: MetalLayerView, context: Context) {
-        if let size { context.coordinator.resize(width: size.0, height: size.1) }
-    }
+///
+/// A pure namespace: the `MetalLayerView` (backing view) and `Coordinator` (renderer) are
+/// created + kept warm by a `VncHost` in `BrokerSession`, then re-parented by
+/// `VncSurfaceView`. The host calls `Coordinator.resize` from `VncSession.size` before each
+/// update, so allocation no longer rides a SwiftUI `updateUIView`.
+enum VncMetalView {
 
     // MARK: - Backing UIView (its layer IS a CAMetalLayer)
 

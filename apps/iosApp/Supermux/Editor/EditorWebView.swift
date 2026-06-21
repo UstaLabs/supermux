@@ -1,17 +1,23 @@
 import SwiftUI
 import WebKit
 
-/// One CodeMirror 6 surface hosted in a `WKWebView`, bridged to the bundled
-/// `EditorWeb/index.html` (a copy of the Android `editor/` assets). Mirrors the
-/// Android `EditorEngine` contract exactly: Swift drives the page through the
-/// `window.cm*` functions and the page calls back through
-/// `window.AndroidEditor.{onChange,onSave,onReady}`.
+/// Thin SwiftUI host for a PERSISTENT CodeMirror `WKWebView`. The view (and its
+/// loaded file:// page, JS bridge, ready handshake + lastPath/lastContent state) is
+/// owned by an `EditorHost` cached in `BrokerSession`; this representable only
+/// re-parents that one instance into the current mount and pushes per-tab deltas in
+/// `updateUIView`. It builds nothing and tears nothing down — keeping the same
+/// `WKWebView` + `Coordinator` alive across remounts is what makes tab switches AND
+/// editor-pane toggles reflow instead of reloading (no white flash).
 ///
-/// SwiftUI re-creates the representable whenever a prop changes, so the props are
-/// taken as plain `let`/closures and deltas are pushed in `updateUIView`. The
-/// underlying `WKWebView` is kept alive across those re-makes via the coordinator,
-/// so tab switches reflow instead of reloading (no white flash).
+/// Bridged to the bundled `EditorWeb/index.html` (a copy of the Android `editor/`
+/// assets). Mirrors the Android `EditorEngine` contract: Swift drives the page through
+/// the `window.cm*` functions and the page calls back through
+/// `window.AndroidEditor.{onChange,onSave,onReady}`. SwiftUI re-creates the
+/// representable whenever a prop changes, so the props are plain `let`/closures and
+/// deltas are pushed in `updateUIView`.
 struct EditorWebView: UIViewRepresentable {
+    /// The persistent webview + coordinator, owned by `BrokerSession`'s editor cache.
+    let host: EditorHost
     let content: String
     let path: String
     let lineWrap: Bool
@@ -26,61 +32,20 @@ struct EditorWebView: UIViewRepresentable {
     /// JSON-RPC `{serverId, message}` here; the parent forwards it to the broker.
     var onLspOut: (_ serverId: String, _ message: String) -> Void = { _, _ in }
 
-    /// CodeMirror's one-dark canvas color (#282c34). Painted on the web view and
-    /// its scroll view so the file:// page doesn't flash white before first paint.
-    private static let editorBackground = UIColor(
-        red: 0x28 / 255.0, green: 0x2c / 255.0, blue: 0x34 / 255.0, alpha: 1
-    )
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onChange: onChange, onSave: onSave, onLspOut: onLspOut)
-    }
+    /// Reuse the host's long-lived coordinator (the bridge target + nav delegate +
+    /// ready/lastPath/lastContent state), so remounts don't reset the handshake.
+    func makeCoordinator() -> Coordinator { host.coordinator }
 
     func makeUIView(context: Context) -> WKWebView {
-        let coordinator = context.coordinator
-
-        // (a) Define the JS->Swift bridge at document start, before cm6.js runs, so
-        //     window.AndroidEditor exists when cmInit wires its listeners. Same shape
-        //     the Android JavascriptInterface exposes, but routed over postMessage.
-        let bridgeJS = """
-        window.AndroidEditor = {
-          onChange: (s) => window.webkit.messageHandlers.editor.postMessage({ t: 'change', s: s }),
-          onSave: () => window.webkit.messageHandlers.editor.postMessage({ t: 'save' }),
-          onReady: () => window.webkit.messageHandlers.editor.postMessage({ t: 'ready' })
-        };
-        """
-        let userScript = WKUserScript(
-            source: bridgeJS, injectionTime: .atDocumentStart, forMainFrameOnly: true
-        )
-        let controller = WKUserContentController()
-        controller.addUserScript(userScript)
-        controller.add(coordinator, name: "editor")
-        controller.add(coordinator, name: "lsp")
-
-        let config = WKWebViewConfiguration()
-        config.userContentController = controller
-
-        let webView = WKWebView(frame: .zero, configuration: config)
-        webView.navigationDelegate = coordinator
-        webView.isOpaque = false
-        webView.backgroundColor = Self.editorBackground
-        webView.scrollView.backgroundColor = Self.editorBackground
-        webView.scrollView.contentInsetAdjustmentBehavior = .never
-        #if DEBUG
-        if #available(iOS 16.4, *) { webView.isInspectable = true }
-        #endif
-
-        // Seed the cache so the first cmInit (fired from didFinish) carries the
-        // current file, matching Android's lastContent/lastFilename handshake.
-        coordinator.lineWrap = lineWrap
-        coordinator.fontSize = fontSize
-        coordinator.cache(content: content, filename: filename(from: path), scrollTop: 0)
-        coordinator.webView = webView
-
-        webView.load(loadRequest: Self.editorPageURL())
-
-        DispatchQueue.main.async { onMakeView(webView) }
-        return webView
+        // Detach from any prior mount before SwiftUI re-parents this cached, reused
+        // webview. Only one mount of a given editor exists at a time, so this is
+        // normally a no-op; it guards the toggle transition (split ⇄ standalone) from
+        // a "view already has a superview" assertion when the old container hasn't been
+        // torn down yet (mirrors `SwiftTermView.makeUIView`). NO construction here —
+        // the `EditorHost` built the webview + bridge + handlers + file:// load once.
+        host.webView.removeFromSuperview()
+        DispatchQueue.main.async { onMakeView(host.webView) }
+        return host.webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
@@ -124,23 +89,16 @@ struct EditorWebView: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
-        // Break the retain cycle WebKit holds on the message handler.
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "editor")
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "lsp")
+        // No-op: the webview + coordinator are owned by the `EditorHost` cached in
+        // `BrokerSession` and MUST outlive this mount, so toggling the editor pane off
+        // doesn't reload the page. The script-message handlers (the webView↔coordinator
+        // retain cycle) are removed by `EditorHost.stop()` when the SESSION is removed.
     }
 
     /// `cm6.js` keys the language off the file's basename (extension), so we only
     /// ever hand it the last path component.
     private func filename(from path: String) -> String {
         (path as NSString).lastPathComponent
-    }
-
-    /// Resolve the bundled editor page. Task 1 bundles `index.html` + `cm6.js`
-    /// under an `EditorWeb/` folder reference; fall back to the bundle root in
-    /// case the resources land flattened.
-    private static func editorPageURL() -> URL? {
-        Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "EditorWeb")
-            ?? Bundle.main.url(forResource: "index", withExtension: "html")
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
@@ -287,15 +245,5 @@ struct EditorWebView: UIViewRepresentable {
             }
             return "\"\""
         }
-    }
-}
-
-private extension WKWebView {
-    /// Load the bundled file:// page, granting read access to its directory so the
-    /// page can pull in its sibling `cm6.js`. No-op (leaves the #282c34 canvas) if
-    /// the resource is missing rather than crashing.
-    func load(loadRequest url: URL?) {
-        guard let url else { return }
-        loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
     }
 }

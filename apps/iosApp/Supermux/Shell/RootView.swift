@@ -9,6 +9,7 @@ struct RootView: View {
     @State private var selected: String?
     @State private var route: NavRoute?
     @State private var debugArchived: ArchivedItem?    // SM_OPEN_ARCHIVED headless repro
+    @State private var layout = WorkspaceLayoutModel()
     @Environment(\.horizontalSizeClass) private var hSize
     var onUnpair: () -> Void
 
@@ -28,34 +29,8 @@ struct RootView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
-            SessionsListView(broker: broker, selected: $selected,
-                             onNewSession: { route = .newSession },
-                             onArchived: { route = .archived })
-                .navigationDestination(item: $route) { page($0) }
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Menu {
-                            Button { route = .personalAssistants } label: { Label("Assistants", systemImage: "person.2") }
-                            Button { route = .usage } label: { Label("Usage", systemImage: "chart.bar") }
-                            Button { route = .devices } label: { Label("Devices", systemImage: "ipad.and.iphone") }
-                            Button { route = .proxies } label: { Label("Proxies", systemImage: "network") }
-                            Button { route = .displays } label: { Label("Displays", systemImage: "display") }
-                            Button { route = .settings } label: { Label("Settings", systemImage: "gearshape") }
-                            Divider()
-                            Button("Unpair", role: .destructive, action: onUnpair)
-                        } label: {
-                            Image(systemName: "ellipsis.circle")
-                        }
-                    }
-                }
-        } detail: {
-            if let s = selectedSession {
-                ChatView(broker: broker, session: s)
-            } else {
-                ContentUnavailableView("Pick a session",
-                                       systemImage: "bubble.left.and.bubble.right")
-            }
+        Group {
+            if hSize == .regular { regularShell } else { compactShell }
         }
         .tint(Theme.teal)
         .task { broker.start() }
@@ -100,6 +75,47 @@ struct RootView: View {
         }
         .fullScreenCover(item: $debugArchived) { item in
             NavigationStack { ArchivedChatView(broker: broker, archived: item.dto) }
+        }
+    }
+
+    /// Compact width (iPhone / Slide-Over / narrow): the split view folds to a stack.
+    private var compactShell: some View {
+        NavigationSplitView {
+            SessionsListView(broker: broker, selected: $selected,
+                             onNewSession: { route = .newSession },
+                             onArchived: { route = .archived })
+                .navigationDestination(item: $route) { page($0) }
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu {
+                            Button { route = .personalAssistants } label: { Label("Assistants", systemImage: "person.2") }
+                            Button { route = .usage } label: { Label("Usage", systemImage: "chart.bar") }
+                            Button { route = .devices } label: { Label("Devices", systemImage: "ipad.and.iphone") }
+                            Button { route = .proxies } label: { Label("Proxies", systemImage: "network") }
+                            Button { route = .displays } label: { Label("Displays", systemImage: "display") }
+                            Button { route = .settings } label: { Label("Settings", systemImage: "gearshape") }
+                            Divider()
+                            Button("Unpair", role: .destructive, action: onUnpair)
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                    }
+                }
+        } detail: {
+            if let s = selectedSession {
+                ChatView(broker: broker, session: s)
+            } else {
+                ContentUnavailableView("Pick a session",
+                                       systemImage: "bubble.left.and.bubble.right")
+            }
+        }
+    }
+
+    /// Regular width (iPad): the PWA's wide multi-pane workspace.
+    private var regularShell: some View {
+        NavigationStack {
+            IPadWorkspace(broker: broker, selected: $selected, route: $route, layout: layout)
+                .navigationDestination(item: $route) { page($0) }
         }
     }
 

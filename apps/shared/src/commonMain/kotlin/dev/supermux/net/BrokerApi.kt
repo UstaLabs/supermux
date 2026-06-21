@@ -10,6 +10,7 @@ import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.request.forms.MultiPartFormDataContent
 import io.ktor.client.request.forms.formData
+import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsBytes
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
@@ -19,6 +20,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SlashCommand
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -572,12 +574,38 @@ class BrokerApi(
 
     private fun bearerHeader() = "Bearer $token"
 
-    private suspend inline fun <reified T> getJson(url: String): T {
-        val text = http.get(url) {
-            header("Authorization", bearerHeader())
-        }.bodyAsText()
-        return json.decodeFromString(text)
+    /**
+     * Read [resp] into [T] WITHOUT ever aborting the app on failure.
+     *
+     * SKIE bridges each Swift→Kotlin suspend call into its OWN StandaloneCoroutine that has
+     * NO CoroutineExceptionHandler, run on a dispatcher that masks cancellation from the body
+     * (SwiftCoroutineDispatcher.executeWithoutCancellation). So any NON-CancellationException
+     * that escapes this body — a 401 "unauthorized" text body fed to decodeFromString, a
+     * transient transport/decode error, a mid-flight teardown during iPad multi-pane layout
+     * churn — cannot reach the (already resumed/cancelled) Swift continuation and instead
+     * crashes the whole process via handleJobException. (`ensureActive()` can't discriminate
+     * here: executeWithoutCancellation hides the real cancel state.)
+     *
+     * CancellationException is the one throwable that completes that coroutine cleanly, so on
+     * any non-2xx / decode / transport failure we log and surface it AS cancellation. Every
+     * caller wraps the call in `try?`, so Swift just sees nil/empty (disconnected, no displays,
+     * empty list, …) — graceful degradation instead of a SIGABRT.
+     */
+    private suspend inline fun <reified T> decode(resp: HttpResponse): T {
+        try {
+            val text = resp.bodyAsText()
+            if (resp.status.isSuccess()) return json.decodeFromString(text)
+            println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            println("[BrokerApi] request failed: ${e.message?.take(160)}")
+        }
+        throw CancellationException("BrokerApi request unavailable")
     }
+
+    private suspend inline fun <reified T> getJson(url: String): T =
+        decode(http.get(url) { header("Authorization", bearerHeader()) })
 
     private suspend inline fun <reified B> postJson(url: String, body: B) {
         http.post(url) {
@@ -604,14 +632,12 @@ class BrokerApi(
     }
 
     /** POST a JSON body and decode the JSON response (for endpoints that return data). */
-    private suspend inline fun <reified B, reified T> postReturningJson(url: String, body: B): T {
-        val text = http.post(url) {
+    private suspend inline fun <reified B, reified T> postReturningJson(url: String, body: B): T =
+        decode(http.post(url) {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
-        }.bodyAsText()
-        return json.decodeFromString(text)
-    }
+        })
 
     private fun urlEncode(s: String): String = s
         .replace("%", "%25")
@@ -672,14 +698,12 @@ class BrokerApi(
     }
 
     /** POST /sessions */
-    suspend fun spawn(req: SpawnRequest): SpawnResponse {
-        val text = http.post("$httpBase/sessions") {
+    suspend fun spawn(req: SpawnRequest): SpawnResponse =
+        decode(http.post("$httpBase/sessions") {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(req))
-        }.bodyAsText()
-        return json.decodeFromString(text)
-    }
+        })
 
     /** GET /settings/config */
     suspend fun getConfig(): AppConfigDto =
@@ -694,14 +718,12 @@ class BrokerApi(
         getJson("$httpBase/settings/curator")
 
     /** PUT /settings/curator {enabled,hour,minute} → updated {config, nextRun} */
-    suspend fun saveCuratorSettings(enabled: Boolean, hour: Int, minute: Int): CuratorSettingsResponse {
-        val text = http.put("$httpBase/settings/curator") {
+    suspend fun saveCuratorSettings(enabled: Boolean, hour: Int, minute: Int): CuratorSettingsResponse =
+        decode(http.put("$httpBase/settings/curator") {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(CuratorConfig(enabled, hour, minute)))
-        }.bodyAsText()
-        return json.decodeFromString(text)
-    }
+        })
 
     /** POST /settings/curator/run-now */
     suspend fun runCuratorNow() {
@@ -724,14 +746,12 @@ class BrokerApi(
         getJson("$httpBase/devices")
 
     /** POST /devices {name} → { url, name }: a one-time pairing URL for the device */
-    suspend fun addDevice(name: String): AddDeviceResponse {
-        val text = http.post("$httpBase/devices") {
+    suspend fun addDevice(name: String): AddDeviceResponse =
+        decode(http.post("$httpBase/devices") {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(AddDeviceBody(name)))
-        }.bodyAsText()
-        return json.decodeFromString(text)
-    }
+        })
 
     /** DELETE /devices/<urlencoded name> */
     suspend fun revokeDevice(name: String) {
@@ -762,12 +782,10 @@ class BrokerApi(
     suspend fun gitStatus(id: String): GitRemoteStatus =
         getJson("$httpBase/sessions/$id/git/status")
 
-    private suspend fun gitOp(id: String, op: String): GitOpResult {
-        val text = http.post("$httpBase/sessions/$id/git/$op") {
+    private suspend fun gitOp(id: String, op: String): GitOpResult =
+        decode(http.post("$httpBase/sessions/$id/git/$op") {
             header("Authorization", bearerHeader())
-        }.bodyAsText()
-        return json.decodeFromString(text)
-    }
+        })
     suspend fun gitFetch(id: String): GitOpResult = gitOp(id, "fetch")
     suspend fun gitPublish(id: String): GitOpResult = gitOp(id, "publish")
     suspend fun gitPush(id: String): GitOpResult = gitOp(id, "push")
@@ -776,14 +794,12 @@ class BrokerApi(
     /** POST /sessions/<id>/finish — sync → verify → merge the session branch. */
     suspend fun finish(
         id: String, skipVerify: Boolean? = null, commitFirst: Boolean? = null, commitMessage: String? = null,
-    ): FinishResult {
-        val text = http.post("$httpBase/sessions/$id/finish") {
+    ): FinishResult =
+        decode(http.post("$httpBase/sessions/$id/finish") {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(FinishBody(skipVerify, commitFirst, commitMessage)))
-        }.bodyAsText()
-        return json.decodeFromString(text)
-    }
+        })
 
     /** POST /sessions/<id>/message — post a message to the agent (e.g. a "Send to agent" fix request). */
     suspend fun sendMessage(id: String, text: String) {
@@ -806,14 +822,12 @@ class BrokerApi(
         getJson("$httpBase/proxies")
 
     /** POST /proxies {sessionName, port, domain?} */
-    suspend fun createProxy(sessionName: String, port: Int, domain: String? = null): CreateProxyResponse {
-        val text = http.post("$httpBase/proxies") {
+    suspend fun createProxy(sessionName: String, port: Int, domain: String? = null): CreateProxyResponse =
+        decode(http.post("$httpBase/proxies") {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(CreateProxyBody(sessionName, port, domain)))
-        }.bodyAsText()
-        return json.decodeFromString(text)
-    }
+        })
 
     /** PATCH /proxies/<domain> {isPublic} */
     suspend fun setProxyPublic(domain: String, isPublic: Boolean) =
@@ -845,7 +859,7 @@ class BrokerApi(
                 })
             }))
         }
-        return json.decodeFromString(resp.bodyAsText())
+        return decode(resp)
     }
 
     /** Upload from a base64 payload (iOS hands us `Data` as base64 — fast Kotlin decode). */
@@ -872,14 +886,12 @@ class BrokerApi(
         getJson<ProjectsResponse>("$httpBase/projects").projects.map { it.path }
 
     /** POST /paths/validate {path} → {ok, path?, error?}. Resolves ~ and checks existence. */
-    suspend fun validatePath(path: String): PathValidation {
-        val text = http.post("$httpBase/paths/validate") {
+    suspend fun validatePath(path: String): PathValidation =
+        decode(http.post("$httpBase/paths/validate") {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(PathBody(path)))
-        }.bodyAsText()
-        return json.decodeFromString(text)
-    }
+        })
 
     /** GET /repos/info?path=&fetch=1 — git repo status + branch lists for the worktree picker. */
     suspend fun getRepoInfo(path: String, fetch: Boolean = false): RepoInfo =
@@ -970,14 +982,12 @@ class BrokerApi(
         getJson("$httpBase/displays")
 
     /** POST /displays {sessionName, provider?, device?, width?, height?} → the started stream. */
-    suspend fun startDisplay(sessionName: String, provider: String? = null, device: String? = null, width: Int? = null, height: Int? = null): DisplayStream {
-        val text = http.post("$httpBase/displays") {
+    suspend fun startDisplay(sessionName: String, provider: String? = null, device: String? = null, width: Int? = null, height: Int? = null): DisplayStream =
+        decode(http.post("$httpBase/displays") {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(StartDisplayBody(sessionName, provider, device, width, height)))
-        }.bodyAsText()
-        return json.decodeFromString(text)
-    }
+        })
 
     /** DELETE /displays/<id> */
     suspend fun stopDisplay(id: String) {

@@ -1,0 +1,478 @@
+import SwiftUI
+import Shared
+import UIKit
+import PhotosUI
+import UniformTypeIdentifiers
+
+/// The chat transcript + composer cluster, extracted from `ChatView` so it can be
+/// hosted both in the iPhone tab layout and in the future iPad multi-pane layout.
+/// Rendered as the `.chat` tab body by `ChatView`; on iPad it will be placed directly
+/// in a column alongside other panes.
+struct ChatPane: View {
+    let broker: BrokerSession
+    let session: SessionInfo
+
+    // MARK: - Bindings from ChatView (state that toolbar actions also mutate)
+    /// Drives the "Rename session" alert in `ChatView`.
+    @Binding var showRename: Bool
+    /// Editable name field inside the rename alert.
+    @Binding var renameText: String
+    /// Drives the kill-confirmation dialog in `ChatView`.
+    @Binding var showKillConfirm: Bool
+    /// Transient status banner rendered at the top of the bottom cluster.
+    @Binding var banner: String?
+
+    // MARK: - Composer state
+    @State private var draft = ""
+    @State private var pending: [PendingAttachment] = []
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var showPhotos = false
+    @State private var showFiles = false
+    @State private var showCamera = false
+    @State private var recorder = AudioRecorder()
+    @State private var micDenied = false
+    @FocusState private var composing: Bool
+
+    // MARK: - Model / reasoning sheet state
+    @State private var modelSheet = false
+    @State private var reasoningSheet = false
+    @State private var reasoning: ReasoningResponse?
+
+    // MARK: - Derived computeds
+    private var draftKey: String { "cmux:draft:\(session.id)" }
+
+    /// Composer is expanded (full controls) when focused, when there's a draft or a
+    /// staged attachment, or while recording; otherwise it rests as a slim glass pill.
+    private var composerExpanded: Bool { composing || !draft.isEmpty || !pending.isEmpty || recorder.isRecording }
+
+    private var log: [LogEntry] { broker.messages[session.id] ?? [] }
+    private var phase: String? { broker.agentPhase[session.id] }
+    private var working: Bool {
+        ["working", "thinking", "running", "tool", "busy", "sending"].contains(phase ?? "")
+    }
+    private var activityEvents: [ActivityEvent] { broker.activity[session.id] ?? [] }
+    /// Messages + tool-call activity, time-merged into blocks (parity with the web ChatView).
+    private var blocks: [ChatBlock] { buildChatBlocks(messages: log, activity: activityEvents) }
+
+    // MARK: - Body
+
+    var body: some View {
+        transcript
+            .safeAreaInset(edge: .bottom, spacing: 0) { chatBottomCluster }
+            .task(id: session.id) {
+                // Debug: raise the keyboard (focus composer) to repro the keyboard-relayout blank.
+                guard ProcessInfo.processInfo.environment["SM_FOCUS"] == "1" else { return }
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                composing = true
+            }
+            .sheet(isPresented: $modelSheet) {
+                OptionSwitchSheet(title: "Model", broker: broker, session: session, kind: .model)
+            }
+            .sheet(isPresented: $reasoningSheet) {
+                OptionSwitchSheet(title: "Reasoning", broker: broker, session: session, kind: .reasoning)
+            }
+            .alert("Microphone access needed", isPresented: $micDenied) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Enable microphone access for supermux in Settings to record voice messages.")
+            }
+            .onAppear { loadPane() }
+            .onChange(of: session.id) { _, _ in loadPane() }
+            .onChange(of: draft) { _, new in UserDefaults.standard.set(new, forKey: draftKey) }
+    }
+
+    // MARK: - Load
+
+    /// (Re)load per-session state owned by this pane. Called on first open and session switch.
+    private func loadPane() {
+        draft = UserDefaults.standard.string(forKey: draftKey)
+            ?? ProcessInfo.processInfo.environment["SM_DRAFT"] ?? ""
+        Task { reasoning = await broker.reasoning(session.id) }
+    }
+
+    // MARK: - Scroll
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
+        if animated { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("__bottom__", anchor: .bottom) } }
+        else { proxy.scrollTo("__bottom__", anchor: .bottom) }
+    }
+
+    // MARK: - Bottom cluster
+
+    /// Composer + banner, pinned above the system glass tab bar.
+    private var chatBottomCluster: some View {
+        VStack(spacing: 8) {
+            if let banner { bannerView(banner) }
+            dock
+        }
+        .padding(.bottom, 4)
+    }
+
+    private func bannerView(_ text: String) -> some View {
+        Text(text).font(.caption.weight(.medium)).foregroundStyle(.white)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .background(Theme.teal)
+    }
+
+    // MARK: - Transcript
+
+    private var transcript: some View {
+        ScrollViewReader { proxy in
+            List {
+                if blocks.isEmpty {
+                    starterPrompts
+                        .frame(maxWidth: .infinity)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                } else {
+                    ForEach(blocks) { block in
+                        Group {
+                            switch block {
+                            case .message(let m): MessageRow(entry: m, broker: broker)
+                            case .tools(let rows):
+                                VStack(alignment: .leading, spacing: 4) {
+                                    ForEach(rows) { ToolRowView(row: $0) }
+                                }
+                            }
+                        }
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                        .listRowBackground(Color.clear)
+                    }
+                    if working {
+                        workingIndicator
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                            .listRowBackground(Color.clear)
+                    }
+                    Color.clear.frame(height: 1).id("__bottom__")
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            // List (collection-view-backed) re-displays its rows correctly on every
+            // relayout — including the keyboard-avoidance shrink — instead of blanking
+            // like ScrollView+LazyVStack did (blank-on-keyboard, blank-on-open). Keyed
+            // per session so each open builds fresh and defaultScrollAnchor lands at bottom.
+            .defaultScrollAnchor(.bottom)
+            .scrollDismissesKeyboard(.interactively)
+            // Tap anywhere on the transcript to dismiss the keyboard ("tap outside").
+            // simultaneousGesture fires alongside scrolling + row/link taps without blocking
+            // them, and is scoped to the transcript so composer controls are unaffected.
+            .simultaneousGesture(TapGesture().onEnded { if composing { composing = false } })
+            .scrollEdgeEffectStyle(.soft, for: .top)
+            .scrollEdgeEffectStyle(.soft, for: .bottom)
+            .onChange(of: log.count) { _, _ in scrollToBottom(proxy) }
+            .task(id: session.id) {
+                // List needs an explicit initial scroll to the bottom — it doesn't honor
+                // defaultScrollAnchor for first positioning the way ScrollView does, and
+                // onChange(log.count) doesn't fire on open (count unchanged). List's
+                // scroll-to-row is reliable, so this can't race/blank like LazyVStack did.
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                scrollToBottom(proxy, animated: false)
+            }
+        }
+        .id(session.id)
+    }
+
+    // MARK: - Working indicator
+
+    private var workingIndicator: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            let since = broker.agentSince[session.id]
+            let elapsed = since.map { max(0, Int64(Date().timeIntervalSince1970 - Double($0) / 1000.0)) }
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(workingLabel + (elapsed.map { " · " + formatDuration(totalSeconds: $0) } ?? ""))
+                    .font(.caption).foregroundStyle(.secondary)
+                Button { broker.interrupt(session.id) } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "stop.fill").font(.caption2)
+                        Text("Stop").font(.caption.weight(.medium))
+                    }
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Color.red.opacity(0.12), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+    private var workingLabel: String {
+        switch phase {
+        case "sending": return "Sending…"
+        case "thinking": return "Thinking…"
+        default: return "Working…"
+        }
+    }
+
+    // MARK: - Starter prompts
+
+    private var starterPrompts: some View {
+        VStack(spacing: 10) {
+            Spacer().frame(height: 36)
+            Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(Theme.teal)
+            Text("Start the conversation").font(.headline)
+            ForEach(["What's the current state?", "Run the tests", "Summarize recent changes"], id: \.self) { p in
+                Button { broker.send(session.id, p) } label: {
+                    Text(p).font(.subheadline).frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14).padding(.vertical, 11)
+                        .background(Color(.secondarySystemBackground),
+                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain).foregroundStyle(.primary)
+            }
+        }
+        .padding(20)
+    }
+
+    // MARK: - Composer dock
+
+    private var dock: some View {
+        VStack(spacing: 8) {
+            if composerExpanded {
+                if !slashMatches.isEmpty { slashMenu }
+            }
+            composerField
+        }
+        .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 2)
+        .animation(.smooth(duration: 0.28), value: composerExpanded)
+        .onChange(of: photoItems) { _, items in loadPhotos(items) }
+        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .images)
+        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            handleFiles(result)
+        }
+        .fullScreenCover(isPresented: $showCamera) { CameraPicker { addCameraImage($0) } }
+    }
+
+    // ONE glass card with an always-present TextField: tapping it focuses natively, so
+    // there's no button→field handoff and no focus race (the earlier first-tap bug). The
+    // extra controls fade in around the field when it's active (focused / non-empty / recording),
+    // and the card morphs (corner radius + padding) between the slim resting pill and the card.
+    private var composerField: some View {
+        VStack(spacing: 8) {
+            if composerExpanded {
+                if !pending.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) { ForEach(pending) { attachmentChip($0) } }
+                    }
+                }
+                if recorder.isRecording {
+                    RecordingBar(
+                        elapsed: recorder.elapsed,
+                        onStop: {
+                            if let (data, name) = recorder.stop() {
+                                pending.append(PendingAttachment(data: data, filename: name, mime: "audio/mp4"))
+                            }
+                        },
+                        onCancel: { recorder.cancel() }
+                    )
+                }
+            }
+            HStack(alignment: .center, spacing: 10) {
+                if !composerExpanded {
+                    Image(systemName: "plus").font(.body.weight(.medium)).foregroundStyle(.secondary)
+                }
+                TextField("Message \(session.name)…", text: $draft, axis: .vertical)
+                    .lineLimit(composerExpanded ? (1...12) : (1...1))
+                    .focused($composing)
+                if !composerExpanded {
+                    micButton
+                }
+            }
+            if composerExpanded {
+                HStack(spacing: 12) {
+                    Menu {
+                        Button { showPhotos = true } label: { Label("Photos", systemImage: "photo") }
+                        Button { showFiles = true } label: { Label("Files", systemImage: "folder") }
+                        Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
+                    } label: {
+                        Image(systemName: "plus").font(.body.weight(.medium)).foregroundStyle(.secondary)
+                    }
+                    micButton
+                    if let m = session.model, !m.isEmpty { pill(m, system: "cpu") { modelSheet = true } }
+                    if reasoning?.visible ?? false {
+                        pill(reasoning?.current ?? "reasoning", system: "brain") { reasoningSheet = true }
+                    }
+                    Spacer()
+                    Button { sendMessage() } label: {
+                        Image(systemName: "arrow.up")
+                            .font(.headline.weight(.bold)).foregroundStyle(.white)
+                            .frame(width: 34, height: 34)
+                            .background(canSend ? Theme.teal : Color.gray.opacity(0.4), in: Circle())
+                    }
+                    .disabled(!canSend)
+                }
+            }
+        }
+        .padding(.horizontal, composerExpanded ? 12 : 16)
+        .padding(.vertical, composerExpanded ? 12 : 10)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: composerExpanded ? 20 : 24, style: .continuous))
+    }
+    private var canSend: Bool { !draft.trimmingCharacters(in: .whitespaces).isEmpty || !pending.isEmpty }
+
+    // MARK: - Mic button
+
+    private var micButton: some View {
+        Button {
+            if recorder.isRecording {
+                if let (data, name) = recorder.stop() {
+                    pending.append(PendingAttachment(data: data, filename: name, mime: "audio/mp4"))
+                }
+            } else {
+                Task { if case .denied = await recorder.start() { micDenied = true } }
+            }
+        } label: {
+            Image(systemName: recorder.isRecording ? "stop.circle.fill" : "mic")
+                .font(.body.weight(.medium))
+                .foregroundStyle(recorder.isRecording ? .red : .secondary)
+        }
+    }
+
+    // MARK: - Attachment chips
+
+    private func attachmentChip(_ p: PendingAttachment) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: p.mime.hasPrefix("audio") ? "waveform" : "photo").font(.caption2)
+            Text(p.filename).font(.caption2).lineLimit(1)
+            Button { pending.removeAll { $0.id == p.id } } label: {
+                Image(systemName: "xmark.circle.fill").font(.caption2)
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .background(Color(.tertiarySystemFill), in: Capsule())
+        .foregroundStyle(.secondary)
+    }
+
+    // MARK: - File / photo loading
+
+    private func loadPhotos(_ items: [PhotosPickerItem]) {
+        guard !items.isEmpty else { return }
+        Task {
+            for (i, item) in items.enumerated() {
+                if let data = try? await item.loadTransferable(type: Data.self) {
+                    pending.append(PendingAttachment(data: data, filename: "image-\(pending.count + i + 1).jpg", mime: "image/jpeg"))
+                }
+            }
+            photoItems = []
+        }
+    }
+    private func handleFiles(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result else { return }
+        for url in urls {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            if let data = try? Data(contentsOf: url) {
+                let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+                pending.append(PendingAttachment(data: data, filename: url.lastPathComponent, mime: mime))
+            }
+        }
+    }
+    private func addCameraImage(_ img: UIImage) {
+        if let data = img.jpegData(compressionQuality: 0.85) {
+            pending.append(PendingAttachment(data: data, filename: "photo-\(pending.count + 1).jpg", mime: "image/jpeg"))
+        }
+    }
+
+    // MARK: - Send
+
+    private func sendMessage() {
+        let text = draft
+        let toUpload = pending
+        draft = ""; pending = []
+        Task {
+            var ids: [String] = []
+            for p in toUpload {
+                let kind = p.mime.hasPrefix("audio") ? "voice" : nil
+                if let id = await broker.upload(session.id, data: p.data, filename: p.filename, mime: p.mime, kind: kind) {
+                    ids.append(id)
+                }
+            }
+            broker.send(session.id, text, attachments: ids.isEmpty ? nil : ids)
+        }
+    }
+
+    // MARK: - Slash commands
+
+    /// Active `/command` token at the end of the draft (cursor assumed at the end),
+    /// starting at the beginning or after whitespace — mirrors web activeSlashToken.
+    private var slashQuery: String? {
+        guard let r = draft.range(of: #"(?:^|\s)(/[^\s]*)$"#, options: .regularExpression) else { return nil }
+        let token = draft[r].drop(while: { $0 == " " || $0 == "\n" || $0 == "\t" })
+        return String(token.dropFirst()).lowercased()
+    }
+    private var slashMatches: [SlashCommand] {
+        guard let q = slashQuery else { return [] }
+        return Array((broker.commands[session.id] ?? [])
+            .filter { q.isEmpty || $0.name.lowercased().contains(q) || $0.family.lowercased().contains(q) }
+            .prefix(8))
+    }
+    private var slashMenu: some View {
+        VStack(spacing: 0) {
+            ForEach(slashMatches, id: \.id) { cmd in
+                Button { applyCommand(cmd) } label: {
+                    HStack(spacing: 8) {
+                        Text(cmd.sigil + cmd.name).font(.callout.weight(.semibold)).foregroundStyle(Theme.teal)
+                        Text(cmd.family).font(.caption2).foregroundStyle(.tertiary)
+                        Spacer(minLength: 0)
+                        if cmd.action != nil {
+                            Image(systemName: "bolt.fill").font(.caption2).foregroundStyle(.tertiary)
+                        }
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 9).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if cmd.id != slashMatches.last?.id { Divider() }
+            }
+        }
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 1))
+    }
+    private func applyCommand(_ cmd: SlashCommand) {
+        if let action = cmd.action {
+            clearSlashToken()
+            switch action.kind {
+            case "model": modelSheet = true
+            case "rename": renameText = session.name; showRename = true
+            case "mute": broker.toggleMute(session)
+            case "stop": broker.interrupt(session.id)
+            case "kill": showKillConfirm = true
+            default: break   // spawn needs navigation we don't have from the chat
+            }
+            return
+        }
+        replaceSlashToken(with: (cmd.insertText.flatMap { $0.isEmpty ? nil : $0 }) ?? (cmd.sigil + cmd.name + " "))
+    }
+    private func replaceSlashToken(with insert: String) {
+        if let r = draft.range(of: #"(?:^|\s)/[^\s]*$"#, options: .regularExpression) {
+            let lead = draft[r].prefix(while: { $0 == " " || $0 == "\n" || $0 == "\t" })
+            let prefixEnd = draft.index(r.lowerBound, offsetBy: lead.count)
+            draft = String(draft[draft.startIndex..<prefixEnd]) + insert
+        } else {
+            draft = insert
+        }
+    }
+    private func clearSlashToken() { replaceSlashToken(with: "") }
+
+    // MARK: - Shared pill helper
+
+    private func pill(_ text: String, system: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: system).font(.caption2)
+                Text(text).font(.caption.weight(.medium)).lineLimit(1)
+            }
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(Color(.tertiarySystemFill), in: Capsule())
+            .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+    }
+}

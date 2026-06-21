@@ -177,7 +177,7 @@ struct SessionRow: View {
 
     private var working: Bool {
         guard let phase else { return false }
-        return ["working", "thinking", "running", "tool", "busy"].contains(phase)
+        return ["working", "thinking", "running", "tool", "busy", "sending"].contains(phase)
     }
 
     var body: some View {
