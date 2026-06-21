@@ -13,6 +13,7 @@ import dev.supermux.net.DeviceDto
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FsEntry
 import dev.supermux.net.FsSearchResult
+import dev.supermux.net.ModelInfo
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ProxyDto
@@ -219,6 +220,16 @@ class AppViewModel(private val baseUrl: String, private val token: String) : Vie
         kind: String? = null,
     ): String? = runCatching { api.upload(sessionId, bytes, name, mime, kind).file_id }.getOrNull()
 
+    // ── Voice dictation ──────────────────────────────────────────────────────────
+
+    /** Whisper path: multipart audio → cleaned text. Returns null on failure (caller keeps draft). */
+    suspend fun transcribeAudio(sessionId: String, bytes: ByteArray, filename: String): String? =
+        runCatching { api.transcribeAudio(sessionId, bytes, filename).text }.getOrNull()
+
+    /** On-device-STT path: JSON draft → cleaned text. Returns null on failure. */
+    suspend fun transcribeDraft(sessionId: String, draft: String): String? =
+        runCatching { api.transcribeDraft(sessionId, draft).text }.getOrNull()
+
     fun sendWith(sessionId: String, text: String, attachments: List<String>) {
         viewModelScope.launch {
             runCatching {
@@ -287,6 +298,20 @@ class AppViewModel(private val baseUrl: String, private val token: String) : Vie
 
     suspend fun config(): AppConfigDto? = runCatching { api.getConfig() }.getOrNull()
     fun saveName(n: String) { viewModelScope.launch { runCatching { api.putConfig(n) } } }
+
+    /** GET /models?agent= — Claude models for the voice cleanup picker (no session). */
+    suspend fun launcherModels(agent: String): List<ModelInfo> =
+        runCatching { api.listModels(agent).models }.getOrNull() ?: emptyList()
+
+    /** PUT /settings/config { voiceCleanupModel }. null/"" → broker default (Haiku). */
+    fun saveVoiceCleanupModel(model: String?) {
+        viewModelScope.launch { runCatching { api.saveConfig(voiceCleanupModel = model?.ifBlank { null }) } }
+    }
+
+    /** Voice-cleanup glossary (shared across devices). */
+    suspend fun fetchGlossary(): List<String> = runCatching { api.fetchGlossary() }.getOrNull() ?: emptyList()
+    suspend fun updateGlossary(terms: List<String>): List<String>? =
+        runCatching { api.updateGlossary(terms) }.getOrNull()
     suspend fun usage(): String? = runCatching { api.usageRaw() }.getOrNull()
     suspend fun curatorSettings(): CuratorSettingsResponse? = runCatching { api.getCuratorSettings() }.getOrNull()
     suspend fun saveCurator(enabled: Boolean, hour: Int, minute: Int): CuratorSettingsResponse? =

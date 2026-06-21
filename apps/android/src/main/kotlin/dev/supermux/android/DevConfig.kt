@@ -8,6 +8,15 @@ import dev.supermux.auth.SecureTokenStore
 object DevConfig {
     const val HOME = "/home/user"
 
+    /**
+     * On-device speech-to-text (live transcript) toggle. OFF by default: Android's
+     * [android.speech.SpeechRecognizer] is OEM/locale-gated and materially weaker than
+     * host-side whisper, so audio-upload → whisper → cleanup is the primary, robust path
+     * (parity with the web PWA). When on, on-device STT only ever supplies a fallback raw
+     * draft; the real transcription is still the whisper POST. Flip after device testing.
+     */
+    const val ENABLE_ONDEVICE_STT = false
+
     private const val PHYSICAL_BROKER = "ws://CHANGE_ME:9898"  // set to your broker host
     private const val EMULATOR_BROKER = "ws://10.0.2.2:9898"
 

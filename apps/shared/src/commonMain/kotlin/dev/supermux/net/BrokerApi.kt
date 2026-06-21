@@ -133,6 +133,15 @@ data class UploadResponse(
     val name: String = "",
 )
 
+/** POST /sessions/<id>/transcribe → cleaned composer text. `degraded`=true means cleanup
+ *  was skipped/failed and `text` is the raw whisper draft. */
+@Serializable
+data class TranscribeResponse(val text: String = "", val degraded: Boolean = false)
+
+/** GET/PUT /config/voice-glossary → { glossary: [...] }. */
+@Serializable
+data class GlossaryResponse(val glossary: List<String> = emptyList())
+
 @Serializable
 data class ProxyDto(
     val domain: String,
@@ -679,6 +688,13 @@ private data class VerifySaveBody(val content: String)
 
 @Serializable
 private data class MessageBody(val text: String)
+
+// Voice dictation request bodies.
+@Serializable
+private data class DraftBody(val draft: String)
+
+@Serializable
+private data class GlossaryBody(val glossary: List<String>)
 
 @Serializable
 private data class CreatePABody(
@@ -1270,6 +1286,42 @@ class BrokerApi(
         }
         return if (resp.status.isSuccess()) resp.bodyAsBytes() else null
     }
+
+    // ── Voice dictation (transcribe + cleanup glossary) ──────────────────────────
+
+    /** POST /sessions/<id>/transcribe — JSON { draft } → cleaned text. (on-device-STT path) */
+    suspend fun transcribeDraft(sessionId: String, draft: String): TranscribeResponse =
+        postReturningJson("$httpBase/sessions/$sessionId/transcribe", DraftBody(draft))
+
+    /** POST /sessions/<id>/transcribe — multipart field "audio" → cleaned text. (whisper path)
+     *  Mirrors `upload()`'s multipart shape; field name is "audio" (NOT "file"), and there is
+     *  no `kind`/`session` part — the route derives the session from the URL. */
+    suspend fun transcribeAudio(
+        sessionId: String, bytes: ByteArray, filename: String, mime: String = "audio/mp4",
+    ): TranscribeResponse {
+        val resp = http.post("$httpBase/sessions/$sessionId/transcribe") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            setBody(MultiPartFormDataContent(formData {
+                append("audio", bytes, Headers.build {
+                    append(HttpHeaders.ContentType, mime)
+                    append(HttpHeaders.ContentDisposition, "filename=\"$filename\"")
+                })
+            }))
+        }
+        return decode(resp)
+    }
+
+    /** GET /config/voice-glossary → the glossary terms (default-seeded server-side). */
+    suspend fun fetchGlossary(): List<String> =
+        getJson<GlossaryResponse>("$httpBase/config/voice-glossary").glossary
+
+    /** PUT /config/voice-glossary { glossary } → the persisted list. */
+    suspend fun updateGlossary(terms: List<String>): List<String> =
+        decode<GlossaryResponse>(http.put("$httpBase/config/voice-glossary") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(GlossaryBody(terms)))
+        }).glossary
 
     /** GET /sessions/<id>/messages — the message log for a (possibly archived) session. */
     suspend fun archivedLogs(sessionId: String): List<LogEntry> =

@@ -66,6 +66,11 @@ fun SettingsScreen(
     curatorLoad: suspend () -> CuratorSettingsResponse?,
     curatorSave: suspend (Boolean, Int, Int) -> CuratorSettingsResponse?,
     curatorRunNow: suspend () -> Unit,
+    voiceLoadModels: suspend () -> List<dev.supermux.net.ModelInfo>,
+    voiceLoadConfig: suspend () -> dev.supermux.net.AppConfigDto?,
+    voiceSaveModel: (String?) -> Unit,
+    glossaryLoad: suspend () -> List<String>,
+    glossarySave: suspend (List<String>) -> List<String>?,
 ) {
     var opened by remember { mutableStateOf<String?>(null) }
 
@@ -77,10 +82,23 @@ fun SettingsScreen(
             curatorRunNow = curatorRunNow,
         )
         "editor" -> EditorSettingsPage(onBack = { opened = null })
+        "voice" -> VoiceSettingsPage(
+            onBack = { opened = null },
+            loadModels = voiceLoadModels,
+            loadConfig = voiceLoadConfig,
+            saveModel = voiceSaveModel,
+            onOpenGlossary = { opened = "glossary" },
+        )
+        "glossary" -> VoiceGlossaryPage(
+            onBack = { opened = "voice" },
+            load = glossaryLoad,
+            save = glossarySave,
+        )
         else -> SettingsIndexPage(
             onBack = onBack,
             onOpenCurator = { opened = "curator" },
             onOpenEditor = { opened = "editor" },
+            onOpenVoice = { opened = "voice" },
         )
     }
 }
@@ -91,6 +109,7 @@ private fun SettingsIndexPage(
     onBack: () -> Unit,
     onOpenCurator: () -> Unit,
     onOpenEditor: () -> Unit,
+    onOpenVoice: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     BackHandler { onBack() }
@@ -120,6 +139,13 @@ private fun SettingsIndexPage(
                 label = "Curator",
                 desc = "Nightly knowledge curation schedule",
                 onClick = onOpenCurator,
+            )
+            HorizontalDivider(color = cs.outlineVariant)
+            SettingsNavRow(
+                iconRes = R.drawable.ic_mic,
+                label = "Voice",
+                desc = "Dictation cleanup model & glossary",
+                onClick = onOpenVoice,
             )
             HorizontalDivider(color = cs.outlineVariant)
             SettingsNavRow(

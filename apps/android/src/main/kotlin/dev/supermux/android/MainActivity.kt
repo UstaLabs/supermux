@@ -296,6 +296,11 @@ class MainActivity : ComponentActivity() {
                             curatorLoad = { vm.curatorSettings() },
                             curatorSave = { e, h, m -> vm.saveCurator(e, h, m) },
                             curatorRunNow = { vm.runCuratorNow() },
+                            voiceLoadModels = { vm.launcherModels("claude") },
+                            voiceLoadConfig = { vm.config() },
+                            voiceSaveModel = { vm.saveVoiceCleanupModel(it) },
+                            glossaryLoad = { vm.fetchGlossary() },
+                            glossarySave = { vm.updateGlossary(it) },
                         )
                     }
                     composable<Usage> {
