@@ -2,6 +2,8 @@ package dev.supermux.android
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
@@ -34,6 +36,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 class AppViewModel(private val baseUrl: String, private val token: String) : ViewModel() {
+    companion object {
+        /** Factory so the VM can be Activity-scoped via viewModel(factory = …) and survive config changes. */
+        fun factory(baseUrl: String, token: String) = viewModelFactory {
+            initializer { AppViewModel(baseUrl, token) }
+        }
+    }
+
     private val http = HttpClient(CIO) { install(WebSockets) }
     private val client = BrokerClient(baseUrl, token, http)
     private val api = BrokerApi(baseUrl, token, http)

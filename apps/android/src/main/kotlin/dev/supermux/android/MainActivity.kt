@@ -2,7 +2,6 @@ package dev.supermux.android
 
 import android.content.Context
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.PredictiveBackHandler
@@ -31,6 +30,7 @@ import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSiz
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
@@ -39,6 +39,18 @@ import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.runtime.Composable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import dev.supermux.android.nav.Appearance
+import dev.supermux.android.nav.Archived
+import dev.supermux.android.nav.Devices
+import dev.supermux.android.nav.Home
+import dev.supermux.android.nav.NewSession
+import dev.supermux.android.nav.Proxies
+import dev.supermux.android.nav.Settings
+import dev.supermux.android.nav.Usage
 import dev.supermux.android.session.SessionKeepAlivePhoneHost
 import dev.supermux.android.session.SessionKeepAliveTabletHost
 import dev.supermux.android.session.rememberVisitedSessions
@@ -80,16 +92,16 @@ class MainActivity : ComponentActivity() {
             }
             var dynamicColor by remember { mutableStateOf(prefs.getBoolean("dynamicColor", true)) }
             SupermuxTheme(appearance = appearance, dynamicEnabled = dynamicColor) {
-                val vm = remember {
-                    AppViewModel(DevConfig.brokerUrl(), DevConfig.resolveToken(applicationContext))
-                }
+                val brokerUrl = remember { DevConfig.brokerUrl() }
+                val token = remember { DevConfig.resolveToken(applicationContext) }
+                val vm: AppViewModel = viewModel(factory = AppViewModel.factory(brokerUrl, token))
                 val sessions by vm.sessions.collectAsStateWithLifecycle()
                 val messages by vm.messages.collectAsStateWithLifecycle()
                 val activity by vm.activity.collectAsStateWithLifecycle()
                 val agentState by vm.agentState.collectAsStateWithLifecycle()
                 val commands by vm.commands.collectAsStateWithLifecycle()
                 val lastBySession = messages.mapValues { it.value.lastOrNull() }
-                var selected by remember { mutableStateOf<String?>(null) }
+                var selected by rememberSaveable { mutableStateOf<String?>(null) }
                 val liveSessionIds = remember(sessions) { sessions.map { it.id }.toSet() }
                 val (visitedSessions, removeVisited) = rememberVisitedSessions(selected, liveSessionIds)
 
@@ -97,132 +109,26 @@ class MainActivity : ComponentActivity() {
                 val expanded = windowSizeClass.widthSizeClass == WindowWidthSizeClass.Expanded
                 val cs = MaterialTheme.colorScheme
 
-                var route by remember { mutableStateOf("list") }
+                val navController = rememberNavController()
+                // Maps the screens' legacy string-route callbacks to type-safe NavHost destinations.
+                val navTo: (String) -> Unit = { dest ->
+                    when (dest) {
+                        "new" -> navController.navigate(NewSession)
+                        "settings" -> navController.navigate(Settings)
+                        "usage" -> navController.navigate(Usage)
+                        "devices" -> navController.navigate(Devices)
+                        "archived" -> navController.navigate(Archived)
+                        "proxies" -> navController.navigate(Proxies)
+                        "appearance" -> navController.navigate(Appearance)
+                        // "displays"/"theme"/"list" → no destinations (stubs)
+                    }
+                }
 
-                when (route) {
-                    "settings" -> {
-                        BackHandler { route = "list" }
-                        SettingsScreen(
-                            onBack = { route = "list" },
-                            curatorLoad = { vm.curatorSettings() },
-                            curatorSave = { e, h, m -> vm.saveCurator(e, h, m) },
-                            curatorRunNow = { vm.runCuratorNow() },
-                        )
-                    }
-                    "usage" -> {
-                        BackHandler { route = "list" }
-                        UsageScreen(
-                            onBack = { route = "list" },
-                            onLoad = { vm.usage() },
-                        )
-                    }
-                    "devices" -> {
-                        BackHandler { route = "list" }
-                        DevicesScreen(
-                            onBack = { route = "list" },
-                            onLoad = { vm.devices() },
-                            onRevoke = { vm.revoke(it) },
-                        )
-                    }
-                    "archived" -> {
-                        BackHandler { route = "list" }
-                        ArchivedScreen(
-                            onBack = { route = "list" },
-                            onLoad = { vm.archived() },
-                            onResume = { vm.resume(it) },
-                            loadLogs = { vm.archivedLogs(it) },
-                        )
-                    }
-                    "proxies" -> {
-                        BackHandler { route = "list" }
-                        ProxyScreen(
-                            onLoad = { vm.proxies() },
-                            sessions = sessions,
-                            onCreate = { s, p, d -> vm.createProxy(s, p, d) },
-                            onTogglePublic = { d, pub -> vm.setProxyPublic(d, pub) },
-                            onRemove = { vm.removeProxy(it) },
-                            onBack = { route = "list" },
-                        )
-                    }
-                    "appearance" -> {
-                        BackHandler { route = "list" }
-                        AppearanceSettingsPage(
-                            appearance = appearance,
-                            dynamicColor = dynamicColor,
-                            onAppearanceChange = {
-                                appearance = it
-                                prefs.edit().putString("appearance", it.name).apply()
-                            },
-                            onDynamicChange = {
-                                dynamicColor = it
-                                prefs.edit().putBoolean("dynamicColor", it).apply()
-                            },
-                            onBack = { route = "list" },
-                        )
-                    }
-                    "new" -> {
-                        BackHandler { route = "list" }
-                        if (expanded) {
-                            Row(Modifier.fillMaxSize()) {
-                                Box(Modifier.width(320.dp)) {
-                                    SessionListScreen(
-                                        sessions = sessions,
-                                        home = DevConfig.HOME,
-                                        activeId = selected,
-                                        onOpen = { selected = it; route = "list" },
-                                        lastBySession = lastBySession,
-                                        onNewSession = { route = "new" },
-                                        loadProjects = { vm.listProjects() },
-                                        validatePath = { vm.validatePath(it) },
-                                        onNavigate = { route = it },
-                                    )
-                                }
-                                Box(
-                                    Modifier
-                                        .width(1.dp)
-                                        .fillMaxHeight()
-                                        .background(cs.outlineVariant),
-                                )
-                                Box(Modifier.weight(1f)) {
-                                    SessionLauncherScreen(
-                                        sessions = sessions,
-                                        home = DevConfig.HOME,
-                                        onBack = { route = "list" },
-                                        loadProjects = { vm.listProjects() },
-                                        validatePath = { vm.validatePath(it) },
-                                        onSubmit = { wd, ag, md, msg ->
-                                            vm.createSessionWithFirstMessage(wd, ag, md, msg)
-                                        },
-                                        onOpenSession = { selected = it; route = "list" },
-                                    )
-                                }
-                            }
-                        } else {
-                            SessionLauncherScreen(
-                                sessions = sessions,
-                                home = DevConfig.HOME,
-                                onBack = { route = "list" },
-                                loadProjects = { vm.listProjects() },
-                                validatePath = { vm.validatePath(it) },
-                                onSubmit = { wd, ag, md, msg ->
-                                    vm.createSessionWithFirstMessage(wd, ag, md, msg)
-                                },
-                                onOpenSession = { selected = it; route = "list" },
-                            )
-                        }
-                    }
-                    else -> {
-                        // "displays" / "theme" → toast then fall back to list
-                        if (route != "list") {
-                            val label = when (route) {
-                                "displays" -> "Displays"
-                                else       -> route
-                            }
-                            Toast.makeText(this, "$label — coming soon", Toast.LENGTH_SHORT).show()
-                            route = "list"
-                        }
-
-                        // ── Session list / chat ────────────────────────────────────
+                NavHost(navController = navController, startDestination = Home) {
+                    // ── Home: list ↔ chat (keep-alive). Bodies are the old `else`-branch, verbatim,
+                    //    with `route = …` swapped for nav. The keep-alive / shared-element / predictive-back
+                    //    code lives inside the hosts below and is unchanged. ──
+                    composable<Home> {
                         if (expanded) {
                             Row(Modifier.fillMaxSize()) {
                                 Box(Modifier.width(320.dp)) {
@@ -232,10 +138,10 @@ class MainActivity : ComponentActivity() {
                                         activeId = selected,
                                         onOpen = { selected = it },
                                         lastBySession = lastBySession,
-                                        onNewSession = { route = "new" },
+                                        onNewSession = { navController.navigate(NewSession) },
                                         loadProjects = { vm.listProjects() },
                                         validatePath = { vm.validatePath(it) },
-                                        onNavigate = { route = it },
+                                        onNavigate = navTo,
                                     )
                                 }
                                 Box(
@@ -270,7 +176,6 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         } else {
-                            // ── Phone: animated list ↔ chat with spring + shared-element ──
                             PhoneNavHost(
                                 selected = selected,
                                 onSelect = { selected = it },
@@ -284,9 +189,111 @@ class MainActivity : ComponentActivity() {
                                 commands = commands,
                                 lastBySession = lastBySession,
                                 vm = vm,
-                                onNavigate = { route = it },
+                                onNavigate = navTo,
                             )
                         }
+                    }
+                    // ── New-session launcher (old "new" branch, verbatim, route→nav) ──
+                    composable<NewSession> {
+                        if (expanded) {
+                            Row(Modifier.fillMaxSize()) {
+                                Box(Modifier.width(320.dp)) {
+                                    SessionListScreen(
+                                        sessions = sessions,
+                                        home = DevConfig.HOME,
+                                        activeId = selected,
+                                        onOpen = { selected = it; navController.popBackStack() },
+                                        lastBySession = lastBySession,
+                                        onNewSession = { },
+                                        loadProjects = { vm.listProjects() },
+                                        validatePath = { vm.validatePath(it) },
+                                        onNavigate = navTo,
+                                    )
+                                }
+                                Box(
+                                    Modifier
+                                        .width(1.dp)
+                                        .fillMaxHeight()
+                                        .background(cs.outlineVariant),
+                                )
+                                Box(Modifier.weight(1f)) {
+                                    SessionLauncherScreen(
+                                        sessions = sessions,
+                                        home = DevConfig.HOME,
+                                        onBack = { navController.popBackStack() },
+                                        loadProjects = { vm.listProjects() },
+                                        validatePath = { vm.validatePath(it) },
+                                        onSubmit = { wd, ag, md, msg ->
+                                            vm.createSessionWithFirstMessage(wd, ag, md, msg)
+                                        },
+                                        onOpenSession = { selected = it; navController.popBackStack() },
+                                    )
+                                }
+                            }
+                        } else {
+                            SessionLauncherScreen(
+                                sessions = sessions,
+                                home = DevConfig.HOME,
+                                onBack = { navController.popBackStack() },
+                                loadProjects = { vm.listProjects() },
+                                validatePath = { vm.validatePath(it) },
+                                onSubmit = { wd, ag, md, msg ->
+                                    vm.createSessionWithFirstMessage(wd, ag, md, msg)
+                                },
+                                onOpenSession = { selected = it; navController.popBackStack() },
+                            )
+                        }
+                    }
+                    composable<Settings> {
+                        SettingsScreen(
+                            onBack = { navController.popBackStack() },
+                            curatorLoad = { vm.curatorSettings() },
+                            curatorSave = { e, h, m -> vm.saveCurator(e, h, m) },
+                            curatorRunNow = { vm.runCuratorNow() },
+                        )
+                    }
+                    composable<Usage> {
+                        UsageScreen(onBack = { navController.popBackStack() }, onLoad = { vm.usage() })
+                    }
+                    composable<Devices> {
+                        DevicesScreen(
+                            onBack = { navController.popBackStack() },
+                            onLoad = { vm.devices() },
+                            onRevoke = { vm.revoke(it) },
+                        )
+                    }
+                    composable<Archived> {
+                        ArchivedScreen(
+                            onBack = { navController.popBackStack() },
+                            onLoad = { vm.archived() },
+                            onResume = { vm.resume(it) },
+                            loadLogs = { vm.archivedLogs(it) },
+                        )
+                    }
+                    composable<Proxies> {
+                        ProxyScreen(
+                            onLoad = { vm.proxies() },
+                            sessions = sessions,
+                            onCreate = { s, p, d -> vm.createProxy(s, p, d) },
+                            onTogglePublic = { d, pub -> vm.setProxyPublic(d, pub) },
+                            onRemove = { vm.removeProxy(it) },
+                            onBack = { navController.popBackStack() },
+                        )
+                    }
+                    composable<Appearance> {
+                        AppearanceSettingsPage(
+                            appearance = appearance,
+                            dynamicColor = dynamicColor,
+                            onAppearanceChange = {
+                                appearance = it
+                                prefs.edit().putString("appearance", it.name).apply()
+                            },
+                            onDynamicChange = {
+                                dynamicColor = it
+                                prefs.edit().putBoolean("dynamicColor", it).apply()
+                            },
+                            onBack = { navController.popBackStack() },
+                        )
                     }
                 }
             }
