@@ -30,6 +30,7 @@ struct ChatView: View {
     @State private var showRename = false
     @State private var renameText = ""
     @State private var showKillConfirm = false
+    @State private var showSTTDebug = false
     @State private var git: GitRemoteStatus?
     @State private var banner: String?
     @State private var noVerifyConfirm = false
@@ -142,6 +143,7 @@ struct ChatView: View {
                 AgentLogo(agent: session.agent, size: 20)
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
+                Button { showSTTDebug = true } label: { Image(systemName: "waveform.badge.mic") }
                 if let g = git, g.isRepo {
                     Button { runFinish() } label: { Label("Finish", systemImage: "arrow.triangle.merge") }
                         .tint(Theme.teal)
@@ -150,6 +152,7 @@ struct ChatView: View {
             }
         }
         .toolbarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showSTTDebug) { STTDebugView() }
         .task { if draft.isEmpty, let d = ProcessInfo.processInfo.environment["SM_DRAFT"] { draft = d } }
         // Load per-session state on EVERY appearance — `.task(id:)` doesn't re-fire when
         // re-opening the *same* session (id unchanged), which left git/branch unloaded.
