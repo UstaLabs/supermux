@@ -163,7 +163,13 @@ struct NewSessionView: View {
                 }
             }
             if recorder.isRecording {
-                RecordingBar(elapsed: recorder.elapsed) { recorder.cancel() }
+                RecordingBar(elapsed: recorder.elapsed,
+                             onStop: {
+                                 if let (data, name) = recorder.stop() {
+                                     pending.append(PendingAttachment(data: data, filename: name, mime: "audio/mp4"))
+                                 }
+                             },
+                             onCancel: { recorder.cancel() })
             }
             TextField("What should the agent do?", text: $draft, axis: .vertical)
                 .lineLimit(3...8).focused($composing)
@@ -189,7 +195,7 @@ struct NewSessionView: View {
                         }.foregroundStyle(.secondary)
                     }
                 }
-                micButton
+                if !recorder.isRecording { micButton }
                 Spacer()
                 Button(action: spawn) {
                     if spawning {

@@ -37,7 +37,6 @@ struct ChatView: View {
     @State private var commitMsg = ""
     @State private var loadedSessionId: String?
     @State private var recorder = AudioRecorder()
-    @State private var dictation = SpeechDictation()
     @State private var transcribing = false
     @State private var micDenied = false
     @FocusState private var composing: Bool
@@ -76,7 +75,7 @@ struct ChatView: View {
 
     /// Composer is expanded (full controls) when focused, when there's a draft or a
     /// staged attachment, or while recording; otherwise it rests as a slim glass pill.
-    private var composerExpanded: Bool { composing || !draft.isEmpty || !pending.isEmpty || recorder.isRecording || dictation.isListening || transcribing }
+    private var composerExpanded: Bool { composing || !draft.isEmpty || !pending.isEmpty || recorder.isRecording || transcribing }
 
     private var sessionLinks: [ProxyDto] { proxies.filter { $0.sessionName == session.name } }
     private var draftKey: String { "cmux:draft:\(session.id)" }
@@ -156,8 +155,8 @@ struct ChatView: View {
         // re-opening the *same* session (id unchanged), which left git/branch unloaded.
         // onAppear covers first-open + reopen; onChange covers switching (reused view).
         .onAppear { if loadedSessionId != session.id { loadSession() } }
-        .onDisappear { dictation.cancel(); recorder.cancel() }
-        .onChange(of: session.id) { _, _ in dictation.cancel(); recorder.cancel(); loadSession() }
+        .onDisappear { recorder.cancel() }
+        .onChange(of: session.id) { _, _ in recorder.cancel(); loadSession() }
         .onChange(of: draft) { _, new in UserDefaults.standard.set(new, forKey: draftKey) }
         .task(id: session.id) {
             if ProcessInfo.processInfo.environment["SM_OPEN_TERMINAL"] == "1" {
@@ -497,17 +496,19 @@ struct ChatView: View {
     // and the card morphs (corner radius + padding) between the slim resting pill and the card.
     private var composerField: some View {
         VStack(spacing: 8) {
+            if recorder.isRecording {
+                // Recording takes over the composer — just the big STOP + small cancel.
+                RecordingBar(elapsed: recorder.elapsed,
+                             onStop: { Task { await toggleMic() } },
+                             onCancel: { recorder.cancel() })
+            } else {
             if composerExpanded {
                 if !pending.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) { ForEach(pending) { attachmentChip($0) } }
                     }
                 }
-                if dictation.isListening {
-                    RecordingBar(elapsed: dictation.elapsed) { dictation.cancel() }
-                } else if recorder.isRecording {
-                    RecordingBar(elapsed: recorder.elapsed) { recorder.cancel() }
-                } else if transcribing {
+                if transcribing {
                     transcribingBar
                 }
             }
@@ -546,6 +547,7 @@ struct ChatView: View {
                     .disabled(!canSend)
                 }
             }
+            }
         }
         .padding(.horizontal, composerExpanded ? 12 : 16)
         .padding(.vertical, composerExpanded ? 12 : 10)
@@ -553,18 +555,16 @@ struct ChatView: View {
     }
     private var canSend: Bool { !draft.trimmingCharacters(in: .whitespaces).isEmpty || !pending.isEmpty }
 
-    // Mic → on-device dictation. Tap to start listening (RecordingBar), tap to stop →
-    // POST the recognized draft to /transcribe → drop the cleaned text into the composer
-    // (appended, never auto-sent). Falls back to audio recording + multipart /transcribe
-    // when the device locale can't recognize on-device.
-    private var micActive: Bool { dictation.isListening || recorder.isRecording }
+    // Mic → record audio, upload to /transcribe (host whisper → agent cleanup), and
+    // drop the cleaned text into the composer (appended, never auto-sent). Same path on
+    // every platform. Stop/cancel live in the RecordingBar while recording.
     private var micButton: some View {
         Button {
             Task { await toggleMic() }
         } label: {
-            Image(systemName: micActive ? "stop.circle.fill" : "mic")
+            Image(systemName: "mic")
                 .font(.body.weight(.medium))
-                .foregroundStyle(micActive ? .red : .secondary)
+                .foregroundStyle(.secondary)
         }
         .disabled(transcribing)
     }
@@ -579,38 +579,16 @@ struct ChatView: View {
         .background(Color(.tertiarySystemFill), in: Capsule())
     }
 
-    /// Drive the mic: stop→transcribe if already capturing, otherwise start dictation
-    /// (with audio-upload fallback). Always sets the composer text; never sends.
+    /// Drive the mic: if recording, stop and transcribe via the host (multipart →
+    /// whisper → agent cleanup); otherwise start recording. Always sets the composer
+    /// text; never sends.
     private func toggleMic() async {
         if recorder.isRecording {
-            // Fallback path was active — finish the clip and transcribe via multipart.
-            guard let (data, name) = recorder.stop() else { return }
+            guard let (data, name) = recorder.stop() else { showBanner("Didn't catch that"); return }
             await runTranscription { try await broker.transcribeAudio(sessionId: session.id, data: data, filename: name) }
             return
         }
-        if dictation.isListening {
-            let (text, _) = await dictation.stop()
-            guard !text.isEmpty else { showBanner("Didn't catch that"); return }
-            // We already have a usable on-device draft. Try the agent cleanup, but if the
-            // broker is unreachable / errors, fall back to the RAW draft so the dictated
-            // text still lands in the composer (cleanup is an enhancement, not a gate).
-            await runTranscription(rawFallback: text) {
-                try await broker.transcribeDraft(sessionId: session.id, draft: text)
-            }
-            return
-        }
-        // Not capturing yet → start on-device dictation, or fall back to recording.
-        switch await dictation.start() {
-        case .started:
-            break
-        case .denied:
-            micDenied = true
-        case .unavailable, .downloading, .failed:
-            // On-device recognition isn't available for this locale, the language model is
-            // still downloading (first use), or the engine failed to start — fall back to
-            // recording audio for a server-side (multipart) transcribe.
-            if case .denied = await recorder.start() { micDenied = true }
-        }
+        if case .denied = await recorder.start() { micDenied = true }
     }
 
     /// Run a transcribe call with the "Transcribing…" state, then append the cleaned text

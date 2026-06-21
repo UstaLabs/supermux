@@ -84,25 +84,45 @@ final class AudioRecorder {
     }
 }
 
-/// Compact "● Recording 0:07 … Cancel" bar shown in the composer while recording.
+/// Recording controls that take over the composer while capturing a voice clip.
+/// Layout: a small de-emphasized cancel (trash) far left, a blinking dot + timer,
+/// and a BIG teal STOP on the right (the primary action, where Send sits) — so
+/// stop is the obvious large target and an accidental cancel is hard to hit.
 struct RecordingBar: View {
     let elapsed: TimeInterval
+    var onStop: () -> Void
     var onCancel: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            Circle().fill(.red).frame(width: 9, height: 9)
-                .opacity(Int(elapsed * 2) % 2 == 0 ? 1 : 0.3)   // blink with the timer ticks
-            Text("Recording \(formatRecordTime(elapsed))")
-                .font(.caption.weight(.medium)).foregroundStyle(.secondary)
-            Spacer(minLength: 0)
+        HStack(spacing: 12) {
             Button(action: onCancel) {
-                Text("Cancel").font(.caption.weight(.semibold)).foregroundStyle(.red)
+                Image(systemName: "trash")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 36, height: 36)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Discard recording")
+
+            Circle().fill(.red).frame(width: 9, height: 9)
+                .opacity(Int(elapsed * 2) % 2 == 0 ? 1 : 0.3)   // blink with the timer ticks
+            Text(formatRecordTime(elapsed))
+                .font(.callout.weight(.medium).monospacedDigit())
+                .foregroundStyle(.primary)
+
+            Spacer(minLength: 0)
+
+            Button(action: onStop) {
+                Image(systemName: "stop.fill")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 48, height: 48)
+                    .background(Theme.teal, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Stop and transcribe")
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(Color(.tertiarySystemFill), in: Capsule())
+        .padding(.leading, 6).padding(.trailing, 4).padding(.vertical, 2)
     }
 }
 
