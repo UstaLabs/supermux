@@ -3,13 +3,14 @@ import Shared
 
 /// Session-level header state + actions shared by the compact `ChatView` toolbar and the
 /// regular-width `IPadWorkspace` header bar: git status, proxy links, the finish flow
-/// (no-verify / uncommitted prompts), git ops, and the transient result banner.
+/// (readiness preflight → action → live job → recovery, surfaced by `FinishSheet`), git ops,
+/// and the transient result banner.
 ///
 /// Extracted from `ChatView` so BOTH paths drive one source of truth instead of duplicating
-/// ~100 lines of finish/git plumbing. The owning view binds its dialogs to the published
-/// flags (`noVerifyConfirm`, `commitPrompt`, …) and renders `banner`/`navSubtitle` itself;
-/// the menus differ per call site (ChatView shows git+links, the iPad header adds the
-/// management pages), so the chrome exposes the data + actions and each view builds its Menu.
+/// ~100 lines of finish/git plumbing. The owning view renders `banner`/`navSubtitle` itself
+/// and presents `FinishSheet(chrome:)`; the menus differ per call site (ChatView shows
+/// git+links, the iPad header adds the management pages), so the chrome exposes the data +
+/// actions and each view builds its Menu.
 @MainActor @Observable final class SessionChrome {
     let broker: BrokerSession
     var session: SessionInfo
@@ -19,10 +20,11 @@ import Shared
     var proxies: [ProxyDto] = []
     var banner: String?
 
-    // Finish-flow dialog flags — owned here so every call site gets the same prompts.
-    var noVerifyConfirm = false
-    var commitPrompt = false
-    var commitMsg = ""
+    // Finish preflight snapshot (loaded by FinishSheet on open when no job is running).
+    var readiness: FinishReadiness?
+    // Unacked-badge: the startedAt the user has already seen. A terminal job whose startedAt
+    // differs is "unacked" → the toolbar Finish button shows a dot until the sheet opens.
+    var ackedAt: Double?
 
     private var loadedSessionId: String?
     private var loadTask: Task<Void, Never>?
@@ -111,25 +113,68 @@ import Shared
 
     // MARK: - Finish flow
 
-    func runFinish(skipVerify: Bool? = nil, commitFirst: Bool? = nil, commitMessage: String? = nil) {
+    /// The live finish job for this session, kept fresh by the WS `finish_job` frame
+    /// (BrokerSession publishes `finishJobs`). nil when no finish has been kicked off.
+    var currentJob: FinishJobDto? { broker.finishJobs[session.id] }
+
+    /// A terminal finish job the user hasn't acknowledged yet (drives the toolbar button dot).
+    /// Running jobs aren't "unacked" — the dot is for a result that arrived in the background.
+    var isUnacked: Bool {
+        guard let j = currentJob, j.status != "running" else { return false }
+        return ackedAt != j.startedAt
+    }
+
+    /// Mark the current job's result as seen (called when the sheet opens).
+    func ack() { if let j = currentJob { ackedAt = j.startedAt } }
+
+    /// Load the preflight snapshot for the finish menu (branch sync / diff / conflict / dirty).
+    func loadReadiness() async {
+        readiness = await broker.finishReadiness(session.id)
+    }
+
+    /// Kick off a finish job optimistically. `broker.finish` returns the *running* job; the
+    /// real outcome arrives on the WS `finish_job` frame (BrokerSession keeps `finishJobs`
+    /// fresh), so we don't branch on the result here — `currentJob` drives the sheet.
+    func run(action: String, skipVerify: Bool? = nil, commitFirst: Bool? = nil, commitMessage: String? = nil) {
         Task {
-            guard let r = await broker.finish(session.id, skipVerify: skipVerify,
-                                              commitFirst: commitFirst, commitMessage: commitMessage) else {
+            guard await broker.finish(session.id, action: action, skipVerify: skipVerify,
+                                      commitFirst: commitFirst, commitMessage: commitMessage) != nil else {
                 showBanner("Finish failed"); return
             }
-            switch r.status {
-            case "integrated": showBanner("Merged into \(r.base ?? "base")")
-            case "nothing_to_do": showBanner("Nothing to merge")
-            case "no_verify": noVerifyConfirm = true; return
-            case "uncommitted": commitMsg = ""; commitPrompt = true; return
-            case "sync_conflict": showBanner("Sync conflict in \(r.files.count) file(s) — resolve via the agent")
-            case "tests_failed": showBanner("Verify failed: \(r.command ?? "tests")")
-            case "dirty_overlap": showBanner("Dirty overlap in \(r.files.count) file(s)")
-            case "non_ff": showBanner("Base moved — retry")
-            case "error": showBanner(r.message ?? "Error")
-            default: showBanner(r.status)
-            }
+            // Refresh git after terminal outcomes land (the WS frame updates currentJob; this
+            // keeps the header's branch/sync in step once a merge/keep/discard settles).
             git = await broker.gitStatus(session.id)
+        }
+    }
+
+    /// Suggest a `.mux/verify.sh` for the no_verify recovery path.
+    func generateVerify() async -> VerifySuggestResult? { await broker.verifySuggest(session.id) }
+
+    /// Save an edited verify script; returns the result so the caller can auto-run merge on ok.
+    func saveVerify(content: String) async -> VerifySaveResult? { await broker.verifySave(session.id, content: content) }
+
+    /// Hand the failed-finish outcome back to the agent as a tailored message (web
+    /// `FinishSheet.vue` `issueMessage` parity), then send it. Pure builder is `Self.issueMessage`.
+    func letAgentFix(outcome: FinishResult) {
+        broker.sendMessage(session.id, Self.issueMessage(outcome))
+    }
+
+    /// Build the agent message for a failed finish outcome — mirrors web `issueMessage`
+    /// (FinishSheet.vue ~81-86) exactly. Pure + static so it's unit-testable.
+    static func issueMessage(_ o: FinishResult) -> String {
+        let files = o.files
+        switch o.status {
+        case "sync_conflict":
+            let list = files.map { "- \($0)" }.joined(separator: "\n")
+            return "The Finish step merged the base branch in and hit conflicts in:\n\(list)\n\nThe worktree is in a conflicted merge state — please resolve the conflicts and commit, then I'll run Finish again."
+        case "tests_failed":
+            return "The Finish step ran the tests (`\(o.command ?? "")`) and they failed:\n\n```\n\(o.output ?? "")\n```\n\nPlease fix them so the branch is green, then I'll run Finish again."
+        case "dirty_overlap":
+            return "The base checkout has unsaved changes in: \(files.joined(separator: ", ")) — the same files my work touches. Please commit or stash them so Finish can fast-forward."
+        case "push_rejected":
+            return "Pushing the branch for a PR was rejected because the remote has diverged: \(o.message ?? ""). Please reconcile (pull/rebase) and I'll run Finish again."
+        default:
+            return "Finish reported: \(o.message ?? o.status)"
         }
     }
 

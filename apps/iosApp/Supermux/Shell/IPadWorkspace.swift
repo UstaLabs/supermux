@@ -196,6 +196,7 @@ private struct WorkspaceDetail: View {
     @Binding var showRename: Bool
     @Binding var renameText: String
     @Binding var showKillConfirm: Bool
+    @State private var finishSheet = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -207,16 +208,8 @@ private struct WorkspaceDetail: View {
             }
             content
         }
-        // Finish-flow dialogs (parity with ChatView), bound to the shared chrome.
-        .confirmationDialog("No verify script found", isPresented: $chrome.noVerifyConfirm, titleVisibility: .visible) {
-            Button("Merge without verifying") { chrome.runFinish(skipVerify: true) }
-            Button("Cancel", role: .cancel) {}
-        }
-        .alert("Uncommitted changes", isPresented: $chrome.commitPrompt) {
-            TextField("Commit message", text: $chrome.commitMsg)
-            Button("Cancel", role: .cancel) {}
-            Button("Commit & finish") { chrome.runFinish(commitFirst: true, commitMessage: chrome.commitMsg.isEmpty ? "wip" : chrome.commitMsg) }
-        } message: { Text("Commit the session's changes, then finish.") }
+        // The Finish bottom sheet (readiness → action → live job → recovery), shared chrome.
+        .sheet(isPresented: $finishSheet) { FinishSheet(chrome: chrome) }
     }
 
     // MARK: - Session header bar
@@ -235,10 +228,11 @@ private struct WorkspaceDetail: View {
             Spacer(minLength: 8)
             sessionLinksMenu
             PaneToggleCluster(layout: layout, sessionId: session.id)
-            if chrome.isRepo {
-                Button { chrome.runFinish() } label: {
+            if session.session_branch != nil {
+                Button { finishSheet = true } label: {
                     Label("Finish", systemImage: "arrow.triangle.merge")
                         .font(.subheadline.weight(.semibold))
+                        .overlay(alignment: .topTrailing) { finishBadge }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.teal)
@@ -251,6 +245,17 @@ private struct WorkspaceDetail: View {
         .frame(height: 52)
         .background(.bar)
         .overlay(alignment: .bottom) { Divider() }
+    }
+
+    /// Unacked-finish dot on the header Finish button: red on failure, teal on success;
+    /// hidden while running or once acknowledged (badge is offset off the prominent button).
+    @ViewBuilder private var finishBadge: some View {
+        if chrome.isUnacked {
+            Circle()
+                .fill(chrome.currentJob?.status == "failed" ? Color.red : Color.white)
+                .frame(width: 8, height: 8)
+                .offset(x: 4, y: -4)
+        }
     }
 
     /// Session proxy links — a `link` menu shown only when the session has proxies

@@ -37,9 +37,10 @@ struct ChatView: View {
     @State private var glossary: [String] = []
     @State private var git: GitRemoteStatus?
     @State private var banner: String?
-    @State private var noVerifyConfirm = false
-    @State private var commitPrompt = false
-    @State private var commitMsg = ""
+    // Finish flow (readiness → action → live job → recovery) lives on SessionChrome, shared
+    // with the iPad header; the FinishSheet reads it. Created lazily on first appearance.
+    @State private var chrome: SessionChrome?
+    @State private var finishSheet = false
     @State private var loadedSessionId: String?
     @State private var recorder = AudioRecorder()
     @State private var dictation = SpeechDictation()
@@ -107,6 +108,10 @@ struct ChatView: View {
         tab = .chat
         draft = UserDefaults.standard.string(forKey: draftKey)
             ?? ProcessInfo.processInfo.environment["SM_DRAFT"] ?? ""
+        // Keep the finish-flow chrome pointed at the current session (one instance, reused
+        // across switches); `load(for:)` is idempotent per id and warms git/proxies for it.
+        if chrome == nil { chrome = SessionChrome(broker: broker, session: session) }
+        chrome?.load(for: session)
         git = nil
         Task {
             for _ in 0..<8 {
@@ -157,9 +162,12 @@ struct ChatView: View {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button { showSTTDebug = true } label: { Image(systemName: "waveform.badge.mic") }
                 Button { showGlossary = true } label: { Image(systemName: "text.book.closed") }
-                if let g = git, g.isRepo {
-                    Button { runFinish() } label: { Label("Finish", systemImage: "arrow.triangle.merge") }
-                        .tint(Theme.teal)
+                if session.session_branch != nil {
+                    Button { finishSheet = true } label: {
+                        Label("Finish", systemImage: "arrow.triangle.merge")
+                            .overlay(alignment: .topTrailing) { finishBadge }
+                    }
+                    .tint(Theme.teal)
                 }
                 if (git?.isRepo ?? false) || !sessionLinks.isEmpty { navMenu }
             }
@@ -213,6 +221,9 @@ struct ChatView: View {
         .sheet(isPresented: $reasoningSheet) {
             OptionSwitchSheet(title: "Reasoning", broker: broker, session: session, kind: .reasoning)
         }
+        .sheet(isPresented: $finishSheet) {
+            if let chrome { FinishSheet(chrome: chrome) }
+        }
         .alert("Rename session", isPresented: $showRename) {
             TextField("Name", text: $renameText)
             Button("Cancel", role: .cancel) {}
@@ -222,15 +233,6 @@ struct ChatView: View {
             Button("Kill session", role: .destructive) { broker.kill(session.id) }
             Button("Cancel", role: .cancel) {}
         }
-        .confirmationDialog("No verify script found", isPresented: $noVerifyConfirm, titleVisibility: .visible) {
-            Button("Merge without verifying") { runFinish(skipVerify: true) }
-            Button("Cancel", role: .cancel) {}
-        }
-        .alert("Uncommitted changes", isPresented: $commitPrompt) {
-            TextField("Commit message", text: $commitMsg)
-            Button("Cancel", role: .cancel) {}
-            Button("Commit & finish") { runFinish(commitFirst: true, commitMessage: commitMsg.isEmpty ? "wip" : commitMsg) }
-        } message: { Text("Commit the session's changes, then finish.") }
         .alert("Microphone access needed", isPresented: $micDenied) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -306,25 +308,13 @@ struct ChatView: View {
         default: return r.status
         }
     }
-    private func runFinish(skipVerify: Bool? = nil, commitFirst: Bool? = nil, commitMessage: String? = nil) {
-        Task {
-            guard let r = await broker.finish(session.id, skipVerify: skipVerify,
-                                              commitFirst: commitFirst, commitMessage: commitMessage) else {
-                showBanner("Finish failed"); return
-            }
-            switch r.status {
-            case "integrated": showBanner("Merged into \(r.base ?? "base")")
-            case "nothing_to_do": showBanner("Nothing to merge")
-            case "no_verify": noVerifyConfirm = true; return
-            case "uncommitted": commitMsg = ""; commitPrompt = true; return
-            case "sync_conflict": showBanner("Sync conflict in \(r.files.count) file(s) — resolve via the agent")
-            case "tests_failed": showBanner("Verify failed: \(r.command ?? "tests")")
-            case "dirty_overlap": showBanner("Dirty overlap in \(r.files.count) file(s)")
-            case "non_ff": showBanner("Base moved — retry")
-            case "error": showBanner(r.message ?? "Error")
-            default: showBanner(r.status)
-            }
-            git = await broker.gitStatus(session.id)
+    /// The unacked-finish dot on the toolbar Finish button: red when the last (background)
+    /// job failed, teal when it succeeded; hidden while running or once acknowledged.
+    @ViewBuilder private var finishBadge: some View {
+        if let chrome, chrome.isUnacked {
+            Circle()
+                .fill(chrome.currentJob?.status == "failed" ? Color.red : Theme.teal)
+                .frame(width: 8, height: 8)
         }
     }
 
