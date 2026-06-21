@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import dev.supermux.net.AgentInstallStatus
+import dev.supermux.net.AgentLoginState
 import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
@@ -12,18 +14,26 @@ import dev.supermux.net.BrokerClient
 import dev.supermux.net.DeviceDto
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
+import dev.supermux.net.ForgeConnectionsResponse
 import dev.supermux.net.FsEntry
 import dev.supermux.net.FsSearchResult
+import dev.supermux.net.LspInstallResult
+import dev.supermux.net.LspMutationResult
+import dev.supermux.net.LspServer
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ModelsResponse
+import dev.supermux.net.OpenCodeOAuthStart
+import dev.supermux.net.OpenCodeProvider
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.ScrcpyClient
 import dev.supermux.net.SpawnRequest
 import dev.supermux.net.TerminalClient
+import dev.supermux.net.UpdateStatus
 import dev.supermux.net.VerifySaveResult
 import dev.supermux.net.VerifySuggestResult
+import dev.supermux.android.settings.AddCustomLspArgs
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.ClientFrame
@@ -36,6 +46,8 @@ import dev.supermux.proto.SlashCommand
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.websocket.WebSockets
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -368,6 +380,89 @@ class AppViewModel(private val baseUrl: String, private val token: String) : Vie
     fun revoke(n: String) { viewModelScope.launch { runCatching { api.revokeDevice(n) } } }
     suspend fun archived(): List<ArchivedDto> = runCatching { api.archived() }.getOrNull() ?: emptyList()
     fun resume(id: String) { viewModelScope.launch { runCatching { api.resume(id) } } }
+
+    // ── Assistant ──────────────────────────────────────────────────────────────
+
+    /** (paName, soul.md) loaded concurrently; null if the config fetch fails. */
+    suspend fun assistantLoad(): Pair<String, String>? = coroutineScope {
+        val cfg = async { runCatching { api.getConfig() }.getOrNull() }
+        val soul = async { runCatching { api.getSoul() }.getOrNull() ?: "" }
+        cfg.await()?.let { it.paName to soul.await() }
+    }
+
+    /** Save paName via saveConfig (NOT the legacy putConfig), then soul; bool = putSoul success. */
+    suspend fun assistantSave(paName: String, soul: String): Boolean {
+        runCatching { api.saveConfig(paName = paName) }
+        return runCatching { api.putSoul(soul) }.getOrDefault(false)
+    }
+
+    // ── Agents ─────────────────────────────────────────────────────────────────
+
+    suspend fun agentStatuses(): List<AgentInstallStatus> =
+        runCatching { api.agentStatuses() }.getOrNull() ?: emptyList()
+    suspend fun agentStartLogin(kind: String): AgentLoginState? =
+        runCatching { api.startAgentLogin(kind) }.getOrNull()
+    suspend fun agentPollLogin(kind: String): AgentLoginState? =
+        runCatching { api.agentLoginState(kind) }.getOrNull()
+    fun agentSendCode(kind: String, code: String) {
+        viewModelScope.launch { runCatching { api.sendAgentLoginCode(kind, code) } }
+    }
+    fun agentCancelLogin(kind: String) {
+        viewModelScope.launch { runCatching { api.cancelAgentLogin(kind) } }
+    }
+    /** Routes the secret to the right saveConfig field by agent kind. */
+    fun agentSaveSecret(kind: String, value: String) {
+        viewModelScope.launch {
+            runCatching {
+                when (kind) {
+                    "claude" -> api.saveConfig(claudeOauthToken = value)
+                    "codex" -> api.saveConfig(codexApiKey = value)
+                    "cursor" -> api.saveConfig(cursorApiKey = value)
+                }
+            }
+        }
+    }
+    suspend fun openCodeProviders(): List<OpenCodeProvider> =
+        runCatching { api.openCodeProviders() }.getOrNull() ?: emptyList()
+    fun openCodeSetKey(providerId: String, key: String) {
+        viewModelScope.launch { runCatching { api.setOpenCodeKey(providerId, key) } }
+    }
+    suspend fun openCodeStartOAuth(providerId: String, method: Int): OpenCodeOAuthStart? =
+        runCatching { api.startOpenCodeOAuth(providerId, method) }.getOrNull()
+    fun openCodeFinishOAuth(providerId: String, method: Int, code: String) {
+        viewModelScope.launch { runCatching { api.finishOpenCodeOAuth(providerId, method, code) } }
+    }
+
+    // ── Editor / LSP ───────────────────────────────────────────────────────────
+    // lspInstallLog / lspInstallDone StateFlows already exist (Phase 2, above) — the
+    // Editor LSP section collects them directly for the live install log.
+
+    suspend fun lspLoad(): List<LspServer> =
+        runCatching { api.getEditorSettings().lsp.servers }.getOrNull() ?: emptyList()
+    suspend fun lspToggle(id: String, enabled: Boolean): List<LspServer>? =
+        runCatching { api.setLspEnabled(id, enabled).lsp.servers }.getOrNull()
+    suspend fun lspInstall(id: String): LspInstallResult? =
+        runCatching { api.installEditorLsp(id) }.getOrNull()
+    suspend fun lspAddCustom(a: AddCustomLspArgs): LspMutationResult? =
+        runCatching {
+            api.addCustomEditorLsp(a.id, a.label, a.command, a.extensions, a.args, a.languageId, a.installCmd)
+        }.getOrNull()
+    suspend fun lspRemoveCustom(id: String): LspMutationResult? =
+        runCatching { api.removeCustomEditorLsp(id) }.getOrNull()
+
+    // ── Git hosting (forges) ─────────────────────────────────────────────────────
+
+    suspend fun forgesLoad(): ForgeConnectionsResponse? = runCatching { api.listForges() }.getOrNull()
+    suspend fun forgeAdd(kind: String, token: String, host: String?, transport: String): Boolean =
+        runCatching { api.addForge(kind, token, host, transport); true }.getOrDefault(false)
+    suspend fun forgeImport(kind: String, transport: String): Boolean =
+        runCatching { api.importForge(kind, transport); true }.getOrDefault(false)
+    fun forgeRemove(id: String) { viewModelScope.launch { runCatching { api.removeForge(id) } } }
+
+    // ── System ─────────────────────────────────────────────────────────────────
+
+    suspend fun updateStatus(): UpdateStatus? = runCatching { api.updateStatus() }.getOrNull()
+    fun restartBroker() { viewModelScope.launch { runCatching { api.restartBroker() } } }
 
     suspend fun fileBytes(fileId: String): ByteArray? = api.fileBytes(fileId)
     suspend fun archivedLogs(sessionId: String): List<LogEntry> =

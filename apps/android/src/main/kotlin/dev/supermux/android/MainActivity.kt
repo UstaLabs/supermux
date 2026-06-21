@@ -293,14 +293,46 @@ class MainActivity : ComponentActivity() {
                     composable<Settings> {
                         SettingsScreen(
                             onBack = { navController.popBackStack() },
+                            // Assistant
+                            assistantLoad = { vm.assistantLoad() },
+                            assistantSave = { paName, soul -> vm.assistantSave(paName, soul) },
+                            // Agents
+                            agentStatuses = { vm.agentStatuses() },
+                            agentStartLogin = { vm.agentStartLogin(it) },
+                            agentPollLogin = { vm.agentPollLogin(it) },
+                            agentSendCode = { kind, code -> vm.agentSendCode(kind, code) },
+                            agentCancelLogin = { vm.agentCancelLogin(it) },
+                            agentSaveSecret = { kind, value -> vm.agentSaveSecret(kind, value) },
+                            openCodeProviders = { vm.openCodeProviders() },
+                            openCodeSetKey = { id, key -> vm.openCodeSetKey(id, key) },
+                            openCodeStartOAuth = { id, method -> vm.openCodeStartOAuth(id, method) },
+                            openCodeFinishOAuth = { id, method, code -> vm.openCodeFinishOAuth(id, method, code) },
+                            // Curator
                             curatorLoad = { vm.curatorSettings() },
                             curatorSave = { e, h, m -> vm.saveCurator(e, h, m) },
                             curatorRunNow = { vm.runCuratorNow() },
+                            // Voice
                             voiceLoadModels = { vm.launcherModels("claude") },
                             voiceLoadConfig = { vm.config() },
                             voiceSaveModel = { vm.saveVoiceCleanupModel(it) },
                             glossaryLoad = { vm.fetchGlossary() },
                             glossarySave = { vm.updateGlossary(it) },
+                            // Editor / LSP
+                            lspLoad = { vm.lspLoad() },
+                            lspToggle = { id, enabled -> vm.lspToggle(id, enabled) },
+                            lspInstall = { vm.lspInstall(it) },
+                            lspInstallLog = vm.lspInstallLog,
+                            lspInstallDone = vm.lspInstallDone,
+                            lspAddCustom = { vm.lspAddCustom(it) },
+                            lspRemoveCustom = { vm.lspRemoveCustom(it) },
+                            // Git hosting
+                            forgesLoad = { vm.forgesLoad() },
+                            forgeAdd = { kind, token, host, transport -> vm.forgeAdd(kind, token, host, transport) },
+                            forgeImport = { kind, transport -> vm.forgeImport(kind, transport) },
+                            forgeRemove = { vm.forgeRemove(it) },
+                            // System
+                            updateStatus = { vm.updateStatus() },
+                            restartBroker = { vm.restartBroker() },
                         )
                     }
                     composable<Usage> {

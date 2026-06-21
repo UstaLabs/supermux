@@ -36,13 +36,24 @@ import dev.supermux.android.chat.TimelineItemRow
 import dev.supermux.android.chat.mergeTimeline
 import dev.supermux.android.theme.AppearanceMode
 import dev.supermux.android.theme.LocalPanes
+import dev.supermux.net.AgentInstallStatus
+import dev.supermux.net.AgentLoginState
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.CuratorSettingsResponse
 import dev.supermux.net.DeviceDto
+import dev.supermux.net.ForgeConnectionsResponse
+import dev.supermux.net.LspInstallResult
+import dev.supermux.net.LspMutationResult
+import dev.supermux.net.LspServer
+import dev.supermux.net.OpenCodeOAuthStart
+import dev.supermux.net.OpenCodeProvider
 import dev.supermux.net.ProxyDto
+import dev.supermux.net.UpdateStatus
 import dev.supermux.android.session.relTime
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
+import kotlinx.coroutines.flow.StateFlow
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -56,32 +67,86 @@ import org.json.JSONObject
 
 // ─── SettingsScreen ───────────────────────────────────────────────────────────
 //
-// Mirrors the web: an INDEX with two rows (Curator, Editor) that navigate to
-// sub-pages. Internal nav via `opened` (null = index). Curator is server-backed
-// (load/save/run-now suspend callbacks); Editor is local SharedPreferences.
+// The full iOS-parity hub: an INDEX of 7 rows that navigate to sub-pages. Internal
+// nav via `opened` (null = index); each sub-page is self-contained with its own
+// Scaffold/TopAppBar/BackHandler and crosses the VM boundary as suspend lambdas /
+// plain callbacks (the established style). Curator + Voice are server-backed; Editor
+// hosts local prefs (SharedPreferences) + the broker-backed Language-servers section.
+//
+// The signature is the union of this Settings suite + the Voice track (canonical order
+// in the 2026-06-21-android-settings-changelist §3a). Both must match MainActivity's call.
 
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
+    // Assistant
+    assistantLoad: suspend () -> Pair<String, String>?,
+    assistantSave: suspend (paName: String, soul: String) -> Boolean,
+    // Agents
+    agentStatuses: suspend () -> List<AgentInstallStatus>,
+    agentStartLogin: suspend (kind: String) -> AgentLoginState?,
+    agentPollLogin: suspend (kind: String) -> AgentLoginState?,
+    agentSendCode: (kind: String, code: String) -> Unit,
+    agentCancelLogin: (kind: String) -> Unit,
+    agentSaveSecret: (kind: String, value: String) -> Unit,
+    openCodeProviders: suspend () -> List<OpenCodeProvider>,
+    openCodeSetKey: (providerId: String, key: String) -> Unit,
+    openCodeStartOAuth: suspend (providerId: String, method: Int) -> OpenCodeOAuthStart?,
+    openCodeFinishOAuth: (providerId: String, method: Int, code: String) -> Unit,
+    // Curator
     curatorLoad: suspend () -> CuratorSettingsResponse?,
     curatorSave: suspend (Boolean, Int, Int) -> CuratorSettingsResponse?,
     curatorRunNow: suspend () -> Unit,
+    // Voice (Voice track)
     voiceLoadModels: suspend () -> List<dev.supermux.net.ModelInfo>,
     voiceLoadConfig: suspend () -> dev.supermux.net.AppConfigDto?,
     voiceSaveModel: (String?) -> Unit,
     glossaryLoad: suspend () -> List<String>,
     glossarySave: suspend (List<String>) -> List<String>?,
+    // Editor / LSP
+    lspLoad: suspend () -> List<LspServer>,
+    lspToggle: suspend (id: String, enabled: Boolean) -> List<LspServer>?,
+    lspInstall: suspend (id: String) -> LspInstallResult?,
+    lspInstallLog: StateFlow<Map<String, List<String>>>,
+    lspInstallDone: StateFlow<Map<String, ServerFrame.LspInstallDone>>,
+    lspAddCustom: suspend (AddCustomLspArgs) -> LspMutationResult?,
+    lspRemoveCustom: suspend (id: String) -> LspMutationResult?,
+    // Git hosting
+    forgesLoad: suspend () -> ForgeConnectionsResponse?,
+    forgeAdd: suspend (kind: String, token: String, host: String?, transport: String) -> Boolean,
+    forgeImport: suspend (kind: String, transport: String) -> Boolean,
+    forgeRemove: (id: String) -> Unit,
+    // System
+    updateStatus: suspend () -> UpdateStatus?,
+    restartBroker: () -> Unit,
 ) {
     var opened by remember { mutableStateOf<String?>(null) }
 
     when (opened) {
+        "assistant" -> AssistantSettingsPage(
+            onBack = { opened = null },
+            load = assistantLoad,
+            save = assistantSave,
+        )
+        "agents" -> AgentSettingsPage(
+            onBack = { opened = null },
+            agentStatuses = agentStatuses,
+            agentStartLogin = agentStartLogin,
+            agentPollLogin = agentPollLogin,
+            agentSendCode = agentSendCode,
+            agentCancelLogin = agentCancelLogin,
+            agentSaveSecret = agentSaveSecret,
+            openCodeProviders = openCodeProviders,
+            openCodeSetKey = openCodeSetKey,
+            openCodeStartOAuth = openCodeStartOAuth,
+            openCodeFinishOAuth = openCodeFinishOAuth,
+        )
         "curator" -> CuratorSettingsPage(
             onBack = { opened = null },
             curatorLoad = curatorLoad,
             curatorSave = curatorSave,
             curatorRunNow = curatorRunNow,
         )
-        "editor" -> EditorSettingsPage(onBack = { opened = null })
         "voice" -> VoiceSettingsPage(
             onBack = { opened = null },
             loadModels = voiceLoadModels,
@@ -94,11 +159,31 @@ fun SettingsScreen(
             load = glossaryLoad,
             save = glossarySave,
         )
+        "editor" -> EditorSettingsPage(
+            onBack = { opened = null },
+            lspLoad = lspLoad,
+            lspToggle = lspToggle,
+            lspInstall = lspInstall,
+            lspInstallLog = lspInstallLog,
+            lspInstallDone = lspInstallDone,
+            lspAddCustom = lspAddCustom,
+            lspRemoveCustom = lspRemoveCustom,
+        )
+        "git" -> GitHostingPage(
+            onBack = { opened = null },
+            forgesLoad = forgesLoad,
+            forgeAdd = forgeAdd,
+            forgeImport = forgeImport,
+            forgeRemove = forgeRemove,
+        )
+        "system" -> SystemSettingsPage(
+            onBack = { opened = null },
+            updateStatus = updateStatus,
+            restartBroker = restartBroker,
+        )
         else -> SettingsIndexPage(
             onBack = onBack,
-            onOpenCurator = { opened = "curator" },
-            onOpenEditor = { opened = "editor" },
-            onOpenVoice = { opened = "voice" },
+            onOpen = { opened = it },
         )
     }
 }
@@ -107,9 +192,7 @@ fun SettingsScreen(
 @Composable
 private fun SettingsIndexPage(
     onBack: () -> Unit,
-    onOpenCurator: () -> Unit,
-    onOpenEditor: () -> Unit,
-    onOpenVoice: () -> Unit,
+    onOpen: (String) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     BackHandler { onBack() }
@@ -134,26 +217,20 @@ private fun SettingsIndexPage(
         containerColor = cs.background,
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            SettingsNavRow(
-                iconRes = R.drawable.ic_sparkle,
-                label = "Curator",
-                desc = "Nightly knowledge curation schedule",
-                onClick = onOpenCurator,
-            )
+            // Order matches iOS: Assistant, Agents, Curator, Voice, Editor, Git hosting, System.
+            SettingsNavRow(R.drawable.ic_smartphone, "Assistant", "PA name and soul.md") { onOpen("assistant") }
             HorizontalDivider(color = cs.outlineVariant)
-            SettingsNavRow(
-                iconRes = R.drawable.ic_mic,
-                label = "Voice",
-                desc = "Dictation cleanup model & glossary",
-                onClick = onOpenVoice,
-            )
+            SettingsNavRow(R.drawable.ic_settings, "Agents", "CLI authorization and API-key fallback") { onOpen("agents") }
             HorizontalDivider(color = cs.outlineVariant)
-            SettingsNavRow(
-                iconRes = R.drawable.ic_file,
-                label = "Editor",
-                desc = "Code editor preferences",
-                onClick = onOpenEditor,
-            )
+            SettingsNavRow(R.drawable.ic_sparkle, "Curator", "Nightly knowledge curation schedule") { onOpen("curator") }
+            HorizontalDivider(color = cs.outlineVariant)
+            SettingsNavRow(R.drawable.ic_mic, "Voice", "Dictation cleanup model & glossary") { onOpen("voice") }
+            HorizontalDivider(color = cs.outlineVariant)
+            SettingsNavRow(R.drawable.ic_file, "Editor", "Font, wrap, and language servers") { onOpen("editor") }
+            HorizontalDivider(color = cs.outlineVariant)
+            SettingsNavRow(R.drawable.ic_network, "Git hosting", "GitHub & GitLab connections") { onOpen("git") }
+            HorizontalDivider(color = cs.outlineVariant)
+            SettingsNavRow(R.drawable.ic_monitor, "System", "Broker restart and status") { onOpen("system") }
         }
     }
 }
@@ -436,11 +513,25 @@ private fun curatorNextRunLabel(enabled: Boolean, nextRun: String?): String {
     }.getOrNull() ?: raw
 }
 
-// ─── Editor page (local SharedPreferences) ───────────────────────────────────────
+// ─── Editor page (local appearance prefs + broker Language-servers section) ───────
+//
+// Mirrors iOS EditorSettingsScreen: ONE "Editor" screen with two sections — the
+// device-local appearance prefs (line-wrap + font-size, SharedPreferences) and the
+// broker-backed Language servers (EditorLspSection, EditorLspScreen.kt). The whole page
+// scrolls because the LSP list + add-form can be tall.
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EditorSettingsPage(onBack: () -> Unit) {
+private fun EditorSettingsPage(
+    onBack: () -> Unit,
+    lspLoad: suspend () -> List<LspServer>,
+    lspToggle: suspend (id: String, enabled: Boolean) -> List<LspServer>?,
+    lspInstall: suspend (id: String) -> LspInstallResult?,
+    lspInstallLog: StateFlow<Map<String, List<String>>>,
+    lspInstallDone: StateFlow<Map<String, ServerFrame.LspInstallDone>>,
+    lspAddCustom: suspend (AddCustomLspArgs) -> LspMutationResult?,
+    lspRemoveCustom: suspend (id: String) -> LspMutationResult?,
+) {
     val cs = MaterialTheme.colorScheme
     val prefs = LocalContext.current
         .getSharedPreferences("cmux-editor-settings", Context.MODE_PRIVATE)
@@ -470,7 +561,12 @@ private fun EditorSettingsPage(onBack: () -> Unit) {
         },
         containerColor = cs.background,
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState()),
+        ) {
             // 1. Wrap long lines
             CuratorRow(
                 label = "Wrap long lines",
@@ -517,6 +613,20 @@ private fun EditorSettingsPage(onBack: () -> Unit) {
                     }
                 }
             }
+            HorizontalDivider(color = cs.outlineVariant)
+
+            // 3. Language servers (broker-backed)
+            Spacer(Modifier.height(8.dp))
+            EditorLspSection(
+                lspLoad = lspLoad,
+                lspToggle = lspToggle,
+                lspInstall = lspInstall,
+                lspInstallLog = lspInstallLog,
+                lspInstallDone = lspInstallDone,
+                lspAddCustom = lspAddCustom,
+                lspRemoveCustom = lspRemoveCustom,
+            )
+            Spacer(Modifier.height(24.dp))
         }
     }
 }
