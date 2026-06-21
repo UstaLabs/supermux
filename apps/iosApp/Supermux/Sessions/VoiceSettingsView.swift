@@ -14,6 +14,7 @@ struct VoiceSettingsView: View {
     @State private var saving = false
     @State private var saved = false
     @State private var error: String?
+    @State private var showGlossary = false
 
     var body: some View {
         Group {
@@ -27,6 +28,7 @@ struct VoiceSettingsView: View {
         .navigationTitle("Voice")
         .navigationBarTitleDisplayMode(.inline)
         .tint(Theme.teal)
+        .sheet(isPresented: $showGlossary) { GlossaryView(broker: broker) }
         .task { await load() }
     }
 
@@ -41,6 +43,17 @@ struct VoiceSettingsView: View {
                 }
             } footer: {
                 Text("Model used to clean up voice-dictation transcripts. Default is Haiku.")
+            }
+
+            Section {
+                Button {
+                    showGlossary = true
+                } label: {
+                    Label("Dictation glossary", systemImage: "text.book.closed")
+                }
+                .tint(.primary)
+            } footer: {
+                Text("Project & technical terms to bias dictation toward (shared across devices).")
             }
 
             Section {
