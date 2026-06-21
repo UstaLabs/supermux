@@ -19,6 +19,7 @@ final class BrokerSession {
     private(set) var agentSince: [String: Int64] = [:]
     private(set) var commands: [String: [SlashCommand]] = [:]
     private(set) var displays: [DisplayStream] = []
+    private(set) var finishJobs: [String: FinishJobDto] = [:]
     private(set) var synced = false
 
     init(baseURL: String, token: String) {
@@ -74,8 +75,11 @@ final class BrokerSession {
             agentPhase = s.agentState.mapValues { $0.phase }
             agentSince = s.agentState.compactMapValues { $0.since?.int64Value }
             commands = s.commands
+            finishJobs = Dictionary(uniqueKeysWithValues: s.sessions.compactMap { sess in sess.finish_job.map { (sess.id, $0) } })
             synced = true
-        case .sessionAdded(let a): sessions.append(a.session)
+        case .sessionAdded(let a):
+            sessions.append(a.session)
+            if let job = a.session.finish_job { finishJobs[a.session.id] = job }
         case .sessionRemoved(let r):
             // Resolve the name BEFORE dropping the session — display hosts are keyed by it.
             let removedName = sessions.first { $0.id == r.id }?.name
@@ -109,6 +113,8 @@ final class BrokerSession {
         case .lspInstallProgress: break
         case .lspInstallDone: break
         case .agentError: break
+        case .finishJobFrame(let f):
+            if let job = f.job { finishJobs[f.session] = job } else { finishJobs.removeValue(forKey: f.session) }
         }
     }
 
@@ -184,9 +190,17 @@ final class BrokerSession {
     func gitPublish(_ id: String) async -> GitOpResult? { try? await api.gitPublish(id: id) }
     func gitPush(_ id: String) async -> GitOpResult? { try? await api.gitPush(id: id) }
     func gitPull(_ id: String) async -> GitOpResult? { try? await api.gitPull(id: id) }
-    func finish(_ id: String, skipVerify: Bool? = nil, commitFirst: Bool? = nil, commitMessage: String? = nil) async -> FinishResult? {
-        try? await api.finish(id: id, skipVerify: skipVerify?.kb, commitFirst: commitFirst?.kb, commitMessage: commitMessage)
+    func finish(_ id: String, action: String? = nil, skipVerify: Bool? = nil, commitFirst: Bool? = nil,
+                commitMessage: String? = nil, prTitle: String? = nil, prBody: String? = nil,
+                draft: Bool? = nil, prRequiresGreen: Bool? = nil) async -> FinishResult? {
+        try? await api.finish(id: id, action: action, skipVerify: skipVerify?.kb,
+                              commitFirst: commitFirst?.kb, commitMessage: commitMessage,
+                              prTitle: prTitle, prBody: prBody,
+                              draft: draft?.kb, prRequiresGreen: prRequiresGreen?.kb)
     }
+    func finishReadiness(_ id: String) async -> FinishReadiness? { try? await api.finishReadiness(id: id) }
+    func verifySuggest(_ id: String) async -> VerifySuggestResult? { try? await api.verifySuggest(id: id) }
+    func verifySave(_ id: String, content: String) async -> VerifySaveResult? { try? await api.verifySave(id: id, content: content) }
     func sendMessage(_ id: String, _ text: String) { Task { [api] in try? await api.sendMessage(id: id, text: text) } }
     func projects() async -> [String] { (try? await api.listProjects()) ?? [] }
     func spawn(workdir: String, agent: String?, name: String?, model: String? = nil,
@@ -260,6 +274,64 @@ final class BrokerSession {
 
     func config() async -> AppConfigDto? { try? await api.getConfig() }
     func setPAName(_ name: String) { Task { [api] in try? await api.putConfig(paName: name) } }
+
+    /// PUT /settings/config — partial patch. All fields are optional; pass nil to leave unchanged.
+    func saveConfig(paName: String? = nil, voiceCleanupModel: String? = nil,
+                    claudeOauthToken: String? = nil, anthropicApiKey: String? = nil,
+                    codexApiKey: String? = nil, cursorApiKey: String? = nil) async {
+        try? await api.saveConfig(paName: paName, voiceCleanupModel: voiceCleanupModel,
+                                  claudeOauthToken: claudeOauthToken, anthropicApiKey: anthropicApiKey,
+                                  codexApiKey: codexApiKey, cursorApiKey: cursorApiKey)
+    }
+
+    // Soul (system prompt / persona markdown).
+    func getSoul() async -> String { (try? await api.getSoul()) ?? "" }
+    func putSoul(text: String) async -> Bool { (try? await api.putSoul(text: text))?.boolValue ?? false }
+
+    // Agent install status + login flow.
+    func agentStatuses() async -> [AgentInstallStatus] { (try? await api.agentStatuses()) ?? [] }
+    func startAgentLogin(kind: String) async -> AgentLoginState? { try? await api.startAgentLogin(kind: kind) }
+    func agentLoginState(kind: String) async -> AgentLoginState? { try? await api.agentLoginState(kind: kind) }
+    func sendAgentLoginCode(kind: String, code: String) { Task { [api] in try? await api.sendAgentLoginCode(kind: kind, code: code) } }
+    func cancelAgentLogin(kind: String) { Task { [api] in try? await api.cancelAgentLogin(kind: kind) } }
+
+    // opencode providers.
+    func openCodeProviders() async -> [OpenCodeProvider] { (try? await api.openCodeProviders()) ?? [] }
+    func setOpenCodeKey(providerId: String, key: String) { Task { [api] in try? await api.setOpenCodeKey(providerId: providerId, key: key) } }
+    func startOpenCodeOAuth(providerId: String, method: Int) async -> OpenCodeOAuthStart? {
+        try? await api.startOpenCodeOAuth(providerId: providerId, method: Int32(method))
+    }
+    func finishOpenCodeOAuth(providerId: String, method: Int, code: String) {
+        Task { [api] in try? await api.finishOpenCodeOAuth(providerId: providerId, method: Int32(method), code: code) }
+    }
+
+    // Editor / LSP settings.
+    func getEditorSettings() async -> EditorSettingsResponse? { try? await api.getEditorSettings() }
+    func setLspEnabled(_ id: String, enabled: Bool) async -> EditorSettingsResponse? {
+        try? await api.setLspEnabled(id: id, enabled: enabled)
+    }
+    func installEditorLsp(_ id: String) async -> LspInstallResult? { try? await api.installEditorLsp(id: id) }
+    func addCustomEditorLsp(id: String, label: String, command: String, extensions: [String],
+                            args: [String] = [], languageId: String? = nil, installCmd: String? = nil) async -> LspMutationResult? {
+        try? await api.addCustomEditorLsp(id: id, label: label, command: command,
+                                          extensions: extensions, args: args,
+                                          languageId: languageId, installCmd: installCmd)
+    }
+    func removeCustomEditorLsp(_ id: String) async -> LspMutationResult? { try? await api.removeCustomEditorLsp(id: id) }
+
+    // Forge connections.
+    func addForge(kind: String, token: String, host: String? = nil, transport: String) async -> ForgeConnection? {
+        try? await api.addForge(kind: kind, token: token, host: host, transport: transport)
+    }
+    func importForge(kind: String, transport: String) async -> ForgeConnection? {
+        try? await api.importForge(kind: kind, transport: transport)
+    }
+    func removeForge(_ id: String) { Task { [api] in try? await api.removeForge(id: id) } }
+
+    // System.
+    func restartBroker() { Task { [api] in try? await api.restartBroker() } }
+    func updateStatus() async -> UpdateStatus? { try? await api.updateStatus() }
+
     func curatorSettings() async -> CuratorSettingsResponse? { try? await api.getCuratorSettings() }
     func saveCurator(enabled: Bool, hour: Int, minute: Int) {
         Task { [api] in _ = try? await api.saveCuratorSettings(enabled: enabled, hour: Int32(hour), minute: Int32(minute)) }
