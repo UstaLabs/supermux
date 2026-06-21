@@ -232,7 +232,19 @@ data class GitOpResult(
     val files: List<String> = emptyList(),
 )
 
-/** Flat result for POST /sessions/<id>/finish — `status` discriminates the 9 variants. */
+/**
+ * Flat result for a finish outcome — `status` discriminates the 15 variants
+ * (integrated | pr_opened | branch_published | push_rejected | kept | discarded |
+ *  push_auth_failed | nothing_to_do | sync_conflict | tests_failed | dirty_overlap |
+ *  non_ff | no_verify | uncommitted | error).
+ *
+ * NOTE: `POST /sessions/<id>/finish` no longer returns this directly — it kicks off
+ * an async finish *job* and returns a [dev.supermux.proto.FinishJobDto] (initially
+ * `status:"running"`). The real outcome arrives on the WS `finish_job` frame as the
+ * job's `outcome`. [FinishResult] is the shape of that outcome (and of the legacy
+ * `finish()` decode, which — via ignoreUnknownKeys — sees only the job's top-level
+ * `status:"running"`).
+ */
 @Serializable
 data class FinishResult(
     val status: String = "",
@@ -244,7 +256,40 @@ data class FinishResult(
     val command: String? = null,
     val output: String? = null,
     val message: String? = null,
+    val prUrl: String? = null,
+    val compareUrl: String? = null,
+    val prError: String? = null,
+    val draft: Boolean? = null,
+    val cleanedUp: Boolean? = null,
 )
+
+// ─── Finish readiness + verify (chat finish menu) ────────────────────────────
+/** GET /sessions/<id>/finish/readiness — preflight snapshot for the finish menu. */
+@Serializable
+data class FinishReadiness(
+    val branch: String = "",
+    val base: String = "",
+    val ahead: Int = 0,
+    val behind: Int = 0,
+    val dirtyFiles: List<String> = emptyList(),
+    val filesChanged: Int = 0,
+    val insertions: Int = 0,
+    val deletions: Int = 0,
+    val hasRemote: Boolean = false,
+    val baseHasUpstream: Boolean = false,
+    val ghAvailable: Boolean = false,
+    val conflictPreflight: String = "unknown", // "clean" | "will_conflict" | "unknown"
+    val recommended: String = "merge",         // "merge" | "pr"
+    val nothingToLand: Boolean = false,
+)
+
+/** POST /sessions/<id>/verify/suggest → suggested verify command/content + its source. */
+@Serializable
+data class VerifySuggestResult(val content: String = "", val source: String = "")
+
+/** POST /sessions/<id>/verify/save → { ok, reason? }. */
+@Serializable
+data class VerifySaveResult(val ok: Boolean = false, val reason: String? = null)
 
 // ─── Personal Assistants (GET/POST /api/pas) ─────────────────────────────────
 @Serializable
@@ -506,8 +551,18 @@ private data class AddDeviceBody(val name: String)
 
 @Serializable
 private data class FinishBody(
-    val skipVerify: Boolean? = null, val commitFirst: Boolean? = null, val commitMessage: String? = null,
+    val action: String? = null,
+    val skipVerify: Boolean? = null,
+    val commitFirst: Boolean? = null,
+    val commitMessage: String? = null,
+    val prTitle: String? = null,
+    val prBody: String? = null,
+    val draft: Boolean? = null,
+    val prRequiresGreen: Boolean? = null,
 )
+
+@Serializable
+private data class VerifySaveBody(val content: String)
 
 @Serializable
 private data class MessageBody(val text: String)
@@ -791,15 +846,44 @@ class BrokerApi(
     suspend fun gitPush(id: String): GitOpResult = gitOp(id, "push")
     suspend fun gitPull(id: String): GitOpResult = gitOp(id, "pull")
 
-    /** POST /sessions/<id>/finish — sync → verify → merge the session branch. */
+    /**
+     * POST /sessions/<id>/finish — kick off the finish job for the session branch.
+     * `action`: "merge" | "pr" | "keep" | "discard" (broker defaults to "merge").
+     *
+     * Returns the *initial* [FinishResult] decode of the launched job (typically
+     * `status:"running"`); the terminal outcome is delivered on the WS `finish_job`
+     * frame ([dev.supermux.proto.FinishJobFrame]).
+     */
     suspend fun finish(
-        id: String, skipVerify: Boolean? = null, commitFirst: Boolean? = null, commitMessage: String? = null,
+        id: String,
+        action: String? = null,
+        skipVerify: Boolean? = null,
+        commitFirst: Boolean? = null,
+        commitMessage: String? = null,
+        prTitle: String? = null,
+        prBody: String? = null,
+        draft: Boolean? = null,
+        prRequiresGreen: Boolean? = null,
     ): FinishResult =
         decode(http.post("$httpBase/sessions/$id/finish") {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
-            setBody(json.encodeToString(FinishBody(skipVerify, commitFirst, commitMessage)))
+            setBody(json.encodeToString(FinishBody(
+                action, skipVerify, commitFirst, commitMessage, prTitle, prBody, draft, prRequiresGreen,
+            )))
         })
+
+    /** GET /sessions/<id>/finish/readiness — preflight for the finish menu. */
+    suspend fun finishReadiness(id: String): FinishReadiness =
+        getJson("$httpBase/sessions/$id/finish/readiness")
+
+    /** POST /sessions/<id>/verify/suggest → { content, source }. */
+    suspend fun verifySuggest(id: String): VerifySuggestResult =
+        postReturningJson("$httpBase/sessions/$id/verify/suggest", EmptyBody())
+
+    /** POST /sessions/<id>/verify/save {content} → { ok, reason? }. */
+    suspend fun verifySave(id: String, content: String): VerifySaveResult =
+        postReturningJson("$httpBase/sessions/$id/verify/save", VerifySaveBody(content))
 
     /** POST /sessions/<id>/message — post a message to the agent (e.g. a "Send to agent" fix request). */
     suspend fun sendMessage(id: String, text: String) {
