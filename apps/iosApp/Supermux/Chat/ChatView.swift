@@ -30,8 +30,6 @@ struct ChatView: View {
     @State private var showRename = false
     @State private var renameText = ""
     @State private var showKillConfirm = false
-    @State private var showSTTDebug = false
-    @State private var showGlossary = false
     // Voice glossary (project/technical terms), cached from the broker on appear and fed to
     // on-device dictation as contextual hints so it spells them right at the source.
     @State private var glossary: [String] = []
@@ -155,8 +153,6 @@ struct ChatView: View {
                 AgentLogo(agent: session.agent, size: 20)
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                Button { showSTTDebug = true } label: { Image(systemName: "waveform.badge.mic") }
-                Button { showGlossary = true } label: { Image(systemName: "text.book.closed") }
                 if let g = git, g.isRepo {
                     Button { runFinish() } label: { Label("Finish", systemImage: "arrow.triangle.merge") }
                         .tint(Theme.teal)
@@ -165,10 +161,6 @@ struct ChatView: View {
             }
         }
         .toolbarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showSTTDebug) { STTDebugView() }
-        .sheet(isPresented: $showGlossary, onDismiss: { Task { await loadGlossary() } }) {
-            GlossaryView(broker: broker)
-        }
         .task { if draft.isEmpty, let d = ProcessInfo.processInfo.environment["SM_DRAFT"] { draft = d } }
         // Load per-session state on EVERY appearance — `.task(id:)` doesn't re-fire when
         // re-opening the *same* session (id unchanged), which left git/branch unloaded.
@@ -558,6 +550,8 @@ struct ChatView: View {
                         Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
                     } label: {
                         Image(systemName: "plus").font(.body.weight(.medium)).foregroundStyle(.secondary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                     micButton
                     if let m = session.model, !m.isEmpty { pill(m, system: "cpu") { modelSheet = true } }
@@ -592,6 +586,8 @@ struct ChatView: View {
             Image(systemName: "mic")
                 .font(.body.weight(.medium))
                 .foregroundStyle(.secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .disabled(transcribing)
     }

@@ -13,6 +13,7 @@ struct SettingsView: View {
     @State private var curatorHour = 1
     @State private var curatorMinute = 0
     @State private var nextRun: String?
+    @State private var showGlossary = false
 
     var body: some View {
         Form {
@@ -30,6 +31,13 @@ struct SettingsView: View {
                 agentRow("Codex", ok: config?.codexConfigured ?? false)
                 agentRow("Cursor", ok: config?.cursorConfigured ?? false)
                 agentRow("Telegram", ok: config?.telegramConfigured ?? false)
+            }
+
+            Section("Dictation") {
+                Button { showGlossary = true } label: {
+                    Label("Dictation glossary", systemImage: "text.book.closed")
+                }
+                .tint(.primary)
             }
 
             Section("Curator") {
@@ -55,6 +63,7 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .tint(Theme.teal)
+        .sheet(isPresented: $showGlossary) { GlossaryView(broker: broker) }
         .task { await load() }
     }
 
