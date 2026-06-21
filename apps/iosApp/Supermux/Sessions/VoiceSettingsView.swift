@@ -1,4 +1,5 @@
 import SwiftUI
+import Shared
 
 /// Settings screen for voice-dictation cleanup.
 ///
