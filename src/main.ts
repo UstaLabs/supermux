@@ -1413,7 +1413,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       log.info("voice_transcribe_in", { sessionId, source, draft, whisperMs, ctxMsgs: messages.length, skills, model: VOICE_CLEANUP_MODEL })
       try {
         const t1 = Date.now()
-        const out = await cleanupDraft({ draft, recentMessages: payload.context.recentMessages, skills })
+        const out = await cleanupDraft(
+          { draft, recentMessages: payload.context.recentMessages, skills },
+          { engine: cfg.voiceCleanupEngine, model: cfg.voiceCleanupModel },
+        )
         const cleanupMs = Date.now() - t1
         const text = out.text || draft
         log.info("voice_transcribe_out", { sessionId, draft, text, whisperMs, cleanupMs, engine: out.engine, model: VOICE_CLEANUP_MODEL })
