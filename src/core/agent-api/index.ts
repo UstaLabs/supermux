@@ -28,9 +28,13 @@ export interface SelectOpts {
   run?: RunFn
 }
 
-// Registry of engine → adapter factory. `cursor` maps to the cursor-cli adapter
-// until the protobuf adapter (Task 7) lands. TODO(task-7): point "cursor" at the
-// real api2.cursor.sh protobuf adapter.
+// Registry of engine → adapter factory. `cursor` still maps to the cursor-cli
+// adapter: the protobuf adapter exists (adapters/cursor.ts) and speaks the
+// StreamChat wire format, but as of 2026-06-21 api2.cursor.sh has DEPRECATED that
+// endpoint server-side (ERROR_DEPRECATED for any client version). The live
+// replacement (agent.v1.AgentService/Run) is a heavier bidi protocol — out of
+// scope for now. Re-point "cursor" at cursorAdapter once StreamChat is
+// un-deprecated or the Run path is implemented. See adapters/cursor.ts header.
 const registry: Record<Engine, (o: SelectOpts) => AgentApi> = {
   codex: (o) => codexAdapter({ fetchFn: o.fetchFn, readFileFn: o.readFileFn }),
   "opencode-zen": (o) => opencodeAdapter("zen", { fetchFn: o.fetchFn, readFileFn: o.readFileFn }),

@@ -26,6 +26,18 @@
 // All I/O is injectable (fetchFn / readFileFn) so the adapter is fully
 // unit-testable with no network or disk. On any failure (non-2xx, 401, error
 // frame, empty) we THROW so the orchestrator fails soft → falls back to cursor-cli.
+//
+// LIVE STATUS (2026-06-21): api2.cursor.sh now returns HTTP 200 with an
+// end-stream error `ERROR_DEPRECATED` ("This endpoint is deprecated. Please
+// upgrade to the latest version of Cursor.") for ANY x-cursor-client-version we
+// send — the StreamChat/GetChatRequest protocol has been retired server-side.
+// The live replacement is `agent.v1.AgentService/Run`, a much heavier bidi
+// protocol (mid-stream blob-store getBlob/setBlob KV handshakes + serialized
+// conversation-state checkpoints, requiring real HTTP/2 bidi rather than a
+// single fetch). Implementing that is out of scope here. Until it lands, the
+// registry keeps the "cursor" engine pointed at cursor-cli; this adapter is
+// retained as best-effort and will work again if Cursor un-deprecates StreamChat
+// (it already speaks the exact wire format) or as the basis for the Run port.
 
 import { homedir } from "os"
 import { join } from "path"
@@ -185,6 +197,21 @@ function generateChecksum(): string {
   return Buffer.from(bytes).toString("base64") + "supermux"
 }
 
+// Flatten a Connect end-stream error JSON into the most useful human message.
+// Cursor nests the real reason at error.details[].debug.details.{title,detail}
+// (e.g. ERROR_DEPRECATED → "This endpoint is deprecated…").
+function connectErrorMessage(err: any): string {
+  const code = err?.code ? String(err.code) : ""
+  for (const d of err?.details ?? []) {
+    const dbg = d?.debug
+    if (dbg?.error) {
+      const detail = dbg?.details?.detail || dbg?.details?.title
+      return detail ? `${dbg.error}: ${detail}` : String(dbg.error)
+    }
+  }
+  return err?.message || code || "stream error"
+}
+
 // ----------------------------------- adapter -----------------------------------
 
 export interface CursorAdapterOpts {
@@ -261,8 +288,7 @@ export function cursorAdapter(opts: CursorAdapterOpts = {}): AgentApi {
             end = null
           }
           if (end?.error) {
-            const msg = end.error.message || end.error.code || "stream error"
-            throw new Error(`cursor: ${msg}`)
+            throw new Error(`cursor: ${connectErrorMessage(end.error)}`)
           }
           continue
         }

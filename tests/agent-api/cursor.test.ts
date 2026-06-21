@@ -229,6 +229,30 @@ test("complete() throws on an end-stream error frame", async () => {
   await expect(a.complete("x")).rejects.toThrow()
 })
 
+test("complete() surfaces the nested Connect error detail (e.g. ERROR_DEPRECATED)", async () => {
+  // Mirrors the live api2.cursor.sh end-stream body for the deprecated endpoint.
+  const errBody = JSON.stringify({
+    error: {
+      code: "unimplemented",
+      message: "Error",
+      details: [
+        {
+          type: "aiserver.v1.ErrorDetails",
+          debug: {
+            error: "ERROR_DEPRECATED",
+            details: { title: "Request type deprecated.", detail: "This endpoint is deprecated." },
+          },
+        },
+      ],
+    },
+  })
+  const body = concatFrames(frame(new TextEncoder().encode(errBody), 0x02))
+  const fetchFn: typeof fetch = (async () =>
+    new Response(body, { status: 200, headers: { "Content-Type": "application/connect+proto" } })) as unknown as typeof fetch
+  const a = cursorAdapter({ fetchFn, readFileFn: () => authFile(), authPath: "/fake/auth.json" })
+  await expect(a.complete("x")).rejects.toThrow(/ERROR_DEPRECATED.*deprecated/)
+})
+
 test("complete() throws on empty streamed text", async () => {
   const fetchFn: typeof fetch = (async () => okStream("", "  ")) as unknown as typeof fetch
   const a = cursorAdapter({ fetchFn, readFileFn: () => authFile(), authPath: "/fake/auth.json" })
