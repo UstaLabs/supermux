@@ -33,6 +33,8 @@ kotlin {
         commonTest.dependencies {
             implementation(kotlin("test"))
             implementation(libs.coroutines.test)
+            // MockEngine: capture the exact request shapes BrokerApi produces.
+            implementation(libs.ktor.client.mock)
         }
         jvmMain.dependencies { implementation(libs.ktor.client.cio) }
         jvmTest.dependencies {
