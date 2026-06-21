@@ -1,6 +1,5 @@
 package dev.supermux.android.settings
 
-import android.app.TimePickerDialog
 import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
@@ -196,7 +195,6 @@ private fun CuratorSettingsPage(
     curatorRunNow: suspend () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     var loaded by remember { mutableStateOf(false) }
@@ -206,6 +204,7 @@ private fun CuratorSettingsPage(
     var nextRun by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
     var running by remember { mutableStateOf(false) }
+    var showTimePicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         val r = curatorLoad()
@@ -266,25 +265,18 @@ private fun CuratorSettingsPage(
                 }
                 HorizontalDivider(color = cs.outlineVariant)
 
-                // 2. Run at — opens a TimePickerDialog
+                // 2. Run at — opens the M3 TimePicker dialog
                 CuratorRow(
                     label = "Run at",
                     desc = "Daily, host local time.",
                 ) {
                     Box(
                         Modifier
+                            .minimumInteractiveComponentSize()
                             .clip(RoundedCornerShape(6.dp))
                             .background(cs.surfaceContainer)
                             .border(1.dp, cs.outline, RoundedCornerShape(6.dp))
-                            .clickable {
-                                TimePickerDialog(
-                                    context,
-                                    { _, h, m -> hour = h; minute = m },
-                                    hour,
-                                    minute,
-                                    true,
-                                ).show()
-                            }
+                            .clickable { showTimePicker = true }
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     ) {
                         Text(
@@ -354,6 +346,34 @@ private fun CuratorSettingsPage(
                 }
             }
         }
+    }
+
+    // M3 time picker, hosted in an AlertDialog (24h). Confirm writes hour/minute
+    // back into the hoisted state exactly as the framework dialog's callback did.
+    if (showTimePicker) {
+        val tpState = rememberTimePickerState(
+            initialHour = hour,
+            initialMinute = minute,
+            is24Hour = true,
+        )
+        AlertDialog(
+            onDismissRequest = { showTimePicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    hour = tpState.hour
+                    minute = tpState.minute
+                    showTimePicker = false
+                }) { Text("OK", color = cs.primary) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTimePicker = false }) { Text("Cancel") }
+            },
+            text = {
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    TimePicker(state = tpState)
+                }
+            },
+        )
     }
 }
 
@@ -480,16 +500,22 @@ private fun EditorSettingsPage(onBack: () -> Unit) {
 private fun StepperButton(text: String, enabled: Boolean, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val alpha = if (enabled) 1f else 0.4f
+    // Keep the 32dp visual but expand the tap target to ≥48dp (a11y, §5).
     Box(
-        Modifier
-            .size(32.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(cs.surfaceContainer)
-            .border(1.dp, cs.outline.copy(alpha = alpha), RoundedCornerShape(6.dp))
-            .clickable(enabled = enabled, onClick = onClick),
+        Modifier.minimumInteractiveComponentSize(),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, color = cs.onSurface.copy(alpha = alpha), fontSize = 18.sp)
+        Box(
+            Modifier
+                .size(32.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(cs.surfaceContainer)
+                .border(1.dp, cs.outline.copy(alpha = alpha), RoundedCornerShape(6.dp))
+                .clickable(enabled = enabled, onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(text, color = cs.onSurface.copy(alpha = alpha), fontSize = 18.sp)
+        }
     }
 }
 
@@ -864,22 +890,18 @@ private fun UsageWindowRow(label: String, used: Double, resetsAt: String?, kind:
             Text(label, color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.weight(1f))
             Text("${used.roundToInt()}% used", color = cs.onSurface, fontSize = 12.sp)
         }
-        // Progress bar track + fill
-        Box(
-            Modifier
+        // Progress bar (M3 LinearProgressIndicator; lambda-progress form, material3 1.4)
+        LinearProgressIndicator(
+            progress = { (pct / 100.0).toFloat() },
+            modifier = Modifier
                 .fillMaxWidth()
                 .height(8.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(cs.surfaceVariant),
-        ) {
-            Box(
-                Modifier
-                    .fillMaxWidth((pct / 100.0).toFloat())
-                    .fillMaxHeight()
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(barColor(used)),
-            )
-        }
+                .clip(RoundedCornerShape(4.dp)),
+            color = barColor(used),
+            trackColor = cs.surfaceVariant,
+            gapSize = 0.dp,
+            drawStopIndicator = {},
+        )
         val reset = formatReset(resetsAt, kind)
         if (reset.isNotEmpty()) {
             Text(reset, color = cs.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))

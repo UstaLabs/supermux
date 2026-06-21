@@ -32,7 +32,10 @@ import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import androidx.compose.animation.AnimatedVisibilityScope
@@ -73,7 +76,7 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 
 class MainActivity : ComponentActivity() {
-    @OptIn(ExperimentalMaterial3WindowSizeClassApi::class, ExperimentalSharedTransitionApi::class)
+    @OptIn(ExperimentalMaterial3WindowSizeClassApi::class, ExperimentalSharedTransitionApi::class, ExperimentalComposeUiApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
@@ -124,7 +127,11 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                NavHost(navController = navController, startDestination = Home) {
+                NavHost(
+                    navController = navController,
+                    startDestination = Home,
+                    modifier = Modifier.semantics { testTagsAsResourceId = true },
+                ) {
                     // ── Home: list ↔ chat (keep-alive). Bodies are the old `else`-branch, verbatim,
                     //    with `route = …` swapped for nav. The keep-alive / shared-element / predictive-back
                     //    code lives inside the hosts below and is unchanged. ──

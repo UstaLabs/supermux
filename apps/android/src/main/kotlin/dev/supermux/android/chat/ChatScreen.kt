@@ -44,13 +44,18 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -64,6 +69,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ReasoningResponse
 import kotlinx.coroutines.Dispatchers
@@ -73,12 +79,13 @@ import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
@@ -405,34 +412,29 @@ fun ChatScreen(
         }
 
         // Panel switcher: Chat / Editor / Terminal / Display
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        val panels = SessionPanel.entries
+        PrimaryTabRow(
+            selectedTabIndex = panels.indexOf(activePanel),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         ) {
-            SessionPanel.entries.forEach { panel ->
+            panels.forEach { panel ->
                 val selected = activePanel == panel
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else Color.Transparent)
-                        .clickable { activePanel = panel }
-                        .padding(vertical = 6.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        panel.name,
-                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 12.sp,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                    )
-                }
+                Tab(
+                    selected = selected,
+                    onClick = { activePanel = panel },
+                    modifier = Modifier.testTag("chat_tab_${panel.name.lowercase()}"),
+                    selectedContentColor = MaterialTheme.colorScheme.primary,
+                    unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = {
+                        Text(
+                            panel.name,
+                            fontSize = 12.sp,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                        )
+                    },
+                )
             }
         }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
 
         var openedPanels by remember { mutableStateOf(setOf(SessionPanel.Chat)) }
         LaunchedEffect(activePanel) { openedPanels = openedPanels + activePanel }
@@ -610,6 +612,20 @@ fun ChatScreen(
 
             // ── Composer card ────────────────────────────────────────────────
             val focusBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = composerBorderAlpha)
+
+            // Single send path used by BOTH the send button and the IME Send action.
+            val canSend = text.isNotBlank() || pendingAttachments.any { !it.uploading }
+            fun doSend() {
+                if (!canSend) return
+                haptic(HapticKind.Confirm)
+                val attachmentIds = pendingAttachments
+                    .filter { !it.uploading }
+                    .map { it.fileId }
+                onSendWith(text, attachmentIds)
+                text = ""
+                pendingAttachments.clear()
+            }
+
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -662,7 +678,15 @@ fun ChatScreen(
                             ),
                             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                             interactionSource = composerInteractionSource,
-                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = 6,
+                            keyboardOptions = KeyboardOptions(
+                                capitalization = KeyboardCapitalization.Sentences,
+                                imeAction = ImeAction.Send,
+                            ),
+                            keyboardActions = KeyboardActions(onSend = { doSend() }),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("chat_composer"),
                         )
                     }
                 }
@@ -670,7 +694,6 @@ fun ChatScreen(
                 Spacer(Modifier.height(6.dp))
 
                 // ── Toolbar row: [Model pill] [Effort pill?]  <spacer>  [+] [🎤] [● send] ──
-                val canSend = text.isNotBlank() || pendingAttachments.any { !it.uploading }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -705,34 +728,30 @@ fun ChatScreen(
 
                     Spacer(modifier = Modifier.weight(1f))
 
-                    // Attach (+) button
-                    Box(
-                        modifier = Modifier
-                            .size(32.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.surfaceContainer)
-                            .clickable { filePickerLauncher.launch("*/*") },
-                        contentAlignment = Alignment.Center,
+                    // Attach (+) button — 48dp tap target wraps the 32dp visual
+                    IconButton(
+                        onClick = { filePickerLauncher.launch("*/*") },
                     ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_plus),
-                            contentDescription = "Add attachment",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp),
-                        )
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.surfaceContainer),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_plus),
+                                contentDescription = "Attach",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
                     }
 
-                    // Mic button — tap to start/stop recording
-                    Box(
-                        modifier = Modifier
-                            .size(32.dp)
-                            .clip(androidx.compose.foundation.shape.CircleShape)
-                            .background(
-                                if (recording) MaterialTheme.colorScheme.error // red while recording
-                                else MaterialTheme.colorScheme.surfaceContainer
-                            )
-                            .clickable {
-                                if (recording) {
+                    // Mic button — tap to start/stop recording; 48dp tap target wraps the 32dp visual
+                    IconButton(
+                        onClick = {
+                            if (recording) {
                                     // Stop recording — tick haptic on stop
                                     haptic(HapticKind.Tick)
                                     recording = false
@@ -768,52 +787,57 @@ fun ChatScreen(
                                         audioPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
                                     }
                                 }
-                            },
-                        contentAlignment = Alignment.Center,
+                        },
                     ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_mic),
-                            contentDescription = "Record voice",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(16.dp),
-                        )
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(androidx.compose.foundation.shape.CircleShape)
+                                .background(
+                                    if (recording) MaterialTheme.colorScheme.error // red while recording
+                                    else MaterialTheme.colorScheme.surfaceContainer
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_mic),
+                                contentDescription = if (recording) "Stop recording" else "Record voice",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
                     }
 
-                    // Circular send button — scale press + confirm haptic; dims when nothing to send
-                    Box(
-                        modifier = Modifier
-                            .scale(sendScale)
-                            .size(38.dp)
-                            .clip(androidx.compose.foundation.shape.CircleShape)
-                            .background(
-                                if (canSend) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
-                            )
-                            .clickable(
-                                interactionSource = sendInteractionSource,
-                                indication = null,
-                                enabled = canSend,
-                            ) {
-                                haptic(HapticKind.Confirm)
-                                val attachmentIds = pendingAttachments
-                                    .filter { !it.uploading }
-                                    .map { it.fileId }
-                                onSendWith(text, attachmentIds)
-                                text = ""
-                                pendingAttachments.clear()
-                            },
-                        contentAlignment = Alignment.Center,
+                    // Circular send button — scale press + confirm haptic; dims when nothing to send.
+                    // 48dp tap target (IconButton) wraps the 38dp circular visual.
+                    IconButton(
+                        onClick = { doSend() },
+                        enabled = canSend,
+                        interactionSource = sendInteractionSource,
+                        modifier = Modifier.testTag("chat_send"),
                     ) {
                         // Stop affordance (square) while the agent is working; send (↵) otherwise
                         val agentWorking = agent != null && agent.phase != "idle"
-                        Icon(
-                            painter = painterResource(
-                                if (agentWorking) R.drawable.ic_square else R.drawable.ic_send
-                            ),
-                            contentDescription = if (agentWorking) "Stop" else "Send",
-                            tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(18.dp),
-                        )
+                        Box(
+                            modifier = Modifier
+                                .scale(sendScale)
+                                .size(38.dp)
+                                .clip(androidx.compose.foundation.shape.CircleShape)
+                                .background(
+                                    if (canSend) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                painter = painterResource(
+                                    if (agentWorking) R.drawable.ic_square else R.drawable.ic_send
+                                ),
+                                contentDescription = if (agentWorking) "Stop" else "Send",
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
                     }
                 }
             }

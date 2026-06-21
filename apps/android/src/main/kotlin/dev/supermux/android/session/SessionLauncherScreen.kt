@@ -1,18 +1,13 @@
 package dev.supermux.android.session
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -23,6 +18,7 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.session.formatWorkdir
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionLauncherScreen(
     sessions: List<SessionInfo>,
@@ -63,32 +59,31 @@ fun SessionLauncherScreen(
         unfocusedLabelColor = cs.onSurfaceVariant,
     )
 
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(cs.surfaceContainerHigh),
-    ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Space.sm, vertical = Space.sm),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_arrow_left),
-                    contentDescription = "Back",
-                    tint = cs.onSurface,
-                    modifier = Modifier.size(18.dp),
-                )
-            }
-            Text("New session", color = cs.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-        }
-        HorizontalDivider(color = cs.outlineVariant)
-
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("New session", color = cs.onSurface) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_arrow_left),
+                            contentDescription = "Back",
+                            tint = cs.onSurface,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = cs.surfaceContainerHigh,
+                ),
+            )
+        },
+        containerColor = cs.surfaceContainerHigh,
+    ) { innerPadding ->
         Column(
             Modifier
-                .weight(1f)
+                .fillMaxSize()
+                .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = Space.lg, vertical = Space.xl),
             verticalArrangement = Arrangement.spacedBy(Space.lg),
@@ -125,28 +120,15 @@ fun SessionLauncherScreen(
                 colors = fieldColors,
             )
 
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, cs.outline, RoundedCornerShape(10.dp))
-                    .clip(RoundedCornerShape(10.dp)),
-            ) {
-                agents.forEach { a ->
-                    val selected = agent == a
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .background(if (selected) cs.primary else Color.Transparent)
-                            .clickable { agent = a }
-                            .padding(vertical = 8.dp),
-                        contentAlignment = Alignment.Center,
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                agents.forEachIndexed { i, a ->
+                    SegmentedButton(
+                        selected = agent == a,
+                        onClick = { agent = a },
+                        shape = SegmentedButtonDefaults.itemShape(i, agents.size),
+                        modifier = Modifier.testTag("agent_$a"),
                     ) {
-                        Text(
-                            a,
-                            color = if (selected) cs.onPrimary else cs.onSurfaceVariant,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
+                        Text(a)
                     }
                 }
             }
@@ -183,7 +165,9 @@ fun SessionLauncherScreen(
                     }
                 },
                 enabled = !submitting && workdir.isNotBlank(),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .testTag("launcher_submit")
+                    .fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = cs.primary,
                     contentColor = cs.onPrimary,

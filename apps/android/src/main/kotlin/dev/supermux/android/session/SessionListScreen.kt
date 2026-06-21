@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -196,7 +197,9 @@ fun SessionRow(
     }
 
     Row(
-        rowModifier.padding(horizontal = 12.dp, vertical = 10.dp),
+        rowModifier
+            .testTag("session_row_${s.id}")
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.Top,
     ) {
         // Subtle teal left-edge unread indicator
@@ -321,139 +324,156 @@ fun SessionListScreen(
         notifyBannerDismissed = true
     }
 
-    Box(Modifier.fillMaxSize()) {
+    Scaffold(
+        topBar = {
+            CenterAlignedTopAppBar(
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            painter = painterResource(R.drawable.mux_logo),
+                            contentDescription = "Supermux logo",
+                            tint = cs.onSurface,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Spacer(Modifier.width(Space.sm))
+                        Text(
+                            "supermux",
+                            color = cs.onSurface,
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = { menuExpanded = true },
+                        modifier = Modifier.testTag("list_overflow"),
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_more_vert),
+                            contentDescription = "Actions",
+                            tint = cs.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Archived") },
+                            leadingIcon = {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_archive),
+                                    contentDescription = null,
+                                    tint = cs.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            },
+                            modifier = Modifier.testTag("nav_archived"),
+                            onClick = { menuExpanded = false; onNavigate("archived") },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Usage") },
+                            leadingIcon = {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_bar_chart),
+                                    contentDescription = null,
+                                    tint = cs.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            },
+                            modifier = Modifier.testTag("nav_usage"),
+                            onClick = { menuExpanded = false; onNavigate("usage") },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Proxies") },
+                            leadingIcon = {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_network),
+                                    contentDescription = null,
+                                    tint = cs.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            },
+                            modifier = Modifier.testTag("nav_proxies"),
+                            onClick = { menuExpanded = false; onNavigate("proxies") },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Appearance") },
+                            leadingIcon = {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_monitor),
+                                    contentDescription = null,
+                                    tint = cs.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            },
+                            modifier = Modifier.testTag("nav_appearance"),
+                            onClick = { menuExpanded = false; onNavigate("appearance") },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Settings") },
+                            leadingIcon = {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_settings),
+                                    contentDescription = null,
+                                    tint = cs.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            },
+                            modifier = Modifier.testTag("nav_settings"),
+                            onClick = { menuExpanded = false; onNavigate("settings") },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Devices") },
+                            leadingIcon = {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_smartphone),
+                                    contentDescription = null,
+                                    tint = cs.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            },
+                            modifier = Modifier.testTag("nav_devices"),
+                            onClick = { menuExpanded = false; onNavigate("devices") },
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                    containerColor = cs.surfaceContainerLow,
+                ),
+            )
+        },
+        floatingActionButton = {
+            // Fix 4: circular FAB — CircleShape instead of rounded-square
+            FloatingActionButton(
+                onClick = onNewSession,
+                modifier = Modifier
+                    .testTag("new_session_fab")
+                    .size(56.dp)
+                    .softElevation(radius = Radii.pill),
+                shape = CircleShape,
+                containerColor = cs.primary,
+                contentColor = cs.onPrimary,
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_plus),
+                    contentDescription = "New session",
+                    tint = cs.onPrimary,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+        },
+        floatingActionButtonPosition = FabPosition.End,
+        containerColor = cs.surfaceContainerHigh,
+    ) { innerPadding ->
         LazyColumn(
             Modifier
+                .testTag("sessions_list")
                 .fillMaxSize()
-                .statusBarsPadding()
+                .padding(innerPadding)
                 .background(cs.surfaceContainerHigh),
         ) {
-            item(key = "header") {
-                // Fix 1: brand header with MuxLogo mark before "supermux" wordmark
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .background(cs.surfaceContainerLow)
-                        .padding(horizontal = Space.lg, vertical = Space.md),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.mux_logo),
-                        contentDescription = "Supermux logo",
-                        tint = cs.onSurface,
-                        modifier = Modifier.size(22.dp),
-                    )
-                    Spacer(Modifier.width(Space.sm))
-                    Text(
-                        "supermux",
-                        color = cs.onSurface,
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Box {
-                        IconButton(onClick = { menuExpanded = true }) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_more_vert),
-                                contentDescription = "Actions",
-                                tint = cs.onSurfaceVariant,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = menuExpanded,
-                            onDismissRequest = { menuExpanded = false },
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Archived") },
-                                leadingIcon = {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_archive),
-                                        contentDescription = null,
-                                        tint = cs.onSurfaceVariant,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                },
-                                onClick = { menuExpanded = false; onNavigate("archived") },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Usage") },
-                                leadingIcon = {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_bar_chart),
-                                        contentDescription = null,
-                                        tint = cs.onSurfaceVariant,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                },
-                                onClick = { menuExpanded = false; onNavigate("usage") },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Proxies") },
-                                leadingIcon = {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_network),
-                                        contentDescription = null,
-                                        tint = cs.onSurfaceVariant,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                },
-                                onClick = { menuExpanded = false; onNavigate("proxies") },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Displays") },
-                                leadingIcon = {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_monitor),
-                                        contentDescription = null,
-                                        tint = cs.onSurfaceVariant,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                },
-                                onClick = { menuExpanded = false; onNavigate("displays") },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Appearance") },
-                                leadingIcon = {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_monitor),
-                                        contentDescription = null,
-                                        tint = cs.onSurfaceVariant,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                },
-                                onClick = { menuExpanded = false; onNavigate("appearance") },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Settings") },
-                                leadingIcon = {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_settings),
-                                        contentDescription = null,
-                                        tint = cs.onSurfaceVariant,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                },
-                                onClick = { menuExpanded = false; onNavigate("settings") },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Devices") },
-                                leadingIcon = {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_smartphone),
-                                        contentDescription = null,
-                                        tint = cs.onSurfaceVariant,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                },
-                                onClick = { menuExpanded = false; onNavigate("devices") },
-                            )
-                        }
-                    }
-                }
-                // Hairline bottom border for the header
-                HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
-            }
-
             // Fix 5: notification banner — shown above first group until dismissed
             if (!notifyBannerDismissed) {
                 item(key = "notify_banner") {
@@ -496,21 +516,23 @@ fun SessionListScreen(
                                 style = MaterialTheme.typography.labelMedium,
                             )
                         }
-                        Icon(
-                            painter = painterResource(R.drawable.ic_x),
-                            contentDescription = "Clear",
-                            tint = cs.onSurfaceVariant.copy(alpha = 0.6f),
-                            modifier = Modifier
-                                .clickable { notifyBannerDismissed = true }
-                                .padding(start = Space.xs, end = Space.xs)
-                                .size(18.dp),
-                        )
+                        IconButton(onClick = { notifyBannerDismissed = true }) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_x),
+                                contentDescription = "Dismiss",
+                                tint = cs.onSurfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
                     }
                 }
             }
 
             item(key = "new_session_row") {
-                NewSessionListRow(onClick = onNewSession)
+                NewSessionListRow(
+                    onClick = onNewSession,
+                    modifier = Modifier.testTag("new_session_row"),
+                )
             }
 
             groups.forEach { g ->
@@ -526,39 +548,17 @@ fun SessionListScreen(
                     )
                 }
             }
-            // Bottom padding so FAB doesn't cover last item
+            // Bottom padding so the FAB doesn't cover the last item
             item(key = "bottom_spacer") { Spacer(Modifier.height(88.dp)) }
         }
-
-        // Fix 4: circular FAB — CircleShape instead of rounded-square
-        FloatingActionButton(
-            onClick = onNewSession,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(Space.xl)
-                .navigationBarsPadding()
-                .size(56.dp)
-                .softElevation(radius = Radii.pill),
-            shape = CircleShape,
-            containerColor = cs.primary,
-            contentColor = cs.onPrimary,
-        ) {
-            Icon(
-                painter = painterResource(R.drawable.ic_plus),
-                contentDescription = "New session",
-                tint = cs.onPrimary,
-                modifier = Modifier.size(24.dp),
-            )
-        }
     }
-
 }
 
 @Composable
-fun NewSessionListRow(onClick: () -> Unit) {
+fun NewSessionListRow(onClick: () -> Unit, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .padding(horizontal = Space.md, vertical = Space.xs)
             .clip(RoundedCornerShape(Radii.md))
