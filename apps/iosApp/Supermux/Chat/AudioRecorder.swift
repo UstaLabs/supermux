@@ -99,7 +99,8 @@ struct RecordingBar: View {
                 Image(systemName: "trash")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                    .frame(width: 36, height: 36)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Discard recording")
