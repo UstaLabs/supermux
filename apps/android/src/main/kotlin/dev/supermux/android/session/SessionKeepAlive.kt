@@ -290,6 +290,7 @@ private fun SessionChatLayer(
             lspRpcOut = { s, sid, m -> vm.lspRpcOut(s, sid, m) },
             lspClose = { s, sid -> vm.lspClose(s, sid) },
             connectTerminal = { vm.connectTerminal(session.id) },
+            connectAgentTerminal = { vm.connectAgentTerminal(session.id) },
             listDisplays = { vm.listDisplays() },
             connectScrcpy = { vm.connectScrcpy(it) },
             connectVnc = { vm.connectVnc(it) },

@@ -276,8 +276,10 @@ class MainActivity : ComponentActivity() {
                                         onBack = { navController.popBackStack() },
                                         loadProjects = { vm.listProjects() },
                                         validatePath = { vm.validatePath(it) },
-                                        onSubmit = { wd, ag, md, msg ->
-                                            vm.createSessionWithFirstMessage(wd, ag, md, msg)
+                                        loadModels = { vm.launcherModels(it) },
+                                        loadRepoInfo = { vm.launcherRepoInfo(it) },
+                                        onSubmit = { wd, ag, md, msg, wt, base ->
+                                            vm.createSessionWithFirstMessage(wd, ag, md, msg, worktree = wt, baseBranch = base)
                                         },
                                         onOpenSession = { selected = it; navController.popBackStack() },
                                     )
@@ -290,8 +292,10 @@ class MainActivity : ComponentActivity() {
                                 onBack = { navController.popBackStack() },
                                 loadProjects = { vm.listProjects() },
                                 validatePath = { vm.validatePath(it) },
-                                onSubmit = { wd, ag, md, msg ->
-                                    vm.createSessionWithFirstMessage(wd, ag, md, msg)
+                                loadModels = { vm.launcherModels(it) },
+                                loadRepoInfo = { vm.launcherRepoInfo(it) },
+                                onSubmit = { wd, ag, md, msg, wt, base ->
+                                    vm.createSessionWithFirstMessage(wd, ag, md, msg, worktree = wt, baseBranch = base)
                                 },
                                 onOpenSession = { selected = it; navController.popBackStack() },
                             )

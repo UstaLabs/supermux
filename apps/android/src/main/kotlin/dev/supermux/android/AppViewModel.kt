@@ -37,6 +37,7 @@ import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.ReviewSubmitResult
+import dev.supermux.net.RepoInfo
 import dev.supermux.net.ScrcpyClient
 import dev.supermux.net.SpawnRequest
 import dev.supermux.net.UpdateCommentBody
@@ -292,6 +293,10 @@ class AppViewModel(
     fun connectTerminal(sessionId: String): TerminalClient =
         TerminalClient(baseUrl, token, http, sessionId)
 
+    /** Raw agent-PTY terminal for the Native tab (kind="agent"); shell tab uses the scratch kind. */
+    fun connectAgentTerminal(sessionId: String): TerminalClient =
+        TerminalClient(baseUrl, token, http, sessionId, kind = "agent")
+
     /** GET /displays. Also seeds [_displays] (the doc-comment's "seeded on demand"); the
      *  StateFlow then stays live via `display_added`/`display_removed` frames. */
     suspend fun listDisplays(): List<DisplayStream> {
@@ -411,13 +416,17 @@ class AppViewModel(
         viewModelScope.launch { runCatching { api.spawn(SpawnRequest(workdir = workdir, name = name?.ifBlank { null }, agent = agent, model = model?.ifBlank { null })) } }
     }
 
-    /** Create a session then queue the first message for [ChatScreen] to send on open. */
+    /** Create a session then queue the first message for [ChatScreen] to send on open.
+     *  [worktree]/[baseBranch] are only honored when the workdir is an eligible git repo
+     *  (the broker ignores them otherwise); baseBranch null → cut from the repo's current branch. */
     suspend fun createSessionWithFirstMessage(
         workdir: String,
         agent: String,
         model: String?,
         text: String,
         attachments: List<String> = emptyList(),
+        worktree: Boolean = false,
+        baseBranch: String? = null,
     ): String {
         val validation = validatePath(workdir) ?: throw IllegalArgumentException("Could not validate path")
         val resolvedPath = validation.path
@@ -429,6 +438,8 @@ class AppViewModel(
                 workdir = resolvedPath,
                 agent = agent,
                 model = model?.ifBlank { null },
+                worktree = if (worktree) true else null,
+                baseBranch = baseBranch?.ifBlank { null },
             ),
         )
         val sessionId = resp.id.ifBlank {
@@ -447,6 +458,10 @@ class AppViewModel(
     /** GET /models?agent= — Claude models for the voice cleanup picker (no session). */
     suspend fun launcherModels(agent: String): List<ModelInfo> =
         runCatching { api.listModels(agent).models }.getOrNull() ?: emptyList()
+
+    /** GET /repos/info?path= — git status for the launcher's worktree picker (null on failure). */
+    suspend fun launcherRepoInfo(workdir: String): RepoInfo? =
+        runCatching { api.getRepoInfo(workdir) }.getOrNull()
 
     /** PUT /settings/config { voiceCleanupModel }. null/"" → broker default (Haiku). */
     fun saveVoiceCleanupModel(model: String?) {

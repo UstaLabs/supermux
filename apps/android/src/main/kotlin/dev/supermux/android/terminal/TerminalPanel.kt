@@ -15,6 +15,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -40,6 +41,9 @@ import org.connectbot.terminal.TerminalEmulatorFactory
 fun TerminalPanel(
     connect: () -> TerminalClient,
     modifier: Modifier = Modifier,
+    // Fires once when the session ends (CONNECTED → DISCONNECTED). The agent-PTY ("Native")
+    // tab uses this to fall back to Chat on agent exit (iOS onExit parity). Null = no-op.
+    onExit: (() -> Unit)? = null,
 ) {
     val c = LocalPanes.current
     val scope = rememberCoroutineScope()
@@ -64,6 +68,19 @@ fun TerminalPanel(
     DisposableEffect(client) { onDispose { client.stop() } }
 
     val status by client.status.collectAsState()
+
+    // Agent-PTY exit detection: once the client has connected, a drop to DISCONNECTED means the
+    // session ended → fire onExit (the Native tab falls back to Chat). Latches so a transient
+    // pre-connect DISCONNECTED never triggers it. No-op when onExit is null (scratch terminal).
+    // Hooks are called unconditionally (rules of composition); only the effect body branches.
+    val hadConnected = remember(client) { mutableStateOf(false) }
+    LaunchedEffect(client, status) {
+        if (status == TerminalStatus.CONNECTED) {
+            hadConnected.value = true
+        } else if (status == TerminalStatus.DISCONNECTED && hadConnected.value) {
+            onExit?.invoke()
+        }
+    }
 
     LaunchedEffect(client, emulator) {
         client.output.collect { bytes ->
