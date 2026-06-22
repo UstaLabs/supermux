@@ -38,9 +38,17 @@ android {
     }
     buildTypes {
         getByName("release") {
-            isMinifyEnabled = true
-            isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Minification is intentionally OFF. R8 renamed/stripped code that several
+            // subsystems resolve BY NAME at runtime and that static analysis can't see:
+            //  - org.connectbot termlib JNI callbacks  -> native crash opening the Terminal
+            //  - Google Tink behind EncryptedSharedPreferences -> SecureTokenStore lost the
+            //    pairing across restarts
+            //  - the cm6 editor @JavascriptInterface bridge (onChange/onSave/onReady/lspOut)
+            // Curating exhaustive keep-rules + re-verifying every subsystem isn't worth the
+            // ~22MB; an unminified release == the already-verified debug build. proguard-rules.pro
+            // keeps the known-required rules documented if minify is ever re-enabled.
+            isMinifyEnabled = false
+            isShrinkResources = false
             // Real release key when keystore.properties is present; debug key otherwise
             // (so the build still produces an installable APK for testing).
             signingConfig = if (keystorePropsFile.exists())
