@@ -52,6 +52,7 @@ export interface RemoteRepo {
 }
 export interface ClonedRepo { path: string; host: string; owner: string; name: string; fullName: string; sizeBytes: number }
 export interface ForgeAddInput { kind: string; host?: string; apiBase?: string; token: string; source: "pat" | "cli"; transport?: "https" | "ssh" }
+export interface InstallJob { state: "running" | "done" | "failed"; log: string; exitCode: number | null }
 export interface FinishReadiness {
   base: string; branch: string
   ahead: number; behind: number
@@ -234,6 +235,17 @@ export const api = {
   getAgentLogin: (kind: string) => request("GET", `/agents/${encodeURIComponent(kind)}/login`),
   cancelAgentLogin: (kind: string) => request("POST", `/agents/${encodeURIComponent(kind)}/login/cancel`),
   sendAgentLoginCode: (kind: string, code: string) => request("POST", `/agents/${encodeURIComponent(kind)}/login/code`, { code }),
+  // Install an agent's CLI on the broker. POST starts (or 409s onto a still-
+  // running job — both return the live job); GET polls progress.
+  startAgentInstall: async (kind: string): Promise<InstallJob> => {
+    const res = await fetch(`/agents/${encodeURIComponent(kind)}/install`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+    })
+    if (!res.ok && res.status !== 409) throw new Error(`POST /agents/${kind}/install → ${res.status}`)
+    return res.json() as Promise<InstallJob>
+  },
+  getAgentInstall: (kind: string) => request("GET", `/agents/${encodeURIComponent(kind)}/install`) as Promise<InstallJob>,
   getOpenCodeProviders: () => request("GET", "/opencode/providers") as Promise<Array<{ id: string; configured: boolean; methods: Array<{ type: string; label: string; index: number }> }>>,
   setOpenCodeKey: (providerId: string, key: string) => request("POST", "/opencode/auth/key", { providerId, key }),
   startOpenCodeOAuth: (providerId: string, method: number) => request("POST", "/opencode/auth/oauth/start", { providerId, method }) as Promise<{ url: string; instructions?: string }>,

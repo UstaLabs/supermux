@@ -79,7 +79,9 @@ import { randomBytes, randomUUID } from "crypto"
 import { execSync as _execSync, spawn as nodeSpawn } from "child_process"
 import { makeLogger } from "./shared/log"
 import { checkPreflight, hasBinary } from "./shared/preflight"
-import { detectAllAgents } from "./core/agents/detect"
+import { detectAllAgents, detectAgent } from "./core/agents/detect"
+import { createInstallManager } from "./core/agents/install"
+import { withAgentBinDirs } from "./core/agents/bin-dirs"
 import { homedir } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve } from "path"
@@ -148,6 +150,12 @@ const log = makeLogger("main")
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const STATIC_DIR = join(__dirname, "channels/web/static")
 const SOUL_PATH = join(MUX_HOME, "soul.md")
+
+// A freshly-installed agent CLI (via the settings install button) lands in a
+// per-user bin dir the installer added to shell rc — which this long-running
+// process never sourced. Put those dirs on PATH up front so both detection
+// (hasBinary) and spawning can see an agent the user installs at runtime.
+process.env.PATH = withAgentBinDirs(process.env.PATH, homedir())
 
 // Fail fast before any filesystem side-effects (state dirs, pid file, db).
 const preflight = checkPreflight(hasBinary)
@@ -891,6 +899,11 @@ const advanceRead = makeReadAdvancer({
 })
 
 if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
+  // One install job per agent; "installed" is re-probed (binary on PATH) after
+  // the installer exits. Referenced lazily by the startAgentInstall closures.
+  const installManager = createInstallManager({
+    isInstalled: (kind) => detectAgent(kind, { hasBinary, fileExists: existsSync }, { home: homedir() }).installed,
+  })
   webChannel = new WebChannel({
     updateChecker,
     port: MUX_WEB_PORT,
@@ -1335,6 +1348,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getAgentLogin: (kind) => loginManager.get(kind as any),
     cancelAgentLogin: (kind) => loginManager.cancel(kind as any),
     sendAgentLoginCode: (kind, code) => loginManager.sendCode(kind as any, code),
+    startAgentInstall: (kind) => installManager.start(kind as AgentKind),
+    getAgentInstall: (kind) => installManager.get(kind as AgentKind),
     listOpenCodeProviders: () => listOpenCodeProviders(),
     setOpenCodeApiKey: (id, key) => setOpenCodeApiKey(id, key),
     startOpenCodeOAuth: (id, method) => startOpenCodeOAuth(id, method),
