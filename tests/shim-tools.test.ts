@@ -88,3 +88,14 @@ describe("shim tool surface gating", () => {
     expect(names).toContain("reply")
   })
 })
+
+test("rpc tools map resolve/reject to orchestration ops rpc_resolve/rpc_reject", async () => {
+  const ops: { name: string; args: any }[] = []
+  const fakeShim = {
+    callOutbound: async () => ({ ok: true }),
+    callOrchestration: async (op: { name: string; args: any }) => { ops.push(op); return { ok: true, value: "ok" } },
+  }
+  const res = await callTool({ name: "resolve", arguments: { request_id: "req-1", data: { text: "hi" } } }, fakeShim as any, "claude", true /* rpcOnly */)
+  expect(res.isError).toBeFalsy()
+  expect(ops).toEqual([{ name: "rpc_resolve", args: { request_id: "req-1", data: { text: "hi" } } }])
+})

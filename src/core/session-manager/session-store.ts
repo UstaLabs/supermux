@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto"
 import type { Database as Db } from "bun:sqlite"
 import { type Session, type SessionRecord, type SessionRow, type SessionStatus, type AgentKind, type SessionRole, rowToRecord } from "./types"
+import type { FinishJob } from "../worktree/finish-job"
 
 export type RegisterInput = {
   id?: string
@@ -15,6 +16,7 @@ export type RegisterInput = {
   can_orchestrate?: boolean
   role?: SessionRole
   is_default?: boolean
+  internal?: boolean
   agent_session_id?: string
   agent_home?: string
   base_commit?: string
@@ -58,6 +60,7 @@ export class SessionStore {
       can_orchestrate: input.can_orchestrate ?? false,
       role,
       is_default,
+      internal: input.internal ?? false,
       tmux_target: input.tmux_target ?? "",
       tmux_window_id: input.tmux_window_id,
       agent_session_id: input.agent_session_id,
@@ -72,10 +75,10 @@ export class SessionStore {
       connected: false,
     }
     this.db.run(
-      `INSERT INTO sessions (id, name, status, agent, workdir, model, reasoning_level, mute, can_orchestrate, role, is_default, tmux_target, tmux_window_id, agent_session_id, agent_home, created_at, base_commit, base_commits, repo_root, base_branch, session_branch)
-       VALUES (?, ?, 'active', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO sessions (id, name, status, agent, workdir, model, reasoning_level, mute, can_orchestrate, role, is_default, internal, tmux_target, tmux_window_id, agent_session_id, agent_home, created_at, base_commit, base_commits, repo_root, base_branch, session_branch)
+       VALUES (?, ?, 'active', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [id, input.name, input.agent, input.workdir, input.model ?? null, input.reasoningLevel ?? null,
-       input.can_orchestrate ? 1 : 0, role, is_default ? 1 : 0, input.tmux_target ?? null,
+       input.can_orchestrate ? 1 : 0, role, is_default ? 1 : 0, input.internal ? 1 : 0, input.tmux_target ?? null,
        input.tmux_window_id ?? null, input.agent_session_id ?? null, input.agent_home ?? null, now,
        input.base_commit ?? null,
        input.base_commits ? JSON.stringify(input.base_commits) : null,
@@ -198,6 +201,12 @@ export class SessionStore {
       [wt.repo_root, wt.base_branch, wt.session_branch, id])
     const session = this.getById(id)
     if (session) { session.repo_root = wt.repo_root; session.base_branch = wt.base_branch; session.session_branch = wt.session_branch }
+  }
+
+  setFinishJob(id: string, job: FinishJob | null): void {
+    this.db.run("UPDATE sessions SET finish_job = ? WHERE id = ?", [job ? JSON.stringify(job) : null, id])
+    const session = this.cache.get(id)
+    if (session) session.finish_job = job ?? undefined
   }
 
   // --- Read status & drafts (server-side, global per session; migration 017) ---

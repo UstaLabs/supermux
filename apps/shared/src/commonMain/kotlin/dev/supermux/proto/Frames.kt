@@ -1,5 +1,7 @@
 package dev.supermux.proto
 
+import dev.supermux.net.DisplayStream
+import dev.supermux.net.FinishResult
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
@@ -17,6 +19,24 @@ data class SessionInfo(
     val model: String? = null,
     val repo_root: String? = null,
     val role: String? = null,
+    /** Worktree session's pinned branch (present only for worktree-backed sessions). */
+    val session_branch: String? = null,
+    /** Last/in-flight finish job for this session (mirrors the broker session record). */
+    val finish_job: FinishJobDto? = null,
+)
+
+/** A finish job's outcome/state machine, broadcast on the `finish_job` WS frame and
+ *  carried on the session snapshot. Mirrors the broker's `FinishJob`
+ *  (src/core/worktree/finish-job.ts): the terminal result lives in [outcome]. */
+@Serializable
+data class FinishJobDto(
+    val sessionId: String = "",
+    val action: String = "merge",     // merge | pr | keep | discard
+    val status: String = "running",   // running | done | failed
+    val stage: String? = null,
+    val outcome: FinishResult? = null,
+    val startedAt: Double = 0.0,       // epoch millis (Date.now())
+    val endedAt: Double? = null,
 )
 
 @Serializable
@@ -119,6 +139,62 @@ sealed interface ServerFrame {
         val commands: List<SlashCommand> = emptyList(),
         val resolved: Boolean = false,
     ) : ServerFrame
+
+    @Serializable @SerialName("fs_changed")
+    data class FsChanged(val session: String, val paths: List<String> = emptyList()) : ServerFrame
+
+    // Finish job lifecycle: the broker broadcasts `{type:"finish_job",session,job}`
+    // on every job state change (running → done|failed) — src/main.ts:onUpdate.
+    @Serializable @SerialName("finish_job")
+    data class FinishJobFrame(val session: String = "", val job: FinishJobDto? = null) : ServerFrame
+
+    // Display stream lifecycle: the broker broadcasts these on the control WS
+    // (src/main.ts: `{type:"display_added",display}` / `{type:"display_removed",id}`).
+    @Serializable @SerialName("display_added")
+    data class DisplayAdded(val display: DisplayStream) : ServerFrame
+
+    @Serializable @SerialName("display_removed")
+    data class DisplayRemoved(val id: String) : ServerFrame
+
+    @Serializable @SerialName("lsp_status")
+    data class LspStatus(
+        val session: String? = null,
+        val path: String? = null,
+        val supported: Boolean = false,
+        val serverId: String? = null,
+        val label: String? = null,
+        val languageId: String? = null,
+        val state: String? = null,
+        val installLabel: String? = null,
+        val requires: String? = null,
+        val error: String? = null,
+    ) : ServerFrame
+
+    @Serializable @SerialName("lsp_ready")
+    data class LspReady(val session: String, val serverId: String) : ServerFrame
+
+    @Serializable @SerialName("lsp_error")
+    data class LspError(
+        val session: String? = null,
+        val serverId: String? = null,
+        val error: String? = null,
+    ) : ServerFrame
+
+    @Serializable @SerialName("lsp_rpc")
+    data class LspRpcIn(val session: String, val serverId: String, val message: String) : ServerFrame
+
+    @Serializable @SerialName("lsp_exit")
+    data class LspExit(val session: String, val serverId: String) : ServerFrame
+
+    @Serializable @SerialName("lsp_install_progress")
+    data class LspInstallProgress(val serverId: String, val line: String = "") : ServerFrame
+
+    @Serializable @SerialName("lsp_install_done")
+    data class LspInstallDone(
+        val serverId: String,
+        val ok: Boolean = false,
+        val error: String? = null,
+    ) : ServerFrame
 }
 
 @Serializable
@@ -136,4 +212,25 @@ sealed interface ClientFrame {
         @EncodeDefault(EncodeDefault.Mode.ALWAYS) val op: String = "reply",
         val args: SendArgs,
     ) : ClientFrame
+
+    @Serializable @SerialName("editor_open")
+    data class EditorOpen(val session: String) : ClientFrame
+
+    @Serializable @SerialName("editor_close")
+    data class EditorClose(val session: String) : ClientFrame
+
+    @Serializable @SerialName("lsp_status_query")
+    data class LspStatusQuery(val session: String, val path: String) : ClientFrame
+
+    @Serializable @SerialName("lsp_open")
+    data class LspOpen(val session: String, val serverId: String) : ClientFrame
+
+    @Serializable @SerialName("lsp_rpc")
+    data class LspRpcOut(val session: String, val serverId: String, val message: String) : ClientFrame
+
+    @Serializable @SerialName("lsp_install")
+    data class LspInstall(val serverId: String) : ClientFrame
+
+    @Serializable @SerialName("lsp_close")
+    data class LspClose(val session: String, val serverId: String) : ClientFrame
 }

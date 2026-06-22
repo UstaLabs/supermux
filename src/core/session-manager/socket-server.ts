@@ -27,6 +27,11 @@ export async function startSocketServer(opts: {
   socketsDir: string
   handler: ServerHandler
   onStatusChange?: (session_id: string, connected: boolean, last_pong_at?: number) => void
+  // Fired when a queued inbound can't be handed to a live channel shim within
+  // deliveryGraceMs (the session crashed / never came up). Lets the broker
+  // surface "couldn't deliver" to the user instead of silently dropping it.
+  onUndeliverable?: (session_id: string, payload: { content: string; meta: Record<string, string> }) => void
+  deliveryGraceMs?: number
 }): Promise<SocketServer> {
   mkdirSync(opts.socketsDir, { recursive: true, mode: 0o700 })
   // A single Claude session has MORE THAN ONE shim connection on the same
@@ -68,6 +73,32 @@ export async function startSocketServer(opts: {
   type Queued = { content: string; meta: Record<string, string>; ts: number }
   const queues = new Map<string, Queued[]>()
   const queueStart = new Map<string, number>()
+  const DELIVERY_GRACE_MS = opts.deliveryGraceMs ?? 15_000
+  const deliveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+  // If a queued message isn't flushed to a live channel shim within the grace
+  // window, the session didn't come up — notify the broker (which tells the user)
+  // and drop the now-undeliverable queue (a re-send is the recovery).
+  function scheduleUndeliverable(session_id: string): void {
+    if (!opts.onUndeliverable || deliveryTimers.has(session_id)) return
+    const t = setTimeout(() => {
+      deliveryTimers.delete(session_id)
+      const q = queues.get(session_id)
+      if (!q || q.length === 0) return  // already flushed/delivered
+      const sample = q[q.length - 1]!
+      queues.delete(session_id)
+      queueStart.delete(session_id)
+      log.warn("inbound_undeliverable", { session_id, dropped: q.length, preview: sample.content.slice(0, 60) })
+      opts.onUndeliverable!(session_id, { content: sample.content, meta: sample.meta })
+    }, DELIVERY_GRACE_MS)
+    t.unref?.()
+    deliveryTimers.set(session_id, t)
+  }
+
+  function clearDeliveryTimer(session_id: string): void {
+    const t = deliveryTimers.get(session_id)
+    if (t) { clearTimeout(t); deliveryTimers.delete(session_id) }
+  }
 
   function enqueueInbound(session_id: string, payload: Queued): "queued" | "dropped" | "expired" {
     if (!queues.has(session_id)) {
@@ -109,6 +140,7 @@ export async function startSocketServer(opts: {
     }
     queues.delete(session_id)
     queueStart.delete(session_id)
+    clearDeliveryTimer(session_id)  // delivered — cancel the undeliverable alarm
   }
 
   async function bindOne(session_id: string): Promise<void> {
@@ -156,6 +188,13 @@ export async function startSocketServer(opts: {
         if (m.kind === "register") {
           const reply = await opts.handler.onRegister({ ...m, session_id })
           socket.write(encodeFrame({ kind: "registered", display_name: reply.name, session_id: reply.session_id }))
+          // A shim that just registered is reachable NOW — mark the session
+          // connected immediately instead of waiting up to a full 15s ping→pong
+          // cycle for the first pong (that lag made fresh resumes hang ~10s in
+          // waitForSessionConnected). Seed lastPong so stale-detection has a baseline.
+          const registeredAt = Date.now()
+          lastPong.set(session_id, registeredAt)
+          opts.onStatusChange?.(session_id, true, registeredAt)
           if (m.channel_only) {
             trackChannelConn(session_id, socket, true)
             flushQueue(session_id)
@@ -263,12 +302,15 @@ export async function startSocketServer(opts: {
           depth: queues.get(session_id)?.length ?? 0,
           preview: payload.content.slice(0, 60),
         })
+        scheduleUndeliverable(session_id)
         return
       }
       const frame = encodeFrame({ kind: "inbound", ...payload })
       for (const conn of live) conn.write(frame)
     },
     async close() {
+      for (const t of deliveryTimers.values()) clearTimeout(t)
+      deliveryTimers.clear()
       for (const set of conns.values()) for (const s of set) s.destroy()
       for (const srv of servers.values()) await new Promise<void>(r => srv.close(() => r()))
       conns.clear()

@@ -23,6 +23,8 @@ import m015 from "./015_worktree_session.sql" with { type: "text" }
 import m016 from "./016_review_comments.sql" with { type: "text" }
 import m017 from "./017_read_status_drafts.sql" with { type: "text" }
 import m018 from "./018_forge_connections.sql" with { type: "text" }
+import m019 from "./019_finish_job.sql" with { type: "text" }
+import m020 from "./020_internal_session.sql" with { type: "text" }
 
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "001_init", sql: m001 },
@@ -42,4 +44,6 @@ export const MIGRATIONS: Migration[] = [
   { version: 16, name: "016_review_comments", sql: m016 },
   { version: 17, name: "017_read_status_drafts", sql: m017 },
   { version: 18, name: "018_forge_connections", sql: m018 },
+  { version: 19, name: "019_finish_job", sql: m019 },
+  { version: 20, name: "020_internal_session", sql: m020 },
 ].sort((a, b) => a.version - b.version)

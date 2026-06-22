@@ -60,7 +60,7 @@ export async function handleSlash(input: SlashInput, ctx: CommandCtx): Promise<S
 }
 
 function cmdSessions(ctx: CommandCtx): SlashReply {
-  const sessions = ctx.registry.list()
+  const sessions = ctx.registry.listVisible()
   if (sessions.length === 0) return { text: "no sessions" }
   const activeId = ctx.registry.getActive(ctx.chat_id)
   const lines = sessions.map(s => {

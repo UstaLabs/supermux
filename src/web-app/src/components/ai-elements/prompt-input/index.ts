@@ -26,7 +26,6 @@ export { default as PromptInputSelectContent } from './PromptInputSelectContent.
 export { default as PromptInputSelectItem } from './PromptInputSelectItem.vue'
 export { default as PromptInputSelectTrigger } from './PromptInputSelectTrigger.vue'
 export { default as PromptInputSelectValue } from './PromptInputSelectValue.vue'
-export { default as PromptInputSpeechButton } from './PromptInputSpeechButton.vue'
 export { default as PromptInputSubmit } from './PromptInputSubmit.vue'
 export { default as PromptInputTab } from './PromptInputTab.vue'
 export { default as PromptInputTabBody } from './PromptInputTabBody.vue'

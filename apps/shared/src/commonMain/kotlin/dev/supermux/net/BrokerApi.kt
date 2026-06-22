@@ -10,6 +10,7 @@ import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.request.forms.MultiPartFormDataContent
 import io.ktor.client.request.forms.formData
+import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsBytes
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
@@ -19,6 +20,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SlashCommand
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -36,6 +38,8 @@ data class AppConfigDto(
     val codexConfigured: Boolean = false,
     val cursorConfigured: Boolean = false,
     val onboarded: Boolean = false,
+    /** Model the voice-cleanup agent uses (null/empty = broker default, Haiku). */
+    val voiceCleanupModel: String? = null,
 )
 
 @Serializable
@@ -98,6 +102,10 @@ data class SpawnRequest(
     val name: String? = null,
     val agent: String? = null,
     val model: String? = null,
+    /** Run the session in an isolated git worktree (only honored when the workdir is an eligible repo). */
+    val worktree: Boolean? = null,
+    /** Base branch the worktree is cut from (defaults to the repo's current branch when null). */
+    val baseBranch: String? = null,
 )
 
 @Serializable
@@ -226,7 +234,19 @@ data class GitOpResult(
     val files: List<String> = emptyList(),
 )
 
-/** Flat result for POST /sessions/<id>/finish — `status` discriminates the 9 variants. */
+/**
+ * Flat result for a finish outcome — `status` discriminates the 15 variants
+ * (integrated | pr_opened | branch_published | push_rejected | kept | discarded |
+ *  push_auth_failed | nothing_to_do | sync_conflict | tests_failed | dirty_overlap |
+ *  non_ff | no_verify | uncommitted | error).
+ *
+ * NOTE: `POST /sessions/<id>/finish` no longer returns this directly — it kicks off
+ * an async finish *job* and returns a [dev.supermux.proto.FinishJobDto] (initially
+ * `status:"running"`). The real outcome arrives on the WS `finish_job` frame as the
+ * job's `outcome`. [FinishResult] is the shape of that outcome (and of the legacy
+ * `finish()` decode, which — via ignoreUnknownKeys — sees only the job's top-level
+ * `status:"running"`).
+ */
 @Serializable
 data class FinishResult(
     val status: String = "",
@@ -238,7 +258,40 @@ data class FinishResult(
     val command: String? = null,
     val output: String? = null,
     val message: String? = null,
+    val prUrl: String? = null,
+    val compareUrl: String? = null,
+    val prError: String? = null,
+    val draft: Boolean? = null,
+    val cleanedUp: Boolean? = null,
 )
+
+// ─── Finish readiness + verify (chat finish menu) ────────────────────────────
+/** GET /sessions/<id>/finish/readiness — preflight snapshot for the finish menu. */
+@Serializable
+data class FinishReadiness(
+    val branch: String = "",
+    val base: String = "",
+    val ahead: Int = 0,
+    val behind: Int = 0,
+    val dirtyFiles: List<String> = emptyList(),
+    val filesChanged: Int = 0,
+    val insertions: Int = 0,
+    val deletions: Int = 0,
+    val hasRemote: Boolean = false,
+    val baseHasUpstream: Boolean = false,
+    val ghAvailable: Boolean = false,
+    val conflictPreflight: String = "unknown", // "clean" | "will_conflict" | "unknown"
+    val recommended: String = "merge",         // "merge" | "pr"
+    val nothingToLand: Boolean = false,
+)
+
+/** POST /sessions/<id>/verify/suggest → suggested verify command/content + its source. */
+@Serializable
+data class VerifySuggestResult(val content: String = "", val source: String = "")
+
+/** POST /sessions/<id>/verify/save → { ok, reason? }. */
+@Serializable
+data class VerifySaveResult(val ok: Boolean = false, val reason: String? = null)
 
 // ─── Personal Assistants (GET/POST /api/pas) ─────────────────────────────────
 @Serializable
@@ -272,6 +325,100 @@ data class LauncherCommands(
 
 @Serializable
 data class PathValidation(val ok: Boolean = false, val path: String? = null, val error: String? = null)
+
+// ─── Repo info + worktree branches (GET /repos/info) ─────────────────────────
+@Serializable
+data class RepoBranches(
+    val local: List<String> = emptyList(),
+    val remote: List<String> = emptyList(),
+)
+
+/** GET /repos/info?path=&fetch= → git status for the launcher's worktree picker.
+ *  `eligible` means the workdir is a repo we can cut an isolated worktree from. */
+@Serializable
+data class RepoInfo(
+    val isGitRepo: Boolean = false,
+    val eligible: Boolean = false,
+    val repoRoot: String? = null,
+    val currentBranch: String? = null,
+    val branches: RepoBranches? = null,
+)
+
+// ─── Git hosting / forges (GET/POST /forge/*) ────────────────────────────────
+@Serializable
+data class ForgeAccount(
+    val login: String = "",
+    val name: String? = null,
+    val avatarUrl: String? = null,
+)
+
+@Serializable
+data class ForgeSsh(val fingerprint: String = "", val registered: Boolean = false)
+
+/** A configured GitHub/GitLab connection. `kind` is "github" | "gitlab". */
+@Serializable
+data class ForgeConnection(
+    val id: String,
+    val kind: String = "github",
+    val host: String = "",
+    val apiBase: String = "",
+    val label: String = "",
+    val account: ForgeAccount = ForgeAccount(),
+    val source: String = "pat",        // "pat" | "cli"
+    val transport: String = "https",   // "https" | "ssh"
+    val ssh: ForgeSsh? = null,
+    val status: String = "ok",         // "ok" | "needs_reconnect"
+)
+
+@Serializable
+data class ForgeCliPresence(val available: Boolean = false, val login: String? = null)
+
+@Serializable
+data class ForgeCliStatus(
+    val github: ForgeCliPresence = ForgeCliPresence(),
+    val gitlab: ForgeCliPresence = ForgeCliPresence(),
+)
+
+@Serializable
+data class ForgeConnectionsResponse(
+    val connections: List<ForgeConnection> = emptyList(),
+    val cli: ForgeCliStatus? = null,
+)
+
+/** A repository on a remote forge (search result / create result). */
+@Serializable
+data class RemoteRepo(
+    val connectionId: String = "",
+    val kind: String = "",
+    val host: String = "",
+    val owner: String = "",
+    val name: String = "",
+    val fullName: String = "",
+    val private: Boolean = false,
+    val description: String? = null,
+    val defaultBranch: String = "",
+    val language: String? = null,
+    val updatedAt: String? = null,
+    val cloneUrl: String = "",
+    val webUrl: String = "",
+)
+
+@Serializable
+data class ForgeSearchError(val connectionId: String = "", val code: String = "", val message: String = "")
+
+@Serializable
+data class ForgeSearchResponse(
+    val repos: List<RemoteRepo> = emptyList(),
+    val errors: List<ForgeSearchError> = emptyList(),
+)
+
+/** Result of resolving a clone/create to a local checkout (POST /forge/clone, /forge/create-local). */
+@Serializable
+data class ResolvedRepo(val localPath: String = "")
+
+/** Result of creating a remote repo then cloning it (POST /forge/create). */
+@Serializable
+data class CreatedRepo(val repo: RemoteRepo? = null, val localPath: String = "")
 
 @Serializable
 data class FsEntry(
@@ -312,6 +459,171 @@ data class DisplayStream(
     val createdAt: String? = null,
 )
 
+// ─── Editor diff + code review (GET /sessions/<id>/fs/diff, /review/*) ────────
+@Serializable
+data class FsDiffResult(
+    val repos: List<RepoDiff> = emptyList(),
+    val comments: List<ReviewComment> = emptyList(),
+)
+
+@Serializable
+data class RepoDiff(
+    val repo: String,
+    val files: List<DiffFile> = emptyList(),
+)
+
+@Serializable
+data class DiffFile(
+    val path: String,
+    val status: String,
+    val diff: String,
+    val binary: Boolean = false,
+    val modeChange: Boolean = false,
+)
+
+@Serializable
+data class ReviewComment(
+    val id: String,
+    val repo: String,
+    val path: String,
+    val side: String,
+    val anchorLine: Int,
+    val anchorContext: String = "",
+    val body: String,
+    val author: String = "",
+    val status: String,
+    val currentLine: Int? = null,
+    val outdated: Boolean = false,
+)
+
+@Serializable
+data class AddCommentBody(
+    val repo: String,
+    val path: String,
+    val side: String,
+    val anchorLine: Int,
+    val anchorContext: String,
+    val body: String,
+    val diffHunkHeader: String? = null,
+)
+
+@Serializable
+data class UpdateCommentBody(
+    val status: String? = null,
+    val body: String? = null,
+    val resolvedBy: String? = null,
+)
+
+@Serializable
+data class ReviewSubmitResult(
+    val ok: Boolean = false,
+    val delivered: Int = 0,
+    val reason: String? = null,
+)
+
+// ─── Agents: install status + link/code login (GET/POST /agents/*) ─────────────
+/** GET /agents/status → per-CLI install + auth state (detectAllAgents).
+ *  Named `AgentInstallStatus` to avoid colliding with proto.AgentStatus (which is
+ *  the agent's *runtime phase*). `kind`: "claude" | "codex" | "cursor" | "opencode". */
+@Serializable
+data class AgentInstallStatus(
+    val kind: String = "",
+    val installed: Boolean = false,
+    val authed: Boolean = false,
+)
+
+/** State of an in-progress agent CLI login (POST/GET /agents/<kind>/login).
+ *  Mirrors the broker `LoginState` (src/core/agents/login/session.ts):
+ *  `phase`: "starting" | "awaiting_user" | "success" | "failed" | "cancelled".
+ *  `url`/`code` are the device-flow auth URL + code to show; `needsCode` means the
+ *  CLI is waiting for the user to paste a code back (POST .../login/code). */
+@Serializable
+data class AgentLoginState(
+    val kind: String = "",
+    val phase: String = "",
+    val url: String? = null,
+    val code: String? = null,
+    val needsCode: Boolean = false,
+    val error: String? = null,
+)
+
+// ─── opencode providers (GET/POST /opencode/*) ────────────────────────────────
+/** One auth method on an opencode provider. `index` is the method's position,
+ *  passed back as the `method` arg to oauth start/finish. `type`: "oauth" | "api". */
+@Serializable
+data class OpenCodeAuthMethod(
+    val type: String = "",
+    val label: String = "",
+    val index: Int = 0,
+)
+
+/** GET /opencode/providers → providers with their auth methods + configured flag.
+ *  (There is NO top-level `label`; render `id` / a method's `label`.) */
+@Serializable
+data class OpenCodeProvider(
+    val id: String = "",
+    val configured: Boolean = false,
+    val methods: List<OpenCodeAuthMethod> = emptyList(),
+)
+
+/** POST /opencode/auth/oauth/start → the authorization URL (+ optional instructions). */
+@Serializable
+data class OpenCodeOAuthStart(val url: String = "", val instructions: String? = null)
+
+// ─── Editor / LSP settings (GET/PUT /settings/editor) ─────────────────────────
+/** One language server row. `state`: "ready" | "missing" | "prereq-missing". */
+@Serializable
+data class LspServer(
+    val id: String = "",
+    val label: String = "",
+    val extensions: List<String> = emptyList(),
+    val enabled: Boolean = false,
+    val state: String = "",
+    val installLabel: String? = null,
+    val installable: Boolean = false,
+    val requires: String? = null,
+    val custom: Boolean = false,
+    val command: String? = null,
+)
+
+@Serializable
+data class LspConfig(val servers: List<LspServer> = emptyList())
+
+/** GET /settings/editor → { lsp: { servers: [...] } }. */
+@Serializable
+data class EditorSettingsResponse(val lsp: LspConfig = LspConfig())
+
+/** POST /settings/editor/lsp/<id>/install → { ok, lines }. */
+@Serializable
+data class LspInstallResult(val ok: Boolean = false, val lines: List<String> = emptyList())
+
+/** Result of add/remove custom LSP → { ok, error?, lsp? }. */
+@Serializable
+data class LspMutationResult(
+    val ok: Boolean = false,
+    val error: String? = null,
+    val lsp: LspConfig? = null,
+)
+
+// ─── System: in-app updater (GET /api/update/status) ──────────────────────────
+/** Mirrors the broker UpdateStatus (src/core/update/checker.ts).
+ *  `mode`: "binary" | "source" | "docker".
+ *  `state`: "idle" | "checking" | "downloading" | "swapping" | "restart-required" | "failed".
+ *  `lastChecked` is epoch-millis. `disabled` is true only in the no-checker fallback. */
+@Serializable
+data class UpdateStatus(
+    val current: String = "",
+    val commit: String = "",
+    val latest: String? = null,
+    val updateAvailable: Boolean = false,
+    val notesUrl: String? = null,
+    val mode: String = "",
+    val state: String = "",
+    val lastChecked: Double? = null,
+    val lastError: String? = null,
+    val disabled: Boolean = false,
+)
+
 // ─── Exceptions ────────────────────────────────────────────────────────────────
 
 class FsException(val status: Int, message: String) : Exception(message)
@@ -344,8 +656,18 @@ private data class AddDeviceBody(val name: String)
 
 @Serializable
 private data class FinishBody(
-    val skipVerify: Boolean? = null, val commitFirst: Boolean? = null, val commitMessage: String? = null,
+    val action: String? = null,
+    val skipVerify: Boolean? = null,
+    val commitFirst: Boolean? = null,
+    val commitMessage: String? = null,
+    val prTitle: String? = null,
+    val prBody: String? = null,
+    val draft: Boolean? = null,
+    val prRequiresGreen: Boolean? = null,
 )
+
+@Serializable
+private data class VerifySaveBody(val content: String)
 
 @Serializable
 private data class MessageBody(val text: String)
@@ -367,6 +689,81 @@ private data class StartDisplayBody(
     val height: Int? = null,
 )
 
+@Serializable
+private data class ForgeSearchBody(val query: String)
+
+@Serializable
+private data class ForgeCloneBody(val connectionId: String, val owner: String, val name: String)
+
+@Serializable
+private data class ForgeCreateBody(
+    val connectionId: String, val name: String, val owner: String? = null, val private: Boolean = true,
+)
+
+@Serializable
+private data class ForgeCreateLocalBody(val name: String)
+
+// Agent login / opencode / config-patch / forge-write request bodies.
+@Serializable
+private data class AgentCodeBody(val code: String)
+
+@Serializable
+private data class OpenCodeKeyBody(val providerId: String, val key: String)
+
+@Serializable
+private data class OpenCodeOAuthStartBody(val providerId: String, val method: Int)
+
+@Serializable
+private data class OpenCodeOAuthFinishBody(val providerId: String, val method: Int, val code: String)
+
+/** Partial PUT /settings/config body. explicitNulls=false omits unset fields, so
+ *  this never clobbers config the caller didn't touch. */
+@Serializable
+private data class ConfigPatchBody(
+    val paName: String? = null,
+    val voiceCleanupModel: String? = null,
+    val claudeOauthToken: String? = null,
+    val anthropicApiKey: String? = null,
+    val codexApiKey: String? = null,
+    val cursorApiKey: String? = null,
+)
+
+@Serializable
+private data class LspServerEnable(val enabled: Boolean)
+
+@Serializable
+private data class LspEnablePatch(val servers: Map<String, LspServerEnable>)
+
+@Serializable
+private data class LspTogglePatch(val lsp: LspEnablePatch)
+
+@Serializable
+private data class AddCustomLspBody(
+    val id: String,
+    val label: String,
+    val command: String,
+    val args: List<String> = emptyList(),
+    val extensions: List<String> = emptyList(),
+    val languageId: String? = null,
+    val installCmd: String? = null,
+)
+
+@Serializable
+private data class AddForgeBody(
+    val kind: String,
+    val token: String,
+    val host: String? = null,
+    val source: String = "pat",
+    val transport: String = "https",
+)
+
+@Serializable
+private data class ImportForgeBody(val kind: String, val transport: String = "https")
+
+/** Empty JSON object body (`{}`) for POSTs that take no params but return data. */
+@Serializable
+private class EmptyBody
+
 // ─── Client ──────────────────────────────────────────────────────────────────
 
 /**
@@ -386,18 +783,46 @@ class BrokerApi(
         .replaceFirst("wss://", "https://")
         .trimEnd('/')
 
-    private val json = Json { ignoreUnknownKeys = true }
+    // explicitNulls=false: partial PATCH bodies (e.g. review-comment resolve) must OMIT unset
+    // optional fields, not send them as JSON null — an explicit null would overwrite stored data.
+    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private fun bearerHeader() = "Bearer $token"
 
-    private suspend inline fun <reified T> getJson(url: String): T {
-        val text = http.get(url) {
-            header("Authorization", bearerHeader())
-        }.bodyAsText()
-        return json.decodeFromString(text)
+    /**
+     * Read [resp] into [T] WITHOUT ever aborting the app on failure.
+     *
+     * SKIE bridges each Swift→Kotlin suspend call into its OWN StandaloneCoroutine that has
+     * NO CoroutineExceptionHandler, run on a dispatcher that masks cancellation from the body
+     * (SwiftCoroutineDispatcher.executeWithoutCancellation). So any NON-CancellationException
+     * that escapes this body — a 401 "unauthorized" text body fed to decodeFromString, a
+     * transient transport/decode error, a mid-flight teardown during iPad multi-pane layout
+     * churn — cannot reach the (already resumed/cancelled) Swift continuation and instead
+     * crashes the whole process via handleJobException. (`ensureActive()` can't discriminate
+     * here: executeWithoutCancellation hides the real cancel state.)
+     *
+     * CancellationException is the one throwable that completes that coroutine cleanly, so on
+     * any non-2xx / decode / transport failure we log and surface it AS cancellation. Every
+     * caller wraps the call in `try?`, so Swift just sees nil/empty (disconnected, no displays,
+     * empty list, …) — graceful degradation instead of a SIGABRT.
+     */
+    private suspend inline fun <reified T> decode(resp: HttpResponse): T {
+        try {
+            val text = resp.bodyAsText()
+            if (resp.status.isSuccess()) return json.decodeFromString(text)
+            println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            println("[BrokerApi] request failed: ${e.message?.take(160)}")
+        }
+        throw CancellationException("BrokerApi request unavailable")
     }
+
+    private suspend inline fun <reified T> getJson(url: String): T =
+        decode(http.get(url) { header("Authorization", bearerHeader()) })
 
     private suspend inline fun <reified B> postJson(url: String, body: B) {
         http.post(url) {
@@ -422,6 +847,14 @@ class BrokerApi(
             setBody(json.encodeToString(body))
         }
     }
+
+    /** POST a JSON body and decode the JSON response (for endpoints that return data). */
+    private suspend inline fun <reified B, reified T> postReturningJson(url: String, body: B): T =
+        decode(http.post(url) {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(body))
+        })
 
     private fun urlEncode(s: String): String = s
         .replace("%", "%25")
@@ -482,36 +915,160 @@ class BrokerApi(
     }
 
     /** POST /sessions */
-    suspend fun spawn(req: SpawnRequest): SpawnResponse {
-        val text = http.post("$httpBase/sessions") {
+    suspend fun spawn(req: SpawnRequest): SpawnResponse =
+        decode(http.post("$httpBase/sessions") {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(req))
-        }.bodyAsText()
-        return json.decodeFromString(text)
-    }
+        })
 
     /** GET /settings/config */
     suspend fun getConfig(): AppConfigDto =
         getJson("$httpBase/settings/config")
 
-    /** PUT /settings/config {"paName": ...} */
+    /** PUT /settings/config {"paName": ...} — back-compat shim; prefer [saveConfig]. */
     suspend fun putConfig(paName: String) =
         putJson("$httpBase/settings/config", PaNameBody(paName))
+
+    /**
+     * PUT /settings/config — partial patch. Only non-null args are serialized
+     * (explicitNulls=false), so unset fields are never overwritten on the broker.
+     * Secret fields (tokens) are write-only — they read back redacted, not echoed.
+     */
+    suspend fun saveConfig(
+        paName: String? = null,
+        voiceCleanupModel: String? = null,
+        claudeOauthToken: String? = null,
+        anthropicApiKey: String? = null,
+        codexApiKey: String? = null,
+        cursorApiKey: String? = null,
+    ) = putJson(
+        "$httpBase/settings/config",
+        ConfigPatchBody(paName, voiceCleanupModel, claudeOauthToken, anthropicApiKey, codexApiKey, cursorApiKey),
+    )
+
+    /** GET /settings/soul → soul.md text ("" on any failure — never throws). */
+    suspend fun getSoul(): String {
+        val resp = http.get("$httpBase/settings/soul") { header("Authorization", bearerHeader()) }
+        return if (resp.status.isSuccess()) resp.bodyAsText() else ""
+    }
+
+    /** PUT /settings/soul (text/plain body) → true on success. */
+    suspend fun putSoul(text: String): Boolean {
+        val resp = http.put("$httpBase/settings/soul") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Text.Plain)
+            setBody(text)
+        }
+        return resp.status.isSuccess()
+    }
+
+    // ── Agents: install status + link/code login ───────────────────────────────
+
+    /** GET /agents/status → install + auth state per agent CLI. */
+    suspend fun agentStatuses(): List<AgentInstallStatus> =
+        getJson("$httpBase/agents/status")
+
+    /** POST /agents/<kind>/login → starts a CLI login, returns the initial state. */
+    suspend fun startAgentLogin(kind: String): AgentLoginState =
+        postReturningJson("$httpBase/agents/${urlEncode(kind)}/login", EmptyBody())
+
+    /** GET /agents/<kind>/login → poll the current login state. */
+    suspend fun agentLoginState(kind: String): AgentLoginState =
+        getJson("$httpBase/agents/${urlEncode(kind)}/login")
+
+    /** POST /agents/<kind>/login/code {code} — hand the CLI a pasted device code. */
+    suspend fun sendAgentLoginCode(kind: String, code: String) =
+        postJson("$httpBase/agents/${urlEncode(kind)}/login/code", AgentCodeBody(code))
+
+    /** POST /agents/<kind>/login/cancel — abort an in-progress login. */
+    suspend fun cancelAgentLogin(kind: String) {
+        http.post("$httpBase/agents/${urlEncode(kind)}/login/cancel") {
+            header("Authorization", bearerHeader())
+        }
+    }
+
+    // ── opencode providers (key + oauth) ───────────────────────────────────────
+
+    /** GET /opencode/providers → providers with their auth methods (bare array). */
+    suspend fun openCodeProviders(): List<OpenCodeProvider> =
+        getJson("$httpBase/opencode/providers")
+
+    /** POST /opencode/auth/key {providerId, key} — save an API key for a provider. */
+    suspend fun setOpenCodeKey(providerId: String, key: String) =
+        postJson("$httpBase/opencode/auth/key", OpenCodeKeyBody(providerId, key))
+
+    /** POST /opencode/auth/oauth/start {providerId, method} → { url, instructions? }.
+     *  `method` is the [OpenCodeAuthMethod.index] of the oauth method. */
+    suspend fun startOpenCodeOAuth(providerId: String, method: Int): OpenCodeOAuthStart =
+        postReturningJson("$httpBase/opencode/auth/oauth/start", OpenCodeOAuthStartBody(providerId, method))
+
+    /** POST /opencode/auth/oauth/finish {providerId, method, code} — complete oauth. */
+    suspend fun finishOpenCodeOAuth(providerId: String, method: Int, code: String) =
+        postJson("$httpBase/opencode/auth/oauth/finish", OpenCodeOAuthFinishBody(providerId, method, code))
+
+    // ── Editor / LSP settings ──────────────────────────────────────────────────
+
+    /** GET /settings/editor → { lsp: { servers } }. */
+    suspend fun getEditorSettings(): EditorSettingsResponse =
+        getJson("$httpBase/settings/editor")
+
+    /** PUT /settings/editor {lsp:{servers:{<id>:{enabled}}}} → updated settings.
+     *  Partial: only the named server's `enabled` is changed. */
+    suspend fun setLspEnabled(id: String, enabled: Boolean): EditorSettingsResponse =
+        decode(http.put("$httpBase/settings/editor") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(LspTogglePatch(LspEnablePatch(mapOf(id to LspServerEnable(enabled))))))
+        })
+
+    /** POST /settings/editor/lsp/<id>/install → { ok, lines } (install log). */
+    suspend fun installEditorLsp(id: String): LspInstallResult =
+        postReturningJson("$httpBase/settings/editor/lsp/${urlEncode(id)}/install", EmptyBody())
+
+    /** POST /settings/editor/lsp/custom — register a custom LSP server → { ok, error?, lsp? }. */
+    suspend fun addCustomEditorLsp(
+        id: String,
+        label: String,
+        command: String,
+        extensions: List<String>,
+        args: List<String> = emptyList(),
+        languageId: String? = null,
+        installCmd: String? = null,
+    ): LspMutationResult =
+        postReturningJson(
+            "$httpBase/settings/editor/lsp/custom",
+            AddCustomLspBody(id, label, command, args, extensions, languageId, installCmd),
+        )
+
+    /** DELETE /settings/editor/lsp/custom/<id> → { ok, error?, lsp? }. */
+    suspend fun removeCustomEditorLsp(id: String): LspMutationResult =
+        decode(http.delete("$httpBase/settings/editor/lsp/custom/${urlEncode(id)}") {
+            header("Authorization", bearerHeader())
+        })
+
+    // ── System: restart + update status ────────────────────────────────────────
+
+    /** POST /system/restart — restart the broker service (fire-and-forget). */
+    suspend fun restartBroker() {
+        http.post("$httpBase/system/restart") { header("Authorization", bearerHeader()) }
+    }
+
+    /** GET /api/update/status → in-app updater state. */
+    suspend fun updateStatus(): UpdateStatus =
+        getJson("$httpBase/api/update/status")
 
     /** GET /settings/curator → {config:{enabled,hour,minute}, nextRun} */
     suspend fun getCuratorSettings(): CuratorSettingsResponse =
         getJson("$httpBase/settings/curator")
 
     /** PUT /settings/curator {enabled,hour,minute} → updated {config, nextRun} */
-    suspend fun saveCuratorSettings(enabled: Boolean, hour: Int, minute: Int): CuratorSettingsResponse {
-        val text = http.put("$httpBase/settings/curator") {
+    suspend fun saveCuratorSettings(enabled: Boolean, hour: Int, minute: Int): CuratorSettingsResponse =
+        decode(http.put("$httpBase/settings/curator") {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(CuratorConfig(enabled, hour, minute)))
-        }.bodyAsText()
-        return json.decodeFromString(text)
-    }
+        })
 
     /** POST /settings/curator/run-now */
     suspend fun runCuratorNow() {
@@ -534,14 +1091,12 @@ class BrokerApi(
         getJson("$httpBase/devices")
 
     /** POST /devices {name} → { url, name }: a one-time pairing URL for the device */
-    suspend fun addDevice(name: String): AddDeviceResponse {
-        val text = http.post("$httpBase/devices") {
+    suspend fun addDevice(name: String): AddDeviceResponse =
+        decode(http.post("$httpBase/devices") {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(AddDeviceBody(name)))
-        }.bodyAsText()
-        return json.decodeFromString(text)
-    }
+        })
 
     /** DELETE /devices/<urlencoded name> */
     suspend fun revokeDevice(name: String) {
@@ -572,28 +1127,53 @@ class BrokerApi(
     suspend fun gitStatus(id: String): GitRemoteStatus =
         getJson("$httpBase/sessions/$id/git/status")
 
-    private suspend fun gitOp(id: String, op: String): GitOpResult {
-        val text = http.post("$httpBase/sessions/$id/git/$op") {
+    private suspend fun gitOp(id: String, op: String): GitOpResult =
+        decode(http.post("$httpBase/sessions/$id/git/$op") {
             header("Authorization", bearerHeader())
-        }.bodyAsText()
-        return json.decodeFromString(text)
-    }
+        })
     suspend fun gitFetch(id: String): GitOpResult = gitOp(id, "fetch")
     suspend fun gitPublish(id: String): GitOpResult = gitOp(id, "publish")
     suspend fun gitPush(id: String): GitOpResult = gitOp(id, "push")
     suspend fun gitPull(id: String): GitOpResult = gitOp(id, "pull")
 
-    /** POST /sessions/<id>/finish — sync → verify → merge the session branch. */
+    /**
+     * POST /sessions/<id>/finish — kick off the finish job for the session branch.
+     * `action`: "merge" | "pr" | "keep" | "discard" (broker defaults to "merge").
+     *
+     * Returns the *initial* [FinishResult] decode of the launched job (typically
+     * `status:"running"`); the terminal outcome is delivered on the WS `finish_job`
+     * frame ([dev.supermux.proto.FinishJobFrame]).
+     */
     suspend fun finish(
-        id: String, skipVerify: Boolean? = null, commitFirst: Boolean? = null, commitMessage: String? = null,
-    ): FinishResult {
-        val text = http.post("$httpBase/sessions/$id/finish") {
+        id: String,
+        action: String? = null,
+        skipVerify: Boolean? = null,
+        commitFirst: Boolean? = null,
+        commitMessage: String? = null,
+        prTitle: String? = null,
+        prBody: String? = null,
+        draft: Boolean? = null,
+        prRequiresGreen: Boolean? = null,
+    ): FinishResult =
+        decode(http.post("$httpBase/sessions/$id/finish") {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
-            setBody(json.encodeToString(FinishBody(skipVerify, commitFirst, commitMessage)))
-        }.bodyAsText()
-        return json.decodeFromString(text)
-    }
+            setBody(json.encodeToString(FinishBody(
+                action, skipVerify, commitFirst, commitMessage, prTitle, prBody, draft, prRequiresGreen,
+            )))
+        })
+
+    /** GET /sessions/<id>/finish/readiness — preflight for the finish menu. */
+    suspend fun finishReadiness(id: String): FinishReadiness =
+        getJson("$httpBase/sessions/$id/finish/readiness")
+
+    /** POST /sessions/<id>/verify/suggest → { content, source }. */
+    suspend fun verifySuggest(id: String): VerifySuggestResult =
+        postReturningJson("$httpBase/sessions/$id/verify/suggest", EmptyBody())
+
+    /** POST /sessions/<id>/verify/save {content} → { ok, reason? }. */
+    suspend fun verifySave(id: String, content: String): VerifySaveResult =
+        postReturningJson("$httpBase/sessions/$id/verify/save", VerifySaveBody(content))
 
     /** POST /sessions/<id>/message — post a message to the agent (e.g. a "Send to agent" fix request). */
     suspend fun sendMessage(id: String, text: String) {
@@ -616,14 +1196,12 @@ class BrokerApi(
         getJson("$httpBase/proxies")
 
     /** POST /proxies {sessionName, port, domain?} */
-    suspend fun createProxy(sessionName: String, port: Int, domain: String? = null): CreateProxyResponse {
-        val text = http.post("$httpBase/proxies") {
+    suspend fun createProxy(sessionName: String, port: Int, domain: String? = null): CreateProxyResponse =
+        decode(http.post("$httpBase/proxies") {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(CreateProxyBody(sessionName, port, domain)))
-        }.bodyAsText()
-        return json.decodeFromString(text)
-    }
+        })
 
     /** PATCH /proxies/<domain> {isPublic} */
     suspend fun setProxyPublic(domain: String, isPublic: Boolean) =
@@ -655,7 +1233,7 @@ class BrokerApi(
                 })
             }))
         }
-        return json.decodeFromString(resp.bodyAsText())
+        return decode(resp)
     }
 
     /** Upload from a base64 payload (iOS hands us `Data` as base64 — fast Kotlin decode). */
@@ -682,13 +1260,57 @@ class BrokerApi(
         getJson<ProjectsResponse>("$httpBase/projects").projects.map { it.path }
 
     /** POST /paths/validate {path} → {ok, path?, error?}. Resolves ~ and checks existence. */
-    suspend fun validatePath(path: String): PathValidation {
-        val text = http.post("$httpBase/paths/validate") {
+    suspend fun validatePath(path: String): PathValidation =
+        decode(http.post("$httpBase/paths/validate") {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(PathBody(path)))
-        }.bodyAsText()
-        return json.decodeFromString(text)
+        })
+
+    /** GET /repos/info?path=&fetch=1 — git repo status + branch lists for the worktree picker. */
+    suspend fun getRepoInfo(path: String, fetch: Boolean = false): RepoInfo =
+        getJson("$httpBase/repos/info?path=${urlEncode(path)}" + if (fetch) "&fetch=1" else "")
+
+    // ── Git hosting / forges ───────────────────────────────────────────────────
+
+    /** GET /forge/connections → configured GitHub/GitLab connections (+ CLI availability). */
+    suspend fun listForges(): ForgeConnectionsResponse =
+        getJson("$httpBase/forge/connections")
+
+    /** POST /forge/search {query} → matching remote repos across all connections. */
+    suspend fun searchForge(query: String): ForgeSearchResponse =
+        postReturningJson("$httpBase/forge/search", ForgeSearchBody(query))
+
+    /** POST /forge/clone {connectionId, owner, name} → { localPath } of the new local checkout. */
+    suspend fun cloneForge(connectionId: String, owner: String, name: String): ResolvedRepo =
+        postReturningJson("$httpBase/forge/clone", ForgeCloneBody(connectionId, owner, name))
+
+    /** POST /forge/create {connectionId, name, private} → creates the remote repo and clones it.
+     *  Param is `isPrivate` (not `private`) so the Swift call site isn't a keyword collision;
+     *  the JSON field stays `private` via [ForgeCreateBody]. */
+    suspend fun createForge(connectionId: String, name: String, isPrivate: Boolean = true): CreatedRepo =
+        postReturningJson("$httpBase/forge/create", ForgeCreateBody(connectionId, name, null, isPrivate))
+
+    /** POST /forge/create-local {name} → { localPath } of a freshly `git init`'d local repo. */
+    suspend fun createLocalRepo(name: String): ResolvedRepo =
+        postReturningJson("$httpBase/forge/create-local", ForgeCreateLocalBody(name))
+
+    /** POST /forge/connections {kind, token, host?, source:"pat", transport} → the new connection.
+     *  `host` is set for self-hosted GitLab/GitHub Enterprise; null = the public host. */
+    suspend fun addForge(
+        kind: String, token: String, host: String? = null, transport: String = "https",
+    ): ForgeConnection =
+        postReturningJson("$httpBase/forge/connections", AddForgeBody(kind, token, host, "pat", transport))
+
+    /** POST /forge/connections/import {kind, transport} → connection imported from the CLI's auth. */
+    suspend fun importForge(kind: String, transport: String = "https"): ForgeConnection =
+        postReturningJson("$httpBase/forge/connections/import", ImportForgeBody(kind, transport))
+
+    /** DELETE /forge/connections/<id> — disconnect a forge account. */
+    suspend fun removeForge(id: String) {
+        http.delete("$httpBase/forge/connections/${urlEncode(id)}") {
+            header("Authorization", bearerHeader())
+        }
     }
 
     // ── Editor filesystem ──────────────────────────────────────────────────────
@@ -723,6 +1345,28 @@ class BrokerApi(
     suspend fun fsSearch(sessionId: String, q: String): List<FsSearchResult> =
         getJson("$httpBase/sessions/$sessionId/fs/search?q=${urlEncode(q)}")
 
+    /** GET /sessions/<id>/fs/diff → { repos: RepoDiff[], comments: ReviewComment[] }. */
+    suspend fun fsDiff(sessionId: String): FsDiffResult =
+        getJson("$httpBase/sessions/$sessionId/fs/diff")
+
+    /** POST /sessions/<id>/review/comments {repo,path,side,anchorLine,anchorContext,body,diffHunkHeader?} → the created comment. */
+    suspend fun reviewAddComment(sessionId: String, body: AddCommentBody): ReviewComment =
+        postReturningJson("$httpBase/sessions/$sessionId/review/comments", body)
+
+    /** PATCH /sessions/<id>/review/comments/<commentId> {status?,body?,resolvedBy?} → true on success (response ignored). */
+    suspend fun reviewUpdateComment(sessionId: String, commentId: String, patch: UpdateCommentBody): Boolean {
+        val resp = http.patch("$httpBase/sessions/$sessionId/review/comments/${urlEncode(commentId)}") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(patch))
+        }
+        return resp.status.isSuccess()
+    }
+
+    /** POST /sessions/<id>/review/submit {} → { ok, delivered, reason? }. */
+    suspend fun reviewSubmit(sessionId: String): ReviewSubmitResult =
+        postReturningJson("$httpBase/sessions/$sessionId/review/submit", EmptyBody())
+
     // ── Displays ─────────────────────────────────────────────────────────────────
 
     /** GET /displays → active display streams. */
@@ -730,14 +1374,12 @@ class BrokerApi(
         getJson("$httpBase/displays")
 
     /** POST /displays {sessionName, provider?, device?, width?, height?} → the started stream. */
-    suspend fun startDisplay(sessionName: String, provider: String? = null, device: String? = null, width: Int? = null, height: Int? = null): DisplayStream {
-        val text = http.post("$httpBase/displays") {
+    suspend fun startDisplay(sessionName: String, provider: String? = null, device: String? = null, width: Int? = null, height: Int? = null): DisplayStream =
+        decode(http.post("$httpBase/displays") {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(StartDisplayBody(sessionName, provider, device, width, height)))
-        }.bodyAsText()
-        return json.decodeFromString(text)
-    }
+        })
 
     /** DELETE /displays/<id> */
     suspend fun stopDisplay(id: String) {

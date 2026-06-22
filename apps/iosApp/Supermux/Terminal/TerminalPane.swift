@@ -1,8 +1,12 @@
 import SwiftUI
 import Shared
+import SwiftTerm
+import UIKit
 
-/// One terminal: a SwiftTerm view + a connection status chip, lifecycle-bound to
-/// a `TerminalSession`. Used for both scratch shells and the agent viewer.
+/// One terminal: a SwiftTerm view + a connection status chip. The live state (websocket
+/// + emulator scrollback) lives in a `TerminalHost` cached in `BrokerSession`, so toggling
+/// this pane off/on or remounting it (tab/session switch) REUSES the warm terminal instead
+/// of reconnecting + re-rendering. Used for both scratch shells and the agent viewer.
 struct TerminalPane: View {
     let broker: BrokerSession
     let session: SessionInfo
@@ -10,35 +14,70 @@ struct TerminalPane: View {
     let terminalId: String?          // scratch tab id; nil for agent
     var onExit: () -> Void = {}
 
-    @State private var term: TerminalSession?
     @State private var ended = false
+    @State private var keyboardHeight: CGFloat = 0
+
+    // The cached, persistent terminal (live connection + scrollback). Computed, but always
+    // returns the SAME instance for this (session, kind, terminalId) — the cache owns it.
+    private var host: TerminalHost {
+        broker.terminalHost(sessionId: session.id, kind: kind, terminalId: terminalId)
+    }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Theme.terminalBackground.ignoresSafeArea()
             if ended {
                 endedState
-            } else if let term {
-                SwiftTermView(session: term)
+            } else {
+                SwiftTermView(view: host.view)
                     .ignoresSafeArea(.container, edges: .bottom)
-                StatusChip(status: term.status)
+                StatusChip(status: host.session.status)
                     .padding(8)
             }
         }
+        .overlay(alignment: .bottom) { keyboardDismissOverlay }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
+            if let f = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect { keyboardHeight = f.height }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardHeight = 0 }
         .onAppear {
-            guard term == nil else { return }
-            let t = TerminalSession(broker: broker, sessionId: session.id,
-                                    kind: kind, terminalId: terminalId)
-            t.onExit = {
+            // The cache owns the connection lifecycle (created + started on first access).
+            // We only (re)point onExit at THIS mount's callback — the host outlives remounts.
+            host.session.onExit = {
                 ended = true
                 onExit()
+                broker.dropTerminalHost(sessionId: session.id, kind: kind, terminalId: terminalId)
             }
-            t.start()
-            term = t
         }
-        .onDisappear {
-            term?.stop()
-            term = nil
+        // No onDisappear stop(): toggling the pane off must NOT tear down the live terminal.
+    }
+
+    // Floating ⌄ button to dismiss the terminal keyboard. SwiftTerm owns a UIKit keyboard, so
+    // SwiftUI tap/scroll dismissal and the global resignFirstResponder don't reach it — we
+    // resign the cached TerminalView directly. Placed just above the keyboard via its frame
+    // height. SM_KBD=1 fakes a height for headless screenshot verification.
+    private var effectiveKbHeight: CGFloat {
+        keyboardHeight > 0 ? keyboardHeight : (ProcessInfo.processInfo.environment["SM_KBD"] == "1" ? 320 : 0)
+    }
+    @ViewBuilder private var keyboardDismissOverlay: some View {
+        if effectiveKbHeight > 0 && !ended {
+            GeometryReader { geo in
+                Button { host.view.resignFirstResponder() } label: {
+                    Image(systemName: "keyboard.chevron.compact.down")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Theme.teal)
+                        .frame(width: 44, height: 44)
+                        .glassEffect(.regular, in: Circle())
+                }
+                .buttonStyle(.plain)
+                // Layout-based positioning (NOT .offset, which leaves the tap target behind):
+                // padding pushes the button up by the keyboard height so it sits just above it
+                // AND its hit region moves with it.
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                .padding(.trailing, 16)
+                .padding(.bottom, max(0, effectiveKbHeight - geo.safeAreaInsets.bottom) + 8)
+            }
+            .ignoresSafeArea(.keyboard)
         }
     }
 
@@ -57,7 +96,7 @@ struct TerminalPane: View {
 struct StatusChip: View {
     let status: TerminalSession.Status
     var body: some View {
-        let (label, tint): (String, Color) = switch status {
+        let (label, tint): (String, SwiftUI.Color) = switch status {
         case .connecting: ("Connecting…", .orange)
         case .connected: ("Connected", Theme.teal)
         case .disconnected: ("Disconnected", .secondary)

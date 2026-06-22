@@ -16,6 +16,7 @@ export interface Session {
   status?: string
   session_branch?: string
   repo_root?: string
+  finish_job?: import("./finishJob").FinishJob
 }
 
 export interface ArchivedSession {

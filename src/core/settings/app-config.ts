@@ -3,6 +3,8 @@
 // (see resolveAppConfig). Mirrors curator-config.ts: a tolerant parser that
 // never throws, so a corrupt/old row degrades to safe defaults.
 
+import { ENGINES } from "../agent-api/index"
+
 export type ExposureMode = "local" | "public"
 
 /** The tunnel chosen by `supermux connect`, for --status/--switch/--off. */
@@ -28,9 +30,34 @@ export interface AppConfig {
   onboarded: boolean
   // Set by `supermux connect`; absent when no tunnel is configured. Store-only.
   tunnel?: TunnelRecord
+  // Voice pipeline settings. Store-only; absent when not configured.
+  voiceCleanupEngine?: string // engine used by voice cleanup (codex | opencode-zen | opencode-go | claude | cursor | cursor-cli); default codex
+  voiceCleanupModel?: string // model used by the voice-cleanup agent
+  voiceCleanupGlossary?: string[] // project/technical terms the cleanup must keep verbatim; default-seeded
+  whisperModel?: string // path or name of the Whisper model file
+  whisperLang?: string // language code (e.g. "tr", "en") or "auto"
 }
 
 export const SETTINGS_KEY_APP = "app"
+
+/**
+ * Built-in glossary seed for voice cleanup. These are project/product/technical
+ * names the cleanup agent must NOT "correct" to a similarly-named world-prior
+ * (e.g. "Supermux" → "Supermaven"). Returned by resolveAppConfig when the user
+ * has not stored their own list; an explicitly-stored empty array is preserved.
+ */
+export const DEFAULT_VOICE_CLEANUP_GLOSSARY: string[] = [
+  "Supermux",
+  "Claude",
+  "Codex",
+  "Whisper",
+  "Haiku",
+  "Opus",
+  "Sonnet",
+  "OpenCode",
+  "Cursor",
+  "Tailscale",
+]
 
 export const defaultAppConfig: AppConfig = {
   paName: "assistant",
@@ -49,6 +76,18 @@ export const defaultAppConfig: AppConfig = {
 
 function str(v: unknown, fallback: string): string {
   return typeof v === "string" ? v : fallback
+}
+
+/**
+ * Coerce arbitrary input into a glossary string array, or undefined if the shape
+ * is unusable. An array keeps its string entries (trimmed; empties dropped). A
+ * comma-separated string is split → trimmed → empties dropped. An explicitly
+ * empty array stays [] (the user cleared the list). Anything else → undefined.
+ */
+function parseGlossary(v: unknown): string[] | undefined {
+  if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean)
+  if (typeof v === "string") return v.split(",").map((x) => x.trim()).filter(Boolean)
+  return undefined
 }
 
 /** Coerce arbitrary input into a TunnelRecord, or undefined if shape is wrong. */
@@ -97,6 +136,12 @@ export function resolveAppConfig(stored: Partial<AppConfig>, env: AppConfigEnv):
     cursorApiKey: firstNonEmpty(stored.cursorApiKey),
     onboarded: stored.onboarded === undefined ? defaultAppConfig.onboarded : Boolean(stored.onboarded),
     tunnel: parseTunnelRecord(stored.tunnel), // store-only, no env source
+    ...(stored.voiceCleanupEngine !== undefined ? { voiceCleanupEngine: stored.voiceCleanupEngine } : {}),
+    ...(stored.voiceCleanupModel !== undefined ? { voiceCleanupModel: stored.voiceCleanupModel } : {}),
+    // Glossary is default-seeded: a stored array (incl. empty) wins; otherwise the built-in seed.
+    voiceCleanupGlossary: Array.isArray(stored.voiceCleanupGlossary) ? stored.voiceCleanupGlossary : DEFAULT_VOICE_CLEANUP_GLOSSARY,
+    ...(stored.whisperModel !== undefined ? { whisperModel: stored.whisperModel } : {}),
+    ...(stored.whisperLang !== undefined ? { whisperLang: stored.whisperLang } : {}),
   }
 }
 
@@ -126,6 +171,14 @@ export function sanitizeAppConfigPatch(input: unknown): Partial<AppConfig> {
     const t = parseTunnelRecord(o.tunnel)
     if (t) out.tunnel = t
   }
+  if (typeof o.voiceCleanupEngine === "string" && (ENGINES as string[]).includes(o.voiceCleanupEngine)) out.voiceCleanupEngine = o.voiceCleanupEngine
+  if (typeof o.voiceCleanupModel === "string") out.voiceCleanupModel = o.voiceCleanupModel
+  if (o.voiceCleanupGlossary !== undefined) {
+    const g = parseGlossary(o.voiceCleanupGlossary)
+    if (g !== undefined) out.voiceCleanupGlossary = g
+  }
+  if (typeof o.whisperModel === "string") out.whisperModel = o.whisperModel
+  if (typeof o.whisperLang === "string") out.whisperLang = o.whisperLang
   return out
 }
 
@@ -150,6 +203,11 @@ export function parseAppConfig(input: unknown, base: AppConfig = defaultAppConfi
     cursorApiKey: str(o.cursorApiKey, base.cursorApiKey),
     onboarded: o.onboarded === undefined ? base.onboarded : Boolean(o.onboarded),
     tunnel: parseTunnelRecord(o.tunnel) ?? base.tunnel,
+    ...(o.voiceCleanupEngine !== undefined ? { voiceCleanupEngine: str(o.voiceCleanupEngine, base.voiceCleanupEngine ?? "") || undefined } : base.voiceCleanupEngine !== undefined ? { voiceCleanupEngine: base.voiceCleanupEngine } : {}),
+    ...(o.voiceCleanupModel !== undefined ? { voiceCleanupModel: str(o.voiceCleanupModel, base.voiceCleanupModel ?? "") || undefined } : base.voiceCleanupModel !== undefined ? { voiceCleanupModel: base.voiceCleanupModel } : {}),
+    voiceCleanupGlossary: parseGlossary(o.voiceCleanupGlossary) ?? base.voiceCleanupGlossary ?? DEFAULT_VOICE_CLEANUP_GLOSSARY,
+    ...(o.whisperModel !== undefined ? { whisperModel: str(o.whisperModel, base.whisperModel ?? "") || undefined } : base.whisperModel !== undefined ? { whisperModel: base.whisperModel } : {}),
+    ...(o.whisperLang !== undefined ? { whisperLang: str(o.whisperLang, base.whisperLang ?? "") || undefined } : base.whisperLang !== undefined ? { whisperLang: base.whisperLang } : {}),
   }
 }
 

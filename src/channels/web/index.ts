@@ -61,7 +61,7 @@ function clientIp(req: Request): string {
 // case — each new instance already starts with an empty bucket.
 export function __resetAuthFailures(): void {}
 
-const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/system", "/repos", "/forge"]
+const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/system", "/repos", "/forge"]
 const MAX_CLIENT_LOG_RING = 800
 
 export type StoredClientLogEntry = {
@@ -89,6 +89,7 @@ export interface SessionSnapshot {
   model?: string
   session_branch?: string
   repo_root?: string
+  finish_job?: import("../../core/worktree/finish-job").FinishJob
 }
 
 export interface ArchivedSessionSnapshot {
@@ -125,7 +126,8 @@ export interface WebChannelOpts {
   switchReasoningLevel?: (id: string, level: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
   getSessionAgent?: (name: string) => { agent: AgentKind; model?: string; reasoningLevel?: string } | undefined
   interruptSession?: (id: string) => Promise<{ ok: boolean; reason?: string }>
-  finishSession?: (id: string, opts?: { skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string }) => Promise<import("../../core/worktree/finish").FinishResult>
+  finishSession?: (id: string, req: { action: "merge"|"pr"|"keep"|"discard"; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }) => Promise<import("../../core/worktree/finish-job").FinishJob | { error: string }>
+  finishReadiness?: (id: string) => import("../../core/worktree/readiness").FinishReadiness | { error: string }
   reviewList?: (id: string) => import("../../core/review/store").Comment[]
   reviewAdd?: (id: string, c: Omit<import("../../core/review/store").NewComment, "sessionId">) => import("../../core/review/store").Comment
   reviewUpdate?: (commentId: string, patch: { status?: "open" | "submitted" | "resolved"; body?: string; resolvedBy?: string }) => void
@@ -138,6 +140,7 @@ export interface WebChannelOpts {
   spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string }>
   killSession?: (name: string) => Promise<void>
   renameSession?: (oldName: string, newName: string) => Promise<void>
+  transcribe?: (sessionId: string, input: { draft?: string; audioPath?: string }) => Promise<{ text: string; degraded?: boolean }>
   spawnPA?: (args: { name: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string }>
   listPAs?: () => SessionSnapshot[]
   updatePA?: (name: string, patch: { model?: string; reasoningLevel?: string }) => Promise<{ ok: boolean; error?: string }>
@@ -1336,6 +1339,22 @@ export class WebChannel implements Channel {
       return this.json(redactAppConfig(updated))
     }
 
+    // ── Voice cleanup glossary ──────────────────────────────────────────────
+    // The app reads/edits the project-term glossary fed to the voice-cleanup
+    // prompt (and, later, the on-device recognizer). Persisted via app-config;
+    // GET always returns a list (default-seeded by resolveAppConfig).
+    if (method === "GET" && path === "/config/voice-glossary") {
+      const cfg = this.opts.getAppConfig?.()
+      if (!cfg) return this.json({ error: "config unavailable" }, 503)
+      return this.json({ glossary: cfg.voiceCleanupGlossary ?? [] })
+    }
+    if (method === "PUT" && path === "/config/voice-glossary") {
+      if (!this.opts.setAppConfig) return this.json({ error: "config unavailable" }, 503)
+      const body = await req.json().catch(() => ({})) as { glossary?: unknown }
+      const updated = this.opts.setAppConfig({ voiceCleanupGlossary: body.glossary as string[] | undefined })
+      return this.json({ glossary: updated.voiceCleanupGlossary ?? [] })
+    }
+
     // ── Settings: exposure ─────────────────────────────────────────────────
     if (method === "GET" && path === "/settings/exposure") {
       const e = this.opts.getExposure?.()
@@ -1540,15 +1559,29 @@ export class WebChannel implements Channel {
       if (!result.ok) return this.json({ error: result.reason ?? "interrupt failed" }, 400)
       return this.json({ ok: true })
     }
+    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/finish\/readiness$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      if (!this.opts.finishReadiness) return this.json({ error: "not configured" }, 503)
+      const r = this.opts.finishReadiness(id)
+      if (r && typeof r === "object" && "error" in r) return this.json(r, 404)
+      return this.json(r)
+    }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/finish$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       if (!this.opts.finishSession) return this.json({ error: "not configured" }, 503)
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      const action = body.action === "pr" || body.action === "keep" || body.action === "discard" ? body.action : "merge"
       const result = await this.opts.finishSession(id, {
+        action,
         skipVerify: body.skipVerify === true,
         commitFirst: body.commitFirst === true,
         commitMessage: typeof body.commitMessage === "string" ? body.commitMessage : undefined,
+        draft: body.draft === true,
+        prRequiresGreen: body.prRequiresGreen === true,
+        prTitle: typeof body.prTitle === "string" ? body.prTitle : undefined,
+        prBody: typeof body.prBody === "string" ? body.prBody : undefined,
       })
+      if (result && typeof result === "object" && "error" in result) return this.json(result, 400)
       return this.json(result)
     }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/git\/status$/)) {
@@ -1821,6 +1854,28 @@ export class WebChannel implements Channel {
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
+    }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/transcribe$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      if (!this.opts.transcribe) return this.json({ error: "not configured" }, 503)
+      const ctype = req.headers.get("content-type") ?? ""
+      let input: { draft?: string; audioPath?: string }
+      if (ctype.includes("multipart/form-data")) {
+        if (!this.fileStore) return this.json({ error: "file store not mounted" }, 500)
+        const form = await req.formData().catch(() => null)
+        const file = form?.get("audio")
+        if (!(file instanceof Blob)) return this.json({ error: "audio field required" }, 400)
+        const bytes = new Uint8Array(await file.arrayBuffer())
+        const { file_id } = await this.fileStore.put({ kind: "voice", mime: file.type || undefined, name: (file as any).name, session: id, origin: "web-upload", device: "web", bytes })
+        const meta = await this.fileStore.get(file_id)
+        input = { audioPath: meta!.path }
+      } else {
+        const body = await req.json().catch(() => ({})) as { draft?: string }
+        if (typeof body.draft !== "string") return this.json({ error: "draft required" }, 400)
+        input = { draft: body.draft }
+      }
+      const result = await this.opts.transcribe(id, input)
+      return this.json(result)
     }
     if (method === "GET" && path === "/devices") {
       return this.json(this.store.list().map((d) => ({ name: d.name, created_at: d.created_at, last_seen_at: d.last_seen_at })))

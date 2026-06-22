@@ -92,6 +92,40 @@ export type IntegrateResult =
   | { status: "dirty_overlap"; files: string[] }
   | { status: "error"; message: string }
 
+export function aheadBehind(worktreeOrRepo: string, base: string): { ahead: number; behind: number } {
+  const r = git(worktreeOrRepo, ["rev-list", "--count", "--left-right", `${base}...HEAD`])
+  if (!r.ok) return { ahead: 0, behind: 0 }
+  const [b, a] = r.out.split(/\s+/)
+  return { ahead: Number(a) || 0, behind: Number(b) || 0 }
+}
+
+export function diffStats(repoRoot: string, from: string, to: string): { filesChanged: number; insertions: number; deletions: number } {
+  const r = git(repoRoot, ["diff", "--numstat", `${from}..${to}`])
+  if (!r.ok || !r.out) return { filesChanged: 0, insertions: 0, deletions: 0 }
+  let files = 0, ins = 0, del = 0
+  for (const line of r.out.split("\n")) {
+    if (!line.trim()) continue
+    const [a, d] = line.split("\t")
+    if (a === undefined) continue
+    files++; ins += Number(a) || 0; del += Number(d) || 0  // "-" (binary) → 0
+  }
+  return { filesChanged: files, insertions: ins, deletions: del }
+}
+
+export function mergeTreePreflight(repoRoot: string, base: string, branch: string): "clean" | "will_conflict" | "unknown" {
+  // git 2.38+ `merge-tree --write-tree` is non-destructive (no MERGE_HEAD) and exits
+  // NON-ZERO on conflict — so the primary conflict detection is in the non-ok branch
+  // (where "CONFLICT" text appears in r.out). The `<<<<<<<` check in the ok-branch is
+  // a defensive fallback. Older git lacks the flag → return "unknown" rather than risk a mutation.
+  const r = git(repoRoot, ["merge-tree", "--write-tree", base, branch])
+  if (r.ok) return r.out.includes("<<<<<<<") ? "will_conflict" : "clean"
+  const lower = r.out.toLowerCase()
+  if (lower.includes("conflict") || r.out.includes("<<<<<<<")) return "will_conflict"
+  return "unknown"
+}
+
+export function gitOk(cwd: string, args: string[]): boolean { return git(cwd, args).ok }
+
 /** Advance `baseBranch` to `sessionBranch`, fast-forward ONLY, checkout-aware.
  *  Never creates a merge commit, never moves base backward, never `checkout`s a
  *  dirty base. */

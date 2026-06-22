@@ -1,11 +1,11 @@
 // src/core/worktree/finish.test.ts
 import { test, expect } from "bun:test"
 import { execFileSync } from "child_process"
-import { mkdtempSync, writeFileSync } from "fs"
+import { existsSync, mkdtempSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { createWorktree } from "./manager"
-import { finishWorktree } from "./finish"
+import { finishWorktree, openPrForSession, discardSession, derivePrText } from "./finish"
 
 function g(cwd: string, ...a: string[]) { return execFileSync("git", ["-C", cwd, ...a], { encoding: "utf-8" }).trim() }
 function tmpRepo(): string {
@@ -100,4 +100,92 @@ test("commitFirst commits the worktree (incl. untracked), then integrates", asyn
   expect(g(repo, "rev-parse", "main")).toBe(g(repo, "rev-parse", h.sessionBranch)) // base advanced to branch
   expect(g(repo, "log", "-1", "--pretty=%s", "main")).toBe("my work")                // our message
   expect(g(repo, "show", "main:u.txt")).toBe("new")                                  // untracked got integrated
+})
+
+test("merge then atomic cleanup removes worktree and branch", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "a.txt"), "x"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "w")
+  const r = await finishWorktree({ repoRoot: repo, worktreeDir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" }, { skipVerify: true, cleanup: true })
+  expect(r.status).toBe("integrated")
+  if (r.status === "integrated") expect(r.cleanedUp).toBe(true)
+  expect(existsSync(h.worktreeDir)).toBe(false)
+  expect(() => g(repo, "rev-parse", "--verify", h.sessionBranch)).toThrow()
+})
+
+test("merge with deleteBranch:false keeps the branch but removes the worktree", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "a.txt"), "x"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "w")
+  const r = await finishWorktree({ repoRoot: repo, worktreeDir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" }, { skipVerify: true, cleanup: true, deleteBranch: false })
+  expect(r.status).toBe("integrated")
+  expect(existsSync(h.worktreeDir)).toBe(false)
+  expect(g(repo, "rev-parse", "--verify", h.sessionBranch)).toBeTruthy()  // branch still exists
+})
+
+test("cleanup is skipped when MUX_DISABLE_WORKTREE_CLEANUP is set", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "a.txt"), "x"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "w")
+  process.env.MUX_DISABLE_WORKTREE_CLEANUP = "1"
+  try {
+    const r = await finishWorktree({ repoRoot: repo, worktreeDir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" }, { skipVerify: true, cleanup: true })
+    expect(r.status).toBe("integrated")
+    if (r.status === "integrated") expect(r.cleanedUp).toBe(false)
+    expect(existsSync(h.worktreeDir)).toBe(true)
+  } finally { delete process.env.MUX_DISABLE_WORKTREE_CLEANUP }
+})
+
+test("discardSession force-removes worktree + branch without merging", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "a.txt"), "x")  // dirty, uncommitted
+  const baseBefore = g(repo, "rev-parse", "main")
+  const r = await discardSession({ repoRoot: repo, worktreeDir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" })
+  expect(r.status).toBe("discarded")
+  expect(existsSync(h.worktreeDir)).toBe(false)
+  expect(g(repo, "rev-parse", "main")).toBe(baseBefore)  // base untouched
+  expect(() => g(repo, "rev-parse", "--verify", h.sessionBranch)).toThrow()
+})
+
+test("openPrForSession pushes the branch to origin (the reliable floor)", async () => {
+  const repo = tmpRepo()
+  const bare = mkdtempSync(join(tmpdir(), "mux-bare-")); execFileSync("git", ["init", "--bare", "-b", "main", bare])
+  g(repo, "remote", "add", "origin", bare); g(repo, "push", "origin", "main")
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "a.txt"), "x"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "w")
+  const r = await openPrForSession({ repoRoot: repo, worktreeDir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" }, { skipVerify: true })
+  // gh may or may not be installed in CI; either way the branch MUST land on the remote.
+  expect(["pr_opened", "branch_published"]).toContain(r.status)
+  expect(g(bare, "rev-parse", "--verify", h.sessionBranch)).toBeTruthy()
+})
+
+test("derivePrText uses the first commit subject as title and lists commits in body", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "a.txt"), "x"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "Add feature A")
+  writeFileSync(join(h.worktreeDir, "b.txt"), "y"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "Wire feature A into B")
+  const t = derivePrText(repo, "main", h.sessionBranch)
+  expect(t.title).toBe("Add feature A")                 // oldest commit subject
+  expect(t.body).toContain("- Add feature A")
+  expect(t.body).toContain("- Wire feature A into B")
+})
+
+test("derivePrText falls back to the branch name when there are no commits", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  const t = derivePrText(repo, "main", h.sessionBranch)
+  expect(t.title).toBe(h.sessionBranch)
+})
+
+test("openPrForSession surfaces push_rejected when the remote branch diverged", async () => {
+  const repo = tmpRepo()
+  const bare = mkdtempSync(join(tmpdir(), "mux-bare-")); execFileSync("git", ["init", "--bare", "-b", "main", bare])
+  g(repo, "remote", "add", "origin", bare); g(repo, "push", "origin", "main")
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(h.worktreeDir, "a.txt"), "x"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "w1")
+  g(h.worktreeDir, "push", "-u", "origin", "HEAD")                 // remote branch now exists
+  writeFileSync(join(h.worktreeDir, "a.txt"), "y"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "--amend", "--no-edit")  // diverge (non-ff)
+  const r = await openPrForSession({ repoRoot: repo, worktreeDir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" }, { skipVerify: true })
+  expect(r.status).toBe("push_rejected")
 })

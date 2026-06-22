@@ -30,16 +30,21 @@ function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
 import { startSocketServer } from "./core/session-manager/socket-server"
 import { createSupervisor, reconcileOnStartup } from "./core/session-manager/supervisor"
 import { acquirePidFile, releasePidFile } from "./core/session-manager/pid-file"
-import { spawnSessionWindow, killSessionWindow, killWindowById, listSessionWindows, sendKeys, sendKeysToWindowId } from "./core/session-manager/tmux"
+import { spawnSessionWindow, killSessionWindow, killWindowById, listSessionWindows, livePanePid, sendKeys, sendKeysToWindowId } from "./core/session-manager/tmux"
 import { spawnSession as spawnSessionHelper, spawnPA, resumeOpenCodeSession } from "./core/session-manager/spawn-helper"
 import { RuntimeRegistry, type SessionRuntime } from "./core/session-manager/runtime"
 import { buildClaudeSpawnCommand } from "./core/session-manager/spawn-command"
+import { createAgentRpc } from "./core/agent-rpc"
+import { buildRpcPrompt } from "./core/agent-rpc/prompts"
+import { transcribeAudio } from "./core/transcription/whisper"
+import { buildVoicePayload } from "./core/transcription/voice-context"
+import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
 import { cursorSpawnArgs, codexSpawnArgs, claudeSpawnArgs, codexPrepareGlobal, codexPrepareSessionHome, opencodeConfigEntries, ensureOpenCodePluginScopes } from "./core/plugins"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider } from "./core/slash-commands"
 import { AgentKind, isAgentKind } from "./shared/agents"
 import { sendChannelConsentEnter } from "./core/session-manager/post-spawn-keys"
-import { preAcceptTrust } from "./core/session-manager/trust"
+import { preAcceptTrust, writeRpcWorkerMcpConfig } from "./core/session-manager/trust"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
 import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
 import { resolveDownloadAttachment } from "./core/session-manager/download"
@@ -70,7 +75,7 @@ import {
 } from "./shared/paths"
 import { validateWebEnv } from "./shared/web-env"
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chmodSync } from "fs"
-import { randomBytes } from "crypto"
+import { randomBytes, randomUUID } from "crypto"
 import { execSync as _execSync, spawn as nodeSpawn } from "child_process"
 import { makeLogger } from "./shared/log"
 import { checkPreflight, hasBinary } from "./shared/preflight"
@@ -130,10 +135,12 @@ import { reverseProxySnippets } from "./core/settings/exposure"
 import { toActivityEvents } from "./core/agents/adapter-activity"
 import { LoginManager } from "./core/agents/login/manager"
 import { getRepoInfo } from "./core/git/repo-info"
-import { createWorktree, removeWorktree, type WorktreeHandle } from "./core/worktree/manager"
+import { createWorktree, removeWorktree, ensureWorktreeAt, type WorktreeHandle } from "./core/worktree/manager"
 import { isWorktreeReclaimable } from "./core/worktree/gc"
-import { finishWorktree, type FinishResult } from "./core/worktree/finish"
+import { startFinishJob, getFinishJob, clearFinishJob, type FinishJob, type FinishJobOpts, type FinishAction } from "./core/worktree/finish-job"
+import { computeReadiness, type FinishReadiness } from "./core/worktree/readiness"
 import { suggestVerify } from "./core/worktree/verify-suggest"
+import { loadFinishConfig } from "./core/worktree/finish-config"
 import { deriveName } from "./core/session-manager/naming"
 
 const log = makeLogger("main")
@@ -407,6 +414,15 @@ const replyOwner = new Map<string, string>()              // key: `${chat_id}:${
 const pendingSpawnActive = new Map<string, string>()      // expectedName → channelChatId
 const pendingClaudeSessionId = new Map<string, string>()  // brokerSessionId → claudeSessionId
 const pendingTmuxWindowId = new Map<string, string>()      // brokerSessionId → tmux window id
+// Claude sessions register asynchronously via the shim's onRegister (not in the
+// spawn helper), so a worker that must be marked broker-internal records the
+// intent here keyed by broker session id; onRegister consumes it. Same deferred
+// pattern as pendingTmuxWindowId/pendingClaudeSessionId above.
+const pendingInternal = new Set<string>()                  // brokerSessionId (internal=true)
+// agent-rpc registry. Assigned once below, after spawnSession/killSession/
+// deliverInbound (its deps) are all defined; declared here so it's in scope for
+// the orchestration dispatch (rpc_resolve / rpc_reject) further up.
+let agentRpc: ReturnType<typeof createAgentRpc>
 
 const telegram: TelegramChannel | undefined = hasTelegram
   ? new TelegramChannel({ token: TG_TOKEN!, fileStore })
@@ -597,6 +613,7 @@ async function onAssistantMessage(
       firePushForReply({
         sender: pushSender, action, sessionName, sessionId,
         isMuted: () => !!registry.get(sessionId)?.mute,
+        isInternal: () => !!registry.get(sessionId)?.internal,
         devices: () => pushStore.all().map((s) => s.device),
         anyPresent: (sid) => viewingTracker.isAnyPresentFor(sid),
       }).catch((err) => log.warn("push_hook_failed", { err: err?.message ?? String(err) }))
@@ -682,15 +699,73 @@ async function interruptSessionById(sessionId: string): Promise<{ ok: boolean; r
   })
 }
 
-async function finishSessionById(sessionId: string, opts?: { skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string }): Promise<FinishResult> {
+type FinishRequest = { action: FinishAction; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }
+
+async function finishSessionById(sessionId: string, req: FinishRequest): Promise<FinishJob | { error: string }> {
   const s = registry.get(sessionId)
-  if (!s) return { status: "error", message: "no such session" }
-  if (!s.repo_root || !s.session_branch || !s.base_branch) return { status: "error", message: "session is not worktree-backed" }
-  return finishWorktree(
-    { repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch },
-    opts,
-    (stage) => webChannel?.broadcastToAll({ type: "finish_progress", session: sessionId, stage }),
-  )
+  if (!s) return { error: "no such session" }
+  if (!s.repo_root || !s.session_branch || !s.base_branch) return { error: "session is not worktree-backed" }
+  const prev = getFinishJob(sessionId)
+  if (prev && prev.status !== "running") clearFinishJob(sessionId)
+  // discard must stop the live agent BEFORE its worktree is force-removed
+  if (req.action === "discard") await killSession(sessionId).catch(() => {})
+  const session = { id: sessionId, repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch }
+  const cfg = loadFinishConfig(s.repo_root)
+  const opts: FinishJobOpts = { ...req, cleanup: false, prRequiresGreen: req.prRequiresGreen ?? cfg.prRequiresGreen }  // worktree removal handled by the archive path below
+  const sessionName = s.name
+  return startFinishJob(session, opts, {
+    onUpdate: (job) => webChannel?.broadcastToAll({ type: "finish_job", session: sessionId, job }),
+    persist: (job) => { try { registry.sessions.setFinishJob(sessionId, job) } catch {} },
+    notify: (job) => { void onFinishTerminal(sessionId, sessionName, job) },
+  })
+}
+
+async function onFinishTerminal(sessionId: string, sessionName: string, job: FinishJob): Promise<void> {
+  fireFinishPush(sessionName, sessionId, job)
+  const status = job.outcome?.status
+  const s = registry.get(sessionId)
+  const archiveMerge = job.action === "merge" && status === "integrated" && (!s?.repo_root || loadFinishConfig(s.repo_root).archiveOnMerge)
+  const archiveDiscard = job.action === "discard" && status === "discarded"
+  if (archiveMerge || archiveDiscard) {
+    try {
+      if (archiveMerge) await killSession(sessionId).catch(() => {})  // discard already killed before the job
+      unregisterSession(sessionId)
+      await refreshTelegramMenu().catch(() => {})
+      webChannel?.broadcastToAll({ type: "session_removed", id: sessionId })
+    } catch (e) { log.warn("finish_archive_failed", { id: sessionId, err: String(e) }) }
+  }
+}
+
+function fireFinishPush(sessionName: string, sessionId: string, job: FinishJob): void {
+  const o = job.outcome
+  if (!o) return
+  let text: string | null = null
+  const br = sessionName
+  switch (o.status) {
+    case "integrated": text = `✅ Merged ${br} into ${o.base}`; break
+    case "pr_opened": text = `📤 PR opened for ${br}`; break
+    case "branch_published": text = `📤 Pushed ${br} — open the PR manually`; break
+    case "discarded": text = `🗑️ Discarded ${br}`; break
+    case "tests_failed": text = `❌ Tests failed in ${br}`; break
+    case "sync_conflict": case "dirty_overlap": text = `⚠️ Conflicts finishing ${br}`; break
+    case "push_auth_failed": text = `🔒 Push auth failed for ${br}`; break
+    case "push_rejected": text = `⚠️ Push rejected (diverged) for ${br}`; break
+    case "uncommitted": text = `⚠️ Uncommitted changes in ${br}`; break
+    case "no_verify": text = `⚠️ No verify configured for ${br}`; break
+    case "non_ff": text = `⚠️ ${br} — base moved, retry the merge`; break
+    case "error": text = `❌ Finish failed for ${br}`; break
+    // kept / nothing_to_do → no push
+  }
+  if (!text) return
+  try { for (const sub of pushStore.all()) void pushSender.sendToDevice(sub.device, { session: sessionName, sessionId, text, ts: new Date().toISOString() }) } catch {}
+}
+
+function finishReadinessById(sessionId: string): FinishReadiness | { error: string } {
+  const s = registry.get(sessionId)
+  if (!s) return { error: "no such session" }
+  if (!s.repo_root || !s.session_branch || !s.base_branch) return { error: "session is not worktree-backed" }
+  const cfg = loadFinishConfig(s.repo_root)
+  return computeReadiness({ repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch, defaultAction: cfg.defaultAction })
 }
 
 // Wire a codex/cursor adapter's structured events into the agent-agnostic
@@ -873,7 +948,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     listChatIds: () =>
       (db.query("SELECT DISTINCT chat_id FROM messages WHERE chat_id LIKE 'web:%' ORDER BY chat_id").all() as { chat_id: string }[]).map((r) => r.chat_id),
     getSessionsSnapshot: () =>
-      registry.list().map((s) => ({
+      registry.listVisible().map((s) => ({
         id: s.id,
         name: s.name,
         workdir: s.workdir,
@@ -887,6 +962,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         status: s.status,
         session_branch: s.session_branch || undefined,
         repo_root: s.repo_root || undefined,
+        finish_job: s.finish_job,
       })),
     getSessionLog: (id) => {
       const s = registry.get(id)
@@ -992,11 +1068,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       if (!s) return { ok: false, reason: "session not found" }
       return interruptSessionById(s.id)
     },
-    finishSession: async (id, opts) => {
-      const s = registry.get(id)
-      if (!s) return { status: "error" as const, message: "no such session" }
-      return finishSessionById(s.id, opts)
-    },
+    finishSession: async (id, req) => finishSessionById(id, req),
+    finishReadiness: (id) => finishReadinessById(id),
     spawnSession: async (args) => {
       const r = await spawnSession({
         workdir: args.workdir,
@@ -1026,6 +1099,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             reasoningLevel: sessionEffort(entry),
             repo_root: entry.repo_root || undefined,
             session_branch: entry.session_branch || undefined,
+            finish_job: entry.finish_job,
           },
         })
       }
@@ -1103,6 +1177,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             reasoningLevel: sessionEffort(entry),
             repo_root: entry.repo_root || undefined,
             session_branch: entry.session_branch || undefined,
+            finish_job: entry.finish_job,
           },
         })
       }
@@ -1315,6 +1390,42 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     listClonedRepos: () => forgeService.listCloned(),
     removeClonedRepo: (p) => forgeService.removeCloned(p),
     pullClonedRepo: (p) => forgeService.pullCloned(p),
+    // Voice: whisper STT (when audio) → agent cleanup pass → composer-ready text.
+    // Closes over the `agentRpc` `let` binding; runs at request time, by which
+    // point agentRpc is assigned (same pattern as the login closures below).
+    transcribe: async (sessionId, input) => {
+      const s = registry.get(sessionId)
+      const cfg = settings.getAppConfig(appConfigEnv)
+      let draft = input.draft ?? ""
+      let whisperMs = 0
+      if (input.audioPath) {
+        const t0 = Date.now()
+        const r = await transcribeAudio(input.audioPath, { model: cfg.whisperModel, lang: cfg.whisperLang })
+        whisperMs = Date.now() - t0
+        draft = r.text
+      }
+      const source = input.audioPath ? "whisper" : "client"
+      if (!draft.trim()) { log.info("voice_transcribe_empty", { sessionId, source, whisperMs }); return { text: "" } }
+      const skills = s ? commandRegistry.get(s.name).filter((c) => c.family === "agent").map((c) => c.name) : []
+      const messages = messageLog.get(s?.id ?? sessionId, 10)
+      const payload = buildVoicePayload(draft, messages, skills)
+      // Full visibility into exactly what the cleanup is fed + the whisper/cleanup timing split.
+      log.info("voice_transcribe_in", { sessionId, source, draft, whisperMs, ctxMsgs: messages.length, skills, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
+      try {
+        const t1 = Date.now()
+        const out = await cleanupDraft(
+          { draft, recentMessages: payload.context.recentMessages, skills, glossary: cfg.voiceCleanupGlossary ?? [] },
+          { engine: cfg.voiceCleanupEngine, model: cfg.voiceCleanupModel },
+        )
+        const cleanupMs = Date.now() - t1
+        const text = out.text || draft
+        log.info("voice_transcribe_out", { sessionId, draft, text, whisperMs, cleanupMs, engine: out.engine, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
+        return { text }
+      } catch (e) {
+        log.warn("voice_cleanup_failed", { sessionId, draft, whisperMs, err: String(e) })
+        return { text: draft, degraded: true }
+      }
+    },
   })
   // loginManager constructed AFTER webChannel so its onChange can reference webChannel.
   // The startAgentLogin/getAgentLogin/cancelAgentLogin closures above close over `loginManager`
@@ -1401,7 +1512,26 @@ async function waitForSessionConnected(sessionId: string, timeoutMs = 20_000): P
   return false
 }
 
-async function resumeSuspendedSession(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string }): Promise<boolean> {
+// When a session's worktree was removed (e.g. its branch was merged via finish),
+// the recorded workdir no longer exists. Spawning `claude --resume` into a missing
+// cwd makes it die on startup, and the inbound message is then silently queued to a
+// dead session (no reply, spinner forever). Recreate the worktree at the SAME path —
+// so claude's cwd-keyed transcript still matches — before any resume/respawn spawns
+// into it. No-op when the workdir is healthy or the session isn't worktree-backed.
+async function ensureSessionWorktree(session: { id: string; name: string; workdir: string; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<void> {
+  if (!session.repo_root || !session.session_branch) return
+  if (existsSync(session.workdir)) return
+  log.warn("worktree_missing_recreating", { id: session.id, name: session.name, workdir: session.workdir, branch: session.session_branch })
+  await ensureWorktreeAt({
+    repoRoot: session.repo_root,
+    workdir: session.workdir,
+    sessionBranch: session.session_branch,
+    baseBranch: session.base_branch || "HEAD",
+  })
+  log.info("worktree_recreated", { id: session.id, name: session.name, workdir: session.workdir })
+}
+
+async function resumeSuspendedSession(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string; tmux_window_id?: string | null; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<boolean> {
   try {
     log.info("resume_suspended_begin", {
       name: session.name,
@@ -1410,19 +1540,19 @@ async function resumeSuspendedSession(session: { id: string; name: string; agent
       status: registry.get(session.id)?.status,
       has_agent_session_id: !!session.agent_session_id,
     })
+    await ensureSessionWorktree(session)
     if (session.agent === "claude") {
       await server.bind(session.id)
-      const existingWindows = await listSessionWindows(TMUX_SESSION)
-      const spawnWindow = !existingWindows.includes(session.name)
-      log.info("resume_suspended_claude", {
-        name: session.name,
-        spawn_window: spawnWindow,
-        existing_windows: existingWindows.length,
-      })
       preAcceptTrust(session.workdir)
-      while ((await listSessionWindows(TMUX_SESSION)).includes(session.name)) {
-        await killSessionWindow({ session: TMUX_SESSION, window: session.name }).catch(() => {})
-      }
+      // Clear ONLY our own prior window, by id — never kill by name. The old
+      // `while (listSessionWindows().includes(name)) killSessionWindow({window:name})`
+      // loop could kill a sibling window that happens to share this display name;
+      // 65b1049 removed the same destructive pattern from the new-spawn path. Then
+      // pick a window name that doesn't collide with any live window (mirrors it).
+      if (session.tmux_window_id) await killWindowById(session.tmux_window_id).catch(() => {})
+      const { ensureUnique } = await import("./core/session-manager/naming")
+      const windowName = ensureUnique(session.name, new Set(await listSessionWindows(TMUX_SESSION)))
+      log.info("resume_suspended_claude", { name: session.name, window: windowName })
       const effort = sessionEffort(session as any)
       const cmd = buildClaudeSpawnCommand({
         name: session.name, model: session.model, effort, sessionId: session.id,
@@ -1431,12 +1561,12 @@ async function resumeSuspendedSession(session: { id: string; name: string; agent
       })
       const tmuxWindow = await spawnSessionWindow({
         session: TMUX_SESSION,
-        window: session.name,
+        window: windowName,
         workdir: session.workdir,
         command: cmd,
       })
       if (tmuxWindow.windowId) registry.sessions.setTmuxWindowId(session.id, tmuxWindow.windowId)
-      const tmuxTarget = `${TMUX_SESSION}:${session.name}`
+      const tmuxTarget = `${TMUX_SESSION}:${windowName}`
       await sendChannelConsentEnter(tmuxTarget)
       await waitForSessionConnected(session.id, 25_000)
     } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
@@ -1513,6 +1643,7 @@ async function resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name
 
   let resumedTmuxWindowId: string | undefined
   try {
+    await ensureSessionWorktree(session)
     if (session.agent === "claude") {
       await server.bind(sessionId)
       const effort = sessionEffort(session)
@@ -1597,7 +1728,7 @@ async function resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name
 
     webChannel?.broadcastToAll({
       type: "session_added",
-      session: { id: sessionId, name, workdir: session.workdir, agent: session.agent, status: "active", repo_root: session.repo_root || undefined, session_branch: session.session_branch || undefined },
+      session: { id: sessionId, name, workdir: session.workdir, agent: session.agent, status: "active", repo_root: session.repo_root || undefined, session_branch: session.session_branch || undefined, finish_job: session.finish_job },
     })
 
     await refreshTelegramMenu()
@@ -1664,6 +1795,17 @@ const server = await startSocketServer({
     const s = registry.get(session_id)
     webChannel?.broadcastToAll({ type: "session_state", session: session_id, connected, model: s?.model })
   },
+  // Safety net: a queued inbound that can't reach a live channel shim within the
+  // grace window means the session crashed / never came up. Tell the user in the
+  // chat that sent it, instead of silently dropping the message.
+  onUndeliverable: (session_id, payload) => {
+    const chat_id = payload.meta?.chat_id
+    if (!chat_id) return
+    const name = registry.get(session_id)?.name ?? session_id
+    const text = `⚠️ Couldn't deliver your message to "${name}" — it didn't come up (it may have crashed). Please try again.`
+    if (chat_id.startsWith("telegram")) void telegram?.send({ op: "reply", chat_id, text })
+    else void webChannel?.send({ op: "reply", chat_id, text })
+  },
   handler: {
     onRegister: async (msg) => {
       const sessionUuid = msg.session_id as string  // UUID from MUX_SESSION_ID
@@ -1729,6 +1871,7 @@ const server = await startSocketServer({
       // re-registers as PA → can_orchestrate stays true via policy. Brand-new sessions
       // default to worker/false.
       const prior = registry.get(sessionUuid)
+      const wasInternal = pendingInternal.delete(sessionUuid)
       const session = registry.register({
         id: sessionUuid,  // Use the UUID from the socket
         name: finalName,
@@ -1738,6 +1881,7 @@ const server = await startSocketServer({
         agent_session_id: agentSessionId,
         role: prior?.role ?? "worker",
         is_default: prior?.is_default ?? false,
+        internal: wasInternal,
         base_commits: (() => {
           const out: Record<string, string> = {}
           for (const repo of scanRepos(workdir)) {
@@ -1747,7 +1891,7 @@ const server = await startSocketServer({
         })(),
       })
 
-      webChannel?.broadcastToAll({
+      if (!wasInternal) webChannel?.broadcastToAll({
         type: "session_added",
         session: { id: session.id, name: finalName, workdir, mute: false, connected: true, agent: session.agent },
       })
@@ -1894,7 +2038,7 @@ const server = await startSocketServer({
       const fromSession = msg.session_id
       const s = registry.get(fromSession)  // Look up by UUID
       const op = msg.op
-      const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices"])
+      const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject"])
       if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
         return { ok: false, error: "permission denied (can_orchestrate=false)" }
       }
@@ -1914,7 +2058,7 @@ const server = await startSocketServer({
             if (entry) {
               webChannel?.broadcastToAll({
                 type: "session_added",
-                session: { id: entry.id, name: entry.name, workdir: entry.workdir, mute: !!entry.mute, connected: true, agent: entry.agent, model: entry.model, repo_root: entry.repo_root || undefined, session_branch: entry.session_branch || undefined },
+                session: { id: entry.id, name: entry.name, workdir: entry.workdir, mute: !!entry.mute, connected: true, agent: entry.agent, model: entry.model, repo_root: entry.repo_root || undefined, session_branch: entry.session_branch || undefined, finish_job: entry.finish_job },
               })
             }
             // Auto-bind the requesting chat to the new session if the
@@ -1977,7 +2121,7 @@ const server = await startSocketServer({
           webChannel?.broadcastToAll({ type: "session_state", session: muted.id, mute: mutedValue })
           return { ok: true, value: "ok" }
         }
-        case "list_sessions":  { return { ok: true, value: registry.list().map((s: any) => ({ name: s.name, workdir: s.workdir, mute: s.mute })) } }
+        case "list_sessions":  { return { ok: true, value: registry.listVisible().map((s: any) => ({ name: s.name, workdir: s.workdir, mute: s.mute })) } }
         case "set_active":     { const t = registry.resolveName(stringArg(op.args, "name")); if (!t) return { ok: false, error: "no such session" }; registry.setActive(stringArg(op.args, "chat_id"), t.id); return { ok: true, value: "ok" } }
         case "get_active":     { return { ok: true, value: registry.getActive(stringArg(op.args, "chat_id")) } }
         case "expose_port": {
@@ -2062,6 +2206,8 @@ const server = await startSocketServer({
           await displayManager.stop(id)
           return { ok: true, value: { stopped: true } }
         }
+        case "rpc_resolve": { agentRpc.settle(String(op.args.request_id), op.args.data); return { ok: true, value: "ok" } }
+        case "rpc_reject":  { agentRpc.fail(String(op.args.request_id), String(op.args.error ?? "rejected")); return { ok: true, value: "ok" } }
       }
       return { ok: false, error: "unknown orchestration op" }
       } catch (err) {
@@ -2133,7 +2279,7 @@ async function deliverUserMessage(sessionId: string, text: string): Promise<{ ok
   return { ok: true }
 }
 
-async function spawnSession(args: { workdir: string; requestedName?: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string }) {
+async function spawnSession(args: { workdir: string; requestedName?: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string; internal?: boolean; rpcMcpConfig?: string }) {
   const agent = args.agent ?? AgentKind.Claude
   const workdir = normalizeExistingWorkdir(args.workdir)
   // Worktree-by-default: when the path is a single git repo and worktree isn't
@@ -2207,8 +2353,12 @@ async function spawnSession(args: { workdir: string; requestedName?: string; age
     },
     // Worktree-backed: derive the session name from the ORIGINAL repo, not the
     // worktree dir (whose basename is a uuid) — otherwise the session is named after the uuid.
-    { workdir: effectiveWorkdir, requestedName: args.requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, effort },
+    { workdir: effectiveWorkdir, requestedName: args.requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig },
   )
+  // Claude registers async via the shim — record the internal intent so
+  // onRegister can stamp the row. Non-claude agents are already registered
+  // synchronously by the helper (internal threaded through there).
+  if (args.internal && (args.agent ?? AgentKind.Claude) === AgentKind.Claude) pendingInternal.add(r.session_id)
   let registered = registry.get(r.session_id)
   if ((args.agent ?? "claude") === "claude") {
     // No blind sleep: wait for the shim to register (proof the window survived
@@ -2246,6 +2396,7 @@ async function reapplySessionAgentConfig(sessionId: string): Promise<{ ok: true 
 
   if (session.agent === "claude") {
     try {
+      await ensureSessionWorktree(session)
       stopClaudeTailer(session.id)
       const tmux = requireClaudeTmux(session)
       if (!tmux.ok) return { ok: false, error: tmux.error }
@@ -2526,6 +2677,7 @@ _tg.on("inbound", async (msg: InboundMessage) => {
               reasoningLevel: sessionEffort(entry),
               repo_root: entry.repo_root || undefined,
               session_branch: entry.session_branch || undefined,
+              finish_job: entry.finish_job,
             },
           })
         }
@@ -2716,6 +2868,33 @@ if (webChannel) {
   })
 }
 
+// Wire the agent-rpc registry now that all its broker-side deps exist
+// (spawnSession, killSession, deliverInbound). Workers are claude/haiku sessions
+// spawned with a strict rpc-only mcp config, marked internal, and run in a
+// neutral scratch workdir. The orchestration dispatch (rpc_resolve/rpc_reject,
+// above) settles/fails pending calls against this instance.
+const RPC_WORKER_IDLE_MS = Number(process.env.RPC_WORKER_IDLE_SEC ?? 600) * 1000
+const RPC_WORKERS_DIR = join(STATE_DIR, "rpc-workers")        // neutral scratch workdir
+mkdirSync(RPC_WORKERS_DIR, { recursive: true })
+agentRpc = createAgentRpc({
+  defaultAgent: AgentKind.Claude,
+  defaultModel: "haiku",
+  defaultTimeoutMs: 30_000,
+  newRequestId: () => randomUUID(),
+  now: () => Date.now(),
+  buildPrompt: buildRpcPrompt,
+  isAlive: (sessionId) => !!registry.get(sessionId)?.connected,
+  killWorker: async (sessionId) => { await killSession(sessionId); unregisterSession(sessionId) },
+  deliver: async (sessionId, text) => { await deliverInbound(sessionId, text, {}) },
+  spawnWorker: async ({ key, agent, model }) => {
+    const safe = key.replace(/[^a-z0-9_-]/gi, "_")
+    mkdirSync(join(STATE_DIR, "agents", "rpc"), { recursive: true })
+    const mcpPath = join(STATE_DIR, "agents", "rpc", `${safe}.json`)
+    writeRpcWorkerMcpConfig(mcpPath)
+    const r = await spawnSession({ workdir: RPC_WORKERS_DIR, requestedName: `rpc-${safe}`, agent, model, internal: true, rpcMcpConfig: mcpPath })
+    return { sessionId: r.session_id }
+  },
+})
 const supervisor = createSupervisor({
   registry,
   bindSocket: (sid) => server.bind(sid),
@@ -2730,6 +2909,7 @@ const supervisor = createSupervisor({
   shouldAutoSpawnPA: () => settings.getAppConfig(appConfigEnv).onboarded,
   paWorkdir: appConfig.paWorkdir || undefined,
   resolveEffort: (s) => sessionEffort(s),
+  reapInternalWorkers: () => agentRpc.reapIdle(RPC_WORKER_IDLE_MS),
 })
 // Existing installs (any prior sessions, active/suspended/archived) are implicitly
 // onboarded — they keep their auto-PA and skip the wizard. Only a pristine instance
@@ -2740,7 +2920,7 @@ if (!settings.getAppConfig(appConfigEnv).onboarded &&
   settings.setAppConfig({ onboarded: true })
   log.info("onboarded_seeded_existing_install", {})
 }
-await reconcileOnStartup({ registry, bindSocket: (sid) => server.bind(sid), supervisor })
+await reconcileOnStartup({ registry, bindSocket: (sid) => server.bind(sid), supervisor, livePanePid: (wid) => livePanePid(wid) })
 
 // Assign the PA respawn implementation now that supervisor is available.
 // Called by setAppConfig when onboarding transitions false → true, so the PA

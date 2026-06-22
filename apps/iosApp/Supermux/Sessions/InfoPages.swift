@@ -283,21 +283,112 @@ struct ProxiesView: View {
     }
 }
 
+/// Management for active display streams (parity with the web SessionDisplayPanel list):
+/// rows live off `broker.displays`, tap opens a full-screen live viewer, swipe stops a
+/// stream, and ＋ starts a host-default (VNC) display. Live via display_added/removed.
 struct DisplaysView: View {
     let broker: BrokerSession
-    @State private var items: [DisplayStream] = []
     @State private var loading = true
+    @State private var viewing: DisplayStreamItem?
+    @State private var banner: String?
+
+    /// Identifiable wrapper so `.fullScreenCover(item:)` can present a `DisplayStream`
+    /// (the SKIE-bridged Kotlin type isn't `Identifiable` on the Swift side).
+    private struct DisplayStreamItem: Identifiable { let stream: DisplayStream; var id: String { stream.id } }
+
+    private var items: [DisplayStream] { broker.displays }
+
     var body: some View {
         Loadable(title: "Displays", loading: loading, isEmpty: items.isEmpty) {
-            List(items, id: \.id) { d in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(d.sessionName.isEmpty ? d.id : d.sessionName).font(.subheadline.weight(.medium))
-                    Text("\(d.provider) · \(d.transport) · \(d.status)")
-                        .font(.caption).foregroundStyle(.secondary)
+            List {
+                ForEach(items, id: \.id) { d in
+                    Button { viewing = DisplayStreamItem(stream: d) } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(rowTitle(d)).font(.subheadline.weight(.medium))
+                            Text("\(d.sessionName.isEmpty ? "—" : d.sessionName) · \(d.status)")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .swipeActions {
+                        Button("Stop", role: .destructive) { stop(d) }
+                    }
                 }
             }
         }
-        .task { items = (try? await broker.api.listDisplays()) ?? []; loading = false }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { start() } label: { Label("Start display", systemImage: "plus") }
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if let banner {
+                Text(banner).font(.caption.weight(.medium)).foregroundStyle(.white)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(Theme.teal, in: Capsule())
+                    .padding(.bottom, 16)
+            }
+        }
+        .fullScreenCover(item: $viewing) { item in
+            DisplayViewerSheet(broker: broker, stream: item.stream)
+        }
+        .task { await broker.refreshDisplays(); loading = false }
+    }
+
+    private func rowTitle(_ d: DisplayStream) -> String {
+        let display = d.display.isEmpty ? d.id : d.display
+        return "\(display) · \(d.provider)"
+    }
+
+    private func start() {
+        Task {
+            // Web "+" sends no args → host-default (VNC) for the foremost session context.
+            _ = try? await broker.api.startDisplay(
+                sessionName: "", provider: nil, device: nil, width: nil, height: nil)
+            await broker.refreshDisplays()
+        }
+    }
+
+    private func stop(_ d: DisplayStream) {
+        Task {
+            try? await broker.api.stopDisplay(id: d.id)
+            await broker.refreshDisplays()
+            showBanner("Display stopped")
+        }
+    }
+
+    private func showBanner(_ text: String) {
+        banner = text
+        Task { try? await Task.sleep(nanoseconds: 2_500_000_000); banner = nil }
+    }
+}
+
+/// Full-screen live viewer for a single display stream, reusing `DisplayStreamView`
+/// (the same surface + input the chat Display tab uses) with a close affordance.
+private struct DisplayViewerSheet: View {
+    let broker: BrokerSession
+    let stream: DisplayStream
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Color.black.ignoresSafeArea()
+            DisplayStreamView(broker: broker, stream: stream)
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
+                    .glassEffect(.regular, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 8)
+            .padding(.leading, 12)
+        }
     }
 }
 

@@ -137,6 +137,33 @@ test("broker fires onStatusChange(false) when socket closes", async () => {
   expect(statusEvents.some(e => e.sid === "sess-hb" && e.connected === false)).toBe(true)
 }, 5000)
 
+test("broker fires onStatusChange(true) the moment a shim REGISTERS, not waiting for the first pong", async () => {
+  // `connected` used to flip true only on a pong, which only arrives in reply to
+  // the broker's 15s-interval ping. So a freshly-resumed session looked
+  // disconnected for up to ~15s and waitForSessionConnected(10s) always timed
+  // out → ~10s delay (or, pre-worktree-fix, a silently-dropped message). A shim
+  // that just registered is reachable NOW, so registration must mark it connected.
+  const statusEvents: Array<{ sid: string; connected: boolean }> = []
+  server = await startSocketServer({
+    socketsDir: dir,
+    onStatusChange: (sid, connected) => statusEvents.push({ sid, connected }),
+    handler: {
+      onRegister: async () => ({ name: "auto-name", session_id: "sess-reg" }),
+      onOutbound: async () => ({ ok: true }),
+      onOrchestration: async () => ({ ok: false, error: "denied" }),
+    },
+  })
+  await server.bind("sess-reg")
+
+  const client = await connectShim({
+    socketsDir: dir, sessionId: "sess-reg", workdir: "/tmp", pid: 1,
+  })
+  // No pong has happened (broker pings every 15s); connected must already be true.
+  await new Promise(r => setTimeout(r, 50))
+  expect(statusEvents.some(e => e.sid === "sess-reg" && e.connected === true)).toBe(true)
+  await client.close()
+}, 5000)
+
 test("sendInbound during disconnect queues, flushes on reconnect", async () => {
   server = await startSocketServer({
     socketsDir: dir,
@@ -364,3 +391,49 @@ test("orchestration single-flight: DIFFERENT args are NOT deduped", async () => 
   expect(calls).toBe(2)
   await a.close()
 })
+
+test("sendInbound to a session that never gets a channel shim fires onUndeliverable after the grace", async () => {
+  // The silent-drop safety net: if a queued message can't be handed to a live
+  // channel shim within the grace window (the session crashed / never came up),
+  // the broker is told via onUndeliverable so it can surface "couldn't deliver".
+  const undeliverable: Array<{ sid: string; content: string; chat: string | undefined }> = []
+  server = await startSocketServer({
+    socketsDir: dir,
+    deliveryGraceMs: 60,
+    onUndeliverable: (sid, payload) => undeliverable.push({ sid, content: payload.content, chat: payload.meta?.chat_id }),
+    handler: {
+      onRegister: async () => ({ name: "n", session_id: "sess-undel" }),
+      onOutbound: async () => ({ ok: true }),
+      onOrchestration: async () => ({ ok: false, error: "denied" }),
+    },
+  })
+  await server.bind("sess-undel")
+  await server.sendInbound("sess-undel", { content: "ping", meta: { chat_id: "web" } })
+  await new Promise(r => setTimeout(r, 180))
+  expect(undeliverable).toEqual([{ sid: "sess-undel", content: "ping", chat: "web" }])
+}, 5000)
+
+test("onUndeliverable does NOT fire when a channel shim connects before the grace (delivered)", async () => {
+  const undeliverable: string[] = []
+  server = await startSocketServer({
+    socketsDir: dir,
+    deliveryGraceMs: 300,
+    onUndeliverable: (sid) => undeliverable.push(sid),
+    handler: {
+      onRegister: async () => ({ name: "n", session_id: "sess-undel2" }),
+      onOutbound: async () => ({ ok: true }),
+      onOrchestration: async () => ({ ok: false, error: "denied" }),
+    },
+  })
+  await server.bind("sess-undel2")
+  await server.sendInbound("sess-undel2", { content: "hi", meta: {} })   // queues
+  const received: string[] = []
+  const client = await connectShim({
+    socketsDir: dir, sessionId: "sess-undel2", workdir: "/tmp", pid: 1,
+    channelOnly: true, onInbound: (p) => received.push(p.content),
+  })
+  await new Promise(r => setTimeout(r, 450))   // well past the grace
+  expect(received).toContain("hi")             // flushed to the shim
+  expect(undeliverable).toEqual([])            // timer cleared on flush — no false alarm
+  await client.close()
+}, 5000)

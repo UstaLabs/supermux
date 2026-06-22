@@ -64,6 +64,27 @@ const ORCHESTRATION_TOOLS = [
   { name: "stop_display", description: "Stop a display stream by id and tear down its virtual display/VNC server.", inputSchema: { type: "object", properties: { id: { type: "string", description: "Stream id returned by start_display" } }, required: ["id"] } },
 ]
 
+export const RPC_TOOLS = [
+  {
+    name: "resolve",
+    description: "Complete the current task. Pass the result as `data` (any JSON). Call this exactly once.",
+    inputSchema: { type: "object", properties: {
+      request_id: { type: "string", description: "Echo the request_id from the task prompt verbatim." },
+      data: { type: "object", description: "The task result as a JSON object." },
+    }, required: ["request_id", "data"] },
+  },
+  {
+    name: "reject",
+    description: "Fail the current task with a short reason (e.g. input was empty/unintelligible).",
+    inputSchema: { type: "object", properties: {
+      request_id: { type: "string", description: "Echo the request_id from the task prompt verbatim." },
+      error: { type: "string", description: "Short failure reason." },
+    }, required: ["request_id", "error"] },
+  },
+]
+const RPC_NAMES = new Set(RPC_TOOLS.map(t => t.name))
+const RPC_OP = { resolve: "rpc_resolve", reject: "rpc_reject" } as const
+
 const REPLY_FOR_STREAMED_AGENTS =
   "Deliver a file attachment to the user (image, video, recording, etc.). " +
   "REQUIRED: files[] with at least one local filesystem path; text is an optional caption (may be empty). " +
@@ -80,14 +101,24 @@ type ToolCaller = {
   callOrchestration: (op: ToolOperation) => Promise<ToolCallResult>
 }
 
-export function listTools(agentKind: AgentKind = AgentKind.Claude) {
+export function listTools(agentKind: AgentKind = AgentKind.Claude, rpcOnly = false) {
+  if (rpcOnly) return RPC_TOOLS
   if (agentKind === AgentKind.Claude) return ALL
   return ALL.map((t) =>
     t.name === "reply" ? { ...t, description: REPLY_FOR_STREAMED_AGENTS } : t,
   )
 }
 
-export async function callTool(params: { name: string; arguments?: Record<string, unknown> }, shim: ToolCaller, agentKind: AgentKind = AgentKind.Claude): Promise<{ isError?: boolean; content: Array<{ type: "text"; text: string }> }> {
+export async function callTool(params: { name: string; arguments?: Record<string, unknown> }, shim: ToolCaller, agentKind: AgentKind = AgentKind.Claude, rpcOnly = false): Promise<{ isError?: boolean; content: Array<{ type: "text"; text: string }> }> {
+  if (rpcOnly) {
+    if (!RPC_NAMES.has(params.name)) {
+      return { isError: true, content: [{ type: "text", text: `tool ${params.name} not available on rpc worker` }] }
+    }
+    const opName = RPC_OP[params.name as keyof typeof RPC_OP]
+    const result = await shim.callOrchestration({ name: opName, args: params.arguments ?? {} })
+    if (!result.ok) return { isError: true, content: [{ type: "text", text: result.error ?? "unknown error" }] }
+    return { content: [{ type: "text", text: JSON.stringify(result.value ?? "ok") }] }
+  }
   const allowed = new Set(listTools(agentKind).map(t => t.name))
   if (!allowed.has(params.name)) {
     return { isError: true, content: [{ type: "text", text: `tool ${params.name} not available for agent kind ${agentKind}` }] }

@@ -49,7 +49,7 @@ export class Registry {
     this.reloadProxies()
   }
 
-  register(input: { id?: string; name: string; workdir: string; tmux_target?: string; tmux_window_id?: string; pid: number; base_commit?: string; base_commits?: Record<string, string>; role?: SessionRole; is_default?: boolean } & Partial<Pick<Session, "mute" | "can_orchestrate" | "agent" | "agent_session_id" | "agent_home" | "model" | "reasoningLevel" | "repo_root" | "base_branch" | "session_branch">>): Session {
+  register(input: { id?: string; name: string; workdir: string; tmux_target?: string; tmux_window_id?: string; pid: number; base_commit?: string; base_commits?: Record<string, string>; role?: SessionRole; is_default?: boolean; internal?: boolean } & Partial<Pick<Session, "mute" | "can_orchestrate" | "agent" | "agent_session_id" | "agent_home" | "model" | "reasoningLevel" | "repo_root" | "base_branch" | "session_branch">>): Session {
     if (this.sessions.takenNames().has(input.name)) {
       throw new Error(`session name already in use: ${input.name}`)
     }
@@ -66,6 +66,7 @@ export class Registry {
       can_orchestrate: input.can_orchestrate ?? canOrchestrate(input.role ?? "worker"),
       role: input.role,
       is_default: input.is_default,
+      internal: input.internal,
       agent_session_id: input.agent_session_id,
       agent_home: input.agent_home,
       base_commit: input.base_commit,
@@ -117,6 +118,9 @@ export class Registry {
   resolveName(name: string): Session | undefined { return this.sessions.getByName(name) }
   fuzzyResolve(query: string): Session | undefined { return this.sessions.fuzzyByName(query) }
   list(): Session[] { return this.sessions.list() }
+  // User-facing enumerations only — excludes hidden internal RPC workers.
+  // Internal/management callers (supervisor, name-uniqueness, resume) MUST use list().
+  listVisible(): Session[] { return this.list().filter(s => !s.internal) }
   // Archived sessions are NOT in the in-memory cache that list() returns; they
   // live only in the DB and are resumable via resumeFromArchive. Callers that
   // reason about ALL known sessions (e.g. deciding which agent homes are

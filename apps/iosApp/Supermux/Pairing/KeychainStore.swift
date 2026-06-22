@@ -5,7 +5,7 @@ import Security
 /// token and passes it into the shared `BrokerClient`/`BrokerApi` (which take a
 /// plain `token: String`), so the KMP `SecureTokenStore` actual is unused on iOS.
 enum KeychainStore {
-    private static let service = "dev.supermux.ios"
+    private static let service = "dev.supermux.app"
     private static let account = "device_token"
 
     private static func baseQuery() -> [String: Any] {

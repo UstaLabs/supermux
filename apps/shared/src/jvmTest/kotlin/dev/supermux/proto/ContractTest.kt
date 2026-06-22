@@ -13,7 +13,7 @@ class ContractTest {
             ?: error("fixture $name.json not found in test resources")).readBytes().decodeToString()
 
     @Test fun every_broker_fixture_parses_into_a_ServerFrame() {
-        val names = listOf("snapshot", "session_added", "session_removed", "agent_state", "agent_error", "message_append", "activity_append", "commands_changed")
+        val names = listOf("snapshot", "session_added", "session_removed", "agent_state", "agent_error", "message_append", "activity_append", "commands_changed", "finish_job")
         for (n in names) {
             val frame = json.decodeFromString<ServerFrame>(load(n))
             // Exhaustive when (no else): adding a new ServerFrame subtype will
@@ -27,6 +27,17 @@ class ContractTest {
                 is ServerFrame.MessageAppend -> {}
                 is ServerFrame.ActivityAppend -> {}
                 is ServerFrame.CommandsChanged -> {}
+                is ServerFrame.FsChanged -> {}
+                is ServerFrame.LspStatus -> {}
+                is ServerFrame.LspReady -> {}
+                is ServerFrame.LspError -> {}
+                is ServerFrame.LspRpcIn -> {}
+                is ServerFrame.LspExit -> {}
+                is ServerFrame.LspInstallProgress -> {}
+                is ServerFrame.LspInstallDone -> {}
+                is ServerFrame.DisplayAdded -> {}
+                is ServerFrame.DisplayRemoved -> {}
+                is ServerFrame.FinishJobFrame -> {}
             }
         }
     }

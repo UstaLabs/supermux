@@ -10,6 +10,7 @@ import EditorSettingsView from "./views/EditorSettingsView.vue"
 import SettingsIndexView from "./views/SettingsIndexView.vue"
 import AssistantSettingsView from "./views/AssistantSettingsView.vue"
 import CuratorSettingsView from "./views/CuratorSettingsView.vue"
+import VoiceSettingsView from "./views/VoiceSettingsView.vue"
 import AgentSettingsView from "./views/AgentSettingsView.vue"
 import { useOnboarding } from "./stores/onboarding"
 
@@ -32,6 +33,7 @@ export const router = createRouter({
     { path: "/settings/assistant", component: AssistantSettingsView, meta: { fullScreen: true } },
     { path: "/settings/agents", component: AgentSettingsView, meta: { fullScreen: true } },
     { path: "/settings/curator", component: CuratorSettingsView, meta: { fullScreen: true } },
+    { path: "/settings/voice", component: VoiceSettingsView, meta: { fullScreen: true } },
     { path: "/settings/editor", component: EditorSettingsView, meta: { fullScreen: true } },
     { path: "/setup", component: () => import("./views/SetupView.vue"), meta: { fullScreen: true } },
     { path: "/settings/git-hosting", component: () => import("./views/GitHostingSettingsView.vue"), meta: { fullScreen: true } },

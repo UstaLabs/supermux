@@ -1,0 +1,135 @@
+import { test, expect, beforeEach, afterEach } from "bun:test"
+import { existsSync, mkdtempSync, rmSync, unlinkSync } from "fs"
+import { join } from "path"
+import { tmpdir } from "os"
+import { WebChannel, __resetAuthFailures } from "../src/channels/web"
+import { DeviceStore } from "../src/channels/web/device-store"
+
+const DEV_PATH = `/tmp/devices-transcribe-${process.pid}.json`
+let ch: WebChannel
+let token: string
+let port: number
+let tmpRoot: string
+let oldHome: string | undefined
+let transcribeCalls: Array<{ id: string; input: { draft?: string; audioPath?: string } }>
+
+// `transcribe` is provided per-test so the "not configured" (503) case can omit it.
+async function start(opts: Record<string, unknown>) {
+  transcribeCalls = []
+  ch = new WebChannel({
+    port: 0,
+    devicesFile: DEV_PATH,
+    publicUrl: "http://127.0.0.1",
+    getSessionsSnapshot: () => [],
+    getSessionLog: () => [],
+    setMute: () => {},
+    onSendFromWeb: () => {},
+    ...opts,
+  } as any)
+  await ch.start()
+  port = (ch as any).boundPort as number
+}
+
+beforeEach(() => {
+  __resetAuthFailures()
+  tmpRoot = mkdtempSync(join(tmpdir(), "mux-transcribe-"))
+  oldHome = process.env.HOME
+  process.env.HOME = tmpRoot
+  if (existsSync(DEV_PATH)) unlinkSync(DEV_PATH)
+  const store = new DeviceStore(DEV_PATH)
+  token = store.mint("test-device").token
+})
+
+afterEach(async () => {
+  await ch?.stop()
+  if (oldHome === undefined) delete process.env.HOME
+  else process.env.HOME = oldHome
+  rmSync(tmpRoot, { recursive: true, force: true })
+  if (existsSync(DEV_PATH)) unlinkSync(DEV_PATH)
+})
+
+function authedJson(headers?: Record<string, string>) {
+  return { Cookie: `cmux_token=${token}`, "content-type": "application/json", ...headers }
+}
+
+test("POST /sessions/:id/transcribe (JSON draft) → cleaned text + dep called with (id, {draft})", async () => {
+  await start({
+    transcribe: async (id: string, input: any) => {
+      transcribeCalls.push({ id, input })
+      return { text: "cleaned" }
+    },
+  })
+  const res = await fetch(`http://127.0.0.1:${port}/sessions/sess-1/transcribe`, {
+    method: "POST",
+    headers: authedJson(),
+    body: JSON.stringify({ draft: "helo" }),
+  })
+  expect(res.status).toBe(200)
+  expect(await res.json()).toEqual({ text: "cleaned" })
+  expect(transcribeCalls).toEqual([{ id: "sess-1", input: { draft: "helo" } }])
+})
+
+test("POST /sessions/:id/transcribe with missing draft → 400", async () => {
+  await start({
+    transcribe: async () => ({ text: "should-not-run" }),
+  })
+  const res = await fetch(`http://127.0.0.1:${port}/sessions/sess-1/transcribe`, {
+    method: "POST",
+    headers: authedJson(),
+    body: JSON.stringify({}),
+  })
+  expect(res.status).toBe(400)
+  expect(transcribeCalls).toHaveLength(0)
+})
+
+test("POST /sessions/:id/transcribe without auth → 401", async () => {
+  await start({
+    transcribe: async () => ({ text: "x" }),
+  })
+  const res = await fetch(`http://127.0.0.1:${port}/sessions/sess-1/transcribe`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ draft: "helo" }),
+  })
+  expect(res.status).toBe(401)
+})
+
+test("POST /sessions/:id/transcribe with no transcribe dep → 503", async () => {
+  await start({}) // transcribe omitted
+  const res = await fetch(`http://127.0.0.1:${port}/sessions/sess-1/transcribe`, {
+    method: "POST",
+    headers: authedJson(),
+    body: JSON.stringify({ draft: "helo" }),
+  })
+  expect(res.status).toBe(503)
+})
+
+test("POST /sessions/:id/transcribe (multipart) → stores audio, passes audioPath to dep", async () => {
+  const { FileStore } = await import("../src/core/files/store")
+  const { openDb, runMigrations } = await import("../src/core/storage/db")
+  const db = openDb(join(tmpRoot, "files.sqlite3"))
+  runMigrations(db, join(import.meta.dir, "../src/core/storage/migrations"))
+  const fileStore = new FileStore(db, join(tmpRoot, "files"))
+  await start({
+    fileStore,
+    transcribe: async (id: string, input: any) => {
+      transcribeCalls.push({ id, input })
+      return { text: "from-audio" }
+    },
+  })
+  const form = new FormData()
+  form.set("audio", new Blob([new Uint8Array([1, 2, 3, 4])], { type: "audio/ogg" }), "clip.ogg")
+  const res = await fetch(`http://127.0.0.1:${port}/sessions/sess-2/transcribe`, {
+    method: "POST",
+    headers: { Cookie: `cmux_token=${token}` },
+    body: form,
+  })
+  expect(res.status).toBe(200)
+  expect(await res.json()).toEqual({ text: "from-audio" })
+  expect(transcribeCalls).toHaveLength(1)
+  expect(transcribeCalls[0]!.id).toBe("sess-2")
+  // The dep gets a real on-disk path produced by the file store (no draft).
+  expect(transcribeCalls[0]!.input.draft).toBeUndefined()
+  expect(typeof transcribeCalls[0]!.input.audioPath).toBe("string")
+  expect(existsSync(transcribeCalls[0]!.input.audioPath!)).toBe(true)
+})

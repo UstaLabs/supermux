@@ -1,5 +1,6 @@
 import type { SessionRole } from "./policy"
 import { AgentKind } from "../../shared/agents"
+import type { FinishJob } from "../worktree/finish-job"
 
 export type SessionStatus = "active" | "suspended" | "archived"
 export type { AgentKind }
@@ -17,6 +18,7 @@ export type SessionRecord = {
   can_orchestrate: boolean
   role: SessionRole
   is_default: boolean
+  internal: boolean
   tmux_target: string
   tmux_window_id?: string
   agent_session_id?: string
@@ -28,6 +30,7 @@ export type SessionRecord = {
   repo_root?: string
   base_branch?: string
   session_branch?: string
+  finish_job?: FinishJob
 }
 
 export type TmuxRef = {
@@ -47,6 +50,7 @@ export type SessionRow = {
   can_orchestrate: number
   role: string
   is_default: number
+  internal: number
   tmux_target: string | null
   tmux_window_id: string | null
   agent_session_id: string | null
@@ -58,6 +62,7 @@ export type SessionRow = {
   repo_root: string | null
   base_branch: string | null
   session_branch: string | null
+  finish_job: string | null
 }
 
 export type Session = SessionRecord & {
@@ -84,6 +89,7 @@ export function rowToRecord(row: SessionRow): SessionRecord {
     can_orchestrate: row.can_orchestrate === 1,
     role: (row.role as SessionRole) ?? "worker",
     is_default: row.is_default === 1,
+    internal: row.internal === 1,
     tmux_target: row.tmux_target ?? "",
     tmux_window_id: row.tmux_window_id ?? undefined,
     agent_session_id: row.agent_session_id ?? undefined,
@@ -95,6 +101,7 @@ export function rowToRecord(row: SessionRow): SessionRecord {
     repo_root: row.repo_root ?? undefined,
     base_branch: row.base_branch ?? undefined,
     session_branch: row.session_branch ?? undefined,
+    finish_job: row.finish_job ? JSON.parse(row.finish_job) : undefined,
   }
 }
 

@@ -52,6 +52,16 @@ export interface RemoteRepo {
 }
 export interface ClonedRepo { path: string; host: string; owner: string; name: string; fullName: string; sizeBytes: number }
 export interface ForgeAddInput { kind: string; host?: string; apiBase?: string; token: string; source: "pat" | "cli"; transport?: "https" | "ssh" }
+export interface FinishReadiness {
+  base: string; branch: string
+  ahead: number; behind: number
+  dirtyFiles: string[]
+  filesChanged: number; insertions: number; deletions: number
+  hasRemote: boolean; baseHasUpstream: boolean; ghAvailable: boolean
+  conflictPreflight: "clean" | "will_conflict" | "unknown"
+  recommended: "merge" | "pr"
+  nothingToLand: boolean
+}
 // In-app updater (GET /api/update/status). Mirrors the broker's UpdateStatus
 // shape (src/core/update/checker.ts) plus `disabled` when MUX_UPDATE_CHECK=0.
 export type UpdateMode = "binary" | "source" | "docker"
@@ -101,6 +111,12 @@ async function request(method: string, path: string, body?: unknown): Promise<an
   return res.json()
 }
 
+export interface AppConfig {
+  voiceCleanupModel?: string
+  whisperLang?: string
+  [key: string]: unknown
+}
+
 export const api = {
   listDevices: () => request("GET", "/devices"),
   addDevice:   (name: string) => request("POST", "/devices", { name }),
@@ -141,18 +157,10 @@ export const api = {
     request("POST", `/sessions/${encodeURIComponent(id)}/mute`, { muted }),
   interrupt: (id: string) =>
     request("POST", `/sessions/${encodeURIComponent(id)}/interrupt`, {}),
-  finish: (id: string, opts?: { skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string }) =>
-    request("POST", `/sessions/${encodeURIComponent(id)}/finish`, opts ?? {}) as Promise<
-      | { status: "integrated"; base: string; branch: string; mergedSha: string; verified: string | null }
-      | { status: "nothing_to_do" }
-      | { status: "sync_conflict"; files: string[] }
-      | { status: "tests_failed"; command: string; output: string }
-      | { status: "dirty_overlap"; files: string[] }
-      | { status: "non_ff" }
-      | { status: "no_verify" }
-      | { status: "uncommitted"; files: string[] }
-      | { status: "error"; message: string }
-    >,
+  finishReadiness: (id: string) =>
+    request("GET", `/sessions/${encodeURIComponent(id)}/finish/readiness`) as Promise<FinishReadiness | { error: string }>,
+  finish: (id: string, body?: { action?: "merge"|"pr"|"keep"|"discard"; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }) =>
+    request("POST", `/sessions/${encodeURIComponent(id)}/finish`, body ?? {}) as Promise<import("@/stores/finishJob").FinishJob | { error: string }>,
   gitStatus: (id: string) =>
     request("GET", `/sessions/${encodeURIComponent(id)}/git/status`) as Promise<GitRemoteStatus>,
   gitFetch: (id: string) =>
@@ -230,8 +238,8 @@ export const api = {
   setOpenCodeKey: (providerId: string, key: string) => request("POST", "/opencode/auth/key", { providerId, key }),
   startOpenCodeOAuth: (providerId: string, method: number) => request("POST", "/opencode/auth/oauth/start", { providerId, method }) as Promise<{ url: string; instructions?: string }>,
   finishOpenCodeOAuth: (providerId: string, method: number, code: string) => request("POST", "/opencode/auth/oauth/finish", { providerId, method, code }),
-  getAppConfig: () => request("GET", "/settings/config"),
-  saveAppConfig: (patch: Record<string, unknown>) => request("PUT", "/settings/config", patch),
+  getAppConfig: () => request("GET", "/settings/config") as Promise<AppConfig>,
+  saveAppConfig: (patch: Partial<AppConfig>) => request("PUT", "/settings/config", patch),
   claimPair: (name = "setup") => request("POST", "/pair/claim", { name }),
   getSoul: async (): Promise<string> => { const r = await fetch("/settings/soul"); if (!r.ok) throw new Error(`GET /settings/soul → ${r.status}`); return r.text() },
   saveSoul: async (content: string): Promise<void> => { const r = await fetch("/settings/soul", { method: "PUT", headers: { "content-type": "text/plain" }, body: content }); if (!r.ok) throw new Error(`PUT /settings/soul → ${r.status}`) },

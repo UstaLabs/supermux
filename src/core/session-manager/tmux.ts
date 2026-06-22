@@ -2,6 +2,8 @@ import { spawn } from "child_process"
 
 type TmuxResult = { code: number; stdout: string; stderr: string }
 type TmuxRunner = (args: string[]) => Promise<TmuxResult>
+// Runs an arbitrary command (used to wrap tmux in `systemd-run`); injectable for tests.
+type CmdRunner = (cmd: string, args: string[]) => Promise<TmuxResult>
 
 async function streamToString(stream: any): Promise<string> {
   const chunks: string[] = []
@@ -23,9 +25,9 @@ async function streamToString(stream: any): Promise<string> {
   return chunks.join("")
 }
 
-function runTmux(args: string[]): Promise<TmuxResult> {
+function runCommand(cmd: string, args: string[]): Promise<TmuxResult> {
   return new Promise((resolve, reject) => {
-    const proc = spawn("tmux", args, { stdio: ["ignore", "pipe", "pipe"] })
+    const proc = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] })
     let stdoutP = streamToString(proc.stdout)
     let stderrP = streamToString(proc.stderr)
     proc.on("close", async (code) => {
@@ -37,7 +39,28 @@ function runTmux(args: string[]): Promise<TmuxResult> {
   })
 }
 
-export function createTmuxClient(run: TmuxRunner = runTmux) {
+const runTmux: TmuxRunner = (args) => runCommand("tmux", args)
+
+// Birth the tmux SERVER in its own systemd scope so it OUTLIVES the broker.
+// The broker runs under mux.service (default KillMode=control-group); a server
+// spawned as a plain broker child lives in that cgroup and is SIGKILLed on every
+// broker restart/redeploy — taking every agent pane (= every session) with it.
+// `systemd-run --user --scope` puts the server in a sibling scope of mux.service,
+// outside the kill set, so sessions survive a broker restart (tmux already moves
+// each PANE into its own scope, so only the server needed decoupling). Falls back
+// to a plain spawn where systemd-run is unavailable (Docker, non-systemd) or the
+// scope can't be created — no worse than the previous behavior.
+async function newSessionScoped(runRaw: CmdRunner, run: TmuxRunner, tmuxArgs: string[]): Promise<TmuxResult> {
+  try {
+    const r = await runRaw("systemd-run", ["--user", "--scope", "--quiet", "--collect", "tmux", ...tmuxArgs])
+    if (r.code === 0) return r
+  } catch {
+    // systemd-run not on PATH — fall through to a plain tmux spawn.
+  }
+  return run(tmuxArgs)
+}
+
+export function createTmuxClient(run: TmuxRunner = runTmux, runRaw: CmdRunner = runCommand) {
   async function spawnSessionWindow(opts: {
     session: string
     window: string
@@ -49,7 +72,7 @@ export function createTmuxClient(run: TmuxRunner = runTmux) {
     const has = await run(["has-session", "-t", opts.session])
     let r: TmuxResult
     if (has.code !== 0) {
-      r = await run(["new-session", "-d", "-P", "-F", "#{window_id}", "-s", opts.session, "-n", opts.window, "-c", opts.workdir, opts.command])
+      r = await newSessionScoped(runRaw, run, ["new-session", "-d", "-P", "-F", "#{window_id}", "-s", opts.session, "-n", opts.window, "-c", opts.workdir, opts.command])
       if (r.code !== 0) throw new Error(`tmux new-session failed: ${r.stderr}`)
     } else {
       // Trailing colon disambiguates: `-t mux:` means "session named
@@ -79,6 +102,22 @@ export function createTmuxClient(run: TmuxRunner = runTmux) {
     return r.stdout.split("\n").map(s => s.trim()).filter(Boolean)
   }
 
+  // Liveness of a window's pane by tmux window id (@N). Returns the live pane's
+  // pid, or null if the window is gone or every pane is dead. reconcileOnStartup
+  // uses this to trust a surviving pane over a stale stored pid after a restart.
+  async function livePanePid(windowId: string): Promise<number | null> {
+    const r = await run(["list-panes", "-t", windowId, "-F", "#{pane_dead} #{pane_pid}"])
+    if (r.code !== 0) return null
+    for (const line of r.stdout.split("\n")) {
+      const [dead, pid] = line.trim().split(/\s+/)
+      if (dead === "0" && pid) {
+        const n = Number(pid)
+        if (Number.isFinite(n) && n > 0) return n
+      }
+    }
+    return null
+  }
+
   async function sendKeys(target: string, keys: string[]): Promise<void> {
     const r = await run(["send-keys", "-t", target, ...keys])
     if (r.code !== 0) throw new Error(`tmux send-keys failed: ${r.stderr}`)
@@ -89,7 +128,7 @@ export function createTmuxClient(run: TmuxRunner = runTmux) {
     if (r.code !== 0) throw new Error(`tmux send-keys failed: ${r.stderr}`)
   }
 
-  return { spawnSessionWindow, killSessionWindow, killWindowById, listSessionWindows, sendKeys, sendKeysToWindowId }
+  return { spawnSessionWindow, killSessionWindow, killWindowById, listSessionWindows, livePanePid, sendKeys, sendKeysToWindowId }
 }
 
 export const {
@@ -97,6 +136,7 @@ export const {
   killSessionWindow,
   killWindowById,
   listSessionWindows,
+  livePanePid,
   sendKeys,
   sendKeysToWindowId,
 } = createTmuxClient()

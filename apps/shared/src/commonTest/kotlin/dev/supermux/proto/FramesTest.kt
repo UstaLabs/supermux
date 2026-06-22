@@ -32,4 +32,26 @@ class FramesTest {
         assertTrue(f is ServerFrame.SessionRemoved)
         assertEquals("550e8400-e29b-41d4-a716-446655440000", (f as ServerFrame.SessionRemoved).id)
     }
+
+    // Display lifecycle frames — broker emits {type:"display_added",display:{...}}
+    // and {type:"display_removed",id}.
+    @Test fun parses_display_added() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"display_added","display":{"id":"d-1504c1bf","sessionName":"ios-display-parity","provider":"linux-xvfb","display":":100","status":"running","createdAt":"2026-06-20T05:05:39.056Z","transport":"vnc"}}""",
+        )
+        assertTrue(f is ServerFrame.DisplayAdded)
+        val d = (f as ServerFrame.DisplayAdded).display
+        assertEquals("d-1504c1bf", d.id)
+        assertEquals("vnc", d.transport)
+        assertEquals("linux-xvfb", d.provider)
+        assertEquals("running", d.status)
+    }
+
+    @Test fun parses_display_removed() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"display_removed","id":"d-1504c1bf"}""",
+        )
+        assertTrue(f is ServerFrame.DisplayRemoved)
+        assertEquals("d-1504c1bf", (f as ServerFrame.DisplayRemoved).id)
+    }
 }

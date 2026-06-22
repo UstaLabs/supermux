@@ -12,6 +12,22 @@ const log = makeLogger("trust")
 // tools, so an agent tool-call can't be dispatched twice. MUST match spawn-command.ts.
 export const CLAUDE_SHIM_SERVER = "mux-shim"
 export const CLAUDE_CHANNEL_SERVER = "mux-channel"
+export const CLAUDE_RPC_SERVER = "mux-rpc"
+
+// Write a STRICT mcp config for an agent-rpc worker: only the rpc tools server
+// (MUX_RPC_ONLY=1 — advertises just resolve/reject) plus the inbound channel,
+// and nothing else. Spawned with --strict-mcp-config so the worker can't reach
+// the full shim toolset; its sole job is to settle/fail the request it's given.
+export function writeRpcWorkerMcpConfig(path: string): void {
+  const spec = shimSpawnSpec()
+  const config = {
+    mcpServers: {
+      [CLAUDE_RPC_SERVER]: { type: "stdio", command: spec.shimCommand, args: spec.shimArgs, env: { MUX_RPC_ONLY: "1" } },
+      [CLAUDE_CHANNEL_SERVER]: { type: "stdio", command: spec.shimCommand, args: spec.shimArgs, env: { MUX_CHANNEL_ONLY: "1" } },
+    },
+  }
+  writeFileSync(path, JSON.stringify(config, null, 2))
+}
 
 // Atomically prepare ~/.claude.json before launching claude for `workdir`.
 // Several first-run concerns, one read-modify-write (avoids a concurrent-spawn

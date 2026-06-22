@@ -17,6 +17,10 @@ import { join } from "path"
 declare const document: {
   querySelector(selector: string): { disabled?: boolean } | null
 }
+type PromptInputHook = {
+  textInput: { value: string }
+  setTextInput(value: string): void
+}
 
 const STATE_DIR = process.env.MUX_STATE_DIR ?? join(process.env.HOME ?? "", ".mux/state")
 const MUX_WEB_PORT = parseInt(process.env.MUX_WEB_PORT ?? "9898", 10)
@@ -59,6 +63,16 @@ async function main(): Promise<void> {
     await page.click("text=ana")
     await page.waitForSelector('textarea[placeholder*="Message"]', { timeout: 10_000 })
 
+    // Stub the transcribe endpoint so the assertion is deterministic
+    // (the fake mic produces non-speech audio; real whisper won't return useful text)
+    await page.route("**/sessions/*/transcribe", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ text: "hello from transcribe" }),
+      }),
+    )
+
     // Tap mic button
     const micBtn = page.locator('button[aria-label="Record voice message"]')
     await micBtn.waitFor({ state: "visible", timeout: 5_000 })
@@ -73,40 +87,18 @@ async function main(): Promise<void> {
     // Let some audio capture happen
     await page.waitForTimeout(1500)
 
-    // Stop the recording
+    // Stop the recording — triggers POST to /sessions/:id/transcribe
     await stopBtn.click()
     console.log("stop clicked")
 
-    // Voice chip should appear in composer (mic icon + duration)
-    const voiceChip = page.locator('button[aria-label="Play voice memo"]').first()
-    await voiceChip.waitFor({ state: "visible", timeout: 5_000 })
-    console.log("voice chip appeared")
-
-    // Tap send
-    const submitBtn = page.locator('button[aria-label="Submit"]')
-    await submitBtn.waitFor({ state: "visible" })
+    // After stop, transcribed text should be dropped into the composer (not sent)
     await page.waitForFunction(
-      () => !document.querySelector('button[aria-label="Submit"]')?.disabled,
-      { timeout: 5_000 },
+      () =>
+        (globalThis as typeof globalThis & { __cmuxPromptInput?: PromptInputHook })
+          .__cmuxPromptInput?.textInput?.value?.includes("hello from transcribe"),
+      { timeout: 10_000 },
     )
-    await submitBtn.click()
-    console.log("submit clicked")
-
-    // Wait for upload to settle (toast cycle)
-    await page.waitForTimeout(2500)
-
-    // Verify broker received a voice attachment in ana's recent messages
-    const msgs = await fetch(`${APP_URL}/sessions/ana/messages`, {
-      headers: { Cookie: `cmux_token=${token}` },
-    }).then((r) => r.json())
-    const found = (msgs as any[]).some((m) =>
-      m.direction === "inbound" &&
-      m.channel === "web" &&
-      Array.isArray(m.attachments) &&
-      m.attachments.some((a: any) => a.kind === "voice"),
-    )
-    if (found) console.log("broker recorded an inbound voice attachment")
-    else throw new Error("no inbound voice attachment found in ana messages")
+    console.log("transcribed text appeared in composer")
 
     console.log("\n=== TEST PASSED ===")
   } finally {

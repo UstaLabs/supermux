@@ -25,7 +25,7 @@ const CORE_PLUGIN_NAME = "mux-core"
 // pane. Both supervisor.ts (personal assistants) and spawn-helper.ts
 // (user-requested workers) use this. Adding/removing flags later is one edit,
 // not two.
-export function buildClaudeSpawnCommand(opts: { name: string; sessionId?: string; model?: string; effort?: string; role?: AgentRole; sessionRole?: SessionRole; claudeSessionId?: string; resume?: boolean; pluginsFile?: string; pluginsDir?: string; workdir?: string }): string {
+export function buildClaudeSpawnCommand(opts: { name: string; sessionId?: string; model?: string; effort?: string; role?: AgentRole; sessionRole?: SessionRole; claudeSessionId?: string; resume?: boolean; pluginsFile?: string; pluginsDir?: string; workdir?: string; rpcMcpConfig?: string }): string {
   const role: AgentRole = opts.role ?? (opts.sessionRole === "personal_assistant" ? "main" : "worker")
   const memoryPreamblePath = writeSessionMemoryPreamble(opts.name, role, opts.workdir)
   const modelFlag = opts.model ? ` --model ${opts.model}` : ""
@@ -40,13 +40,21 @@ export function buildClaudeSpawnCommand(opts: { name: string; sessionId?: string
   // Reply rules normally arrive via mux-core's SessionStart hook. Only
   // append the static fallback when that plugin isn't part of this spawn.
   const replyFallback = hasCorePlugin ? "" : ` --append-system-prompt-file ${replyFallbackPath(STATE_DIR)}`
+  // agent-rpc worker: pin to a STRICT mcp config (only the rpc-tools server + the
+  // inbound channel). MUX_RPC_ONLY is set PER-SERVER inside that config (on the
+  // mux-rpc entry only) — it must NOT go on the claude process env, or it would be
+  // inherited by the mux-channel shim too, flipping it into rpc mode and breaking
+  // inbound channel injection (the worker would then never receive its prompt).
+  // --dangerously-load-development-channels server:mux-channel resolves
+  // mux-channel against this strict config (which includes it).
+  const rpcFlags = opts.rpcMcpConfig ? ` --strict-mcp-config --mcp-config ${opts.rpcMcpConfig}` : ""
   // MUX_SESSION_ROLE lets the SessionStart hook inject the PA's soul.md (its full
   // identity) for personal assistants only — workers must never receive soul.md.
   return `bash -lc 'CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 MUX_SESSION_ID=${sessionId} MUX_DISPLAY_NAME=${opts.name} MUX_SESSION_ROLE=${role} ` +
     `claude --dangerously-skip-permissions --dangerously-load-development-channels server:mux-channel ` +
     `--add-dir ${promptsDir(STATE_DIR)} ` +
     `--append-system-prompt-file ${environmentMdPath(STATE_DIR)} ` +
-    `--append-system-prompt-file ${memoryPreamblePath}${replyFallback}${pluginFlags}${modelFlag}${effortFlag}${sessionFlag}${settingsFlag}'`
+    `--append-system-prompt-file ${memoryPreamblePath}${replyFallback}${pluginFlags}${modelFlag}${effortFlag}${sessionFlag}${settingsFlag}${rpcFlags}'`
 }
 
 // Single source of truth for the codex invocation broker spawns into a tmux

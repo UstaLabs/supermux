@@ -3,7 +3,7 @@ import { deriveName, ensureUnique } from "./naming"
 import { buildClaudeSpawnCommand } from "./spawn-command"
 import { preAcceptTrust } from "./trust"
 import { sendChannelConsentEnter } from "./post-spawn-keys"
-import { killSessionWindow, listSessionWindows } from "./tmux"
+import { listSessionWindows } from "./tmux"
 import { resolveCodexAuth } from "../agents/codex/auth"
 import { writeCodexConfig } from "../agents/codex/config-writer"
 import { writeCodexPreamble } from "../agents/codex/preamble-writer"
@@ -55,6 +55,8 @@ export type SpawnDeps = {
   bind: (session_id: string) => Promise<void>
   spawnTmux: (opts: { session: string; window: string; workdir: string; command: string }) => Promise<{ windowId?: string } | void>
   tmuxSession: string
+  /** Lists existing tmux window names; injectable for tests. Defaults to real tmux. */
+  listWindows?: (session: string) => Promise<string[]>
   resolveAttachment?: (file_id: string) => Promise<string>
   postSpawnReady?: (target: string) => Promise<void>
   codexResolveAuth?: typeof resolveCodexAuth
@@ -88,6 +90,14 @@ export type SpawnArgs = {
   reasoningLevel?: string
   /** Resolved CLI value (highest when unset). Passed by the broker caller. */
   effort?: string
+  /** Mark the session as broker-internal (e.g. an agent-rpc worker) so it's
+   *  hidden from user-facing lists. For claude the row is created async via the
+   *  shim's onRegister, so the broker applies this there (see main.ts). For the
+   *  synchronously-registered agents it's forwarded into registry.register(). */
+  internal?: boolean
+  /** When set (agent-rpc worker), claude is pinned to this strict mcp config
+   *  and launched in MUX_RPC_ONLY mode. */
+  rpcMcpConfig?: string
 }
 
 export type SpawnResult = {
@@ -369,22 +379,30 @@ export async function spawnPA(opts: {
 }
 
 async function spawnClaudeSession(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
+  const listWindows = deps.listWindows ?? listSessionWindows
   const base = args.requestedName ?? deriveName(args.workdir)
-  const name = ensureUnique(base, deps.registry.takenNames())
+  // Resolve a window name unique against BOTH taken display names AND existing
+  // tmux window names. Worker windows are named after the repo base (e.g.
+  // "supermux"); a session that later renames its DISPLAY name keeps its
+  // original window name, so the base would otherwise look "free" as a display
+  // name and collide with that still-live window. The old path then ran
+  // `kill-window -t mux:<name>`, which killed the existing same-named (live!)
+  // session — i.e. creating a new session silently killed the previously-active
+  // one on the same repo. Uniquifying against live window names means we never
+  // collide, so we never need to (and never do) kill a sibling's window.
+  const existingWindows = await listWindows(deps.tmuxSession)
+  const name = ensureUnique(base, new Set([...deps.registry.takenNames(), ...existingWindows]))
   const id = randomUUID()
   const claudeSessionId = randomUUID()
   deps.registry.reserveName(name)
   preAcceptTrust(args.workdir)
   try {
     await deps.bind(id)
-    while ((await listSessionWindows(deps.tmuxSession)).includes(name)) {
-      await killSessionWindow({ session: deps.tmuxSession, window: name }).catch(() => {})
-    }
     const tmuxWindow = await deps.spawnTmux({
       session: deps.tmuxSession,
       window: name,
       workdir: args.workdir,
-      command: buildClaudeSpawnCommand({ name, model: args.model, effort: args.effort, sessionId: id, claudeSessionId, workdir: args.workdir }),
+      command: buildClaudeSpawnCommand({ name, model: args.model, effort: args.effort, sessionId: id, claudeSessionId, workdir: args.workdir, rpcMcpConfig: args.rpcMcpConfig }),
     })
     if (tmuxWindow?.windowId) deps.onTmuxWindowId?.(id, tmuxWindow.windowId)
     await (deps.postSpawnReady ?? sendChannelConsentEnter)(`${deps.tmuxSession}:${name}`)
@@ -447,6 +465,7 @@ export async function spawnCodexSession(deps: SpawnDeps, args: SpawnArgs): Promi
       agent: AgentKind.Codex,
       agent_home: sessionHome,
       base_commits: captureBaseCommits(args.workdir),
+      internal: args.internal,
     } as any)
 
     const adapter = (deps.codexAdapterFactory ?? ((opts) => new CodexAdapter(opts)))({
@@ -521,6 +540,7 @@ export async function spawnCursorSession(deps: SpawnDeps, args: SpawnArgs): Prom
       agent: AgentKind.Cursor,
       agent_home: sessionHome,
       base_commits: captureBaseCommits(args.workdir),
+      internal: args.internal,
     })
 
     deps.registerAdapter?.(name, adapter, { onExit: () => {} })
@@ -608,6 +628,7 @@ export async function spawnOpenCodeSession(deps: SpawnDeps, args: SpawnArgs): Pr
       agent: AgentKind.OpenCode,
       agent_home: sessionHome,
       base_commits: captureBaseCommits(args.workdir),
+      internal: args.internal,
     } as any)
 
     const adapter = new OpenCodeAdapter({
