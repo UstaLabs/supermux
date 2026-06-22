@@ -13,6 +13,9 @@ struct SupermuxApp: App {
             BrokerConfig.pair(PairToken(baseURL: b, token: t))
         }
         _paired = State(initialValue: BrokerConfig.isPaired)
+        // Start the WatchConnectivity channel so a paired Apple Watch gets the broker
+        // credentials (pushed on activation + whenever they change below).
+        PhoneWatchProvisioner.shared.activate()
     }
 
     var body: some Scene {
@@ -25,7 +28,10 @@ struct SupermuxApp: App {
                     })
                     .id(base)
                 } else {
-                    PairingView { _ in paired = true }
+                    PairingView { _ in
+                        paired = true
+                        PhoneWatchProvisioner.shared.pushCurrent()
+                    }
                 }
             }
             .onOpenURL { url in
@@ -35,6 +41,7 @@ struct SupermuxApp: App {
                     ?? PairToken.parse(url.absoluteString, fallbackBaseURL: BrokerConfig.baseURL) {
                     BrokerConfig.pair(p)
                     paired = true
+                    PhoneWatchProvisioner.shared.pushCurrent()
                 }
             }
             .preferredColorScheme(appearance == "light" ? .light : appearance == "dark" ? .dark : nil)
