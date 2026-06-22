@@ -31,7 +31,10 @@ export function checkPreflight(has: (bin: string) => boolean): PreflightResult {
 /** Real PATH probe used at boot. */
 export function hasBinary(bin: string): boolean {
   try {
-    execSync(`command -v ${bin}`, { stdio: "ignore", shell: "/bin/sh" })
+    // Pass env explicitly: Bun's execSync does NOT honor an in-process
+    // mutation to process.env.PATH unless env is passed, and the broker
+    // prepends agent-install dirs to PATH at startup (see agents/bin-dirs).
+    execSync(`command -v ${bin}`, { stdio: "ignore", shell: "/bin/sh", env: process.env })
     return true
   } catch {
     return false
