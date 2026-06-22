@@ -6,6 +6,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
+import dev.supermux.net.AddCommentBody
 import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
@@ -15,6 +16,7 @@ import dev.supermux.net.DeviceDto
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.ForgeConnectionsResponse
+import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
 import dev.supermux.net.FsSearchResult
 import dev.supermux.net.LspInstallResult
@@ -27,8 +29,11 @@ import dev.supermux.net.OpenCodeProvider
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
+import dev.supermux.net.ReviewComment
+import dev.supermux.net.ReviewSubmitResult
 import dev.supermux.net.ScrcpyClient
 import dev.supermux.net.SpawnRequest
+import dev.supermux.net.UpdateCommentBody
 import dev.supermux.net.TerminalClient
 import dev.supermux.net.UpdateStatus
 import dev.supermux.net.VerifySaveResult
@@ -478,6 +483,51 @@ class AppViewModel(private val baseUrl: String, private val token: String) : Vie
         runCatching { api.fsWrite(sessionId, path, content) }.getOrDefault(false)
     suspend fun fsSearch(sessionId: String, q: String): List<FsSearchResult> =
         runCatching { api.fsSearch(sessionId, q) }.getOrNull() ?: emptyList()
+
+    // ── Editor diff + inline code-review ───────────────────────────────────────
+    // HTTP wrappers (parity with iOS BrokerSession review*); the DiffView pane drives
+    // these via the lambdas threaded through ChatScreen → EditorPanel.
+
+    /** GET /sessions/<id>/fs/diff → repos + existing review comments (null on failure). */
+    suspend fun fsDiff(sessionId: String): FsDiffResult? =
+        runCatching { api.fsDiff(sessionId) }.getOrNull()
+
+    /** POST a new inline review comment → the created comment (null on failure). */
+    suspend fun reviewAddComment(sessionId: String, body: AddCommentBody): ReviewComment? =
+        runCatching { api.reviewAddComment(sessionId, body) }.getOrNull()
+
+    /** PATCH a comment to status="resolved" (iOS reviewResolve parity). */
+    suspend fun reviewResolve(sessionId: String, commentId: String): Boolean =
+        runCatching { api.reviewUpdateComment(sessionId, commentId, UpdateCommentBody(status = "resolved")) }
+            .getOrDefault(false)
+
+    /** POST /review/submit → delivers open comments to the agent (null on failure). */
+    suspend fun reviewSubmit(sessionId: String): ReviewSubmitResult? =
+        runCatching { api.reviewSubmit(sessionId) }.getOrNull()
+
+    // ── Editor lifecycle + LSP control-plane senders ───────────────────────────
+    // editor_open/close start/stop the broker fs-watcher (so fs_changed fires) and the
+    // lsp_* frames drive code-intelligence. Inbound frames are already folded into
+    // lspStatus / lspRpc / fsChanges flows above; these are the outbound half.
+
+    fun editorOpen(sessionId: String) {
+        viewModelScope.launch { runCatching { client.send(ClientFrame.EditorOpen(sessionId)) } }
+    }
+    fun editorClose(sessionId: String) {
+        viewModelScope.launch { runCatching { client.send(ClientFrame.EditorClose(sessionId)) } }
+    }
+    fun lspStatusQuery(sessionId: String, path: String) {
+        viewModelScope.launch { runCatching { client.send(ClientFrame.LspStatusQuery(sessionId, path)) } }
+    }
+    fun lspOpen(sessionId: String, serverId: String) {
+        viewModelScope.launch { runCatching { client.send(ClientFrame.LspOpen(sessionId, serverId)) } }
+    }
+    fun lspRpcOut(sessionId: String, serverId: String, message: String) {
+        viewModelScope.launch { runCatching { client.send(ClientFrame.LspRpcOut(sessionId, serverId, message)) } }
+    }
+    fun lspClose(sessionId: String, serverId: String) {
+        viewModelScope.launch { runCatching { client.send(ClientFrame.LspClose(sessionId, serverId)) } }
+    }
 
     suspend fun listProjects(): List<String> = runCatching { api.listProjects() }.getOrNull() ?: emptyList()
     suspend fun validatePath(path: String): PathValidation? = runCatching { api.validatePath(path) }.getOrNull()

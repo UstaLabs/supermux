@@ -206,12 +206,26 @@ fun FencedCodeBlock(code: String) {
  */
 @Composable
 fun AssistantMessage(text: String) {
-    val cs = MaterialTheme.colorScheme
-    val blocks = parseMarkdownBlocks(text)
-    Column(
+    MarkdownBody(
+        text = text,
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = Space.xs),
+    )
+}
+
+/**
+ * Reusable block-markdown renderer (prose + fenced code), the single source for chat,
+ * the editor markdown preview, and the PWA-parity rendering. Splits via the shared
+ * [parseMarkdownBlocks]; prose uses inline bold/italic/code spans, code uses
+ * [FencedCodeBlock]. Keep all markdown surfaces routed through this so they never drift.
+ */
+@Composable
+fun MarkdownBody(text: String, modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    val blocks = parseMarkdownBlocks(text)
+    Column(
+        modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
         for (block in blocks) {

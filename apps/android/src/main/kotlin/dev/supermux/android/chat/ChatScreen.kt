@@ -140,6 +140,24 @@ fun ChatScreen(
     fsRead: suspend (String) -> Result<String> = { Result.success("") },
     fsWrite: suspend (String, String) -> Boolean = { _, _ -> false },
     fsSearch: suspend (String) -> List<dev.supermux.net.FsSearchResult> = { emptyList() },
+    // Editor diff + inline code-review (bound to session.id in SessionKeepAlive).
+    fsDiff: suspend () -> dev.supermux.net.FsDiffResult? = { null },
+    reviewAddComment: suspend (dev.supermux.net.AddCommentBody) -> dev.supermux.net.ReviewComment? = { null },
+    reviewResolve: suspend (String) -> Boolean = { false },
+    reviewSubmit: suspend () -> dev.supermux.net.ReviewSubmitResult? = { null },
+    // Editor LSP + live file-watch — app-wide flows + session-bound senders.
+    fsChanges: kotlinx.coroutines.flow.SharedFlow<dev.supermux.proto.ServerFrame.FsChanged> =
+        kotlinx.coroutines.flow.MutableSharedFlow(),
+    lspStatus: kotlinx.coroutines.flow.StateFlow<Map<String, dev.supermux.proto.ServerFrame.LspStatus>> =
+        kotlinx.coroutines.flow.MutableStateFlow(emptyMap()),
+    lspRpc: kotlinx.coroutines.flow.SharedFlow<dev.supermux.proto.ServerFrame.LspRpcIn> =
+        kotlinx.coroutines.flow.MutableSharedFlow(),
+    editorOpen: (String) -> Unit = {},
+    editorClose: (String) -> Unit = {},
+    lspStatusQuery: (String, String) -> Unit = { _, _ -> },
+    lspOpen: (String, String) -> Unit = { _, _ -> },
+    lspRpcOut: (String, String, String) -> Unit = { _, _, _ -> },
+    lspClose: (String, String) -> Unit = { _, _ -> },
     connectTerminal: (() -> dev.supermux.net.TerminalClient)? = null,
     listDisplays: (suspend () -> List<dev.supermux.net.DisplayStream>)? = null,
     connectScrcpy: ((String) -> dev.supermux.net.ScrcpyClient)? = null,
@@ -987,10 +1005,25 @@ fun ChatScreen(
             }
             if (SessionPanel.Editor in openedPanels) {
                 EditorPanel(
+                    sessionId = session.id,
+                    workdir = session.workdir,
                     fsList = fsList,
                     fsRead = fsRead,
                     fsWrite = fsWrite,
                     fsSearch = fsSearch,
+                    fsDiff = fsDiff,
+                    reviewAddComment = reviewAddComment,
+                    reviewResolve = reviewResolve,
+                    reviewSubmit = reviewSubmit,
+                    fsChanges = fsChanges,
+                    lspStatus = lspStatus,
+                    lspRpc = lspRpc,
+                    editorOpen = editorOpen,
+                    editorClose = editorClose,
+                    lspStatusQuery = lspStatusQuery,
+                    lspOpen = lspOpen,
+                    lspRpcOut = lspRpcOut,
+                    lspClose = lspClose,
                     onConsumesBackChange = onEditorConsumesBackChange,
                     modifier = Modifier.keepAlivePanel(activePanel == SessionPanel.Editor),
                 )

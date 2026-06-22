@@ -15,10 +15,14 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -47,13 +51,24 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import dev.supermux.android.R
+import dev.supermux.android.chat.MarkdownBody
 import dev.supermux.android.theme.HapticKind
 import dev.supermux.android.theme.LocalPanes
 import dev.supermux.android.theme.Space
 import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.net.AddCommentBody
+import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
 import dev.supermux.net.FsSearchResult
+import dev.supermux.net.ReviewComment
+import dev.supermux.net.ReviewSubmitResult
+import dev.supermux.proto.ServerFrame
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
 /**
  * Code editor panel: lazy file tree, multi-tab editing, filename search.
@@ -62,10 +77,27 @@ import kotlinx.coroutines.delay
 @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
 @Composable
 fun EditorPanel(
+    sessionId: String,
+    workdir: String,
     fsList: suspend (String) -> List<FsEntry>,
     fsRead: suspend (String) -> Result<String>,
     fsWrite: suspend (String, String) -> Boolean,
     fsSearch: suspend (String) -> List<FsSearchResult>,
+    // Phase 2 — diff + inline code-review.
+    fsDiff: suspend () -> FsDiffResult? = { null },
+    reviewAddComment: suspend (AddCommentBody) -> ReviewComment? = { null },
+    reviewResolve: suspend (String) -> Boolean = { false },
+    reviewSubmit: suspend () -> ReviewSubmitResult? = { null },
+    // Phase 4 + 5 — LSP + live file-watch. Flows are app-wide; bridge/banner filter by session.
+    fsChanges: SharedFlow<ServerFrame.FsChanged> = MutableSharedFlow(),
+    lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>> = MutableStateFlow(emptyMap()),
+    lspRpc: SharedFlow<ServerFrame.LspRpcIn> = MutableSharedFlow(),
+    editorOpen: (String) -> Unit = {},
+    editorClose: (String) -> Unit = {},
+    lspStatusQuery: (String, String) -> Unit = { _, _ -> },
+    lspOpen: (String, String) -> Unit = { _, _ -> },
+    lspRpcOut: (String, String, String) -> Unit = { _, _, _ -> },
+    lspClose: (String, String) -> Unit = { _, _ -> },
     onConsumesBackChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -103,12 +135,67 @@ fun EditorPanel(
     val lineWrap = prefs.getBoolean("lineWrap", true)
     val fontSize = prefs.getInt("fontSize", 13)
 
+    // LSP bridge — orchestrates the cm6 LSPClient over the Phase-2 flows, filtered by session.
+    val bridge = remember(sessionId, lspStatus, lspRpc) {
+        AndroidLspBridge(
+            sessionId = sessionId,
+            lspStatus = lspStatus,
+            lspRpc = lspRpc,
+            lspStatusQuery = lspStatusQuery,
+            lspOpen = lspOpen,
+            lspRpcOut = lspRpcOut,
+        )
+    }
+
     val engine = rememberEditorEngine(
         lineWrap = lineWrap,
         fontSize = fontSize,
         onChange = { content -> editor.activeTab?.path?.let { editor.updateContent(it, content) } },
         onSave = { editor.saveActive() },
+        // cm6 posts `{serverId,message}` JSON; forward it verbatim to the broker.
+        onLspOut = { payload ->
+            val (sid, msg) = parseLspOut(payload) ?: return@rememberEditorEngine
+            bridge.rpcOut(sid, msg)
+        },
     )
+
+    val activeIsMarkdown = editor.activeTab?.path?.let(::isMarkdownPath) == true
+    val showPreviewToggle = activeIsMarkdown && !editor.showDiff
+    val showPreview = editor.previewMode && activeIsMarkdown && !editor.showDiff
+
+    // Editor lifecycle: tell the broker to start/stop the fs-watcher for this session.
+    // This is ALSO what makes fs_changed fire — the stale banner is dead without it.
+    DisposableEffect(sessionId) {
+        editorOpen(sessionId)
+        onDispose { editorClose(sessionId) }
+    }
+
+    // Live file-watch: fold fs_changed pulses for this session into the stale set.
+    LaunchedEffect(sessionId, fsChanges) {
+        fsChanges.collect { f -> if (f.session == sessionId) editor.markChanged(f.paths) }
+    }
+
+    // (Re)wire code intelligence whenever the active file (or diff/preview mode) changes.
+    // LaunchedEffect cancellation tears down the prior client on a fast tab switch, and
+    // re-keying on engine.failed re-runs after a renderer crash recovers (parity §7.3).
+    LaunchedEffect(editor.activeTabPath, editor.showDiff, showPreview, engine.failed) {
+        engine.lspDisconnect()
+        val tab = editor.activeTab
+        if (editor.showDiff || showPreview || tab == null || workdir.isEmpty() || engine.failed) {
+            return@LaunchedEffect
+        }
+        delay(1_200) // let the WebView reach `ready` (parity EditorPane.swift:102)
+        val status = bridge.queryStatus(tab.path)
+        val serverId = status.serverId
+        // Status.isReady: supported && serverId != null && state == "ready" (LspBridge.swift:18).
+        if (!status.supported || serverId == null || status.state != "ready") return@LaunchedEffect
+        // Pump inbound RPC for this server in a child coroutine (cancelled with this effect).
+        launch { bridge.pumpRpcIn(serverId) { sid, msg -> engine.lspMessage(sid, msg) } }
+        if (!bridge.open(serverId)) return@LaunchedEffect
+        val rootUri = dirUri(workdir)
+        val fileUri = pathToUri(joinPath(workdir, tab.path))
+        engine.lspConnect(serverId, rootUri, fileUri, status.languageId ?: "")
+    }
 
     fun revealFile(path: String) {
         focusManager.clearFocus()
@@ -144,6 +231,34 @@ fun EditorPanel(
     } == true
 
     Box(modifier.fillMaxSize()) {
+        // Diff is a MODE of the panel (parity EditorPane.swift:44): when showDiff, the
+        // DiffView swaps the whole pane — header/tabs/tree/editor — exactly like iOS.
+        if (editor.showDiff) {
+            DiffView(
+                repos = editor.diffRepos,
+                comments = editor.diffComments,
+                onAddComment = { repo, path, anchorLine, anchorContext, hunkHeader, body ->
+                    reviewAddComment(
+                        AddCommentBody(
+                            repo = repo,
+                            path = path,
+                            side = "RIGHT",
+                            anchorLine = anchorLine,
+                            anchorContext = anchorContext,
+                            body = body,
+                            diffHunkHeader = hunkHeader,
+                        ),
+                    )
+                    Unit
+                },
+                onResolve = { commentId -> reviewResolve(commentId); Unit },
+                onSubmit = { reviewSubmit(); Unit },
+                onReload = { scope.launch { editor.reloadDiff(fsDiff) } },
+                onClose = { editor.showDiff = false },
+                modifier = Modifier.fillMaxSize(),
+            )
+            return@Box
+        }
         Column(Modifier.fillMaxSize()) {
             Row(
                 Modifier
@@ -175,6 +290,42 @@ fun EditorPanel(
                         .weight(1f)
                         .padding(horizontal = Space.xs),
                 )
+                // Markdown preview toggle — only on .md tabs (parity EditorPane.swift:158-166).
+                if (showPreviewToggle) {
+                    IconButton(onClick = { haptic(HapticKind.Tick); editor.previewMode = !editor.previewMode }) {
+                        Icon(
+                            painter = painterResource(
+                                if (editor.previewMode) R.drawable.ic_pencil else R.drawable.ic_eye,
+                            ),
+                            contentDescription = if (editor.previewMode) "Edit" else "Preview",
+                            tint = if (editor.previewMode) cs.primary else cs.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+                // View changes (diff) — opens the DiffView mode (parity EditorPane.swift:168-180).
+                if (editor.diffLoading) {
+                    Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = cs.primary,
+                        )
+                    }
+                } else {
+                    IconButton(onClick = {
+                        haptic(HapticKind.Tick)
+                        focusManager.clearFocus()
+                        scope.launch { editor.loadDiff(fsDiff) }
+                    }) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_diff),
+                            contentDescription = "View changes",
+                            tint = cs.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
                 if (editor.saving) {
                     Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(
@@ -239,6 +390,37 @@ fun EditorPanel(
                         )
                         HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
 
+                        // Stale-on-disk banner for the active tab (parity EditorPane.swift:54-56,
+                        // 275-287). Inline (not a Snackbar) since it's tied to the tab's state.
+                        if (activeTab != null && editor.isStale(activeTab.path)) {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .background(cs.errorContainer.copy(alpha = 0.5f))
+                                    .padding(horizontal = Space.md, vertical = Space.xs),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_alert_triangle),
+                                    contentDescription = null,
+                                    tint = cs.error,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Text(
+                                    "File changed on disk",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = cs.onErrorContainer,
+                                    modifier = Modifier.weight(1f).padding(start = Space.sm),
+                                )
+                                FilledTonalButton(
+                                    onClick = { scope.launch { editor.reload(activeTab.path, fsRead) } },
+                                    modifier = Modifier.heightIn(min = 36.dp),
+                                ) {
+                                    Text("Reload", style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
+                        }
+
                         Box(Modifier.weight(1f).fillMaxWidth()) {
                             // Pre-warm WebView as soon as the editor panel opens.
                             WebCodeEditor(
@@ -253,6 +435,21 @@ fun EditorPanel(
                                 onSave = { editor.saveActive() },
                                 modifier = Modifier.fillMaxSize(),
                             )
+
+                            // Markdown preview overlay — covers (but keeps warm) the WebView when
+                            // toggled on a .md tab (parity EditorPane.swift:240-245). Opaque so the
+                            // editor underneath is hidden; the engine stays alive in remember.
+                            if (showPreview && activeTab != null) {
+                                Column(
+                                    Modifier
+                                        .fillMaxSize()
+                                        .background(Color(c.code))
+                                        .verticalScroll(rememberScrollState())
+                                        .padding(Space.lg),
+                                ) {
+                                    MarkdownBody(activeTab.content)
+                                }
+                            }
 
                             if (editor.tabs.isEmpty() && editor.loadingPath == null && editor.loadError == null) {
                                 Box(
@@ -355,3 +552,29 @@ fun EditorPanel(
         }
     }
 }
+
+// ─── Editor helpers (markdown detection, LSP-out parsing, file URIs) ───────────
+
+/** `.md` / `.markdown` → markdown preview eligible (parity EditorPane.swift:30-33). */
+private fun isMarkdownPath(path: String): Boolean =
+    path.lowercase().let { it.endsWith(".md") || it.endsWith(".markdown") }
+
+/** Parse cm6's outbound `{serverId,message}` JSON payload → (serverId, message). */
+private fun parseLspOut(payload: String): Pair<String, String>? = runCatching {
+    val o = org.json.JSONObject(payload)
+    val serverId = o.optString("serverId")
+    val message = o.optString("message")
+    if (serverId.isEmpty()) null else serverId to message
+}.getOrNull()
+
+// file:// URI construction (port EditorPane.swift:120-131). Uri.encode keeps "/" so path
+// separators survive, matching iOS's .urlPathAllowed percent-encoding.
+private fun joinPath(dir: String, rel: String): String {
+    val d = dir.removeSuffix("/")
+    val r = rel.removePrefix("/")
+    return "$d/$r"
+}
+
+private fun pathToUri(abs: String): String = "file://" + android.net.Uri.encode(abs, "/")
+
+private fun dirUri(workdir: String): String = pathToUri(workdir.removeSuffix("/")) + "/"
