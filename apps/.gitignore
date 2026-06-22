@@ -4,3 +4,8 @@ build/
 **/build/
 local.properties
 .kotlin/
+
+# Release signing — NEVER commit the keystore or its passwords
+keystore.properties
+*.jks
+*.keystore

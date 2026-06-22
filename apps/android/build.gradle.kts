@@ -1,9 +1,21 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.serialization)
 }
+
+// Release signing is driven by a gitignored keystore.properties (never committed).
+// When it's absent (fresh checkout / CI without the key) the release build falls
+// back to the debug key so it still assembles — see buildTypes.release below.
+val keystorePropsFile = project.file("keystore.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) FileInputStream(keystorePropsFile).use { load(it) }
+}
+
 android {
     namespace = "dev.supermux.android"
     compileSdk = libs.versions.androidCompileSdk.get().toInt()
@@ -14,12 +26,27 @@ android {
         versionCode = 1; versionName = "0.1"
     }
     buildFeatures { compose = true }
+    signingConfigs {
+        if (keystorePropsFile.exists()) {
+            create("release") {
+                storeFile = file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
     buildTypes {
         getByName("release") {
-            isMinifyEnabled = false
-            // Signed with the debug key so release builds are installable for testing.
-            // Swap in a real keystore for distribution.
-            signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Real release key when keystore.properties is present; debug key otherwise
+            // (so the build still produces an installable APK for testing).
+            signingConfig = if (keystorePropsFile.exists())
+                signingConfigs.getByName("release")
+            else
+                signingConfigs.getByName("debug")
         }
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
