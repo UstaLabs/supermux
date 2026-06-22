@@ -38,6 +38,7 @@ import dev.supermux.net.TerminalClient
 import dev.supermux.net.UpdateStatus
 import dev.supermux.net.VerifySaveResult
 import dev.supermux.net.VerifySuggestResult
+import dev.supermux.net.VncClient
 import dev.supermux.android.settings.AddCustomLspArgs
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
@@ -233,10 +234,31 @@ class AppViewModel(private val baseUrl: String, private val token: String) : Vie
     fun connectTerminal(sessionId: String): TerminalClient =
         TerminalClient(baseUrl, token, http, sessionId)
 
-    suspend fun listDisplays(): List<DisplayStream> =
-        runCatching { api.listDisplays() }.getOrNull() ?: emptyList()
+    /** GET /displays. Also seeds [_displays] (the doc-comment's "seeded on demand"); the
+     *  StateFlow then stays live via `display_added`/`display_removed` frames. */
+    suspend fun listDisplays(): List<DisplayStream> {
+        val list = runCatching { api.listDisplays() }.getOrNull() ?: return _displays.value
+        _displays.value = list
+        return list
+    }
     fun connectScrcpy(streamId: String): ScrcpyClient =
         ScrcpyClient(baseUrl, token, http, streamId)
+    fun connectVnc(streamId: String): VncClient =
+        VncClient(baseUrl, token, http, streamId)
+
+    /** POST /displays → the started stream (the display_added frame also folds it into [displays]). */
+    suspend fun startDisplay(
+        sessionName: String,
+        provider: String? = null,
+        device: String? = null,
+        width: Int? = null,
+        height: Int? = null,
+    ): DisplayStream? =
+        runCatching { api.startDisplay(sessionName, provider, device, width, height) }.getOrNull()
+
+    suspend fun stopDisplay(id: String) {
+        runCatching { api.stopDisplay(id) }
+    }
 
     suspend fun upload(
         sessionId: String,

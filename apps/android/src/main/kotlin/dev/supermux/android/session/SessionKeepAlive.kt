@@ -74,6 +74,7 @@ fun SessionKeepAlivePhoneHost(
     lastBySession: Map<String, LogEntry?>,
     vm: AppViewModel,
     onNavigate: (String) -> Unit,
+    onOpenDisplays: () -> Unit,
 ) {
     SharedTransitionLayout {
         Box(Modifier.fillMaxSize()) {
@@ -96,6 +97,7 @@ fun SessionKeepAlivePhoneHost(
                                 if (selected == sessionId) onClearSelected()
                             }
                         },
+                        onOpenDisplays = onOpenDisplays,
                         sharedScope = this@SharedTransitionLayout,
                         animScope = null,
                     )
@@ -157,6 +159,7 @@ fun SessionKeepAliveTabletHost(
     agentState: Map<String, AgentStatus?>,
     commands: Map<String, List<SlashCommand>>,
     vm: AppViewModel,
+    onOpenDisplays: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier.fillMaxSize()) {
@@ -181,6 +184,7 @@ fun SessionKeepAliveTabletHost(
                             onRemoveVisited(sessionId)
                         }
                     },
+                    onOpenDisplays = onOpenDisplays,
                     sharedScope = null,
                     animScope = null,
                 )
@@ -201,6 +205,7 @@ private fun SessionChatLayer(
     vm: AppViewModel,
     onBack: () -> Unit,
     onKill: () -> Unit,
+    onOpenDisplays: () -> Unit,
     sharedScope: SharedTransitionScope?,
     animScope: AnimatedVisibilityScope?,
 ) {
@@ -278,6 +283,10 @@ private fun SessionChatLayer(
             connectTerminal = { vm.connectTerminal(session.id) },
             listDisplays = { vm.listDisplays() },
             connectScrcpy = { vm.connectScrcpy(it) },
+            connectVnc = { vm.connectVnc(it) },
+            displays = vm.displays,
+            onStartDisplay = { vm.startDisplay(session.name) },
+            onOpenDisplays = onOpenDisplays,
             consumePendingFirst = { vm.consumePendingFirst(it) },
             onEditorConsumesBackChange = { editorConsumesBack = it },
             finishJob = finishJob,

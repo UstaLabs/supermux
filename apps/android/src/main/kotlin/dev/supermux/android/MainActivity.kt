@@ -49,6 +49,7 @@ import androidx.navigation.compose.rememberNavController
 import dev.supermux.android.nav.Appearance
 import dev.supermux.android.nav.Archived
 import dev.supermux.android.nav.Devices
+import dev.supermux.android.nav.Displays
 import dev.supermux.android.nav.Home
 import dev.supermux.android.nav.NewSession
 import dev.supermux.android.nav.Proxies
@@ -59,6 +60,7 @@ import dev.supermux.android.session.SessionKeepAliveTabletHost
 import dev.supermux.android.session.rememberVisitedSessions
 import dev.supermux.android.session.SessionLauncherScreen
 import dev.supermux.android.session.SessionListScreen
+import dev.supermux.android.display.DisplaysScreen
 import dev.supermux.android.settings.AppearanceSettingsPage
 import dev.supermux.android.settings.ArchivedScreen
 import dev.supermux.android.settings.DevicesScreen
@@ -217,6 +219,7 @@ class MainActivity : ComponentActivity() {
                                         agentState = agentState,
                                         commands = commands,
                                         vm = vm,
+                                        onOpenDisplays = { navController.navigate(Displays) },
                                         modifier = Modifier.fillMaxSize(),
                                     )
                                 }
@@ -236,6 +239,7 @@ class MainActivity : ComponentActivity() {
                                 lastBySession = lastBySession,
                                 vm = vm,
                                 onNavigate = navTo,
+                                onOpenDisplays = { navController.navigate(Displays) },
                             )
                         }
                     }
@@ -363,6 +367,19 @@ class MainActivity : ComponentActivity() {
                             onBack = { navController.popBackStack() },
                         )
                     }
+                    composable<Displays> {
+                        // Seed the live list once (the reducer otherwise fills only from frames);
+                        // mirrors iOS DisplaysView's `.task { refreshDisplays() }`.
+                        LaunchedEffect(Unit) { vm.listDisplays() }
+                        DisplaysScreen(
+                            onBack = { navController.popBackStack() },
+                            displays = vm.displays,
+                            onStart = { sessionName -> vm.startDisplay(sessionName) },
+                            onStop = { id -> vm.stopDisplay(id) },
+                            connectVnc = { vm.connectVnc(it) },
+                            connectScrcpy = { vm.connectScrcpy(it) },
+                        )
+                    }
                     composable<Appearance> {
                         AppearanceSettingsPage(
                             appearance = appearance,
@@ -402,6 +419,7 @@ private fun PhoneNavHost(
     lastBySession: Map<String, LogEntry?>,
     vm: AppViewModel,
     onNavigate: (String) -> Unit,
+    onOpenDisplays: () -> Unit,
 ) {
     SessionKeepAlivePhoneHost(
         selected = selected,
@@ -417,5 +435,6 @@ private fun PhoneNavHost(
         lastBySession = lastBySession,
         vm = vm,
         onNavigate = onNavigate,
+        onOpenDisplays = onOpenDisplays,
     )
 }

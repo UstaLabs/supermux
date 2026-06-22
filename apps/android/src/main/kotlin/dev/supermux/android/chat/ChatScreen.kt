@@ -161,6 +161,11 @@ fun ChatScreen(
     connectTerminal: (() -> dev.supermux.net.TerminalClient)? = null,
     listDisplays: (suspend () -> List<dev.supermux.net.DisplayStream>)? = null,
     connectScrcpy: ((String) -> dev.supermux.net.ScrcpyClient)? = null,
+    connectVnc: ((String) -> dev.supermux.net.VncClient)? = null,
+    displays: kotlinx.coroutines.flow.StateFlow<List<dev.supermux.net.DisplayStream>> =
+        kotlinx.coroutines.flow.MutableStateFlow(emptyList()),
+    onStartDisplay: suspend () -> Unit = {},
+    onOpenDisplays: () -> Unit = {},
     consumePendingFirst: (String) -> dev.supermux.android.AppViewModel.PendingFirstMessage? = { null },
     onEditorConsumesBackChange: (Boolean) -> Unit = {},
     // Finish flow — null/empty defaults keep the existing call (and ArchivedChatScreen) compiling.
@@ -555,6 +560,22 @@ fun ChatScreen(
                             onClick = {
                                 headerMenuExpanded = false
                                 onMute(!isMuted)
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Displays") },
+                            leadingIcon = {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_monitor),
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            },
+                            modifier = Modifier.testTag("chat_overflow_displays"),
+                            onClick = {
+                                headerMenuExpanded = false
+                                onOpenDisplays()
                             },
                         )
                         DropdownMenuItem(
@@ -1042,13 +1063,17 @@ fun ChatScreen(
             }
             if (SessionPanel.Display in openedPanels) {
                 val ld = listDisplays
-                val cs = connectScrcpy
+                val cScrcpy = connectScrcpy
+                val cVnc = connectVnc
                 Box(Modifier.keepAlivePanel(activePanel == SessionPanel.Display)) {
-                    if (ld != null && cs != null) {
+                    if (ld != null && cScrcpy != null && cVnc != null) {
                         DisplayPanel(
                             sessionName = session.name,
+                            displays = displays,
                             listDisplays = ld,
-                            connect = cs,
+                            connectScrcpy = cScrcpy,
+                            connectVnc = cVnc,
+                            onStartDisplay = onStartDisplay,
                             modifier = Modifier.fillMaxSize(),
                         )
                     } else {

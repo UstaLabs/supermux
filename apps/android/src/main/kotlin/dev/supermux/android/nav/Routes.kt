@@ -14,4 +14,5 @@ import kotlinx.serialization.Serializable
 @Serializable object Devices
 @Serializable object Archived
 @Serializable object Proxies
+@Serializable object Displays
 @Serializable object Appearance
