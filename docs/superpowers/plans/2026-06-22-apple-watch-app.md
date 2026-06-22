@@ -12,7 +12,11 @@ Spec: `docs/superpowers/specs/2026-06-22-apple-watch-app-design.md`.
 
 ---
 
-## Status (2026-06-22) — built + simulator-verified; TestFlight blocked on ASC issuer
+## Status (2026-06-22) — SHIPPED to internal TestFlight (build 28)
+
+**UPDATE (final):** Completed end-to-end. The "blocked on ASC issuer" note below was superseded — the issuer + the full headless release pipeline were already on-box (`~/.config/asc/`). The watch networking was rewritten to **pure-Swift** (SKIE doesn't support the watch device arch arm64_32 — details in `domains/infra.md`). Build **28** (iOS app + embedded watch app, with a watch app icon) was archived (no `-sdk`, manual signing via a dedicated `smux-dist` keychain), exported (app-store-connect, both profiles), uploaded via `altool`, processed **VALID**, and assigned to the internal TestFlight group. On-device verification — especially live voice dictation, which the simulator can't exercise — is the user's via TestFlight. Commits: `139d609` → `13826ec` → `36564ba` → `70be324` → icon → status.
+
+### (historical, point-in-time — superseded by the UPDATE above)
 
 **Done & committed** (branch `mux/supermux-11`):
 - **Task 1** — KMP watchOS targets + `appleMain` source set (commit `139d609`). `:shared:jvmTest` green on Linux; `:shared:linkDebugFrameworkWatchosSimulatorArm64` green on the Mac. SKIE + Ktor Darwin + zlib cinterop all build for watchOS → no thin-client fallback needed.
