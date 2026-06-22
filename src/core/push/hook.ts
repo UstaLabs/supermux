@@ -1,5 +1,6 @@
 import type { OutboundAction } from "../../channels/channel"
 import type { PushSender, PushPayload } from "./sender"
+import type { NativePushSender } from "./native-sender"
 
 export function extractPreview(action: OutboundAction & { op: "reply" }): string {
   if (action.text && action.text.length > 0) {
@@ -31,6 +32,12 @@ export interface FirePushArgs {
   /** True when the user is present for this session on ANY device (that session's
    * chat open, or the chat list, anywhere). */
   anyPresent: (sessionId: string) => boolean
+  /** Optional native push sender (APNs/FCM relay). When provided together with
+   * nativeDevices, the reply is also fanned out to registered native devices
+   * after the same mute + presence suppression guards that govern web push. */
+  nativeSender?: NativePushSender
+  /** Returns the list of registered native device ids for this user. */
+  nativeDevices?: () => string[]
 }
 
 // Web is one logical channel and the user is ONE person across their devices, so
@@ -53,5 +60,8 @@ export async function firePushForReply(args: FirePushArgs): Promise<void> {
   }
   for (const device of devices()) {
     await sender.sendToDevice(device, payload)
+  }
+  if (args.nativeSender && args.nativeDevices) {
+    for (const device of args.nativeDevices()) await args.nativeSender.sendToDevice(device, payload)
   }
 }
