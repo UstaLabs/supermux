@@ -101,7 +101,11 @@ agent finishes ─► broker firePushForReply (mute + presence checks, already e
   identity, **no** private keys.
 - **Endpoints:**
   - `POST /register {platform, pushToken}` → mints a high-entropy `routingToken`, stores
-    `routingToken → {platform, pushToken}`, returns `{routingToken}`. Rate-limited per IP.
+    `routingToken → {platform, pushToken}`, and **delivers the `routingToken` to the device via
+    a one-time bootstrap push** to `pushToken` — **not** in the HTTP response (which is just
+    `202 {pending}`). This *is* the proof-of-possession: only the device that actually receives
+    pushes for that token ever learns its `routingToken`, so you cannot obtain a usable token for
+    a device you don't physically control. Rate-limited per IP.
   - `POST /push {routingToken, ciphertext}` → looks up the push token, wraps `ciphertext` in
     an APNs/FCM envelope (`mutable-content:1`, opaque `data`), sends. Returns
     `{ok}` / `{ok:false, gone}` (gone ⇒ caller should drop the registration). Rate-limited
@@ -111,11 +115,16 @@ agent finishes ─► broker firePushForReply (mute + presence checks, already e
 ### 2. Broker additions (every self-hoster — small)
 
 - **Migration 012:** extend `device_push_tokens` with `routing_token TEXT` and
-  `device_pubkey TEXT`. (`DevicePushTokenStore` gains these fields.)
-- **`POST /push/device {platform, token, pubkey}`** (authed by the app's existing device
-  bearer): the broker calls `{relay}/register`, gets a `routingToken`, stores the row.
-  **`DELETE /push/device`** → calls `{relay}/unregister` + removes the row. Add to the web
-  channel's `/push` route group (alongside `/push/subscribe`).
+  `device_pubkey TEXT` (the broker keys off the `routingToken`; the raw `token` column becomes
+  optional on the broker, since the app now hands over the `routingToken`, not the push token).
+  (`DevicePushTokenStore` gains these fields.)
+- **`POST /push/device {platform, routingToken, pubkey}`** (authed by the app's existing device
+  bearer): the app obtains the `routingToken` from the relay's bootstrap push (above) and hands
+  it to its broker, which stores the row. The broker never needs the raw push token — it sends
+  via the `routingToken`. (The app learns which relay to use from its broker, so a self-hoster's
+  `MUX_PUSH_RELAY_URL` override propagates to the app.) **`DELETE /push/device`** → calls
+  `{relay}/unregister` + removes the row. Add to the web channel's `/push` route group
+  (alongside `/push/subscribe`).
 - **`core/push/relay-adapter.ts`** — a `RelayPushAdapter`: given a stored device row + a
   `PushPayload`, it ECIES-encrypts `JSON(payload)` with `device_pubkey` and `POST`s
   `{routingToken, ciphertext}` to the relay (no `platform` field needed — the relay already
@@ -141,8 +150,9 @@ agent finishes ─► broker firePushForReply (mute + presence checks, already e
 - Add the **Push Notifications** capability + `aps-environment` entitlement. On launch:
   `UNUserNotificationCenter` authorization → `registerForRemoteNotifications` → APNs token.
 - Generate an encryption keypair (`CryptoKit` Curve25519), store the **private** key in the
-  **Keychain**, send `{platform:"ios", token, pubkey}` to broker `POST /push/device`. Re-send
-  on APNs token change.
+  **Keychain**. Register the APNs token with the relay (`/register`) → receive the `routingToken`
+  via the bootstrap push → send `{platform:"ios", routingToken, pubkey}` to the broker
+  `POST /push/device`. Re-register on APNs token change.
 - Add a **Notification Service Extension** (`mutable-content:1`): on receipt, decrypt the
   ciphertext with the Keychain private key → set title/body → show. On decrypt failure, show a
   generic fallback ("New activity in supermux").
@@ -155,8 +165,9 @@ agent finishes ─► broker firePushForReply (mute + presence checks, already e
 - Add the Firebase Messaging SDK. `FirebaseMessagingService` → FCM token (+ `onNewToken`
   refresh → re-register).
 - Generate an encryption keypair, store the **private** key in the Keystore /
-  EncryptedSharedPreferences, send `{platform:"android", token, pubkey}` to broker
-  `POST /push/device`.
+  EncryptedSharedPreferences. Register the FCM token with the relay (`/register`) → receive the
+  `routingToken` via the bootstrap (data) push → send `{platform:"android", routingToken,
+  pubkey}` to the broker `POST /push/device`.
 - On FCM **data** message: decrypt the ciphertext → post a notification (NotificationManager +
   a "Sessions" channel). Tap → open the session.
 
@@ -181,16 +192,23 @@ existing patterns.
 
 ### Abuse-prevention reasoning
 
-- A `routingToken` is a **capability**: holding it lets you push to exactly one device. It is
-  minted only via `/register` and held only by that device's broker.
-- `/register` returns a token only for the `pushToken` you supply — and you only possess your
-  **own** device's push token. So an attacker can, at worst, spam **themselves**. To target a
-  victim they'd need the victim's push token (not public) **and** the victim's public key (held
-  only by the victim's broker) to produce a *decryptable* notification — without it the NSE/
-  service fails to decrypt and shows nothing or the generic fallback.
-- Per-routingToken + global **rate limits** protect the APNs/FCM keys from being flagged.
-  Optional defense-in-depth (deferred): the device also registers a verify-key and the broker
-  signs payloads.
+Two distinct abuses, two defenses:
+
+- **Targeting** (pushing to *someone else's* phone). A `routingToken` is a **capability** —
+  holding it lets you push to exactly one device. But it is only ever delivered *through a
+  bootstrap push to that device* (relay `/register`), so an attacker who registers a victim's
+  push token causes the token to land on the **victim's** phone, not theirs — they learn nothing.
+  You can only obtain a usable `routingToken` for a device you physically hold. This holds even
+  if push tokens leak (they are not high-entropy secrets). Backstop: every payload is **encrypted
+  to the device's public key** (held only on its broker), so even a stolen `routingToken` can't
+  put *forged content* on a screen — it just fails to decrypt → generic fallback.
+- **Volume** (flooding the relay to get the APNs/FCM keys flagged/banned — the bigger risk: it
+  would break push for *everyone*). The capability model does **not** stop this; **rate limits**
+  do: per-`routingToken` send caps, per-IP `/register` caps, and a global circuit-breaker on the
+  keys. Because every `routingToken` now costs a *real device that received a bootstrap push*, an
+  attacker can't cheaply mint thousands of tokens to flood from — each one needs an actual phone.
+- Optional defense-in-depth (deferred): the device also registers a verify-key and the broker
+  signs payloads (authenticity on top of confidentiality).
 
 ## Distribution
 
