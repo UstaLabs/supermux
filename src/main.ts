@@ -69,6 +69,8 @@ import { loadOrGenerateVapid } from "./core/push/vapid"
 import { PushSubscriptionStore } from "./core/push/subscriptions"
 import { createPushSender } from "./core/push/sender"
 import { firePushForReply } from "./core/push/hook"
+import { DevicePushTokenStore } from "./core/push/device-tokens"
+import { createRelayClient } from "./core/push/relay-adapter"
 import { ViewingTracker } from "./core/push/viewing-tracker"
 import {
   MUX_HOME, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, DEVICES_FILE,
@@ -401,6 +403,10 @@ const vapidSubject = process.env.MUX_WEB_VAPID_SUBJECT ?? (() => {
 const vapid = loadOrGenerateVapid(join(STATE_DIR, "push-keys.json"), vapidSubject)
 const pushStore = new PushSubscriptionStore(db)
 const pushSender = createPushSender({ vapid, store: pushStore })
+const deviceTokenStore = new DevicePushTokenStore(db)
+const relayUrl = process.env.MUX_PUSH_RELAY_URL ?? "https://push.supermux.dev"
+const nativeSender = createRelayClient({ store: deviceTokenStore, relayUrl })
+const nativeDevices = () => deviceTokenStore.all().filter((r) => r.routing_token).map((r) => r.device)
 const viewingTracker = new ViewingTracker()
 log.info("push_ready", { publicKey: vapid.publicKey.slice(0, 16) + "…", subject: vapid.subject })
 
@@ -616,6 +622,8 @@ async function onAssistantMessage(
         isInternal: () => !!registry.get(sessionId)?.internal,
         devices: () => pushStore.all().map((s) => s.device),
         anyPresent: (sid) => viewingTracker.isAnyPresentFor(sid),
+        nativeSender,
+        nativeDevices,
       }).catch((err) => log.warn("push_hook_failed", { err: err?.message ?? String(err) }))
       const mid = (res.value as any)?.message_id
       if (mid) replyOwner.set(`${chat_id}:${mid}`, sessionName)
@@ -654,6 +662,7 @@ async function notifyAgentError(sessionId: string, sessionName: string, errorTyp
     }
     if (lastWeb && !registry.get(sessionId)?.mute) {
       await pushSender.sendToChat(lastWeb, { session: sessionName, text: `⚠️ ${errorType}: ${errorMessage}`.slice(0, 180), ts: new Date().toISOString() })
+      for (const r of deviceTokenStore.all()) if (r.routing_token) void nativeSender.sendToDevice(r.device, { session: sessionName, text: `⚠️ ${errorType}: ${errorMessage}`.slice(0, 180), ts: new Date().toISOString() })
     }
   } catch (err) { log.warn("agent_error_push_failed", { session: sessionName, err: String(err) }) }
 }
@@ -758,6 +767,7 @@ function fireFinishPush(sessionName: string, sessionId: string, job: FinishJob):
   }
   if (!text) return
   try { for (const sub of pushStore.all()) void pushSender.sendToDevice(sub.device, { session: sessionName, sessionId, text, ts: new Date().toISOString() }) } catch {}
+  try { for (const r of deviceTokenStore.all()) if (r.routing_token) void nativeSender.sendToDevice(r.device, { session: sessionName, sessionId, text, ts: new Date().toISOString() }) } catch {}
 }
 
 function finishReadinessById(sessionId: string): FinishReadiness | { error: string } {
@@ -1026,6 +1036,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     onSendFromWeb: () => {},                                // wired below via webChannel.on('inbound')
     fileStore,
     pushStore,
+    deviceTokenStore,
     vapidPublicKey: vapid.publicKey,
     viewingTracker,
     getReads: () => registry.sessions.allReads(),
@@ -3159,6 +3170,7 @@ const modelRefreshInterval = setInterval(() => {
       postNotice: async (_cid, text) => {
         const payload = { session: "curator", text, ts: new Date().toISOString() }
         for (const s of pushStore.all()) await pushSender.sendToDevice(s.device, payload)
+        for (const r of deviceTokenStore.all()) if (r.routing_token) await nativeSender.sendToDevice(r.device, payload)
       },
   }
   curatorScheduler = new CuratorScheduler(() => runCurator(curatorDeps))
