@@ -24,8 +24,10 @@ struct SessionDetailView: View {
                 if let last = entries.last?.id { withAnimation { proxy.scrollTo(last, anchor: .bottom) } }
             }
             .onAppear {
+                broker.openSession(session.id)
                 if let last = entries.last?.id { proxy.scrollTo(last, anchor: .bottom) }
             }
+            .onDisappear { broker.closeSession() }
         }
         .navigationTitle(session.name)
         .safeAreaInset(edge: .bottom) {

@@ -10,6 +10,17 @@ struct SessionInfo: Decodable, Identifiable {
     var agent: String?
     var status: String?
     var connected: Bool?
+
+    enum CodingKeys: String, CodingKey { case id, name, agent, status, connected }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.name = try c.decode(String.self, forKey: .name)
+        // GET /sessions (SessionSnapshot) has an optional id; fall back to name.
+        self.id = (try? c.decode(String.self, forKey: .id)) ?? name
+        self.agent = try? c.decode(String.self, forKey: .agent)
+        self.status = try? c.decode(String.self, forKey: .status)
+        self.connected = try? c.decode(Bool.self, forKey: .connected)
+    }
 }
 
 struct Attachment: Decodable, Identifiable {
