@@ -7,6 +7,12 @@ import { createApnsAdapter } from "./apns"
 import { createFcmAdapter, createServiceAccountTokenGetter } from "./fcm"
 import { makeLogger } from "../shared/log"
 
+// Parse an env var as a positive integer; fall back to `d` for missing/empty/NaN/0.
+const intEnv = (v: string | undefined, d: number): number => {
+  const n = Number(v)
+  return Number.isFinite(n) && n > 0 ? n : d
+}
+
 const env = process.env
 const log = makeLogger("relay/main")
 const store = new RelayStore(new Database(env.MUX_RELAY_DB ?? "relay.db"))
@@ -24,13 +30,19 @@ const fcm = createFcmAdapter({
     ? createServiceAccountTokenGetter(sa)
     : async () => { throw new Error("FCM not configured") },
 })
-const core = createRelayCore({ store, apns, fcm, ratePerMin: Number(env.MUX_RELAY_RATE_PER_MIN ?? 30) })
+const core = createRelayCore({
+  store,
+  apns,
+  fcm,
+  ratePerMin: intEnv(env.MUX_RELAY_RATE_PER_MIN, 30),
+  globalRatePerMin: intEnv(env.MUX_RELAY_GLOBAL_PER_MIN, 6000),
+})
 const handler = makeRelayHandler(core)
 
 // per-IP /register limiter (defense against mass registration)
 const ipHits = new Map<string, number[]>()
-const registerPerMin = Number(env.MUX_RELAY_REGISTER_PER_MIN ?? 10)
-const port = Number(env.MUX_RELAY_PORT ?? 8788)
+const registerPerMin = intEnv(env.MUX_RELAY_REGISTER_PER_MIN, 10)
+const port = intEnv(env.MUX_RELAY_PORT, 8788)
 
 Bun.serve({
   port,

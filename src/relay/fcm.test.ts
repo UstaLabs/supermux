@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test"
 import { buildServiceAccountJwt, createFcmAdapter, createServiceAccountTokenGetter } from "./fcm"
 
-const deps = { projectId: "p", getAccessToken: async () => "ya29", fetchImpl: async () => new Response("", { status: 200 }) }
+const mkFetch = (r: Response) => (async () => r) as unknown as typeof fetch
+const deps = { projectId: "p", getAccessToken: async () => "ya29", fetchImpl: mkFetch(new Response("", { status: 200 })) }
 
 test("maps 200 → ok", async () => {
   const a = createFcmAdapter({ ...deps })
@@ -9,17 +10,17 @@ test("maps 200 → ok", async () => {
 })
 
 test("maps 404 (UNREGISTERED) → gone", async () => {
-  const a = createFcmAdapter({ ...deps, fetchImpl: async () => new Response('{"error":{"status":"UNREGISTERED"}}', { status: 404 }) })
+  const a = createFcmAdapter({ ...deps, fetchImpl: mkFetch(new Response('{"error":{"status":"UNREGISTERED"}}', { status: 404 })) })
   expect(await a.send("tok", { ciphertext: "blob" } as any)).toEqual({ ok: false, gone: true })
 })
 
 test("maps 400 (INVALID_ARGUMENT) → gone", async () => {
-  const a = createFcmAdapter({ ...deps, fetchImpl: async () => new Response('{"error":{"status":"INVALID_ARGUMENT"}}', { status: 400 }) })
+  const a = createFcmAdapter({ ...deps, fetchImpl: mkFetch(new Response('{"error":{"status":"INVALID_ARGUMENT"}}', { status: 400 })) })
   expect(await a.send("tok", { ciphertext: "blob" } as any)).toEqual({ ok: false, gone: true })
 })
 
 test("maps 503 (transient) → not gone", async () => {
-  const a = createFcmAdapter({ ...deps, fetchImpl: async () => new Response("upstream unavailable", { status: 503 }) })
+  const a = createFcmAdapter({ ...deps, fetchImpl: mkFetch(new Response("upstream unavailable", { status: 503 })) })
   expect(await a.send("tok", { ciphertext: "blob" } as any)).toEqual({ ok: false, gone: false })
 })
 
@@ -46,7 +47,7 @@ test("buildServiceAccountJwt: well-formed RS256 assertion with correct claims + 
     { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"])
 
   const jwt = await buildServiceAccountJwt(sa, key, 1_700_000_000)
-  const [h, c, s] = jwt.split(".")
+  const [h, c, s] = jwt.split(".") as [string, string, string]
   expect([h, c, s].every(Boolean)).toBe(true)
 
   const header = JSON.parse(Buffer.from(h, "base64url").toString())
@@ -72,7 +73,7 @@ test("createServiceAccountTokenGetter: exchanges JWT for token, caches across ca
   const { sa } = await makeFakeServiceAccount()
   let calls = 0
   let seenBody = ""
-  const fetchImpl = (async (_url, init) => {
+  const fetchImpl = (async (_url: string, init?: RequestInit) => {
     calls++
     seenBody = String(init?.body ?? "")
     return new Response(JSON.stringify({ access_token: "ya29.fresh", token_type: "Bearer", expires_in: 3600 }), { status: 200 })

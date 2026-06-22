@@ -3,7 +3,7 @@ import { sealForDevice } from "./encrypt"
 
 // openForTest mirrors what the native clients will do; it both tests and documents the format.
 async function openForTest(sealed: string, privateKey: CryptoKey): Promise<string> {
-  const [ephB64, saltB64, ivB64, ctB64] = sealed.split(".")
+  const [ephB64, saltB64, ivB64, ctB64] = sealed.split(".") as [string, string, string, string]
   const b = (s: string) => Uint8Array.from(Buffer.from(s, "base64url"))
   const ephPub = await crypto.subtle.importKey("raw", b(ephB64), { name: "ECDH", namedCurve: "P-256" }, false, [])
   const shared = await crypto.subtle.deriveBits({ name: "ECDH", public: ephPub }, privateKey, 256)

@@ -39,3 +39,27 @@ test("rate limit blocks the N+1th push in a window", async () => {
   for (let i = 0; i < 5; i++) expect((await core.push(routingToken, "x")).ok).toBe(true)
   expect(await core.push(routingToken, "x")).toEqual({ ok: false, gone: false })
 })
+
+test("global rate ceiling blocks across different routing tokens", async () => {
+  const sent: any[] = []
+  const adapter = { send: (token: string, p: any) => { sent.push({ token, p }); return Promise.resolve({ ok: true as const }) } }
+  // ratePerMin=10 per-token, but globalRatePerMin=3 across all tokens
+  const core = createRelayCore({
+    store: new RelayStore(new Database(":memory:")),
+    apns: adapter,
+    fcm: adapter,
+    ratePerMin: 10,
+    globalRatePerMin: 3,
+  })
+  const { routingToken: rt1 } = await core.register("ios", "tok1")
+  const { routingToken: rt2 } = await core.register("ios", "tok2")
+  const { routingToken: rt3 } = await core.register("ios", "tok3")
+  sent.length = 0
+
+  // First 3 pushes (across different tokens) should succeed
+  expect((await core.push(rt1, "a")).ok).toBe(true)
+  expect((await core.push(rt2, "b")).ok).toBe(true)
+  expect((await core.push(rt3, "c")).ok).toBe(true)
+  // 4th push to a different token hits the global ceiling
+  expect(await core.push(rt1, "d")).toEqual({ ok: false, gone: false })
+})

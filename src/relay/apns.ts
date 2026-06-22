@@ -33,8 +33,11 @@ function base64urlJson(obj: unknown): string {
 }
 
 // Decode a PKCS#8 PEM (the contents of an Apple `.p8` auth key) to raw DER bytes.
+// Handles both real newlines and literal `\n`-escaped newlines (as stored in
+// Coolify / Docker secrets where multi-line values are pasted with `\n`).
 function pemToDer(pem: string): Uint8Array {
   const b64 = pem
+    .replace(/\\n/g, "\n")
     .replace(/-----BEGIN [^-]+-----/, "")
     .replace(/-----END [^-]+-----/, "")
     .replace(/\s+/g, "")
