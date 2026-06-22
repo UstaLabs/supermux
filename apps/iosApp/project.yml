@@ -9,6 +9,7 @@ options:
   bundleIdPrefix: dev.supermux
   deploymentTarget:
     iOS: "26.0"
+    watchOS: "26.0"
   createIntermediateGroups: true
 
 settings:
@@ -115,6 +116,45 @@ targets:
           # when signing headlessly over SSH. Running in-session keeps codesign working.
           ./gradlew --no-daemon :shared:embedAndSignAppleFrameworkForXcode
 
+  SupermuxWatch:
+    type: application
+    platform: watchOS
+    sources:
+      - path: SupermuxWatch
+    info:
+      path: SupermuxWatch/Info.plist
+      properties:
+        CFBundleDisplayName: Supermux
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        WKApplication: true
+        WKCompanionAppBundleIdentifier: dev.supermux.app
+        NSSpeechRecognitionUsageDescription: Supermux turns your dictated voice into messages for your agents.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app.watchkitapp
+        WATCHOS_DEPLOYMENT_TARGET: "26.0"
+        TARGETED_DEVICE_FAMILY: "4"
+        FRAMEWORK_SEARCH_PATHS:
+          - $(inherited)
+          - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
+        OTHER_LDFLAGS:
+          - $(inherited)
+          - -framework
+          - Shared
+        LD_RUNPATH_SEARCH_PATHS:
+          - $(inherited)
+          - "@executable_path/Frameworks"
+    preBuildScripts:
+      - name: Build Kotlin Shared.framework (watchOS, embed and sign)
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          source ~/ios-build-env.sh 2>/dev/null || true
+          export JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home -v 17 2>/dev/null || /usr/libexec/java_home)}"
+          cd "$SRCROOT/.."
+          ./gradlew --no-daemon :shared:embedAndSignAppleFrameworkForXcode
+
   SupermuxTests:
     type: bundle.unit-test
     platform: iOS
@@ -130,6 +170,12 @@ targets:
           - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
 
 schemes:
+  SupermuxWatch:
+    build:
+      targets:
+        SupermuxWatch: all
+    run:
+      config: Debug
   Supermux:
     build:
       targets:
