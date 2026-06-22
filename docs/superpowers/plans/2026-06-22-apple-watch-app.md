@@ -12,6 +12,22 @@ Spec: `docs/superpowers/specs/2026-06-22-apple-watch-app-design.md`.
 
 ---
 
+## Status (2026-06-22) — built + simulator-verified; TestFlight blocked on ASC issuer
+
+**Done & committed** (branch `mux/supermux-11`):
+- **Task 1** — KMP watchOS targets + `appleMain` source set (commit `139d609`). `:shared:jvmTest` green on Linux; `:shared:linkDebugFrameworkWatchosSimulatorArm64` green on the Mac. SKIE + Ktor Darwin + zlib cinterop all build for watchOS → no thin-client fallback needed.
+- **Tasks 2–7** — `SupermuxWatch` app (commit `13826ec`): XcodeGen target, sessions list, session detail (Markdown history + inline photos, Crown-scroll, pinned mic), voice input (watch system dictation → broker `transcribeDraft` cleanup). Built + RUN on the watchOS 26.5 simulator against the live broker — sessions list + session detail render real data (screenshots captured).
+- **Task 8** — iOS `PhoneWatchProvisioner` (WatchConnectivity) wired into `SupermuxApp` (commit `36564ba`). iOS app builds clean (no regression). No broker/server changes anywhere.
+- **Task 9** — sim verification recipe used: tar-over-ssh → `xcodegen generate` → `xcodebuild -scheme SupermuxWatch -sdk watchsimulator26.5` (ARCHS=arm64, CODE_SIGNING_ALLOWED=NO) → `simctl install/launch` with `SM_PAIR_*` / `SM_OPEN_SESSION` env → `simctl io screenshot`.
+
+**Remaining (Tasks 10–11) — needs the user:**
+- TestFlight delivery needs the **App Store Connect API key issuer ID** (key `AuthKey_4RRH24653B.p8` + key-id `4RRH24653B` are on the Mac; the issuer UUID is not stored anywhere findable). Needed to headlessly register the new `dev.supermux.app.watchkitapp` App ID and sign the watch app for distribution.
+- **Embed gotcha:** a plain `- target: SupermuxWatch` (embed) dependency made XcodeGen build the watch target for **iOS** (`arm64-apple-ios26-simulator`) → `WCSessionDelegate` then required the iOS-only `sessionDidBecomeInactive`/`sessionDidDeactivate`. The embed is only verifiable via a real device archive (signing-blocked), so it was **reverted**; wire it correctly as part of the archive step.
+- iOS app is **mid-App-Store-review** → bundling the new watch target into build #28 needs the user's explicit OK.
+- Alt delivery: direct dev-install to the physical iPhone over Tailscale (the iPhone was "unavailable" to the Mac at build time).
+
+---
+
 ## Environment facts (verified 2026-06-22)
 
 - **Mac:** `ssh mac` (Tailscale `100.121.185.86`, user `ahmet`, passwordless, MacBook Air, Darwin arm64). **Xcode 26.5**. **watchOS 26.5 SDK** (`-sdk watchos26.5` / `-sdk watchsimulator26.5`) + **watchOS 26.5 sim runtime** present. Watch sim devices incl. `Apple Watch Series 11 (46mm)`, paired with `iPhone 17 Pro Max`.
