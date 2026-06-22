@@ -9,6 +9,7 @@ options:
   bundleIdPrefix: dev.supermux
   deploymentTarget:
     iOS: "26.0"
+    watchOS: "10.0"
   createIntermediateGroups: true
 
 settings:
@@ -19,7 +20,7 @@ settings:
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: "57L7J9XA89"
     MARKETING_VERSION: "1.0"
-    CURRENT_PROJECT_VERSION: "28"
+    CURRENT_PROJECT_VERSION: "35"
     # Gradle pre-build phase needs filesystem access outside the sandbox.
     ENABLE_USER_SCRIPT_SANDBOXING: "NO"
   # App Store distribution signing is Release-only so Debug/simulator builds stay automatic.
@@ -54,6 +55,9 @@ targets:
         buildPhase: resources
     dependencies:
       - package: SwiftTerm
+      # Bundle the watch app inside the iOS app for paired install / TestFlight.
+      - target: SupermuxWatch
+        embed: true
     info:
       path: Supermux/Info.plist
       properties:
@@ -115,6 +119,35 @@ targets:
           # when signing headlessly over SSH. Running in-session keeps codesign working.
           ./gradlew --no-daemon :shared:embedAndSignAppleFrameworkForXcode
 
+  SupermuxWatch:
+    type: application
+    platform: watchOS
+    sources:
+      - path: SupermuxWatch
+    info:
+      path: SupermuxWatch/Info.plist
+      properties:
+        CFBundleDisplayName: Supermux
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        WKApplication: true
+        WKCompanionAppBundleIdentifier: dev.supermux.app
+        NSSpeechRecognitionUsageDescription: Supermux turns your dictated voice into messages for your agents.
+        # The broker is self-hosted, often plain http/ws (LAN / Tailscale) — allow it
+        # (mirrors the iOS app). Without this, watchOS ATS blocks the ws:// connection.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app.watchkitapp
+        WATCHOS_DEPLOYMENT_TARGET: "10.0"
+        TARGETED_DEVICE_FAMILY: "4"
+      configs:
+        Release:
+          PROVISIONING_PROFILE_SPECIFIER: "Supermux Watch App Store"
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          "CODE_SIGN_IDENTITY[sdk=watchos*]": "Apple Distribution"
+
   SupermuxTests:
     type: bundle.unit-test
     platform: iOS
@@ -130,6 +163,12 @@ targets:
           - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
 
 schemes:
+  SupermuxWatch:
+    build:
+      targets:
+        SupermuxWatch: all
+    run:
+      config: Debug
   Supermux:
     build:
       targets:

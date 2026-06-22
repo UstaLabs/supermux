@@ -16,6 +16,8 @@
 	<dict>
 		<key>dev.supermux.app</key>
 		<string>Supermux App Store</string>
+		<key>dev.supermux.app.watchkitapp</key>
+		<string>Supermux Watch App Store</string>
 	</dict>
 	<key>uploadSymbols</key>
 	<true/>
