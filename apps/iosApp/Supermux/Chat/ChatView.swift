@@ -258,7 +258,7 @@ struct ChatView: View {
     private func linkURL(_ p: ProxyDto) -> URL? { URL(string: proxyUrl(proxy: p)) }
 }
 
-// MessageRow, AttachmentView, Lightbox, ShareSheet, CameraPicker → ChatMessages.swift
+// MessageRow, AttachmentView, ShareSheet, CameraPicker → ChatMessages.swift (photos use system Quick Look)
 // The transcript + composer (with voice dictation) → ChatPane.swift (shared iPhone + iPad)
 // OptionSwitchSheet → OptionSwitchSheet.swift
 // ChatBlock, ToolRow, ToolStatus, tsMs, buildChatBlocks, ToolRowView → ChatActivity.swift

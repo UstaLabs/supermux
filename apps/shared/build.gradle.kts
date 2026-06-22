@@ -11,10 +11,15 @@ kotlin {
 
     jvm()
     androidTarget()
-    // iOS targets are declared so the iosMain source set + Apple actuals exist;
-    // their compile/link tasks run on a Mac (Spec 2). On this Linux host they
-    // are disabled (see kotlin.native.ignoreDisabledTargets in gradle.properties).
-    listOf(iosArm64(), iosSimulatorArm64()).forEach { t ->
+    // Apple targets are declared so the appleMain/iosMain/watchosMain source sets +
+    // Apple actuals exist; their compile/link tasks run on a Mac (Spec 2). On this
+    // Linux host they are disabled (see kotlin.native.ignoreDisabledTargets in
+    // gradle.properties). iOS + watchOS share Darwin code via the default hierarchy's
+    // intermediate `appleMain` source set.
+    listOf(
+        iosArm64(), iosSimulatorArm64(),
+        watchosArm64(), watchosSimulatorArm64(),
+    ).forEach { t ->
         t.binaries.framework {
             baseName = "Shared"
             isStatic = false
@@ -43,7 +48,7 @@ kotlin {
             implementation(libs.ktor.server.cio)
             implementation(libs.ktor.server.websockets)
         }
-        iosMain.dependencies { implementation(libs.ktor.client.darwin) }
+        appleMain.dependencies { implementation(libs.ktor.client.darwin) }
         androidMain.dependencies { implementation(libs.androidx.security.crypto) }
     }
 }

@@ -33,6 +33,11 @@ struct ChatPane: View {
     @State private var dictation = SpeechDictation()
     @State private var transcribing = false
     @State private var micDenied = false
+    // True while dictation.start() is in flight (notably the first-run on-device model
+    // download). Drives the "Preparing speech…" state AND blocks a second tap from starting a
+    // concurrent mic session — two installTap on one audio bus is a hard crash (the first-voice
+    // crash users hit on a fresh install before the speech model is ready).
+    @State private var micStarting = false
     // Voice glossary (project/technical terms), cached from the broker on appear and fed to
     // on-device dictation as contextual hints so it spells them right at the source.
     @State private var glossary: [String] = []
@@ -48,7 +53,7 @@ struct ChatPane: View {
 
     /// Composer is expanded (full controls) when focused, when there's a draft or a
     /// staged attachment, or while recording; otherwise it rests as a slim glass pill.
-    private var composerExpanded: Bool { composing || !draft.isEmpty || !pending.isEmpty || dictation.isListening || recorder.isRecording || transcribing }
+    private var composerExpanded: Bool { composing || !draft.isEmpty || !pending.isEmpty || dictation.isListening || recorder.isRecording || transcribing || micStarting }
 
     private var log: [LogEntry] { broker.messages[session.id] ?? [] }
     private var phase: String? { broker.agentPhase[session.id] }
@@ -294,10 +299,13 @@ struct ChatPane: View {
                 if transcribing {
                     transcribingBar
                 }
+                if micStarting {
+                    preparingBar
+                }
             }
             HStack(alignment: .center, spacing: 10) {
                 if !composerExpanded {
-                    Image(systemName: "plus").font(.body.weight(.medium)).foregroundStyle(.secondary)
+                    attachMenu
                 }
                 TextField("Message \(session.name)…", text: $draft, axis: .vertical)
                     .lineLimit(composerExpanded ? (1...12) : (1...1))
@@ -308,13 +316,7 @@ struct ChatPane: View {
             }
             if composerExpanded {
                 HStack(spacing: 12) {
-                    Menu {
-                        Button { showPhotos = true } label: { Label("Photos", systemImage: "photo") }
-                        Button { showFiles = true } label: { Label("Files", systemImage: "folder") }
-                        Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
-                    } label: {
-                        Image(systemName: "plus").font(.body.weight(.medium)).foregroundStyle(.secondary)
-                    }
+                    attachMenu
                     micButton
                     if let m = session.model, !m.isEmpty { pill(m, system: "cpu") { modelSheet = true } }
                     if reasoning?.visible ?? false {
@@ -338,6 +340,23 @@ struct ChatPane: View {
     }
     private var canSend: Bool { !draft.trimmingCharacters(in: .whitespaces).isEmpty || !pending.isEmpty }
 
+    /// Attachment (+) menu — shared by the collapsed and expanded composer states. The 44×44
+    /// content shape gives it a real tap target (HIG minimum); previously the collapsed "+" was a
+    /// static, non-tappable Image and the expanded one had only the tiny glyph as its hit area.
+    private var attachMenu: some View {
+        Menu {
+            Button { showPhotos = true } label: { Label("Photos", systemImage: "photo") }
+            Button { showFiles = true } label: { Label("Files", systemImage: "folder") }
+            Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
+        } label: {
+            Image(systemName: "plus")
+                .font(.body.weight(.medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+    }
+
     // MARK: - Mic / dictation
 
     // Mic → on-device STT first (real-time → /transcribe draft → cleanup), falling back to
@@ -347,19 +366,35 @@ struct ChatPane: View {
         Button {
             Task { await toggleMic() }
         } label: {
-            Image(systemName: "mic")
-                .font(.body.weight(.medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
+            Group {
+                if micStarting {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "mic").font(.body.weight(.medium)).foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
         }
-        .disabled(transcribing)
+        .disabled(transcribing || micStarting)
     }
 
     private var transcribingBar: some View {
         HStack(spacing: 10) {
             ProgressView().controlSize(.small)
             Text("Transcribing…").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Color(.tertiarySystemFill), in: Capsule())
+    }
+
+    /// Shown while the first-run on-device speech model is downloading/preparing — so the
+    /// composer never looks frozen and the user doesn't re-tap into a crash.
+    private var preparingBar: some View {
+        HStack(spacing: 10) {
+            ProgressView().controlSize(.small)
+            Text("Preparing speech…").font(.caption.weight(.medium)).foregroundStyle(.secondary)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
@@ -388,6 +423,12 @@ struct ChatPane: View {
         }
         // Start on-device; fall back to audio recording if it's unavailable / model downloading.
         // The glossary biases the recognizer toward our project/technical terms.
+        // Guard re-entry: on a fresh install start() can take seconds (model download), and a
+        // second tap during that wait would spin up a concurrent mic session on the same audio
+        // bus → crash. micStarting also surfaces the "Preparing speech…" state.
+        guard !micStarting else { return }
+        micStarting = true
+        defer { micStarting = false }
         switch await dictation.start(contextualStrings: glossary) {
         case .started: break
         case .denied: micDenied = true

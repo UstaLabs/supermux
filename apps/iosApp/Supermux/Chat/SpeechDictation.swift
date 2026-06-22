@@ -190,6 +190,15 @@ final class SpeechDictation {
         // Wire the mic tap into the analyzer's input format (converting as needed).
         let input = engine.inputNode
         let tapFormat = input.outputFormat(forBus: 0)
+        // Guard against an invalid hardware format (0 Hz / 0 channels): installTap with such a
+        // format is an uncatchable AVAudioEngine assertion crash, which can occur right after a
+        // fresh mic-permission grant before the input route settles. Bail to the audio fallback.
+        guard tapFormat.sampleRate > 0, tapFormat.channelCount > 0 else {
+            deactivateSession()
+            await backend.teardown()
+            phase = .idle
+            return .unavailable
+        }
         input.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { [backend] buffer, _ in
             backend.append(buffer)
         }
@@ -233,6 +242,12 @@ final class SpeechDictation {
 
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            legacyRequest = nil
+            deactivateSession()
+            phase = .idle
+            return .unavailable
+        }
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak req] buffer, _ in
             req?.append(buffer)
         }

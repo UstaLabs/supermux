@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from "fs"
 import { resolve } from "path"
 import { createOpencodeClient } from "@opencode-ai/sdk"
 import type { OpenCodeClientLike, OpenCodeCommandEntry } from "./adapter"
+import { awaitServerReady } from "./spawn-readiness"
 import { makeLogger } from "../../../shared/log"
 
 const log = makeLogger("agents/opencode/spawn")
@@ -161,7 +162,9 @@ export async function spawnOpenCodeServer(opts: {
   const real = makeClient(baseUrl)
   // opencode's server cold-boot is ~20-25s (model catalog + provider init), so
   // the readiness budget must comfortably exceed that or every spawn times out.
-  if (!opts.skipReady) await waitForReady(real, opts.readyTimeoutMs ?? 45_000)
+  // Race readiness against child death so a missing/broken binary fails fast
+  // (ENOENT → instant, accurate error) instead of waiting out the full timeout.
+  if (!opts.skipReady) await awaitServerReady(child, waitForReady(real, opts.readyTimeoutMs ?? 45_000))
 
   return {
     pid: child.pid ?? -1,

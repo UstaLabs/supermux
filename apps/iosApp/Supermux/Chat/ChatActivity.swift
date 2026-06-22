@@ -75,19 +75,22 @@ struct ToolRowView: View {
     let row: ToolRow
     @State private var open = false
     private var hasContent: Bool { !(row.input ?? "").isEmpty || !(row.output ?? "").isEmpty }
+    private var summaryLong: Bool { (row.summary ?? "").count > 80 }
+    private var canExpand: Bool { hasContent || summaryLong }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button { if hasContent { open.toggle() } } label: {
+            Button { if canExpand { open.toggle() } } label: {
                 HStack(spacing: 8) {
                     Image(systemName: icon).font(.caption).foregroundStyle(.secondary).frame(width: 16)
                     Text(label).font(.caption.weight(.semibold)).foregroundStyle(.primary)
                     if let s = row.summary {
-                        Text(s).font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+                        Text(s).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                            .lineLimit(open ? nil : 2).truncationMode(.middle)
                     }
                     Spacer(minLength: 4)
                     Circle().fill(statusColor).frame(width: 6, height: 6)
-                    if hasContent {
+                    if canExpand {
                         Image(systemName: open ? "chevron.down" : "chevron.right")
                             .font(.caption2).foregroundStyle(.tertiary)
                     }
