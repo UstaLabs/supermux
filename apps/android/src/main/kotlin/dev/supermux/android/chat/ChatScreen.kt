@@ -61,6 +61,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -69,6 +70,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -96,8 +98,13 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.core.content.FileProvider
+import java.io.File
 import dev.supermux.android.DevConfig
 import dev.supermux.android.R
+import dev.supermux.android.theme.Radii
+import dev.supermux.util.formatDuration
 import dev.supermux.android.display.DisplayPanel
 import dev.supermux.android.ui.keepAlivePanel
 import dev.supermux.android.editor.EditorPanel
@@ -113,6 +120,22 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 
 enum class SessionPanel { Chat, Editor, Terminal, Display }
+
+/** Phases where the agent is busy → show the working indicator (iOS workingIndicator gate). */
+private val WORKING_PHASES = setOf("working", "thinking", "running", "tool", "busy", "sending")
+
+/**
+ * Active "/command" token at the END of the draft (cursor assumed at end), at line start or
+ * after whitespace — mirrors iOS slashQuery (ChatPane.swift:508). Group 1 is the slash token.
+ */
+private val slashTokenRegex = Regex("""(?:^|\s)(/\S*)$""")
+
+/** Stable list key for timeline diffing so the optimistic→real id swap (§9) doesn't flicker. */
+private fun timelineItemKey(item: TimelineItem): String = when (item) {
+    is TimelineItem.Msg -> "m:${item.entry.id}"
+    is TimelineItem.Tool -> "t:${item.event.callId ?: "${item.event.kind}:${item.event.seq}:${item.event.ts}"}"
+    is TimelineItem.Act -> "a:${item.event.seq ?: -1}:${item.event.ts}"
+}
 
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
@@ -135,6 +158,12 @@ fun ChatScreen(
     onPickModel: (String) -> Unit = {},
     onPickEffort: (String) -> Unit = {},
     commands: List<SlashCommand> = emptyList(),
+    commandsResolved: Boolean = false,
+    // Interrupt the running agent (transcript Stop capsule + /stop slash control). §8/§1.
+    onInterrupt: () -> Unit = {},
+    // Per-session draft persistence (DataStore, process-death-durable). §3.
+    loadDraft: suspend (String) -> String = { "" },
+    saveDraft: (String, String) -> Unit = { _, _ -> },
     loadBytes: suspend (String) -> ByteArray? = { null },
     fsList: suspend (String) -> List<dev.supermux.net.FsEntry> = { emptyList() },
     fsRead: suspend (String) -> Result<String> = { Result.success("") },
@@ -188,30 +217,52 @@ fun ChatScreen(
     data class PendingAttachment(val fileId: String, val name: String, val uploading: Boolean)
     val pendingAttachments = remember { mutableStateListOf<PendingAttachment>() }
 
-    // file picker launcher — result: read bytes, name, mime, then upload
+    // Shared upload flow for ALL attachment sources (Photos / Files / Camera). Reads the URI's
+    // bytes, stages a placeholder chip (uploading=true), uploads, then swaps in the real fileId
+    // (or drops the chip on failure). The placeholder object is tracked by identity so concurrent
+    // uploads can't clobber each other's index.
+    suspend fun stageFromUri(uri: Uri) {
+        val resolver = context.contentResolver
+        val mime = resolver.getType(uri) ?: "application/octet-stream"
+        val name = uri.lastPathSegment?.substringAfterLast('/') ?: "file"
+        val bytes = withContext(Dispatchers.IO) {
+            resolver.openInputStream(uri)?.use { it.readBytes() }
+        } ?: return
+        val placeholder = PendingAttachment(fileId = "", name = name, uploading = true)
+        withContext(Dispatchers.Main) { pendingAttachments.add(placeholder) }
+        val fileId = onUpload(bytes, name, mime, null)
+        withContext(Dispatchers.Main) {
+            val idx = pendingAttachments.indexOf(placeholder)
+            if (idx < 0) return@withContext
+            if (fileId != null) {
+                pendingAttachments[idx] = PendingAttachment(fileId, name, uploading = false)
+            } else {
+                pendingAttachments.removeAt(idx)
+            }
+        }
+    }
+
+    // Files: system document picker (any mime).
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
     ) { uri: Uri? ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch(Dispatchers.IO) {
-            val resolver = context.contentResolver
-            val mime = resolver.getType(uri) ?: "application/octet-stream"
-            val name = uri.lastPathSegment?.substringAfterLast('/') ?: "file"
-            val bytes = resolver.openInputStream(uri)?.use { it.readBytes() } ?: return@launch
-            // add a placeholder chip with uploading=true
-            val placeholder = PendingAttachment(fileId = "", name = name, uploading = true)
-            withContext(Dispatchers.Main) { pendingAttachments.add(placeholder) }
-            val idx = pendingAttachments.lastIndex
-            val fileId = onUpload(bytes, name, mime, null)
-            withContext(Dispatchers.Main) {
-                if (fileId != null) {
-                    pendingAttachments[idx] = PendingAttachment(fileId, name, uploading = false)
-                } else {
-                    // upload failed — remove the placeholder
-                    pendingAttachments.removeAt(idx)
-                }
-            }
-        }
+        if (uri != null) scope.launch { stageFromUri(uri) }
+    }
+
+    // Photos: modern visual-media picker (no storage permission; backported on Play services).
+    val photoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri: Uri? ->
+        if (uri != null) scope.launch { stageFromUri(uri) }
+    }
+
+    // Camera: delegated capture to the system camera app, writing into our FileProvider URI.
+    var cameraUri by remember { mutableStateOf<Uri?>(null) }
+    val takePicture = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture(),
+    ) { ok: Boolean ->
+        val uri = cameraUri
+        if (ok && uri != null) scope.launch { stageFromUri(uri) }
     }
 
     // ── voice dictation (record → transcribe → into composer) ─────────────────
@@ -219,6 +270,23 @@ fun ChatScreen(
     // drive logic below can append cleaned/raw transcripts into the same state the
     // BasicTextField edits (risk §5). If `text` is ever moved to the VM, move appendToDraft too.
     var text by remember { mutableStateOf("") }
+
+    // ── per-session draft persistence (DataStore; survives switch + process death) §3 ──
+    // Load once per session (parity with iOS loadPane). `draftLoaded` gates the save effect so
+    // the initial restore (or an empty load) never clobbers a draft before it is read back.
+    var draftLoaded by remember(session.id) { mutableStateOf(false) }
+    LaunchedEffect(session.id) {
+        draftLoaded = false
+        text = loadDraft(session.id)
+        draftLoaded = true
+    }
+    // Persist, debounced (~400ms) — avoids a DataStore write per keystroke. Clearing on send
+    // sets text="" which writes empty through this same effect.
+    LaunchedEffect(session.id, text, draftLoaded) {
+        if (!draftLoaded) return@LaunchedEffect
+        delay(400)
+        saveDraft(session.id, text)
+    }
 
     val recorder = remember { VoiceRecorder(context) }
     val dictation = remember { DictationEngine(context) }
@@ -389,7 +457,8 @@ fun ChatScreen(
                     showModelSheet = true
                 }
             }
-            "spawn" -> { /* TODO: spawn from control command */ }
+            "stop" -> onInterrupt()
+            "spawn" -> { /* TODO: spawn from control command (needs nav; iOS also skips) */ }
             else -> {}
         }
     }
@@ -644,24 +713,82 @@ fun ChatScreen(
         val listState = rememberLazyListState()
         var prevTimelineSize by remember { mutableIntStateOf(0) }
 
-        LaunchedEffect(timelineItems.size, activePanel) {
+        // Working ⇔ the agent is in a busy phase (iOS workingIndicator gate). Drives both the
+        // bottom WorkingIndicator row and the auto-scroll target (so the spinner stays in view).
+        val working = agent != null && agent.phase in WORKING_PHASES
+
+        // Auto-scroll on new content AND when the working row appears/disappears.
+        LaunchedEffect(timelineItems.size, working, activePanel) {
             if (activePanel != SessionPanel.Chat) return@LaunchedEffect
-            if (timelineItems.isNotEmpty() && timelineItems.size > prevTimelineSize) {
-                listState.animateScrollToItem(timelineItems.size - 1)
+            val target = timelineItems.size - 1 + (if (working) 1 else 0)
+            if (target >= 0 && (timelineItems.size > prevTimelineSize || working)) {
+                listState.animateScrollToItem(target)
             }
             prevTimelineSize = timelineItems.size
         }
 
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = Space.lg, vertical = Space.md),
-            verticalArrangement = Arrangement.spacedBy(Space.lg),
-        ) {
-            items(timelineItems) { item ->
-                TimelineItemRow(item, loadBytes)
+        if (timelineItems.isEmpty() && !working) {
+            // ── Empty session: starter prompts (iOS ChatPane empty state) ──
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(Space.xl),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(Space.md),
+            ) {
+                Spacer(Modifier.height(36.dp))
+                Icon(
+                    painter = painterResource(R.drawable.ic_sparkle),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(32.dp),
+                )
+                Text(
+                    "Start the conversation",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                listOf("What's the current state?", "Run the tests", "Summarize recent changes")
+                    .forEachIndexed { i, prompt ->
+                        Surface(
+                            onClick = {
+                                haptic(HapticKind.Confirm)
+                                onSendWith(prompt, emptyList())
+                            },
+                            shape = RoundedCornerShape(Radii.md),
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("chat_starter_$i"),
+                        ) {
+                            Text(
+                                prompt,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(horizontal = Space.md, vertical = Space.md),
+                            )
+                        }
+                    }
+            }
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = Space.lg, vertical = Space.md),
+                verticalArrangement = Arrangement.spacedBy(Space.lg),
+            ) {
+                items(timelineItems, key = { timelineItemKey(it) }) { item ->
+                    TimelineItemRow(item, loadBytes)
+                }
+                // Live working indicator pinned to the bottom (iOS renders it below the last block).
+                if (working && agent != null) {
+                    item(key = "__working__") {
+                        WorkingIndicator(agent, onStop = onInterrupt)
+                    }
+                }
             }
         }
 
@@ -680,11 +807,24 @@ fun ChatScreen(
                     .background(MaterialTheme.colorScheme.outlineVariant),
             )
 
-            // ── slash-command menu: shown when text starts with "/" ───────
-            val slashQuery = if (text.startsWith("/")) text.drop(1).lowercase() else null
+            // ── slash-command menu: active "/token" at end of draft (start-of-line or after
+            //    whitespace), filtering on name OR family by `contains`, capped at 8 (iOS parity) ──
+            val slashMatch = slashTokenRegex.find(text)
+            val slashQuery = slashMatch?.groupValues?.get(1)?.drop(1)?.lowercase()
             val slashMatches = if (slashQuery != null) {
-                commands.filter { it.name.startsWith(slashQuery, ignoreCase = true) }
+                commands.filter {
+                    slashQuery.isEmpty() ||
+                        it.name.contains(slashQuery, ignoreCase = true) ||
+                        it.family.contains(slashQuery, ignoreCase = true)
+                }.take(8)
             } else emptyList()
+
+            // Replace the active "/token" with [insert], preserving any leading whitespace.
+            fun replaceSlashToken(insert: String) {
+                val m = slashTokenRegex.find(text) ?: run { text = insert; return }
+                val lead = m.value.takeWhile { it == ' ' || it == '\n' || it == '\t' }
+                text = text.substring(0, m.range.first) + lead + insert
+            }
 
             if (slashMatches.isNotEmpty()) {
                 Column(
@@ -699,12 +839,17 @@ fun ChatScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .testTag("chat_slash_item_${cmd.name}")
                                 .clickable {
-                                    if (cmd.family == "agent") {
-                                        text = cmd.insertText ?: "/${cmd.name} "
-                                    } else {
-                                        text = ""
+                                    haptic(HapticKind.Tick)
+                                    val action = cmd.action
+                                    if (action != null) {
+                                        replaceSlashToken("")
                                         onControl(cmd)
+                                    } else {
+                                        replaceSlashToken(
+                                            cmd.insertText?.ifEmpty { null } ?: "${cmd.sigil}${cmd.name} "
+                                        )
                                     }
                                 }
                                 .padding(horizontal = 14.dp, vertical = 8.dp),
@@ -727,6 +872,16 @@ fun ChatScreen(
                                     maxLines = 1,
                                 )
                             }
+                            // Trailing "executes" glyph for control commands (iOS bolt.fill).
+                            if (cmd.action != null) {
+                                Spacer(Modifier.weight(1f))
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_zap),
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                    modifier = Modifier.size(13.dp),
+                                )
+                            }
                         }
                     }
                 }
@@ -736,6 +891,18 @@ fun ChatScreen(
                         .fillMaxWidth()
                         .height(1.dp)
                         .background(MaterialTheme.colorScheme.outlineVariant),
+                )
+            } else if (slashQuery != null && !commandsResolved) {
+                // §1.5 loading hint: a fresh session whose command set hasn't resolved yet.
+                Text(
+                    text = "Loading commands…",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceContainer)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
                 )
             }
 
@@ -945,22 +1112,65 @@ fun ChatScreen(
 
                     Spacer(modifier = Modifier.weight(1f))
 
-                    // Attach (+) button — 48dp tap target wraps the 32dp visual
-                    IconButton(
-                        onClick = { filePickerLauncher.launch("*/*") },
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(MaterialTheme.colorScheme.surfaceContainer),
-                            contentAlignment = Alignment.Center,
+                    // Attach (+) button → menu: Photos / Files / Camera (iOS + menu parity).
+                    var attachMenu by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { attachMenu = true }) {
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceContainer),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_plus),
+                                    contentDescription = "Attach",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                        DropdownMenu(
+                            expanded = attachMenu,
+                            onDismissRequest = { attachMenu = false },
                         ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_plus),
-                                contentDescription = "Attach",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp),
+                            DropdownMenuItem(
+                                text = { Text("Photos") },
+                                leadingIcon = {
+                                    Icon(painterResource(R.drawable.ic_image), null, modifier = Modifier.size(18.dp))
+                                },
+                                modifier = Modifier.testTag("attach_menu_photos"),
+                                onClick = {
+                                    attachMenu = false
+                                    photoPicker.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                                    )
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Files") },
+                                leadingIcon = {
+                                    Icon(painterResource(R.drawable.ic_file), null, modifier = Modifier.size(18.dp))
+                                },
+                                modifier = Modifier.testTag("attach_menu_files"),
+                                onClick = {
+                                    attachMenu = false
+                                    filePickerLauncher.launch("*/*")
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Camera") },
+                                leadingIcon = {
+                                    Icon(painterResource(R.drawable.ic_camera), null, modifier = Modifier.size(18.dp))
+                                },
+                                modifier = Modifier.testTag("attach_menu_camera"),
+                                onClick = {
+                                    attachMenu = false
+                                    val uri = createImageUri(context)
+                                    cameraUri = uri
+                                    takePicture.launch(uri)
+                                },
                             )
                         }
                     }
@@ -988,16 +1198,15 @@ fun ChatScreen(
                         }
                     }
 
-                    // Circular send button — scale press + confirm haptic; dims when nothing to send.
-                    // 48dp tap target (IconButton) wraps the 38dp circular visual.
+                    // Circular send button — ALWAYS sends (iOS parity); the Stop/interrupt
+                    // affordance lives in the transcript WorkingIndicator, not here. Scale press +
+                    // confirm haptic; dims when there is nothing to send.
                     IconButton(
                         onClick = { doSend() },
                         enabled = canSend,
                         interactionSource = sendInteractionSource,
                         modifier = Modifier.testTag("chat_send"),
                     ) {
-                        // Stop affordance (square) while the agent is working; send (↵) otherwise
-                        val agentWorking = agent != null && agent.phase != "idle"
                         Box(
                             modifier = Modifier
                                 .scale(sendScale)
@@ -1010,10 +1219,8 @@ fun ChatScreen(
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(
-                                painter = painterResource(
-                                    if (agentWorking) R.drawable.ic_square else R.drawable.ic_send
-                                ),
-                                contentDescription = if (agentWorking) "Stop" else "Send",
+                                painter = painterResource(R.drawable.ic_send),
+                                contentDescription = "Send",
                                 tint = MaterialTheme.colorScheme.onPrimary,
                                 modifier = Modifier.size(18.dp),
                             )
@@ -1269,4 +1476,74 @@ private fun RecordingBar(
             }
         }
     }
+}
+
+/**
+ * Live "Working… · Ns" indicator pinned to the bottom of the transcript (iOS workingIndicator
+ * parity): a small spinner + phase label + elapsed duration, and a red Stop capsule that
+ * interrupts the running agent. Ticks every 1s, recomputing elapsed from `agent.since` (epoch-ms).
+ */
+@Composable
+private fun WorkingIndicator(agent: AgentStatus, onStop: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val haptic = rememberHaptics()
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000)
+            now = System.currentTimeMillis()
+        }
+    }
+    val elapsed = agent.since?.let { ((now - it).coerceAtLeast(0)) / 1000 }
+    val label = when (agent.phase) {
+        "sending" -> "Sending…"
+        "thinking" -> "Thinking…"
+        else -> "Working…"
+    }
+    Row(
+        modifier = Modifier.padding(vertical = Space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Space.sm),
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(14.dp),
+            strokeWidth = 2.dp,
+            color = cs.primary,
+        )
+        Text(
+            text = label + (elapsed?.let { " · " + formatDuration(it) } ?: ""),
+            style = MaterialTheme.typography.bodySmall,
+            color = cs.onSurfaceVariant,
+        )
+        // Red Stop capsule → interrupt
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(cs.error.copy(alpha = 0.12f))
+                .clickable { haptic(HapticKind.Tick); onStop() }
+                .testTag("working_stop")
+                .padding(horizontal = Space.sm, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_square),
+                contentDescription = "Stop",
+                tint = cs.error,
+                modifier = Modifier.size(11.dp),
+            )
+            Text("Stop", style = MaterialTheme.typography.labelMedium, color = cs.error)
+        }
+    }
+}
+
+/**
+ * Create a FileProvider URI for a fresh camera capture in cacheDir/attachments (the path already
+ * declared in file_paths.xml + reused by openAttachment). The system camera app writes the JPEG
+ * here, then [stageFromUri] reads it back and uploads it.
+ */
+private fun createImageUri(context: android.content.Context): Uri {
+    val dir = File(context.cacheDir, "attachments").apply { mkdirs() }
+    val file = File(dir, "camera_${System.currentTimeMillis()}.jpg")
+    return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
 }

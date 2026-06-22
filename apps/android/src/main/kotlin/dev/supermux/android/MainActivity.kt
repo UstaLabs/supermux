@@ -138,12 +138,13 @@ class MainActivity : ComponentActivity() {
 
                 val brokerUrl = remember { store.loadBaseUrl()!! }   // gate guarantees both are present
                 val token = remember { store.load()!! }
-                val vm: AppViewModel = viewModel(factory = AppViewModel.factory(brokerUrl, token))
+                val vm: AppViewModel = viewModel(factory = AppViewModel.factory(application, brokerUrl, token))
                 val sessions by vm.sessions.collectAsStateWithLifecycle()
                 val messages by vm.messages.collectAsStateWithLifecycle()
                 val activity by vm.activity.collectAsStateWithLifecycle()
                 val agentState by vm.agentState.collectAsStateWithLifecycle()
                 val commands by vm.commands.collectAsStateWithLifecycle()
+                val commandsResolved by vm.commandsResolved.collectAsStateWithLifecycle()
                 val lastBySession = messages.mapValues { it.value.lastOrNull() }
                 var selected by rememberSaveable { mutableStateOf<String?>(null) }
                 val liveSessionIds = remember(sessions) { sessions.map { it.id }.toSet() }
@@ -218,6 +219,7 @@ class MainActivity : ComponentActivity() {
                                         activityMap = activity,
                                         agentState = agentState,
                                         commands = commands,
+                                        commandsResolved = commandsResolved,
                                         vm = vm,
                                         onOpenDisplays = { navController.navigate(Displays) },
                                         modifier = Modifier.fillMaxSize(),
@@ -236,6 +238,7 @@ class MainActivity : ComponentActivity() {
                                 activityMap = activity,
                                 agentState = agentState,
                                 commands = commands,
+                                commandsResolved = commandsResolved,
                                 lastBySession = lastBySession,
                                 vm = vm,
                                 onNavigate = navTo,
@@ -416,6 +419,7 @@ private fun PhoneNavHost(
     activityMap: Map<String, List<ActivityEvent>>,
     agentState: Map<String, AgentStatus?>,
     commands: Map<String, List<SlashCommand>>,
+    commandsResolved: Map<String, Boolean>,
     lastBySession: Map<String, LogEntry?>,
     vm: AppViewModel,
     onNavigate: (String) -> Unit,
@@ -432,6 +436,7 @@ private fun PhoneNavHost(
         activityMap = activityMap,
         agentState = agentState,
         commands = commands,
+        commandsResolved = commandsResolved,
         lastBySession = lastBySession,
         vm = vm,
         onNavigate = onNavigate,

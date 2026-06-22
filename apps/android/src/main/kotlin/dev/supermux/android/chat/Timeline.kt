@@ -7,11 +7,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -22,17 +25,30 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.heightIn
@@ -42,6 +58,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import dev.supermux.proto.Attachment
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
@@ -79,7 +96,11 @@ enum class ToolStatus { RUNNING, DONE, ERROR }
 
 sealed interface TimelineItem {
     data class Msg(val entry: LogEntry) : TimelineItem
-    data class Tool(val event: ActivityEvent, val status: ToolStatus) : TimelineItem
+    data class Tool(
+        val event: ActivityEvent,
+        val status: ToolStatus,
+        val output: String? = null,   // detail from the matching tool_result event (iOS folds as Output)
+    ) : TimelineItem
     data class Act(val event: ActivityEvent) : TimelineItem
 }
 
@@ -96,12 +117,14 @@ fun mergeTimeline(
     messages: List<LogEntry>,
     activity: List<ActivityEvent>,
 ): List<TimelineItem> {
-    // callId -> resolved final status from `tool_result` events
+    // callId -> resolved final status + output detail from `tool_result` events
     val resultStatus = HashMap<String, ToolStatus>()
+    val resultDetail = HashMap<String, String?>()
     for (e in activity) {
         val id = e.callId
         if (e.kind == "tool_result" && id != null) {
             resultStatus[id] = if (e.phase == "failed") ToolStatus.ERROR else ToolStatus.DONE
+            resultDetail[id] = e.detail
         }
     }
     val items = ArrayList<TimelineItem>(messages.size + activity.size)
@@ -110,7 +133,8 @@ fun mergeTimeline(
         when (e.kind) {
             "tool" -> {
                 val status = e.callId?.let { resultStatus[it] } ?: ToolStatus.RUNNING
-                items.add(TimelineItem.Tool(e, status))
+                val output = e.callId?.let { resultDetail[it] }
+                items.add(TimelineItem.Tool(e, status, output))
             }
             "tool_result" -> { /* folded into the matching tool row above */ }
             else -> items.add(TimelineItem.Act(e))
@@ -160,35 +184,60 @@ fun mdAnnotated(text: String): AnnotatedString = buildAnnotatedString {
 /**
  * Elegant mono code block for fenced ``` content.
  * Horizontal accent line + subtle header-tinted background + horizontal scroll.
+ * A top-end copy button (iOS CodeBlock parity) copies the raw code, flashing a check for ~1.5s.
  */
 @Composable
 fun FencedCodeBlock(code: String) {
     val cs = MaterialTheme.colorScheme
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(topStart = 0.dp, topEnd = Radii.sm, bottomStart = 0.dp, bottomEnd = Radii.sm))
-            .background(cs.surfaceContainerLow)
-            .padding(start = 0.dp),
-    ) {
-        // 2dp left accent
-        Box(
+    val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    var copied by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth()) {
+        Row(
             Modifier
-                .width(2.dp)
-                .height(1.dp) // height will stretch with the Row's intrinsic content height
-                .background(cs.primary.copy(alpha = 0.4f)),
-        )
-        Box(
-            Modifier
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = Space.md, vertical = Space.sm),
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(topStart = 0.dp, topEnd = Radii.sm, bottomStart = 0.dp, bottomEnd = Radii.sm))
+                .background(cs.surfaceContainerLow)
+                .padding(start = 0.dp),
         ) {
-            Text(
-                text = code,
-                fontFamily = MonoFontFamily,
-                fontSize = 12.sp,
-                lineHeight = 18.sp,
-                color = cs.onSurface.copy(alpha = 0.9f),
+            // 2dp left accent
+            Box(
+                Modifier
+                    .width(2.dp)
+                    .height(1.dp) // height will stretch with the Row's intrinsic content height
+                    .background(cs.primary.copy(alpha = 0.4f)),
+            )
+            Box(
+                Modifier
+                    .horizontalScroll(rememberScrollState())
+                    // pad the right so the copy button never overlaps the first line of code
+                    .padding(start = Space.md, end = Space.xl + Space.md, top = Space.sm, bottom = Space.sm),
+            ) {
+                Text(
+                    text = code,
+                    fontFamily = MonoFontFamily,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                    color = cs.onSurface.copy(alpha = 0.9f),
+                )
+            }
+        }
+        IconButton(
+            onClick = {
+                clipboard.setText(AnnotatedString(code))
+                copied = true
+                scope.launch { delay(1500); copied = false }
+            },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(Space.xs)
+                .size(28.dp),
+        ) {
+            Icon(
+                painter = painterResource(if (copied) R.drawable.ic_check else R.drawable.ic_copy),
+                contentDescription = if (copied) "Copied" else "Copy",
+                tint = if (copied) cs.primary else cs.onSurfaceVariant,
+                modifier = Modifier.size(14.dp),
             )
         }
     }
@@ -223,6 +272,7 @@ fun AssistantMessage(text: String) {
 @Composable
 fun MarkdownBody(text: String, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
+    val typography = MaterialTheme.typography
     val blocks = parseMarkdownBlocks(text)
     Column(
         modifier = modifier,
@@ -235,12 +285,64 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier) {
                         Text(
                             text = mdAnnotated(block.text),
                             color = cs.onSurface,
-                            style = MaterialTheme.typography.bodyLarge,
+                            style = typography.bodyLarge,
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
                 }
                 is MdBlock.Code -> FencedCodeBlock(block.code)
+                is MdBlock.Heading -> Text(
+                    text = mdAnnotated(block.text),
+                    color = cs.onSurface,
+                    style = when (block.level) {
+                        1 -> typography.titleLarge
+                        2 -> typography.titleMedium
+                        else -> typography.titleSmall
+                    },
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                is MdBlock.Quote -> Row(
+                    modifier = Modifier.height(IntrinsicSize.Min),
+                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                ) {
+                    Box(
+                        Modifier
+                            .width(3.dp)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(1.dp))
+                            .background(cs.primary.copy(alpha = 0.5f)),
+                    )
+                    Text(
+                        text = mdAnnotated(block.text),
+                        color = cs.onSurfaceVariant,
+                        style = typography.bodyLarge,
+                    )
+                }
+                is MdBlock.Bullet -> Row(
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                ) {
+                    Text("•", color = cs.onSurfaceVariant, style = typography.bodyLarge)
+                    Text(
+                        text = mdAnnotated(block.text),
+                        color = cs.onSurface,
+                        style = typography.bodyLarge,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                is MdBlock.Numbered -> Row(
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                ) {
+                    Text("${block.n}.", color = cs.onSurfaceVariant, style = typography.bodyLarge)
+                    Text(
+                        text = mdAnnotated(block.text),
+                        color = cs.onSurface,
+                        style = typography.bodyLarge,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
         }
     }
@@ -279,13 +381,31 @@ fun UserMessage(text: String) {
     }
 }
 
+/** Per-tool leading glyph (iOS ToolRowView.icon parity). Missing icons fall back to existing ones. */
+private fun toolIcon(tool: String): Int = when (tool) {
+    "Bash" -> R.drawable.ic_terminal
+    "Read" -> R.drawable.ic_file
+    "Edit", "Write" -> R.drawable.ic_pencil
+    "Grep" -> R.drawable.ic_search
+    "Glob" -> R.drawable.ic_folder_open
+    "Task", "Agent" -> R.drawable.ic_sparkle
+    "Skill" -> R.drawable.ic_file
+    "WebFetch", "WebSearch" -> R.drawable.ic_globe
+    else -> R.drawable.ic_settings
+}
+
+/** Strip an mcp__server__tool name down to its last segment (iOS label parity). */
+private fun toolLabel(tool: String): String =
+    if (tool.startsWith("mcp__")) tool.substringAfterLast("__") else tool
+
 /**
  * Calm Premium — tool-use activity.
- * Quiet left-rail: thin 2dp vertical accent + tool name + mono summary ellipsis
- * + trailing status indicator. Tappable to expand detail block (collapsed by default).
+ * Quiet row: per-tool leading icon + thin accent rail + tool label + mono summary ellipsis
+ * + trailing status indicator. Tappable to expand split Input / Output blocks (collapsed by
+ * default; expand affordance only when there is input or output).
  */
 @Composable
-fun ToolCard(event: ActivityEvent, status: ToolStatus) {
+fun ToolCard(event: ActivityEvent, status: ToolStatus, output: String? = null) {
     val cs = MaterialTheme.colorScheme
     val isRunning = status == ToolStatus.RUNNING
     val isError = status == ToolStatus.ERROR
@@ -293,30 +413,43 @@ fun ToolCard(event: ActivityEvent, status: ToolStatus) {
     val accentAlpha = if (isRunning) 1f else 0.4f
     var expanded by remember { mutableStateOf(false) }
 
+    val input = event.detail
+    val hasContent = !input.isNullOrBlank() || !output.isNullOrBlank()
+    val toolName = event.tool ?: "tool"
+
     Column(
         Modifier
             .fillMaxWidth()
-            .clickable { if (event.detail != null) expanded = !expanded }
+            .testTag("tool_card")
+            .clickable(enabled = hasContent) { expanded = !expanded }
             .padding(vertical = Space.xs),
     ) {
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 2dp vertical accent rail
+            // Per-tool leading icon
+            Icon(
+                painter = painterResource(toolIcon(toolName)),
+                contentDescription = null,
+                tint = cs.onSurfaceVariant,
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(Space.sm))
+
+            // 2dp vertical accent rail (running-emphasis)
             Box(
                 Modifier
                     .width(2.dp)
-                    .height(Space.xl)
+                    .height(Space.lg)
                     .clip(RoundedCornerShape(1.dp))
                     .background(accentColor.copy(alpha = accentAlpha)),
             )
             Spacer(Modifier.width(Space.sm))
 
-            // Tool name (labelLarge)
-            val toolName = event.tool ?: "tool"
+            // Tool label (labelLarge), mcp__…__ stripped to last segment
             Text(
-                text = toolName,
+                text = toolLabel(toolName),
                 color = cs.onSurface,
                 style = MaterialTheme.typography.labelLarge,
             )
@@ -363,22 +496,51 @@ fun ToolCard(event: ActivityEvent, status: ToolStatus) {
             }
         }
 
-        // Expandable detail block
+        // Expandable Input + Output blocks (iOS ioBlock parity)
         AnimatedVisibility(
             visible = expanded,
             enter = expandVertically(),
             exit = shrinkVertically(),
         ) {
-            val detail = event.detail
-            if (detail != null) {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(start = Space.md, top = Space.xs),
-                ) {
-                    FencedCodeBlock(detail)
+            Column(
+                Modifier.padding(start = Space.md, top = Space.xs),
+                verticalArrangement = Arrangement.spacedBy(Space.sm),
+            ) {
+                input?.takeIf { it.isNotBlank() }?.let { ioBlock("Input", it, error = false) }
+                output?.takeIf { it.isNotBlank() }?.let {
+                    ioBlock("Output", it, error = status == ToolStatus.ERROR)
                 }
             }
+        }
+    }
+}
+
+/** A labelled, height-capped mono block — used for a tool call's Input / Output (iOS ioBlock). */
+@Composable
+private fun ioBlock(label: String, text: String, error: Boolean) {
+    val cs = MaterialTheme.colorScheme
+    Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
+        Text(
+            text = label,
+            color = cs.onSurfaceVariant,
+            style = MaterialTheme.typography.labelSmall,
+        )
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = 200.dp)
+                .clip(RoundedCornerShape(Radii.sm))
+                .background(cs.surfaceContainerLow)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Space.md, vertical = Space.sm),
+        ) {
+            Text(
+                text = text,
+                fontFamily = MonoFontFamily,
+                fontSize = 12.sp,
+                lineHeight = 18.sp,
+                color = if (error) cs.error else cs.onSurface.copy(alpha = 0.9f),
+            )
         }
     }
 }
@@ -462,7 +624,7 @@ fun TimelineItemRow(item: TimelineItem, loadBytes: suspend (String) -> ByteArray
                 }
             }
         }
-        is TimelineItem.Tool -> ToolCard(item.event, item.status)
+        is TimelineItem.Tool -> ToolCard(item.event, item.status, item.output)
         is TimelineItem.Act -> {
             when (item.event.kind) {
                 "thinking" -> ReasoningLine(item.event)
@@ -514,14 +676,17 @@ private fun AttachmentItem(att: Attachment, loadBytes: suspend (String) -> ByteA
             }
             val b = bmp
             if (b != null) {
+                var showLightbox by remember(att.file_id) { mutableStateOf(false) }
                 Image(
                     bitmap = b,
                     contentDescription = att.name,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
                         .heightIn(max = 240.dp)
-                        .clip(RoundedCornerShape(Radii.md)),
+                        .clip(RoundedCornerShape(Radii.md))
+                        .clickable { showLightbox = true },
                 )
+                if (showLightbox) ImageLightbox(b, onDismiss = { showLightbox = false })
             } else {
                 Box(
                     modifier = Modifier
@@ -542,6 +707,62 @@ private fun AttachmentItem(att: Attachment, loadBytes: suspend (String) -> ByteA
         isVideo -> AttachmentChip(R.drawable.ic_play, att.name ?: "video", att, loadBytes)
         isAudio -> AttachmentChip(R.drawable.ic_volume_2, att.name ?: "voice message", att, loadBytes)
         else -> AttachmentChip(R.drawable.ic_file, att.name ?: att.file_id, att, loadBytes)
+    }
+}
+
+/**
+ * Fullscreen image lightbox (iOS Lightbox parity): black backdrop, fit-scaled image with
+ * pinch-to-zoom + pan (clamped ≥1×), a close button. A Dialog with usePlatformDefaultWidth=false
+ * is the idiomatic Android-native fullscreen overlay; predictive-back dismisses it for free.
+ */
+@Composable
+private fun ImageLightbox(image: ImageBitmap, onDismiss: () -> Unit) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        var scale by remember { mutableFloatStateOf(1f) }
+        var offset by remember { mutableStateOf(Offset.Zero) }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        scale = (scale * zoom).coerceIn(1f, 5f)
+                        offset = if (scale > 1f) offset + pan else Offset.Zero
+                    }
+                }
+                .testTag("image_lightbox"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                bitmap = image,
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = offset.x
+                        translationY = offset.y
+                    },
+            )
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(Space.md),
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_x),
+                    contentDescription = "Close",
+                    tint = Color.White,
+                )
+            }
+        }
     }
 }
 

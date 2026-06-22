@@ -1,9 +1,15 @@
 package dev.supermux.android
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import android.content.Context
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import kotlinx.coroutines.flow.first
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
 import dev.supermux.net.AddCommentBody
@@ -61,11 +67,21 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-class AppViewModel(private val baseUrl: String, private val token: String) : ViewModel() {
+/** App-scoped DataStore backing per-session composer drafts (process-death-durable; mirrors
+ *  iOS UserDefaults "cmux:draft:<id>"). One store for the whole app, keyed per session. */
+private val Context.draftDataStore by preferencesDataStore(name = "chat_drafts")
+
+class AppViewModel(
+    application: Application,
+    private val baseUrl: String,
+    private val token: String,
+) : AndroidViewModel(application) {
+    private val appContext: Context = application.applicationContext
+
     companion object {
         /** Factory so the VM can be Activity-scoped via viewModel(factory = …) and survive config changes. */
-        fun factory(baseUrl: String, token: String) = viewModelFactory {
-            initializer { AppViewModel(baseUrl, token) }
+        fun factory(application: Application, baseUrl: String, token: String) = viewModelFactory {
+            initializer { AppViewModel(application, baseUrl, token) }
         }
     }
 
@@ -152,8 +168,14 @@ class AppViewModel(private val baseUrl: String, private val token: String) : Vie
                     is ServerFrame.SessionAdded -> _sessions.value = _sessions.value + f.session
                     is ServerFrame.SessionRemoved -> _sessions.value = _sessions.value.filterNot { it.id == f.id }
                     is ServerFrame.MessageAppend -> {
+                        // Optimistic-echo dedup (iOS BrokerSession parity): when the real inbound
+                        // message lands, drop the matching local-… placeholder we appended on send.
                         _messages.value = _messages.value.toMutableMap().apply {
-                            this[f.session] = (this[f.session] ?: emptyList()) + f.entry
+                            val prev = this[f.session] ?: emptyList()
+                            val pruned = if (f.entry.direction.startsWith("in")) {
+                                prev.filterNot { it.id.startsWith("local-") && it.text == f.entry.text }
+                            } else prev
+                            this[f.session] = pruned + f.entry
                         }
                     }
                     is ServerFrame.ActivityAppend -> {
@@ -226,9 +248,45 @@ class AppViewModel(private val baseUrl: String, private val token: String) : Vie
         }
     }
 
+    /** Soft-stop the running agent (POST /sessions/<id>/interrupt). Parity with the iOS
+     *  transcript Stop capsule + the `/stop` slash control. */
+    fun interrupt(id: String) { viewModelScope.launch { runCatching { api.interrupt(id) } } }
+
+    /** ISO-8601 (UTC) timestamp so an optimistic entry sorts LAST under mergeTimeline's
+     *  lexicographic `ts` ordering (the broker emits ISO-8601 too). */
+    private fun nowIso(): String = java.time.Instant.now().toString()
+
+    /** Append an optimistic outbound bubble so the user's message shows instantly, before the
+     *  broker echoes it back as an inbound message (iOS BrokerSession.send parity). Deduped in
+     *  the MessageAppend reducer. Only echoes when there is text (attachments-only stay quiet). */
+    private fun appendOptimistic(sessionId: String, text: String) {
+        if (text.isEmpty()) return
+        val optimistic = LogEntry(
+            id = "local-${(_messages.value[sessionId]?.size ?: 0)}-${text.hashCode()}",
+            ts = nowIso(),
+            direction = "inbound",
+            text = text,
+        )
+        _messages.update { it + (sessionId to ((it[sessionId] ?: emptyList()) + optimistic)) }
+    }
+
     fun send(sessionId: String, text: String) {
         if (text.isBlank()) return
+        appendOptimistic(sessionId, text.trim())
         viewModelScope.launch { client.send(ClientFrame.Send(sessionId, args = SendArgs(text))) }
+    }
+
+    // ── Per-session composer draft persistence (DataStore) ─────────────────────────
+    // Survives session-switch AND process death (iOS UserDefaults "cmux:draft:<id>" parity).
+    private fun draftKey(sessionId: String) = stringPreferencesKey("draft:$sessionId")
+
+    suspend fun loadDraft(sessionId: String): String =
+        runCatching { appContext.draftDataStore.data.first()[draftKey(sessionId)] }.getOrNull() ?: ""
+
+    fun saveDraft(sessionId: String, text: String) {
+        viewModelScope.launch {
+            runCatching { appContext.draftDataStore.edit { it[draftKey(sessionId)] = text } }
+        }
     }
 
     fun connectTerminal(sessionId: String): TerminalClient =
@@ -279,6 +337,7 @@ class AppViewModel(private val baseUrl: String, private val token: String) : Vie
         runCatching { api.transcribeDraft(sessionId, draft).text }.getOrNull()
 
     fun sendWith(sessionId: String, text: String, attachments: List<String>) {
+        appendOptimistic(sessionId, text.trim())
         viewModelScope.launch {
             runCatching {
                 client.send(ClientFrame.Send(sessionId, args = SendArgs(text, attachments.ifEmpty { null })))

@@ -4,6 +4,9 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- QR pairing scan (zxing-android-embedded also declares this; explicit here). -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Attachment camera capture is delegated to the system camera app (TakePicture);
+         the camera is optional so non-camera devices can still install. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <application
         android:name=".SupermuxApplication"
         android:label="supermux"
