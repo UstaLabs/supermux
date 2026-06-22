@@ -13,30 +13,35 @@ struct SessionDetailView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
+                    // Title as a scrolling header (not a pinned bar) → frees space as you read.
+                    Text(session.name)
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 2)
                     ForEach(entries, id: \.id) { entry in
                         MessageBubble(entry: entry, broker: broker).id(entry.id)
                     }
+                    // Talk button as a scrolling footer (not pinned) → scrolls away too.
+                    Button { showVoice = true } label: {
+                        Label("Talk", systemImage: "mic.fill").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.top, 4)
+                    .id("talk")
                 }
                 .padding(.horizontal, 2)
                 .padding(.vertical, 4)
             }
             .onChange(of: entries.count) {
-                if let last = entries.last?.id { withAnimation { proxy.scrollTo(last, anchor: .bottom) } }
+                withAnimation { proxy.scrollTo("talk", anchor: .bottom) }
             }
             .onAppear {
                 broker.openSession(session.id)
-                if let last = entries.last?.id { proxy.scrollTo(last, anchor: .bottom) }
+                proxy.scrollTo("talk", anchor: .bottom)
             }
             .onDisappear { broker.closeSession() }
         }
-        .navigationTitle(session.name)
-        .safeAreaInset(edge: .bottom) {
-            Button { showVoice = true } label: {
-                Label("Talk", systemImage: "mic.fill").frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .padding(.horizontal, 6)
-        }
+        .navigationTitle("")
         .sheet(isPresented: $showVoice) {
             VoiceInputView(broker: broker, sessionId: session.id)
         }
