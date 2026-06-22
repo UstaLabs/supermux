@@ -114,6 +114,7 @@ export interface WebChannelOpts {
   onSendFromWeb: (msg: InboundMessage) => void
   fileStore?: import("../../core/files/store").FileStore
   pushStore?: import("../../core/push/subscriptions").PushSubscriptionStore
+  deviceTokenStore?: import("../../core/push/device-tokens").DevicePushTokenStore
   vapidPublicKey?: string
   viewingTracker?: import("../../core/push/viewing-tracker").ViewingTracker
   getReads?: () => Record<string, string>          // sessionId -> last_read_at (snapshot)
@@ -229,6 +230,7 @@ export class WebChannel implements Channel {
   private readonly store: DeviceStore
   private readonly fileStore?: import("../../core/files/store").FileStore
   private readonly pushStore?: import("../../core/push/subscriptions").PushSubscriptionStore
+  private readonly deviceTokenStore?: import("../../core/push/device-tokens").DevicePushTokenStore
   private readonly vapidPublicKey?: string
   private inboundHandlers: Array<(m: InboundMessage) => void> = []
   private wsConnections = new Set<{ ws: import("bun").ServerWebSocket<WSData>; deviceName: string }>()
@@ -245,6 +247,7 @@ export class WebChannel implements Channel {
     this.store = new DeviceStore(opts.devicesFile)
     this.fileStore = opts.fileStore
     this.pushStore = opts.pushStore
+    this.deviceTokenStore = opts.deviceTokenStore
     this.vapidPublicKey = opts.vapidPublicKey
     this.fsWatcher = opts.fsWatcher
   }
@@ -278,6 +281,9 @@ export class WebChannel implements Channel {
   async start(): Promise<void> {
     if (this.pushStore) {
       this.store.addRevokeListener((name) => { this.pushStore!.remove(name) })
+    }
+    if (this.deviceTokenStore) {
+      this.store.addRevokeListener((name) => { this.deviceTokenStore!.remove(name) })
     }
     this.server = Bun.serve<WSData>({
       port: this.opts.port,
@@ -1136,6 +1142,24 @@ export class WebChannel implements Channel {
       if (!auth.ok) return new Response("unauthorized", { status: 401 })
       if (!this.pushStore) return new Response("push not configured", { status: 503 })
       this.pushStore.remove(auth.device.name)
+      return this.json({ ok: true })
+    }
+
+    if (method === "POST" && path === "/push/device") {
+      const auth = this.requireAuth(req); if (!auth.ok) return new Response("unauthorized", { status: 401 })
+      if (!this.deviceTokenStore) return new Response("push not configured", { status: 503 })
+      let body: any; try { body = await req.json() } catch { return new Response("bad json", { status: 400 }) }
+      const platform = body?.platform, rt = body?.routingToken, pubkey = body?.pubkey
+      if ((platform !== "ios" && platform !== "android") || typeof rt !== "string" || typeof pubkey !== "string")
+        return new Response("platform + routingToken + pubkey required", { status: 400 })
+      this.deviceTokenStore.putNative(auth.device.name, platform, rt, pubkey)
+      return this.json({ ok: true })
+    }
+
+    if (method === "DELETE" && path === "/push/device") {
+      const auth = this.requireAuth(req); if (!auth.ok) return new Response("unauthorized", { status: 401 })
+      if (!this.deviceTokenStore) return new Response("push not configured", { status: 503 })
+      this.deviceTokenStore.remove(auth.device.name)
       return this.json({ ok: true })
     }
 
