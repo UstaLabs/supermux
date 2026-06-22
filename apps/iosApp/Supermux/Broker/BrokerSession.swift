@@ -352,6 +352,18 @@ final class BrokerSession {
         return try? await URLSession.shared.data(for: req).0
     }
 
+    /// Stream an attachment to a temp file with progress; throws on HTTP/transport failure
+    /// (unlike `loadFile`, which silently returns nil). Returns the local file URL. Used by
+    /// the file-row download UI so large files report progress and surface errors.
+    func downloadFile(_ id: String, name: String,
+                      onProgress: @escaping (Double) -> Void) async throws -> URL {
+        guard let url = URL(string: "\(baseURL)/files/\(id)") else { throw URLError(.badURL) }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let dest = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        return try await FileDownloader(dest: dest, onProgress: onProgress).download(req)
+    }
+
     // MARK: - Dictation transcribe (POST /sessions/:id/transcribe → { text, degraded? })
     // Bearer-authed direct HTTP (same shape as `loadFile`), since there's no shared
     // Kotlin helper for this endpoint. The on-device path POSTs the recognized draft as

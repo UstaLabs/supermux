@@ -16,6 +16,7 @@ struct MarkdownView: View {
                 row(block)
             }
         }
+        .textSelection(.enabled)
     }
 
     @ViewBuilder private func row(_ b: MDBlock) -> some View {
