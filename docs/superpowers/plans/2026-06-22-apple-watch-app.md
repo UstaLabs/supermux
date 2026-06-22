@@ -16,6 +16,16 @@ Spec: `docs/superpowers/specs/2026-06-22-apple-watch-app-design.md`.
 
 **UPDATE (final):** Completed end-to-end. The "blocked on ASC issuer" note below was superseded — the issuer + the full headless release pipeline were already on-box (`~/.config/asc/`). The watch networking was rewritten to **pure-Swift** (SKIE doesn't support the watch device arch arm64_32 — details in `domains/infra.md`). Build **28** (iOS app + embedded watch app, with a watch app icon) was archived (no `-sdk`, manual signing via a dedicated `smux-dist` keychain), exported (app-store-connect, both profiles), uploaded via `altool`, processed **VALID**, and assigned to the internal TestFlight group. On-device verification — especially live voice dictation, which the simulator can't exercise — is the user's via TestFlight. Commits: `139d609` → `13826ec` → `36564ba` → `70be324` → icon → status.
 
+**FINAL (on-device, build 33):** Physical-watch debugging found two more issues beyond the sim:
+(1) min watchOS 26 excluded the user's watch → lowered to **watchOS 10.0** (build 29); (2)
+**`URLSessionWebSocketTask` is blocked on real watchOS devices** (Apple TN3135 low-level-networking
+restriction — works only in the Simulator's macOS stack; symptom `-1009` on device while REST + other
+apps work) → **replaced the watch's WebSocket with REST polling** of the broker's existing
+`GET /sessions`, `GET /sessions/{id}/messages`, `POST /sessions/{id}/message` (no server changes; the
+watch stays independent). **Build 33 confirmed working end-to-end on the physical watch** — sessions
+list, history, and voice dictation → broker cleanup → message delivered to the agent. watchOS
+networking lesson recorded in `domains/infra.md`.
+
 ### (historical, point-in-time — superseded by the UPDATE above)
 
 **Done & committed** (branch `mux/supermux-11`):
