@@ -1,5 +1,4 @@
 import SwiftUI
-import Shared
 
 /// The watch's home screen: a Digital-Crown-scrollable list of active sessions.
 struct SessionsListView: View {
@@ -38,11 +37,11 @@ private struct SessionRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Circle()
-                .fill((session.connected?.boolValue ?? false) ? Color.green : Color.secondary)
+                .fill((session.connected ?? false) ? Color.green : Color.secondary)
                 .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.name).font(.headline).lineLimit(1)
-                Text(session.agent).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                Text(session.agent ?? "").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
         }

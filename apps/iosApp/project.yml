@@ -20,7 +20,7 @@ settings:
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: "57L7J9XA89"
     MARKETING_VERSION: "1.0"
-    CURRENT_PROJECT_VERSION: "27"
+    CURRENT_PROJECT_VERSION: "28"
     # Gradle pre-build phase needs filesystem access outside the sandbox.
     ENABLE_USER_SCRIPT_SANDBOXING: "NO"
   # App Store distribution signing is Release-only so Debug/simulator builds stay automatic.
@@ -55,6 +55,9 @@ targets:
         buildPhase: resources
     dependencies:
       - package: SwiftTerm
+      # Bundle the watch app inside the iOS app for paired install / TestFlight.
+      - target: SupermuxWatch
+        embed: true
     info:
       path: Supermux/Info.plist
       properties:
@@ -135,25 +138,11 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app.watchkitapp
         WATCHOS_DEPLOYMENT_TARGET: "26.0"
         TARGETED_DEVICE_FAMILY: "4"
-        FRAMEWORK_SEARCH_PATHS:
-          - $(inherited)
-          - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
-        OTHER_LDFLAGS:
-          - $(inherited)
-          - -framework
-          - Shared
-        LD_RUNPATH_SEARCH_PATHS:
-          - $(inherited)
-          - "@executable_path/Frameworks"
-    preBuildScripts:
-      - name: Build Kotlin Shared.framework (watchOS, embed and sign)
-        basedOnDependencyAnalysis: false
-        script: |
-          set -e
-          source ~/ios-build-env.sh 2>/dev/null || true
-          export JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home -v 17 2>/dev/null || /usr/libexec/java_home)}"
-          cd "$SRCROOT/.."
-          ./gradlew --no-daemon :shared:embedAndSignAppleFrameworkForXcode
+      configs:
+        Release:
+          PROVISIONING_PROFILE_SPECIFIER: "Supermux Watch App Store"
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          "CODE_SIGN_IDENTITY[sdk=watchos*]": "Apple Distribution"
 
   SupermuxTests:
     type: bundle.unit-test

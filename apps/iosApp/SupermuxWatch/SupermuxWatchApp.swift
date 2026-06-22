@@ -1,5 +1,4 @@
 import SwiftUI
-import Shared
 
 @main
 struct SupermuxWatchApp: App {

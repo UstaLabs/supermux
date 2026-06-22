@@ -1,5 +1,4 @@
 import SwiftUI
-import Shared
 
 /// A session's conversation: agent replies (Markdown) + your messages + inline
 /// photos, Crown-scrollable, with a pinned mic button to talk to the agent.
