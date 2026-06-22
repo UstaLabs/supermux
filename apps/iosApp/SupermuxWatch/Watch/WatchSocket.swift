@@ -24,10 +24,13 @@ final class WatchSocket {
     var onSyncChange: ((Bool) -> Void)?
 
     init?(baseURL: String, token: String) {
-        // Darwin WebSocket requires ws(s):// (http(s):// is rejected).
-        var s = baseURL
-        if s.hasPrefix("https") { s = "wss" + s.dropFirst(5) }
-        else if s.hasPrefix("http") { s = "ws" + s.dropFirst(4) }
+        // Darwin WebSocket requires ws(s):// (http(s):// is rejected). Be robust to a
+        // trailing slash, a missing scheme, and http vs https.
+        var s = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        while s.hasSuffix("/") { s.removeLast() }
+        if s.hasPrefix("https://") { s = "wss://" + s.dropFirst(8) }
+        else if s.hasPrefix("http://") { s = "ws://" + s.dropFirst(7) }
+        else if !s.hasPrefix("ws://") && !s.hasPrefix("wss://") { s = "wss://" + s }
         guard let u = URL(string: s + "/ws") else { return nil }
         self.wsURL = u
         self.token = token

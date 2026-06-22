@@ -7,10 +7,15 @@ struct SessionsListView: View {
     var body: some View {
         Group {
             if !broker.synced {
-                VStack(spacing: 8) {
+                VStack(spacing: 6) {
                     ProgressView()
                     Text("Connecting…").font(.footnote).foregroundStyle(.secondary)
+                    // Diagnostic: the exact broker URL the watch is using.
+                    Text(broker.baseURL)
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .lineLimit(3).multilineTextAlignment(.center)
                 }
+                .padding(.horizontal, 6)
             } else if broker.sessions.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "bubble.left.and.bubble.right").font(.title3).foregroundStyle(.secondary)
