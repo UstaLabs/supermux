@@ -22,6 +22,7 @@ final class WatchSocket {
 
     var onEvent: ((WatchServerEvent) -> Void)?
     var onSyncChange: ((Bool) -> Void)?
+    var onStatus: ((String) -> Void)?   // diagnostic: human-readable connection state
 
     init?(baseURL: String, token: String) {
         // Darwin WebSocket requires ws(s):// (http(s):// is rejected). Be robust to a
@@ -48,14 +49,17 @@ final class WatchSocket {
     }
 
     private func loop() async {
+        var attempt = 0
         while running {
             var req = URLRequest(url: wsURL)
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             let t = session.webSocketTask(with: req)
             t.maximumMessageSize = 64 * 1024 * 1024   // snapshot can exceed the 1 MB default
             task = t
+            onStatus?("opening WS (try \(attempt + 1))")
             t.resume()
             send(raw: "{\"type\":\"subscribe\"}")
+            onStatus?("subscribed; waiting for data")
             do {
                 while running {
                     switch try await t.receive() {
@@ -65,10 +69,12 @@ final class WatchSocket {
                     }
                 }
             } catch {
-                // fall through to reconnect
+                let e = error as NSError
+                onStatus?("err \(e.domain) \(e.code): \(e.localizedDescription)")
             }
             onSyncChange?(false)
             guard running else { break }
+            attempt += 1
             try? await Task.sleep(nanoseconds: backoffNs)
             backoffNs = min(backoffNs * 2, 8_000_000_000)
         }

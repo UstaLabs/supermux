@@ -14,6 +14,7 @@ final class WatchBrokerSession {
     private(set) var sessions: [SessionInfo] = []
     private(set) var messages: [String: [LogEntry]] = [:]
     private(set) var synced = false
+    private(set) var status = ""   // diagnostic connection state
 
     init(baseURL: String, token: String) {
         self.baseURL = baseURL
@@ -23,6 +24,7 @@ final class WatchBrokerSession {
 
     func start() {
         socket?.onSyncChange = { [weak self] s in Task { @MainActor in self?.synced = s } }
+        socket?.onStatus = { [weak self] s in Task { @MainActor in self?.status = s } }
         socket?.onEvent = { [weak self] ev in Task { @MainActor in self?.reduce(ev) } }
         socket?.start()
     }

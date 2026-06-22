@@ -10,10 +10,15 @@ struct SessionsListView: View {
                 VStack(spacing: 6) {
                     ProgressView()
                     Text("Connecting…").font(.footnote).foregroundStyle(.secondary)
-                    // Diagnostic: the exact broker URL the watch is using.
+                    // Diagnostic: the exact broker URL + WS connection state.
                     Text(broker.baseURL)
                         .font(.caption2).foregroundStyle(.secondary)
-                        .lineLimit(3).multilineTextAlignment(.center)
+                        .lineLimit(2).multilineTextAlignment(.center)
+                    if !broker.status.isEmpty {
+                        Text(broker.status)
+                            .font(.caption2).foregroundStyle(.orange)
+                            .lineLimit(4).multilineTextAlignment(.center)
+                    }
                 }
                 .padding(.horizontal, 6)
             } else if broker.sessions.isEmpty {
