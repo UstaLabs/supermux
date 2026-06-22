@@ -6,7 +6,8 @@ function freshDb(): Database {
   const db = new Database(":memory:")
   db.run(`CREATE TABLE device_push_tokens (
     device TEXT PRIMARY KEY, platform TEXT NOT NULL, token TEXT NOT NULL,
-    created_at TEXT NOT NULL, last_used_at TEXT)`)
+    created_at TEXT NOT NULL, last_used_at TEXT,
+    routing_token TEXT, device_pubkey TEXT)`)
   return db
 }
 
@@ -29,4 +30,10 @@ test("all returns every row; remove deletes one", () => {
   expect(s.all().length).toBe(2)
   s.remove("a")
   expect(s.all().map((r) => r.device)).toEqual(["b"])
+})
+
+test("putNative stores routingToken + pubkey and get returns them", () => {
+  const s = new DevicePushTokenStore(freshDb())
+  s.putNative("phone", "ios", "rt-123", "PUBKEY")
+  expect(s.get("phone")).toMatchObject({ platform: "ios", routing_token: "rt-123", device_pubkey: "PUBKEY" })
 })

@@ -25,6 +25,7 @@ import m017 from "./017_read_status_drafts.sql" with { type: "text" }
 import m018 from "./018_forge_connections.sql" with { type: "text" }
 import m019 from "./019_finish_job.sql" with { type: "text" }
 import m020 from "./020_internal_session.sql" with { type: "text" }
+import m021 from "./021_device_push_routing.sql" with { type: "text" }
 
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "001_init", sql: m001 },
@@ -46,4 +47,5 @@ export const MIGRATIONS: Migration[] = [
   { version: 18, name: "018_forge_connections", sql: m018 },
   { version: 19, name: "019_finish_job", sql: m019 },
   { version: 20, name: "020_internal_session", sql: m020 },
+  { version: 21, name: "021_device_push_routing", sql: m021 },
 ].sort((a, b) => a.version - b.version)

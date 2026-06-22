@@ -6,6 +6,8 @@ export interface DevicePushTokenRecord {
   token: string
   created_at: string
   last_used_at: string | null
+  routing_token: string | null
+  device_pubkey: string | null
 }
 
 export class DevicePushTokenStore {
@@ -19,6 +21,13 @@ export class DevicePushTokenStore {
          ON CONFLICT(device) DO UPDATE SET platform = excluded.platform, token = excluded.token`,
       )
       .run(device, platform, token, new Date().toISOString())
+  }
+
+  putNative(device: string, platform: "ios" | "android", routingToken: string, pubkey: string): void {
+    this.db.prepare(`INSERT INTO device_push_tokens (device, platform, token, routing_token, device_pubkey, created_at)
+      VALUES (?, ?, '', ?, ?, ?)
+      ON CONFLICT(device) DO UPDATE SET platform=excluded.platform, routing_token=excluded.routing_token, device_pubkey=excluded.device_pubkey`)
+      .run(device, platform, routingToken, pubkey, new Date().toISOString())
   }
 
   get(device: string): DevicePushTokenRecord | null {
