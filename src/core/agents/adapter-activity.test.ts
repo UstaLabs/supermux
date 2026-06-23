@@ -151,6 +151,24 @@ test("opencode failed -> detail from state.error", () => {
   expect(r).toMatchObject({ kind: "tool_result", title: "error", detail: "command not found: bad", callId: "oc6" })
 })
 
+test("opencode completed -> detail from state.content when output absent", () => {
+  const ev = { kind: "tool-call", tool: "bash", phase: "completed", call_id: "oc9", detail: { type: "tool", tool: "bash", callID: "oc9", state: { status: "completed", input: { command: "ls" }, title: "ls", content: [{ type: "text", text: "file1\nfile2" }] } } } as const
+  const [r] = toActivityEvents("opencode", ev, NOW)
+  expect(r).toMatchObject({ kind: "tool_result", title: "done", detail: "file1", callId: "oc9" })
+})
+
+test("opencode started -> summary from pending raw when input absent", () => {
+  const ev = { kind: "tool-call", tool: "bash", phase: "started", call_id: "oc10", detail: { type: "tool", tool: "bash", callID: "oc10", state: { status: "pending", raw: "npm install", input: {} } } } as const
+  const [r] = toActivityEvents("opencode", ev, NOW)
+  expect(r).toMatchObject({ kind: "tool", tool: "Bash", title: "Bash: npm install", detail: "npm install" })
+})
+
+test("opencode edit started -> Edit with filePath from state.input", () => {
+  const ev = { kind: "tool-call", tool: "edit", phase: "started", call_id: "oc11", detail: { type: "tool", tool: "edit", callID: "oc11", state: { status: "running", input: { filePath: "/src/main.ts" } } } } as const
+  const [r] = toActivityEvents("opencode", ev, NOW)
+  expect(r).toMatchObject({ kind: "tool", tool: "Edit", title: "Edit: /src/main.ts", detail: "/src/main.ts" })
+})
+
 // --- defensive ---
 
 test("defensive: missing detail -> no summary, no throw", () => {
