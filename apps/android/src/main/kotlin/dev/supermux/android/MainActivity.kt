@@ -278,6 +278,11 @@ class MainActivity : ComponentActivity() {
                                         validatePath = { vm.validatePath(it) },
                                         loadModels = { vm.launcherModels(it) },
                                         loadRepoInfo = { vm.launcherRepoInfo(it) },
+                                        loadForges = { vm.listForges() },
+                                        searchForge = { vm.searchForge(it) },
+                                        cloneForge = { cid, owner, name -> vm.cloneForge(cid, owner, name) },
+                                        createLocalRepo = { vm.createLocalRepo(it) },
+                                        createForge = { cid, name -> vm.createForge(cid, name) },
                                         onSubmit = { wd, ag, md, msg, wt, base ->
                                             vm.createSessionWithFirstMessage(wd, ag, md, msg, worktree = wt, baseBranch = base)
                                         },
@@ -294,6 +299,11 @@ class MainActivity : ComponentActivity() {
                                 validatePath = { vm.validatePath(it) },
                                 loadModels = { vm.launcherModels(it) },
                                 loadRepoInfo = { vm.launcherRepoInfo(it) },
+                                loadForges = { vm.listForges() },
+                                searchForge = { vm.searchForge(it) },
+                                cloneForge = { cid, owner, name -> vm.cloneForge(cid, owner, name) },
+                                createLocalRepo = { vm.createLocalRepo(it) },
+                                createForge = { cid, name -> vm.createForge(cid, name) },
                                 onSubmit = { wd, ag, md, msg, wt, base ->
                                     vm.createSessionWithFirstMessage(wd, ag, md, msg, worktree = wt, baseBranch = base)
                                 },
