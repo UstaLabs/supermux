@@ -147,6 +147,14 @@ data class CreateProxyResponse(
 @Serializable
 data class AddDeviceResponse(val url: String = "", val name: String = "")
 
+/** GET /me → paired status + optional relayUrl for native-push registration. */
+@Serializable
+data class MeResponse(
+    val paired: Boolean = false,
+    val device: String? = null,
+    val relayUrl: String? = null,
+)
+
 // ─── Usage (GET /usage → fetchAllUsage) ──────────────────────────────────────
 // `resetsAt` is an ISO string for Claude but epoch-seconds for Codex, so each
 // provider gets its own window type (kotlinx.serialization can't union them).
@@ -759,6 +767,21 @@ private data class AddForgeBody(
 
 @Serializable
 private data class ImportForgeBody(val kind: String, val transport: String = "https")
+
+/** POST $httpBase/push/device body. */
+@Serializable
+private data class RegisterPushDeviceBody(
+    val platform: String,
+    val routingToken: String,
+    val pubkey: String,
+)
+
+/** POST $relayUrl/register body. */
+@Serializable
+private data class RegisterPushRelayBody(
+    val platform: String,
+    val pushToken: String,
+)
 
 /** Empty JSON object body (`{}`) for POSTs that take no params but return data. */
 @Serializable
@@ -1385,6 +1408,38 @@ class BrokerApi(
     suspend fun stopDisplay(id: String) {
         http.delete("$httpBase/displays/${urlEncode(id)}") {
             header("Authorization", bearerHeader())
+        }
+    }
+
+    // ── Push registration ─────────────────────────────────────────────────────
+
+    /**
+     * GET /me → returns the `relayUrl` field (null when the broker is not configured
+     * with a relay URL or the response can't be decoded).
+     */
+    suspend fun pushRelayUrl(): String? =
+        getJson<MeResponse>("$httpBase/me").relayUrl
+
+    /**
+     * POST /push/device — registers this device with the broker after the app has
+     * received its `routingToken` from the relay bootstrap push.
+     * Body: `{platform, routingToken, pubkey}`.
+     */
+    suspend fun registerPushDevice(platform: String, routingToken: String, pubkey: String) =
+        postJson("$httpBase/push/device", RegisterPushDeviceBody(platform, routingToken, pubkey))
+
+    /**
+     * POST <relayUrl>/register — tells the relay to issue a bootstrap push that
+     * delivers the `routingToken` to this device (via FCM/APNs). The relay responds
+     * 202 Accepted; the actual routingToken arrives asynchronously in the push payload.
+     * Body: `{platform, pushToken}`.
+     */
+    suspend fun registerPushTokenWithRelay(relayUrl: String, platform: String, pushToken: String) {
+        val url = relayUrl.trimEnd('/') + "/register"
+        http.post(url) {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(RegisterPushRelayBody(platform, pushToken)))
         }
     }
 }

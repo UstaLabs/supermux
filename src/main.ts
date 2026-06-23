@@ -1037,6 +1037,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     fileStore,
     pushStore,
     deviceTokenStore,
+    relayUrl,
     vapidPublicKey: vapid.publicKey,
     viewingTracker,
     getReads: () => registry.sessions.allReads(),

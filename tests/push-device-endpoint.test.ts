@@ -83,3 +83,51 @@ test("DELETE /push/device removes the native token", async () => {
   expect(res.status).toBe(200)
   expect(deviceStore.get("iphone")).toBeNull()
 })
+
+test("GET /me returns relayUrl when channel is configured with one", async () => {
+  // Spin up a separate channel that has relayUrl set.
+  const tmpDir2 = mkdtempSync(join(tmpdir(), "cmux-me-relay-"))
+  try {
+    const devicesFile2 = join(tmpDir2, "devices.json")
+    const ds2 = new DeviceStore(devicesFile2)
+    const token2 = ds2.mint("iphone2").token
+
+    const ch2 = new WebChannel({
+      port: 0,
+      devicesFile: devicesFile2,
+      publicUrl: "http://127.0.0.1",
+      getSessionsSnapshot: () => [],
+      getSessionLog: () => [],
+      setMute: () => {},
+      onSendFromWeb: () => {},
+      deviceTokenStore: deviceStore,
+      relayUrl: "https://relay.example",
+    } as any)
+    await ch2.start()
+    const port2 = ch2.boundPort
+    try {
+      const res = await fetch(`http://127.0.0.1:${port2}/me`, {
+        headers: { Cookie: `cmux_token=${token2}` },
+      })
+      expect(res.status).toBe(200)
+      const body = await res.json() as any
+      expect(body.paired).toBe(true)
+      expect(body.relayUrl).toBe("https://relay.example")
+    } finally {
+      await ch2.stop()
+    }
+  } finally {
+    rmSync(tmpDir2, { recursive: true, force: true })
+  }
+})
+
+test("GET /me omits relayUrl when not configured", async () => {
+  const res = await fetch(`http://127.0.0.1:${port}/me`, {
+    headers: { Cookie: `cmux_token=${token}` },
+  })
+  expect(res.status).toBe(200)
+  const body = await res.json() as any
+  expect(body.paired).toBe(true)
+  // relayUrl should be absent (or undefined) when not configured
+  expect(body.relayUrl).toBeUndefined()
+})
