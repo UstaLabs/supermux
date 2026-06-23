@@ -50,6 +50,8 @@ import dev.supermux.android.settings.UsageScreen
 import dev.supermux.android.theme.LocalPanes
 import dev.supermux.android.theme.SupermuxTheme
 import dev.supermux.android.DevConfig
+import dev.supermux.android.push.PushPermission
+import dev.supermux.android.push.SupermuxMessagingService
 import dev.supermux.auth.SecureTokenStoreContext
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
@@ -62,6 +64,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         SecureTokenStoreContext.init(applicationContext)
+        // Native push: ensure the notification channel exists and ask for POST_NOTIFICATIONS
+        // (API 33+) so decrypted session pushes can be shown. Must run before the activity
+        // is STARTED, hence here in onCreate before setContent.
+        SupermuxMessagingService.ensureChannel(this)
+        PushPermission.request(this)
         enableEdgeToEdge()
         setContent {
             SupermuxTheme {

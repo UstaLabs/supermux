@@ -12,6 +12,8 @@ activityCompose = "1.9.3"
 lifecycle = "2.8.7"
 termlib = "0.0.35"
 skie = "0.10.12"
+firebaseBom = "33.7.0"
+googleServices = "4.4.2"
 
 [libraries]
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -39,6 +41,8 @@ compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
 compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
 compose-animation = { module = "androidx.compose.animation:animation" }
 termlib = { module = "org.connectbot:termlib", version.ref = "termlib" }
+firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }
+firebase-messaging = { module = "com.google.firebase:firebase-messaging" }
 
 [plugins]
 multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
@@ -48,3 +52,4 @@ android-library = { id = "com.android.library", version.ref = "agp" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 skie = { id = "co.touchlab.skie", version.ref = "skie" }
+google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }

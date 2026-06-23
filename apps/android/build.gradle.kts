@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.compose.compiler)
+    alias(libs.plugins.google.services)
 }
 android {
     namespace = "dev.supermux.android"
@@ -30,6 +31,11 @@ kotlin {
 }
 dependencies {
     implementation(project(":shared"))
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
+    implementation(libs.androidx.security.crypto)
+    implementation(libs.serialization.json)
+    implementation(libs.coroutines.core)
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.animation)
@@ -44,4 +50,6 @@ dependencies {
     implementation(libs.termlib)
     debugImplementation(libs.compose.ui.tooling)
     implementation(libs.compose.ui.tooling.preview)
+    testImplementation(kotlin("test"))
+    testImplementation(libs.coroutines.test)
 }
