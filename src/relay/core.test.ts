@@ -5,7 +5,7 @@ import { createRelayCore } from "./core"
 
 function mk() {
   const sent: any[] = []
-  const adapter = { send: (token: string, p: any) => { sent.push({ token, p }); return Promise.resolve({ ok: true as const }) } }
+  const adapter = { send: (token: string, p: any, opts?: any) => { sent.push({ token, p, opts }); return Promise.resolve({ ok: true as const }) } }
   const core = createRelayCore({ store: new RelayStore(new Database(":memory:")), apns: adapter, fcm: adapter, ratePerMin: 5 })
   return { core, sent }
 }
@@ -17,6 +17,12 @@ test("register mints a token and bootstrap-pushes it to the device", async () =>
   expect(sent).toHaveLength(1)
   expect(sent[0].token).toBe("apns-tok")
   expect(JSON.stringify(sent[0].p)).toContain(routingToken)
+})
+
+test("register sends bootstrap push silently (silent:true)", async () => {
+  const { core, sent } = mk()
+  await core.register("ios", "apns-tok")
+  expect(sent[0].opts).toEqual({ silent: true })
 })
 
 test("push forwards the ciphertext to the mapped device", async () => {

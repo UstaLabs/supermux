@@ -15,12 +15,13 @@ export function createFcmAdapter(deps: FcmDeps): PlatformPushAdapter {
     // `payload` is the relay's already-encrypted blob (`{ ciphertext }`), not the
     // broker-side PushPayload — we only reuse PlatformPushAdapter's shape here.
     // Data-only message (no `notification` key) so the client controls display.
-    async send(token, payload: any) {
+    // FCM data-only messages are inherently silent on Android; opts.silent is a no-op here.
+    async send(token, payload: any, _opts?: { silent?: boolean }) {
       const at = await deps.getAccessToken()
       const res = await f(`https://fcm.googleapis.com/v1/projects/${deps.projectId}/messages:send`, {
         method: "POST",
         headers: { authorization: `Bearer ${at}`, "content-type": "application/json" },
-        body: JSON.stringify({ message: { token, data: { d: payload.ciphertext } } }),
+        body: JSON.stringify({ message: { token, data: { d: payload.ciphertext }, android: { priority: "high" } } }),
       })
       if (res.status === 200) return { ok: true }
       const body = await res.text()

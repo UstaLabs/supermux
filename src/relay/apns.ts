@@ -90,7 +90,7 @@ export function createApnsAdapter(cfg: ApnsConfig, h2post: H2Post = defaultH2Pos
   return {
     // `payload` is the relay's already-encrypted blob (`{ ciphertext }`), not the
     // broker-side PushPayload — we only reuse PlatformPushAdapter's shape here.
-    async send(token, payload: any) {
+    async send(token, payload: any, opts?: { silent?: boolean }) {
       // A bad/misconfigured key shouldn't crash transport — log it and fall back
       // to an empty bearer (APNs will 403, mapped transient). A real `.p8` signs.
       const jwt = await providerJwt().catch((err) => {
@@ -98,17 +98,17 @@ export function createApnsAdapter(cfg: ApnsConfig, h2post: H2Post = defaultH2Pos
         return ""
       })
       const host = cfg.sandbox ? "api.sandbox.push.apple.com" : "api.push.apple.com"
-      const body = JSON.stringify({
-        aps: { alert: { title: "supermux", body: "" }, "mutable-content": 1 },
-        data: payload.ciphertext,
-      })
+      const isSilent = opts?.silent === true
+      const body = isSilent
+        ? JSON.stringify({ aps: { "content-available": 1 }, data: payload.ciphertext })
+        : JSON.stringify({ aps: { alert: { title: "supermux", body: "" }, "mutable-content": 1 }, data: payload.ciphertext })
       const res = await h2post({
         host,
         path: `/3/device/${token}`,
         headers: {
           authorization: `bearer ${jwt}`,
           "apns-topic": cfg.bundleId,
-          "apns-push-type": "alert",
+          "apns-push-type": isSilent ? "background" : "alert",
         },
         body,
       })

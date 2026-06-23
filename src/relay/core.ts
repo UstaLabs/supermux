@@ -39,7 +39,7 @@ export function createRelayCore(o: {
   return {
     async register(platform, pushToken) {
       const routingToken = o.store.register(platform, pushToken)
-      await adapterFor(platform).send(pushToken, { ciphertext: JSON.stringify({ kind: "bootstrap", routingToken }) } as any)
+      await adapterFor(platform).send(pushToken, { ciphertext: JSON.stringify({ kind: "bootstrap", routingToken }) } as any, { silent: true })
       return { routingToken, status: "pending" }
     },
     async push(routingToken, ciphertext) {
