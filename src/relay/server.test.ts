@@ -1,12 +1,14 @@
 import { expect, test } from "bun:test"
-import { Database } from "bun:sqlite"
-import { RelayStore } from "./store"
+import { randomBytes } from "node:crypto"
+import { createTokenCodec } from "./token-codec"
+import { createInMemoryRateLimiter } from "./rate-limiter"
 import { createRelayCore } from "./core"
 import { makeRelayHandler } from "./server"
 
 function handler() {
   const a = { send: () => Promise.resolve({ ok: true as const }) }
-  const core = createRelayCore({ store: new RelayStore(new Database(":memory:")), apns: a, fcm: a, ratePerMin: 100 })
+  const codec = createTokenCodec({ currentKeyId: "k1", keys: new Map([["k1", randomBytes(32)]]) })
+  const core = createRelayCore({ codec, apns: a, fcm: a, limiter: createInMemoryRateLimiter(), ttlSeconds: 3600, ratePerMin: 100, globalRatePerMin: 1000 })
   return makeRelayHandler(core)
 }
 const req = (path: string, body: any) => new Request("http://x" + path, { method: "POST", body: JSON.stringify(body) })

@@ -1,4 +1,5 @@
-import type { RelayStore } from "./store"
+import type { TokenCodec } from "./token-codec"
+import type { RateLimiter } from "./rate-limiter"
 import type { PlatformPushAdapter } from "../core/push/native-sender"
 
 export interface RelayCore {
@@ -6,51 +7,24 @@ export interface RelayCore {
   push(routingToken: string, ciphertext: string): Promise<{ ok: true } | { ok: false; gone: boolean }>
   unregister(routingToken: string): void
 }
-
 export function createRelayCore(o: {
-  store: RelayStore
-  apns: PlatformPushAdapter
-  fcm: PlatformPushAdapter
-  ratePerMin: number
-  globalRatePerMin?: number
+  codec: TokenCodec; apns: PlatformPushAdapter; fcm: PlatformPushAdapter; limiter: RateLimiter
+  ttlSeconds: number; ratePerMin: number; globalRatePerMin: number
 }): RelayCore {
-  const hits = new Map<string, number[]>()
-  const globalHits: number[] = []
-  const globalCap = o.globalRatePerMin ?? 6000
   const adapterFor = (p: "ios" | "android") => (p === "ios" ? o.apns : o.fcm)
-
-  function allowed(rt: string): boolean {
-    const now = Date.now(), win = hits.get(rt)?.filter((t) => now - t < 60_000) ?? []
-    if (win.length >= o.ratePerMin) { hits.set(rt, win); return false }
-    win.push(now); hits.set(rt, win); return true
-  }
-
-  function globalAllowed(): boolean {
-    const now = Date.now()
-    // Prune timestamps outside the 60s window in-place
-    let i = 0
-    while (i < globalHits.length && now - (globalHits[i] as number) >= 60_000) i++
-    globalHits.splice(0, i)
-    if (globalHits.length >= globalCap) return false
-    globalHits.push(now)
-    return true
-  }
-
   return {
     async register(platform, pushToken) {
-      const routingToken = o.store.register(platform, pushToken)
+      const routingToken = o.codec.seal({ platform, pushToken, ttlSeconds: o.ttlSeconds })
       await adapterFor(platform).send(pushToken, { ciphertext: JSON.stringify({ kind: "bootstrap", routingToken }) } as any, { silent: true })
       return { routingToken, status: "pending" }
     },
     async push(routingToken, ciphertext) {
-      const route = o.store.lookup(routingToken)
-      if (!route) return { ok: false, gone: true }
-      if (!allowed(routingToken)) return { ok: false, gone: false }
-      if (!globalAllowed()) return { ok: false, gone: false }
-      const res = await adapterFor(route.platform).send(route.pushToken, { ciphertext } as any)
-      if (res.ok === false && res.gone) o.store.unregister(routingToken)
-      return res
+      const r = o.codec.open(routingToken)
+      if (!r.ok) return { ok: false, gone: true }
+      if (!(await o.limiter.allow(routingToken, o.ratePerMin))) return { ok: false, gone: false }
+      if (!(await o.limiter.allow("__global__", o.globalRatePerMin))) return { ok: false, gone: false }
+      return adapterFor(r.platform).send(r.pushToken, { ciphertext } as any)
     },
-    unregister(routingToken) { o.store.unregister(routingToken) },
+    unregister() { /* stateless: nothing to delete; tokens expire via TTL */ },
   }
 }
