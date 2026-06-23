@@ -58,6 +58,11 @@ export async function connectShim(opts: ShimClientOpts): Promise<ShimClient> {
           log.info("shim_call_response_received", { call_id: m.call_id, ok: m.ok, mono_ns: process.hrtime.bigint().toString() })
           const resolver = pending.get(m.call_id)
           if (resolver) { pending.delete(m.call_id); resolver({ ok: m.ok, value: m.value, error: m.error }) }
+        } else if (m.kind === "ping") {
+          // Reply so the broker's heartbeat sees us alive. Without this the broker's
+          // lastPong goes stale (>45s) and it marks the session disconnected, after
+          // which every inbound eats waitForSessionConnected's full 10s timeout.
+          s.write(encodeFrame({ kind: "pong" }))
         } else if (m.kind === "pong") {
           // ignore — heartbeat tracking lives broker-side
         }
