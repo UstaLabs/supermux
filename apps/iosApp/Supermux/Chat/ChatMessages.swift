@@ -123,6 +123,7 @@ struct AttachmentView: View {
                 ) { p in
                     Task { @MainActor in progress = p }
                 }
+                // Download finished → present Quick Look immediately (setting previewURL auto-opens it).
                 await MainActor.run { downloading = false; fileURL = u; previewURL = u }
             } catch {
                 await MainActor.run { downloading = false; failed = true }
@@ -147,7 +148,6 @@ struct AttachmentView: View {
         return url
     }
 }
-
 
 /// Camera capture → UIImage (device only; needs NSCameraUsageDescription).
 struct CameraPicker: UIViewControllerRepresentable {
