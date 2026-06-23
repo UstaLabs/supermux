@@ -62,11 +62,21 @@ struct PaneVisibility: Codable, Equatable {
 
     /// UserDefaults key for the per-session pane-visibility map (JSON `[sessionId: PaneVisibility]`).
     @ObservationIgnored private static let panesKey = "ipad.panes.v1"
+    /// UserDefaults key for the per-session main-view map (JSON `[sessionId: Bool]`, true = native).
+    @ObservationIgnored private static let nativeMainKey = "ipad.nativeMain.v1"
 
     /// Per-session open/closed pane state (PWA `panels[sessionId]`). Assigned as a whole new
     /// dict on mutation so `@Observable` tracks reads of `panes(for:)` in views; persisted to
     /// UserDefaults on every write. Defaults to empty — an unseen session reads a fresh default.
     private var panes: [String: PaneVisibility]
+
+    /// Per-session main-view mode (PWA `panel.mainView`): false = chat transcript, true = the
+    /// agent's native terminal in the main column. Kept in its OWN map (not folded into
+    /// `PaneVisibility`) so adding it can't break the Codable decode of an already-persisted
+    /// `ipad.panes.v1` blob, and so the view mode stays orthogonal to which work panes are open
+    /// (matching the PWA, where `mainView` is independent of `terminalOpen/editorOpen/displayOpen`).
+    /// Assigned as a whole new dict on mutation so `@Observable` tracks `nativeView(for:)` reads.
+    private var nativeMain: [String: Bool]
 
     /// The open-pane state for `sessionId`, or a fresh default (chat on, work panes off) if the
     /// session has never had its panes touched. Read-only — does NOT insert; use `setPanes` to store.
@@ -85,6 +95,20 @@ struct PaneVisibility: Codable, Equatable {
         if let data = try? JSONEncoder().encode(panes) { store.set(data, forKey: Self.panesKey) }
     }
 
+    /// Whether `sessionId`'s main column shows the native agent terminal (true) or the chat
+    /// transcript (false). Defaults to chat for an unseen session (PWA `mainView: "chat"`).
+    /// Read-only — does NOT insert; use `setNativeView` to store.
+    func nativeView(for sessionId: String) -> Bool { nativeMain[sessionId] ?? false }
+
+    /// Sets `sessionId`'s main-view mode and persists the whole map. Assigning a brand-new dict
+    /// (rather than mutating in place) is what lets `@Observable` see the change and re-render.
+    func setNativeView(_ on: Bool, for sessionId: String) {
+        var next = nativeMain
+        next[sessionId] = on
+        nativeMain = next
+        if let data = try? JSONEncoder().encode(nativeMain) { store.set(data, forKey: Self.nativeMainKey) }
+    }
+
     init(store: UserDefaults = .standard) {
         self.store = store
         chatPct = Self.load(store, "ipad.split.chatPct", B.chat.def, B.chat.min, B.chat.max)
@@ -99,6 +123,13 @@ struct PaneVisibility: Codable, Equatable {
             panes = decoded
         } else {
             panes = [:]
+        }
+        // Decode the per-session main-view map; absent/corrupt → empty (every session reads chat).
+        if let data = store.data(forKey: Self.nativeMainKey),
+           let decoded = try? JSONDecoder().decode([String: Bool].self, from: data) {
+            nativeMain = decoded
+        } else {
+            nativeMain = [:]
         }
     }
 
