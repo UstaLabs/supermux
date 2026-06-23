@@ -172,7 +172,12 @@ export function sanitizeAppConfigPatch(input: unknown): Partial<AppConfig> {
     if (t) out.tunnel = t
   }
   if (typeof o.voiceCleanupEngine === "string" && (ENGINES as string[]).includes(o.voiceCleanupEngine)) out.voiceCleanupEngine = o.voiceCleanupEngine
-  if (typeof o.voiceCleanupModel === "string") out.voiceCleanupModel = o.voiceCleanupModel
+  // "" is a reset sentinel: it maps to undefined so the sparse merge in
+  // SettingsStore.setAppConfig CLEARS a previously-stored model (reverting to the
+  // engine's own default) instead of persisting an empty, broken model id. This is
+  // how a client resets "Cleanup model → Default" and how switching engines drops
+  // a stale, engine-specific model.
+  if (typeof o.voiceCleanupModel === "string") out.voiceCleanupModel = o.voiceCleanupModel || undefined
   if (o.voiceCleanupGlossary !== undefined) {
     const g = parseGlossary(o.voiceCleanupGlossary)
     if (g !== undefined) out.voiceCleanupGlossary = g

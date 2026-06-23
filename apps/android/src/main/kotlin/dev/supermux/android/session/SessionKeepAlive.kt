@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -70,9 +71,11 @@ fun SessionKeepAlivePhoneHost(
     activityMap: Map<String, List<ActivityEvent>>,
     agentState: Map<String, AgentStatus?>,
     commands: Map<String, List<SlashCommand>>,
+    commandsResolved: Map<String, Boolean>,
     lastBySession: Map<String, LogEntry?>,
     vm: AppViewModel,
     onNavigate: (String) -> Unit,
+    onOpenDisplays: () -> Unit,
 ) {
     SharedTransitionLayout {
         Box(Modifier.fillMaxSize()) {
@@ -87,6 +90,7 @@ fun SessionKeepAlivePhoneHost(
                         activity = activityMap[sessionId] ?: emptyList(),
                         agent = agentState[sessionId],
                         commands = commands[sessionId] ?: emptyList(),
+                        commandsResolved = commandsResolved[sessionId] ?: false,
                         vm = vm,
                         onBack = onClearSelected,
                         onKill = {
@@ -95,6 +99,7 @@ fun SessionKeepAlivePhoneHost(
                                 if (selected == sessionId) onClearSelected()
                             }
                         },
+                        onOpenDisplays = onOpenDisplays,
                         sharedScope = this@SharedTransitionLayout,
                         animScope = null,
                     )
@@ -155,7 +160,9 @@ fun SessionKeepAliveTabletHost(
     activityMap: Map<String, List<ActivityEvent>>,
     agentState: Map<String, AgentStatus?>,
     commands: Map<String, List<SlashCommand>>,
+    commandsResolved: Map<String, Boolean>,
     vm: AppViewModel,
+    onOpenDisplays: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier.fillMaxSize()) {
@@ -173,6 +180,7 @@ fun SessionKeepAliveTabletHost(
                     activity = activityMap[sessionId] ?: emptyList(),
                     agent = agentState[sessionId],
                     commands = commands[sessionId] ?: emptyList(),
+                    commandsResolved = commandsResolved[sessionId] ?: false,
                     vm = vm,
                     onBack = {},
                     onKill = {
@@ -180,6 +188,7 @@ fun SessionKeepAliveTabletHost(
                             onRemoveVisited(sessionId)
                         }
                     },
+                    onOpenDisplays = onOpenDisplays,
                     sharedScope = null,
                     animScope = null,
                 )
@@ -197,14 +206,21 @@ private fun SessionChatLayer(
     activity: List<ActivityEvent>,
     agent: AgentStatus?,
     commands: List<SlashCommand>,
+    commandsResolved: Boolean,
     vm: AppViewModel,
     onBack: () -> Unit,
     onKill: () -> Unit,
+    onOpenDisplays: () -> Unit,
     sharedScope: SharedTransitionScope?,
     animScope: AnimatedVisibilityScope?,
 ) {
     var gestureProgress by remember(session.id) { mutableFloatStateOf(0f) }
     var editorConsumesBack by remember(session.id) { mutableStateOf(false) }
+
+    // Collect the finish-job flow once at this layer (consistent with messages/activity/agent);
+    // the per-session value drives ChatScreen's Finish button + sheet.
+    val finishJobs by vm.finishJobs.collectAsState()
+    val finishJob = finishJobs[session.id]
 
     if (visible) {
         BackHandler(enabled = !editorConsumesBack) { onBack() }
@@ -238,6 +254,9 @@ private fun SessionChatLayer(
             onBack = onBack,
             onSendWith = { text, atts -> vm.sendWith(session.id, text, atts) },
             onUpload = { bytes, name, mime, kind -> vm.upload(session.id, bytes, name, mime, kind) },
+            transcribeAudio = { bytes, name -> vm.transcribeAudio(session.id, bytes, name) },
+            transcribeDraft = { draft -> vm.transcribeDraft(session.id, draft) },
+            loadGlossary = { vm.fetchGlossary() },
             onRename = { vm.rename(session.id, it) },
             onMute = { vm.setMute(session.id, it) },
             onKill = onKill,
@@ -246,16 +265,49 @@ private fun SessionChatLayer(
             onPickModel = { vm.switchModel(session.id, it) },
             onPickEffort = { vm.switchReasoning(session.id, it) },
             commands = commands,
+            commandsResolved = commandsResolved,
+            onInterrupt = { vm.interrupt(session.id) },
+            loadDraft = { vm.loadDraft(it) },
+            saveDraft = { id, t -> vm.saveDraft(id, t) },
             loadBytes = { vm.fileBytes(it) },
             fsList = { vm.fsList(session.id, it) },
             fsRead = { vm.fsRead(session.id, it) },
             fsWrite = { p, ct -> vm.fsWrite(session.id, p, ct) },
             fsSearch = { vm.fsSearch(session.id, it) },
+            // Editor diff + inline code-review (bound to this session).
+            fsDiff = { vm.fsDiff(session.id) },
+            reviewAddComment = { body -> vm.reviewAddComment(session.id, body) },
+            reviewResolve = { commentId -> vm.reviewResolve(session.id, commentId) },
+            reviewSubmit = { vm.reviewSubmit(session.id) },
+            // Editor LSP + live file-watch — app-wide flows + session-bound senders.
+            fsChanges = vm.fsChanges,
+            lspStatus = vm.lspStatus,
+            lspRpc = vm.lspRpc,
+            editorOpen = { vm.editorOpen(it) },
+            editorClose = { vm.editorClose(it) },
+            lspStatusQuery = { s, p -> vm.lspStatusQuery(s, p) },
+            lspOpen = { s, sid -> vm.lspOpen(s, sid) },
+            lspRpcOut = { s, sid, m -> vm.lspRpcOut(s, sid, m) },
+            lspClose = { s, sid -> vm.lspClose(s, sid) },
             connectTerminal = { vm.connectTerminal(session.id) },
+            connectAgentTerminal = { vm.connectAgentTerminal(session.id) },
             listDisplays = { vm.listDisplays() },
             connectScrcpy = { vm.connectScrcpy(it) },
+            connectVnc = { vm.connectVnc(it) },
+            displays = vm.displays,
+            onStartDisplay = { vm.startDisplay(session.name) },
+            onOpenDisplays = onOpenDisplays,
             consumePendingFirst = { vm.consumePendingFirst(it) },
             onEditorConsumesBackChange = { editorConsumesBack = it },
+            finishJob = finishJob,
+            onFinishReadiness = { vm.finishReadiness(session.id) },
+            onFinish = { action, skipVerify, commitFirst, commitMessage, onKickoff ->
+                vm.finish(session.id, action, skipVerify, commitFirst, commitMessage, onKickoff = onKickoff)
+            },
+            onClearFinishJob = { vm.clearFinishJob(session.id) },
+            onVerifySuggest = { vm.verifySuggest(session.id) },
+            onVerifySave = { vm.verifySave(session.id, it) },
+            onSendToAgent = { vm.sendMessage(session.id, it) },
             sharedScope = sharedScope,
             animScope = animScope,
         )

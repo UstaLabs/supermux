@@ -192,6 +192,8 @@ export interface WebChannelOpts {
   getAgentLogin?: (kind: string) => import("../../core/agents/login/session").LoginState | undefined
   cancelAgentLogin?: (kind: string) => void
   sendAgentLoginCode?: (kind: string, code: string) => void
+  startAgentInstall?: (kind: string) => { job: import("../../core/agents/install").InstallJob; alreadyRunning: boolean }
+  getAgentInstall?: (kind: string) => import("../../core/agents/install").InstallJob | undefined
   listOpenCodeProviders?: () => Promise<import("../../core/agents/opencode/auth-ops").OpenCodeProviderInfo[]>
   setOpenCodeApiKey?: (providerId: string, key: string) => Promise<void>
   startOpenCodeOAuth?: (providerId: string, method: number) => Promise<{ url: string; instructions?: string }>
@@ -1462,6 +1464,23 @@ export class WebChannel implements Channel {
       if (!body.code) return this.json({ error: "code required" }, 400)
       this.opts.sendAgentLoginCode?.(kind, body.code)
       return this.json({ ok: true })
+    }
+
+    // ── agent install (broker shells out to the agent's official installer) ──
+    if (method === "POST" && path.match(/^\/agents\/[^/]+\/install$/)) {
+      const kind = decodeURIComponent(path.split("/")[2]!)
+      if (!this.opts.startAgentInstall) return this.json({ error: "install unavailable" }, 503)
+      if (!isAgentKind(kind)) return this.json({ error: `unknown agent: ${kind}` }, 400)
+      const { job, alreadyRunning } = this.opts.startAgentInstall(kind)
+      // 409 (with the live job) when one is already running, so the client can
+      // just resume polling instead of starting a duplicate.
+      return this.json(job, alreadyRunning ? 409 : 200)
+    }
+    if (method === "GET" && path.match(/^\/agents\/[^/]+\/install$/)) {
+      const kind = decodeURIComponent(path.split("/")[2]!)
+      const job = this.opts.getAgentInstall?.(kind)
+      if (!job) return this.json({ error: "no install in progress" }, 404)
+      return this.json(job)
     }
 
     // ── opencode provider auth (multi-provider: OAuth browser login + API key) ──

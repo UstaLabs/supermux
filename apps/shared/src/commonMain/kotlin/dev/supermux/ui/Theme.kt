@@ -30,3 +30,25 @@ fun supermuxDark(): SupermuxColors = SupermuxColors(
     terminalForeground = 0xFFD8DED3.toInt(),
     warning = oklchToArgb(0.78, 0.12, 75.0),
 )
+
+/** Resolved ARGB colour tokens — mirror of web-app/src/style.css :root (light). */
+fun supermuxLight(): SupermuxColors = SupermuxColors(
+    background = oklchToArgb(0.955, 0.006, 115.0),
+    foreground = oklchToArgb(0.19, 0.008, 130.0),
+    card = oklchToArgb(0.995, 0.004, 105.0),
+    primary = oklchToArgb(0.49, 0.105, 185.0),
+    primaryForeground = oklchToArgb(0.985, 0.01, 180.0),
+    muted = oklchToArgb(0.91, 0.008, 115.0),
+    mutedForeground = oklchToArgb(0.51, 0.014, 130.0),
+    border = oklchToArgb(0.86, 0.01, 110.0),
+    destructive = oklchToArgb(0.54, 0.19, 27.0),
+    rail = oklchToArgb(0.925, 0.007, 115.0),
+    sessionList = oklchToArgb(0.94, 0.007, 115.0),
+    header = oklchToArgb(0.995, 0.004, 105.0),
+    chat = oklchToArgb(0.965, 0.006, 115.0),
+    workspace = oklchToArgb(0.95, 0.006, 115.0),
+    code = oklchToArgb(0.995, 0.004, 105.0),
+    terminal = 0xFF141511.toInt(),
+    terminalForeground = 0xFFD8DED3.toInt(),
+    warning = oklchToArgb(0.66, 0.13, 75.0),
+)

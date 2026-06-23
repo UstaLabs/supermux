@@ -37,11 +37,14 @@ class EditorEngine(
     private val fontSize: Int,
     onChange: (String) -> Unit,
     onSave: () -> Unit,
+    onLspOut: (String) -> Unit = {},
 ) {
     private val appContext = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
     private val onChangeS = mutableStateOf(onChange)
     private val onSaveS = mutableStateOf(onSave)
+    /** Outbound LSP JSON-RPC string `{serverId,message}` posted by cm6's LSPClient. */
+    private val onLspOutS = mutableStateOf(onLspOut)
 
     var ready by mutableStateOf(false)
         private set
@@ -52,9 +55,10 @@ class EditorEngine(
     private var lastContent = ""
     private var lastFilename = ""
 
-    fun updateCallbacks(onChange: (String) -> Unit, onSave: () -> Unit) {
+    fun updateCallbacks(onChange: (String) -> Unit, onSave: () -> Unit, onLspOut: (String) -> Unit = onLspOutS.value) {
         onChangeS.value = onChange
         onSaveS.value = onSave
+        onLspOutS.value = onLspOut
     }
 
     fun obtainWebView(): WebView {
@@ -123,9 +127,21 @@ class EditorEngine(
                     }
                 }
             }, "AndroidEditor")
+            // LSP out channel. cm6's LSPClient posts `{serverId,message}` via the (iOS-only)
+            // `window.webkit.messageHandlers.lsp.postMessage`; the document-start shim below
+            // routes that to this @JavascriptInterface. Callbacks arrive on the WebView JS
+            // thread → hop to main (same pattern as AndroidEditor above).
+            addJavascriptInterface(object {
+                @JavascriptInterface fun lspOut(payload: String) { main.post { onLspOutS.value.invoke(payload) } }
+            }, "AndroidLsp")
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     Log.d("EditorEngine", "onPageFinished $url")
+                    // CRITICAL: install the WebKit-shaped LSP bridge BEFORE cmInit runs, so the
+                    // bundle's `window.webkit.messageHandlers.lsp` gate (cm6-entry.mjs:214)
+                    // resolves on Android and cmLspConnect does not early-return. The payload `s`
+                    // is already JSON.stringify({serverId,message}); forward it verbatim.
+                    view?.evaluateJavascript(LSP_BRIDGE_SHIM, null)
                     view?.evaluateJavascript(
                         "cmInit(${q(lastContent)}, ${q(lastFilename)}, $lineWrap, $fontSize)",
                     ) { r -> Log.d("EditorEngine", "cmInit returned: $r") }
@@ -161,7 +177,39 @@ class EditorEngine(
         view.evaluateJavascript("cmSetScrollTop($scrollTop)", null)
     }
 
+    // ── LSP bridge (mirrors cmSet* — drives the cm6 LSPClient over the shim) ────
+
+    /** Connect the cm6 LSP client for the active file. No-op until [ready] (the WebView's
+     *  cmLspConnect needs the editor view + the shim, both present after onPageFinished). */
+    fun lspConnect(serverId: String, rootUri: String, fileUri: String, languageId: String) {
+        webView?.evaluateJavascript(
+            "window.cmLspConnect(${q(serverId)},${q(rootUri)},${q(fileUri)},${q(languageId)})",
+            null,
+        )
+    }
+
+    /** Deliver an inbound JSON-RPC message string to the cm6 LSP client for [serverId]. */
+    fun lspMessage(serverId: String, message: String) {
+        webView?.evaluateJavascript("window.cmLspMessage(${q(serverId)},${q(message)})", null)
+    }
+
+    /** Tear down all cm6 LSP connections and revert to a plain editor. */
+    fun lspDisconnect() {
+        webView?.evaluateJavascript("window.cmLspDisconnect && window.cmLspDisconnect()", null)
+    }
+
     private fun q(s: String): String = JSONObject.quote(s)
+
+    companion object {
+        /** Maps WebKit's iOS-only `window.webkit.messageHandlers.lsp.postMessage` onto the
+         *  Android `AndroidLsp` @JavascriptInterface so the shared cm6 bundle's LSP gate
+         *  (cm6-entry.mjs:214) resolves without a rebuild. */
+        private const val LSP_BRIDGE_SHIM = """
+            window.webkit = window.webkit || {};
+            window.webkit.messageHandlers = window.webkit.messageHandlers || {};
+            window.webkit.messageHandlers.lsp = { postMessage: function (s) { window.AndroidLsp.lspOut(s); } };
+        """
+    }
 }
 
 @Composable
@@ -170,14 +218,16 @@ fun rememberEditorEngine(
     fontSize: Int,
     onChange: (String) -> Unit,
     onSave: () -> Unit,
+    onLspOut: (String) -> Unit = {},
 ): EditorEngine {
     val context = androidx.compose.ui.platform.LocalContext.current
     val onChangeS = rememberUpdatedState(onChange)
     val onSaveS = rememberUpdatedState(onSave)
+    val onLspOutS = rememberUpdatedState(onLspOut)
     val engine = remember(lineWrap, fontSize) {
-        EditorEngine(context, lineWrap, fontSize, onChangeS.value, onSaveS.value)
+        EditorEngine(context, lineWrap, fontSize, onChangeS.value, onSaveS.value, onLspOutS.value)
     }
-    engine.updateCallbacks(onChangeS.value, onSaveS.value)
+    engine.updateCallbacks(onChangeS.value, onSaveS.value, onLspOutS.value)
     DisposableEffect(engine) {
         onDispose { engine.destroy() }
     }

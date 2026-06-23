@@ -5,7 +5,12 @@ package dev.supermux.auth
 // never ship as the iOS auth store.
 actual class SecureTokenStore actual constructor() {
     private var token: String? = null
+    private var baseUrl: String? = null
     actual fun save(token: String) { this.token = token }
     actual fun load(): String? = token
-    actual fun clear() { token = null }
+    actual fun clear() { token = null; baseUrl = null }
+    // Unused on iOS (BrokerConfig stores the base URL in UserDefaults; KeychainStore
+    // holds the token) — present only to satisfy the expect for all targets.
+    actual fun saveBaseUrl(url: String) { this.baseUrl = url }
+    actual fun loadBaseUrl(): String? = baseUrl
 }

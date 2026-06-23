@@ -18,20 +18,25 @@ struct OptionSwitchSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                if loading { HStack { Spacer(); ProgressView(); Spacer() } }
-                ForEach(options) { o in
-                    Button {
-                        if kind == .model { broker.switchModel(session.id, o.id) }
-                        else { broker.switchReasoning(session.id, o.id) }
-                        dismiss()
-                    } label: {
-                        HStack {
-                            Text(o.label)
-                            Spacer()
-                            if o.id == current { Image(systemName: "checkmark").foregroundStyle(Theme.teal) }
+                if loading {
+                    HStack { Spacer(); ProgressView(); Spacer() }
+                } else if options.isEmpty {
+                    Text("No models available").foregroundStyle(.secondary)
+                } else {
+                    ForEach(options) { o in
+                        Button {
+                            if kind == .model { broker.switchModel(session.id, o.id) }
+                            else { broker.switchReasoning(session.id, o.id) }
+                            dismiss()
+                        } label: {
+                            HStack {
+                                Text(o.label)
+                                Spacer()
+                                if o.id == current { Image(systemName: "checkmark").foregroundStyle(Theme.teal) }
+                            }
                         }
+                        .foregroundStyle(.primary)
                     }
-                    .foregroundStyle(.primary)
                 }
             }
             .navigationTitle(title).navigationBarTitleDisplayMode(.inline)

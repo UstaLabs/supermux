@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue"
 import { Check, Link, Key, X, Copy, Settings, ChevronDown } from "lucide-vue-next"
-import { api } from "@/api/client"
+import { api, type InstallJob } from "@/api/client"
 import AgentLogo from "@/components/AgentLogo.vue"
 import OpenCodeProviderAuth from "@/components/OpenCodeProviderAuth.vue"
 import { Button } from "@/components/ui/button"
@@ -177,11 +177,64 @@ async function copyToClipboard(text: string) {
   } catch {}
 }
 
+// ── agent install ────────────────────────────────────────────────────────────
+// The broker shells out to the agent's official installer (non-interactively).
+// We kick it off, then poll progress on a separate timer from the login poller.
+const installStates = ref<Record<string, InstallJob>>({})
+const installPolls = ref<Record<string, ReturnType<typeof setInterval>>>({})
+
+function stopInstallPoll(kind: string) {
+  const id = installPolls.value[kind]
+  if (id !== undefined) {
+    clearInterval(id)
+    const next = { ...installPolls.value }
+    delete next[kind]
+    installPolls.value = next
+  }
+}
+
+async function installAgent(kind: string) {
+  stopInstallPoll(kind)
+  installStates.value = { ...installStates.value, [kind]: { state: "running", log: "", exitCode: null } }
+  try {
+    const job = await api.startAgentInstall(kind)
+    installStates.value = { ...installStates.value, [kind]: job }
+    const intervalId = setInterval(async () => {
+      try {
+        const j = await api.getAgentInstall(kind)
+        installStates.value = { ...installStates.value, [kind]: j }
+        if (j.state !== "running") {
+          stopInstallPoll(kind)
+          if (j.state === "done") {
+            toast.success(`${kind} installed`)
+            const next = { ...installStates.value }
+            delete next[kind]
+            installStates.value = next
+            await refresh() // re-detect → row flips to installed, normal UI appears
+          } else {
+            toast.error(`${kind} install failed`)
+          }
+        }
+      } catch (e: any) {
+        stopInstallPoll(kind)
+        toast.error(e?.message ?? "Install poll error")
+      }
+    }, 1000)
+    installPolls.value = { ...installPolls.value, [kind]: intervalId }
+  } catch (e: any) {
+    installStates.value = { ...installStates.value, [kind]: { state: "failed", log: e?.message ?? String(e), exitCode: null } }
+    toast.error(e?.message ?? `Failed to start ${kind} install`)
+  }
+}
+
 onMounted(refresh)
 
 onUnmounted(() => {
   for (const kind of Object.keys(pollIntervals.value)) {
     stopPoll(kind)
+  }
+  for (const kind of Object.keys(installPolls.value)) {
+    stopInstallPoll(kind)
   }
 })
 </script>
@@ -213,6 +266,15 @@ onUnmounted(() => {
           </div>
           <div class="flex items-center gap-2 shrink-0">
             <span v-if="s.authed" class="text-[11px] text-emerald-400 font-medium">Ready</span>
+            <Button
+              v-if="!s.installed"
+              size="sm"
+              variant="outline"
+              :disabled="installStates[s.kind]?.state === 'running'"
+              @click="installAgent(s.kind)"
+            >
+              {{ installStates[s.kind]?.state === 'running' ? 'Installing…' : 'Install' }}
+            </Button>
             <button
               type="button"
               class="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition flex items-center gap-1"
@@ -227,8 +289,26 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- opencode is multi-provider: surface the provider connect UI (OAuth + key) -->
-        <div v-if="s.kind === 'opencode' && isConfigOpen(s)" class="px-4 pb-4 border-t border-border pt-3">
+        <!-- Install progress / failure (broker is running the official installer) -->
+        <div v-if="installStates[s.kind]" class="px-4 pb-4 border-t border-border pt-3 space-y-2">
+          <div v-if="installStates[s.kind]!.state === 'running'" class="flex items-center gap-2 text-xs text-muted-foreground">
+            <span class="size-3.5 border-2 border-muted-foreground/30 border-t-muted-foreground rounded-full animate-spin shrink-0" />
+            Installing {{ s.kind }} on the broker…
+          </div>
+          <div v-else-if="installStates[s.kind]!.state === 'failed'" class="space-y-1.5">
+            <p class="text-xs text-red-400">Install failed.</p>
+            <Button size="sm" variant="outline" @click="installAgent(s.kind)">Retry</Button>
+          </div>
+          <pre
+            v-if="installStates[s.kind]!.log"
+            class="text-[10px] leading-snug p-2 bg-background border border-border rounded-md font-mono max-h-32 overflow-auto whitespace-pre-wrap"
+          >{{ installStates[s.kind]!.log.slice(-2000) }}</pre>
+        </div>
+
+        <!-- opencode is multi-provider: surface the provider connect UI (OAuth + key).
+             Gated on `installed` so a not-installed opencode never triggers a control-
+             server spawn (the 45s hang behind the 502/500). -->
+        <div v-if="s.kind === 'opencode' && isConfigOpen(s) && s.installed" class="px-4 pb-4 border-t border-border pt-3">
           <OpenCodeProviderAuth />
         </div>
 

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -40,7 +41,7 @@ fun EditorTabs(
     onClose: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     val haptic = rememberHaptics()
     val scroll = rememberScrollState()
 
@@ -49,7 +50,7 @@ fun EditorTabs(
     Row(
         modifier
             .fillMaxWidth()
-            .background(Color(c.sessionList))
+            .background(cs.surfaceContainerHigh)
             .horizontalScroll(scroll)
             .padding(horizontal = Space.sm, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -91,11 +92,12 @@ private fun TabChip(
     haptic: (HapticKind) -> Unit,
 ) {
     val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     Row(
         Modifier
             .height(28.dp)
             .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
-            .background(if (active) Color(c.card) else Color.Transparent)
+            .background(if (active) cs.surfaceContainer else Color.Transparent)
             .clickable(enabled = !loading) {
                 haptic(HapticKind.Tick)
                 onSelect()
@@ -109,7 +111,7 @@ private fun TabChip(
                 androidx.compose.material3.CircularProgressIndicator(
                     modifier = Modifier.size(10.dp),
                     strokeWidth = 1.5.dp,
-                    color = Color(c.mutedForeground),
+                    color = cs.onSurfaceVariant,
                 )
             }
             dirty -> {
@@ -117,13 +119,13 @@ private fun TabChip(
                     Modifier
                         .size(6.dp)
                         .clip(RoundedCornerShape(999.dp))
-                        .background(Color(0xFFFBBF24)),
+                        .background(Color(c.warning)),
                 )
             }
         }
         Text(
             label,
-            color = if (active) Color(c.foreground) else Color(c.mutedForeground),
+            color = if (active) cs.onSurface else cs.onSurfaceVariant,
             fontFamily = MonoFontFamily,
             fontSize = 12.sp,
             maxLines = 1,
@@ -133,7 +135,7 @@ private fun TabChip(
             Icon(
                 painter = painterResource(R.drawable.ic_x),
                 contentDescription = "Close",
-                tint = Color(c.mutedForeground).copy(alpha = 0.7f),
+                tint = cs.onSurfaceVariant.copy(alpha = 0.7f),
                 modifier = Modifier
                     .size(14.dp)
                     .clickable {

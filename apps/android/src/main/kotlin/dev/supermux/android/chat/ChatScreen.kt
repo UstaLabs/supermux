@@ -9,9 +9,14 @@ import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -41,29 +46,40 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ReasoningResponse
 import kotlinx.coroutines.Dispatchers
@@ -73,22 +89,28 @@ import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.core.content.FileProvider
+import java.io.File
+import dev.supermux.android.DevConfig
 import dev.supermux.android.R
+import dev.supermux.android.theme.Radii
+import dev.supermux.util.formatDuration
 import dev.supermux.android.display.DisplayPanel
 import dev.supermux.android.ui.keepAlivePanel
 import dev.supermux.android.editor.EditorPanel
 import dev.supermux.android.terminal.TerminalPanel
 import dev.supermux.android.session.SessionAvatar
 import dev.supermux.android.theme.HapticKind
-import dev.supermux.android.theme.LocalPanes
 import dev.supermux.android.theme.Space
 import dev.supermux.android.theme.rememberHaptics
 import dev.supermux.proto.ActivityEvent
@@ -97,7 +119,23 @@ import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 
-enum class SessionPanel { Chat, Editor, Terminal, Display }
+enum class SessionPanel { Chat, Native, Editor, Terminal, Display }
+
+/** Phases where the agent is busy → show the working indicator (iOS workingIndicator gate). */
+private val WORKING_PHASES = setOf("working", "thinking", "running", "tool", "busy", "sending")
+
+/**
+ * Active "/command" token at the END of the draft (cursor assumed at end), at line start or
+ * after whitespace — mirrors iOS slashQuery (ChatPane.swift:508). Group 1 is the slash token.
+ */
+private val slashTokenRegex = Regex("""(?:^|\s)(/\S*)$""")
+
+/** Stable list key for timeline diffing so the optimistic→real id swap (§9) doesn't flicker. */
+private fun timelineItemKey(item: TimelineItem): String = when (item) {
+    is TimelineItem.Msg -> "m:${item.entry.id}"
+    is TimelineItem.Tool -> "t:${item.event.callId ?: "${item.event.kind}:${item.event.seq}:${item.event.ts}"}"
+    is TimelineItem.Act -> "a:${item.event.seq ?: -1}:${item.event.ts}"
+}
 
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
@@ -109,6 +147,9 @@ fun ChatScreen(
     onBack: () -> Unit,
     onSendWith: (text: String, attachments: List<String>) -> Unit,
     onUpload: suspend (bytes: ByteArray, name: String, mime: String, kind: String?) -> String?,
+    transcribeAudio: suspend (bytes: ByteArray, filename: String) -> String? = { _, _ -> null },
+    transcribeDraft: suspend (draft: String) -> String? = { null },
+    loadGlossary: suspend () -> List<String> = { emptyList() },
     onRename: (String) -> Unit = {},
     onMute: (Boolean) -> Unit = {},
     onKill: () -> Unit = {},
@@ -117,20 +158,58 @@ fun ChatScreen(
     onPickModel: (String) -> Unit = {},
     onPickEffort: (String) -> Unit = {},
     commands: List<SlashCommand> = emptyList(),
+    commandsResolved: Boolean = false,
+    // Interrupt the running agent (transcript Stop capsule + /stop slash control). §8/§1.
+    onInterrupt: () -> Unit = {},
+    // Per-session draft persistence (DataStore, process-death-durable). §3.
+    loadDraft: suspend (String) -> String = { "" },
+    saveDraft: (String, String) -> Unit = { _, _ -> },
     loadBytes: suspend (String) -> ByteArray? = { null },
     fsList: suspend (String) -> List<dev.supermux.net.FsEntry> = { emptyList() },
     fsRead: suspend (String) -> Result<String> = { Result.success("") },
     fsWrite: suspend (String, String) -> Boolean = { _, _ -> false },
     fsSearch: suspend (String) -> List<dev.supermux.net.FsSearchResult> = { emptyList() },
+    // Editor diff + inline code-review (bound to session.id in SessionKeepAlive).
+    fsDiff: suspend () -> dev.supermux.net.FsDiffResult? = { null },
+    reviewAddComment: suspend (dev.supermux.net.AddCommentBody) -> dev.supermux.net.ReviewComment? = { null },
+    reviewResolve: suspend (String) -> Boolean = { false },
+    reviewSubmit: suspend () -> dev.supermux.net.ReviewSubmitResult? = { null },
+    // Editor LSP + live file-watch — app-wide flows + session-bound senders.
+    fsChanges: kotlinx.coroutines.flow.SharedFlow<dev.supermux.proto.ServerFrame.FsChanged> =
+        kotlinx.coroutines.flow.MutableSharedFlow(),
+    lspStatus: kotlinx.coroutines.flow.StateFlow<Map<String, dev.supermux.proto.ServerFrame.LspStatus>> =
+        kotlinx.coroutines.flow.MutableStateFlow(emptyMap()),
+    lspRpc: kotlinx.coroutines.flow.SharedFlow<dev.supermux.proto.ServerFrame.LspRpcIn> =
+        kotlinx.coroutines.flow.MutableSharedFlow(),
+    editorOpen: (String) -> Unit = {},
+    editorClose: (String) -> Unit = {},
+    lspStatusQuery: (String, String) -> Unit = { _, _ -> },
+    lspOpen: (String, String) -> Unit = { _, _ -> },
+    lspRpcOut: (String, String, String) -> Unit = { _, _, _ -> },
+    lspClose: (String, String) -> Unit = { _, _ -> },
     connectTerminal: (() -> dev.supermux.net.TerminalClient)? = null,
+    // Native tab — terminal bound to the agent PTY with kind="agent"; iOS parity, claude-only.
+    connectAgentTerminal: (() -> dev.supermux.net.TerminalClient)? = null,
     listDisplays: (suspend () -> List<dev.supermux.net.DisplayStream>)? = null,
     connectScrcpy: ((String) -> dev.supermux.net.ScrcpyClient)? = null,
+    connectVnc: ((String) -> dev.supermux.net.VncClient)? = null,
+    displays: kotlinx.coroutines.flow.StateFlow<List<dev.supermux.net.DisplayStream>> =
+        kotlinx.coroutines.flow.MutableStateFlow(emptyList()),
+    onStartDisplay: suspend () -> Unit = {},
+    onOpenDisplays: () -> Unit = {},
     consumePendingFirst: (String) -> dev.supermux.android.AppViewModel.PendingFirstMessage? = { null },
     onEditorConsumesBackChange: (Boolean) -> Unit = {},
+    // Finish flow — null/empty defaults keep the existing call (and ArchivedChatScreen) compiling.
+    finishJob: dev.supermux.proto.FinishJobDto? = null,                                  // finishJobs[session.id]
+    onFinishReadiness: suspend () -> dev.supermux.net.FinishReadiness? = { null },        // vm.finishReadiness(id)
+    onFinish: (action: String, skipVerify: Boolean?, commitFirst: Boolean?, commitMessage: String?, onKickoff: (Boolean) -> Unit) -> Unit = { _, _, _, _, cb -> cb(false) },
+    onClearFinishJob: () -> Unit = {},                                                    // vm.clearFinishJob(id)
+    onVerifySuggest: suspend () -> dev.supermux.net.VerifySuggestResult? = { null },      // vm.verifySuggest(id)
+    onVerifySave: suspend (String) -> dev.supermux.net.VerifySaveResult? = { null },      // vm.verifySave(id, content)
+    onSendToAgent: (String) -> Unit = {},                                                 // vm.sendMessage(id, text)
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
 ) {
-    val c = LocalPanes.current
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val haptic = rememberHaptics()
@@ -140,40 +219,92 @@ fun ChatScreen(
     data class PendingAttachment(val fileId: String, val name: String, val uploading: Boolean)
     val pendingAttachments = remember { mutableStateListOf<PendingAttachment>() }
 
-    // file picker launcher — result: read bytes, name, mime, then upload
-    val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent(),
-    ) { uri: Uri? ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch(Dispatchers.IO) {
-            val resolver = context.contentResolver
-            val mime = resolver.getType(uri) ?: "application/octet-stream"
-            val name = uri.lastPathSegment?.substringAfterLast('/') ?: "file"
-            val bytes = resolver.openInputStream(uri)?.use { it.readBytes() } ?: return@launch
-            // add a placeholder chip with uploading=true
-            val placeholder = PendingAttachment(fileId = "", name = name, uploading = true)
-            withContext(Dispatchers.Main) { pendingAttachments.add(placeholder) }
-            val idx = pendingAttachments.lastIndex
-            val fileId = onUpload(bytes, name, mime, null)
-            withContext(Dispatchers.Main) {
-                if (fileId != null) {
-                    pendingAttachments[idx] = PendingAttachment(fileId, name, uploading = false)
-                } else {
-                    // upload failed — remove the placeholder
-                    pendingAttachments.removeAt(idx)
-                }
+    // Shared upload flow for ALL attachment sources (Photos / Files / Camera). Reads the URI's
+    // bytes, stages a placeholder chip (uploading=true), uploads, then swaps in the real fileId
+    // (or drops the chip on failure). The placeholder object is tracked by identity so concurrent
+    // uploads can't clobber each other's index.
+    suspend fun stageFromUri(uri: Uri) {
+        val resolver = context.contentResolver
+        val mime = resolver.getType(uri) ?: "application/octet-stream"
+        val name = uri.lastPathSegment?.substringAfterLast('/') ?: "file"
+        val bytes = withContext(Dispatchers.IO) {
+            resolver.openInputStream(uri)?.use { it.readBytes() }
+        } ?: return
+        val placeholder = PendingAttachment(fileId = "", name = name, uploading = true)
+        withContext(Dispatchers.Main) { pendingAttachments.add(placeholder) }
+        val fileId = onUpload(bytes, name, mime, null)
+        withContext(Dispatchers.Main) {
+            val idx = pendingAttachments.indexOf(placeholder)
+            if (idx < 0) return@withContext
+            if (fileId != null) {
+                pendingAttachments[idx] = PendingAttachment(fileId, name, uploading = false)
+            } else {
+                pendingAttachments.removeAt(idx)
             }
         }
     }
 
-    // ── voice recorder ───────────────────────────────────────────────────────
-    val recorder = remember { VoiceRecorder(context) }
-    var recording by remember { mutableStateOf(false) }
-    var recordingSeconds by remember { mutableIntStateOf(0) }
+    // Files: system document picker (any mime).
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+    ) { uri: Uri? ->
+        if (uri != null) scope.launch { stageFromUri(uri) }
+    }
 
-    // Elapsed-seconds timer while recording
-    LaunchedEffect(recording) {
-        if (recording) {
+    // Photos: modern visual-media picker (no storage permission; backported on Play services).
+    val photoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri: Uri? ->
+        if (uri != null) scope.launch { stageFromUri(uri) }
+    }
+
+    // Camera: delegated capture to the system camera app, writing into our FileProvider URI.
+    var cameraUri by remember { mutableStateOf<Uri?>(null) }
+    val takePicture = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture(),
+    ) { ok: Boolean ->
+        val uri = cameraUri
+        if (ok && uri != null) scope.launch { stageFromUri(uri) }
+    }
+
+    // ── voice dictation (record → transcribe → into composer) ─────────────────
+    // Composer draft text. Hoisted here (not inside the composer Column) so the dictation
+    // drive logic below can append cleaned/raw transcripts into the same state the
+    // BasicTextField edits (risk §5). If `text` is ever moved to the VM, move appendToDraft too.
+    var text by remember { mutableStateOf("") }
+
+    // ── per-session draft persistence (DataStore; survives switch + process death) §3 ──
+    // Load once per session (parity with iOS loadPane). `draftLoaded` gates the save effect so
+    // the initial restore (or an empty load) never clobbers a draft before it is read back.
+    var draftLoaded by remember(session.id) { mutableStateOf(false) }
+    LaunchedEffect(session.id) {
+        draftLoaded = false
+        text = loadDraft(session.id)
+        draftLoaded = true
+    }
+    // Persist, debounced (~400ms) — avoids a DataStore write per keystroke. Clearing on send
+    // sets text="" which writes empty through this same effect.
+    LaunchedEffect(session.id, text, draftLoaded) {
+        if (!draftLoaded) return@LaunchedEffect
+        delay(400)
+        saveDraft(session.id, text)
+    }
+
+    val recorder = remember { VoiceRecorder(context) }
+    val dictation = remember { DictationEngine(context) }
+    var recording by remember { mutableStateOf(false) }     // audio (whisper) path active
+    var listening by remember { mutableStateOf(false) }     // on-device STT active
+    var transcribing by remember { mutableStateOf(false) }  // POST in flight ("Transcribing…")
+    var liveTranscript by remember { mutableStateOf("") }   // on-device partials
+    var recordingSeconds by remember { mutableIntStateOf(0) }
+    var micDenied by remember { mutableStateOf(false) }
+    var banner by remember { mutableStateOf<String?>(null) }
+    val glossary = remember { mutableStateListOf<String>() }
+    LaunchedEffect(session.id) { glossary.clear(); glossary.addAll(loadGlossary()) }
+
+    // Elapsed-seconds timer while either recording mode is active.
+    LaunchedEffect(recording || listening) {
+        if (recording || listening) {
             recordingSeconds = 0
             while (true) {
                 delay(1000)
@@ -182,14 +313,105 @@ fun ChatScreen(
         }
     }
 
-    // Permission launcher — once granted, start recording
+    // Auto-clear the transient banner (~4s), parity with iOS showBanner.
+    LaunchedEffect(banner) {
+        if (banner != null) {
+            delay(4000)
+            banner = null
+        }
+    }
+
+    // ── dictation drive logic (kept here so it shares `text`/state) ───────────
+    fun appendToDraft(s: String) {
+        val t = s.trim()
+        if (t.isEmpty()) return
+        text = if (text.isBlank()) t else text.trimEnd() + " " + t
+    }
+
+    suspend fun runTranscription(rawFallback: String?, call: suspend () -> String?) {
+        transcribing = true
+        try {
+            val cleaned = call()?.trim()
+            when {
+                !cleaned.isNullOrEmpty() -> appendToDraft(cleaned)
+                !rawFallback.isNullOrBlank() -> appendToDraft(rawFallback)  // keep on-device draft
+                else -> banner = "Transcription failed"                     // nothing to keep
+            }
+        } finally {
+            transcribing = false
+        }
+    }
+
+    fun startMic() {
+        haptic(HapticKind.Tick)
+        val started =
+            if (DevConfig.ENABLE_ONDEVICE_STT) dictation.start(glossary.toList())
+            else DictationStart.UNAVAILABLE
+        when (started) {
+            DictationStart.STARTED -> {
+                listening = true
+                liveTranscript = ""
+                dictation.onPartial = { liveTranscript = it }
+            }
+            DictationStart.DENIED -> micDenied = true
+            DictationStart.UNAVAILABLE -> {  // whisper path
+                recorder.start()
+                recording = true
+            }
+        }
+    }
+
+    fun stopMic() {
+        haptic(HapticKind.Tick)
+        if (listening) {
+            listening = false
+            val draft = dictation.stop()
+            if (draft.isBlank()) { banner = "Didn't catch that"; return }
+            scope.launch { runTranscription(rawFallback = draft) { transcribeDraft(draft) } }
+        } else if (recording) {
+            recording = false
+            val f = recorder.stop()
+            if (f == null) { banner = "Didn't catch that"; return }
+            scope.launch(Dispatchers.IO) {
+                val bytes = f.readBytes()
+                val name = f.name
+                withContext(Dispatchers.Main) {
+                    runTranscription(rawFallback = null) { transcribeAudio(bytes, name) }
+                }
+            }
+        }
+    }
+
+    fun cancelMic() {
+        dictation.cancel()
+        recorder.cancel()
+        listening = false
+        recording = false
+        liveTranscript = ""
+    }
+
+    // Mic needs RECORD_AUDIO for BOTH paths (MediaRecorder + SpeechRecognizer). A fresh grant
+    // routes through startMic() so it makes the same on-device-vs-audio decision. A permanent
+    // denial returns granted=false with no re-prompt → show the "enable in Settings" dialog.
     val audioPermLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        if (granted) {
-            recorder.start()
-            recording = true
-        }
+        if (granted) startMic() else micDenied = true
+    }
+
+    fun onMicClick() {
+        val hasPerm = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (hasPerm) startMic()
+        else audioPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    }
+
+    // Cancel any in-flight recording when this session leaves composition / is switched away,
+    // so a backgrounded recording never leaks the mic or posts stale audio (risk §6, iOS parity).
+    DisposableEffect(session.id) {
+        onDispose { cancelMic() }
     }
 
     // ── model picker state ───────────────────────────────────────────────────
@@ -237,7 +459,8 @@ fun ChatScreen(
                     showModelSheet = true
                 }
             }
-            "spawn" -> { /* TODO: spawn from control command */ }
+            "stop" -> onInterrupt()
+            "spawn" -> { /* TODO: spawn from control command (needs nav; iOS also skips) */ }
             else -> {}
         }
     }
@@ -245,7 +468,7 @@ fun ChatScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(c.chat))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .statusBarsPadding(),
     ) {
         // ----------------------------------------------------------------
@@ -255,7 +478,7 @@ fun ChatScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(c.header))
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
                     .padding(horizontal = 10.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -263,7 +486,7 @@ fun ChatScreen(
                 Icon(
                     painter = painterResource(R.drawable.ic_arrow_left),
                     contentDescription = "Back",
-                    tint = Color(c.foreground),
+                    tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier
                         .clickable(onClick = onBack)
                         .padding(end = 8.dp)
@@ -286,7 +509,7 @@ fun ChatScreen(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = session.name,
-                        color = Color(c.foreground),
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.titleLarge,
                         maxLines = 1,
                     )
@@ -300,7 +523,7 @@ fun ChatScreen(
                     }
                     Text(
                         text = subLabel,
-                        color = Color(c.mutedForeground),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelMedium,
                         maxLines = 1,
                     )
@@ -311,20 +534,52 @@ fun ChatScreen(
                     Row(
                         modifier = Modifier
                             .clip(RoundedCornerShape(20.dp))
-                            .background(Color(c.primary).copy(alpha = 0.16f))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
                             .padding(horizontal = 8.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(5.dp),
                     ) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(12.dp),
-                            color = Color(c.primary),
+                            color = MaterialTheme.colorScheme.primary,
                             strokeWidth = 2.dp,
                         )
                         Text(
                             text = agent.phase.replaceFirstChar { it.uppercaseChar() },
-                            color = Color(c.primary),
+                            color = MaterialTheme.colorScheme.primary,
                             fontSize = 12.sp,
+                        )
+                    }
+                }
+
+                // Finish — only for worktree-backed sessions (iOS gates on session.session_branch).
+                if (session.session_branch != null) {
+                    var showFinishSheet by remember(session.id) { mutableStateOf(false) }
+                    // Acked startedAt survives rotation/process-death so a result stays "seen".
+                    var ackedStartedAt by rememberSaveable(session.id) { mutableStateOf(0.0) }
+                    val isUnacked = finishJob != null &&
+                        finishJob.status != "running" &&
+                        finishJob.startedAt != ackedStartedAt
+                    FinishButton(
+                        finishJob = finishJob,
+                        isUnacked = isUnacked,
+                        onClick = {
+                            ackedStartedAt = finishJob?.startedAt ?: ackedStartedAt
+                            showFinishSheet = true
+                        },
+                    )
+                    if (showFinishSheet) {
+                        FinishSheet(
+                            session = session,
+                            finishJob = finishJob,
+                            onReadiness = onFinishReadiness,
+                            onFinish = onFinish,
+                            onClearJob = onClearFinishJob,
+                            onVerifySuggest = onVerifySuggest,
+                            onVerifySave = onVerifySave,
+                            onSendToAgent = onSendToAgent,
+                            onAck = { ackedStartedAt = finishJob?.startedAt ?: ackedStartedAt },
+                            onDismiss = { showFinishSheet = false },
                         )
                     }
                 }
@@ -334,7 +589,7 @@ fun ChatScreen(
                     Icon(
                         painter = painterResource(R.drawable.ic_more_vert),
                         contentDescription = "More",
-                        tint = Color(c.mutedForeground),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier
                             .clickable { headerMenuExpanded = true }
                             .padding(start = 4.dp)
@@ -350,7 +605,7 @@ fun ChatScreen(
                                 Icon(
                                     painter = painterResource(R.drawable.ic_pencil),
                                     contentDescription = null,
-                                    tint = Color(c.foreground),
+                                    tint = MaterialTheme.colorScheme.onSurface,
                                     modifier = Modifier.size(18.dp),
                                 )
                             },
@@ -369,7 +624,7 @@ fun ChatScreen(
                                         if (isMuted) R.drawable.ic_volume_2 else R.drawable.ic_volume_x
                                     ),
                                     contentDescription = null,
-                                    tint = Color(c.foreground),
+                                    tint = MaterialTheme.colorScheme.onSurface,
                                     modifier = Modifier.size(18.dp),
                                 )
                             },
@@ -379,12 +634,28 @@ fun ChatScreen(
                             },
                         )
                         DropdownMenuItem(
-                            text = { Text("Kill", color = Color(c.destructive)) },
+                            text = { Text("Displays") },
+                            leadingIcon = {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_monitor),
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            },
+                            modifier = Modifier.testTag("chat_overflow_displays"),
+                            onClick = {
+                                headerMenuExpanded = false
+                                onOpenDisplays()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Kill", color = MaterialTheme.colorScheme.error) },
                             leadingIcon = {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_trash),
                                     contentDescription = null,
-                                    tint = Color(c.destructive),
+                                    tint = MaterialTheme.colorScheme.error,
                                     modifier = Modifier.size(18.dp),
                                 )
                             },
@@ -402,39 +673,44 @@ fun ChatScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(1.dp)
-                    .background(Color(c.border)),
+                    .background(MaterialTheme.colorScheme.outlineVariant),
             )
         }
 
-        // Panel switcher: Chat / Editor / Terminal / Display
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color(c.header))
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        // Panel switcher: Chat / Native / Editor / Terminal / Display.
+        // Native (raw agent PTY) is gated on the session's agent being "claude" — iOS parity with
+        // the gate `(session.agent ?? "claude") == "claude"`. Android's session.agent is non-null.
+        val panels = remember(session.agent) {
+            SessionPanel.entries.filter { it != SessionPanel.Native || session.agent == "claude" }
+        }
+        // If the active panel was filtered out (e.g. Native hidden), fall back to Chat.
+        LaunchedEffect(panels) {
+            if (activePanel !in panels) activePanel = SessionPanel.Chat
+        }
+        PrimaryTabRow(
+            selectedTabIndex = panels.indexOf(activePanel).coerceAtLeast(0),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         ) {
-            SessionPanel.entries.forEach { panel ->
+            panels.forEach { panel ->
                 val selected = activePanel == panel
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (selected) Color(c.primary).copy(alpha = 0.16f) else Color.Transparent)
-                        .clickable { activePanel = panel }
-                        .padding(vertical = 6.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        panel.name,
-                        color = if (selected) Color(c.primary) else Color(c.mutedForeground),
-                        fontSize = 12.sp,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                    )
-                }
+                val tag = if (panel == SessionPanel.Native) "tab_native"
+                          else "chat_tab_${panel.name.lowercase()}"
+                Tab(
+                    selected = selected,
+                    onClick = { activePanel = panel },
+                    modifier = Modifier.testTag(tag),
+                    selectedContentColor = MaterialTheme.colorScheme.primary,
+                    unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = {
+                        Text(
+                            panel.name,
+                            fontSize = 12.sp,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                        )
+                    },
+                )
             }
         }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color(c.border)))
 
         var openedPanels by remember { mutableStateOf(setOf(SessionPanel.Chat)) }
         LaunchedEffect(activePanel) { openedPanels = openedPanels + activePanel }
@@ -449,24 +725,82 @@ fun ChatScreen(
         val listState = rememberLazyListState()
         var prevTimelineSize by remember { mutableIntStateOf(0) }
 
-        LaunchedEffect(timelineItems.size, activePanel) {
+        // Working ⇔ the agent is in a busy phase (iOS workingIndicator gate). Drives both the
+        // bottom WorkingIndicator row and the auto-scroll target (so the spinner stays in view).
+        val working = agent != null && agent.phase in WORKING_PHASES
+
+        // Auto-scroll on new content AND when the working row appears/disappears.
+        LaunchedEffect(timelineItems.size, working, activePanel) {
             if (activePanel != SessionPanel.Chat) return@LaunchedEffect
-            if (timelineItems.isNotEmpty() && timelineItems.size > prevTimelineSize) {
-                listState.animateScrollToItem(timelineItems.size - 1)
+            val target = timelineItems.size - 1 + (if (working) 1 else 0)
+            if (target >= 0 && (timelineItems.size > prevTimelineSize || working)) {
+                listState.animateScrollToItem(target)
             }
             prevTimelineSize = timelineItems.size
         }
 
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = Space.lg, vertical = Space.md),
-            verticalArrangement = Arrangement.spacedBy(Space.lg),
-        ) {
-            items(timelineItems) { item ->
-                TimelineItemRow(item, loadBytes)
+        if (timelineItems.isEmpty() && !working) {
+            // ── Empty session: starter prompts (iOS ChatPane empty state) ──
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(Space.xl),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(Space.md),
+            ) {
+                Spacer(Modifier.height(36.dp))
+                Icon(
+                    painter = painterResource(R.drawable.ic_sparkle),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(32.dp),
+                )
+                Text(
+                    "Start the conversation",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                listOf("What's the current state?", "Run the tests", "Summarize recent changes")
+                    .forEachIndexed { i, prompt ->
+                        Surface(
+                            onClick = {
+                                haptic(HapticKind.Confirm)
+                                onSendWith(prompt, emptyList())
+                            },
+                            shape = RoundedCornerShape(Radii.md),
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("chat_starter_$i"),
+                        ) {
+                            Text(
+                                prompt,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(horizontal = Space.md, vertical = Space.md),
+                            )
+                        }
+                    }
+            }
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = Space.lg, vertical = Space.md),
+                verticalArrangement = Arrangement.spacedBy(Space.lg),
+            ) {
+                items(timelineItems, key = { timelineItemKey(it) }) { item ->
+                    TimelineItemRow(item, loadBytes)
+                }
+                // Live working indicator pinned to the bottom (iOS renders it below the last block).
+                if (working && agent != null) {
+                    item(key = "__working__") {
+                        WorkingIndicator(agent, onStop = onInterrupt)
+                    }
+                }
             }
         }
 
@@ -482,23 +816,34 @@ fun ChatScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(1.dp)
-                    .background(Color(c.border)),
+                    .background(MaterialTheme.colorScheme.outlineVariant),
             )
 
-            var text by remember { mutableStateOf("") }
-
-            // ── slash-command menu: shown when text starts with "/" ───────
-            val slashQuery = if (text.startsWith("/")) text.drop(1).lowercase() else null
+            // ── slash-command menu: active "/token" at end of draft (start-of-line or after
+            //    whitespace), filtering on name OR family by `contains`, capped at 8 (iOS parity) ──
+            val slashMatch = slashTokenRegex.find(text)
+            val slashQuery = slashMatch?.groupValues?.get(1)?.drop(1)?.lowercase()
             val slashMatches = if (slashQuery != null) {
-                commands.filter { it.name.startsWith(slashQuery, ignoreCase = true) }
+                commands.filter {
+                    slashQuery.isEmpty() ||
+                        it.name.contains(slashQuery, ignoreCase = true) ||
+                        it.family.contains(slashQuery, ignoreCase = true)
+                }.take(8)
             } else emptyList()
+
+            // Replace the active "/token" with [insert], preserving any leading whitespace.
+            fun replaceSlashToken(insert: String) {
+                val m = slashTokenRegex.find(text) ?: run { text = insert; return }
+                val lead = m.value.takeWhile { it == ' ' || it == '\n' || it == '\t' }
+                text = text.substring(0, m.range.first) + lead + insert
+            }
 
             if (slashMatches.isNotEmpty()) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = 240.dp)
-                        .background(Color(c.card))
+                        .background(MaterialTheme.colorScheme.surfaceContainer)
                         .verticalScroll(rememberScrollState())
                         .padding(vertical = 4.dp),
                 ) {
@@ -506,12 +851,17 @@ fun ChatScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .testTag("chat_slash_item_${cmd.name}")
                                 .clickable {
-                                    if (cmd.family == "agent") {
-                                        text = cmd.insertText ?: "/${cmd.name} "
-                                    } else {
-                                        text = ""
+                                    haptic(HapticKind.Tick)
+                                    val action = cmd.action
+                                    if (action != null) {
+                                        replaceSlashToken("")
                                         onControl(cmd)
+                                    } else {
+                                        replaceSlashToken(
+                                            cmd.insertText?.ifEmpty { null } ?: "${cmd.sigil}${cmd.name} "
+                                        )
                                     }
                                 }
                                 .padding(horizontal = 14.dp, vertical = 8.dp),
@@ -519,7 +869,7 @@ fun ChatScreen(
                         ) {
                             Text(
                                 text = "${cmd.sigil}${cmd.name}",
-                                color = Color(c.foreground),
+                                color = MaterialTheme.colorScheme.onSurface,
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium,
@@ -529,9 +879,19 @@ fun ChatScreen(
                             if (desc != null) {
                                 Text(
                                     text = desc,
-                                    color = Color(c.mutedForeground),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontSize = 12.sp,
                                     maxLines = 1,
+                                )
+                            }
+                            // Trailing "executes" glyph for control commands (iOS bolt.fill).
+                            if (cmd.action != null) {
+                                Spacer(Modifier.weight(1f))
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_zap),
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                    modifier = Modifier.size(13.dp),
                                 )
                             }
                         }
@@ -542,7 +902,19 @@ fun ChatScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(1.dp)
-                        .background(Color(c.border)),
+                        .background(MaterialTheme.colorScheme.outlineVariant),
+                )
+            } else if (slashQuery != null && !commandsResolved) {
+                // §1.5 loading hint: a fresh session whose command set hasn't resolved yet.
+                Text(
+                    text = "Loading commands…",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceContainer)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
                 )
             }
 
@@ -559,7 +931,7 @@ fun ChatScreen(
                         Row(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(16.dp))
-                                .background(Color(c.card))
+                                .background(MaterialTheme.colorScheme.surfaceContainer)
                                 .padding(horizontal = 10.dp, vertical = 5.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -567,13 +939,13 @@ fun ChatScreen(
                             if (att.uploading) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(12.dp),
-                                    color = Color(c.primary),
+                                    color = MaterialTheme.colorScheme.primary,
                                     strokeWidth = 1.5.dp,
                                 )
                             }
                             Text(
                                 text = att.name,
-                                color = Color(c.foreground),
+                                color = MaterialTheme.colorScheme.onSurface,
                                 fontSize = 12.sp,
                                 maxLines = 1,
                             )
@@ -581,7 +953,7 @@ fun ChatScreen(
                                 Icon(
                                     painter = painterResource(R.drawable.ic_x),
                                     contentDescription = "Remove",
-                                    tint = Color(c.mutedForeground),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier
                                         .clickable { pendingAttachments.removeAt(idx) }
                                         .padding(start = 2.dp)
@@ -611,11 +983,71 @@ fun ChatScreen(
             )
 
             // ── Composer card ────────────────────────────────────────────────
-            val focusBorderColor = Color(c.primary).copy(alpha = composerBorderAlpha)
-            Column(
+            val focusBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = composerBorderAlpha)
+
+            // Single send path used by BOTH the send button and the IME Send action.
+            val canSend = text.isNotBlank() || pendingAttachments.any { !it.uploading }
+            fun doSend() {
+                if (!canSend) return
+                haptic(HapticKind.Confirm)
+                val attachmentIds = pendingAttachments
+                    .filter { !it.uploading }
+                    .map { it.fileId }
+                onSendWith(text, attachmentIds)
+                text = ""
+                pendingAttachments.clear()
+            }
+
+            // ── transient banner (transcription failed / didn't catch that) ──
+            banner?.let { msg ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = msg,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+
+            // ── "Transcribing…" indicator (parity with iOS transcribingBar) ──
+            if (transcribing) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        strokeWidth = 1.5.dp,
+                    )
+                    Text(
+                        text = "Transcribing…",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+
+            // ── Composer takeover: RecordingBar replaces the card while dictating ──
+            if (recording || listening) {
+                RecordingBar(
+                    seconds = recordingSeconds,
+                    liveTranscript = liveTranscript,
+                    onStop = { stopMic() },
+                    onCancel = { cancelMic() },
+                )
+            } else Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(c.chat))
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
                     .padding(horizontal = 10.dp, vertical = 10.dp),
             ) {
                 // ── Text input area (card background, animated focus border) ──
@@ -623,56 +1055,41 @@ fun ChatScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .background(Color(c.card))
+                        .background(MaterialTheme.colorScheme.surfaceContainer)
                         .border(1.dp, focusBorderColor, RoundedCornerShape(12.dp))
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                 ) {
-                    if (recording) {
-                        // Recording indicator: red dot + elapsed time
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(Color(0xFFDC2626)),
-                            )
-                            val mm = recordingSeconds / 60
-                            val ss = recordingSeconds % 60
-                            Text(
-                                text = "Recording %d:%02d".format(mm, ss),
-                                color = Color(0xFFDC2626),
-                                fontSize = 14.sp,
-                            )
-                        }
-                    } else {
-                        if (text.isEmpty()) {
-                            Text(
-                                text = "Message ${session.name}…",
-                                color = Color(c.mutedForeground),
-                                fontSize = 14.sp,
-                            )
-                        }
-                        BasicTextField(
-                            value = text,
-                            onValueChange = { text = it },
-                            textStyle = TextStyle(
-                                color = Color(c.foreground),
-                                fontSize = 14.sp,
-                            ),
-                            cursorBrush = SolidColor(Color(c.primary)),
-                            interactionSource = composerInteractionSource,
-                            modifier = Modifier.fillMaxWidth(),
+                    if (text.isEmpty()) {
+                        Text(
+                            text = "Message ${session.name}…",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 14.sp,
                         )
                     }
+                    BasicTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        textStyle = TextStyle(
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 14.sp,
+                        ),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        interactionSource = composerInteractionSource,
+                        maxLines = 6,
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Sentences,
+                            imeAction = ImeAction.Send,
+                        ),
+                        keyboardActions = KeyboardActions(onSend = { doSend() }),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("chat_composer"),
+                    )
                 }
 
                 Spacer(Modifier.height(6.dp))
 
-                // ── Toolbar row: [Model pill] [Effort pill?]  <spacer>  [+] [🎤] [● send] ──
-                val canSend = text.isNotBlank() || pendingAttachments.any { !it.uploading }
+                // ── Toolbar row: [Model pill] [Effort pill?]  <spacer>  [+] [mic] [● send] ──
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -707,127 +1124,163 @@ fun ChatScreen(
 
                     Spacer(modifier = Modifier.weight(1f))
 
-                    // Attach (+) button
-                    Box(
-                        modifier = Modifier
-                            .size(32.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color(c.card))
-                            .clickable { filePickerLauncher.launch("*/*") },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_plus),
-                            contentDescription = "Add attachment",
-                            tint = Color(c.mutedForeground),
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
-
-                    // Mic button — tap to start/stop recording
-                    Box(
-                        modifier = Modifier
-                            .size(32.dp)
-                            .clip(androidx.compose.foundation.shape.CircleShape)
-                            .background(
-                                if (recording) Color(0xFFDC2626) // red while recording
-                                else Color(c.card)
-                            )
-                            .clickable {
-                                if (recording) {
-                                    // Stop recording — tick haptic on stop
-                                    haptic(HapticKind.Tick)
-                                    recording = false
-                                    val f = recorder.stop()
-                                    if (f != null) {
-                                        scope.launch(Dispatchers.IO) {
-                                            val bytes = f.readBytes()
-                                            val name = f.name
-                                            val placeholder = PendingAttachment(fileId = "", name = "🎤 voice", uploading = true)
-                                            withContext(Dispatchers.Main) { pendingAttachments.add(placeholder) }
-                                            val idx = pendingAttachments.lastIndex
-                                            val fileId = onUpload(bytes, name, "audio/mp4", "voice")
-                                            withContext(Dispatchers.Main) {
-                                                if (fileId != null) {
-                                                    pendingAttachments[idx] = PendingAttachment(fileId, "🎤 voice", uploading = false)
-                                                } else {
-                                                    pendingAttachments.removeAt(idx)
-                                                }
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    // Start recording — check/request permission; tick haptic on start
-                                    val hasPerm = ContextCompat.checkSelfPermission(
-                                        context,
-                                        Manifest.permission.RECORD_AUDIO,
-                                    ) == PackageManager.PERMISSION_GRANTED
-                                    if (hasPerm) {
-                                        haptic(HapticKind.Tick)
-                                        recorder.start()
-                                        recording = true
-                                    } else {
-                                        audioPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                    }
-                                }
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_mic),
-                            contentDescription = "Record voice",
-                            tint = Color(c.mutedForeground),
-                            modifier = Modifier.size(16.dp),
-                        )
-                    }
-
-                    // Circular send button — scale press + confirm haptic; dims when nothing to send
-                    Box(
-                        modifier = Modifier
-                            .scale(sendScale)
-                            .size(38.dp)
-                            .clip(androidx.compose.foundation.shape.CircleShape)
-                            .background(
-                                if (canSend) Color(c.primary)
-                                else Color(c.primary).copy(alpha = 0.35f),
-                            )
-                            .clickable(
-                                interactionSource = sendInteractionSource,
-                                indication = null,
-                                enabled = canSend,
+                    // Attach (+) button → menu: Photos / Files / Camera (iOS + menu parity).
+                    var attachMenu by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { attachMenu = true }) {
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceContainer),
+                                contentAlignment = Alignment.Center,
                             ) {
-                                haptic(HapticKind.Confirm)
-                                val attachmentIds = pendingAttachments
-                                    .filter { !it.uploading }
-                                    .map { it.fileId }
-                                onSendWith(text, attachmentIds)
-                                text = ""
-                                pendingAttachments.clear()
-                            },
-                        contentAlignment = Alignment.Center,
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_plus),
+                                    contentDescription = "Attach",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                        DropdownMenu(
+                            expanded = attachMenu,
+                            onDismissRequest = { attachMenu = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Photos") },
+                                leadingIcon = {
+                                    Icon(painterResource(R.drawable.ic_image), null, modifier = Modifier.size(18.dp))
+                                },
+                                modifier = Modifier.testTag("attach_menu_photos"),
+                                onClick = {
+                                    attachMenu = false
+                                    photoPicker.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                                    )
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Files") },
+                                leadingIcon = {
+                                    Icon(painterResource(R.drawable.ic_file), null, modifier = Modifier.size(18.dp))
+                                },
+                                modifier = Modifier.testTag("attach_menu_files"),
+                                onClick = {
+                                    attachMenu = false
+                                    filePickerLauncher.launch("*/*")
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Camera") },
+                                leadingIcon = {
+                                    Icon(painterResource(R.drawable.ic_camera), null, modifier = Modifier.size(18.dp))
+                                },
+                                modifier = Modifier.testTag("attach_menu_camera"),
+                                onClick = {
+                                    attachMenu = false
+                                    val uri = createImageUri(context)
+                                    cameraUri = uri
+                                    takePicture.launch(uri)
+                                },
+                            )
+                        }
+                    }
+
+                    // Mic button — starts dictation (the RecordingBar takes over while active).
+                    // Disabled while a transcription POST is in flight. 48dp tap target / 32dp visual.
+                    IconButton(
+                        onClick = { onMicClick() },
+                        enabled = !transcribing,
+                        modifier = Modifier.testTag("chat_mic"),
                     ) {
-                        // Stop affordance (square) while the agent is working; send (↵) otherwise
-                        val agentWorking = agent != null && agent.phase != "idle"
-                        Icon(
-                            painter = painterResource(
-                                if (agentWorking) R.drawable.ic_square else R.drawable.ic_send
-                            ),
-                            contentDescription = if (agentWorking) "Stop" else "Send",
-                            tint = Color(c.primaryForeground),
-                            modifier = Modifier.size(18.dp),
-                        )
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(androidx.compose.foundation.shape.CircleShape)
+                                .background(MaterialTheme.colorScheme.surfaceContainer),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_mic),
+                                contentDescription = "Record voice",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
+
+                    // Circular send button — ALWAYS sends (iOS parity); the Stop/interrupt
+                    // affordance lives in the transcript WorkingIndicator, not here. Scale press +
+                    // confirm haptic; dims when there is nothing to send.
+                    IconButton(
+                        onClick = { doSend() },
+                        enabled = canSend,
+                        interactionSource = sendInteractionSource,
+                        modifier = Modifier.testTag("chat_send"),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .scale(sendScale)
+                                .size(38.dp)
+                                .clip(androidx.compose.foundation.shape.CircleShape)
+                                .background(
+                                    if (canSend) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_send),
+                                contentDescription = "Send",
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
                     }
                 }
             }
             }
             }
             }
+            if (SessionPanel.Native in openedPanels) {
+                val cat = connectAgentTerminal
+                Box(Modifier.keepAlivePanel(activePanel == SessionPanel.Native)) {
+                    if (cat != null) {
+                        TerminalPanel(
+                            connect = cat,
+                            modifier = Modifier.fillMaxSize(),
+                            // Agent PTY exited → fall back to Chat (iOS onExit: { tab = .chat }).
+                            onExit = { activePanel = SessionPanel.Chat },
+                        )
+                    } else {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("Native terminal unavailable", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
             if (SessionPanel.Editor in openedPanels) {
                 EditorPanel(
+                    sessionId = session.id,
+                    workdir = session.workdir,
                     fsList = fsList,
                     fsRead = fsRead,
                     fsWrite = fsWrite,
                     fsSearch = fsSearch,
+                    fsDiff = fsDiff,
+                    reviewAddComment = reviewAddComment,
+                    reviewResolve = reviewResolve,
+                    reviewSubmit = reviewSubmit,
+                    fsChanges = fsChanges,
+                    lspStatus = lspStatus,
+                    lspRpc = lspRpc,
+                    editorOpen = editorOpen,
+                    editorClose = editorClose,
+                    lspStatusQuery = lspStatusQuery,
+                    lspOpen = lspOpen,
+                    lspRpcOut = lspRpcOut,
+                    lspClose = lspClose,
                     onConsumesBackChange = onEditorConsumesBackChange,
                     modifier = Modifier.keepAlivePanel(activePanel == SessionPanel.Editor),
                 )
@@ -839,25 +1292,29 @@ fun ChatScreen(
                         TerminalPanel(connect = ct, modifier = Modifier.fillMaxSize())
                     } else {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("Terminal unavailable", color = Color(c.mutedForeground), fontSize = 13.sp)
+                            Text("Terminal unavailable", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                         }
                     }
                 }
             }
             if (SessionPanel.Display in openedPanels) {
                 val ld = listDisplays
-                val cs = connectScrcpy
+                val cScrcpy = connectScrcpy
+                val cVnc = connectVnc
                 Box(Modifier.keepAlivePanel(activePanel == SessionPanel.Display)) {
-                    if (ld != null && cs != null) {
+                    if (ld != null && cScrcpy != null && cVnc != null) {
                         DisplayPanel(
                             sessionName = session.name,
+                            displays = displays,
                             listDisplays = ld,
-                            connect = cs,
+                            connectScrcpy = cScrcpy,
+                            connectVnc = cVnc,
+                            onStartDisplay = onStartDisplay,
                             modifier = Modifier.fillMaxSize(),
                         )
                     } else {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("Display unavailable", color = Color(c.mutedForeground), fontSize = 13.sp)
+                            Text("Display unavailable", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                         }
                     }
                 }
@@ -915,6 +1372,18 @@ fun ChatScreen(
         )
     }
 
+    // ── mic-permission-denied dialog (parity with iOS ChatPane) ───────────────
+    if (micDenied) {
+        AlertDialog(
+            onDismissRequest = { micDenied = false },
+            title = { Text("Microphone access needed") },
+            text = { Text("Enable microphone access in Settings to dictate messages.") },
+            confirmButton = {
+                TextButton(onClick = { micDenied = false }) { Text("OK") }
+            },
+        )
+    }
+
     // ── bottom sheets ────────────────────────────────────────────────────────
     if (showModelSheet) {
         val opts = modelsData?.models?.map { it.id to it.displayName } ?: emptyList()
@@ -937,4 +1406,173 @@ fun ChatScreen(
             onDismiss = { showEffortSheet = false },
         )
     }
+}
+
+/**
+ * Recording takeover of the composer row (parity with iOS RecordingBar): a small de-emphasized
+ * trash CANCEL far left, a blinking red dot + mono timer, and a big primary STOP where Send
+ * normally sits. When on-device STT has partial text, a scrollable live transcript sits above.
+ *
+ * Touch-target rule: STOP is a 48dp visual inside a ≥48dp IconButton (the obvious large target);
+ * CANCEL is a 32dp visual inside the 48dp IconButton min-size, so an accidental cancel is hard.
+ */
+@Composable
+private fun RecordingBar(
+    seconds: Int,
+    liveTranscript: String,   // "" when audio-only (no on-device)
+    onStop: () -> Unit,       // big STOP (transcribe)
+    onCancel: () -> Unit,     // small trash (discard)
+) {
+    val cs = MaterialTheme.colorScheme
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 10.dp),
+    ) {
+        // Live transcript area (only when on-device STT has partial text). maxHeight ~120dp, scroll.
+        if (liveTranscript.isNotBlank()) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 120.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(cs.surfaceContainer)
+                    .verticalScroll(rememberScrollState())
+                    .padding(12.dp),
+            ) {
+                Text(liveTranscript, color = cs.onSurface, fontSize = 14.sp)
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
+        ) {
+            // 1) Small de-emphasized CANCEL (trash), 48dp tap target / 32dp visual, far left.
+            IconButton(onClick = onCancel, modifier = Modifier.testTag("voice_cancel")) {
+                Box(
+                    Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(cs.surfaceContainer),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        painterResource(R.drawable.ic_trash),
+                        contentDescription = "Discard recording",
+                        tint = cs.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+            // 2) Blinking red dot + mono timer
+            val blink by rememberInfiniteTransition(label = "rec").animateFloat(
+                initialValue = 1f,
+                targetValue = 0.3f,
+                animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
+                label = "dot",
+            )
+            Box(
+                Modifier
+                    .size(9.dp)
+                    .clip(CircleShape)
+                    .background(cs.error.copy(alpha = blink)),
+            )
+            Text(
+                "%d:%02d".format(seconds / 60, seconds % 60),
+                color = cs.onSurface,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 14.sp,
+            )
+            Spacer(Modifier.weight(1f))
+            // 3) BIG STOP — primary, where Send normally sits. 48dp filled circle, ≥48dp target.
+            IconButton(onClick = onStop, modifier = Modifier.testTag("voice_stop")) {
+                Box(
+                    Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(cs.primary),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        painterResource(R.drawable.ic_square),
+                        contentDescription = "Stop and transcribe",
+                        tint = cs.onPrimary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Live "Working… · Ns" indicator pinned to the bottom of the transcript (iOS workingIndicator
+ * parity): a small spinner + phase label + elapsed duration, and a red Stop capsule that
+ * interrupts the running agent. Ticks every 1s, recomputing elapsed from `agent.since` (epoch-ms).
+ */
+@Composable
+private fun WorkingIndicator(agent: AgentStatus, onStop: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val haptic = rememberHaptics()
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000)
+            now = System.currentTimeMillis()
+        }
+    }
+    val elapsed = agent.since?.let { ((now - it).coerceAtLeast(0)) / 1000 }
+    val label = when (agent.phase) {
+        "sending" -> "Sending…"
+        "thinking" -> "Thinking…"
+        else -> "Working…"
+    }
+    Row(
+        modifier = Modifier.padding(vertical = Space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Space.sm),
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(14.dp),
+            strokeWidth = 2.dp,
+            color = cs.primary,
+        )
+        Text(
+            text = label + (elapsed?.let { " · " + formatDuration(it) } ?: ""),
+            style = MaterialTheme.typography.bodySmall,
+            color = cs.onSurfaceVariant,
+        )
+        // Red Stop capsule → interrupt
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(cs.error.copy(alpha = 0.12f))
+                .clickable { haptic(HapticKind.Tick); onStop() }
+                .testTag("working_stop")
+                .padding(horizontal = Space.sm, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_square),
+                contentDescription = "Stop",
+                tint = cs.error,
+                modifier = Modifier.size(11.dp),
+            )
+            Text("Stop", style = MaterialTheme.typography.labelMedium, color = cs.error)
+        }
+    }
+}
+
+/**
+ * Create a FileProvider URI for a fresh camera capture in cacheDir/attachments (the path already
+ * declared in file_paths.xml + reused by openAttachment). The system camera app writes the JPEG
+ * here, then [stageFromUri] reads it back and uploads it.
+ */
+private fun createImageUri(context: android.content.Context): Uri {
+    val dir = File(context.cacheDir, "attachments").apply { mkdirs() }
+    val file = File(dir, "camera_${System.currentTimeMillis()}.jpg")
+    return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
 }

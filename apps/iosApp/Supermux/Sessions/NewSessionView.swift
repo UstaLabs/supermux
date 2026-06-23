@@ -184,16 +184,17 @@ struct NewSessionView: View {
                         Image(systemName: "chevron.down").font(.caption2)
                     }.foregroundStyle(.primary)
                 }
-                if !models.isEmpty {
-                    Menu {
-                        Button("Default") { model = nil }
-                        ForEach(models, id: \.id) { m in Button(m.displayName) { model = m.id } }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(modelLabel).font(.subheadline.weight(.medium))
-                            Image(systemName: "chevron.down").font(.caption2)
-                        }.foregroundStyle(.secondary)
-                    }
+                // Always show the model menu (web LauncherModelPicker parity). Hiding it
+                // when the list is empty made cursor/opencode look model-less after a
+                // transient /models miss or before the cache warmed.
+                Menu {
+                    Button("Default") { model = nil }
+                    ForEach(models, id: \.id) { m in Button(m.displayName) { model = m.id } }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(modelLabel).font(.subheadline.weight(.medium))
+                        Image(systemName: "chevron.down").font(.caption2)
+                    }.foregroundStyle(.secondary)
                 }
                 if !recorder.isRecording { micButton }
                 Spacer()

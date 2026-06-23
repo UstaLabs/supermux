@@ -281,11 +281,15 @@ final class BrokerSession {
     func config() async -> AppConfigDto? { try? await api.getConfig() }
     func setPAName(_ name: String) { Task { [api] in try? await api.putConfig(paName: name) } }
 
-    /// PUT /settings/config — partial patch. All fields are optional; pass nil to leave unchanged.
+    /// PUT /settings/config — partial patch. All fields are optional; pass nil to leave
+    /// unchanged. An empty-string `voiceCleanupModel` ("") resets the model to the
+    /// engine's default (the broker's reset sentinel).
     func saveConfig(paName: String? = nil, voiceCleanupModel: String? = nil,
+                    voiceCleanupEngine: String? = nil,
                     claudeOauthToken: String? = nil, anthropicApiKey: String? = nil,
                     codexApiKey: String? = nil, cursorApiKey: String? = nil) async {
         try? await api.saveConfig(paName: paName, voiceCleanupModel: voiceCleanupModel,
+                                  voiceCleanupEngine: voiceCleanupEngine,
                                   claudeOauthToken: claudeOauthToken, anthropicApiKey: anthropicApiKey,
                                   codexApiKey: codexApiKey, cursorApiKey: cursorApiKey)
     }
@@ -350,6 +354,18 @@ final class BrokerSession {
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         return try? await URLSession.shared.data(for: req).0
+    }
+
+    /// Stream an attachment to a temp file with progress; throws on HTTP/transport failure
+    /// (unlike `loadFile`, which silently returns nil). Returns the local file URL. Used by
+    /// the file-row download UI so large files report progress and surface errors.
+    func downloadFile(_ id: String, name: String,
+                      onProgress: @escaping (Double) -> Void) async throws -> URL {
+        guard let url = URL(string: "\(baseURL)/files/\(id)") else { throw URLError(.badURL) }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let dest = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        return try await FileDownloader(dest: dest, onProgress: onProgress).download(req)
     }
 
     // MARK: - Dictation transcribe (POST /sessions/:id/transcribe → { text, degraded? })

@@ -24,5 +24,7 @@ actual class SecureTokenStore actual constructor() {
     }
     actual fun save(token: String) { prefs.edit().putString("token", token).apply() }
     actual fun load(): String? = prefs.getString("token", null)
-    actual fun clear() { prefs.edit().remove("token").apply() }
+    actual fun clear() { prefs.edit().remove("token").remove("base_url").apply() }
+    actual fun saveBaseUrl(url: String) { prefs.edit().putString("base_url", url).apply() }
+    actual fun loadBaseUrl(): String? = prefs.getString("base_url", null)
 }

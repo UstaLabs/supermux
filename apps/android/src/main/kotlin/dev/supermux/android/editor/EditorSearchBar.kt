@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -32,7 +33,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import dev.supermux.android.R
 import dev.supermux.android.theme.HapticKind
-import dev.supermux.android.theme.LocalPanes
 import dev.supermux.android.theme.MonoFontFamily
 import dev.supermux.android.theme.Space
 import dev.supermux.android.theme.rememberHaptics
@@ -44,20 +44,20 @@ fun EditorSearchField(
     onQueryChange: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
 
     Row(
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(Color(c.muted).copy(alpha = 0.5f))
+            .background(cs.surfaceVariant.copy(alpha = 0.5f))
             .padding(horizontal = Space.sm, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             painter = painterResource(R.drawable.ic_search),
             contentDescription = null,
-            tint = Color(c.mutedForeground),
+            tint = cs.onSurfaceVariant,
             modifier = Modifier.size(14.dp),
         )
         BasicTextField(
@@ -65,11 +65,11 @@ fun EditorSearchField(
             onValueChange = onQueryChange,
             singleLine = true,
             textStyle = TextStyle(
-                color = Color(c.foreground),
+                color = cs.onSurface,
                 fontFamily = MonoFontFamily,
                 fontSize = 12.sp,
             ),
-            cursorBrush = SolidColor(Color(c.primary)),
+            cursorBrush = SolidColor(cs.primary),
             modifier = Modifier
                 .weight(1f)
                 .padding(start = Space.sm),
@@ -78,7 +78,7 @@ fun EditorSearchField(
                     if (query.isEmpty()) {
                         Text(
                             "Search files…",
-                            color = Color(c.mutedForeground),
+                            color = cs.onSurfaceVariant,
                             fontFamily = MonoFontFamily,
                             fontSize = 12.sp,
                         )
@@ -98,7 +98,7 @@ fun EditorSearchOverlay(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     val haptic = rememberHaptics()
     val scroll = rememberScrollState()
 
@@ -119,7 +119,7 @@ fun EditorSearchOverlay(
                 .fillMaxWidth()
                 .shadow(8.dp, RoundedCornerShape(8.dp))
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color(c.card))
+                .background(cs.surfaceContainer)
                 .heightIn(max = 240.dp)
                 .verticalScroll(scroll),
         ) {
@@ -127,7 +127,7 @@ fun EditorSearchOverlay(
                 val alpha = if (result.ignored) 0.5f else 1f
                 Text(
                     result.path,
-                    color = Color(c.foreground).copy(alpha = alpha),
+                    color = cs.onSurface.copy(alpha = alpha),
                     fontFamily = MonoFontFamily,
                     fontSize = 12.sp,
                     maxLines = 2,
