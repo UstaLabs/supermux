@@ -187,6 +187,7 @@ struct ChatPane: View {
                 TextField("Message \(session.name)…", text: $draft, axis: .vertical)
                     .lineLimit(composerExpanded ? (1...12) : (1...1))
                     .focused($composing)
+                    .composerHardwareKeyboardSubmit(canSubmit: canSend) { sendMessage() }
                 if !composerExpanded {
                     micButton
                 }
