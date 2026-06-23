@@ -37,4 +37,13 @@ final class PreviewFilenameTests: XCTestCase {
             previewFilename(name: nil, mime: "image/png", fallbackBase: "image", defaultExt: "jpg"),
             "image.png")
     }
+
+    func testStripsMimeParametersAndLowercases() {
+        XCTAssertEqual(previewFilename(name: nil, mime: "text/plain; charset=utf-8"), "file.txt")
+        XCTAssertEqual(previewFilename(name: nil, mime: "APPLICATION/PDF"), "file.pdf")
+    }
+
+    func testKeepsDotfileNameAsIs() {
+        XCTAssertEqual(previewFilename(name: ".gitignore", mime: "text/plain"), ".gitignore")
+    }
 }

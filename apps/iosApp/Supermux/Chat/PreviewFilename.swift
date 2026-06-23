@@ -17,7 +17,7 @@ import UniformTypeIdentifiers
 func previewFilename(name: String?, mime: String?,
                      fallbackBase: String = "file", defaultExt: String? = nil) -> String {
     if let n = name, !n.isEmpty, n.contains(".") { return n }
-    let base = (name?.isEmpty == false) ? name! : fallbackBase
+    let base = name.flatMap { $0.isEmpty ? nil : $0 } ?? fallbackBase
     if let ext = mimeFileExtension(mime) ?? defaultExt {
         return "\(base).\(ext)"
     }
@@ -25,8 +25,12 @@ func previewFilename(name: String?, mime: String?,
 }
 
 /// The preferred filename extension for a MIME type (UTI-backed), falling back to the subtype.
+/// Strips any `; parameters` (e.g. `text/plain; charset=utf-8`) and lowercases first, since an
+/// attachment's MIME can arrive as a raw Content-Type value.
 private func mimeFileExtension(_ mime: String?) -> String? {
-    guard let mime, !mime.isEmpty else { return nil }
-    if let ext = UTType(mimeType: mime)?.preferredFilenameExtension { return ext }
-    return mime.split(separator: "/").last.map(String.init)
+    guard let mime else { return nil }
+    let bare = mime.prefix { $0 != ";" }.trimmingCharacters(in: .whitespaces).lowercased()
+    guard !bare.isEmpty else { return nil }
+    if let ext = UTType(mimeType: bare)?.preferredFilenameExtension { return ext }
+    return bare.split(separator: "/").last.map(String.init)
 }
