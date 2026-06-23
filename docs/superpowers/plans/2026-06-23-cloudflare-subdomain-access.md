@@ -115,13 +115,7 @@ test("parseTunnelId extracts a UUID, else undefined", () => {
 Run: `bun test src/core/tunnels/cloudflared.test.ts -t "baseDomainOf"`
 Expected: FAIL — `baseDomainOf` (and the others) are not exported / not a function.
 
-- [ ] **Step 3 — implement the helpers.** In `src/core/tunnels/cloudflared.ts`, add `homedir` to the `os` import — there is no `os` import yet, so add this near the top imports (below the existing `import` lines):
-
-```ts
-import { homedir } from "os"
-```
-
-Then add these exported helpers directly below the existing `hostFromHint` function (above `export const cloudflaredProvider`):
+- [ ] **Step 3 — implement the helpers.** In `src/core/tunnels/cloudflared.ts`, add these exported helpers directly below the existing `hostFromHint` function (above `export const cloudflaredProvider`). They need no new imports — `TUNNEL_NAME` is already defined in the file (the `homedir` import is added in Task 3, where it's first used):
 
 ```ts
 /**
@@ -285,7 +279,7 @@ async function resolveTunnelId(ctx: ConnectCtx, createOut: string): Promise<stri
 }
 ```
 
-- [ ] **Step 4 — replace the named branch of `up()`.** In `src/core/tunnels/cloudflared.ts`, replace the entire `if (mode.id === "named") { … }` block (currently ~lines 99-126, ending with `return { publicUrl: \`https://${host}\`, stable: true }`) with:
+- [ ] **Step 4 — replace the named branch of `up()`.** First add `import { homedir } from "os"` to the top of `src/core/tunnels/cloudflared.ts` (the new code uses `homedir()`). Then replace the entire `if (mode.id === "named") { … }` block (currently ~lines 99-126, ending with `return { publicUrl: \`https://${host}\`, stable: true }`) with:
 
 ```ts
     if (mode.id === "named") {
