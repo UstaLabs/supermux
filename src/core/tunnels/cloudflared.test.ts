@@ -275,3 +275,74 @@ test("parseTunnelId extracts a UUID, else undefined", () => {
   )
   expect(parseTunnelId("no id here")).toBeUndefined()
 })
+
+// ── up(): named — ingress config + wildcard ─────────────────────────────────────
+
+test("named: writes config.yml with the broker-host ingress rule (the 404 fix)", async () => {
+  const { ctx, calls } = makeCtx({ mode: "named", publicUrlHint: "mux.example.com" }, [
+    { match: /tunnel create/, result: { stdout: "Created tunnel supermux with id 11111111-1111-4111-8111-111111111111" } },
+  ])
+  const res = await cloudflaredProvider.up(ctx)
+  expect(res.publicUrl).toBe("https://mux.example.com")
+  expect(res.proxyBaseDomain).toBeUndefined()
+  const write = calls.find((c) => c[0] === "sh" && c[2]!.includes("config.yml"))
+  expect(write).toBeTruthy()
+  expect(write![2]).toContain("hostname: mux.example.com")
+  expect(write![2]).toContain("service: http://localhost:8787")
+  expect(write![2]).toContain("http_status:404")
+  expect(write![2]).toContain("11111111-1111-4111-8111-111111111111.json")
+  expect(write![2]).not.toContain("*.")
+  expect(calls).toContainEqual(["cloudflared", "tunnel", "route", "dns", "supermux", "mux.example.com"])
+  expect(calls).toContainEqual(["cloudflared", "service", "install"])
+})
+
+test("named: --wildcard routes *.base and adds a wildcard ingress rule, returns proxyBaseDomain", async () => {
+  const { ctx, calls } = makeCtx({ mode: "named", publicUrlHint: "mux.example.com", wildcard: true }, [
+    { match: /tunnel create/, result: { stdout: "id 22222222-2222-4222-8222-222222222222" } },
+  ])
+  const res = await cloudflaredProvider.up(ctx)
+  expect(res.proxyBaseDomain).toBe("example.com")
+  expect(calls).toContainEqual(["cloudflared", "tunnel", "route", "dns", "supermux", "*.example.com"])
+  const write = calls.find((c) => c[0] === "sh" && c[2]!.includes("config.yml"))
+  expect(write![2]).toContain('hostname: "*.example.com"')
+})
+
+test("named: a --wildcard-domain overrides the derived base", async () => {
+  const { ctx, calls } = makeCtx(
+    { mode: "named", publicUrlHint: "mux.example.com", wildcard: true, wildcardDomain: "apps.example.com" },
+    [{ match: /tunnel create/, result: { stdout: "id 22222222-2222-4222-8222-222222222222" } }],
+  )
+  const res = await cloudflaredProvider.up(ctx)
+  expect(res.proxyBaseDomain).toBe("apps.example.com")
+  expect(calls).toContainEqual(["cloudflared", "tunnel", "route", "dns", "supermux", "*.apps.example.com"])
+})
+
+test("named: wildcard DNS failure keeps the broker host working and skips proxyBaseDomain", async () => {
+  const { ctx, calls, out } = makeCtx({ mode: "named", publicUrlHint: "mux.example.com", wildcard: true }, [
+    { match: /tunnel create/, result: { stdout: "id 33333333-3333-4333-8333-333333333333" } },
+    { match: /route dns supermux \*\./, result: { code: 1, stderr: "wildcard not allowed on this plan" } },
+  ])
+  const res = await cloudflaredProvider.up(ctx)
+  expect(res.proxyBaseDomain).toBeUndefined()
+  const write = calls.find((c) => c[0] === "sh" && c[2]!.includes("config.yml"))
+  expect(write![2]).not.toContain("*.example.com")
+  expect(out.join("\n")).toContain("path mode")
+})
+
+test("named: resolves the tunnel id from `tunnel list` when create says it already exists", async () => {
+  const { ctx, calls } = makeCtx({ mode: "named", publicUrlHint: "mux.example.com" }, [
+    { match: /tunnel create/, result: { code: 1, stderr: "tunnel with name supermux already exists" } },
+    { match: /tunnel list --output json/, result: { stdout: '[{"id":"44444444-4444-4444-4444-444444444444","name":"supermux"}]' } },
+  ])
+  await cloudflaredProvider.up(ctx)
+  const write = calls.find((c) => c[0] === "sh" && c[2]!.includes("config.yml"))
+  expect(write![2]).toContain("credentials-file:")
+  expect(write![2]).toContain("44444444-4444-4444-4444-444444444444.json")
+})
+
+test("named: rejects a hostname containing shell metacharacters / newlines", async () => {
+  const { ctx } = makeCtx({ mode: "named", publicUrlHint: "mux.example.com\nSUPERMUX_CFG\nwhoami" }, [
+    { match: /tunnel create/, result: { stdout: "id 55555555-5555-4555-8555-555555555555" } },
+  ])
+  await expect(cloudflaredProvider.up(ctx)).rejects.toThrow(/invalid hostname/i)
+})
