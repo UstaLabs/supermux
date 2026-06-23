@@ -364,7 +364,9 @@ final class BrokerSession {
         guard let url = URL(string: "\(baseURL)/files/\(id)") else { throw URLError(.badURL) }
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let dest = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(id, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dest = dir.appendingPathComponent(name)
         return try await FileDownloader(dest: dest, onProgress: onProgress).download(req)
     }
 
