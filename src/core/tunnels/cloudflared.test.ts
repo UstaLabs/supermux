@@ -1,5 +1,12 @@
 import { test, expect, mock } from "bun:test"
-import { cloudflaredProvider, baseDomainOf, buildTunnelConfig, parseTunnelId } from "./cloudflared"
+import {
+  cloudflaredProvider,
+  baseDomainOf,
+  buildTunnelConfig,
+  parseTunnelId,
+  linuxInstallScript,
+  installHintLines,
+} from "./cloudflared"
 import { which } from "./run"
 import type { ConnectCtx, RunResult } from "./types"
 
@@ -223,20 +230,39 @@ test("install: short-circuits to true when cloudflared is already on PATH", asyn
   expect(calls).toEqual([]) // nothing spawned — it's already there
 })
 
-// Force the "not installed on linux" path deterministically (this host may have
-// cloudflared). We stub `which` → false via mock.module for THIS test, then
-// restore the real module so nothing leaks into other tests. Runs last.
-test("install: on linux WITHOUT cloudflared, prints the docs URL and returns false", async () => {
+// Force the linux install paths deterministically (this host may have cloudflared
+// and/or a package manager). We stub `which` via mock.module for THESE tests, then
+// restore the real module so nothing leaks into other tests.
+test("install: on linux with no package manager, prints working install links and returns false", async () => {
   if (process.platform === "darwin") return // brew path is the darwin branch
   const real = await import("./run")
-  mock.module("./run", () => ({ ...real, which: () => false }))
+  mock.module("./run", () => ({ ...real, which: () => false })) // nothing on PATH
   try {
     const { ctx, out } = makeCtx() // yes:true ⇒ consent assumed, no prompt
     const ok = await cloudflaredProvider.install(ctx)
     expect(ok).toBe(false)
-    expect(out.join("\n")).toContain("developers.cloudflare.com/cloudflare-tunnel/downloads")
+    const text = out.join("\n")
+    expect(text).toContain("https://pkg.cloudflare.com/")
+    expect(text).not.toContain("cloudflare-tunnel/downloads") // the old dead 404 path
   } finally {
     mock.module("./run", () => real) // restore for any later test runs
+  }
+})
+
+test("install: on linux with apt + no cloudflared, runs the official apt install script", async () => {
+  if (process.platform === "darwin") return
+  const real = await import("./run")
+  // cloudflared absent; apt-get present ⇒ the apt branch runs.
+  mock.module("./run", () => ({ ...real, which: (b: string) => b === "apt-get" }))
+  try {
+    const { ctx, calls } = makeCtx()
+    const ok = await cloudflaredProvider.install(ctx)
+    expect(ok).toBe(false) // the faked run doesn't really install ⇒ still absent
+    const sh = calls.find((c) => c[0] === "sh" && c[2]!.includes("apt-get install -y cloudflared"))
+    expect(sh).toBeTruthy()
+    expect(sh![2]).toContain("https://pkg.cloudflare.com/cloudflare-main.gpg")
+  } finally {
+    mock.module("./run", () => real)
   }
 })
 
@@ -274,6 +300,29 @@ test("parseTunnelId extracts a UUID, else undefined", () => {
     "11111111-2222-4333-8444-555555555555",
   )
   expect(parseTunnelId("no id here")).toBeUndefined()
+})
+
+test("linuxInstallScript(apt) uses Cloudflare's signed apt repo and installs non-interactively", () => {
+  const s = linuxInstallScript("apt")
+  expect(s).toContain("https://pkg.cloudflare.com/cloudflare-main.gpg")
+  expect(s).toContain("https://pkg.cloudflare.com/cloudflared any main")
+  expect(s).toContain("apt-get install -y cloudflared")
+  expect(s).toContain('[ "$(id -u)" = 0 ] || SUDO=sudo') // sudo only when not root
+})
+
+test("linuxInstallScript(dnf/yum) drops the official .repo and installs", () => {
+  for (const pm of ["dnf", "yum"] as const) {
+    const s = linuxInstallScript(pm)
+    expect(s).toContain("https://pkg.cloudflare.com/cloudflared.repo")
+    expect(s).toContain(`${pm} install -y cloudflared`)
+  }
+})
+
+test("installHintLines points at working URLs (not the dead docs path)", () => {
+  const text = installHintLines().join("\n")
+  expect(text).toContain("https://pkg.cloudflare.com/")
+  expect(text).toContain("https://github.com/cloudflare/cloudflared/releases/latest")
+  expect(text).not.toContain("cloudflare-tunnel/downloads")
 })
 
 // ── up(): named — ingress config + wildcard ─────────────────────────────────────

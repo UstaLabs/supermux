@@ -15,7 +15,12 @@ import { which, extractFirstUrl } from "./run"
 import { resolveMode, type TunnelProvider, type ConnectCtx, type TunnelResult } from "./types"
 
 const TUNNEL_NAME = "supermux"
-const DOWNLOAD_DOCS = "https://developers.cloudflare.com/cloudflare-tunnel/downloads/"
+// Working, self-updating install pages. The old
+// developers.cloudflare.com/cloudflare-tunnel/downloads/ path now 404s.
+// pkg.cloudflare.com carries the apt/dnf repo instructions; the releases page has
+// standalone binaries for any distro/arch.
+const DOWNLOAD_DOCS = "https://pkg.cloudflare.com/"
+const RELEASES = "https://github.com/cloudflare/cloudflared/releases/latest"
 
 /**
  * Reduce `ctx.publicUrlHint` to a bare hostname for the named mode. Accepts a
@@ -82,6 +87,40 @@ export function parseTunnelId(text: string): string | undefined {
 }
 
 /**
+ * The shell script that installs cloudflared from Cloudflare's official package
+ * repo (https://pkg.cloudflare.com) for a detected package manager. Uses sudo only
+ * when not already root. apt adds the signed repo + key; dnf/yum drop the .repo
+ * file. Installs non-interactively (-y). Returned for `sh -c`.
+ */
+export function linuxInstallScript(pm: "apt" | "dnf" | "yum"): string {
+  const sudo = `SUDO=""; [ "$(id -u)" = 0 ] || SUDO=sudo;`
+  if (pm === "apt") {
+    return (
+      `${sudo} ` +
+      `$SUDO mkdir -p --mode=0755 /usr/share/keyrings && ` +
+      `curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | $SUDO tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null && ` +
+      `echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' | $SUDO tee /etc/apt/sources.list.d/cloudflared.list >/dev/null && ` +
+      `$SUDO apt-get update && $SUDO apt-get install -y cloudflared`
+    )
+  }
+  // dnf / yum (RPM): drop Cloudflare's .repo file, then install.
+  return (
+    `${sudo} ` +
+    `curl -fsSL https://pkg.cloudflare.com/cloudflared.repo | $SUDO tee /etc/yum.repos.d/cloudflared.repo >/dev/null && ` +
+    `$SUDO ${pm} install -y cloudflared`
+  )
+}
+
+/** Copy-paste fallback when auto-install can't run (unknown PM, no curl, sudo denied). */
+export function installHintLines(): string[] {
+  return [
+    "Couldn't auto-install cloudflared. Install it manually, then re-run `supermux connect`:",
+    `  • Packages (apt/dnf): ${DOWNLOAD_DOCS}`,
+    `  • Standalone binary:  ${RELEASES}`,
+  ]
+}
+
+/**
  * Conservative hostname guard: letters, digits, dots, hyphens only. Rejects
  * whitespace/newlines/shell metacharacters so a host or base domain can be safely
  * interpolated into the config heredoc and DNS-route argv. Throws on a bad value.
@@ -122,10 +161,11 @@ export const cloudflaredProvider: TunnelProvider = {
   },
 
   /**
-   * Offer to install cloudflared (consent-gated). Best-effort:
+   * Offer to install cloudflared (consent-gated). Best-effort, never throws:
    *   • darwin → `brew install cloudflared`
-   *   • linux  → print the official download docs (no safe one-liner) → false
-   * Returns true only if cloudflared ends up present. Never throws.
+   *   • linux  → Cloudflare's official apt/dnf/yum repo (sudo when not root)
+   * Falls back to printing working install links. Returns true iff cloudflared
+   * ends up on PATH.
    */
   async install(ctx: ConnectCtx): Promise<boolean> {
     // Already there? Nothing to do.
@@ -141,13 +181,25 @@ export const cloudflaredProvider: TunnelProvider = {
       } catch {
         // Swallow — we re-check PATH below; brew may be absent or offline.
       }
-      return which("cloudflared")
+    } else {
+      // Linux: install from Cloudflare's official repo via the detected package
+      // manager (best-effort; needs sudo unless already root).
+      const pm = which("apt-get") ? "apt" : which("dnf") ? "dnf" : which("yum") ? "yum" : undefined
+      if (pm) {
+        ctx.println(`Installing cloudflared via ${pm} (Cloudflare's official repo)…`)
+        try {
+          await ctx.run(["sh", "-c", linuxInstallScript(pm)], { stream: true })
+        } catch {
+          // Swallow — re-check PATH below; print the fallback if it didn't land.
+        }
+      }
     }
 
-    // Linux (and anything else): no universally-safe auto-install. Point at docs.
-    ctx.println("Couldn't auto-install cloudflared. Install it from:")
-    ctx.println(`  ${DOWNLOAD_DOCS}`)
-    return which("cloudflared")
+    if (which("cloudflared")) return true
+
+    // Auto-install didn't land — print working, copy-paste instructions.
+    for (const line of installHintLines()) ctx.println(line)
+    return false
   },
 
   /**
