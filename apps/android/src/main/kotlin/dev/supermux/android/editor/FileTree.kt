@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -20,14 +21,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
 import dev.supermux.android.theme.HapticKind
-import dev.supermux.android.theme.LocalPanes
 import dev.supermux.android.theme.MonoFontFamily
 import dev.supermux.android.theme.rememberHaptics
 import dev.supermux.net.FsEntry
@@ -120,7 +119,7 @@ private fun TreeNodeRow(
     loading: Set<String>,
     onClick: (TreeNode) -> Unit,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     val haptic = rememberHaptics()
     val isDir = node.entry.type == "dir"
     val isOpen = expanded.contains(node.path)
@@ -143,14 +142,14 @@ private fun TreeNodeRow(
                 isLoading -> CircularProgressIndicator(
                     modifier = Modifier.size(12.dp),
                     strokeWidth = 1.5.dp,
-                    color = Color(c.mutedForeground),
+                    color = cs.onSurfaceVariant,
                 )
                 isDir -> Icon(
                     painter = painterResource(
                         if (isOpen) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right,
                     ),
                     contentDescription = null,
-                    tint = Color(c.mutedForeground).copy(alpha = alpha),
+                    tint = cs.onSurfaceVariant.copy(alpha = alpha),
                     modifier = Modifier.size(14.dp),
                 )
             }
@@ -158,12 +157,12 @@ private fun TreeNodeRow(
         Icon(
             painter = painterResource(if (isDir) R.drawable.ic_folder_open else R.drawable.ic_file),
             contentDescription = null,
-            tint = Color(c.mutedForeground).copy(alpha = alpha),
+            tint = cs.onSurfaceVariant.copy(alpha = alpha),
             modifier = Modifier.size(16.dp),
         )
         Text(
             node.entry.name,
-            color = Color(c.foreground).copy(alpha = alpha),
+            color = cs.onSurface.copy(alpha = alpha),
             fontFamily = MonoFontFamily,
             fontSize = 13.sp,
             maxLines = 1,

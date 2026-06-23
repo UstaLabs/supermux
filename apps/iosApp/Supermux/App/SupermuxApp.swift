@@ -2,6 +2,10 @@ import SwiftUI
 
 @main
 struct SupermuxApp: App {
+    // UIKit AppDelegate (push/APNs) adapted into the SwiftUI lifecycle. The delegate
+    // requests notification authorization + registers for remote notifications on
+    // launch (if paired), and orchestrates relay/broker push registration.
+    @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
     @State private var paired: Bool
     @AppStorage("appearance") private var appearance = "system"
 
@@ -31,6 +35,7 @@ struct SupermuxApp: App {
                     PairingView { _ in
                         paired = true
                         PhoneWatchProvisioner.shared.pushCurrent()
+                        PushManager.shared.registerIfPaired()
                     }
                 }
             }
@@ -42,6 +47,7 @@ struct SupermuxApp: App {
                     BrokerConfig.pair(p)
                     paired = true
                     PhoneWatchProvisioner.shared.pushCurrent()
+                    PushManager.shared.registerIfPaired()
                 }
             }
             .preferredColorScheme(appearance == "light" ? .light : appearance == "dark" ? .dark : nil)

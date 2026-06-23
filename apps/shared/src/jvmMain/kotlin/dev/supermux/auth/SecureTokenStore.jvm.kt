@@ -5,7 +5,10 @@ package dev.supermux.auth
 // are iOS Keychain + Android Keystore — this is deliberately not persistent.
 actual class SecureTokenStore actual constructor() {
     private var token: String? = null
+    private var baseUrl: String? = null
     actual fun save(token: String) { this.token = token }
     actual fun load(): String? = token
-    actual fun clear() { token = null }
+    actual fun clear() { token = null; baseUrl = null }
+    actual fun saveBaseUrl(url: String) { this.baseUrl = url }
+    actual fun loadBaseUrl(): String? = baseUrl
 }

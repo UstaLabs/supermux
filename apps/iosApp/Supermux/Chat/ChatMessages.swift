@@ -1,6 +1,7 @@
 import SwiftUI
 import Shared
 import UIKit
+import QuickLook
 
 struct MessageRow: View {
     let entry: LogEntry
@@ -14,7 +15,6 @@ struct MessageRow: View {
                 if isAgent {
                     MarkdownView(text: text).font(.subheadline)
                         .transcriptBody()
-                        .contextMenu { Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") } }
                 } else {
                     Text(text).font(.subheadline.weight(.medium))
                         .textSelection(.enabled)
@@ -33,8 +33,13 @@ struct AttachmentView: View {
     let att: Attachment
     let broker: BrokerSession
     @State private var image: UIImage?
-    @State private var showLightbox = false
-    @State private var shareURL: URL?
+    @State private var imageData: Data?
+    @State private var previewURL: URL?
+    @State private var fileURL: URL?
+    @State private var downloading = false
+    @State private var progress: Double = 0
+    @State private var failed = false
+    @State private var showShare = false
     private var isImage: Bool { (att.mime ?? "").hasPrefix("image") || (att.kind ?? "") == "photo" }
 
     var body: some View {
@@ -42,46 +47,87 @@ struct AttachmentView: View {
             if isImage { imageView } else { fileRow }
         }
         .task {
-            if isImage, image == nil, let data = await broker.loadFile(att.file_id) { image = UIImage(data: data) }
+            if isImage, image == nil, let data = await broker.loadFile(att.file_id) {
+                imageData = data
+                image = UIImage(data: data)
+            }
         }
     }
 
     @ViewBuilder private var imageView: some View {
         if let image {
-            Image(uiImage: image).resizable().scaledToFit()
-                .frame(maxWidth: .infinity, maxHeight: 240, alignment: .leading)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .onTapGesture { showLightbox = true }
-                .fullScreenCover(isPresented: $showLightbox) { Lightbox(image: image) }
+            Button {
+                if previewURL == nil, let data = imageData {
+                    previewURL = tmpURL(data, name: imageFileName)
+                }
+            } label: {
+                Image(uiImage: image).resizable().scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: 240, alignment: .leading)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .quickLookPreview($previewURL)
         } else {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color(.secondarySystemBackground)).frame(height: 140).overlay(ProgressView())
         }
     }
 
+    /// A filename with an extension Quick Look can key off (falls back to the mime subtype).
+    private var imageFileName: String {
+        if let n = att.name, n.contains(".") { return n }
+        let ext = (att.mime?.split(separator: "/").last).map(String.init) ?? "jpg"
+        return "image.\(ext)"
+    }
+
     private var fileRow: some View {
         Button {
-            Task {
-                if let data = await broker.loadFile(att.file_id) { shareURL = tmpURL(data, name: att.name ?? "file") }
-            }
+            if downloading { return }
+            if fileURL != nil { showShare = true } else { startDownload() }
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: fileIcon).font(.title3).foregroundStyle(.secondary).frame(width: 26)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(att.name ?? "file").font(.caption.weight(.medium)).lineLimit(1)
-                    if let sz = att.size?.int64Value, sz > 0 {
+                    Text(att.name ?? "file").font(.caption.weight(.medium))
+                        .lineLimit(2).truncationMode(.middle)
+                    if failed {
+                        Text("Download failed — tap to retry").font(.caption2).foregroundStyle(.red)
+                    } else if let sz = att.size?.int64Value, sz > 0 {
                         Text(fmtSize(sz)).font(.caption2).foregroundStyle(.secondary)
                     }
                 }
                 Spacer(minLength: 4)
-                Image(systemName: "arrow.down.circle").foregroundStyle(Theme.teal)
+                if downloading {
+                    HStack(spacing: 6) {
+                        ProgressView(value: progress).progressViewStyle(.linear).frame(width: 70)
+                        Text("\(Int(progress * 100))%").font(.caption2.monospaced())
+                            .foregroundStyle(.secondary).monospacedDigit()
+                    }
+                } else if failed {
+                    Image(systemName: "arrow.clockwise.circle").foregroundStyle(.red)
+                } else {
+                    Image(systemName: fileURL == nil ? "arrow.down.circle" : "square.and.arrow.up")
+                        .foregroundStyle(Theme.teal)
+                }
             }
             .padding(10)
             .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
-        .sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) {
-            if let u = shareURL { ShareSheet(items: [u]) }
+        .sheet(isPresented: $showShare) { if let u = fileURL { ShareSheet(items: [u]) } }
+    }
+
+    private func startDownload() {
+        failed = false; downloading = true; progress = 0
+        Task {
+            do {
+                let u = try await broker.downloadFile(att.file_id, name: att.name ?? "file") { p in
+                    Task { @MainActor in progress = p }
+                }
+                await MainActor.run { downloading = false; fileURL = u; showShare = true }
+            } catch {
+                await MainActor.run { downloading = false; failed = true }
+            }
         }
     }
 
@@ -100,24 +146,6 @@ struct AttachmentView: View {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
         try? data.write(to: url)
         return url
-    }
-}
-
-struct Lightbox: View {
-    let image: UIImage
-    @Environment(\.dismiss) private var dismiss
-    @State private var scale: CGFloat = 1
-    var body: some View {
-        ZStack(alignment: .topTrailing) {
-            Color.black.ignoresSafeArea()
-            Image(uiImage: image).resizable().scaledToFit().scaleEffect(scale)
-                .gesture(MagnificationGesture().onChanged { scale = max(1, $0) }
-                    .onEnded { _ in withAnimation { if scale < 1 { scale = 1 } } })
-            Button { dismiss() } label: {
-                Image(systemName: "xmark").font(.title2.weight(.semibold)).foregroundStyle(.white)
-                    .padding(12).background(.ultraThinMaterial, in: Circle())
-            }.padding()
-        }
     }
 }
 

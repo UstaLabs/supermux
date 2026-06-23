@@ -11,4 +11,8 @@ expect class SecureTokenStore() {
     fun save(token: String)
     fun load(): String?
     fun clear()
+    // Phase 2: the broker base URL persisted next to the token, so pairing can
+    // store host+token atomically in one secure store. clear() drops both.
+    fun saveBaseUrl(url: String)
+    fun loadBaseUrl(): String?
 }

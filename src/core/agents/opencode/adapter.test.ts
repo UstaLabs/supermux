@@ -175,9 +175,11 @@ test("send() folds a resolved attachment path into the prompt text", async () =>
 test("event stream maps tool-part state transitions and dedupes started", async () => {
   const events: OpenCodeEvent[] = [
     { type: "message.part.updated", properties: { part: { type: "tool", tool: "bash", callID: "c1", sessionID: "sess_1", state: { status: "running" } } } },
-    { type: "message.part.updated", properties: { part: { type: "tool", tool: "bash", callID: "c1", sessionID: "sess_1", state: { status: "running" } } } }, // dup → ignored
-    { type: "message.part.updated", properties: { part: { type: "tool", tool: "bash", callID: "c1", sessionID: "sess_1", state: { status: "completed" } } } },
-    { type: "message.part.updated", properties: { part: { type: "tool", tool: "edit", callID: "c2", sessionID: "sess_1", state: { status: "error" } } } },
+    { type: "message.part.updated", properties: { part: { type: "tool", tool: "bash", callID: "c1", sessionID: "sess_1", state: { status: "running" } } } }, // no input yet → still ignored
+    { type: "message.part.updated", properties: { part: { type: "tool", tool: "bash", callID: "c1", sessionID: "sess_1", state: { status: "running", input: { command: "npm test" } } } } },
+    { type: "message.part.updated", properties: { part: { type: "tool", tool: "bash", callID: "c1", sessionID: "sess_1", state: { status: "running", input: { command: "npm test" } } } } }, // dup → ignored
+    { type: "message.part.updated", properties: { part: { type: "tool", tool: "bash", callID: "c1", sessionID: "sess_1", state: { status: "completed", input: { command: "npm test" }, output: "ok", title: "npm test" } } } },
+    { type: "message.part.updated", properties: { part: { type: "tool", tool: "edit", callID: "c2", sessionID: "sess_1", state: { status: "error", input: { filePath: "/a.ts" }, error: "fail" } } } },
     { type: "session.idle", properties: { sessionID: "sess_1" } }, // ignored by mapping
   ]
   const { client } = makeClient({ events })
@@ -188,7 +190,7 @@ test("event stream maps tool-part state transitions and dedupes started", async 
   await adapter.start()
   await tick()
   const tools = collected.filter((e) => e.kind === "tool-call") as Extract<AgentEvent, { kind: "tool-call" }>[]
-  expect(tools.map((t) => `${t.tool}:${t.phase}`)).toEqual(["bash:started", "bash:completed", "edit:failed"])
+  expect(tools.map((t) => `${t.tool}:${t.phase}`)).toEqual(["bash:started", "bash:completed", "edit:started", "edit:failed"])
 })
 
 test("interrupt() aborts the session", async () => {

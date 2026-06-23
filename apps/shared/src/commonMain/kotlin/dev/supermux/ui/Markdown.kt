@@ -6,11 +6,25 @@ data class MdSpan(val text: String, val kind: SpanStyleKind)
 sealed interface MdBlock {
     data class Prose(val text: String) : MdBlock
     data class Code(val lang: String?, val code: String) : MdBlock
+    // Block depth (iOS MarkdownView parity): headings, blockquotes, bullet + numbered list items.
+    // ADDITIVE — existing Prose/Code unchanged. Consumers with an exhaustive `when` must add arms.
+    data class Heading(val level: Int, val text: String) : MdBlock
+    data class Quote(val text: String) : MdBlock
+    data class Bullet(val text: String) : MdBlock
+    data class Numbered(val n: Int, val text: String) : MdBlock
 }
 
+private val headingRegex = Regex("""^(#{1,6})\s+(.*)$""")
+private val quoteRegex = Regex("""^>\s?(.*)$""")
+private val bulletRegex = Regex("""^[-*]\s+(.*)$""")
+private val numberedRegex = Regex("""^(\d+)\.\s+(.*)$""")
+
 /**
- * Split markdown into prose vs fenced ``` code blocks.
+ * Split markdown into prose vs fenced ``` code blocks, plus headings / blockquotes /
+ * bullet / numbered list items (iOS MarkdownView.parseMarkdown parity).
  * Handles ```lang\n...\n``` fences; unterminated fence = treat rest as code.
+ * Heading/quote/list recognition only happens OUTSIDE a code fence; the prose buffer is
+ * flushed before emitting a structural block so paragraph grouping stays intact.
  * Empty prose blocks are omitted.
  */
 fun parseMarkdownBlocks(input: String): List<MdBlock> {
@@ -20,26 +34,58 @@ fun parseMarkdownBlocks(input: String): List<MdBlock> {
     var codeLang: String? = null
     val buf = StringBuilder()
 
+    fun flushProse() {
+        val prose = buf.toString()
+        if (prose.isNotBlank()) result.add(MdBlock.Prose(prose.trimEnd('\n')))
+        buf.clear()
+    }
+
     for (line in lines) {
-        if (!inCode && line.trimStart().startsWith("```")) {
+        val trimmedStart = line.trimStart()
+        if (!inCode && trimmedStart.startsWith("```")) {
             // Flush prose
-            val prose = buf.toString()
-            if (prose.isNotBlank()) result.add(MdBlock.Prose(prose.trimEnd('\n')))
-            buf.clear()
+            flushProse()
             // Start code block — extract optional language tag
-            val fence = line.trimStart()
-            val tag = fence.removePrefix("```").trim()
+            val tag = trimmedStart.removePrefix("```").trim()
             codeLang = if (tag.isEmpty()) null else tag
             inCode = true
-        } else if (inCode && line.trimStart().startsWith("```")) {
+        } else if (inCode && trimmedStart.startsWith("```")) {
             // End of code block
             result.add(MdBlock.Code(codeLang, buf.toString().trimEnd('\n')))
             buf.clear()
             codeLang = null
             inCode = false
-        } else {
+        } else if (inCode) {
             if (buf.isNotEmpty()) buf.append('\n')
             buf.append(line)
+        } else {
+            // Outside a fence: recognize structural blocks, else accumulate prose.
+            val heading = headingRegex.find(line)
+            val numbered = numberedRegex.find(line)
+            val bullet = bulletRegex.find(line)
+            val quote = quoteRegex.find(line)
+            when {
+                heading != null -> {
+                    flushProse()
+                    result.add(MdBlock.Heading(heading.groupValues[1].length, heading.groupValues[2].trim()))
+                }
+                numbered != null -> {
+                    flushProse()
+                    result.add(MdBlock.Numbered(numbered.groupValues[1].toIntOrNull() ?: 1, numbered.groupValues[2]))
+                }
+                bullet != null -> {
+                    flushProse()
+                    result.add(MdBlock.Bullet(bullet.groupValues[1]))
+                }
+                quote != null -> {
+                    flushProse()
+                    result.add(MdBlock.Quote(quote.groupValues[1]))
+                }
+                else -> {
+                    if (buf.isNotEmpty()) buf.append('\n')
+                    buf.append(line)
+                }
+            }
         }
     }
 

@@ -14,7 +14,8 @@
     "revoke": "bun scripts/revoke.ts",
     "plugin": "bun scripts/plugin.ts",
     "migrate:mux": "bun scripts/migrate-to-mux.ts",
-    "generate:logo": "bun scripts/generate-logo-assets.ts"
+    "generate:logo": "bun scripts/generate-logo-assets.ts",
+    "relay": "bun src/relay/main.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

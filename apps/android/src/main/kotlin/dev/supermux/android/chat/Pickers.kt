@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -37,7 +38,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
 import dev.supermux.android.theme.HapticKind
-import dev.supermux.android.theme.LocalPanes
 import dev.supermux.android.theme.rememberHaptics
 
 /** Shared pill shape used by both ModelPill and EffortPill. */
@@ -46,7 +46,7 @@ private fun PillChip(
     label: String,
     onClick: () -> Unit,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     val haptic = rememberHaptics()
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
@@ -59,8 +59,8 @@ private fun PillChip(
         modifier = Modifier
             .scale(scale)
             .clip(RoundedCornerShape(20.dp))
-            .background(Color(c.card))
-            .border(1.dp, Color(c.border), RoundedCornerShape(20.dp))
+            .background(cs.surfaceContainer)
+            .border(1.dp, cs.outline, RoundedCornerShape(20.dp))
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -74,14 +74,14 @@ private fun PillChip(
     ) {
         Text(
             text = label,
-            color = Color(c.mutedForeground),
+            color = cs.onSurfaceVariant,
             fontSize = 11.sp,
             maxLines = 1,
         )
         Icon(
             painter = painterResource(R.drawable.ic_chevron_down),
             contentDescription = null,
-            tint = Color(c.mutedForeground),
+            tint = cs.onSurfaceVariant,
             modifier = Modifier.size(14.dp),
         )
     }
@@ -114,15 +114,15 @@ fun PickerSheet(
     onPick: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     val haptic = rememberHaptics()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = Color(c.card),
-        contentColor = Color(c.foreground),
+        containerColor = cs.surfaceContainerLow,
+        contentColor = cs.onSurface,
     ) {
         Column(
             modifier = Modifier
@@ -132,7 +132,7 @@ fun PickerSheet(
             // Sheet title
             Text(
                 text = title,
-                color = Color(c.foreground),
+                color = cs.onSurface,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 15.sp,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
@@ -150,7 +150,7 @@ fun PickerSheet(
                             onDismiss()
                         }
                         .background(
-                            if (isSelected) Color(c.primary).copy(alpha = 0.10f)
+                            if (isSelected) cs.primary.copy(alpha = 0.10f)
                             else Color.Transparent
                         )
                         .padding(horizontal = 20.dp, vertical = 14.dp),
@@ -159,7 +159,7 @@ fun PickerSheet(
                 ) {
                     Text(
                         text = label,
-                        color = if (isSelected) Color(c.primary) else Color(c.foreground),
+                        color = if (isSelected) cs.primary else cs.onSurface,
                         fontSize = 14.sp,
                         fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
                     )
@@ -168,7 +168,7 @@ fun PickerSheet(
                         Icon(
                             painter = painterResource(R.drawable.ic_check),
                             contentDescription = null,
-                            tint = Color(c.primary),
+                            tint = cs.primary,
                             modifier = Modifier.size(16.dp),
                         )
                     }

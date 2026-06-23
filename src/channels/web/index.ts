@@ -114,6 +114,7 @@ export interface WebChannelOpts {
   onSendFromWeb: (msg: InboundMessage) => void
   fileStore?: import("../../core/files/store").FileStore
   pushStore?: import("../../core/push/subscriptions").PushSubscriptionStore
+  deviceTokenStore?: import("../../core/push/device-tokens").DevicePushTokenStore
   vapidPublicKey?: string
   viewingTracker?: import("../../core/push/viewing-tracker").ViewingTracker
   getReads?: () => Record<string, string>          // sessionId -> last_read_at (snapshot)
@@ -215,6 +216,7 @@ export interface WebChannelOpts {
   pullClonedRepo?: (path: string) => unknown
   // null = update checks disabled (MUX_UPDATE_CHECK=0); undefined = same as null.
   updateChecker?: UpdateChecker | null
+  relayUrl?: string
 }
 
 export class WebChannel implements Channel {
@@ -231,7 +233,9 @@ export class WebChannel implements Channel {
   private readonly store: DeviceStore
   private readonly fileStore?: import("../../core/files/store").FileStore
   private readonly pushStore?: import("../../core/push/subscriptions").PushSubscriptionStore
+  private readonly deviceTokenStore?: import("../../core/push/device-tokens").DevicePushTokenStore
   private readonly vapidPublicKey?: string
+  private readonly relayUrl?: string
   private inboundHandlers: Array<(m: InboundMessage) => void> = []
   private wsConnections = new Set<{ ws: import("bun").ServerWebSocket<WSData>; deviceName: string }>()
   private displaySockets = new WeakMap<object, import("bun").Socket>()
@@ -247,7 +251,9 @@ export class WebChannel implements Channel {
     this.store = new DeviceStore(opts.devicesFile)
     this.fileStore = opts.fileStore
     this.pushStore = opts.pushStore
+    this.deviceTokenStore = opts.deviceTokenStore
     this.vapidPublicKey = opts.vapidPublicKey
+    this.relayUrl = opts.relayUrl
     this.fsWatcher = opts.fsWatcher
   }
 
@@ -280,6 +286,9 @@ export class WebChannel implements Channel {
   async start(): Promise<void> {
     if (this.pushStore) {
       this.store.addRevokeListener((name) => { this.pushStore!.remove(name) })
+    }
+    if (this.deviceTokenStore) {
+      this.store.addRevokeListener((name) => { this.deviceTokenStore!.remove(name) })
     }
     this.server = Bun.serve<WSData>({
       port: this.opts.port,
@@ -1141,6 +1150,24 @@ export class WebChannel implements Channel {
       return this.json({ ok: true })
     }
 
+    if (method === "POST" && path === "/push/device") {
+      const auth = this.requireAuth(req); if (!auth.ok) return new Response("unauthorized", { status: 401 })
+      if (!this.deviceTokenStore) return new Response("push not configured", { status: 503 })
+      let body: any; try { body = await req.json() } catch { return new Response("bad json", { status: 400 }) }
+      const platform = body?.platform, rt = body?.routingToken, pubkey = body?.pubkey
+      if ((platform !== "ios" && platform !== "android") || typeof rt !== "string" || typeof pubkey !== "string")
+        return new Response("platform + routingToken + pubkey required", { status: 400 })
+      this.deviceTokenStore.putNative(auth.device.name, platform, rt, pubkey)
+      return this.json({ ok: true })
+    }
+
+    if (method === "DELETE" && path === "/push/device") {
+      const auth = this.requireAuth(req); if (!auth.ok) return new Response("unauthorized", { status: 401 })
+      if (!this.deviceTokenStore) return new Response("push not configured", { status: 503 })
+      this.deviceTokenStore.remove(auth.device.name)
+      return this.json({ ok: true })
+    }
+
     if (method === "GET" && path.startsWith("/files/")) {
       const auth = this.requireAuth(req)
       if (!auth.ok) return new Response("unauthorized", { status: 401 })
@@ -1195,7 +1222,7 @@ export class WebChannel implements Channel {
     // Paired-status probe for the PWA (200 when the cookie is valid, else 401).
     if (method === "GET" && path === "/me") {
       const a = this.requireAuth(req)
-      return this.json(a.ok ? { paired: true, device: a.device.name } : { paired: false }, a.ok ? 200 : 401)
+      return this.json(a.ok ? { paired: true, device: a.device.name, relayUrl: this.relayUrl } : { paired: false }, a.ok ? 200 : 401)
     }
 
     // Trust-on-first-connect: on a brand-new broker (no devices yet, not onboarded),

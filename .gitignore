@@ -13,3 +13,7 @@ src/channels/web/static/
 # Internal planning/spec docs (kept local, never published)
 docs/superpowers/
 .superpowers/
+
+# Firebase config — real one carries the app's API key/sender id; keep it local.
+# A committed apps/android/google-services.json.example is the template to copy from.
+apps/android/google-services.json

@@ -27,6 +27,14 @@ import kotlinx.serialization.json.Json
 
 // ─── DTOs ────────────────────────────────────────────────────────────────────
 
+/** GET /pair.json?t=<token> → confirmed device bearer + its display name. */
+@Serializable
+data class PairJsonResult(val token: String = "", val name: String = "")
+
+/** GET /me → bearer-validity probe. paired=true with the device name when the token is good. */
+@Serializable
+data class MeResult(val paired: Boolean = false, val device: String? = null)
+
 @Serializable
 data class AppConfigDto(
     val paName: String = "",
@@ -38,7 +46,10 @@ data class AppConfigDto(
     val codexConfigured: Boolean = false,
     val cursorConfigured: Boolean = false,
     val onboarded: Boolean = false,
-    /** Model the voice-cleanup agent uses (null/empty = broker default, Haiku). */
+    /** Direct-API engine for voice cleanup (codex | opencode-zen | opencode-go |
+     *  cursor | claude). null = broker default (codex). */
+    val voiceCleanupEngine: String? = null,
+    /** Model the cleanup engine uses. null/empty = that engine's own default. */
     val voiceCleanupModel: String? = null,
 )
 
@@ -125,6 +136,15 @@ data class UploadResponse(
     val name: String = "",
 )
 
+/** POST /sessions/<id>/transcribe → cleaned composer text. `degraded`=true means cleanup
+ *  was skipped/failed and `text` is the raw whisper draft. */
+@Serializable
+data class TranscribeResponse(val text: String = "", val degraded: Boolean = false)
+
+/** GET/PUT /config/voice-glossary → { glossary: [...] }. */
+@Serializable
+data class GlossaryResponse(val glossary: List<String> = emptyList())
+
 @Serializable
 data class ProxyDto(
     val domain: String,
@@ -146,6 +166,14 @@ data class CreateProxyResponse(
 /** POST /devices → one-time pairing URL for a freshly minted device token. */
 @Serializable
 data class AddDeviceResponse(val url: String = "", val name: String = "")
+
+/** GET /me → paired status + optional relayUrl for native-push registration. */
+@Serializable
+data class MeResponse(
+    val paired: Boolean = false,
+    val device: String? = null,
+    val relayUrl: String? = null,
+)
 
 // ─── Usage (GET /usage → fetchAllUsage) ──────────────────────────────────────
 // `resetsAt` is an ISO string for Claude but epoch-seconds for Codex, so each
@@ -672,6 +700,13 @@ private data class VerifySaveBody(val content: String)
 @Serializable
 private data class MessageBody(val text: String)
 
+// Voice dictation request bodies.
+@Serializable
+private data class DraftBody(val draft: String)
+
+@Serializable
+private data class GlossaryBody(val glossary: List<String>)
+
 @Serializable
 private data class CreatePABody(
     val name: String, val agent: String? = null, val model: String? = null, val focusText: String? = null,
@@ -722,6 +757,7 @@ private data class OpenCodeOAuthFinishBody(val providerId: String, val method: I
 private data class ConfigPatchBody(
     val paName: String? = null,
     val voiceCleanupModel: String? = null,
+    val voiceCleanupEngine: String? = null,
     val claudeOauthToken: String? = null,
     val anthropicApiKey: String? = null,
     val codexApiKey: String? = null,
@@ -759,6 +795,21 @@ private data class AddForgeBody(
 
 @Serializable
 private data class ImportForgeBody(val kind: String, val transport: String = "https")
+
+/** POST $httpBase/push/device body. */
+@Serializable
+private data class RegisterPushDeviceBody(
+    val platform: String,
+    val routingToken: String,
+    val pubkey: String,
+)
+
+/** POST $relayUrl/register body. */
+@Serializable
+private data class RegisterPushRelayBody(
+    val platform: String,
+    val pushToken: String,
+)
 
 /** Empty JSON object body (`{}`) for POSTs that take no params but return data. */
 @Serializable
@@ -867,6 +918,18 @@ class BrokerApi(
 
     // ── public API ───────────────────────────────────────────────────────────
 
+    /**
+     * GET /pair.json?t=<token> — confirms the candidate token against the broker
+     * and echoes {token,name} (the native pairing shim; /pair only sets a cookie).
+     * 401 → CancellationException (graceful) → caller treats as an invalid token.
+     */
+    suspend fun pairJson(token: String): PairJsonResult =
+        getJson("$httpBase/pair.json?t=${urlEncode(token)}")
+
+    /** GET /me — bearer-validity probe; {paired, device?}. Used to validate a manually-typed token. */
+    suspend fun me(): MeResult =
+        getJson("$httpBase/me")
+
     /** GET /sessions/<id>/models */
     suspend fun models(id: String): ModelsResponse =
         getJson("$httpBase/sessions/$id/models")
@@ -938,13 +1001,22 @@ class BrokerApi(
     suspend fun saveConfig(
         paName: String? = null,
         voiceCleanupModel: String? = null,
+        voiceCleanupEngine: String? = null,
         claudeOauthToken: String? = null,
         anthropicApiKey: String? = null,
         codexApiKey: String? = null,
         cursorApiKey: String? = null,
     ) = putJson(
         "$httpBase/settings/config",
-        ConfigPatchBody(paName, voiceCleanupModel, claudeOauthToken, anthropicApiKey, codexApiKey, cursorApiKey),
+        ConfigPatchBody(
+            paName = paName,
+            voiceCleanupModel = voiceCleanupModel,
+            voiceCleanupEngine = voiceCleanupEngine,
+            claudeOauthToken = claudeOauthToken,
+            anthropicApiKey = anthropicApiKey,
+            codexApiKey = codexApiKey,
+            cursorApiKey = cursorApiKey,
+        ),
     )
 
     /** GET /settings/soul → soul.md text ("" on any failure — never throws). */
@@ -1251,6 +1323,42 @@ class BrokerApi(
         return if (resp.status.isSuccess()) resp.bodyAsBytes() else null
     }
 
+    // ── Voice dictation (transcribe + cleanup glossary) ──────────────────────────
+
+    /** POST /sessions/<id>/transcribe — JSON { draft } → cleaned text. (on-device-STT path) */
+    suspend fun transcribeDraft(sessionId: String, draft: String): TranscribeResponse =
+        postReturningJson("$httpBase/sessions/$sessionId/transcribe", DraftBody(draft))
+
+    /** POST /sessions/<id>/transcribe — multipart field "audio" → cleaned text. (whisper path)
+     *  Mirrors `upload()`'s multipart shape; field name is "audio" (NOT "file"), and there is
+     *  no `kind`/`session` part — the route derives the session from the URL. */
+    suspend fun transcribeAudio(
+        sessionId: String, bytes: ByteArray, filename: String, mime: String = "audio/mp4",
+    ): TranscribeResponse {
+        val resp = http.post("$httpBase/sessions/$sessionId/transcribe") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            setBody(MultiPartFormDataContent(formData {
+                append("audio", bytes, Headers.build {
+                    append(HttpHeaders.ContentType, mime)
+                    append(HttpHeaders.ContentDisposition, "filename=\"$filename\"")
+                })
+            }))
+        }
+        return decode(resp)
+    }
+
+    /** GET /config/voice-glossary → the glossary terms (default-seeded server-side). */
+    suspend fun fetchGlossary(): List<String> =
+        getJson<GlossaryResponse>("$httpBase/config/voice-glossary").glossary
+
+    /** PUT /config/voice-glossary { glossary } → the persisted list. */
+    suspend fun updateGlossary(terms: List<String>): List<String> =
+        decode<GlossaryResponse>(http.put("$httpBase/config/voice-glossary") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(GlossaryBody(terms)))
+        }).glossary
+
     /** GET /sessions/<id>/messages — the message log for a (possibly archived) session. */
     suspend fun archivedLogs(sessionId: String): List<LogEntry> =
         getJson("$httpBase/sessions/$sessionId/messages")
@@ -1385,6 +1493,38 @@ class BrokerApi(
     suspend fun stopDisplay(id: String) {
         http.delete("$httpBase/displays/${urlEncode(id)}") {
             header("Authorization", bearerHeader())
+        }
+    }
+
+    // ── Push registration ─────────────────────────────────────────────────────
+
+    /**
+     * GET /me → returns the `relayUrl` field (null when the broker is not configured
+     * with a relay URL or the response can't be decoded).
+     */
+    suspend fun pushRelayUrl(): String? =
+        getJson<MeResponse>("$httpBase/me").relayUrl
+
+    /**
+     * POST /push/device — registers this device with the broker after the app has
+     * received its `routingToken` from the relay bootstrap push.
+     * Body: `{platform, routingToken, pubkey}`.
+     */
+    suspend fun registerPushDevice(platform: String, routingToken: String, pubkey: String) =
+        postJson("$httpBase/push/device", RegisterPushDeviceBody(platform, routingToken, pubkey))
+
+    /**
+     * POST <relayUrl>/register — tells the relay to issue a bootstrap push that
+     * delivers the `routingToken` to this device (via FCM/APNs). The relay responds
+     * 202 Accepted; the actual routingToken arrives asynchronously in the push payload.
+     * Body: `{platform, pushToken}`.
+     */
+    suspend fun registerPushTokenWithRelay(relayUrl: String, platform: String, pushToken: String) {
+        val url = relayUrl.trimEnd('/') + "/register"
+        http.post(url) {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(RegisterPushRelayBody(platform, pushToken)))
         }
     }
 }

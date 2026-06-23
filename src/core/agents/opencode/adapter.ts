@@ -333,6 +333,25 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     }
   }
 
+  /** True once the SSE part carries enough to render a useful started card
+   * (command/path/title). opencode streams incremental updates — the first
+   * `running` event often has status only; input arrives on a later delta. */
+  private hasToolSummary(part: OpenCodePart): boolean {
+    const state = (part as { state?: Record<string, unknown> }).state
+    if (!state || typeof state !== "object") return false
+    const input = state.input
+    if (input && typeof input === "object" && !Array.isArray(input) && Object.keys(input as object).length > 0) return true
+    if (typeof state.title === "string" && state.title.trim()) return true
+    if (typeof state.raw === "string" && state.raw.trim()) return true
+    return false
+  }
+
+  private emitToolStarted(part: OpenCodePart, callId: string, tool: string): void {
+    if (callId && this.startedTools.has(callId)) return
+    if (callId) this.startedTools.add(callId)
+    this.emit("tool-call", { kind: "tool-call", tool, phase: "started", call_id: callId, detail: part })
+  }
+
   private handleEvent(ev: OpenCodeEvent): void {
     if (ev.type !== "message.part.updated") return
     const part = (ev.properties as { part?: OpenCodePart } | undefined)?.part
@@ -343,11 +362,13 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     const status = (part as { state?: { status?: string } }).state?.status
     if (status === "pending" || status === "running") {
       if (callId && this.startedTools.has(callId)) return
-      if (callId) this.startedTools.add(callId)
-      this.emit("tool-call", { kind: "tool-call", tool, phase: "started", call_id: callId, detail: part })
+      if (!this.hasToolSummary(part)) return
+      this.emitToolStarted(part, callId, tool)
     } else if (status === "completed") {
+      if (callId && !this.startedTools.has(callId)) this.emitToolStarted(part, callId, tool)
       this.emit("tool-call", { kind: "tool-call", tool, phase: "completed", call_id: callId, detail: part })
     } else if (status === "error") {
+      if (callId && !this.startedTools.has(callId)) this.emitToolStarted(part, callId, tool)
       this.emit("tool-call", { kind: "tool-call", tool, phase: "failed", call_id: callId, detail: part })
     }
   }

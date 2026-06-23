@@ -113,6 +113,7 @@ async function request(method: string, path: string, body?: unknown): Promise<an
 }
 
 export interface AppConfig {
+  voiceCleanupEngine?: string
   voiceCleanupModel?: string
   whisperLang?: string
   [key: string]: unknown

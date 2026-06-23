@@ -8,12 +8,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -39,6 +41,9 @@ import org.connectbot.terminal.TerminalEmulatorFactory
 fun TerminalPanel(
     connect: () -> TerminalClient,
     modifier: Modifier = Modifier,
+    // Fires once when the session ends (CONNECTED → DISCONNECTED). The agent-PTY ("Native")
+    // tab uses this to fall back to Chat on agent exit (iOS onExit parity). Null = no-op.
+    onExit: (() -> Unit)? = null,
 ) {
     val c = LocalPanes.current
     val scope = rememberCoroutineScope()
@@ -48,8 +53,8 @@ fun TerminalPanel(
         TerminalEmulatorFactory.create(
             initialRows = 24,
             initialCols = 80,
-            defaultForeground = Color(c.foreground),
-            defaultBackground = Color(c.code),
+            defaultForeground = Color(c.terminalForeground),
+            defaultBackground = Color(c.terminal),
             onKeyboardInput = { data ->
                 scope.launch { client.sendInput(data) }
             },
@@ -64,19 +69,32 @@ fun TerminalPanel(
 
     val status by client.status.collectAsState()
 
+    // Agent-PTY exit detection: once the client has connected, a drop to DISCONNECTED means the
+    // session ended → fire onExit (the Native tab falls back to Chat). Latches so a transient
+    // pre-connect DISCONNECTED never triggers it. No-op when onExit is null (scratch terminal).
+    // Hooks are called unconditionally (rules of composition); only the effect body branches.
+    val hadConnected = remember(client) { mutableStateOf(false) }
+    LaunchedEffect(client, status) {
+        if (status == TerminalStatus.CONNECTED) {
+            hadConnected.value = true
+        } else if (status == TerminalStatus.DISCONNECTED && hadConnected.value) {
+            onExit?.invoke()
+        }
+    }
+
     LaunchedEffect(client, emulator) {
         client.output.collect { bytes ->
             emulator.writeInput(bytes)
         }
     }
 
-    Box(modifier.fillMaxSize().background(Color(c.code))) {
+    Box(modifier.fillMaxSize().background(Color(c.terminal))) {
         Terminal(
             terminalEmulator = emulator,
             modifier = Modifier.fillMaxSize(),
             typeface = Typeface.MONOSPACE,
-            backgroundColor = Color(c.code),
-            foregroundColor = Color(c.foreground),
+            backgroundColor = Color(c.terminal),
+            foregroundColor = Color(c.terminalForeground),
             keyboardEnabled = true,
             showSoftKeyboard = true,
         )
@@ -92,14 +110,15 @@ fun TerminalPanel(
 @Composable
 private fun StatusChip(status: TerminalStatus, modifier: Modifier = Modifier) {
     val c = LocalPanes.current
+    val cs = MaterialTheme.colorScheme
     val (label, tint) = when (status) {
         TerminalStatus.CONNECTING -> "Connecting…" to Color(c.warning)
-        TerminalStatus.CONNECTED -> "Connected" to Color(c.primary)
-        TerminalStatus.DISCONNECTED -> "Disconnected" to Color(c.mutedForeground)
+        TerminalStatus.CONNECTED -> "Connected" to cs.primary
+        TerminalStatus.DISCONNECTED -> "Disconnected" to cs.onSurfaceVariant
     }
     Row(
         modifier
-            .background(Color(c.card).copy(alpha = 0.85f), RoundedCornerShape(Radii.pill))
+            .background(cs.surfaceContainer.copy(alpha = 0.85f), RoundedCornerShape(Radii.pill))
             .padding(horizontal = Space.sm, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -108,6 +127,6 @@ private fun StatusChip(status: TerminalStatus, modifier: Modifier = Modifier) {
                 .size(6.dp)
                 .background(tint, RoundedCornerShape(Radii.pill)),
         )
-        Text(label, color = Color(c.mutedForeground), fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp))
+        Text(label, color = cs.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp))
     }
 }

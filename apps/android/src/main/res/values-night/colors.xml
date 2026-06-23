@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark-mode window background (brand dark). -->
+    <color name="supermux_window_background">#FF1E211D</color>
+</resources>

@@ -2,25 +2,46 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- API 33+: required to post decrypted session notifications (runtime-requested). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- QR pairing scan (zxing-android-embedded also declares this; explicit here). -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Attachment camera capture is delegated to the system camera app (TakePicture);
+         the camera is optional so non-camera devices can still install. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <application
         android:name=".SupermuxApplication"
         android:label="supermux"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android:theme="@android:style/Theme.Material.NoActionBar"
+        android:theme="@style/Theme.Supermux"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:hardwareAccelerated="true"
-            android:windowSoftInputMode="adjustResize"
-            android:configChanges="orientation|screenSize|keyboardHidden">
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Deep-link pairing: supermux://pair?t=TOKEN&base=… (mirrors iOS CFBundleURLSchemes:[supermux]). -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="supermux" android:host="pair" />
+            </intent-filter>
         </activity>
+        <!-- Native push: receives FCM data-only messages (relay `data:{d:<ciphertext>}`). -->
+        <service
+            android:name=".push.SupermuxMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
