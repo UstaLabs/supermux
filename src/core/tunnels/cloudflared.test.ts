@@ -1,5 +1,5 @@
 import { test, expect, mock } from "bun:test"
-import { cloudflaredProvider } from "./cloudflared"
+import { cloudflaredProvider, baseDomainOf, buildTunnelConfig, parseTunnelId } from "./cloudflared"
 import { which } from "./run"
 import type { ConnectCtx, RunResult } from "./types"
 
@@ -238,4 +238,40 @@ test("install: on linux WITHOUT cloudflared, prints the docs URL and returns fal
   } finally {
     mock.module("./run", () => real) // restore for any later test runs
   }
+})
+
+// ── pure helpers ────────────────────────────────────────────────────────────────
+
+test("baseDomainOf strips the leftmost label; a bare apex is unchanged", () => {
+  expect(baseDomainOf("mux.example.com")).toBe("example.com")
+  expect(baseDomainOf("example.com")).toBe("example.com")
+  expect(baseDomainOf("a.b.example.com")).toBe("b.example.com")
+})
+
+test("buildTunnelConfig emits broker ingress, optional wildcard, and a catch-all", () => {
+  const base = buildTunnelConfig({
+    tunnelId: "t-1",
+    credentialsFile: "/h/.cloudflared/t-1.json",
+    port: "8787",
+    host: "mux.example.com",
+  })
+  expect(base).toContain("tunnel: t-1")
+  expect(base).toContain("credentials-file: /h/.cloudflared/t-1.json")
+  expect(base).toContain("hostname: mux.example.com")
+  expect(base).toContain("service: http://localhost:8787")
+  expect(base).toContain("http_status:404")
+  expect(base).toContain("Managed by supermux")
+  expect(base).not.toContain("*.")
+
+  const wild = buildTunnelConfig({ port: "8787", host: "mux.example.com", wildcardBase: "example.com" })
+  expect(wild).toContain('hostname: "*.example.com"')
+  expect(wild).toContain("tunnel: supermux") // falls back to the tunnel NAME when no id
+  expect(wild).not.toContain("credentials-file:") // omitted when no creds path
+})
+
+test("parseTunnelId extracts a UUID, else undefined", () => {
+  expect(parseTunnelId("Created tunnel supermux with id 11111111-2222-4333-8444-555555555555")).toBe(
+    "11111111-2222-4333-8444-555555555555",
+  )
+  expect(parseTunnelId("no id here")).toBeUndefined()
 })

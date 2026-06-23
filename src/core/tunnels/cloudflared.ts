@@ -36,6 +36,50 @@ function hostFromHint(hint?: string): string | undefined {
   return trimmed.replace(/^\/\//, "").split(/[/:?#]/)[0] || undefined
 }
 
+/**
+ * Derive the wildcard base domain from a tunnel host by dropping the leftmost
+ * label: "mux.example.com" → "example.com". A bare apex (≤2 labels) is returned
+ * unchanged. Public-suffix edge cases (e.g. "x.example.co.uk") are why the caller
+ * shows this for confirmation / allows --wildcard-domain to override it.
+ */
+export function baseDomainOf(host: string): string {
+  const labels = host.split(".").filter(Boolean)
+  return labels.length <= 2 ? host : labels.slice(1).join(".")
+}
+
+/**
+ * Build cloudflared's config.yml for the named tunnel. The broker-host ingress
+ * rule is the line the old flow omitted (→ the 404). A wildcard rule is added when
+ * `wildcardBase` is set. The leading marker lets a re-run recognize a
+ * supermux-written file (so it isn't backed up again). Falls back to the tunnel
+ * NAME and omits credentials-file when the UUID couldn't be resolved — cloudflared
+ * then locates the credentials by name in its default dir.
+ */
+export function buildTunnelConfig(opts: {
+  tunnelId?: string
+  credentialsFile?: string
+  port: string
+  host: string
+  wildcardBase?: string
+}): string {
+  const svc = `http://localhost:${opts.port}`
+  const rules = [`  - hostname: ${opts.host}\n    service: ${svc}`]
+  if (opts.wildcardBase) rules.push(`  - hostname: "*.${opts.wildcardBase}"\n    service: ${svc}`)
+  rules.push(`  - service: http_status:404`)
+  const creds = opts.credentialsFile ? `credentials-file: ${opts.credentialsFile}\n` : ""
+  return (
+    `# Managed by supermux connect — re-running may overwrite this file.\n` +
+    `tunnel: ${opts.tunnelId || TUNNEL_NAME}\n` +
+    creds +
+    `ingress:\n${rules.join("\n")}\n`
+  )
+}
+
+/** Pull a tunnel UUID out of `cloudflared tunnel create` stdout (or any text). */
+export function parseTunnelId(text: string): string | undefined {
+  return text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0]
+}
+
 export const cloudflaredProvider: TunnelProvider = {
   id: "cloudflared",
   label: "Cloudflare Tunnel",
