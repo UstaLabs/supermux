@@ -173,6 +173,7 @@ struct NewSessionView: View {
             }
             TextField("What should the agent do?", text: $draft, axis: .vertical)
                 .lineLimit(3...8).focused($composing)
+                .composerHardwareKeyboardSubmit(canSubmit: canSpawn && !spawning) { spawn() }
             if !slashMatches.isEmpty { slashMenu }
             HStack(spacing: 16) {
                 Menu {
