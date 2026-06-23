@@ -227,6 +227,12 @@ private struct WorkspaceDetail: View {
             }
             Spacer(minLength: 8)
             sessionLinksMenu
+            // Chat ⇄ Native (agent terminal) switch for the main column — only for agents that
+            // have a native view (claude), mirroring the PWA's `v-if="isClaude"`, and only while
+            // the chat column is actually shown (the native view IS the chat column's other mode).
+            if session.agent == "claude" && panes.chatOpen {
+                AgentViewToggle(layout: layout, sessionId: session.id)
+            }
             PaneToggleCluster(layout: layout, sessionId: session.id)
             if session.session_branch != nil {
                 Button { finishSheet = true } label: {
@@ -323,10 +329,19 @@ private struct WorkspaceDetail: View {
         }
     }
 
-    private var chat: some View {
-        ChatPane(broker: broker, session: session,
-                 showRename: $showRename, renameText: $renameText,
-                 showKillConfirm: $showKillConfirm, banner: $chrome.banner)
+    /// The main column: the chat transcript+composer, or — when the user flips the header's
+    /// Chat⇄Native switch (claude only) — the agent's native terminal, the SAME `TerminalPane`
+    /// the iPhone "Native" tab hosts. `onExit` (agent process ended) falls back to chat, matching
+    /// the PWA's `@exit="mainView = 'chat'"`.
+    @ViewBuilder private var chat: some View {
+        if layout.nativeView(for: session.id) && session.agent == "claude" {
+            TerminalPane(broker: broker, session: session, kind: "agent", terminalId: nil,
+                         onExit: { layout.setNativeView(false, for: session.id) })
+        } else {
+            ChatPane(broker: broker, session: session,
+                     showRename: $showRename, renameText: $renameText,
+                     showKillConfirm: $showKillConfirm, banner: $chrome.banner)
+        }
     }
 
     @ViewBuilder private var rightArea: some View {
