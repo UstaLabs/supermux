@@ -55,19 +55,21 @@ struct ChatPane: View {
     /// staged attachment, or while recording; otherwise it rests as a slim glass pill.
     private var composerExpanded: Bool { composing || !draft.isEmpty || !pending.isEmpty || dictation.isListening || recorder.isRecording || transcribing || micStarting }
 
-    private var log: [LogEntry] { broker.messages[session.id] ?? [] }
-    private var phase: String? { broker.agentPhase[session.id] }
-    private var working: Bool {
-        ["working", "thinking", "running", "tool", "busy", "sending"].contains(phase ?? "")
-    }
-    private var activityEvents: [ActivityEvent] { broker.activity[session.id] ?? [] }
-    /// Messages + tool-call activity, time-merged into blocks (parity with the web ChatView).
-    private var blocks: [ChatBlock] { buildChatBlocks(messages: log, activity: activityEvents) }
-
     // MARK: - Body
 
     var body: some View {
-        transcript
+        // The transcript is a *separate, Equatable* view. Composer keystrokes mutate this view's
+        // `draft`/composer @State and re-run `body`, but `.equatable()` (keyed on session.id) makes
+        // SwiftUI skip re-evaluating the transcript on those re-runs — so the message list is NOT
+        // rebuilt (no buildChatBlocks, no List re-diff) on each keypress, which is what keeps typing
+        // fast in long chats. New messages still update it directly via @Observable (BrokerSession).
+        SessionTranscript(broker: broker, session: session)
+            .equatable()
+            // Tap anywhere on the transcript to dismiss the keyboard ("tap outside"). Applied here,
+            // not inside SessionTranscript, so the transcript stays free of composer focus state and
+            // the Equatable gate holds. simultaneousGesture fires alongside scrolling + row/link taps
+            // without blocking them, and is scoped to the transcript so composer controls are unaffected.
+            .simultaneousGesture(TapGesture().onEnded { if composing { composing = false } })
             .safeAreaInset(edge: .bottom, spacing: 0) { chatBottomCluster }
             .task(id: session.id) {
                 // Debug: raise the keyboard (focus composer) to repro the keyboard-relayout blank.
@@ -108,13 +110,6 @@ struct ChatPane: View {
         if let terms = try? await broker.fetchGlossary() { glossary = terms }
     }
 
-    // MARK: - Scroll
-
-    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
-        if animated { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("__bottom__", anchor: .bottom) } }
-        else { proxy.scrollTo("__bottom__", anchor: .bottom) }
-    }
-
     // MARK: - Bottom cluster
 
     /// Composer + banner, pinned above the system glass tab bar.
@@ -131,124 +126,6 @@ struct ChatPane: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 14).padding(.vertical, 8)
             .background(Theme.teal)
-    }
-
-    // MARK: - Transcript
-
-    private var transcript: some View {
-        ScrollViewReader { proxy in
-            List {
-                if blocks.isEmpty {
-                    starterPrompts
-                        .frame(maxWidth: .infinity)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
-                } else {
-                    ForEach(blocks) { block in
-                        Group {
-                            switch block {
-                            case .message(let m): MessageRow(entry: m, broker: broker)
-                            case .tools(let rows):
-                                VStack(alignment: .leading, spacing: 4) {
-                                    ForEach(rows) { ToolRowView(row: $0) }
-                                }
-                            }
-                        }
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
-                        .listRowBackground(Color.clear)
-                    }
-                    if working {
-                        workingIndicator
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
-                            .listRowBackground(Color.clear)
-                    }
-                    Color.clear.frame(height: 1).id("__bottom__")
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
-                }
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            // List (collection-view-backed) re-displays its rows correctly on every
-            // relayout — including the keyboard-avoidance shrink — instead of blanking
-            // like ScrollView+LazyVStack did (blank-on-keyboard, blank-on-open). Keyed
-            // per session so each open builds fresh and defaultScrollAnchor lands at bottom.
-            .defaultScrollAnchor(.bottom)
-            .scrollDismissesKeyboard(.interactively)
-            // Tap anywhere on the transcript to dismiss the keyboard ("tap outside").
-            // simultaneousGesture fires alongside scrolling + row/link taps without blocking
-            // them, and is scoped to the transcript so composer controls are unaffected.
-            .simultaneousGesture(TapGesture().onEnded { if composing { composing = false } })
-            .scrollEdgeEffectStyle(.soft, for: .top)
-            .scrollEdgeEffectStyle(.soft, for: .bottom)
-            .onChange(of: log.count) { _, _ in scrollToBottom(proxy) }
-            .task(id: session.id) {
-                // List needs an explicit initial scroll to the bottom — it doesn't honor
-                // defaultScrollAnchor for first positioning the way ScrollView does, and
-                // onChange(log.count) doesn't fire on open (count unchanged). List's
-                // scroll-to-row is reliable, so this can't race/blank like LazyVStack did.
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                scrollToBottom(proxy, animated: false)
-            }
-        }
-        .id(session.id)
-    }
-
-    // MARK: - Working indicator
-
-    private var workingIndicator: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { _ in
-            let since = broker.agentSince[session.id]
-            let elapsed = since.map { max(0, Int64(Date().timeIntervalSince1970 - Double($0) / 1000.0)) }
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text(workingLabel + (elapsed.map { " · " + formatDuration(totalSeconds: $0) } ?? ""))
-                    .font(.caption).foregroundStyle(.secondary)
-                Button { broker.interrupt(session.id) } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: "stop.fill").font(.caption2)
-                        Text("Stop").font(.caption.weight(.medium))
-                    }
-                    .foregroundStyle(.red)
-                    .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(Color.red.opacity(0.12), in: Capsule())
-                }
-                .buttonStyle(.plain)
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-    private var workingLabel: String {
-        switch phase {
-        case "sending": return "Sending…"
-        case "thinking": return "Thinking…"
-        default: return "Working…"
-        }
-    }
-
-    // MARK: - Starter prompts
-
-    private var starterPrompts: some View {
-        VStack(spacing: 10) {
-            Spacer().frame(height: 36)
-            Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(Theme.teal)
-            Text("Start the conversation").font(.headline)
-            ForEach(["What's the current state?", "Run the tests", "Summarize recent changes"], id: \.self) { p in
-                Button { broker.send(session.id, p) } label: {
-                    Text(p).font(.subheadline).frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 14).padding(.vertical, 11)
-                        .background(Color(.secondarySystemBackground),
-                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                }
-                .buttonStyle(.plain).foregroundStyle(.primary)
-            }
-        }
-        .padding(20)
     }
 
     // MARK: - Composer dock
@@ -617,5 +494,148 @@ struct ChatPane: View {
             .foregroundStyle(.secondary)
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// The chat transcript (messages + tool-activity), split out of `ChatPane` as its own
+/// **Equatable** view. The composer's rapidly-changing state (`draft`, expansion, etc.) lives on
+/// `ChatPane`, so every keystroke re-runs `ChatPane.body`. `.equatable()` (keyed on `session.id`)
+/// makes SwiftUI skip re-evaluating THIS view on those re-runs, so the transcript is *not* rebuilt
+/// — no `buildChatBlocks` (sort + cluster over the whole history) and no List re-diff — on each
+/// keypress. That whole-list rebuild per keystroke was the cause of slow typing in long chats.
+///
+/// Liveness is unaffected: `BrokerSession` is `@Observable`, so new messages/activity invalidate
+/// this node directly (it reads `broker.messages[...]` / `broker.activity[...]`), independent of
+/// the Equatable gate — the gate only suppresses redundant, composer-driven re-evaluations.
+struct SessionTranscript: View, Equatable {
+    let broker: BrokerSession
+    let session: SessionInfo
+
+    // Only the session identity gates parent-driven re-evaluation: the content is keyed by
+    // `session.id` and refreshed via @Observable, so nothing else here needs comparing.
+    static func == (lhs: SessionTranscript, rhs: SessionTranscript) -> Bool {
+        lhs.session.id == rhs.session.id
+    }
+
+    private var log: [LogEntry] { broker.messages[session.id] ?? [] }
+    private var phase: String? { broker.agentPhase[session.id] }
+    private var working: Bool {
+        ["working", "thinking", "running", "tool", "busy", "sending"].contains(phase ?? "")
+    }
+    private var activityEvents: [ActivityEvent] { broker.activity[session.id] ?? [] }
+    /// Messages + tool-call activity, time-merged into blocks (parity with the web ChatView).
+    private var blocks: [ChatBlock] { buildChatBlocks(messages: log, activity: activityEvents) }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            List {
+                if blocks.isEmpty {
+                    starterPrompts
+                        .frame(maxWidth: .infinity)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                } else {
+                    ForEach(blocks) { block in
+                        Group {
+                            switch block {
+                            case .message(let m): MessageRow(entry: m, broker: broker)
+                            case .tools(let rows):
+                                VStack(alignment: .leading, spacing: 4) {
+                                    ForEach(rows) { ToolRowView(row: $0) }
+                                }
+                            }
+                        }
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                        .listRowBackground(Color.clear)
+                    }
+                    if working {
+                        workingIndicator
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                            .listRowBackground(Color.clear)
+                    }
+                    Color.clear.frame(height: 1).id("__bottom__")
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            // List (collection-view-backed) re-displays its rows correctly on every
+            // relayout — including the keyboard-avoidance shrink — instead of blanking
+            // like ScrollView+LazyVStack did (blank-on-keyboard, blank-on-open). Keyed
+            // per session so each open builds fresh and defaultScrollAnchor lands at bottom.
+            .defaultScrollAnchor(.bottom)
+            .scrollDismissesKeyboard(.interactively)
+            .scrollEdgeEffectStyle(.soft, for: .top)
+            .scrollEdgeEffectStyle(.soft, for: .bottom)
+            .onChange(of: log.count) { _, _ in scrollToBottom(proxy) }
+            .task(id: session.id) {
+                // List needs an explicit initial scroll to the bottom — it doesn't honor
+                // defaultScrollAnchor for first positioning the way ScrollView does, and
+                // onChange(log.count) doesn't fire on open (count unchanged). List's
+                // scroll-to-row is reliable, so this can't race/blank like LazyVStack did.
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                scrollToBottom(proxy, animated: false)
+            }
+        }
+        .id(session.id)
+    }
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
+        if animated { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("__bottom__", anchor: .bottom) } }
+        else { proxy.scrollTo("__bottom__", anchor: .bottom) }
+    }
+
+    private var workingIndicator: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            let since = broker.agentSince[session.id]
+            let elapsed = since.map { max(0, Int64(Date().timeIntervalSince1970 - Double($0) / 1000.0)) }
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(workingLabel + (elapsed.map { " · " + formatDuration(totalSeconds: $0) } ?? ""))
+                    .font(.caption).foregroundStyle(.secondary)
+                Button { broker.interrupt(session.id) } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "stop.fill").font(.caption2)
+                        Text("Stop").font(.caption.weight(.medium))
+                    }
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Color.red.opacity(0.12), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+    private var workingLabel: String {
+        switch phase {
+        case "sending": return "Sending…"
+        case "thinking": return "Thinking…"
+        default: return "Working…"
+        }
+    }
+
+    private var starterPrompts: some View {
+        VStack(spacing: 10) {
+            Spacer().frame(height: 36)
+            Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(Theme.teal)
+            Text("Start the conversation").font(.headline)
+            ForEach(["What's the current state?", "Run the tests", "Summarize recent changes"], id: \.self) { p in
+                Button { broker.send(session.id, p) } label: {
+                    Text(p).font(.subheadline).frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14).padding(.vertical, 11)
+                        .background(Color(.secondarySystemBackground),
+                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain).foregroundStyle(.primary)
+            }
+        }
+        .padding(20)
     }
 }
