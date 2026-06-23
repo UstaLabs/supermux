@@ -323,9 +323,9 @@ class MainActivity : ComponentActivity() {
                             curatorSave = { e, h, m -> vm.saveCurator(e, h, m) },
                             curatorRunNow = { vm.runCuratorNow() },
                             // Voice
-                            voiceLoadModels = { vm.launcherModels("claude") },
+                            voiceLoadModels = { family -> vm.launcherModels(family) },
                             voiceLoadConfig = { vm.config() },
-                            voiceSaveModel = { vm.saveVoiceCleanupModel(it) },
+                            voiceSaveVoiceCleanup = { engine, model -> vm.saveVoiceCleanup(engine, model) },
                             glossaryLoad = { vm.fetchGlossary() },
                             glossarySave = { vm.updateGlossary(it) },
                             // Editor / LSP

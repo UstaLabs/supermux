@@ -30,6 +30,17 @@ test("sanitize drops non-string voice fields", () => {
   expect(patch.whisperLang).toBeUndefined()
 })
 
+test("voiceCleanupModel: an empty string resets a previously-set model on merge (back to engine default)", () => {
+  // Switching cleanup engines must drop a stale, engine-specific model. A client
+  // sends voiceCleanupModel:"" to mean "reset to the engine's default"; sanitize
+  // maps "" → undefined so the sparse merge clears the stored value rather than
+  // persisting an empty (and then broken) model id.
+  const current = sanitizeAppConfigPatch({ voiceCleanupModel: "gpt-5.4-mini" })
+  const merged = { ...current, ...sanitizeAppConfigPatch({ voiceCleanupModel: "" }) }
+  const resolved = resolveAppConfig(merged, {} as any)
+  expect(resolved.voiceCleanupModel).toBeUndefined()
+})
+
 test("voiceCleanupEngine: valid engine survives sanitize + resolve", () => {
   const patch = sanitizeAppConfigPatch({ voiceCleanupEngine: "opencode-zen" })
   expect(patch.voiceCleanupEngine).toBe("opencode-zen")

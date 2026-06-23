@@ -46,7 +46,10 @@ data class AppConfigDto(
     val codexConfigured: Boolean = false,
     val cursorConfigured: Boolean = false,
     val onboarded: Boolean = false,
-    /** Model the voice-cleanup agent uses (null/empty = broker default, Haiku). */
+    /** Direct-API engine for voice cleanup (codex | opencode-zen | opencode-go |
+     *  cursor | claude). null = broker default (codex). */
+    val voiceCleanupEngine: String? = null,
+    /** Model the cleanup engine uses. null/empty = that engine's own default. */
     val voiceCleanupModel: String? = null,
 )
 
@@ -746,6 +749,7 @@ private data class OpenCodeOAuthFinishBody(val providerId: String, val method: I
 private data class ConfigPatchBody(
     val paName: String? = null,
     val voiceCleanupModel: String? = null,
+    val voiceCleanupEngine: String? = null,
     val claudeOauthToken: String? = null,
     val anthropicApiKey: String? = null,
     val codexApiKey: String? = null,
@@ -974,13 +978,22 @@ class BrokerApi(
     suspend fun saveConfig(
         paName: String? = null,
         voiceCleanupModel: String? = null,
+        voiceCleanupEngine: String? = null,
         claudeOauthToken: String? = null,
         anthropicApiKey: String? = null,
         codexApiKey: String? = null,
         cursorApiKey: String? = null,
     ) = putJson(
         "$httpBase/settings/config",
-        ConfigPatchBody(paName, voiceCleanupModel, claudeOauthToken, anthropicApiKey, codexApiKey, cursorApiKey),
+        ConfigPatchBody(
+            paName = paName,
+            voiceCleanupModel = voiceCleanupModel,
+            voiceCleanupEngine = voiceCleanupEngine,
+            claudeOauthToken = claudeOauthToken,
+            anthropicApiKey = anthropicApiKey,
+            codexApiKey = codexApiKey,
+            cursorApiKey = cursorApiKey,
+        ),
     )
 
     /** GET /settings/soul → soul.md text ("" on any failure — never throws). */

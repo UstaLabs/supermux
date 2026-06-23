@@ -183,6 +183,40 @@ class BrokerApiSettingsTest {
         assertEquals("""{"codexApiKey":"sk-123"}""", reqs.single().bodyText())
     }
 
+    @Test fun app_config_decodes_voice_engine() {
+        val c = json.decodeFromString<AppConfigDto>(
+            """{"voiceCleanupEngine":"opencode-zen","voiceCleanupModel":"deepseek-v4-flash-free"}""")
+        assertEquals("opencode-zen", c.voiceCleanupEngine)
+        assertEquals("deepseek-v4-flash-free", c.voiceCleanupModel)
+    }
+
+    @Test fun app_config_voice_engine_null_when_absent() {
+        val c = json.decodeFromString<AppConfigDto>("""{"paName":"x"}""")
+        assertNull(c.voiceCleanupEngine)
+    }
+
+    @Test fun save_config_sends_voice_engine_and_model() = runTest {
+        val reqs = mutableListOf<HttpRequestData>()
+        val api = captured(sink = reqs)
+        api.saveConfig(voiceCleanupEngine = "codex", voiceCleanupModel = "gpt-5.4-mini")
+        assertEquals(
+            """{"voiceCleanupModel":"gpt-5.4-mini","voiceCleanupEngine":"codex"}""",
+            reqs.single().bodyText(),
+        )
+    }
+
+    @Test fun save_config_empty_model_is_sent_as_reset_sentinel() = runTest {
+        // "" is the reset-to-default sentinel; it must reach the broker as an empty
+        // string (not be omitted), so switching engines clears a stale model id.
+        val reqs = mutableListOf<HttpRequestData>()
+        val api = captured(sink = reqs)
+        api.saveConfig(voiceCleanupEngine = "cursor", voiceCleanupModel = "")
+        assertEquals(
+            """{"voiceCleanupModel":"","voiceCleanupEngine":"cursor"}""",
+            reqs.single().bodyText(),
+        )
+    }
+
     @Test fun add_forge_sends_kind_token_host() = runTest {
         val reqs = mutableListOf<HttpRequestData>()
         val api = captured(body = """{"id":"c1","kind":"github"}""", sink = reqs)

@@ -54,30 +54,51 @@ import dev.supermux.android.R
 import dev.supermux.android.chat.PickerSheet
 import kotlinx.coroutines.launch
 
-// ─── Voice settings (cleanup model + glossary link) ────────────────────────────
+// ─── Voice settings (cleanup engine + model + glossary link) ───────────────────
 //
-// Parity with iOS VoiceSettingsView: a cleanup-model picker ("Default (Haiku)" +
-// Claude models) reusing the shared PickerSheet, plus a row linking to the glossary
-// editor. The cleanup model persists immediately on pick (one-tap, auto-save).
+// Reflects the direct-API cleanup adapter layer: pick the ENGINE (Codex default,
+// OpenCode Zen/Go, Cursor), then a MODEL for that engine ("Default" = the engine's
+// own). The gated Claude adapter is intentionally not offered here. Both rows reuse
+// the shared M3 PickerSheet and persist immediately on pick (one-tap). Switching
+// engine drops the now-irrelevant model and reloads the new engine's model list.
+
+private data class VoiceEngine(val id: String, val label: String, val family: String)
+
+// Curated mirror of ENGINES in src/core/agent-api/index.ts. `family` is the
+// AgentKind whose models GET /models?agent= returns for that engine.
+private val VOICE_ENGINES = listOf(
+    VoiceEngine("codex", "Codex", "codex"),
+    VoiceEngine("opencode-zen", "OpenCode Zen", "opencode"),
+    VoiceEngine("opencode-go", "OpenCode Go", "opencode"),
+    VoiceEngine("cursor", "Cursor", "cursor"),
+)
+private const val DEFAULT_VOICE_ENGINE = "codex"
+private fun voiceEngineFamily(id: String): String = VOICE_ENGINES.firstOrNull { it.id == id }?.family ?: "codex"
+private fun voiceEngineLabel(id: String): String = VOICE_ENGINES.firstOrNull { it.id == id }?.label ?: id
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VoiceSettingsPage(
     onBack: () -> Unit,
-    loadModels: suspend () -> List<dev.supermux.net.ModelInfo>,
+    loadModels: suspend (family: String) -> List<dev.supermux.net.ModelInfo>,
     loadConfig: suspend () -> dev.supermux.net.AppConfigDto?,
-    saveModel: (String?) -> Unit,
+    saveVoiceCleanup: (engine: String?, model: String?) -> Unit,
     onOpenGlossary: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
     var models by remember { mutableStateOf<List<dev.supermux.net.ModelInfo>>(emptyList()) }
-    var selected by remember { mutableStateOf("") }   // "" = Default (Haiku)
+    var engine by remember { mutableStateOf(DEFAULT_VOICE_ENGINE) }
+    var selectedModel by remember { mutableStateOf("") }   // "" = the engine's default
     var loading by remember { mutableStateOf(true) }
-    var showPicker by remember { mutableStateOf(false) }
+    var showEnginePicker by remember { mutableStateOf(false) }
+    var showModelPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        models = loadModels()                          // vm.launcherModels("claude")
-        selected = loadConfig()?.voiceCleanupModel ?: ""
+        val cfg = loadConfig()
+        engine = cfg?.voiceCleanupEngine?.ifBlank { null } ?: DEFAULT_VOICE_ENGINE
+        selectedModel = cfg?.voiceCleanupModel ?: ""
+        models = loadModels(voiceEngineFamily(engine))
         loading = false
     }
 
@@ -103,27 +124,44 @@ fun VoiceSettingsPage(
             }
         } else {
             Column(Modifier.fillMaxSize().padding(padding)) {
-                // Row 1: Cleanup model → tappable value chip → picker.
-                val currentLabel =
-                    if (selected.isEmpty()) "Default (Haiku)"
-                    else models.firstOrNull { it.id == selected }?.displayName ?: selected
+                // Row 1: Cleanup engine → tappable value chip → picker.
                 VoiceSettingRow(
-                    label = "Cleanup model",
-                    desc = "Model used to clean up voice-dictation transcripts. Default is Haiku.",
+                    label = "Cleanup engine",
+                    desc = "Direct-API agent that cleans up voice-dictation transcripts.",
                 ) {
                     Box(
                         Modifier
                             .clip(RoundedCornerShape(20.dp))
                             .background(cs.surfaceContainer)
-                            .clickable { showPicker = true }
+                            .clickable { showEnginePicker = true }
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     ) {
-                        Text(currentLabel.take(24), color = cs.onSurface, fontSize = 13.sp, maxLines = 1)
+                        Text(voiceEngineLabel(engine).take(24), color = cs.onSurface, fontSize = 13.sp, maxLines = 1)
                     }
                 }
                 HorizontalDivider(color = cs.outlineVariant)
 
-                // Row 2: Dictation glossary → glossary editor.
+                // Row 2: Cleanup model (for the selected engine) → tappable chip → picker.
+                val modelLabel =
+                    if (selectedModel.isEmpty()) "Default"
+                    else models.firstOrNull { it.id == selectedModel }?.displayName ?: selectedModel
+                VoiceSettingRow(
+                    label = "Cleanup model",
+                    desc = "Model for ${voiceEngineLabel(engine)}. Default uses the engine's own.",
+                ) {
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(cs.surfaceContainer)
+                            .clickable { showModelPicker = true }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        Text(modelLabel.take(24), color = cs.onSurface, fontSize = 13.sp, maxLines = 1)
+                    }
+                }
+                HorizontalDivider(color = cs.outlineVariant)
+
+                // Row 3: Dictation glossary → glossary editor.
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -151,18 +189,32 @@ fun VoiceSettingsPage(
         }
     }
 
-    if (showPicker) {
-        // "" sentinel for the broker default (Haiku) + the Claude models.
-        val options = listOf("" to "Default (Haiku)") + models.map { it.id to it.displayName }
+    if (showEnginePicker) {
+        PickerSheet(
+            title = "Cleanup engine",
+            options = VOICE_ENGINES.map { it.id to it.label },
+            current = engine,
+            onPick = { picked ->
+                engine = picked
+                selectedModel = ""                 // drop the stale, engine-specific model
+                saveVoiceCleanup(picked, "")       // set engine + reset model to default
+                scope.launch { models = loadModels(voiceEngineFamily(picked)) }
+            },
+            onDismiss = { showEnginePicker = false },
+        )
+    }
+    if (showModelPicker) {
+        // "" → the engine's default + the engine's models.
+        val options = listOf("" to "Default") + models.map { it.id to it.displayName }
         PickerSheet(
             title = "Cleanup model",
             options = options,
-            current = selected,
+            current = selectedModel,
             onPick = { picked ->
-                selected = picked
-                saveModel(picked.ifEmpty { null })   // null → broker default
+                selectedModel = picked
+                saveVoiceCleanup(null, picked)     // engine unchanged; "" resets to default
             },
-            onDismiss = { showPicker = false },
+            onDismiss = { showModelPicker = false },
         )
     }
 }

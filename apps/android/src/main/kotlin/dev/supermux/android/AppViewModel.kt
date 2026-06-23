@@ -455,7 +455,7 @@ class AppViewModel(
     suspend fun config(): AppConfigDto? = runCatching { api.getConfig() }.getOrNull()
     fun saveName(n: String) { viewModelScope.launch { runCatching { api.putConfig(n) } } }
 
-    /** GET /models?agent= — Claude models for the voice cleanup picker (no session). */
+    /** GET /models?agent= — models for the cleanup-engine + launcher pickers (no session). */
     suspend fun launcherModels(agent: String): List<ModelInfo> =
         runCatching { api.listModels(agent).models }.getOrNull() ?: emptyList()
 
@@ -463,9 +463,13 @@ class AppViewModel(
     suspend fun launcherRepoInfo(workdir: String): RepoInfo? =
         runCatching { api.getRepoInfo(workdir) }.getOrNull()
 
-    /** PUT /settings/config { voiceCleanupModel }. null/"" → broker default (Haiku). */
-    fun saveVoiceCleanupModel(model: String?) {
-        viewModelScope.launch { runCatching { api.saveConfig(voiceCleanupModel = model?.ifBlank { null }) } }
+    /**
+     * PUT /settings/config { voiceCleanupEngine?, voiceCleanupModel? }.
+     * A null arg leaves that field unchanged; an empty-string model ("") resets the
+     * model to the engine's default (the broker treats "" as the reset sentinel).
+     */
+    fun saveVoiceCleanup(engine: String?, model: String?) {
+        viewModelScope.launch { runCatching { api.saveConfig(voiceCleanupEngine = engine, voiceCleanupModel = model) } }
     }
 
     /** Voice-cleanup glossary (shared across devices). */

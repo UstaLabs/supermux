@@ -98,9 +98,9 @@ fun SettingsScreen(
     curatorSave: suspend (Boolean, Int, Int) -> CuratorSettingsResponse?,
     curatorRunNow: suspend () -> Unit,
     // Voice (Voice track)
-    voiceLoadModels: suspend () -> List<dev.supermux.net.ModelInfo>,
+    voiceLoadModels: suspend (family: String) -> List<dev.supermux.net.ModelInfo>,
     voiceLoadConfig: suspend () -> dev.supermux.net.AppConfigDto?,
-    voiceSaveModel: (String?) -> Unit,
+    voiceSaveVoiceCleanup: (engine: String?, model: String?) -> Unit,
     glossaryLoad: suspend () -> List<String>,
     glossarySave: suspend (List<String>) -> List<String>?,
     // Editor / LSP
@@ -151,7 +151,7 @@ fun SettingsScreen(
             onBack = { opened = null },
             loadModels = voiceLoadModels,
             loadConfig = voiceLoadConfig,
-            saveModel = voiceSaveModel,
+            saveVoiceCleanup = voiceSaveVoiceCleanup,
             onOpenGlossary = { opened = "glossary" },
         )
         "glossary" -> VoiceGlossaryPage(

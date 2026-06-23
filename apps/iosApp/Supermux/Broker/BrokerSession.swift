@@ -281,11 +281,15 @@ final class BrokerSession {
     func config() async -> AppConfigDto? { try? await api.getConfig() }
     func setPAName(_ name: String) { Task { [api] in try? await api.putConfig(paName: name) } }
 
-    /// PUT /settings/config — partial patch. All fields are optional; pass nil to leave unchanged.
+    /// PUT /settings/config — partial patch. All fields are optional; pass nil to leave
+    /// unchanged. An empty-string `voiceCleanupModel` ("") resets the model to the
+    /// engine's default (the broker's reset sentinel).
     func saveConfig(paName: String? = nil, voiceCleanupModel: String? = nil,
+                    voiceCleanupEngine: String? = nil,
                     claudeOauthToken: String? = nil, anthropicApiKey: String? = nil,
                     codexApiKey: String? = nil, cursorApiKey: String? = nil) async {
         try? await api.saveConfig(paName: paName, voiceCleanupModel: voiceCleanupModel,
+                                  voiceCleanupEngine: voiceCleanupEngine,
                                   claudeOauthToken: claudeOauthToken, anthropicApiKey: anthropicApiKey,
                                   codexApiKey: codexApiKey, cursorApiKey: cursorApiKey)
     }
