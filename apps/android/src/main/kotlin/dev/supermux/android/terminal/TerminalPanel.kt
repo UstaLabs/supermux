@@ -4,9 +4,14 @@ import android.graphics.Typeface
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -88,7 +93,16 @@ fun TerminalPanel(
         }
     }
 
-    Box(modifier.fillMaxSize().background(Color(c.terminal))) {
+    // Shrink the terminal above the soft keyboard (and nav bar) under edge-to-edge — mirrors the
+    // chat composer's inset handling. Resizing the view makes termlib recompute its grid and emit a
+    // pty resize, so the shell reflows to the visible rows/cols instead of the cursor line hiding
+    // behind the IME. (Background stays full-bleed; only the content insets.)
+    Box(
+        modifier
+            .fillMaxSize()
+            .background(Color(c.terminal))
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+    ) {
         Terminal(
             terminalEmulator = emulator,
             modifier = Modifier.fillMaxSize(),
