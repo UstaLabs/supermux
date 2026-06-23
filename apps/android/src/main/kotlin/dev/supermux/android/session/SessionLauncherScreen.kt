@@ -26,7 +26,9 @@ import dev.supermux.android.chat.PickerSheet
 import dev.supermux.android.theme.HapticKind
 import dev.supermux.android.theme.Space
 import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ModelInfo
+import dev.supermux.net.RemoteRepo
 import dev.supermux.net.RepoInfo
 import dev.supermux.proto.SessionInfo
 import dev.supermux.session.formatWorkdir
@@ -47,6 +49,12 @@ fun SessionLauncherScreen(
     loadModels: suspend (agent: String) -> List<ModelInfo> = { emptyList() },
     // Git status for the chosen project; gates the worktree picker on RepoInfo.eligible.
     loadRepoInfo: suspend (workdir: String) -> RepoInfo? = { null },
+    // Forge omnibox for the project picker (connections + clone/create). Defaults = "no forges".
+    loadForges: suspend () -> List<ForgeConnection> = { emptyList() },
+    searchForge: suspend (query: String) -> List<RemoteRepo> = { emptyList() },
+    cloneForge: suspend (connectionId: String, owner: String, name: String) -> String? = { _, _, _ -> null },
+    createLocalRepo: suspend (name: String) -> String? = { null },
+    createForge: suspend (connectionId: String, name: String) -> String? = { _, _ -> null },
     onSubmit: suspend (workdir: String, agent: String, model: String?, message: String, worktree: Boolean, baseBranch: String?) -> String,
     onOpenSession: (String) -> Unit,
 ) {
@@ -58,6 +66,7 @@ fun SessionLauncherScreen(
     var model by remember { mutableStateOf<String?>(null) }     // null == "Default"
     var message by remember { mutableStateOf("") }
     var projects by remember { mutableStateOf(emptyList<String>()) }
+    var showProjectSheet by remember { mutableStateOf(false) }
     var submitting by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val agents = listOf("claude", "codex", "cursor", "opencode")
@@ -141,12 +150,10 @@ fun SessionLauncherScreen(
 
             Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
                 Text("Project", color = cs.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                ProjectPathPicker(
-                    value = workdir,
-                    onValueChange = { workdir = it; workdirTouched = true; error = null },
-                    projects = projects,
+                ProjectField(
+                    workdir = workdir,
                     home = home,
-                    fieldColors = fieldColors,
+                    onClick = { showProjectSheet = true },
                 )
             }
 
@@ -288,6 +295,22 @@ fun SessionLauncherScreen(
                 showWorktreeSheet = false
             },
             onDismiss = { showWorktreeSheet = false },
+        )
+    }
+
+    // ── Forge-aware project picker (known projects + typed path + clone/create) ──
+    if (showProjectSheet) {
+        ProjectPickerSheet(
+            current = workdir,
+            projects = projects,
+            home = home,
+            loadForges = loadForges,
+            searchForge = searchForge,
+            cloneForge = cloneForge,
+            createLocalRepo = createLocalRepo,
+            createForge = createForge,
+            onPick = { workdir = it; workdirTouched = true; error = null },
+            onDismiss = { showProjectSheet = false },
         )
     }
 }

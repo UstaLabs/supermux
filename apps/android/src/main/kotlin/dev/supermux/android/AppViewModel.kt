@@ -21,6 +21,7 @@ import dev.supermux.net.BrokerClient
 import dev.supermux.net.DeviceDto
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
+import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeConnectionsResponse
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
@@ -35,6 +36,7 @@ import dev.supermux.net.OpenCodeProvider
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
+import dev.supermux.net.RemoteRepo
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.ReviewSubmitResult
 import dev.supermux.net.RepoInfo
@@ -631,6 +633,27 @@ class AppViewModel(
 
     suspend fun listProjects(): List<String> = runCatching { api.listProjects() }.getOrNull() ?: emptyList()
     suspend fun validatePath(path: String): PathValidation? = runCatching { api.validatePath(path) }.getOrNull()
+
+    // ── Git hosting / forges (project-picker omnibox; mirrors iOS BrokerSession) ────
+    /** Configured GitHub/GitLab connections (empty on any failure). */
+    suspend fun listForges(): List<ForgeConnection> =
+        runCatching { api.listForges().connections }.getOrNull() ?: emptyList()
+
+    /** Debounced repo search across all connections (empty on any failure). */
+    suspend fun searchForge(query: String): List<RemoteRepo> =
+        runCatching { api.searchForge(query).repos }.getOrNull() ?: emptyList()
+
+    /** Clone a remote repo → local checkout path, or null on failure. */
+    suspend fun cloneForge(connectionId: String, owner: String, name: String): String? =
+        runCatching { api.cloneForge(connectionId, owner, name).localPath }.getOrNull()?.ifBlank { null }
+
+    /** `git init` a fresh local repo → its path, or null on failure. */
+    suspend fun createLocalRepo(name: String): String? =
+        runCatching { api.createLocalRepo(name).localPath }.getOrNull()?.ifBlank { null }
+
+    /** Create a remote repo on the forge then clone it → local path, or null on failure. */
+    suspend fun createForge(connectionId: String, name: String): String? =
+        runCatching { api.createForge(connectionId, name).localPath }.getOrNull()?.ifBlank { null }
 
     // ── Proxies ──────────────────────────────────────────────────────────────
 
