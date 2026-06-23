@@ -61,27 +61,36 @@ test("codex mcpToolCall completed -> result detail", () => {
 })
 
 // --- cursor ---
+// Shapes verified against cursor-agent's bundled protobuf-es toJSON output:
+// the tool_call field is an agent.v1.ToolCall message whose oneof `tool` unwraps
+// to { <caseName>: { args: {...}, result: {...} } }. Args are nested under `.args`,
+// and the result oneof unwraps to { success: { stdout,...} } | { failure: { stderr,...} }.
 
 test("cursor read started -> Read card with path summary", () => {
-  const ev = { kind: "tool-call", tool: "readToolCall", phase: "started", call_id: "x", detail: { tool_call: { readToolCall: { path: "/a/b.ts" } } } } as const
+  const ev = { kind: "tool-call", tool: "readToolCall", phase: "started", call_id: "x", detail: { tool_call: { readToolCall: { args: { path: "/a/b.ts" } } } } } as const
   expect(toActivityEvents("cursor", ev, NOW)).toEqual([
     { ts: ISO, kind: "tool", tool: "Read", title: "Read: /a/b.ts", detail: "/a/b.ts", phase: "started", callId: "x" },
   ])
 })
 
-test("cursor bash started -> Bash with command", () => {
-  const ev = { kind: "tool-call", tool: "bashToolCall", phase: "started", call_id: "b1", detail: { tool_call: { bashToolCall: { command: "npm test" } } } } as const
+test("cursor shell started -> Bash with command", () => {
+  const ev = { kind: "tool-call", tool: "shellToolCall", phase: "started", call_id: "b1", detail: { tool_call: { shellToolCall: { args: { command: "npm test" } } } } } as const
   expect(toActivityEvents("cursor", ev, NOW)[0]).toMatchObject({ kind: "tool", tool: "Bash", title: "Bash: npm test", detail: "npm test" })
 })
 
-test("cursor completed -> detail from tool_call_result.content", () => {
-  const ev = { kind: "tool-call", tool: "bashToolCall", phase: "completed", call_id: "b1", detail: { tool_call: {}, result: { tool_call_result: { content: "tests passed", is_error: false } } } } as const
+test("cursor grep started -> Grep with pattern from args", () => {
+  const ev = { kind: "tool-call", tool: "grepToolCall", phase: "started", call_id: "g1", detail: { tool_call: { grepToolCall: { args: { pattern: "TODO", path: "/src" } } } } } as const
+  expect(toActivityEvents("cursor", ev, NOW)[0]).toMatchObject({ kind: "tool", tool: "Grep", title: "Grep: TODO", detail: "TODO" })
+})
+
+test("cursor completed -> detail from result.success.stdout", () => {
+  const ev = { kind: "tool-call", tool: "shellToolCall", phase: "completed", call_id: "b1", detail: { tool_call: { shellToolCall: { args: { command: "npm test" }, result: { success: { stdout: "tests passed", stderr: "" } } } } } } as const
   const [r] = toActivityEvents("cursor", ev, NOW)
   expect(r).toEqual({ ts: ISO, kind: "tool_result", title: "done", detail: "tests passed", phase: "completed", callId: "b1" })
 })
 
-test("cursor failed -> error title with detail", () => {
-  const ev = { kind: "tool-call", tool: "bashToolCall", phase: "failed", call_id: "b2", detail: { tool_call: {}, result: { tool_call_result: { content: "command not found", is_error: true } } } } as const
+test("cursor failed -> error title with detail from result.failure.stderr", () => {
+  const ev = { kind: "tool-call", tool: "shellToolCall", phase: "failed", call_id: "b2", detail: { tool_call: { shellToolCall: { args: { command: "badcmd" }, result: { failure: { exitCode: 127, stderr: "command not found" } } } } } } as const
   const [r] = toActivityEvents("cursor", ev, NOW)
   expect(r).toMatchObject({ kind: "tool_result", title: "error", detail: "command not found", callId: "b2" })
 })
@@ -112,10 +121,10 @@ test("opencode MCP tool no arg -> just tool name", () => {
   expect(r).toMatchObject({ kind: "tool", tool: "Reply", title: "Reply", detail: "" })
 })
 
-test("opencode completed -> detail from state.output", () => {
+test("opencode completed -> detail from state.output (not title)", () => {
   const ev = { kind: "tool-call", tool: "bash", phase: "completed", call_id: "oc1", detail: { type: "tool", tool: "bash", callID: "oc1", state: { status: "completed", input: { command: "npm install" }, output: "added 42 packages", title: "npm install" } } } as const
   const [r] = toActivityEvents("opencode", ev, NOW)
-  expect(r).toEqual({ ts: ISO, kind: "tool_result", title: "done", detail: "npm install", phase: "completed", callId: "oc1" })
+  expect(r).toEqual({ ts: ISO, kind: "tool_result", title: "done", detail: "added 42 packages", phase: "completed", callId: "oc1" })
 })
 
 test("opencode completed with output but no title -> uses output", () => {

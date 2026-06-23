@@ -8,6 +8,21 @@ const DETAIL_MAX = 2000
 
 interface ToolCallEventLike { tool: string; phase: "started" | "completed" | "failed"; call_id: string; detail?: unknown }
 
+/** Extract a human-readable result string from a cursor-agent tool body's `.result`
+ * oneof. protobuf-es toJSON() unwraps the oneof so `result` is a single-key object
+ * like `{ success: { stdout, stderr, interleavedOutput } }` or
+ * `{ failure: { exitCode, stderr } }` (other cases: error/cancelled/timeout/...). */
+function extractCursorResult(toolBody: Record<string, unknown> | undefined): string {
+  const result = toolBody?.result as Record<string, unknown> | undefined
+  if (!result || typeof result !== "object") return ""
+  const caseKey = Object.keys(result)[0]
+  if (!caseKey) return ""
+  const caseVal = result[caseKey] as Record<string, unknown> | undefined
+  if (!caseVal || typeof caseVal !== "object") return ""
+  if (caseKey === "success") return pickString(caseVal, ["stdout", "interleavedOutput", "stderr"])
+  return pickString(caseVal, ["stderr", "error", "message", "stdout"])
+}
+
 function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike): { summary: string; resultDetail: string } {
   const obj = ev.detail && typeof ev.detail === "object" ? ev.detail as Record<string, unknown> : undefined
   if (!obj) return { summary: "", resultDetail: "" }
@@ -22,7 +37,10 @@ function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike): { summary: st
     // for delta SSE updates where input may be absent). The input fallback prevents
     // the old behavior of picking the tool-name string and showing "Bash: bash".
     const summary = input ? pickString(input, ["command", "path", "file", "pattern", "query", "text", "url", "port", "name", "args"]) : rawTitle
-    const result = ev.phase === "completed" ? (rawTitle || output) : ev.phase === "failed" ? error : ""
+    // For completed events, prefer the actual output over the title — the title is a
+    // label (typically the command/input), so `rawTitle || output` showed the input as
+    // the output. Flip to `output || rawTitle` so the real result is surfaced.
+    const result = ev.phase === "completed" ? (output || rawTitle) : ev.phase === "failed" ? error : ""
     return { summary, resultDetail: result }
   }
 
@@ -43,14 +61,18 @@ function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike): { summary: st
   }
 
   if (agent === "cursor") {
+    // cursor-agent emits the raw protobuf `agent.v1.ToolCall` message as `tool_call`.
+    // protobuf-es toJSON() unwraps its oneof `tool` so the case name becomes the JSON
+    // key: tool_call = { <caseName>: { args: {...}, result: {...} } } — args are nested
+    // under `.args`, NOT at the top level (the old code read them flat, producing empty
+    // summaries). The result oneof similarly unwraps to { success: { stdout,... } } |
+    // { failure: { stderr,... } } | { error: {...} } — the old code looked for a
+    // non-existent `obj.result.tool_call_result.content` and always came up empty.
     const tc = obj.tool_call as Record<string, unknown> | undefined
-    const args = tc && typeof tc === "object" ? (tc[ev.tool] ?? Object.values(tc)[0]) as Record<string, unknown> | undefined : undefined
-    const summary = args ? pickString(args, ["path", "command", "pattern", "query", "file", "target_file", "text"]) : ""
-    let result = ""
-    if (ev.phase === "completed" || ev.phase === "failed") {
-      const res = (obj.result as Record<string, unknown> | undefined)?.tool_call_result as Record<string, unknown> | undefined
-      result = typeof res?.content === "string" ? res.content : ""
-    }
+    const toolBody = tc && typeof tc === "object" ? (tc[ev.tool] ?? Object.values(tc)[0]) as Record<string, unknown> | undefined : undefined
+    const innerArgs = toolBody?.args as Record<string, unknown> | undefined
+    const summary = innerArgs ? pickString(innerArgs, ["command", "pattern", "query", "globPattern", "glob_pattern", "description", "url", "path", "file", "target_file", "text"]) : ""
+    const result = (ev.phase === "completed" || ev.phase === "failed") ? extractCursorResult(toolBody) : ""
     return { summary, resultDetail: result }
   }
 
