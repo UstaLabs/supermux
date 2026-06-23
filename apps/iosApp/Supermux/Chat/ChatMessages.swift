@@ -143,7 +143,9 @@ struct AttachmentView: View {
         return "\(n) B"
     }
     private func tmpURL(_ data: Data, name: String) -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(att.file_id, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent(name)
         try? data.write(to: url)
         return url
     }
