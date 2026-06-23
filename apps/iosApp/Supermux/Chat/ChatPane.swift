@@ -195,7 +195,7 @@ struct ChatPane: View {
                 HStack(spacing: 12) {
                     attachMenu
                     micButton
-                    if let m = session.model, !m.isEmpty { pill(m, system: "cpu") { modelSheet = true } }
+                    pill(modelPillLabel, system: "cpu") { modelSheet = true }
                     if reasoning?.visible ?? false {
                         pill(reasoning?.current ?? "reasoning", system: "brain") { reasoningSheet = true }
                     }
@@ -216,6 +216,15 @@ struct ChatPane: View {
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: composerExpanded ? 20 : 24, style: .continuous))
     }
     private var canSend: Bool { !draft.trimmingCharacters(in: .whitespaces).isEmpty || !pending.isEmpty }
+
+    /// Web ModelPill parity: always visible; "Default" when unset, else a short label.
+    private var modelPillLabel: String {
+        guard let id = session.model, !id.isEmpty else { return "Default" }
+        if let slash = id.lastIndex(of: "/") {
+            return String(id[id.index(after: slash)...])
+        }
+        return id
+    }
 
     /// Attachment (+) menu — shared by the collapsed and expanded composer states. The 44×44
     /// content shape gives it a real tap target (HIG minimum); previously the collapsed "+" was a
