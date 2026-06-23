@@ -34,17 +34,26 @@ func b64url(_ s: Substring) -> Data {
     return Data(base64Encoded: t)!
 }
 
-/// Opens a supermux push blob sealed by the broker (P-256 ECDH -> HKDF-SHA256 -> AES-256-GCM).
-func openSealedPush(_ blob: String, privatePkcs8B64: String) throws -> String {
+/// Opens a supermux push blob sealed by the broker (P-256 ECDH -> HKDF-SHA256 -> AES-256-GCM),
+/// given the device's private key directly. This is the entry point the NSE uses: it loads the
+/// shared `P256.KeyAgreement.PrivateKey` from the Keychain (`PushKeypair`) and calls here.
+func openSealedPush(_ blob: String, privateKey: P256.KeyAgreement.PrivateKey) throws -> String {
     let p = blob.split(separator: ".")
     guard p.count == 4 else { throw PushCryptoError.badFormat }
     let eph = b64url(p[0]), salt = b64url(p[1]), iv = b64url(p[2]), ct = b64url(p[3])
-    let priv = try P256.KeyAgreement.PrivateKey(derRepresentation: Data(base64Encoded: privatePkcs8B64)!)  // PKCS#8 DER
     let ephPub = try P256.KeyAgreement.PublicKey(x963Representation: eph)                                  // 0x04||X||Y
-    let shared = try priv.sharedSecretFromKeyAgreement(with: ephPub)
+    let shared = try privateKey.sharedSecretFromKeyAgreement(with: ephPub)
     let key = shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: salt,
                                              sharedInfo: Data("supermux-push".utf8), outputByteCount: 32)
     let box = try AES.GCM.SealedBox(nonce: AES.GCM.Nonce(data: iv),
                                     ciphertext: ct.prefix(ct.count - 16), tag: ct.suffix(16))
     return String(data: try AES.GCM.open(box, using: key), encoding: .utf8)!
+}
+
+/// Opens a supermux push blob given the device private key as PKCS#8 DER (base64).
+/// VERIFIED against a real broker `sealForDevice` output; kept as the proven entry
+/// point. Delegates to the key-based overload after importing the PKCS#8 bytes.
+func openSealedPush(_ blob: String, privatePkcs8B64: String) throws -> String {
+    let priv = try P256.KeyAgreement.PrivateKey(derRepresentation: Data(base64Encoded: privatePkcs8B64)!)  // PKCS#8 DER
+    return try openSealedPush(blob, privateKey: priv)
 }

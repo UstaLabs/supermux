@@ -58,6 +58,10 @@ targets:
       # Bundle the watch app inside the iOS app for paired install / TestFlight.
       - target: SupermuxWatch
         embed: true
+      # Notification Service Extension (decrypts sealed pushes on-device). Embedded
+      # in the app bundle under PlugIns/.
+      - target: SupermuxPushNSE
+        embed: true
     info:
       path: Supermux/Info.plist
       properties:
@@ -91,6 +95,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app
+        # APNs (aps-environment) + shared Keychain access group so the NSE can read
+        # the same push keypair this app generates.
+        CODE_SIGN_ENTITLEMENTS: Supermux/Supermux.entitlements
         FRAMEWORK_SEARCH_PATHS:
           - $(inherited)
           - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
@@ -147,6 +154,39 @@ targets:
           PROVISIONING_PROFILE_SPECIFIER: "Supermux Watch App Store"
           CODE_SIGN_IDENTITY: "Apple Distribution"
           "CODE_SIGN_IDENTITY[sdk=watchos*]": "Apple Distribution"
+
+  SupermuxPushNSE:
+    # Notification Service Extension: intercepts `mutable-content` pushes and decrypts
+    # the sealed blob on-device before display. Shares PushCrypto.swift + PushKeypair.swift
+    # with the app (compiled into both) and the push Keychain access group.
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: SupermuxPushNSE/NotificationService.swift
+      # Shared sources — compiled into BOTH the app and this extension. The NSE loads
+      # the keypair from the shared Keychain group and opens the blob with the same code.
+      - path: Supermux/Push/PushCrypto.swift
+      - path: Supermux/Push/PushKeypair.swift
+    info:
+      path: SupermuxPushNSE/Info.plist
+      properties:
+        CFBundleDisplayName: SupermuxPushNSE
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app.push-nse
+        CODE_SIGN_ENTITLEMENTS: SupermuxPushNSE/SupermuxPushNSE.entitlements
+        # App extensions must declare they don't use the (extension-unsafe) UIKit APIs.
+        APPLICATION_EXTENSION_API_ONLY: "YES"
+      configs:
+        Release:
+          PROVISIONING_PROFILE_SPECIFIER: "Supermux Push NSE App Store"
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
 
   SupermuxTests:
     type: bundle.unit-test
