@@ -53,6 +53,9 @@ targets:
       - path: Supermux/EditorWeb
         type: folder
         buildPhase: resources
+      # Shared with the watch app: relay wire-format + transport logic, compiled into the
+      # iOS app so BrokerRelay (phone side) and SupermuxTests can use them.
+      - path: SupermuxWatch/Watch/RelayEnvelope.swift
     dependencies:
       - package: SwiftTerm
       # Bundle the watch app inside the iOS app for paired install / TestFlight.
