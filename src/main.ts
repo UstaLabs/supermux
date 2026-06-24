@@ -86,7 +86,7 @@ import { createInstallManager } from "./core/agents/install"
 import { withAgentBinDirs } from "./core/agents/bin-dirs"
 import { homedir } from "os"
 import { home } from "./shared/home"
-import { join, dirname, resolve, resolve as resolvePath, isAbsolute } from "path"
+import { join, dirname, resolve, isAbsolute } from "path"
 import { fileURLToPath } from "url"
 import { ClaudeCodeAdapter } from "./core/agents/claude/index"
 import { wireClaudeStateEvents } from "./core/agents/claude/state-projection"
@@ -316,7 +316,7 @@ function resolveGitDirs(workdir: string): { gitDir: string; commonDir: string } 
   try {
     const gitDir = execFileSync("git", ["rev-parse", "--absolute-git-dir"], { cwd: workdir, encoding: "utf-8" }).trim()
     const raw = execFileSync("git", ["rev-parse", "--git-common-dir"], { cwd: workdir, encoding: "utf-8" }).trim()
-    return { gitDir, commonDir: isAbsolute(raw) ? raw : resolvePath(workdir, raw) }
+    return { gitDir, commonDir: isAbsolute(raw) ? raw : resolve(workdir, raw) }
   } catch { return null }
 }
 
@@ -592,6 +592,7 @@ function unregisterSession(id: string): void {
   // their home (cursor runtime symlink + per-session state/history) must
   // survive. Truly orphaned dirs (no registry entry) are reclaimed by the
   // startup orphan-GC instead.
+  gitStatusService.sync(gitServiceSessions())  // release fs-watch for the now-archived session
 }
 
 // Resolve an inbound attachment file_id to a local path, for codex/cursor
