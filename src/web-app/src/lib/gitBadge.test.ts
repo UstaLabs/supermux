@@ -20,3 +20,7 @@ test("unpublished remote → muted unpublished", () => {
   const b = gitBadge({ mode: "remote", compareRef: "x", ahead: 0, behind: 0, dirty: 0, unpublished: true, computedAt: 0 })
   expect(b).toEqual({ text: "unpublished", title: "Not published", tone: "muted" })
 })
+test("dirty-only → glyph ·N, no separator in title", () => {
+  const b = gitBadge({ mode: "base", compareRef: "main", ahead: 0, behind: 0, dirty: 3, computedAt: 0 })
+  expect(b).toEqual({ text: "·3", title: "3 uncommitted", tone: "active" })
+})

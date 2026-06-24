@@ -4,7 +4,7 @@ export interface GitBadge { text: string; title: string; tone: "muted" | "active
 
 export function gitBadge(git: GitLiteStatus | undefined): GitBadge | null {
   if (!git) return null
-  const ref = git.mode === "base" ? (git.compareRef || "base") : "origin"
+  const ref = git.mode === "base" ? (git.compareRef || "base") : (git.compareRef.split("/")[0] || "origin")
   if (git.unpublished) return { text: "unpublished", title: "Not published", tone: "muted" }
 
   const parts: string[] = []
