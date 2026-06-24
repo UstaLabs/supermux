@@ -264,6 +264,12 @@ fun SessionRow(
                 Spacer(Modifier.height(Space.xs))
             }
 
+            // Git status badge (worktree-vs-base or branch-vs-remote divergence).
+            if (s.git != null) {
+                Spacer(Modifier.height(2.dp))
+                GitBadgeRow(s.git)
+            }
+
             // Preview: last message or workdir fallback
             val previewText = preview?.text?.replace("\n", " ")?.take(80)
             if (previewText != null) {
