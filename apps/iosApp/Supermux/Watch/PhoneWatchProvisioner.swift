@@ -41,4 +41,16 @@ final class PhoneWatchProvisioner: NSObject, WCSessionDelegate {
 
     func sessionWatchStateDidChange(_ session: WCSession) { pushCurrent() }
     func sessionReachabilityDidChange(_ session: WCSession) { pushCurrent() }
+
+    // MARK: Relay (watch → broker via this phone)
+
+    /// The watch relays a broker request when it can't reach the broker directly (e.g. a
+    /// Tailscale-only broker; there is no watchOS Tailscale client). Run it with this
+    /// phone's stored creds and reply with the bytes. Delivered even when the app was
+    /// suspended — the system wakes it in the background to answer.
+    func session(_ session: WCSession,
+                 didReceiveMessage message: [String: Any],
+                 replyHandler: @escaping ([String: Any]) -> Void) {
+        Task { replyHandler(await BrokerRelay.handle(message)) }
+    }
 }
