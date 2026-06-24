@@ -121,6 +121,7 @@ final class BrokerSession {
         case .agentError: break
         case .finishJobFrame(let f):
             if let job = f.job { finishJobs[f.session] = job } else { finishJobs.removeValue(forKey: f.session) }
+        case .sessionGit: break
         }
     }
 
