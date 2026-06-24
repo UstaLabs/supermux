@@ -115,9 +115,11 @@ import dev.supermux.android.theme.Space
 import dev.supermux.android.theme.rememberHaptics
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
+import dev.supermux.proto.GitBadgeKind
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
+import dev.supermux.proto.gitBadge
 
 enum class SessionPanel { Chat, Native, Editor, Terminal, Display }
 
@@ -527,6 +529,30 @@ fun ChatScreen(
                         style = MaterialTheme.typography.labelMedium,
                         maxLines = 1,
                     )
+                    val badge = gitBadge(session.git)
+                    if (badge != null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
+                            if (badge.kind == GitBadgeKind.BASE) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_git_branch),
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(12.dp),
+                                )
+                            }
+                            val label = if (badge.kind == GitBadgeKind.BASE && badge.compareRef.isNotEmpty())
+                                "${badge.compareRef} ${badge.text}" else badge.text
+                            Text(
+                                text = label,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                            )
+                        }
+                    }
                 }
 
                 // Agent pill (only if non-idle)
