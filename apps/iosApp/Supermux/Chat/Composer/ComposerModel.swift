@@ -56,6 +56,11 @@ final class ComposerModel {
         self.pending = []
     }
 
+    /// Swap only the injected IO, leaving draft/attachments/mic untouched. The launcher binds
+    /// its glossary closure to the broker via this in `.task`, without resetting state (unlike
+    /// `reconfigure`, which is the session-switch reset).
+    func setContext(_ context: ComposerContext) { self.context = context }
+
     // MARK: - Derived
     // Trims newlines too (the original chat `canSend` used `.whitespaces`, leaving a
     // newline-only draft "sendable" — a latent quirk; this aligns with the launcher's
