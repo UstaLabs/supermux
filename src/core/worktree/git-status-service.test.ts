@@ -66,10 +66,10 @@ test("single-flight: a recompute requested mid-flight reruns exactly once after"
 test("a base-ref change recomputes all sessions sharing the common dir", () => {
   const h = harness()
   h.svc.sync([{ id: "a", workdir: "/wa" }, { id: "b", workdir: "/wb" }])
-  h.scheduled.length = 0                          // ignore initial schedules
+  const before = h.scheduled.length              // snapshot initial schedules
   const refsDir = join("/common", "refs", "heads")
   h.watchers.get(refsDir)!()                      // fire base-ref change
-  expect(h.scheduled.length).toBe(2)             // both a and b rescheduled
+  expect(h.scheduled.length - before).toBe(2)    // both a and b rescheduled
 })
 
 test("sync untracks a removed session and closes its unique watch", () => {
@@ -79,6 +79,17 @@ test("sync untracks a removed session and closes its unique watch", () => {
   h.svc.sync([])                                  // a is gone
   expect(h.watchers.has("/git/a")).toBe(false)
   expect(h.svc.get("a")).toBeUndefined()
+})
+
+test("shared commonDir watch stays open when one of two sessions is removed", () => {
+  const h = harness()
+  h.svc.sync([{ id: "a", workdir: "/wa" }, { id: "b", workdir: "/wb" }])
+  const refsDir = join("/common", "refs", "heads")
+  expect(h.watchers.has(refsDir)).toBe(true)
+  h.svc.sync([{ id: "b", workdir: "/wb" }])    // remove "a", keep "b"
+  expect(h.watchers.has(refsDir)).toBe(true)   // still open — b shares it
+  h.svc.sync([])                               // remove "b"
+  expect(h.watchers.has(refsDir)).toBe(false)  // now closed
 })
 
 test("non-repo sessions (resolveGitDirs null) cache null and set no watches", () => {

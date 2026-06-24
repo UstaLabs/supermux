@@ -54,7 +54,8 @@ export class GitStatusService {
     if (!this.tracked.has(id)) return
     const prev = this.timers.get(id)
     if (prev !== undefined) this.deps.cancel(prev)
-    this.timers.set(id, this.deps.schedule(() => { this.timers.delete(id); void this.recompute(id) }, this.deps.debounceMs ?? 400))
+    // best-effort badge: swallow recompute errors (computeLiteStatus already degrades to null)
+    this.timers.set(id, this.deps.schedule(() => { this.timers.delete(id); void this.recompute(id).catch(() => {}) }, this.deps.debounceMs ?? 400))
   }
 
   private track(s: ServiceSession): void {
@@ -108,7 +109,7 @@ export class GitStatusService {
       this.deps.onChange(id, git)
     } finally {
       this.inflight.delete(id)
-      if (this.rerun.delete(id)) void this.recompute(id)
+      if (this.rerun.delete(id)) void this.recompute(id).catch(() => {})
     }
   }
 }
