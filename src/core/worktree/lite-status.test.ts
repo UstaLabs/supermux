@@ -40,11 +40,21 @@ test("base mode: clean worktree reports zeros", async () => {
   expect(r).toEqual({ mode: "base", compareRef: "main", ahead: 0, behind: 0, dirty: 0, computedAt: 1 })
 })
 
+test("base mode: counts commits behind when base advances", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  writeFileSync(join(repo, "m.txt"), "m"); g(repo, "add", "."); g(repo, "commit", "-m", "main-moves")
+  const r = await computeLiteStatus({ workdir: h.worktreeDir, repo_root: repo, base_branch: "main", session_branch: h.sessionBranch }, 9)
+  expect(r?.ahead).toBe(0)
+  expect(r?.behind).toBe(1)
+})
+
 test("remote mode: unpublished branch has no upstream", async () => {
   const { work } = repoWithRemote() // on mux/s, never pushed
   const r = await computeLiteStatus({ workdir: work }, 5)
   expect(r?.mode).toBe("remote")
   expect(r?.unpublished).toBe(true)
+  expect(r?.compareRef).toBe("mux/s")
 })
 
 test("remote mode: ahead of upstream after a local commit", async () => {

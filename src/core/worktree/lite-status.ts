@@ -59,8 +59,8 @@ export async function computeLiteStatus(s: LiteStatusInput, now: number = Date.n
   if (!(inside.ok && inside.out === "true")) return null
   const br = await runGit(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"])
   const branch = br.ok && br.out ? br.out : null
+  if (!branch) return null // detached HEAD — not "unpublished"; nothing renders detached specially (matches remoteStatus()/header)
   const dirty = await dirtyCount(cwd)
-  if (!branch) return { mode: "remote", compareRef: "", ahead: 0, behind: 0, dirty, unpublished: true, computedAt: now }
   const up = await runGit(cwd, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
   const upstream = up.ok && up.out ? up.out : null
   if (!upstream) return { mode: "remote", compareRef: branch, ahead: 0, behind: 0, dirty, unpublished: true, computedAt: now }
