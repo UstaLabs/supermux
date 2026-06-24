@@ -22,25 +22,14 @@ struct ChatPane: View {
     /// Transient status banner rendered at the top of the bottom cluster.
     @Binding var banner: String?
 
-    // MARK: - Composer state
-    @State private var draft = ""
-    @State private var pending: [PendingAttachment] = []
+    // MARK: - Composer (shared engine)
+    @State private var composer: ComposerModel
+
+    // MARK: - Picker / sheet state (still owned by the view)
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var showPhotos = false
     @State private var showFiles = false
     @State private var showCamera = false
-    @State private var recorder = AudioRecorder()
-    @State private var dictation = SpeechDictation()
-    @State private var transcribing = false
-    @State private var micDenied = false
-    // True while dictation.start() is in flight (notably the first-run on-device model
-    // download). Drives the "Preparing speech…" state AND blocks a second tap from starting a
-    // concurrent mic session — two installTap on one audio bus is a hard crash (the first-voice
-    // crash users hit on a fresh install before the speech model is ready).
-    @State private var micStarting = false
-    // Voice glossary (project/technical terms), cached from the broker on appear and fed to
-    // on-device dictation as contextual hints so it spells them right at the source.
-    @State private var glossary: [String] = []
     @FocusState private var composing: Bool
 
     // MARK: - Model / reasoning sheet state
@@ -48,18 +37,51 @@ struct ChatPane: View {
     @State private var reasoningSheet = false
     @State private var reasoning: ReasoningResponse?
 
+    // MARK: - Init
+
+    init(broker: BrokerSession, session: SessionInfo,
+         showRename: Binding<Bool>, renameText: Binding<String>,
+         showKillConfirm: Binding<Bool>, banner: Binding<String?>) {
+        self.broker = broker
+        self.session = session
+        self._showRename = showRename
+        self._renameText = renameText
+        self._showKillConfirm = showKillConfirm
+        self._banner = banner
+        self._composer = State(initialValue: ComposerModel(
+            context: Self.makeContext(broker: broker, session: session),
+            initialDraft: Self.loadDraft(session: session)
+        ))
+    }
+
+    private static func makeContext(broker: BrokerSession, session: SessionInfo) -> ComposerContext {
+        ComposerContext(
+            glossary: { (try? await broker.fetchGlossary()) ?? [] },
+            cleanupTranscript: { try await broker.transcribeDraft(sessionId: session.id, draft: $0) },
+            audioFallbackTranscribe: { try await broker.transcribeAudio(sessionId: session.id, data: $0, filename: $1) }
+        )
+    }
+
+    private static func loadDraft(session: SessionInfo) -> String {
+        UserDefaults.standard.string(forKey: "cmux:draft:\(session.id)")
+            ?? ProcessInfo.processInfo.environment["SM_DRAFT"] ?? ""
+    }
+
     // MARK: - Derived computeds
+
     private var draftKey: String { "cmux:draft:\(session.id)" }
 
     /// Composer is expanded (full controls) when focused, when there's a draft or a
     /// staged attachment, or while recording; otherwise it rests as a slim glass pill.
-    private var composerExpanded: Bool { composing || !draft.isEmpty || !pending.isEmpty || dictation.isListening || recorder.isRecording || transcribing || micStarting }
+    private var composerExpanded: Bool {
+        composing || composer.hasContent || composer.isBusy
+    }
 
     // MARK: - Body
 
     var body: some View {
         // The transcript is a *separate, Equatable* view. Composer keystrokes mutate this view's
-        // `draft`/composer @State and re-run `body`, but `.equatable()` (keyed on session.id) makes
+        // composer @State and re-run `body`, but `.equatable()` (keyed on session.id) makes
         // SwiftUI skip re-evaluating the transcript on those re-runs — so the message list is NOT
         // rebuilt (no buildChatBlocks, no List re-diff) on each keypress, which is what keeps typing
         // fast in long chats. New messages still update it directly via @Observable (BrokerSession).
@@ -83,31 +105,62 @@ struct ChatPane: View {
             .sheet(isPresented: $reasoningSheet) {
                 OptionSwitchSheet(title: "Reasoning", broker: broker, session: session, kind: .reasoning)
             }
-            .alert("Microphone access needed", isPresented: $micDenied) {
+            .alert("Microphone access needed", isPresented: $composer.micDenied) {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("Enable microphone access for supermux in Settings to record voice messages.")
             }
             .onAppear { loadPane() }
-            .onDisappear { dictation.cancel(); recorder.cancel() }
-            .onChange(of: session.id) { _, _ in dictation.cancel(); recorder.cancel(); loadPane() }
-            .onChange(of: draft) { _, new in UserDefaults.standard.set(new, forKey: draftKey) }
+            .onDisappear { composer.cancelMic() }
+            .onChange(of: session.id) { _, _ in
+                composer.reconfigure(
+                    context: Self.makeContext(broker: broker, session: session),
+                    draft: Self.loadDraft(session: session)
+                )
+                loadPane()
+            }
+            .onChange(of: composer.draft) { _, new in UserDefaults.standard.set(new, forKey: draftKey) }
+            .onChange(of: composer.refocusToken) { _, _ in composing = true }
+            .onChange(of: composer.status) { _, s in
+                guard let s else { return }
+                showBanner(s)
+                composer.status = nil
+            }
+            // Observe the id (SlashCommand isn't Equatable). The value is cleared right after
+            // handling, so the same control command re-applies fine on the next tap.
+            .onChange(of: composer.controlCommandToHandle?.id) { _, _ in
+                guard let cmd = composer.controlCommandToHandle else { return }
+                handleControlCommand(cmd)
+                composer.controlCommandToHandle = nil
+            }
     }
 
     // MARK: - Load
 
     /// (Re)load per-session state owned by this pane. Called on first open and session switch.
     private func loadPane() {
-        draft = UserDefaults.standard.string(forKey: draftKey)
-            ?? ProcessInfo.processInfo.environment["SM_DRAFT"] ?? ""
         Task { reasoning = await broker.reasoning(session.id) }
-        Task { await loadGlossary() }
+        Task { await composer.loadGlossary() }
     }
 
-    /// Cache the voice glossary from the broker (shared across sessions). Best-effort —
-    /// dictation still works without it; the terms are just contextual bias.
-    private func loadGlossary() async {
-        if let terms = try? await broker.fetchGlossary() { glossary = terms }
+    // MARK: - Control commands + banner
+
+    /// Show a transient status banner via the binding, auto-clearing after 4s.
+    private func showBanner(_ text: String) {
+        banner = text
+        Task { try? await Task.sleep(nanoseconds: 4_000_000_000); banner = nil }
+    }
+
+    /// Handle a control slash command (lifted from the old inline `applyCommand` switch).
+    private func handleControlCommand(_ cmd: SlashCommand) {
+        switch cmd.action?.kind {
+        case "model": modelSheet = true
+        case "rename": renameText = session.name; showRename = true
+        case "mute": broker.toggleMute(session)
+        case "stop": broker.interrupt(session.id)
+        case "kill": showKillConfirm = true
+        default: break   // spawn needs navigation we don't have from chat
+        }
     }
 
     // MARK: - Bottom cluster
@@ -131,20 +184,25 @@ struct ChatPane: View {
     // MARK: - Composer dock
 
     private var dock: some View {
-        VStack(spacing: 8) {
+        let cmds = broker.commands[session.id] ?? []
+        return VStack(spacing: 8) {
             if composerExpanded {
-                if !slashMatches.isEmpty { slashMenu }
+                let matches = composer.slashMatches(in: cmds)
+                if !matches.isEmpty {
+                    SlashMenu(matches: matches, showsActionGlyph: true) { composer.applyCommand($0) }
+                }
             }
             composerField
         }
         .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 2)
         .animation(.smooth(duration: 0.28), value: composerExpanded)
-        .onChange(of: photoItems) { _, items in loadPhotos(items) }
-        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .images)
-        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
-            handleFiles(result)
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            Task { await composer.loadPhotos(items); photoItems = [] }
         }
-        .fullScreenCover(isPresented: $showCamera) { CameraPicker { addCameraImage($0) } }
+        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .images)
+        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { composer.handleFiles($0) }
+        .fullScreenCover(isPresented: $showCamera) { CameraPicker { composer.addCameraImage($0) } }
     }
 
     // ONE glass card with an always-present TextField: tapping it focuses natively, so
@@ -153,49 +211,47 @@ struct ChatPane: View {
     // and the card morphs (corner radius + padding) between the slim resting pill and the card.
     private var composerField: some View {
         VStack(spacing: 8) {
-            if dictation.isListening || recorder.isRecording {
+            if composer.dictation.isListening || composer.recorder.isRecording {
                 // Recording takes over the composer. On-device shows the live transcript above
                 // the big STOP / small cancel; the audio-fallback path just shows the timer.
-                if dictation.isListening && !dictation.transcript.isEmpty {
+                if composer.dictation.isListening && !composer.dictation.transcript.isEmpty {
                     ScrollView {
-                        Text(dictation.transcript)
+                        Text(composer.dictation.transcript)
                             .font(.callout).frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxHeight: 120)
                 }
-                RecordingBar(elapsed: dictation.isListening ? dictation.elapsed : recorder.elapsed,
-                             onStop: { Task { await toggleMic() } },
-                             onCancel: { dictation.cancel(); recorder.cancel() })
+                RecordingBar(elapsed: composer.dictation.isListening ? composer.dictation.elapsed : composer.recorder.elapsed,
+                             onStop: { Task { await composer.toggleMic() } },
+                             onCancel: { composer.cancelMic() })
             } else {
             if composerExpanded {
-                if !pending.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) { ForEach(pending) { attachmentChip($0) } }
-                    }
+                if !composer.pending.isEmpty {
+                    AttachmentTray(pending: composer.pending, onRemove: { composer.removeAttachment($0) })
                 }
-                if transcribing {
+                if composer.transcribing {
                     transcribingBar
                 }
-                if micStarting {
+                if composer.micStarting {
                     preparingBar
                 }
             }
             HStack(alignment: .center, spacing: 10) {
                 if !composerExpanded {
-                    attachMenu
+                    AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera)
                 }
-                TextField("Message \(session.name)…", text: $draft, axis: .vertical)
+                TextField("Message \(session.name)…", text: $composer.draft, axis: .vertical)
                     .lineLimit(composerExpanded ? (1...12) : (1...1))
                     .focused($composing)
-                    .composerHardwareKeyboardSubmit(canSubmit: canSend) { sendMessage() }
+                    .composerHardwareKeyboardSubmit(canSubmit: composer.canSubmit) { sendMessage() }
                 if !composerExpanded {
-                    micButton
+                    MicButton(model: composer)
                 }
             }
             if composerExpanded {
                 HStack(spacing: 12) {
-                    attachMenu
-                    micButton
+                    AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera)
+                    MicButton(model: composer)
                     pill(modelPillLabel, system: "cpu") { modelSheet = true }
                     if reasoning?.visible ?? false {
                         pill(reasoning?.current ?? "reasoning", system: "brain") { reasoningSheet = true }
@@ -205,9 +261,9 @@ struct ChatPane: View {
                         Image(systemName: "arrow.up")
                             .font(.headline.weight(.bold)).foregroundStyle(.white)
                             .frame(width: 34, height: 34)
-                            .background(canSend ? Theme.teal : Color.gray.opacity(0.4), in: Circle())
+                            .background(composer.canSubmit ? Theme.teal : Color.gray.opacity(0.4), in: Circle())
                     }
-                    .disabled(!canSend)
+                    .disabled(!composer.canSubmit)
                 }
             }
             }
@@ -216,7 +272,6 @@ struct ChatPane: View {
         .padding(.vertical, composerExpanded ? 12 : 10)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: composerExpanded ? 20 : 24, style: .continuous))
     }
-    private var canSend: Bool { !draft.trimmingCharacters(in: .whitespaces).isEmpty || !pending.isEmpty }
 
     /// Web ModelPill parity: always visible; "Default" when unset, else a short label.
     private var modelPillLabel: String {
@@ -225,45 +280,6 @@ struct ChatPane: View {
             return String(id[id.index(after: slash)...])
         }
         return id
-    }
-
-    /// Attachment (+) menu — shared by the collapsed and expanded composer states. The 44×44
-    /// content shape gives it a real tap target (HIG minimum); previously the collapsed "+" was a
-    /// static, non-tappable Image and the expanded one had only the tiny glyph as its hit area.
-    private var attachMenu: some View {
-        Menu {
-            Button { showPhotos = true } label: { Label("Photos", systemImage: "photo") }
-            Button { showFiles = true } label: { Label("Files", systemImage: "folder") }
-            Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
-        } label: {
-            Image(systemName: "plus")
-                .font(.body.weight(.medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
-        }
-    }
-
-    // MARK: - Mic / dictation
-
-    // Mic → on-device STT first (real-time → /transcribe draft → cleanup), falling back to
-    // audio recording → host whisper when on-device is unavailable. Cleaned text is appended
-    // to the composer (never sent). Stop/cancel live in the RecordingBar while recording.
-    private var micButton: some View {
-        Button {
-            Task { await toggleMic() }
-        } label: {
-            Group {
-                if micStarting {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: "mic").font(.body.weight(.medium)).foregroundStyle(.secondary)
-                }
-            }
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())
-        }
-        .disabled(transcribing || micStarting)
     }
 
     private var transcribingBar: some View {
@@ -288,135 +304,10 @@ struct ChatPane: View {
         .background(Color(.tertiarySystemFill), in: Capsule())
     }
 
-    /// Drive the mic: on-device STT first (real-time → /transcribe draft → cleanup), falling
-    /// back to audio recording → host whisper when on-device is unavailable. Always sets the
-    /// composer text; never sends.
-    private func toggleMic() async {
-        if recorder.isRecording {
-            // Fallback audio path was active — finish + transcribe via multipart (whisper).
-            guard let (data, name) = recorder.stop() else { showBanner("Didn't catch that"); return }
-            await runTranscription { try await broker.transcribeAudio(sessionId: session.id, data: data, filename: name) }
-            return
-        }
-        if dictation.isListening {
-            // On-device path — stop, then clean the on-device draft. Raw draft is the fallback
-            // so the dictation still lands even if the cleanup call fails.
-            let (text, _) = await dictation.stop()
-            guard !text.isEmpty else { showBanner("Didn't catch that"); return }
-            await runTranscription(rawFallback: text) {
-                try await broker.transcribeDraft(sessionId: session.id, draft: text)
-            }
-            return
-        }
-        // Start on-device; fall back to audio recording if it's unavailable / model downloading.
-        // The glossary biases the recognizer toward our project/technical terms.
-        // Guard re-entry: on a fresh install start() can take seconds (model download), and a
-        // second tap during that wait would spin up a concurrent mic session on the same audio
-        // bus → crash. micStarting also surfaces the "Preparing speech…" state.
-        guard !micStarting else { return }
-        micStarting = true
-        defer { micStarting = false }
-        switch await dictation.start(contextualStrings: glossary) {
-        case .started: break
-        case .denied: micDenied = true
-        case .unavailable, .downloading, .failed:
-            if case .denied = await recorder.start() { micDenied = true }
-        }
-    }
-
-    /// Run a transcribe call with the "Transcribing…" state, then append the cleaned text
-    /// to the composer (a space joins it to any existing draft). On ANY failure we keep the
-    /// raw on-device draft (when we have one) so the dictation isn't lost; the agent cleanup
-    /// is just an enhancement. We only surface an error when there's no text to keep at all.
-    private func runTranscription(rawFallback: String? = nil,
-                                  _ call: @escaping () async throws -> String) async {
-        transcribing = true
-        defer { transcribing = false }
-        let result: String
-        do {
-            result = try await call()
-        } catch {
-            if let raw = rawFallback?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
-                appendToDraft(raw)
-            } else {
-                showBanner("Transcription failed")
-            }
-            return
-        }
-        let cleaned = result.trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleaned.isEmpty {
-            if let raw = rawFallback?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
-                appendToDraft(raw)
-            }
-            return
-        }
-        appendToDraft(cleaned)
-    }
-
-    /// Append text to the composer draft, space-joining onto any existing draft, and focus.
-    private func appendToDraft(_ text: String) {
-        let existing = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        draft = existing.isEmpty ? text : existing + " " + text
-        composing = true
-    }
-
-    /// Show a transient status banner via the binding, auto-clearing after 4s.
-    private func showBanner(_ text: String) {
-        banner = text
-        Task { try? await Task.sleep(nanoseconds: 4_000_000_000); banner = nil }
-    }
-
-    // MARK: - Attachment chips
-
-    private func attachmentChip(_ p: PendingAttachment) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: p.mime.hasPrefix("audio") ? "waveform" : "photo").font(.caption2)
-            Text(p.filename).font(.caption2).lineLimit(1)
-            Button { pending.removeAll { $0.id == p.id } } label: {
-                Image(systemName: "xmark.circle.fill").font(.caption2)
-            }
-        }
-        .padding(.horizontal, 8).padding(.vertical, 5)
-        .background(Color(.tertiarySystemFill), in: Capsule())
-        .foregroundStyle(.secondary)
-    }
-
-    // MARK: - File / photo loading
-
-    private func loadPhotos(_ items: [PhotosPickerItem]) {
-        guard !items.isEmpty else { return }
-        Task {
-            for (i, item) in items.enumerated() {
-                if let data = try? await item.loadTransferable(type: Data.self) {
-                    pending.append(PendingAttachment(data: data, filename: "image-\(pending.count + i + 1).jpg", mime: "image/jpeg"))
-                }
-            }
-            photoItems = []
-        }
-    }
-    private func handleFiles(_ result: Result<[URL], Error>) {
-        guard case .success(let urls) = result else { return }
-        for url in urls {
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            if let data = try? Data(contentsOf: url) {
-                let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-                pending.append(PendingAttachment(data: data, filename: url.lastPathComponent, mime: mime))
-            }
-        }
-    }
-    private func addCameraImage(_ img: UIImage) {
-        if let data = img.jpegData(compressionQuality: 0.85) {
-            pending.append(PendingAttachment(data: data, filename: "photo-\(pending.count + 1).jpg", mime: "image/jpeg"))
-        }
-    }
-
     // MARK: - Send
 
     private func sendMessage() {
-        let text = draft
-        let toUpload = pending
-        draft = ""; pending = []
+        let (text, toUpload) = composer.consume()
         Task {
             var ids: [String] = []
             for p in toUpload {
@@ -428,68 +319,6 @@ struct ChatPane: View {
             broker.send(session.id, text, attachments: ids.isEmpty ? nil : ids)
         }
     }
-
-    // MARK: - Slash commands
-
-    /// Active `/command` token at the end of the draft (cursor assumed at the end),
-    /// starting at the beginning or after whitespace — mirrors web activeSlashToken.
-    private var slashQuery: String? {
-        guard let r = draft.range(of: #"(?:^|\s)(/[^\s]*)$"#, options: .regularExpression) else { return nil }
-        let token = draft[r].drop(while: { $0 == " " || $0 == "\n" || $0 == "\t" })
-        return String(token.dropFirst()).lowercased()
-    }
-    private var slashMatches: [SlashCommand] {
-        guard let q = slashQuery else { return [] }
-        return Array((broker.commands[session.id] ?? [])
-            .filter { q.isEmpty || $0.name.lowercased().contains(q) || $0.family.lowercased().contains(q) }
-            .prefix(8))
-    }
-    private var slashMenu: some View {
-        VStack(spacing: 0) {
-            ForEach(slashMatches, id: \.id) { cmd in
-                Button { applyCommand(cmd) } label: {
-                    HStack(spacing: 8) {
-                        Text(cmd.sigil + cmd.name).font(.callout.weight(.semibold)).foregroundStyle(Theme.teal)
-                        Text(cmd.family).font(.caption2).foregroundStyle(.tertiary)
-                        Spacer(minLength: 0)
-                        if cmd.action != nil {
-                            Image(systemName: "bolt.fill").font(.caption2).foregroundStyle(.tertiary)
-                        }
-                    }
-                    .padding(.horizontal, 14).padding(.vertical, 9).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                if cmd.id != slashMatches.last?.id { Divider() }
-            }
-        }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 1))
-    }
-    private func applyCommand(_ cmd: SlashCommand) {
-        if let action = cmd.action {
-            clearSlashToken()
-            switch action.kind {
-            case "model": modelSheet = true
-            case "rename": renameText = session.name; showRename = true
-            case "mute": broker.toggleMute(session)
-            case "stop": broker.interrupt(session.id)
-            case "kill": showKillConfirm = true
-            default: break   // spawn needs navigation we don't have from the chat
-            }
-            return
-        }
-        replaceSlashToken(with: (cmd.insertText.flatMap { $0.isEmpty ? nil : $0 }) ?? (cmd.sigil + cmd.name + " "))
-    }
-    private func replaceSlashToken(with insert: String) {
-        if let r = draft.range(of: #"(?:^|\s)/[^\s]*$"#, options: .regularExpression) {
-            let lead = draft[r].prefix(while: { $0 == " " || $0 == "\n" || $0 == "\t" })
-            let prefixEnd = draft.index(r.lowerBound, offsetBy: lead.count)
-            draft = String(draft[draft.startIndex..<prefixEnd]) + insert
-        } else {
-            draft = insert
-        }
-    }
-    private func clearSlashToken() { replaceSlashToken(with: "") }
 
     // MARK: - Shared pill helper
 

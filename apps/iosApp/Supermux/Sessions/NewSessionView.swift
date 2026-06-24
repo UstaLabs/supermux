@@ -1,5 +1,7 @@
 import SwiftUI
 import Shared
+import PhotosUI
+import UniformTypeIdentifiers
 
 /// Compose-first launcher — mirrors the web SessionLauncherView: centered
 /// "Let's build", a project dropdown, and a compose card (agent picker + the
@@ -14,11 +16,7 @@ struct NewSessionView: View {
     @State private var model: String?
     @State private var models: [ModelInfo] = []
     @State private var projectSearch = false
-    @State private var draft = ""
     @State private var launcherCommands: [SlashCommand] = []
-    @State private var pending: [PendingAttachment] = []
-    @State private var recorder = AudioRecorder()
-    @State private var micDenied = false
     @State private var spawning = false
     // Worktree / base-branch (web LauncherWorktreePicker parity) — shown only when
     // the selected project is an eligible git repo.
@@ -29,6 +27,15 @@ struct NewSessionView: View {
     @State private var worktreeFetching = false
     @State private var fetchedRepos: Set<String> = []
     @FocusState private var composing: Bool
+    @State private var composer = ComposerModel(context: ComposerContext(
+        glossary: { [] },           // set in .task once broker is in scope (see below)
+        cleanupTranscript: nil,     // no session pre-spawn → raw on-device text
+        audioFallbackTranscribe: nil // no session → record-and-attach voice memo
+    ))
+    @State private var showPhotos = false
+    @State private var showFiles = false
+    @State private var showCamera = false
+    @State private var photoItems: [PhotosPickerItem] = []
 
     private let agents = ["claude", "codex", "cursor", "opencode"]
 
@@ -51,6 +58,12 @@ struct NewSessionView: View {
         .navigationTitle("New session").navigationBarTitleDisplayMode(.inline)
         .tint(Theme.teal)
         .task {
+            composer.setContext(ComposerContext(
+                glossary: { (try? await broker.fetchGlossary()) ?? [] },
+                cleanupTranscript: nil,
+                audioFallbackTranscribe: nil
+            ))
+            await composer.loadGlossary()
             projects = await broker.projects()
             // Debug: force the initial project for headless screenshots (e.g. an eligible repo).
             if let forced = ProcessInfo.processInfo.environment["SM_WORKDIR"], !forced.isEmpty {
@@ -95,7 +108,15 @@ struct NewSessionView: View {
             )
             .presentationDetents([.medium, .large])
         }
-        .alert("Microphone access needed", isPresented: $micDenied) {
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            Task { await composer.loadPhotos(items); photoItems = [] }
+        }
+        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .images)
+        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { composer.handleFiles($0) }
+        .fullScreenCover(isPresented: $showCamera) { CameraPicker { composer.addCameraImage($0) } }
+        .onChange(of: composer.refocusToken) { _, _ in composing = true }
+        .alert("Microphone access needed", isPresented: $composer.micDenied) {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Enable microphone access for supermux in Settings to record voice messages.")
@@ -156,25 +177,31 @@ struct NewSessionView: View {
     }
 
     private var composeCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if !pending.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) { ForEach(pending) { attachmentChip($0) } }
+        let cmds = launcherCommands
+        let matches = composer.slashMatches(in: cmds)
+        return VStack(alignment: .leading, spacing: 12) {
+            if !composer.pending.isEmpty {
+                AttachmentTray(pending: composer.pending, onRemove: { composer.removeAttachment($0) })
+            }
+            if composer.dictation.isListening || composer.recorder.isRecording {
+                if composer.dictation.isListening && !composer.dictation.transcript.isEmpty {
+                    ScrollView {
+                        Text(composer.dictation.transcript)
+                            .font(.callout)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 100)
                 }
+                RecordingBar(elapsed: composer.dictation.isListening ? composer.dictation.elapsed : composer.recorder.elapsed,
+                             onStop: { Task { await composer.toggleMic() } },
+                             onCancel: { composer.cancelMic() })
             }
-            if recorder.isRecording {
-                RecordingBar(elapsed: recorder.elapsed,
-                             onStop: {
-                                 if let (data, name) = recorder.stop() {
-                                     pending.append(PendingAttachment(data: data, filename: name, mime: "audio/mp4"))
-                                 }
-                             },
-                             onCancel: { recorder.cancel() })
-            }
-            TextField("What should the agent do?", text: $draft, axis: .vertical)
+            TextField("What should the agent do?", text: $composer.draft, axis: .vertical)
                 .lineLimit(3...8).focused($composing)
                 .composerHardwareKeyboardSubmit(canSubmit: canSpawn && !spawning) { spawn() }
-            if !slashMatches.isEmpty { slashMenu }
+            if !matches.isEmpty {
+                SlashMenu(matches: matches, showsActionGlyph: false) { composer.applyCommand($0) }
+            }
             HStack(spacing: 16) {
                 Menu {
                     ForEach(agents, id: \.self) { a in Button(a.capitalized) { agent = a } }
@@ -197,7 +224,12 @@ struct NewSessionView: View {
                         Image(systemName: "chevron.down").font(.caption2)
                     }.foregroundStyle(.secondary)
                 }
-                if !recorder.isRecording { micButton }
+                AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera)
+                // Hidden while recording/dictating (the RecordingBar above owns stop/cancel) —
+                // parity with the original launcher + the chat composer.
+                if !composer.recorder.isRecording && !composer.dictation.isListening {
+                    MicButton(model: composer)
+                }
                 Spacer()
                 Button(action: spawn) {
                     if spawning {
@@ -219,8 +251,8 @@ struct NewSessionView: View {
 
     private func spawn() {
         spawning = true
-        let firstMsg = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let toUpload = pending
+        let (raw, toUpload) = composer.consume()
+        let firstMsg = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let eligible = repoInfo?.eligible == true
         let wantsWorktree = eligible ? useWorktree : false
         let base = (eligible && useWorktree && !baseBranch.isEmpty) ? baseBranch : nil
@@ -244,83 +276,6 @@ struct NewSessionView: View {
             spawning = false
         }
     }
-
-    private var micButton: some View {
-        Button {
-            if recorder.isRecording {
-                if let (data, name) = recorder.stop() {
-                    pending.append(PendingAttachment(data: data, filename: name, mime: "audio/mp4"))
-                }
-            } else {
-                Task { if case .denied = await recorder.start() { micDenied = true } }
-            }
-        } label: {
-            Image(systemName: recorder.isRecording ? "stop.circle.fill" : "mic")
-                .font(.body.weight(.medium))
-                .foregroundStyle(recorder.isRecording ? .red : .secondary)
-        }
-    }
-
-    private func attachmentChip(_ p: PendingAttachment) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: p.mime.hasPrefix("audio") ? "waveform" : "photo").font(.caption2)
-            Text(p.filename).font(.caption2).lineLimit(1)
-            Button { pending.removeAll { $0.id == p.id } } label: {
-                Image(systemName: "xmark.circle.fill").font(.caption2)
-            }
-        }
-        .padding(.horizontal, 8).padding(.vertical, 5)
-        .background(Color(.tertiarySystemFill), in: Capsule())
-        .foregroundStyle(.secondary)
-    }
-
-    // MARK: - Slash commands (mirror ChatView, against launcher preview commands)
-
-    // Active `/command` token at the end of the draft (cursor assumed at the end).
-    private var slashQuery: String? {
-        guard let r = draft.range(of: #"(?:^|\s)(/[^\s]*)$"#, options: .regularExpression) else { return nil }
-        let token = draft[r].drop(while: { $0 == " " || $0 == "\n" || $0 == "\t" })
-        return String(token.dropFirst()).lowercased()
-    }
-    private var slashMatches: [SlashCommand] {
-        guard let q = slashQuery else { return [] }
-        return Array(launcherCommands
-            .filter { q.isEmpty || $0.name.lowercased().contains(q) || $0.family.lowercased().contains(q) }
-            .prefix(8))
-    }
-    private var slashMenu: some View {
-        VStack(spacing: 0) {
-            ForEach(slashMatches, id: \.id) { cmd in
-                Button { applyCommand(cmd) } label: {
-                    HStack(spacing: 8) {
-                        Text(cmd.sigil + cmd.name).font(.callout.weight(.semibold)).foregroundStyle(Theme.teal)
-                        Text(cmd.family).font(.caption2).foregroundStyle(.tertiary)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 14).padding(.vertical, 9).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                if cmd.id != slashMatches.last?.id { Divider() }
-            }
-        }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 1))
-    }
-    private func applyCommand(_ cmd: SlashCommand) {
-        // Launcher preview commands are insert-only — control actions need a live session.
-        guard cmd.action == nil else { clearSlashToken(); return }
-        replaceSlashToken(with: (cmd.insertText.flatMap { $0.isEmpty ? nil : $0 }) ?? (cmd.sigil + cmd.name + " "))
-    }
-    private func replaceSlashToken(with insert: String) {
-        if let r = draft.range(of: #"(?:^|\s)/[^\s]*$"#, options: .regularExpression) {
-            let lead = draft[r].prefix(while: { $0 == " " || $0 == "\n" || $0 == "\t" })
-            let prefixEnd = draft.index(r.lowerBound, offsetBy: lead.count)
-            draft = String(draft[draft.startIndex..<prefixEnd]) + insert
-        } else {
-            draft = insert
-        }
-    }
-    private func clearSlashToken() { replaceSlashToken(with: "") }
 }
 
 /// Forge-aware project picker — mirrors the web ProjectPathPicker omnibox:
