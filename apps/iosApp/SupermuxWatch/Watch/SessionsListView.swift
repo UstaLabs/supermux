@@ -14,6 +14,9 @@ struct SessionsListView: View {
                     Text(broker.baseURL)
                         .font(.caption2).foregroundStyle(.secondary)
                         .lineLimit(2).multilineTextAlignment(.center)
+                    if broker.route == .offline {
+                        Text("Offline").font(.caption).foregroundStyle(.orange)
+                    }
                     if !broker.status.isEmpty {
                         Text(broker.status)
                             .font(.caption2).foregroundStyle(.orange)
@@ -33,6 +36,16 @@ struct SessionsListView: View {
             }
         }
         .navigationTitle("Supermux")
+        .toolbar {
+            if broker.route == .phone {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Image(systemName: "iphone")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Connected via iPhone")
+                }
+            }
+        }
         .navigationDestination(for: String.self) { id in
             if let session = broker.sessions.first(where: { $0.id == id }) {
                 SessionDetailView(broker: broker, session: session)
