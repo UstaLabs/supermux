@@ -214,6 +214,11 @@ struct ChatView: View {
     /// Subtitle under the inline title: branch + sync status when in a repo, else the workdir.
     /// Kept off the title row so a long session name can't crowd it (it truncates on its own line).
     private var navSubtitle: String {
+        // Prefer the at-a-glance base-mode status (worktree vs base branch), live from the broker.
+        let lite = broker.sessions.first { $0.id == session.id }?.git ?? session.git
+        if let lite, let badge = GitBadgeKt.gitBadge(git: lite), badge.kind == .base {
+            return lite.compareRef.isEmpty ? badge.text : "\(lite.compareRef) \(badge.text)"
+        }
         if let g = git, g.isRepo, let b = g.branch {
             if g.upstream == nil { return "\(b) · not published" }
             var s = b

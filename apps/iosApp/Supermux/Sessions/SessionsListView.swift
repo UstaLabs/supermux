@@ -190,8 +190,12 @@ struct SessionRow: View {
                     if muted { Image(systemName: "bell.slash.fill").font(.caption2).foregroundStyle(.tertiary) }
                     Spacer(minLength: 0)
                 }
-                Text(preview ?? session.agent)
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(preview ?? session.agent)
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer(minLength: 0)
+                    GitBadgeView(git: session.git)
+                }
             }
         }
         .padding(.vertical, 3)

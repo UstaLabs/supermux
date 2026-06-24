@@ -69,6 +69,9 @@ import Shared
 
     /// Subtitle under the title: branch + sync status when in a repo, else the workdir.
     var navSubtitle: String {
+        if let lite = session.git, let badge = GitBadgeKt.gitBadge(git: lite), badge.kind == .base {
+            return lite.compareRef.isEmpty ? badge.text : "\(lite.compareRef) \(badge.text)"
+        }
         if let g = git, g.isRepo, let b = g.branch {
             if g.upstream == nil { return "\(b) · not published" }
             var s = b
