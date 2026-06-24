@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { mkdtempSync, readFileSync, existsSync } from "fs"
+import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { runConnectCommand } from "./cli-connect"
@@ -162,4 +162,56 @@ test("--help returns 0 and prints usage", async () => {
   const code = await runConnectCommand(["--help"], { println: (s) => out.push(s) })
   expect(code).toBe(0)
   expect(out.join("\n")).toContain("supermux connect")
+})
+
+test("cloudflared proxyBaseDomain is written to .env as MUX_PROXY_BASE_DOMAIN", async () => {
+  const dir = tmp()
+  const p = fake({
+    async up() {
+      return { publicUrl: "https://mux.example.com", stable: true, proxyBaseDomain: "example.com" }
+    },
+  })
+  await runConnectCommand(["cloudflared", "--yes"], {
+    providers: [p], stateDir: dir, tty: false, run: okRun, println() {},
+  })
+  expect(readFileSync(join(dir, ".env"), "utf8")).toContain("MUX_PROXY_BASE_DOMAIN=example.com")
+})
+
+test("--wildcard is parsed and passed to the provider as ctx.wildcard", async () => {
+  const dir = tmp()
+  let seen: boolean | undefined
+  const p = fake({
+    async up(ctx) {
+      seen = ctx.wildcard
+      return { publicUrl: "https://mux.example.com", stable: true }
+    },
+  })
+  await runConnectCommand(["cloudflared", "--yes", "--wildcard"], {
+    providers: [p], stateDir: dir, tty: false, run: okRun, println() {},
+  })
+  expect(seen).toBe(true)
+})
+
+test("--wildcard-domain is parsed and passed to the provider as ctx.wildcardDomain", async () => {
+  const dir = tmp()
+  let seen: string | undefined
+  const p = fake({
+    async up(ctx) {
+      seen = ctx.wildcardDomain
+      return { publicUrl: "https://mux.example.com", stable: true }
+    },
+  })
+  await runConnectCommand(["cloudflared", "--yes", "--wildcard-domain", "apps.example.com"], {
+    providers: [p], stateDir: dir, tty: false, run: okRun, println() {},
+  })
+  expect(seen).toBe("apps.example.com")
+})
+
+test("--off clears a stale MUX_PROXY_BASE_DOMAIN", async () => {
+  const dir = tmp()
+  writeFileSync(join(dir, ".env"), "MUX_PROXY_BASE_DOMAIN=stale.example.com\n")
+  await runConnectCommand(["--off", "--port", "8787"], {
+    providers: [fake()], stateDir: dir, tty: false, run: okRun, println() {},
+  })
+  expect(readFileSync(join(dir, ".env"), "utf8")).not.toContain("MUX_PROXY_BASE_DOMAIN")
 })

@@ -86,3 +86,19 @@ test("restartBroker reports failure (non-zero) without throwing", async () => {
   expect(ok).toBe(false)
   expect(out.join("\n")).toContain("journalctl")
 })
+
+test("writeEnvPublicUrl sets MUX_PROXY_BASE_DOMAIN when a base domain is given", () => {
+  const dir = tmp()
+  writeEnvPublicUrl(dir, "8787", "https://mux.example.com", "example.com")
+  const env = readFileSync(join(dir, ".env"), "utf8")
+  expect(env).toContain("MUX_PROXY_BASE_DOMAIN=example.com")
+})
+
+test("writeEnvPublicUrl clears a stale MUX_PROXY_BASE_DOMAIN when none is given, keeps other keys", () => {
+  const dir = tmp()
+  writeFileSync(join(dir, ".env"), "MUX_PROXY_BASE_DOMAIN=old.example.com\nFOO=bar\n")
+  writeEnvPublicUrl(dir, "8787", "http://localhost:8787")
+  const env = readFileSync(join(dir, ".env"), "utf8")
+  expect(env).not.toContain("MUX_PROXY_BASE_DOMAIN")
+  expect(env).toContain("FOO=bar")
+})

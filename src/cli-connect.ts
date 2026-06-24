@@ -36,6 +36,8 @@ interface Flags {
   switchTo?: string
   port?: string
   publicUrl?: string
+  wildcard?: boolean
+  wildcardDomain?: string
   mode?: string
   restart: boolean
   pair: boolean
@@ -53,6 +55,8 @@ function parseFlags(args: string[]): Flags {
       case "--switch": f.switchTo = args[++i]; break
       case "--port": f.port = args[++i]; break
       case "--public-url": f.publicUrl = args[++i]; break
+      case "--wildcard": f.wildcard = true; break
+      case "--wildcard-domain": f.wildcardDomain = args[++i]; break
       case "--mode": f.mode = args[++i]; break
       case "--no-restart": f.restart = false; break
       case "--no-pair": f.pair = false; break
@@ -184,7 +188,7 @@ async function connectProvider(
     ctx.println(`Refusing to write an invalid public URL (${v.error}). Broker unchanged.`)
     return 1
   }
-  writeEnvPublicUrl(ctx.stateDir, ctx.port, result.publicUrl)
+  writeEnvPublicUrl(ctx.stateDir, ctx.port, result.publicUrl, result.proxyBaseDomain)
   setStorePublicUrl(ctx.stateDir, {
     webPublicUrl: result.publicUrl,
     webPort: ctx.port,
@@ -255,6 +259,8 @@ const HELP = `supermux connect — set up a public/mesh link to this box
 Flags:
   --port <n>        web port (default: from .env, else 8787)
   --public-url <u>  set/override the public URL (cloudflared named host, ngrok domain, manual)
+  --wildcard        (cloudflared named) also expose apps on *.<base> subdomains
+  --wildcard-domain <d>  override the auto-derived wildcard base domain
   --mode <id>       provider mode (cloudflared: named|quick; tailscale: serve|funnel; ngrok: reserved|random)
   --no-restart      don't restart the broker after writing the URL
   --no-pair         don't print a new pairing link
@@ -294,6 +300,8 @@ export async function runConnectCommand(args: string[], deps: ConnectDeps = {}):
     tty,
     yes: flags.yes,
     publicUrlHint: flags.publicUrl,
+    wildcard: flags.wildcard,
+    wildcardDomain: flags.wildcardDomain,
     run,
     println,
     ask,
