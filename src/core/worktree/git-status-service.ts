@@ -23,6 +23,13 @@ export interface GitStatusServiceDeps {
 
 interface Tracked { s: ServiceSession; dirs: string[] }
 
+function sameStatus(a: GitLiteStatus | null | undefined, b: GitLiteStatus | null): boolean {
+  if (!a && !b) return true
+  if (!a || !b) return false
+  return a.mode === b.mode && a.compareRef === b.compareRef && a.ahead === b.ahead
+    && a.behind === b.behind && a.dirty === b.dirty && !!a.unpublished === !!b.unpublished
+}
+
 /**
  * Holds per-session GitLiteStatus, recomputes it on demand / fs change / turn-end,
  * and broadcasts changes. Watches are refcounted by directory so many worktree
@@ -43,11 +50,26 @@ export class GitStatusService {
     return v ?? undefined
   }
 
-  /** Idempotent reconcile: track new repo sessions, untrack vanished ones. */
+  /** Idempotent reconcile: track new repo sessions, untrack vanished ones, refresh changed ones. */
   sync(sessions: ServiceSession[]): void {
     const want = new Set(sessions.map((s) => s.id))
     for (const id of [...this.tracked.keys()]) if (!want.has(id)) this.untrack(id)
-    for (const s of sessions) if (!this.tracked.has(s.id)) this.track(s)
+    for (const s of sessions) {
+      const t = this.tracked.get(s.id)
+      if (!t) { this.track(s); continue }
+      // Already tracked — refresh only when worktree-relevant fields actually changed
+      // (spawn-race: base/session/repo arrive after the initial track; also branch switches).
+      // No-op otherwise so frequent getSessionsSnapshot() calls don't cause recompute churn.
+      const workdirChanged = t.s.workdir !== s.workdir
+      const fieldsChanged = workdirChanged
+        || t.s.repo_root !== s.repo_root
+        || t.s.base_branch !== s.base_branch
+        || t.s.session_branch !== s.session_branch
+      if (!fieldsChanged) continue
+      t.s = s
+      if (workdirChanged) { this.untrack(s.id); this.track(s) }  // watch dirs depend on workdir
+      else this.scheduleRecompute(s.id)                          // same dirs, recompute w/ new fields
+    }
   }
 
   scheduleRecompute(id: string): void {
@@ -61,6 +83,8 @@ export class GitStatusService {
   private track(s: ServiceSession): void {
     const dirs = this.deps.resolveGitDirs(s)
     if (!dirs) { this.cache.set(s.id, null); this.tracked.set(s.id, { s, dirs: [] }); return }
+    // NOTE: refs/remotes is intentionally NOT watched — remote-mode (plain repo) ahead/behind
+    // vs @{upstream} updates on turn-end / snapshot, not on `git fetch`. v1 is base-axis focused.
     const watchDirs = [...new Set([dirs.gitDir, dirs.commonDir, join(dirs.commonDir, "refs", "heads")])]
     this.tracked.set(s.id, { s, dirs: watchDirs })
     for (const d of watchDirs) this.addDirRef(d, s.id)
@@ -105,8 +129,9 @@ export class GitStatusService {
     try {
       const git = await this.deps.compute(t.s)
       if (!this.tracked.has(id)) return        // untracked while computing
+      const prev = this.cache.get(id)
       this.cache.set(id, git)
-      this.deps.onChange(id, git)
+      if (!sameStatus(prev, git)) this.deps.onChange(id, git)
     } finally {
       this.inflight.delete(id)
       if (this.rerun.delete(id)) void this.recompute(id).catch(() => {})

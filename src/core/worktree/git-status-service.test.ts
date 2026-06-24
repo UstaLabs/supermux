@@ -99,6 +99,37 @@ test("non-repo sessions (resolveGitDirs null) cache null and set no watches", ()
   expect(h.scheduled.length).toBe(0)
 })
 
+test("sync refreshes an already-tracked session when worktree fields arrive (spawn-race)", async () => {
+  const seen: Array<string | null | undefined> = []
+  const h = harness({ compute: async (s) => { seen.push(s.base_branch ?? null); return { mode: s.base_branch ? "base" : "remote", compareRef: s.base_branch ?? "x", ahead: 0, behind: 0, dirty: 0, computedAt: 0 } } })
+  h.svc.sync([{ id: "a", workdir: "/w" }])                                   // tracked, no base yet
+  h.flush(); await Promise.resolve(); await Promise.resolve()
+  h.svc.sync([{ id: "a", workdir: "/w", repo_root: "/r", base_branch: "main", session_branch: "mux/a" }])
+  h.flush(); await Promise.resolve(); await Promise.resolve()
+  expect(seen[seen.length - 1]).toBe("main")
+  expect(h.svc.get("a")?.mode).toBe("base")
+})
+
+test("sync is a no-op for an unchanged already-tracked session", async () => {
+  let computes = 0
+  const h = harness({ compute: async () => { computes++; return { mode: "base", compareRef: "m", ahead: 0, behind: 0, dirty: 0, computedAt: 0 } } })
+  const sess = { id: "a", workdir: "/w", repo_root: "/r", base_branch: "main", session_branch: "mux/a" }
+  h.svc.sync([sess]); h.flush(); await Promise.resolve(); await Promise.resolve()
+  expect(computes).toBe(1)
+  h.svc.sync([{ ...sess }]); h.flush(); await Promise.resolve(); await Promise.resolve()
+  expect(computes).toBe(1)   // identical fields → no recompute
+})
+
+test("recompute skips onChange when the computed status is unchanged", async () => {
+  const h = harness({ compute: async () => ({ mode: "base", compareRef: "m", ahead: 1, behind: 0, dirty: 0, computedAt: 0 }) })
+  h.svc.sync([{ id: "a", workdir: "/w" }]); h.flush()
+  await Promise.resolve(); await Promise.resolve()
+  expect(h.changes.length).toBe(1)            // first broadcast
+  h.svc.scheduleRecompute("a"); h.flush()
+  await Promise.resolve(); await Promise.resolve()
+  expect(h.changes.length).toBe(1)            // identical → no second broadcast
+})
+
 // Live end-to-end: real fs.watch + real computeLiteStatus on a real worktree.
 test("live: committing in a worktree triggers a recompute", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mux-svc-")); execFileSync("git", ["init", "-b", "main", dir])
