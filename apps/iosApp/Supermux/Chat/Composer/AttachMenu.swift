@@ -1,0 +1,25 @@
+// apps/iosApp/Supermux/Chat/Composer/AttachMenu.swift
+import SwiftUI
+
+/// The "+" attachment menu (Photos / Files / Camera), shared by both composers. Stateless: it
+/// flips the screen-owned picker-presentation bindings; the screen wires the actual
+/// `.photosPicker` / `.fileImporter` / `.fullScreenCover` modifiers.
+struct AttachMenu: View {
+    @Binding var showPhotos: Bool
+    @Binding var showFiles: Bool
+    @Binding var showCamera: Bool
+
+    var body: some View {
+        Menu {
+            Button { showPhotos = true } label: { Label("Photos", systemImage: "photo") }
+            Button { showFiles = true } label: { Label("Files", systemImage: "folder") }
+            Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
+        } label: {
+            Image(systemName: "plus")
+                .font(.body.weight(.medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+    }
+}
