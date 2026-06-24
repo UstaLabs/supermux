@@ -121,7 +121,17 @@ final class BrokerSession {
         case .agentError: break
         case .finishJobFrame(let f):
             if let job = f.job { finishJobs[f.session] = job } else { finishJobs.removeValue(forKey: f.session) }
-        case .sessionGit: break
+        case .sessionGit(let g):
+            if let idx = sessions.firstIndex(where: { $0.id == g.session }) {
+                // NOTE: verify SKIE doCopy signature on Mac build
+                sessions[idx] = sessions[idx].doCopy(
+                    id: sessions[idx].id, name: sessions[idx].name, workdir: sessions[idx].workdir,
+                    agent: sessions[idx].agent, status: sessions[idx].status, mute: sessions[idx].mute,
+                    connected: sessions[idx].connected, model: sessions[idx].model,
+                    repoRoot: sessions[idx].repoRoot, role: sessions[idx].role,
+                    sessionBranch: sessions[idx].sessionBranch, git: g.git,
+                    finishJob: sessions[idx].finish_job)
+            }
         }
     }
 
