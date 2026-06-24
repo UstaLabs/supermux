@@ -9,12 +9,13 @@ import Foundation
 @Observable
 final class WatchBrokerSession {
     let baseURL: String
-    private let token: String
+    private var transport: BrokerTransport
 
     private(set) var sessions: [SessionInfo] = []
     private(set) var messages: [String: [LogEntry]] = [:]
     private(set) var synced = false
     private(set) var status = ""   // diagnostic: last REST error, empty when healthy
+    private(set) var route: BrokerRoute = .direct   // which path served the last request
 
     /// The session whose detail view is open — its messages get polled each tick.
     var activeSession: String?
@@ -22,11 +23,26 @@ final class WatchBrokerSession {
     private var polling = false
     private var pendingEchoes: [String: [LogEntry]] = [:]   // optimistic sends awaiting server echo
 
-    init(baseURL: String, token: String) {
+    /// `transport` is injectable for tests; in the app it's a `RoutingTransport` that prefers
+    /// the paired iPhone and falls back to a direct connection.
+    init(baseURL: String, token: String, transport: BrokerTransport? = nil) {
         var b = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         while b.hasSuffix("/") { b.removeLast() }
         self.baseURL = b
-        self.token = token
+        if let transport {
+            self.transport = transport
+        } else {
+            // Placeholder so all stored properties are initialized before we capture self.
+            self.transport = DirectTransport(baseURL: b, token: token)
+        }
+        if transport == nil {
+            self.transport = RoutingTransport(
+                direct: DirectTransport(baseURL: b, token: token),
+                relay: PhoneRelayTransport(),
+                reachability: WCReachability(),
+                onRoute: { [weak self] r in Task { @MainActor in self?.route = r } }
+            )
+        }
     }
 
     func start() {
@@ -79,14 +95,10 @@ final class WatchBrokerSession {
         )
         pendingEchoes[sessionId, default: []].append(echo)
         messages[sessionId, default: []].append(echo)
-        Task { [baseURL, token] in
-            guard let url = URL(string: "\(baseURL)/sessions/\(sessionId)/message") else { return }
-            var req = URLRequest(url: url)
-            req.httpMethod = "POST"
-            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try? JSONSerialization.data(withJSONObject: ["text": t])
-            _ = try? await URLSession.shared.data(for: req)
+        Task { [transport] in
+            let body = try? JSONSerialization.data(withJSONObject: ["text": t])
+            _ = try? await transport.request(method: "POST", path: "/sessions/\(sessionId)/message",
+                                             body: body, contentType: "application/json")
         }
     }
 
@@ -101,14 +113,8 @@ final class WatchBrokerSession {
     // MARK: - REST helpers
 
     private func get<T: Decodable>(_ path: String, _ type: T.Type) async throws -> T {
-        guard let url = URL(string: baseURL + path) else { throw URLError(.badURL) }
-        var req = URLRequest(url: url)
-        req.timeoutInterval = 15
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
-        }
+        let (data, status) = try await transport.request(method: "GET", path: path, body: nil, contentType: nil)
+        guard (200..<300).contains(status) else { throw URLError(.badServerResponse) }
         return try JSONDecoder().decode(T.self, from: data)
     }
 
@@ -121,24 +127,19 @@ final class WatchBrokerSession {
 
     /// POST a rough dictation draft → broker LLM cleanup (glossary) → cleaned text.
     func transcribeDraft(sessionId: String, draft: String) async throws -> String {
-        guard let url = URL(string: "\(baseURL)/sessions/\(sessionId)/transcribe") else { throw URLError(.badURL) }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["draft": draft])
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
-        }
+        let body = try JSONSerialization.data(withJSONObject: ["draft": draft])
+        let (data, status) = try await transport.request(method: "POST",
+                                                         path: "/sessions/\(sessionId)/transcribe",
+                                                         body: body, contentType: "application/json")
+        guard (200..<300).contains(status) else { throw URLError(.badServerResponse) }
         return try JSONDecoder().decode(TranscribeResponse.self, from: data).text
     }
 
     /// Bearer-authed attachment bytes (inline photos).
     func loadFile(_ id: String) async -> Data? {
-        guard let url = URL(string: "\(baseURL)/files/\(id)") else { return nil }
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        return try? await URLSession.shared.data(for: req).0
+        guard let (data, status) = try? await transport.request(method: "GET", path: "/files/\(id)",
+                                                                body: nil, contentType: nil),
+              (200..<300).contains(status) else { return nil }
+        return data
     }
 }
