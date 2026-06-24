@@ -152,6 +152,7 @@ const itemClass =
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="start" class="w-56 p-1">
+        <p class="px-2 pt-1 text-[10px] uppercase tracking-wide text-muted-foreground/70">Sync with origin</p>
         <p v-if="props.workdir" class="px-2 pt-1 pb-1 text-[10px] font-mono uppercase tracking-wide text-muted-foreground truncate">
           {{ props.workdir }}
         </p>
