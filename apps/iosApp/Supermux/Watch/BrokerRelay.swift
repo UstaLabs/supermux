@@ -44,17 +44,20 @@ enum BrokerRelay {
     }
 
     /// Decide what bytes to send back over the link. File images are downscaled; everything
-    /// else passes through if it fits the hard cap, otherwise is skipped (returns nil).
+    /// else passes through uncapped so long sessions still load over the phone relay.
     static func prepareBody(path: String, status: Int, data: Data) -> Data? {
-        let isFileImage = (200..<300).contains(status) && path.hasPrefix("/files/")
-        guard isFileImage else {
-            return data.count <= hardCapBytes ? data : nil
+        // Only image file responses get the downscale/skip treatment. Everything else —
+        // session lists, message logs, transcribe results — is text/JSON and passes through
+        // uncapped (WCSession's own payload limit is the only ceiling). Capping these would
+        // wrongly fail the relay for long sessions on Tailscale-only brokers (no direct path).
+        guard (200..<300).contains(status), path.hasPrefix("/files/") else {
+            return data
         }
         if data.count <= smallEnoughBytes, UIImage(data: data) != nil {
             return data   // already small enough to relay untouched
         }
         guard let image = UIImage(data: data) else {
-            return data.count <= hardCapBytes ? data : nil   // not an image → cap-gate
+            return data.count <= hardCapBytes ? data : nil   // non-image file → cap-gate
         }
         let shrunk = downscale(image, maxDimension: thumbMaxDimension)
         guard let jpeg = shrunk.jpegData(compressionQuality: jpegQuality),

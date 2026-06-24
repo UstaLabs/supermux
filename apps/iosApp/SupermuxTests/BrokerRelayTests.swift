@@ -50,4 +50,18 @@ final class BrokerRelayTests: XCTestCase {
         XCTAssertLessThanOrEqual(out!.count, BrokerRelay.hardCapBytes)
         XCTAssertNotNil(UIImage(data: out!)) // still a valid image
     }
+
+    func testPrepareBodyPassesThroughLargeNonFileBody() {
+        // Non-/files/ responses (e.g. a long message log) are never size-capped.
+        let big = Data(count: BrokerRelay.hardCapBytes * 2)
+        XCTAssertEqual(BrokerRelay.prepareBody(path: "/sessions/x/messages", status: 200, data: big), big)
+    }
+
+    func testPrepareBodyPassesThroughSmallImageUntouched() {
+        // A small image (≤ smallEnoughBytes) is relayed without re-encoding.
+        let small = solidImage(CGSize(width: 50, height: 50))
+        let jpeg = small.jpegData(compressionQuality: 0.9)!
+        XCTAssertLessThanOrEqual(jpeg.count, BrokerRelay.smallEnoughBytes)
+        XCTAssertEqual(BrokerRelay.prepareBody(path: "/files/x", status: 200, data: jpeg), jpeg)
+    }
 }
