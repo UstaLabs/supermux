@@ -303,7 +303,7 @@ final class ComposerModel {
     }
 
     // MARK: - Derived
-    var canSubmit: Bool { !draft.trimmingCharacters(in: .whitespaces).isEmpty || !pending.isEmpty }
+    var canSubmit: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pending.isEmpty }
     var hasContent: Bool { !draft.isEmpty || !pending.isEmpty }
     var isBusy: Bool { dictation.isListening || recorder.isRecording || transcribing || micStarting }
 
