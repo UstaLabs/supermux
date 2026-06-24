@@ -95,4 +95,55 @@ final class WorkspaceLayoutModelTests: XCTestCase {
         XCTAssertTrue(m.panes(for: "B").chatOpen)     // B untouched chat → still default on
         XCTAssertTrue(m.panes(for: "B").displayOpen)
     }
+
+    // MARK: - Per-session main view (chat ⇄ native agent terminal), PWA `panel.mainView` parity
+
+    func testNativeViewDefaultsToChatForUnseenSession() {
+        let m = WorkspaceLayoutModel(store: freshStore())
+        // PWA defaultPanelState.mainView === "chat" → the main column shows the transcript, not
+        // the agent terminal, until the user flips the toggle.
+        XCTAssertFalse(m.nativeView(for: "never-touched"))
+    }
+
+    func testNativeViewReadOnlyAccessorDoesNotInsert() {
+        let store = freshStore()
+        let a = WorkspaceLayoutModel(store: store)
+        _ = a.nativeView(for: "ephemeral")            // reading a default must NOT persist anything
+        let b = WorkspaceLayoutModel(store: store)
+        XCTAssertFalse(b.nativeView(for: "ephemeral"))
+    }
+
+    func testSetNativeViewPersistsPerSession() {
+        let store = freshStore()
+        let a = WorkspaceLayoutModel(store: store)
+        a.setNativeView(true, for: "s1")
+        // A new model over the same store reloads the per-session map from UserDefaults.
+        let b = WorkspaceLayoutModel(store: store)
+        XCTAssertTrue(b.nativeView(for: "s1"))
+    }
+
+    func testNativeViewIndependentPerSessionAndClearable() {
+        let m = WorkspaceLayoutModel(store: freshStore())
+        m.setNativeView(true, for: "A")
+        // B is untouched → still chat; A is independent and can be flipped back to chat.
+        XCTAssertTrue(m.nativeView(for: "A"))
+        XCTAssertFalse(m.nativeView(for: "B"))
+        m.setNativeView(false, for: "A")
+        XCTAssertFalse(m.nativeView(for: "A"))
+    }
+
+    func testNativeViewIsOrthogonalToPaneVisibility() {
+        // The main-view mode and which work panes are open are independent axes (PWA keeps
+        // mainView separate from terminalOpen/editorOpen/displayOpen). Setting one must not move
+        // the other.
+        let m = WorkspaceLayoutModel(store: freshStore())
+        m.setNativeView(true, for: "s1")
+        XCTAssertTrue(m.panes(for: "s1").chatOpen)    // pane flags untouched by the view toggle
+        XCTAssertFalse(m.panes(for: "s1").terminalOpen)
+
+        var v = m.panes(for: "s1")
+        v.terminalOpen = true
+        m.setPanes(v, for: "s1")
+        XCTAssertTrue(m.nativeView(for: "s1"))        // toggling a pane didn't reset the view mode
+    }
 }

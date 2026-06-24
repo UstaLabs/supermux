@@ -39,7 +39,6 @@ struct AttachmentView: View {
     @State private var downloading = false
     @State private var progress: Double = 0
     @State private var failed = false
-    @State private var showShare = false
     private var isImage: Bool { (att.mime ?? "").hasPrefix("image") || (att.kind ?? "") == "photo" }
 
     var body: some View {
@@ -75,15 +74,13 @@ struct AttachmentView: View {
 
     /// A filename with an extension Quick Look can key off (falls back to the mime subtype).
     private var imageFileName: String {
-        if let n = att.name, n.contains(".") { return n }
-        let ext = (att.mime?.split(separator: "/").last).map(String.init) ?? "jpg"
-        return "image.\(ext)"
+        previewFilename(name: att.name, mime: att.mime, fallbackBase: "image", defaultExt: "jpg")
     }
 
     private var fileRow: some View {
         Button {
             if downloading { return }
-            if fileURL != nil { showShare = true } else { startDownload() }
+            if fileURL != nil { previewURL = fileURL } else { startDownload() }
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: fileIcon).font(.title3).foregroundStyle(.secondary).frame(width: 26)
@@ -106,7 +103,7 @@ struct AttachmentView: View {
                 } else if failed {
                     Image(systemName: "arrow.clockwise.circle").foregroundStyle(.red)
                 } else {
-                    Image(systemName: fileURL == nil ? "arrow.down.circle" : "square.and.arrow.up")
+                    Image(systemName: fileURL == nil ? "arrow.down.circle" : "eye.circle")
                         .foregroundStyle(Theme.teal)
                 }
             }
@@ -114,17 +111,20 @@ struct AttachmentView: View {
             .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
-        .sheet(isPresented: $showShare) { if let u = fileURL { ShareSheet(items: [u]) } }
+        .quickLookPreview($previewURL)
     }
 
     private func startDownload() {
         failed = false; downloading = true; progress = 0
         Task {
             do {
-                let u = try await broker.downloadFile(att.file_id, name: att.name ?? "file") { p in
+                let u = try await broker.downloadFile(
+                    att.file_id, name: previewFilename(name: att.name, mime: att.mime)
+                ) { p in
                     Task { @MainActor in progress = p }
                 }
-                await MainActor.run { downloading = false; fileURL = u; showShare = true }
+                // Download finished → present Quick Look immediately (setting previewURL auto-opens it).
+                await MainActor.run { downloading = false; fileURL = u; previewURL = u }
             } catch {
                 await MainActor.run { downloading = false; failed = true }
             }
@@ -143,18 +143,12 @@ struct AttachmentView: View {
         return "\(n) B"
     }
     private func tmpURL(_ data: Data, name: String) -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(att.file_id, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent(name)
         try? data.write(to: url)
         return url
     }
-}
-
-struct ShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-    func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }
 
 /// Camera capture → UIImage (device only; needs NSCameraUsageDescription).

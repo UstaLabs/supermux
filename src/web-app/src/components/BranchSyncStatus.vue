@@ -4,12 +4,18 @@ import { ArrowUp, ArrowDown, RefreshCw, UploadCloud, GitBranch, Loader2Icon } fr
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import BranchPickerPopover from "@/components/BranchPickerPopover.vue"
 import { useGitRemote, type GitActionResult } from "@/stores/gitRemote"
+import { useGitStatus } from "@/stores/gitStatus"
 import { api, type GitPullResult, type GitSwitchResult } from "@/api/client"
 import { toast } from "vue-sonner"
 
 const props = defineProps<{ sessionId: string; workdir?: string; workdirLabel?: string }>()
 
 const git = useGitRemote()
+const liteGit = useGitStatus()
+const base = computed(() => {
+  const g = liteGit.get(props.sessionId)
+  return g && g.mode === "base" ? g : null
+})
 const syncOpen = ref(false)
 const sending = ref(false)
 
@@ -24,15 +30,25 @@ const behind = computed(() => status.value?.behind ?? 0)
 
 const label = computed(() =>
   status.value?.branch ?? (status.value?.detachedSha ? `detached @ ${status.value.detachedSha}` : ""))
-const showState = computed(() => !!status.value?.hasRemote && !!status.value?.branch)
+const showState = computed(() => !!base.value || (!!status.value?.hasRemote && !!status.value?.branch))
 
 const stateLabel = computed(() => {
+  if (base.value) {
+    const a = base.value.ahead, b = base.value.behind
+    if (a && b) return `↑${a} ↓${b}`
+    if (a) return `↑${a}`
+    if (b) return `↓${b}`
+    return "✓"
+  }
   if (!published.value) return "not published"
   if (ahead.value && behind.value) return `↑${ahead.value} ↓${behind.value}`
   if (ahead.value) return `↑${ahead.value}`
   if (behind.value) return `↓${behind.value}`
   return "✓"
 })
+
+const stateTitle = computed(() =>
+  base.value ? `vs ${base.value.compareRef}` : (published.value ? "vs origin" : "not published to origin"))
 
 const cardTitle = computed(() => {
   switch (result.value?.status) {
@@ -129,13 +145,14 @@ const itemClass =
 
     <DropdownMenu v-if="showState" v-model:open="syncOpen">
       <DropdownMenuTrigger as-child>
-        <button type="button" :class="segBtn" class="shrink-0" aria-label="Branch sync">
+        <button type="button" :class="segBtn" class="shrink-0" aria-label="Branch sync" :title="stateTitle">
           <span class="opacity-80">· {{ stateLabel }}</span>
           <Loader2Icon v-if="busy" class="size-3 shrink-0 animate-spin" />
         </button>
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="start" class="w-56 p-1">
+        <p class="px-2 pt-1 text-[10px] uppercase tracking-wide text-muted-foreground/70">Sync with origin</p>
         <p v-if="props.workdir" class="px-2 pt-1 pb-1 text-[10px] font-mono uppercase tracking-wide text-muted-foreground truncate">
           {{ props.workdir }}
         </p>

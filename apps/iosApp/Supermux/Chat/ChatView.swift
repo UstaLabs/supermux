@@ -2,15 +2,6 @@ import SwiftUI
 import Shared
 import UIKit
 
-/// A photo (or audio) staged in the composer, awaiting upload on send. Defined here and
-/// shared by ChatPane / NewSessionView.
-struct PendingAttachment: Identifiable {
-    let id = UUID()
-    let data: Data
-    let filename: String
-    let mime: String
-}
-
 /// The iPhone (compact) session screen: a 5-tab pane switcher (Chat / Native / Terminal /
 /// Editor / Display) with the toolbar, finish flow, and git actions. The Chat tab renders
 /// the shared `ChatPane` (transcript + composer with voice dictation) — the SAME component
@@ -258,7 +249,7 @@ struct ChatView: View {
     private func linkURL(_ p: ProxyDto) -> URL? { URL(string: proxyUrl(proxy: p)) }
 }
 
-// MessageRow, AttachmentView, ShareSheet, CameraPicker → ChatMessages.swift (photos use system Quick Look)
+// MessageRow, AttachmentView, CameraPicker → ChatMessages.swift (attachments use system Quick Look)
 // The transcript + composer (with voice dictation) → ChatPane.swift (shared iPhone + iPad)
 // OptionSwitchSheet → OptionSwitchSheet.swift
 // ChatBlock, ToolRow, ToolStatus, tsMs, buildChatBlocks, ToolRowView → ChatActivity.swift

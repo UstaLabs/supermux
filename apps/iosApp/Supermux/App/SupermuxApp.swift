@@ -1,4 +1,5 @@
 import SwiftUI
+import Shared
 
 @main
 struct SupermuxApp: App {
@@ -10,6 +11,12 @@ struct SupermuxApp: App {
     @AppStorage("appearance") private var appearance = "system"
 
     init() {
+        // Crash guard FIRST, before any networking: ktor-darwin surfaces WS/connection
+        // errors on an unhandled coroutine → SIGABRT (the "app cannot be open" launch
+        // crash when the broker restarts / a connection error hits at startup). Install
+        // a Kotlin/Native hook that logs-and-continues so the reconnect loop recovers
+        // instead of the process aborting.
+        IosClientKt.installIosCrashGuard()
         // Debug/testing convenience: auto-pair from launch env
         // (inject via SIMCTL_CHILD_SM_PAIR_TOKEN / SIMCTL_CHILD_SM_PAIR_BASE).
         let env = ProcessInfo.processInfo.environment

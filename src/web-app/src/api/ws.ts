@@ -12,6 +12,7 @@ import { useLsp } from "../stores/lsp"
 import { useOnboarding } from "../stores/onboarding"
 import { useSessionCache } from "../stores/sessionCache"
 import { useFinishJob } from "../stores/finishJob"
+import { useGitStatus } from "../stores/gitStatus"
 import { useUnread } from "../stores/unread"
 import { useDrafts } from "../stores/drafts"
 import { router } from "../router"
@@ -29,6 +30,7 @@ export const useWS = defineStore("ws", () => {
   const commands = useCommandsStore()
   const onboarding = useOnboarding()
   const finishJob = useFinishJob()
+  const gitStatus = useGitStatus()
   const unread = useUnread()
   const drafts = useDrafts()
   let ws: WebSocket | null = null
@@ -94,7 +96,7 @@ export const useWS = defineStore("ws", () => {
     if (frame.type === "snapshot") {
       if (typeof frame.homeDir === "string") sessions.setHomeDir(frame.homeDir)
       sessions.replace(frame.sessions ?? [])
-      for (const s of (frame.sessions ?? [])) finishJob.fromSnapshot(s.id, s.finish_job)
+      for (const s of (frame.sessions ?? [])) { finishJob.fromSnapshot(s.id, s.finish_job); gitStatus.fromSnapshot(s.id, s.git) }
       if (frame.logs) for (const [s, log] of Object.entries(frame.logs)) messages.replace(s, log as any)
       if (frame.activity) for (const [s, list] of Object.entries(frame.activity)) activity.replace(s, list as any)
       if (frame.agentState) for (const [s, st] of Object.entries(frame.agentState)) agentState.set(s, st as any)
@@ -104,13 +106,15 @@ export const useWS = defineStore("ws", () => {
       if (frame.reads) unread.seed(frame.reads)
       if (frame.drafts) drafts.seed(frame.drafts)
       onboarding.setOnboarded(frame.onboarded ?? false)
-    } else if (frame.type === "session_added")    { sessions.add(frame.session); finishJob.fromSnapshot(frame.session.id, frame.session.finish_job) }
+    } else if (frame.type === "session_added")    { sessions.add(frame.session); finishJob.fromSnapshot(frame.session.id, frame.session.finish_job); gitStatus.fromSnapshot(frame.session.id, frame.session.git) }
     else if   (frame.type === "finish_job")        finishJob.set(frame.session, frame.job)
+    else if   (frame.type === "session_git")       gitStatus.set(frame.session, frame.git)
     else if   (frame.type === "commands_changed") commands.set(frame.session, frame.commands, frame.resolved ?? true)
     else if   (frame.type === "session_removed")  {
       sessions.remove(frame.id)
       commands.remove(frame.id)
       useSessionCache().drop(frame.id)
+      gitStatus.clear(frame.id)
       navigateAwayFromKilledSession(frame.id)
     }
     else if   (frame.type === "session_renamed")  sessions.rename(frame.id, frame.new)

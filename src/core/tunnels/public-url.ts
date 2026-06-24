@@ -31,14 +31,25 @@ function serializeEnv(map: Map<string, string>): string {
 /**
  * Upsert MUX_WEB_PORT + MUX_WEB_PUBLIC_URL in `<stateDir>/.env`, CLOBBERING any
  * existing values (unlike `supermux setup`, which keeps existing keys — here the
- * whole point is to change the URL). Tightens perms to 600.
+ * whole point is to change the URL). Tightens perms to 600. A 4th `proxyBaseDomain`
+ * sets `MUX_PROXY_BASE_DOMAIN` (subdomain mode); omitting it CLEARS any stale value.
  */
-export function writeEnvPublicUrl(stateDir: string, port: string, url: string): void {
+export function writeEnvPublicUrl(
+  stateDir: string,
+  port: string,
+  url: string,
+  proxyBaseDomain?: string,
+): void {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
   const envPath = join(stateDir, ".env")
   const map = existsSync(envPath) ? parseEnvFile(readFileSync(envPath, "utf8")) : new Map<string, string>()
   map.set("MUX_WEB_PORT", port)
   map.set("MUX_WEB_PUBLIC_URL", url)
+  // Wildcard (subdomain) mode is env-driven: set it when present, clear a stale
+  // value otherwise (so `connect --off` / a re-run without wildcard can't leave a
+  // base domain that silently breaks routing).
+  if (proxyBaseDomain) map.set("MUX_PROXY_BASE_DOMAIN", proxyBaseDomain)
+  else map.delete("MUX_PROXY_BASE_DOMAIN")
   writeFileSync(envPath, serializeEnv(map))
   chmodSync(envPath, 0o600)
 }

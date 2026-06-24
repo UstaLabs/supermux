@@ -1,5 +1,12 @@
 import { test, expect, mock } from "bun:test"
-import { cloudflaredProvider } from "./cloudflared"
+import {
+  cloudflaredProvider,
+  baseDomainOf,
+  buildTunnelConfig,
+  parseTunnelId,
+  linuxInstallScript,
+  installHintLines,
+} from "./cloudflared"
 import { which } from "./run"
 import type { ConnectCtx, RunResult } from "./types"
 
@@ -223,19 +230,168 @@ test("install: short-circuits to true when cloudflared is already on PATH", asyn
   expect(calls).toEqual([]) // nothing spawned — it's already there
 })
 
-// Force the "not installed on linux" path deterministically (this host may have
-// cloudflared). We stub `which` → false via mock.module for THIS test, then
-// restore the real module so nothing leaks into other tests. Runs last.
-test("install: on linux WITHOUT cloudflared, prints the docs URL and returns false", async () => {
+// Force the linux install paths deterministically (this host may have cloudflared
+// and/or a package manager). We stub `which` via mock.module for THESE tests, then
+// restore the real module so nothing leaks into other tests.
+test("install: on linux with no package manager, prints working install links and returns false", async () => {
   if (process.platform === "darwin") return // brew path is the darwin branch
   const real = await import("./run")
-  mock.module("./run", () => ({ ...real, which: () => false }))
+  mock.module("./run", () => ({ ...real, which: () => false })) // nothing on PATH
   try {
     const { ctx, out } = makeCtx() // yes:true ⇒ consent assumed, no prompt
     const ok = await cloudflaredProvider.install(ctx)
     expect(ok).toBe(false)
-    expect(out.join("\n")).toContain("developers.cloudflare.com/cloudflare-tunnel/downloads")
+    const text = out.join("\n")
+    expect(text).toContain("https://pkg.cloudflare.com/")
+    expect(text).not.toContain("cloudflare-tunnel/downloads") // the old dead 404 path
   } finally {
     mock.module("./run", () => real) // restore for any later test runs
   }
+})
+
+test("install: on linux with apt + no cloudflared, runs the official apt install script", async () => {
+  if (process.platform === "darwin") return
+  const real = await import("./run")
+  // cloudflared absent; apt-get present ⇒ the apt branch runs.
+  mock.module("./run", () => ({ ...real, which: (b: string) => b === "apt-get" }))
+  try {
+    const { ctx, calls } = makeCtx()
+    const ok = await cloudflaredProvider.install(ctx)
+    expect(ok).toBe(false) // the faked run doesn't really install ⇒ still absent
+    const sh = calls.find((c) => c[0] === "sh" && c[2]!.includes("apt-get install -y cloudflared"))
+    expect(sh).toBeTruthy()
+    expect(sh![2]).toContain("https://pkg.cloudflare.com/cloudflare-main.gpg")
+  } finally {
+    mock.module("./run", () => real)
+  }
+})
+
+// ── pure helpers ────────────────────────────────────────────────────────────────
+
+test("baseDomainOf strips the leftmost label; a bare apex is unchanged", () => {
+  expect(baseDomainOf("mux.example.com")).toBe("example.com")
+  expect(baseDomainOf("example.com")).toBe("example.com")
+  expect(baseDomainOf("a.b.example.com")).toBe("b.example.com")
+})
+
+test("buildTunnelConfig emits broker ingress, optional wildcard, and a catch-all", () => {
+  const base = buildTunnelConfig({
+    tunnelId: "t-1",
+    credentialsFile: "/h/.cloudflared/t-1.json",
+    port: "8787",
+    host: "mux.example.com",
+  })
+  expect(base).toContain("tunnel: t-1")
+  expect(base).toContain("credentials-file: /h/.cloudflared/t-1.json")
+  expect(base).toContain("hostname: mux.example.com")
+  expect(base).toContain("service: http://localhost:8787")
+  expect(base).toContain("http_status:404")
+  expect(base).toContain("Managed by supermux")
+  expect(base).not.toContain("*.")
+
+  const wild = buildTunnelConfig({ port: "8787", host: "mux.example.com", wildcardBase: "example.com" })
+  expect(wild).toContain('hostname: "*.example.com"')
+  expect(wild).toContain("tunnel: supermux") // falls back to the tunnel NAME when no id
+  expect(wild).not.toContain("credentials-file:") // omitted when no creds path
+})
+
+test("parseTunnelId extracts a UUID, else undefined", () => {
+  expect(parseTunnelId("Created tunnel supermux with id 11111111-2222-4333-8444-555555555555")).toBe(
+    "11111111-2222-4333-8444-555555555555",
+  )
+  expect(parseTunnelId("no id here")).toBeUndefined()
+})
+
+test("linuxInstallScript(apt) uses Cloudflare's signed apt repo and installs non-interactively", () => {
+  const s = linuxInstallScript("apt")
+  expect(s).toContain("https://pkg.cloudflare.com/cloudflare-main.gpg")
+  expect(s).toContain("https://pkg.cloudflare.com/cloudflared any main")
+  expect(s).toContain("apt-get install -y cloudflared")
+  expect(s).toContain('[ "$(id -u)" = 0 ] || SUDO=sudo') // sudo only when not root
+})
+
+test("linuxInstallScript(dnf/yum) drops the official .repo and installs", () => {
+  for (const pm of ["dnf", "yum"] as const) {
+    const s = linuxInstallScript(pm)
+    expect(s).toContain("https://pkg.cloudflare.com/cloudflared.repo")
+    expect(s).toContain(`${pm} install -y cloudflared`)
+  }
+})
+
+test("installHintLines points at working URLs (not the dead docs path)", () => {
+  const text = installHintLines().join("\n")
+  expect(text).toContain("https://pkg.cloudflare.com/")
+  expect(text).toContain("https://github.com/cloudflare/cloudflared/releases/latest")
+  expect(text).not.toContain("cloudflare-tunnel/downloads")
+})
+
+// ── up(): named — ingress config + wildcard ─────────────────────────────────────
+
+test("named: writes config.yml with the broker-host ingress rule (the 404 fix)", async () => {
+  const { ctx, calls } = makeCtx({ mode: "named", publicUrlHint: "mux.example.com" }, [
+    { match: /tunnel create/, result: { stdout: "Created tunnel supermux with id 11111111-1111-4111-8111-111111111111" } },
+  ])
+  const res = await cloudflaredProvider.up(ctx)
+  expect(res.publicUrl).toBe("https://mux.example.com")
+  expect(res.proxyBaseDomain).toBeUndefined()
+  const write = calls.find((c) => c[0] === "sh" && c[2]!.includes("config.yml"))
+  expect(write).toBeTruthy()
+  expect(write![2]).toContain("hostname: mux.example.com")
+  expect(write![2]).toContain("service: http://localhost:8787")
+  expect(write![2]).toContain("http_status:404")
+  expect(write![2]).toContain("11111111-1111-4111-8111-111111111111.json")
+  expect(write![2]).not.toContain("*.")
+  expect(calls).toContainEqual(["cloudflared", "tunnel", "route", "dns", "supermux", "mux.example.com"])
+  expect(calls).toContainEqual(["cloudflared", "service", "install"])
+})
+
+test("named: --wildcard routes *.base and adds a wildcard ingress rule, returns proxyBaseDomain", async () => {
+  const { ctx, calls } = makeCtx({ mode: "named", publicUrlHint: "mux.example.com", wildcard: true }, [
+    { match: /tunnel create/, result: { stdout: "id 22222222-2222-4222-8222-222222222222" } },
+  ])
+  const res = await cloudflaredProvider.up(ctx)
+  expect(res.proxyBaseDomain).toBe("example.com")
+  expect(calls).toContainEqual(["cloudflared", "tunnel", "route", "dns", "supermux", "*.example.com"])
+  const write = calls.find((c) => c[0] === "sh" && c[2]!.includes("config.yml"))
+  expect(write![2]).toContain('hostname: "*.example.com"')
+})
+
+test("named: a --wildcard-domain overrides the derived base", async () => {
+  const { ctx, calls } = makeCtx(
+    { mode: "named", publicUrlHint: "mux.example.com", wildcard: true, wildcardDomain: "apps.example.com" },
+    [{ match: /tunnel create/, result: { stdout: "id 22222222-2222-4222-8222-222222222222" } }],
+  )
+  const res = await cloudflaredProvider.up(ctx)
+  expect(res.proxyBaseDomain).toBe("apps.example.com")
+  expect(calls).toContainEqual(["cloudflared", "tunnel", "route", "dns", "supermux", "*.apps.example.com"])
+})
+
+test("named: wildcard DNS failure keeps the broker host working and skips proxyBaseDomain", async () => {
+  const { ctx, calls, out } = makeCtx({ mode: "named", publicUrlHint: "mux.example.com", wildcard: true }, [
+    { match: /tunnel create/, result: { stdout: "id 33333333-3333-4333-8333-333333333333" } },
+    { match: /route dns supermux \*\./, result: { code: 1, stderr: "wildcard not allowed on this plan" } },
+  ])
+  const res = await cloudflaredProvider.up(ctx)
+  expect(res.proxyBaseDomain).toBeUndefined()
+  const write = calls.find((c) => c[0] === "sh" && c[2]!.includes("config.yml"))
+  expect(write![2]).not.toContain("*.example.com")
+  expect(out.join("\n")).toContain("path mode")
+})
+
+test("named: resolves the tunnel id from `tunnel list` when create says it already exists", async () => {
+  const { ctx, calls } = makeCtx({ mode: "named", publicUrlHint: "mux.example.com" }, [
+    { match: /tunnel create/, result: { code: 1, stderr: "tunnel with name supermux already exists" } },
+    { match: /tunnel list --output json/, result: { stdout: '[{"id":"44444444-4444-4444-4444-444444444444","name":"supermux"}]' } },
+  ])
+  await cloudflaredProvider.up(ctx)
+  const write = calls.find((c) => c[0] === "sh" && c[2]!.includes("config.yml"))
+  expect(write![2]).toContain("credentials-file:")
+  expect(write![2]).toContain("44444444-4444-4444-4444-444444444444.json")
+})
+
+test("named: rejects a hostname containing shell metacharacters / newlines", async () => {
+  const { ctx } = makeCtx({ mode: "named", publicUrlHint: "mux.example.com\nSUPERMUX_CFG\nwhoami" }, [
+    { match: /tunnel create/, result: { stdout: "id 55555555-5555-4555-8555-555555555555" } },
+  ])
+  await expect(cloudflaredProvider.up(ctx)).rejects.toThrow(/invalid hostname/i)
 })

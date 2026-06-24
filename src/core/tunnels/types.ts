@@ -40,6 +40,8 @@ export interface ConnectCtx {
   tty: boolean // is a controlling TTY available?
   yes: boolean // --yes: assume consent, never prompt
   publicUrlHint?: string // a user-supplied --public-url / host (cloudflared named, ngrok reserved)
+  wildcard?: boolean // --wildcard: enable wildcard subdomains for exposed apps. undefined ⇒ prompt when interactive
+  wildcardDomain?: string // --wildcard-domain: override the auto-derived wildcard base domain
   run: Run
   println: Println
   ask: Ask
@@ -56,6 +58,7 @@ export interface TunnelResult {
   publicUrl: string // the https URL to set as MUX_WEB_PUBLIC_URL
   stable: boolean // false ⇒ print the throwaway caveat
   notes?: string[] // extra lines for the user (e.g. "device must run Tailscale")
+  proxyBaseDomain?: string // wildcard base to persist as MUX_PROXY_BASE_DOMAIN (subdomain mode). undefined ⇒ clear it
 }
 
 export interface TunnelProvider {
