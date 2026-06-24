@@ -5,6 +5,7 @@ import { useAgentState, isAgentWorking } from "@/stores/agentState"
 import { useGitStatus } from "@/stores/gitStatus"
 import { gitBadge } from "@/lib/gitBadge"
 import SessionAvatar from "@/components/SessionAvatar.vue"
+import { GitBranch } from "lucide-vue-next"
 
 const props = defineProps<{
   id: string
@@ -120,9 +121,9 @@ defineExpose({ startRename })
           <span
             v-if="badge"
             :title="badge.title"
-            class="shrink-0 font-mono text-[10px] tabular-nums"
+            class="inline-flex shrink-0 items-center gap-0.5 font-mono text-[10px] tabular-nums"
             :class="badge.tone === 'muted' ? 'text-muted-foreground/45' : 'text-muted-foreground/80'"
-          >{{ badge.text }}</span>
+          ><GitBranch v-if="badge.kind === 'base'" class="size-2.5 shrink-0" />{{ badge.text }}</span>
           <span
             v-if="props.unread"
             class="h-5 w-1 rounded-full bg-primary/70 shrink-0"
