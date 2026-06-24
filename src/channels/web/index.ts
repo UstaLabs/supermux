@@ -89,6 +89,7 @@ export interface SessionSnapshot {
   model?: string
   session_branch?: string
   repo_root?: string
+  git?: import("../../core/worktree/lite-status").GitLiteStatus
   finish_job?: import("../../core/worktree/finish-job").FinishJob
 }
 

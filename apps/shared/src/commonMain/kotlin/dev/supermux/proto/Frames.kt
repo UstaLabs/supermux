@@ -21,6 +21,8 @@ data class SessionInfo(
     val role: String? = null,
     /** Worktree session's pinned branch (present only for worktree-backed sessions). */
     val session_branch: String? = null,
+    /** At-a-glance worktree-vs-base (or branch-vs-remote) divergence; null when not a git repo. */
+    val git: GitLiteStatusDto? = null,
     /** Last/in-flight finish job for this session (mirrors the broker session record). */
     val finish_job: FinishJobDto? = null,
 )
@@ -37,6 +39,17 @@ data class FinishJobDto(
     val outcome: FinishResult? = null,
     val startedAt: Double = 0.0,       // epoch millis (Date.now())
     val endedAt: Double? = null,
+)
+
+@Serializable
+data class GitLiteStatusDto(
+    val mode: String = "base",        // base | remote
+    val compareRef: String = "",
+    val ahead: Int = 0,
+    val behind: Int = 0,
+    val dirty: Int = 0,
+    val unpublished: Boolean? = null,
+    val computedAt: Double = 0.0,     // epoch millis
 )
 
 @Serializable
@@ -147,6 +160,11 @@ sealed interface ServerFrame {
     // on every job state change (running → done|failed) — src/main.ts:onUpdate.
     @Serializable @SerialName("finish_job")
     data class FinishJobFrame(val session: String = "", val job: FinishJobDto? = null) : ServerFrame
+
+    // Per-session git status delta: broker broadcasts `{type:"session_git",session,git}`
+    // on every recompute — src/main.ts: gitStatusService onChange.
+    @Serializable @SerialName("session_git")
+    data class SessionGit(val session: String = "", val git: GitLiteStatusDto? = null) : ServerFrame
 
     // Display stream lifecycle: the broker broadcasts these on the control WS
     // (src/main.ts: `{type:"display_added",display}` / `{type:"display_removed",id}`).

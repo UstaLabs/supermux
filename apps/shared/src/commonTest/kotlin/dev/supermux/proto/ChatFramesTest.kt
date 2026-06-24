@@ -74,4 +74,25 @@ class ChatFramesTest {
         assertEquals("tests_failed", s.finish_job?.outcome?.status)
         assertEquals("bun test", s.finish_job?.outcome?.command)
     }
+
+    @Test fun parses_session_git_frame() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"session_git","session":"s1","git":{"mode":"base","compareRef":"main","ahead":2,"behind":1,"dirty":3,"computedAt":1}}""")
+        assertTrue(f is ServerFrame.SessionGit)
+        val frame = f as ServerFrame.SessionGit
+        assertEquals("s1", frame.session)
+        assertEquals("base", frame.git?.mode)
+        assertEquals(2, frame.git?.ahead)
+        assertEquals(3, frame.git?.dirty)
+    }
+
+    @Test fun snapshot_session_carries_git() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"snapshot","sessions":[{"id":"s1","name":"n","workdir":"/w","agent":"claude",
+               |"git":{"mode":"remote","compareRef":"origin/x","ahead":0,"behind":0,"dirty":0,"unpublished":true,"computedAt":1}}]}""".trimMargin())
+        assertTrue(f is ServerFrame.Snapshot)
+        val s = (f as ServerFrame.Snapshot).sessions[0]
+        assertEquals("remote", s.git?.mode)
+        assertEquals(true, s.git?.unpublished)
+    }
 }
