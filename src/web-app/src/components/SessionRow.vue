@@ -2,6 +2,8 @@
 import { computed, ref, nextTick } from "vue"
 import { useMessages } from "@/stores/messages"
 import { useAgentState, isAgentWorking } from "@/stores/agentState"
+import { useGitStatus } from "@/stores/gitStatus"
+import { gitBadge } from "@/lib/gitBadge"
 import SessionAvatar from "@/components/SessionAvatar.vue"
 
 const props = defineProps<{
@@ -35,6 +37,9 @@ const agentState = useAgentState()
 // the same condition — as the chat view's "Working…" indicator, so the two
 // never disagree.
 const working = computed(() => isAgentWorking(agentState.get(props.id).phase))
+
+const gitStatus = useGitStatus()
+const badge = computed(() => gitBadge(gitStatus.get(props.id)))
 
 const renameValue = ref(props.name)
 const renameInput = ref<HTMLInputElement | null>(null)
@@ -112,6 +117,12 @@ defineExpose({ startRename })
           >
             {{ lastText || "no messages yet" }}
           </div>
+          <span
+            v-if="badge"
+            :title="badge.title"
+            class="shrink-0 font-mono text-[10px] tabular-nums"
+            :class="badge.tone === 'muted' ? 'text-muted-foreground/45' : 'text-muted-foreground/80'"
+          >{{ badge.text }}</span>
           <span
             v-if="props.unread"
             class="h-5 w-1 rounded-full bg-primary/70 shrink-0"
