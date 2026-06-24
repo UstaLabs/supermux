@@ -23,6 +23,19 @@ declare module "*.tmpl" {
   export default content
 }
 
+// supermux mux-core hook scripts vendored via `with { type: "text" }` — the
+// .cmd polyglot wrapper and the extension-less session-start hook (a wildcard
+// can't match the latter, so it's declared by its specifier like pty-helper).
+// See src/core/plugins/mux-core.ts (ensureMuxCoreSkills writes these to disk).
+declare module "*.cmd" {
+  const content: string
+  export default content
+}
+declare module "*/hooks/session-start" {
+  const content: string
+  export default content
+}
+
 // PWA assets embedded by scripts/generate-static-manifest.ts (the generated
 // src/channels/web/static-manifest.generated.ts imports every built static file
 // `with { type: "file" }`). Under moduleResolution:bundler these wildcards make
