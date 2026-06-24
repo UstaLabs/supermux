@@ -228,6 +228,10 @@ class AppViewModel(
                             it + (f.serverId to ((it[f.serverId] ?: emptyList()) + f.line))
                         }
                     is ServerFrame.LspInstallDone -> _lspInstallDone.update { it + (f.serverId to f) }
+                    is ServerFrame.SessionGit ->
+                        _sessions.value = _sessions.value.map { s ->
+                            if (s.id == f.session) s.copy(git = f.git) else s
+                        }
                     else -> {}
                 }
             }
