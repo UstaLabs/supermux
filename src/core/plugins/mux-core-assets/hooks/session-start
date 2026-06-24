@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# SessionStart hook for the supermux mux-core plugin.
+#
+# Injects the must-always-be-known supermux reply conventions into every session
+# (Claude/Cursor/others), modelled on obra/superpowers' session-start. Reads the
+# reply-conventions SKILL.md, wraps it in <EXTREMELY_IMPORTANT>, and emits the
+# right JSON dialect per CLI. Fires on startup|clear|compact.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Escape a string for embedding inside a JSON string literal.
+escape_for_json() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    printf '%s' "$s"
+}
+
+# Escape the skill CONTENT once, then build the final context string with
+# literal \n sequences (valid JSON escapes in the emitted output). Do NOT
+# re-escape the assembled string — that would double-escape the content.
+reply_conventions=$(cat "${PLUGIN_ROOT}/skills/reply-conventions/SKILL.md" 2>&1 || echo "Error reading reply-conventions skill")
+reply_escaped=$(escape_for_json "$reply_conventions")
+session_context="<EXTREMELY_IMPORTANT>\nYou are a supermux session. The single rule that overrides your default behavior: every user-facing word goes through the mcp__mux-shim__reply tool, never your transcript.\n\nBelow is your 'mux:reply-conventions' skill in full:\n\n${reply_escaped}\n</EXTREMELY_IMPORTANT>"
+
+# Emit only the field the current platform consumes.
+# Cursor: additional_context (snake_case). Claude Code: hookSpecificOutput.additionalContext.
+# Others (Copilot/SDK standard): additionalContext (top-level).
+if [ -n "${CURSOR_PLUGIN_ROOT:-}" ]; then
+  printf '{\n  "additional_context": "%s"\n}\n' "$session_context"
+elif [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -z "${COPILOT_CLI:-}" ]; then
+  printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "SessionStart",\n    "additionalContext": "%s"\n  }\n}\n' "$session_context"
+else
+  printf '{\n  "additionalContext": "%s"\n}\n' "$session_context"
+fi
+
+exit 0

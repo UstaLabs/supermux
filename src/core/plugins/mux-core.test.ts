@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test"
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from "fs"
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync, statSync } from "fs"
+import { execFileSync } from "child_process"
 import { tmpdir } from "os"
 import { join } from "path"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./mux-core"
@@ -72,6 +73,70 @@ test("ensureMuxCoreSkills is idempotent when files already match", () => {
     const pluginDir = join(root, "mux-core")
     expect(ensureMuxCoreSkills({ pluginDir })).toBe(true)
     expect(ensureMuxCoreSkills({ pluginDir })).toBe(false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// ── reply delivery: the SessionStart hook + reply-conventions skill MUST be
+//    shipped from supermux, else a fresh install spawns Claude sessions that
+//    never learn to call the reply tool (replies stay in the transcript). ────
+
+test("ensureMuxCoreSkills ships the reply-conventions skill (mux-shim tool, no stale name)", () => {
+  const root = mkdtempSync(join(tmpdir(), "mux-core-reply-"))
+  try {
+    const pluginDir = join(root, "mux-core")
+    ensureMuxCoreSkills({ pluginDir })
+
+    const skill = readFileSync(join(pluginDir, "skills", "reply-conventions", "SKILL.md"), "utf8")
+    expect(skill).toContain("name: reply-conventions")
+    expect(skill).toContain("mcp__mux-shim__reply")
+    expect(skill).not.toContain("agentmux-shim") // stale pre-rename name must be gone
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("ensureMuxCoreSkills ships the SessionStart hook machinery, executable", () => {
+  const root = mkdtempSync(join(tmpdir(), "mux-core-hook-"))
+  try {
+    const pluginDir = join(root, "mux-core")
+    ensureMuxCoreSkills({ pluginDir })
+
+    const hook = join(pluginDir, "hooks", "session-start")
+    const runner = join(pluginDir, "hooks", "run-hook.cmd")
+    expect(existsSync(hook)).toBe(true)
+    expect(existsSync(runner)).toBe(true)
+    expect(existsSync(join(pluginDir, "hooks", "hooks.json"))).toBe(true)
+    expect(existsSync(join(pluginDir, "hooks", "hooks-cursor.json"))).toBe(true)
+    // hooks.json invokes run-hook.cmd DIRECTLY, so both scripts must be +x.
+    expect(statSync(hook).mode & 0o111).toBeGreaterThan(0)
+    expect(statSync(runner).mode & 0o111).toBeGreaterThan(0)
+
+    const hooksJson = JSON.parse(readFileSync(join(pluginDir, "hooks", "hooks.json"), "utf8"))
+    expect(hooksJson.hooks.SessionStart[0].hooks[0].command).toContain("run-hook.cmd")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("shipped session-start hook emits the reply-tool instruction (Claude dialect)", () => {
+  const root = mkdtempSync(join(tmpdir(), "mux-core-hookrun-"))
+  try {
+    const pluginDir = join(root, "mux-core")
+    ensureMuxCoreSkills({ pluginDir })
+
+    // Run the vendored hook exactly as Claude Code would (CLAUDE_PLUGIN_ROOT set,
+    // not Cursor/Copilot). Proves the embedded script is byte-intact AND that it
+    // injects the reply rule referencing the real mux-shim tool.
+    const out = execFileSync("bash", [join(pluginDir, "hooks", "session-start")], {
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: pluginDir, CURSOR_PLUGIN_ROOT: "", COPILOT_CLI: "" },
+      encoding: "utf8",
+    })
+    const ctx = JSON.parse(out).hookSpecificOutput.additionalContext as string
+    expect(ctx).toContain("EXTREMELY_IMPORTANT")
+    expect(ctx).toContain("mcp__mux-shim__reply")
+    expect(ctx).toContain("reply-conventions") // the skill body got injected
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

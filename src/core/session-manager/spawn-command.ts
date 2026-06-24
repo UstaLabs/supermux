@@ -36,10 +36,14 @@ export function buildClaudeSpawnCommand(opts: { name: string; sessionId?: string
     sessionFlag = opts.resume ? ` --resume ${opts.claudeSessionId}` : ` --session-id ${opts.claudeSessionId}`
   }
   const settingsFlag = existsSync(CLAUDE_HOOKS_SETTINGS_PATH) ? ` --settings ${CLAUDE_HOOKS_SETTINGS_PATH}` : ""
-  const { flags: pluginFlags, hasCorePlugin } = buildPluginFlags(opts.name, opts.pluginsFile, opts.pluginsDir)
-  // Reply rules normally arrive via mux-core's SessionStart hook. Only
-  // append the static fallback when that plugin isn't part of this spawn.
-  const replyFallback = hasCorePlugin ? "" : ` --append-system-prompt-file ${replyFallbackPath(STATE_DIR)}`
+  const { flags: pluginFlags, coreReplyHookPresent } = buildPluginFlags(opts.name, opts.pluginsFile, opts.pluginsDir)
+  // Reply rules normally arrive via mux-core's SessionStart hook. Append the
+  // static fallback whenever that hook isn't actually on disk for this spawn —
+  // either mux-core isn't loaded, OR it's registered but its hook file is
+  // missing (e.g. a fresh install before ensureMuxCoreSkills wrote it). Keying
+  // on the file (not just the registry entry) is what stops a half-installed
+  // plugin from suppressing the fallback AND injecting nothing.
+  const replyFallback = coreReplyHookPresent ? "" : ` --append-system-prompt-file ${replyFallbackPath(STATE_DIR)}`
   // agent-rpc worker: pin to a STRICT mcp config (only the rpc-tools server + the
   // inbound channel). MUX_RPC_ONLY is set PER-SERVER inside that config (on the
   // mux-rpc entry only) — it must NOT go on the claude process env, or it would be
@@ -97,12 +101,13 @@ export function buildOpenCodeSpawnCommand(opts: { name: string; sessionId?: stri
 // Never throws — a bad registry yields no flags so spawns are never broken.
 // Plugin dirs with whitespace/quotes are skipped (they'd corrupt the single-
 // quoted bash command); that's logged rather than silently dropped. Also reports
-// whether mux-core (which carries the reply-conventions hook) is present,
-// so the caller knows whether the static reply fallback is needed.
-function buildPluginFlags(sessionName: string, file?: string, pluginsDir?: string): { flags: string; hasCorePlugin: boolean } {
+// whether mux-core's reply-conventions SessionStart hook is actually present ON
+// DISK (not merely registered), so the caller knows whether the static reply
+// fallback is needed.
+function buildPluginFlags(sessionName: string, file?: string, pluginsDir?: string): { flags: string; coreReplyHookPresent: boolean } {
   const { args } = claudeSpawnArgs({ sessionName, file, pluginsDir, onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) })
   let out = ""
-  let hasCorePlugin = false
+  let coreReplyHookPresent = false
   for (let i = 0; i < args.length; i += 2) {
     const flag = args[i]          // "--plugin-dir"
     const dir = args[i + 1] ?? ""
@@ -110,10 +115,15 @@ function buildPluginFlags(sessionName: string, file?: string, pluginsDir?: strin
       log.warn("plugin_dir_unsafe_skipped", { dir })
       continue
     }
-    if (basename(dir) === CORE_PLUGIN_NAME) hasCorePlugin = true
+    // Trust mux-core to deliver the reply rules ONLY when its SessionStart hook
+    // script is on disk — a registered-but-missing hook must still get the
+    // fallback (see the spawn gate above).
+    if (basename(dir) === CORE_PLUGIN_NAME && existsSync(join(dir, "hooks", "session-start"))) {
+      coreReplyHookPresent = true
+    }
     out += ` ${flag} ${dir}`
   }
-  return { flags: out, hasCorePlugin }
+  return { flags: out, coreReplyHookPresent }
 }
 
 function writeSessionMemoryPreamble(sessionName: string, role: AgentRole, workdir?: string): string {
