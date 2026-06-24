@@ -76,9 +76,9 @@ import {
   MUX_HOME, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, DEVICES_FILE,
 } from "./shared/paths"
 import { validateWebEnv } from "./shared/web-env"
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chmodSync } from "fs"
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chmodSync, watch as fsWatch } from "fs"
 import { randomBytes, randomUUID } from "crypto"
-import { execSync as _execSync, spawn as nodeSpawn } from "child_process"
+import { execSync as _execSync, spawn as nodeSpawn, execFileSync } from "child_process"
 import { makeLogger } from "./shared/log"
 import { checkPreflight, hasBinary } from "./shared/preflight"
 import { detectAllAgents, detectAgent } from "./core/agents/detect"
@@ -86,7 +86,7 @@ import { createInstallManager } from "./core/agents/install"
 import { withAgentBinDirs } from "./core/agents/bin-dirs"
 import { homedir } from "os"
 import { home } from "./shared/home"
-import { join, dirname, resolve } from "path"
+import { join, dirname, resolve, resolve as resolvePath, isAbsolute } from "path"
 import { fileURLToPath } from "url"
 import { ClaudeCodeAdapter } from "./core/agents/claude/index"
 import { wireClaudeStateEvents } from "./core/agents/claude/state-projection"
@@ -145,6 +145,8 @@ import { startFinishJob, getFinishJob, clearFinishJob, type FinishJob, type Fini
 import { computeReadiness, type FinishReadiness } from "./core/worktree/readiness"
 import { suggestVerify } from "./core/worktree/verify-suggest"
 import { loadFinishConfig } from "./core/worktree/finish-config"
+import { computeLiteStatus } from "./core/worktree/lite-status"
+import { GitStatusService, type ServiceSession } from "./core/worktree/git-status-service"
 import { deriveName } from "./core/session-manager/naming"
 
 const log = makeLogger("main")
@@ -309,6 +311,38 @@ const fileStore = new FileStore(db, filesDir)
 const messageLog = new MessageStore(db, fileStore)
 const activityStore = new ActivityStore()
 const agentStateStore = new AgentStateStore()
+
+function resolveGitDirs(workdir: string): { gitDir: string; commonDir: string } | null {
+  try {
+    const gitDir = execFileSync("git", ["rev-parse", "--absolute-git-dir"], { cwd: workdir, encoding: "utf-8" }).trim()
+    const raw = execFileSync("git", ["rev-parse", "--git-common-dir"], { cwd: workdir, encoding: "utf-8" }).trim()
+    return { gitDir, commonDir: isAbsolute(raw) ? raw : resolvePath(workdir, raw) }
+  } catch { return null }
+}
+
+const gitStatusService = new GitStatusService({
+  compute: (s) => computeLiteStatus(s),
+  resolveGitDirs: (s) => resolveGitDirs(s.workdir),
+  watch: (dir, onEvent) => {
+    try {
+      const w = fsWatch(dir, { persistent: false }, () => onEvent())
+      w.on("error", () => {})   // dir may vanish (worktree removed) — degrade silently
+      return { close: () => { try { w.close() } catch {} } }
+    } catch { return { close: () => {} } }
+  },
+  onChange: (id, git) => webChannel?.broadcastToAll({ type: "session_git", session: id, git }),
+  schedule: (fn, ms) => setTimeout(fn, ms),
+  cancel: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+  debounceMs: 400,
+})
+
+function gitServiceSessions(): ServiceSession[] {
+  return registry.listVisible().map((s) => ({
+    id: s.id, workdir: s.workdir,
+    repo_root: s.repo_root, base_branch: s.base_branch, session_branch: s.session_branch,
+  }))
+}
+
 const tailers = new Map<string, TranscriptTailer>()  // keyed by session UUID
 
 function ensureClaudeTailer(sessionUuid: string, _name: string, workdir: string, seekToEnd = false): void {
@@ -970,8 +1004,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
     listChatIds: () =>
       (db.query("SELECT DISTINCT chat_id FROM messages WHERE chat_id LIKE 'web:%' ORDER BY chat_id").all() as { chat_id: string }[]).map((r) => r.chat_id),
-    getSessionsSnapshot: () =>
-      registry.listVisible().map((s) => ({
+    getSessionsSnapshot: () => {
+      gitStatusService.sync(gitServiceSessions())
+      return registry.listVisible().map((s) => ({
         id: s.id,
         name: s.name,
         workdir: s.workdir,
@@ -985,8 +1020,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         status: s.status,
         session_branch: s.session_branch || undefined,
         repo_root: s.repo_root || undefined,
+        git: gitStatusService.get(s.id),
         finish_job: s.finish_job,
-      })),
+      }))
+    },
     getSessionLog: (id) => {
       const s = registry.get(id)
       return messageLog.get(s?.id ?? id)
@@ -2412,6 +2449,7 @@ async function spawnSession(args: { workdir: string; requestedName?: string; age
       repo_root: wt.repoRoot, base_branch: wt.baseBranch, session_branch: wt.sessionBranch,
     })
   }
+  gitStatusService.sync(gitServiceSessions())
   return r
 }
 
@@ -2824,6 +2862,9 @@ agentStateStore.on("change", (sessionId: string, state) => {
       }
     }).catch((err) => log.warn("drain_reapply_failed", { sessionId, err: String(err) }))
   }
+})
+agentStateStore.on("change", (sessionId: string, state) => {
+  if (state.phase === "idle") gitStatusService.scheduleRecompute(sessionId)
 })
 agentStateStore.on("thoughtComplete", (sessionId: string, durationMs: number, now: number) => {
   const sec = Math.max(1, Math.round(durationMs / 1000))
