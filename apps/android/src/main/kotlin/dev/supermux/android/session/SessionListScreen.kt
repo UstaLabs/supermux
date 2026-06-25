@@ -42,6 +42,8 @@ import dev.supermux.session.formatWorkdir
 import dev.supermux.session.groupSessions
 import kotlinx.coroutines.launch
 
+private fun isWorking(phase: String?): Boolean = phase == "thinking" || phase == "running"
+
 /** Produces a human-readable relative time string from an ISO-8601 timestamp string. */
 fun relTime(ts: String?): String {
     if (ts == null) return ""
@@ -164,6 +166,7 @@ fun SessionRow(
     s: SessionInfo,
     active: Boolean,
     preview: LogEntry? = null,
+    working: Boolean = false,
     onClick: () -> Unit,
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
@@ -198,17 +201,7 @@ fun SessionRow(
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        SessionStatusRail(git = s.git, unread = hasUnread, modifier = Modifier.align(Alignment.CenterVertically))
-        Spacer(Modifier.width(Space.sm))
-
-        SessionAvatar(
-            name = s.name,
-            agent = s.agent,
-            sessionId = s.id,
-            sharedScope = sharedScope,
-            animScope = animScope,
-        )
-
+        SessionStatusRail(git = s.git, working = working, modifier = Modifier.align(Alignment.CenterVertically))
         Spacer(Modifier.width(12.dp))
 
         Column(Modifier.weight(1f)) {
@@ -284,6 +277,7 @@ fun SessionListScreen(
     activeId: String?,
     onOpen: (String) -> Unit,
     lastBySession: Map<String, LogEntry?> = emptyMap(),
+    agentState: Map<String, dev.supermux.proto.AgentStatus?> = emptyMap(),
     onNewSession: () -> Unit = {},
     loadProjects: suspend () -> List<String> = { emptyList() },
     validatePath: suspend (String) -> dev.supermux.net.PathValidation? = { null },
@@ -462,6 +456,7 @@ fun SessionListScreen(
                         s,
                         active = s.id == activeId,
                         preview = lastBySession[s.id],
+                        working = isWorking(agentState[s.id]?.phase),
                         onClick = { onOpen(s.id) },
                         sharedScope = sharedScope,
                         animScope = animScope,

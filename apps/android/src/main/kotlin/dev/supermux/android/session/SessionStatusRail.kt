@@ -4,55 +4,74 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
+import dev.supermux.android.theme.MonoFontFamily
 import dev.supermux.proto.GitLiteStatusDto
-import dev.supermux.proto.SessionDoneState
-import dev.supermux.proto.sessionDoneState
+import dev.supermux.proto.SessionStatusKind
+import dev.supermux.proto.SessionStatusLevel
+import dev.supermux.proto.gitBadge
+import dev.supermux.proto.sessionStatus
 
 private val DoneGreen = Color(0xFF16A34A)
 private val NotDoneAmber = Color(0xFFF59E0B)
 
 /**
- * Leading session status: a colored rail + check/branch icon. Renders an empty
- * fixed-width spacer (for alignment) when there's no status (non-worktree session).
+ * Leading per-session state: working spinner (top priority), else the git/cloud status icon.
+ * Worktree: ✓ done / ⎇ not-done / neutral pristine. Remote: cloud-done / cloud-off + ↑N ↓N counts.
  */
 @Composable
-fun SessionStatusRail(git: GitLiteStatusDto?, unread: Boolean, modifier: Modifier = Modifier) {
-    val state = sessionDoneState(git)
-    if (state == null) {
-        // Keep avatar alignment consistent; still show the unread cue as a thin bar.
-        Box(
-            modifier
-                .width(4.dp)
-                .height(20.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(if (unread) Color(0xFF14B8A6).copy(alpha = 0.7f) else Color.Transparent),
-        )
-        return
-    }
-    val color = if (state == SessionDoneState.DONE) DoneGreen else NotDoneAmber
-    val icon = if (state == SessionDoneState.DONE) R.drawable.ic_check else R.drawable.ic_git_branch
+fun SessionStatusRail(git: GitLiteStatusDto?, working: Boolean, modifier: Modifier = Modifier) {
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            Modifier
-                .width(4.dp)
-                .height(20.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(color),
-        )
-        Spacer(Modifier.width(4.dp))
-        Icon(painterResource(icon), contentDescription = null, tint = color, modifier = Modifier.size(13.dp))
+        if (working) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(14.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            return@Row
+        }
+        val st = sessionStatus(git)
+        when {
+            st == null || (st.kind == SessionStatusKind.WORKTREE && st.level == SessionStatusLevel.PRISTINE) ->
+                NeutralDot()
+            st.kind == SessionStatusKind.WORKTREE && st.level == SessionStatusLevel.DONE ->
+                StatusIcon(R.drawable.ic_check, DoneGreen)
+            st.kind == SessionStatusKind.WORKTREE ->
+                StatusIcon(R.drawable.ic_git_branch, NotDoneAmber)
+            st.kind == SessionStatusKind.REMOTE && st.level == SessionStatusLevel.DONE ->
+                StatusIcon(R.drawable.ic_cloud_done, DoneGreen)
+            else -> {
+                StatusIcon(R.drawable.ic_cloud_off, NotDoneAmber)
+                val text = gitBadge(git)?.text
+                if (!text.isNullOrEmpty()) {
+                    Spacer(Modifier.width(4.dp))
+                    Text(text, color = NotDoneAmber, fontFamily = MonoFontFamily, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                }
+            }
+        }
     }
+}
+
+@Composable private fun StatusIcon(res: Int, color: Color) {
+    Icon(painterResource(res), contentDescription = null, tint = color, modifier = Modifier.size(14.dp))
+}
+
+@Composable private fun NeutralDot() {
+    Box(Modifier.size(6.dp).clip(CircleShape).background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)))
 }
