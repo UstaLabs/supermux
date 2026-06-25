@@ -49,3 +49,18 @@ fun gitBadge(git: GitLiteStatusDto?): GitBadge? {
     val kind = if (git.mode == "base") GitBadgeKind.BASE else GitBadgeKind.REMOTE
     return GitBadge(parts.joinToString(" "), kind, GitBadgeTone.ACTIVE, ref)
 }
+
+/** Glanceable finished-vs-not state for the session list. */
+enum class SessionDoneState { DONE, NOT_DONE }
+
+/**
+ * Two-state "is this session finished?" for the list. Worktree (base-mode) sessions only:
+ * DONE when its commits are in the base branch (ahead == 0) and the tree is clean (dirty == 0);
+ * NOT_DONE when there are unmerged commits (ahead > 0) or uncommitted changes (dirty > 0).
+ * `behind` alone does NOT make it not-done. Returns null when no indicator applies
+ * (non-repo session, or remote/plain-repo mode).
+ */
+fun sessionDoneState(git: GitLiteStatusDto?): SessionDoneState? {
+    if (git == null || git.mode != "base") return null
+    return if (git.ahead == 0 && git.dirty == 0) SessionDoneState.DONE else SessionDoneState.NOT_DONE
+}

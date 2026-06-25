@@ -50,4 +50,25 @@ class GitBadgeTest {
         assertEquals("+1", b?.text)
         assertEquals(GitBadgeKind.BASE, b?.kind)
     }
+
+    @Test fun done_when_in_dev_and_clean() {
+        assertEquals(SessionDoneState.DONE, sessionDoneState(GitLiteStatusDto(mode = "base", compareRef = "dev")))
+    }
+
+    @Test fun not_done_when_ahead() {
+        assertEquals(SessionDoneState.NOT_DONE, sessionDoneState(GitLiteStatusDto(mode = "base", compareRef = "dev", ahead = 2)))
+    }
+
+    @Test fun not_done_when_dirty() {
+        assertEquals(SessionDoneState.NOT_DONE, sessionDoneState(GitLiteStatusDto(mode = "base", compareRef = "dev", dirty = 1)))
+    }
+
+    @Test fun behind_only_is_still_done() {
+        assertEquals(SessionDoneState.DONE, sessionDoneState(GitLiteStatusDto(mode = "base", compareRef = "dev", behind = 3)))
+    }
+
+    @Test fun no_indicator_for_null_or_remote() {
+        assertNull(sessionDoneState(null))
+        assertNull(sessionDoneState(GitLiteStatusDto(mode = "remote", compareRef = "origin/x", ahead = 1)))
+    }
 }
