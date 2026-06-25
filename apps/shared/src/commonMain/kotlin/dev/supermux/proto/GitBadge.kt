@@ -64,3 +64,32 @@ fun sessionDoneState(git: GitLiteStatusDto?): SessionDoneState? {
     if (git == null || git.mode != "base") return null
     return if (git.ahead == 0 && git.dirty == 0) SessionDoneState.DONE else SessionDoneState.NOT_DONE
 }
+
+/** Which axis a session's status is measured on — picks the platform icon family. */
+enum class SessionStatusKind { WORKTREE, REMOTE }
+
+/** DONE = done (worktree, merged+clean) / synced (remote); NOT_DONE = not-done / not-synced;
+ *  PRISTINE = worktree that has never committed (clean) — neutral, no ✓. */
+enum class SessionStatusLevel { PRISTINE, DONE, NOT_DONE }
+
+data class SessionStatus(val kind: SessionStatusKind, val level: SessionStatusLevel)
+
+/**
+ * Unified per-session status for the list indicator. null when no indicator applies (git == null).
+ * Worktree (base): NOT_DONE if ahead or dirty; else DONE if [touched]; else PRISTINE (never committed).
+ * Remote: DONE when synced both ways + clean + published; else NOT_DONE.
+ */
+fun sessionStatus(git: GitLiteStatusDto?): SessionStatus? {
+    if (git == null) return null
+    return if (git.mode == "base") {
+        val level = when {
+            git.ahead > 0 || git.dirty > 0 -> SessionStatusLevel.NOT_DONE
+            git.touched -> SessionStatusLevel.DONE
+            else -> SessionStatusLevel.PRISTINE
+        }
+        SessionStatus(SessionStatusKind.WORKTREE, level)
+    } else {
+        val synced = git.ahead == 0 && git.behind == 0 && git.dirty == 0 && git.unpublished != true
+        SessionStatus(SessionStatusKind.REMOTE, if (synced) SessionStatusLevel.DONE else SessionStatusLevel.NOT_DONE)
+    }
+}
