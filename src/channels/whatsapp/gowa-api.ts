@@ -36,8 +36,7 @@ export class GowaClient {
     const bytes = await readFile(filePath)
     const form = new FormData()
     form.set("phone", phone)
-    const field = kind === "image" ? "image" : kind === "audio" ? "audio" : "file"
-    form.set(field, new Blob([bytes]), basename(filePath))
+    form.set(kind, new Blob([bytes]), basename(filePath))
     if (opts?.caption) form.set("caption", opts.caption)
     if (opts?.replyTo) form.set("reply_message_id", opts.replyTo)
     const res = await this.f(`${this.opts.baseUrl}/send/${kind}`, { method: "POST", headers: this.headers(), body: form })

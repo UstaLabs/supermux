@@ -249,7 +249,7 @@ export const SECRET_FIELDS = ["telegramBotToken", "claudeOauthToken", "anthropic
  * flag. The single source of truth for what the REST layer may expose.
  */
 export function redactAppConfig(cfg: AppConfig): Record<string, unknown> {
-  const { telegramBotToken, claudeOauthToken, anthropicApiKey, codexApiKey, cursorApiKey, ...rest } = cfg
+  const { telegramBotToken, claudeOauthToken, anthropicApiKey, codexApiKey, cursorApiKey, whatsappGowaBasicAuth, whatsappWebhookSecret, ...rest } = cfg
   return {
     ...rest,
     telegramConfigured: telegramBotToken !== "",
@@ -257,6 +257,8 @@ export function redactAppConfig(cfg: AppConfig): Record<string, unknown> {
     anthropicConfigured: anthropicApiKey !== "",
     codexConfigured: codexApiKey !== "",
     cursorConfigured: cursorApiKey !== "",
+    whatsappGowaBasicAuthConfigured: whatsappGowaBasicAuth !== "",
+    whatsappWebhookSecretConfigured: whatsappWebhookSecret !== "",
   }
 }
 
