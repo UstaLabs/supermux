@@ -198,21 +198,8 @@ fun SessionRow(
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        // Subtle teal left-edge unread indicator
-        if (hasUnread) {
-            Box(
-                Modifier
-                    .width(4.dp)
-                    .height(20.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(cs.primary.copy(alpha = 0.7f))
-                    .align(Alignment.CenterVertically),
-            )
-            Spacer(Modifier.width(Space.sm))
-        } else {
-            // Reserve same horizontal space so avatar aligns consistently
-            Spacer(Modifier.width(4.dp + Space.sm))
-        }
+        SessionStatusRail(git = s.git, unread = hasUnread, modifier = Modifier.align(Alignment.CenterVertically))
+        Spacer(Modifier.width(Space.sm))
 
         SessionAvatar(
             name = s.name,
@@ -231,7 +218,7 @@ fun SessionRow(
                     s.name,
                     color = cs.onSurface,
                     fontSize = 15.sp,
-                    fontWeight = FontWeight.Medium,
+                    fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
@@ -262,12 +249,6 @@ fun SessionRow(
                 )
             } else {
                 Spacer(Modifier.height(Space.xs))
-            }
-
-            // Git status badge (worktree-vs-base or branch-vs-remote divergence).
-            if (s.git != null) {
-                Spacer(Modifier.height(2.dp))
-                GitBadgeRow(s.git)
             }
 
             // Preview: last message or workdir fallback

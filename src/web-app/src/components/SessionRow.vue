@@ -3,9 +3,9 @@ import { computed, ref, nextTick } from "vue"
 import { useMessages } from "@/stores/messages"
 import { useAgentState, isAgentWorking } from "@/stores/agentState"
 import { useGitStatus } from "@/stores/gitStatus"
-import { gitBadge } from "@/lib/gitBadge"
+import { gitBadge, sessionDoneState } from "@/lib/gitBadge"
 import SessionAvatar from "@/components/SessionAvatar.vue"
-import { GitBranch } from "lucide-vue-next"
+import { GitBranch, Check } from "lucide-vue-next"
 
 const props = defineProps<{
   id: string
@@ -41,6 +41,7 @@ const working = computed(() => isAgentWorking(agentState.get(props.id).phase))
 
 const gitStatus = useGitStatus()
 const badge = computed(() => gitBadge(gitStatus.get(props.id)))
+const done = computed(() => sessionDoneState(gitStatus.get(props.id)))
 
 const renameValue = ref(props.name)
 const renameInput = ref<HTMLInputElement | null>(null)
@@ -90,6 +91,7 @@ defineExpose({ startRename })
         ? 'bg-card border-border shadow-sm'
         : 'border-transparent hover:bg-card/70 active:bg-card',
       props.reserveMenuSpace ? 'pl-3 pr-9 py-2.5' : 'px-3 py-2.5',
+      done === 'done' ? 'border-l-2 border-l-emerald-500' : done === 'not-done' ? 'border-l-2 border-l-amber-500' : '',
     ]"
     @click="handleNavigate"
   >
@@ -118,12 +120,13 @@ defineExpose({ startRename })
           >
             {{ lastText || "no messages yet" }}
           </div>
-          <span
-            v-if="badge"
-            :title="badge.title"
-            class="inline-flex shrink-0 items-center gap-0.5 font-mono text-[10px] tabular-nums"
-            :class="badge.tone === 'muted' ? 'text-muted-foreground/45' : 'text-muted-foreground/80'"
-          ><GitBranch v-if="badge.kind === 'base'" class="size-2.5 shrink-0" />{{ badge.text }}</span>
+          <component
+            v-if="done"
+            :is="done === 'done' ? Check : GitBranch"
+            :title="badge?.title"
+            class="size-3.5 shrink-0"
+            :class="done === 'done' ? 'text-emerald-400' : 'text-amber-500'"
+          />
           <span
             v-if="props.unread"
             class="h-5 w-1 rounded-full bg-primary/70 shrink-0"
