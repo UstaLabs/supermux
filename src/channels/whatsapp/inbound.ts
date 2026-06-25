@@ -30,8 +30,40 @@ function mediaKind(field: MediaField, pathOrUrl: string): AttachmentKind {
   return "document"
 }
 
-export async function normalizeWhatsAppInbound(payload: any, deps: WhatsAppNormalizeDeps): Promise<InboundMessage> {
-  const p = payload?.payload ?? {}
+// The GOWA webhook carries no MIME field, but the served file path/filename has
+// an extension. FileStore derives the on-disk extension from `mime` (undefined →
+// `.bin`), so map the extension back to a MIME (parity with how Telegram passes
+// a real mime through). Returns undefined for unknown extensions.
+const EXT_MIME: Record<string, string> = {
+  ".ogg": "audio/ogg",
+  ".opus": "audio/ogg",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".pdf": "application/pdf",
+  ".mp4": "video/mp4",
+  ".m4a": "audio/mp4",
+}
+
+function mimeFromPath(pathOrUrl: string, name?: string): string | undefined {
+  const source = name && name.includes(".") ? name : pathOrUrl
+  const lower = source.toLowerCase()
+  const dot = lower.lastIndexOf(".")
+  if (dot < 0) return undefined
+  // strip any query string on a served URL (e.g. ".jpeg?foo=1")
+  const ext = lower.slice(dot).split("?")[0] ?? ""
+  return EXT_MIME[ext]
+}
+
+// `message` is the INNER GOWA webhook message-payload object (the one with
+// `id` / `chat_id` / `from` / `from_name` / `timestamp` / `body` /
+// `replied_to_id` and media fields like `image` / `audio` / `document`). The
+// caller (the webhook handler) has already unwrapped the outer
+// `{ event, device_id, payload }` envelope — do NOT unwrap `.payload` again here.
+export async function normalizeWhatsAppInbound(message: any, deps: WhatsAppNormalizeDeps): Promise<InboundMessage> {
+  const p = message ?? {}
   const chatId = String(p.chat_id ?? p.from ?? "")
   let attachments: InboundAttachment[] | undefined
 
@@ -50,8 +82,9 @@ export async function normalizeWhatsAppInbound(payload: any, deps: WhatsAppNorma
       if (ref) {
         const bytes = await deps.gowa.fetchMedia(ref.pathOrUrl)
         const kind = mediaKind(media.field, ref.pathOrUrl)
-        const stored = await deps.fileStore.put({ kind, name: ref.name, origin: "whatsapp-dl", bytes })
-        attachments = [{ kind, file_id: stored.file_id, size: bytes.length, name: ref.name }]
+        const mime = mimeFromPath(ref.pathOrUrl, ref.name)
+        const stored = await deps.fileStore.put({ kind, mime, name: ref.name, origin: "whatsapp-dl", bytes })
+        attachments = [{ kind, file_id: stored.file_id, mime, size: bytes.length, name: ref.name }]
       }
     } catch (err: any) {
       log.warn("eager_download_failed_dropping_attachment", { err: err?.message ?? String(err), id: String(p.id ?? ""), field: media.field })

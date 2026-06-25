@@ -19,6 +19,7 @@ export interface WhatsAppChannelOpts {
   webhookPort: number
   webhookSecret: string
   fileStore: FileStore
+  accessFile?: string   // path to the allowlist JSON; defaults to the shared ACCESS_FILE
 }
 
 export class WhatsAppChannel implements Channel {
@@ -32,10 +33,12 @@ export class WhatsAppChannel implements Channel {
   private readonly gowa: GowaClient
   private readonly fileStore: FileStore
   private readonly server: WhatsAppWebhookServer
+  private readonly accessFile: string
   private inboundHandlers: Array<(m: InboundMessage) => void> = []
 
   constructor(opts: WhatsAppChannelOpts) {
     this.fileStore = opts.fileStore
+    this.accessFile = opts.accessFile ?? ACCESS_FILE
     this.gowa = new GowaClient({ baseUrl: opts.gowaUrl, basicAuth: opts.gowaBasicAuth, deviceId: opts.gowaDeviceId })
     const handler = createWebhookHandler({ secret: opts.webhookSecret, onMessage: (p) => { void this.onPayload(p) } })
     this.server = new WhatsAppWebhookServer(opts.webhookPort, handler)
@@ -86,7 +89,7 @@ export class WhatsAppChannel implements Channel {
 
   private async onPayload(payload: any): Promise<void> {
     const fromJid = String(payload?.from ?? "")
-    if (!isWhatsAppAllowed(loadWhatsAppAccess(ACCESS_FILE), fromJid)) {
+    if (!isWhatsAppAllowed(loadWhatsAppAccess(this.accessFile), fromJid)) {
       log.warn("access_dropped_inbound", { from: fromJid })
       return
     }
