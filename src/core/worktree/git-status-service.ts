@@ -7,6 +7,7 @@ export interface ServiceSession {
   repo_root?: string | null
   base_branch?: string | null
   session_branch?: string | null
+  base_commit?: string | null
 }
 
 export interface WatchHandle { close(): void }
@@ -28,6 +29,7 @@ function sameStatus(a: GitLiteStatus | null | undefined, b: GitLiteStatus | null
   if (!a || !b) return false
   return a.mode === b.mode && a.compareRef === b.compareRef && a.ahead === b.ahead
     && a.behind === b.behind && a.dirty === b.dirty && !!a.unpublished === !!b.unpublished
+    && !!a.touched === !!b.touched
 }
 
 /**

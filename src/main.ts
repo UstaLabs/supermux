@@ -340,6 +340,9 @@ function gitServiceSessions(): ServiceSession[] {
   return registry.listVisible().map((s) => ({
     id: s.id, workdir: s.workdir,
     repo_root: s.repo_root, base_branch: s.base_branch, session_branch: s.session_branch,
+    // base_commits is a { repoRelPath -> HEAD-at-creation } map; a worktree session is single-repo,
+    // so its base commit is the sole value. Used for the `touched` (pristine-vs-did-work) flag.
+    base_commit: s.base_commits ? Object.values(s.base_commits)[0] ?? null : null,
   }))
 }
 
