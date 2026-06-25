@@ -37,3 +37,11 @@ export function gitBadge(git: GitLiteStatus | undefined): GitBadge | null {
     kind: git.mode === "base" ? "base" : "remote",
   }
 }
+
+export type SessionDoneState = "done" | "not-done"
+
+/** Two-state session-list status; mirrors the shared Kotlin `sessionDoneState`. */
+export function sessionDoneState(git: GitLiteStatus | undefined): SessionDoneState | null {
+  if (!git || git.mode !== "base") return null
+  return git.ahead === 0 && git.dirty === 0 ? "done" : "not-done"
+}
