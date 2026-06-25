@@ -1,24 +1,29 @@
 import { test, expect } from "bun:test"
 import { requireAtLeastOneChannel } from "../src/shared/channels"
 
-test("neither channel configured: returns error", () => {
-  const r = requireAtLeastOneChannel(false, false)
+test("no channel configured: returns error", () => {
+  const r = requireAtLeastOneChannel(false, false, false)
   expect(r.error).toBeDefined()
   expect(r.error).toContain("MUX_TELEGRAM_BOT_TOKEN")
   expect(r.error).toContain("MUX_WEB_PORT")
 })
 
 test("telegram only: ok", () => {
-  const r = requireAtLeastOneChannel(true, false)
+  const r = requireAtLeastOneChannel(true, false, false)
   expect(r.error).toBeUndefined()
 })
 
 test("web only: ok", () => {
-  const r = requireAtLeastOneChannel(false, true)
+  const r = requireAtLeastOneChannel(false, true, false)
   expect(r.error).toBeUndefined()
 })
 
-test("both channels: ok", () => {
-  const r = requireAtLeastOneChannel(true, true)
+test("whatsapp only: ok", () => {
+  const r = requireAtLeastOneChannel(false, false, true)
+  expect(r.error).toBeUndefined()
+})
+
+test("all channels: ok", () => {
+  const r = requireAtLeastOneChannel(true, true, true)
   expect(r.error).toBeUndefined()
 })
