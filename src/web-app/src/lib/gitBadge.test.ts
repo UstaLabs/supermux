@@ -49,3 +49,16 @@ test("sessionDoneState: null for undefined or remote", () => {
   expect(sessionDoneState(undefined)).toBeNull()
   expect(sessionDoneState({ mode: "remote", compareRef: "origin/x", ahead: 1, behind: 0, dirty: 0, computedAt: 0 })).toBeNull()
 })
+
+import { sessionStatus } from "./gitBadge"
+
+test("sessionStatus worktree pristine/done/not-done", () => {
+  expect(sessionStatus({ mode: "base", compareRef: "dev", ahead: 0, behind: 0, dirty: 0, touched: false, computedAt: 0 })).toEqual({ kind: "worktree", level: "pristine" })
+  expect(sessionStatus({ mode: "base", compareRef: "dev", ahead: 0, behind: 0, dirty: 0, touched: true, computedAt: 0 })).toEqual({ kind: "worktree", level: "done" })
+  expect(sessionStatus({ mode: "base", compareRef: "dev", ahead: 1, behind: 0, dirty: 0, touched: true, computedAt: 0 })).toEqual({ kind: "worktree", level: "not-done" })
+})
+test("sessionStatus remote synced/not", () => {
+  expect(sessionStatus({ mode: "remote", compareRef: "origin/x", ahead: 0, behind: 0, dirty: 0, computedAt: 0 })).toEqual({ kind: "remote", level: "done" })
+  expect(sessionStatus({ mode: "remote", compareRef: "origin/x", ahead: 0, behind: 1, dirty: 0, computedAt: 0 })).toEqual({ kind: "remote", level: "not-done" })
+})
+test("sessionStatus null", () => { expect(sessionStatus(undefined)).toBeNull() })

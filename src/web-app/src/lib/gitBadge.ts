@@ -45,3 +45,19 @@ export function sessionDoneState(git: GitLiteStatus | undefined): SessionDoneSta
   if (!git || git.mode !== "base") return null
   return git.ahead === 0 && git.dirty === 0 ? "done" : "not-done"
 }
+
+export type SessionStatusKind = "worktree" | "remote"
+export type SessionStatusLevel = "pristine" | "done" | "not-done"
+export interface SessionStatus { kind: SessionStatusKind; level: SessionStatusLevel }
+
+/** Mirrors the shared Kotlin `sessionStatus`. */
+export function sessionStatus(git: GitLiteStatus | undefined): SessionStatus | null {
+  if (!git) return null
+  if (git.mode === "base") {
+    const level: SessionStatusLevel =
+      git.ahead > 0 || git.dirty > 0 ? "not-done" : git.touched ? "done" : "pristine"
+    return { kind: "worktree", level }
+  }
+  const synced = git.ahead === 0 && git.behind === 0 && git.dirty === 0 && !git.unpublished
+  return { kind: "remote", level: synced ? "done" : "not-done" }
+}
