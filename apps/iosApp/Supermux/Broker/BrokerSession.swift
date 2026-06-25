@@ -84,8 +84,25 @@ final class BrokerSession {
             finishJobs = Dictionary(uniqueKeysWithValues: s.sessions.compactMap { sess in sess.finish_job.map { (sess.id, $0) } })
             synced = true
         case .sessionAdded(let a):
-            sessions.append(a.session)
-            if let job = a.session.finish_job { finishJobs[a.session.id] = job }
+            // The broker re-broadcasts session_added for the SAME session (an early add right
+            // after spawn, then the authoritative post-register add that carries repo_root /
+            // session_branch). Dedup by id and backfill — keep existing values where the incoming
+            // frame omits them, never clobber with nil — instead of appending a duplicate row.
+            // (web parity: src/web-app/src/stores/sessions.ts `add()`.)
+            let incoming = a.session
+            if let idx = sessions.firstIndex(where: { $0.id == incoming.id }) {
+                let old = sessions[idx]
+                sessions[idx] = incoming.doCopy(
+                    id: incoming.id, name: incoming.name, workdir: incoming.workdir,
+                    agent: incoming.agent, status: incoming.status ?? old.status,
+                    mute: incoming.mute ?? old.mute, connected: incoming.connected ?? old.connected,
+                    model: incoming.model ?? old.model, repo_root: incoming.repo_root ?? old.repo_root,
+                    role: incoming.role ?? old.role, session_branch: incoming.session_branch ?? old.session_branch,
+                    git: incoming.git ?? old.git, finish_job: incoming.finish_job ?? old.finish_job)
+            } else {
+                sessions.append(incoming)
+            }
+            if let job = incoming.finish_job { finishJobs[incoming.id] = job }
         case .sessionRemoved(let r):
             // Resolve the name BEFORE dropping the session — display hosts are keyed by it.
             let removedName = sessions.first { $0.id == r.id }?.name
