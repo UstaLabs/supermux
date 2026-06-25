@@ -27,6 +27,11 @@ export interface AppConfig {
   anthropicApiKey: string
   codexApiKey: string
   cursorApiKey: string
+  whatsappGowaUrl: string         // "" when unset
+  whatsappGowaBasicAuth: string   // "" when unset (secret)
+  whatsappGowaDeviceId: string    // "" when unset
+  whatsappWebhookPort: string     // "" when unset
+  whatsappWebhookSecret: string   // "" when unset (secret)
   onboarded: boolean
   // Set by `supermux connect`; absent when no tunnel is configured. Store-only.
   tunnel?: TunnelRecord
@@ -71,6 +76,11 @@ export const defaultAppConfig: AppConfig = {
   anthropicApiKey: "",
   codexApiKey: "",
   cursorApiKey: "",
+  whatsappGowaUrl: "",
+  whatsappGowaBasicAuth: "",
+  whatsappGowaDeviceId: "",
+  whatsappWebhookPort: "",
+  whatsappWebhookSecret: "",
   onboarded: false,
 }
 
@@ -106,6 +116,11 @@ export interface AppConfigEnv {
   MUX_TELEGRAM_BOT_TOKEN?: string
   MUX_WEB_PUBLIC_URL?: string
   MUX_WEB_PORT?: string
+  MUX_WHATSAPP_GOWA_URL?: string
+  MUX_WHATSAPP_GOWA_BASIC_AUTH?: string
+  MUX_WHATSAPP_GOWA_DEVICE_ID?: string
+  MUX_WHATSAPP_WEBHOOK_PORT?: string
+  MUX_WHATSAPP_WEBHOOK_SECRET?: string
 }
 
 /** Pick the first non-empty string among the candidates, else "". */
@@ -134,6 +149,11 @@ export function resolveAppConfig(stored: Partial<AppConfig>, env: AppConfigEnv):
     anthropicApiKey: firstNonEmpty(stored.anthropicApiKey),
     codexApiKey: firstNonEmpty(stored.codexApiKey),
     cursorApiKey: firstNonEmpty(stored.cursorApiKey),
+    whatsappGowaUrl: firstNonEmpty(stored.whatsappGowaUrl, env.MUX_WHATSAPP_GOWA_URL),
+    whatsappGowaBasicAuth: firstNonEmpty(stored.whatsappGowaBasicAuth, env.MUX_WHATSAPP_GOWA_BASIC_AUTH),
+    whatsappGowaDeviceId: firstNonEmpty(stored.whatsappGowaDeviceId, env.MUX_WHATSAPP_GOWA_DEVICE_ID),
+    whatsappWebhookPort: firstNonEmpty(stored.whatsappWebhookPort, env.MUX_WHATSAPP_WEBHOOK_PORT),
+    whatsappWebhookSecret: firstNonEmpty(stored.whatsappWebhookSecret, env.MUX_WHATSAPP_WEBHOOK_SECRET),
     onboarded: stored.onboarded === undefined ? defaultAppConfig.onboarded : Boolean(stored.onboarded),
     tunnel: parseTunnelRecord(stored.tunnel), // store-only, no env source
     ...(stored.voiceCleanupEngine !== undefined ? { voiceCleanupEngine: stored.voiceCleanupEngine } : {}),
@@ -206,6 +226,11 @@ export function parseAppConfig(input: unknown, base: AppConfig = defaultAppConfi
     anthropicApiKey: str(o.anthropicApiKey, base.anthropicApiKey),
     codexApiKey: str(o.codexApiKey, base.codexApiKey),
     cursorApiKey: str(o.cursorApiKey, base.cursorApiKey),
+    whatsappGowaUrl: str(o.whatsappGowaUrl, base.whatsappGowaUrl),
+    whatsappGowaBasicAuth: str(o.whatsappGowaBasicAuth, base.whatsappGowaBasicAuth),
+    whatsappGowaDeviceId: str(o.whatsappGowaDeviceId, base.whatsappGowaDeviceId),
+    whatsappWebhookPort: str(o.whatsappWebhookPort, base.whatsappWebhookPort),
+    whatsappWebhookSecret: str(o.whatsappWebhookSecret, base.whatsappWebhookSecret),
     onboarded: o.onboarded === undefined ? base.onboarded : Boolean(o.onboarded),
     tunnel: parseTunnelRecord(o.tunnel) ?? base.tunnel,
     ...(o.voiceCleanupEngine !== undefined ? { voiceCleanupEngine: str(o.voiceCleanupEngine, base.voiceCleanupEngine ?? "") || undefined } : base.voiceCleanupEngine !== undefined ? { voiceCleanupEngine: base.voiceCleanupEngine } : {}),
@@ -217,7 +242,7 @@ export function parseAppConfig(input: unknown, base: AppConfig = defaultAppConfi
 }
 
 /** Fields that must NEVER be returned over the API. */
-export const SECRET_FIELDS = ["telegramBotToken", "claudeOauthToken", "anthropicApiKey", "codexApiKey", "cursorApiKey"] as const
+export const SECRET_FIELDS = ["telegramBotToken", "claudeOauthToken", "anthropicApiKey", "codexApiKey", "cursorApiKey", "whatsappGowaBasicAuth", "whatsappWebhookSecret"] as const
 
 /**
  * Strip every secret from a config and replace it with a boolean "<x>Configured"
