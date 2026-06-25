@@ -90,7 +90,7 @@ defineExpose({ startRename })
         ? 'bg-card border-border shadow-sm'
         : 'border-transparent hover:bg-card/70 active:bg-card',
       props.reserveMenuSpace ? 'pl-3 pr-9 py-2.5' : 'px-3 py-2.5',
-      status?.kind === 'worktree' && status.level === 'done' ? 'border-l-2 border-l-emerald-500'
+      status?.level === 'done' ? 'border-l-2 border-l-emerald-500'
         : status?.level === 'not-done' ? 'border-l-2 border-l-amber-500' : '',
     ]"
     @click="handleNavigate"
@@ -98,10 +98,10 @@ defineExpose({ startRename })
     <div class="flex items-start gap-3">
       <div class="flex w-5 shrink-0 items-center justify-center self-stretch pt-0.5">
         <Loader2Icon v-if="working" class="size-4 animate-spin text-primary" aria-label="working" />
-        <Check v-else-if="status?.kind === 'worktree' && status.level === 'done'" class="size-4 text-emerald-400" />
-        <GitBranch v-else-if="status?.kind === 'worktree' && status.level === 'not-done'" class="size-4 text-amber-500" />
-        <CloudCheck v-else-if="status?.kind === 'remote' && status.level === 'done'" class="size-4 text-emerald-400" />
-        <Cloud v-else-if="status?.kind === 'remote'" class="size-4 text-amber-500" />
+        <Check v-else-if="status?.kind === 'worktree' && status.level === 'done'" :title="badge?.title" class="size-4 text-emerald-400" />
+        <GitBranch v-else-if="status?.kind === 'worktree' && status.level === 'not-done'" :title="badge?.title" class="size-4 text-amber-500" />
+        <CloudCheck v-else-if="status?.kind === 'remote' && status.level === 'done'" :title="badge?.title" class="size-4 text-emerald-400" />
+        <Cloud v-else-if="status?.kind === 'remote'" :title="badge?.title" class="size-4 text-amber-500" />
         <span v-else class="size-1.5 rounded-full bg-muted-foreground/30" aria-hidden="true" />
       </div>
 
