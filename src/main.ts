@@ -2651,7 +2651,7 @@ async function switchSessionReasoningLevel(sessionId: string, newLevel: string, 
 // so the same routing applies to Telegram and WhatsApp alike.
 const wireInbound = (ch: Channel) => {
 ch.on("inbound", async (msg: InboundMessage) => {
-  log.debug("telegram.inbound", {
+  log.debug(`${ch.name}.inbound`, {
     chat_id: msg.chat_id,
     user_id: msg.user_id,
     text: (msg.text ?? "").slice(0, 80),
@@ -2814,8 +2814,8 @@ ch.on("inbound", async (msg: InboundMessage) => {
   }
 
   log.debug("send_inbound.before", { session: session.name, text: decision.text.slice(0, 80) })
-  // chat_id is namespaced ("telegram:<id>"), so embedding it in the entry id
-  // disambiguates the same telegram message_id arriving in DM vs group.
+  // chat_id is namespaced ("telegram:<id>" / "whatsapp:<jid>"), so embedding it in
+  // the entry id disambiguates the same message_id arriving in DM vs group.
   try {
     messageLog.append(session.id, {
       id: `in:${msg.chat_id}:${msg.message_id}`,

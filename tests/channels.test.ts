@@ -6,6 +6,7 @@ test("no channel configured: returns error", () => {
   expect(r.error).toBeDefined()
   expect(r.error).toContain("MUX_TELEGRAM_BOT_TOKEN")
   expect(r.error).toContain("MUX_WEB_PORT")
+  expect(r.error).toContain("MUX_WHATSAPP_GOWA_URL")
 })
 
 test("telegram only: ok", () => {
