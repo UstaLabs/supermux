@@ -1,5 +1,6 @@
 // src/main.ts
 import { TelegramChannel } from "./channels/telegram"
+import { WhatsAppChannel } from "./channels/whatsapp"
 import { WebChannel } from "./channels/web"
 import { buildProxyPublicUrl } from "./channels/web/proxy"
 import { EMBEDDED_STATIC } from "./channels/web/static-manifest.generated"
@@ -232,6 +233,11 @@ const appConfigEnv = {
   MUX_TELEGRAM_BOT_TOKEN: process.env.MUX_TELEGRAM_BOT_TOKEN,
   MUX_WEB_PUBLIC_URL: process.env.MUX_WEB_PUBLIC_URL,
   MUX_WEB_PORT: process.env.MUX_WEB_PORT,
+  MUX_WHATSAPP_GOWA_URL: process.env.MUX_WHATSAPP_GOWA_URL,
+  MUX_WHATSAPP_GOWA_BASIC_AUTH: process.env.MUX_WHATSAPP_GOWA_BASIC_AUTH,
+  MUX_WHATSAPP_GOWA_DEVICE_ID: process.env.MUX_WHATSAPP_GOWA_DEVICE_ID,
+  MUX_WHATSAPP_WEBHOOK_PORT: process.env.MUX_WHATSAPP_WEBHOOK_PORT,
+  MUX_WHATSAPP_WEBHOOK_SECRET: process.env.MUX_WHATSAPP_WEBHOOK_SECRET,
 }
 const appConfig = settings.getAppConfig(appConfigEnv)
 // Inject stored agent credentials into the broker env (non-clobbering) so every
@@ -478,7 +484,22 @@ let agentRpc: ReturnType<typeof createAgentRpc>
 const telegram: TelegramChannel | undefined = hasTelegram
   ? new TelegramChannel({ token: TG_TOKEN!, fileStore })
   : undefined
-const channels: Record<string, Channel> = telegram ? { telegram } : {}
+const WA_GOWA_URL = appConfig.whatsappGowaUrl || undefined
+const hasWhatsApp = !!WA_GOWA_URL
+const whatsapp: WhatsAppChannel | undefined = hasWhatsApp
+  ? new WhatsAppChannel({
+      gowaUrl: WA_GOWA_URL!,
+      gowaBasicAuth: appConfig.whatsappGowaBasicAuth || undefined,
+      gowaDeviceId: appConfig.whatsappGowaDeviceId || undefined,
+      webhookPort: Number(appConfig.whatsappWebhookPort) || 3001,
+      webhookSecret: appConfig.whatsappWebhookSecret || "secret",
+      fileStore,
+    })
+  : undefined
+const channels: Record<string, Channel> = {
+  ...(telegram ? { telegram } : {}),
+  ...(whatsapp ? { whatsapp } : {}),
+}
 
 // adapters keyed by session UUID (not session name)
 const adapters = new Map<string, AgentAdapter>()
@@ -852,7 +873,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
 
 const webEnv = validateWebEnv(process.env.MUX_WEB_PORT, process.env.MUX_WEB_PUBLIC_URL)
 if (webEnv.error) { log.error("web_env_invalid", { error: webEnv.error }); process.exit(1) }
-const channelCheck = requireAtLeastOneChannel(hasTelegram, webEnv.enabled)
+const channelCheck = requireAtLeastOneChannel(hasTelegram, webEnv.enabled, hasWhatsApp)
 if (channelCheck.error) { log.error("no_channel_configured", { error: channelCheck.error }); process.exit(1) }
 const MUX_WEB_PORT = process.env.MUX_WEB_PORT ? parseInt(process.env.MUX_WEB_PORT, 10) : undefined
 const MUX_WEB_PUBLIC_URL = process.env.MUX_WEB_PUBLIC_URL
@@ -2627,10 +2648,13 @@ async function switchSessionReasoningLevel(sessionId: string, newLevel: string, 
 }
 
 // Wire telegram inbound through routing
-if (telegram) {
-const _tg = telegram  // narrowed local — telegram is TelegramChannel here
-_tg.on("inbound", async (msg: InboundMessage) => {
-  log.debug("telegram.inbound", {
+// Channel-agnostic inbound pipeline — registered for every configured channel.
+// The body only touches Channel-interface methods (ch.send) plus in-scope
+// closures (classifyInbound/handleSlash/deliverInbound/registry/messageLog/…),
+// so the same routing applies to Telegram and WhatsApp alike.
+const wireInbound = (ch: Channel) => {
+ch.on("inbound", async (msg: InboundMessage) => {
+  log.debug(`${ch.name}.inbound`, {
     chat_id: msg.chat_id,
     user_id: msg.user_id,
     text: (msg.text ?? "").slice(0, 80),
@@ -2764,28 +2788,28 @@ _tg.on("inbound", async (msg: InboundMessage) => {
       },
     }
     const reply = await handleSlash(decision, cmdCtx)
-    await _tg.send({ op: "reply", chat_id: msg.chat_id, text: reply.text, disable_notification: false })
+    await ch.send({ op: "reply", chat_id: msg.chat_id, text: reply.text, disable_notification: false })
     return
   }
 
   if (decision.kind === "error") {
-    await _tg.send({ op: "reply", chat_id: msg.chat_id, text: `routing error: ${decision.reason}`, disable_notification: false })
+    await ch.send({ op: "reply", chat_id: msg.chat_id, text: `routing error: ${decision.reason}`, disable_notification: false })
     return
   }
 
   // session route
   const session = registry.get(decision.id)
   if (!session) {
-    await _tg.send({ op: "reply", chat_id: msg.chat_id, text: `no such session: ${decision.name}`, disable_notification: false })
+    await ch.send({ op: "reply", chat_id: msg.chat_id, text: `no such session: ${decision.name}`, disable_notification: false })
     return
   }
 
   // Lazy resume: if the session is suspended, re-spawn it before delivering the message
   if (session.status === "suspended") {
-    await _tg.send({ op: "reply", chat_id: msg.chat_id, text: `Resuming session "${session.name}"...`, disable_notification: true })
+    await ch.send({ op: "reply", chat_id: msg.chat_id, text: `Resuming session "${session.name}"...`, disable_notification: true })
     const resumed = await resumeSuspendedSession(session)
     if (!resumed) {
-      await _tg.send({ op: "reply", chat_id: msg.chat_id, text: `Failed to resume suspended session "${session.name}". Try /kill and re-spawn.`, disable_notification: false })
+      await ch.send({ op: "reply", chat_id: msg.chat_id, text: `Failed to resume suspended session "${session.name}". Try /kill and re-spawn.`, disable_notification: false })
       return
     }
   } else if ((session.agent ?? "claude") === "claude" && !registry.get(session.id)?.connected) {
@@ -2793,14 +2817,14 @@ _tg.on("inbound", async (msg: InboundMessage) => {
   }
 
   log.debug("send_inbound.before", { session: session.name, text: decision.text.slice(0, 80) })
-  // chat_id is namespaced ("telegram:<id>"), so embedding it in the entry id
-  // disambiguates the same telegram message_id arriving in DM vs group.
+  // chat_id is namespaced ("telegram:<id>" / "whatsapp:<jid>"), so embedding it in
+  // the entry id disambiguates the same message_id arriving in DM vs group.
   try {
     messageLog.append(session.id, {
       id: `in:${msg.chat_id}:${msg.message_id}`,
       ts: msg.ts,
       direction: "inbound",
-      channel: "telegram",
+      channel: ch.name,
       chat_id: msg.chat_id,
       message_id: msg.message_id,
       text: decision.text,
@@ -2827,7 +2851,7 @@ _tg.on("inbound", async (msg: InboundMessage) => {
     const r = await deliverInbound(session.id, decision.text, meta)
     if (!r.ok) {
       log.warn("send_inbound.adapter_missing", { session: session.name, agent: session.agent ?? "claude" })
-      await _tg.send({
+      await ch.send({
         op: "reply", chat_id: msg.chat_id,
         text: `⚠ ${session.agent ?? "claude"} session "${session.name}" is not responding (adapter disconnected). Try /kill + re-spawn.`,
         disable_notification: false,
@@ -2839,7 +2863,9 @@ _tg.on("inbound", async (msg: InboundMessage) => {
     log.error("send_inbound.error", { session: session.name, err: err?.message ?? String(err) })
   }
 })
-} // end if (telegram)
+}
+if (telegram) wireInbound(telegram)
+if (whatsapp) wireInbound(whatsapp)
 
 // Fan log activity to web subscribers — listeners receive sessionId (UUID),
 // look up session name for display
@@ -3246,6 +3272,7 @@ const modelRefreshInterval = setInterval(() => {
 // Telegram polling can block on a 409 conflict (another poller still draining);
 // start it LAST and don't let its retry loop gate boot-critical wiring above.
 if (telegram) await telegram.start()
+if (whatsapp) await whatsapp.start()
 
 let shuttingDown = false
 async function gracefulShutdown(signal: string) {
@@ -3273,6 +3300,9 @@ async function gracefulShutdown(signal: string) {
   if (telegram) try {
     await telegram.stop()
   } catch (err: any) { log.warn("telegram_stop_failed", { err: err?.message }) }
+  if (whatsapp) try {
+    await whatsapp.stop()
+  } catch (err: any) { log.warn("whatsapp_stop_failed", { err: err?.message ?? String(err) }) }
   try {
     supervisor.stop()
   } catch (err: any) { log.warn("supervisor_stop_failed", { err: err?.message }) }
