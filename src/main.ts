@@ -3269,10 +3269,12 @@ const modelRefreshInterval = setInterval(() => {
   }
 }
 
-// Telegram polling can block on a 409 conflict (another poller still draining);
-// start it LAST and don't let its retry loop gate boot-critical wiring above.
-if (telegram) await telegram.start()
+// Telegram long-polling (grammy bot.start()) does not resolve until shutdown, so it
+// MUST be the last awaited call at boot — anything awaited after it never runs.
+// WhatsApp's start() is quick (bind webhook + one status probe), so start it BEFORE
+// the Telegram gate; otherwise the channel silently never comes up.
 if (whatsapp) await whatsapp.start()
+if (telegram) await telegram.start()
 
 let shuttingDown = false
 async function gracefulShutdown(signal: string) {
