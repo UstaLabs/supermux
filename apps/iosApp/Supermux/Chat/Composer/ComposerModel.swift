@@ -3,6 +3,7 @@ import SwiftUI
 import Shared
 import PhotosUI
 import UniformTypeIdentifiers
+import UIKit
 
 /// The composer's shared brain: draft + staged attachments + the mic/dictation pipeline +
 /// slash-command parsing. Lifted out of `ChatPane` so the new-session launcher shares the
@@ -110,6 +111,52 @@ final class ComposerModel {
         if let data = img.jpegData(compressionQuality: 0.85) {
             pending.append(PendingAttachment(data: data, filename: "photo-\(pending.count + 1).jpg", mime: "image/jpeg"))
         }
+    }
+
+    // MARK: - Paste
+    /// Stage whatever is pasteable on the system clipboard as attachment(s), mirroring the web
+    /// composer's paste handler (`PromptInputTextarea.handlePaste`): images first — the common
+    /// "copied a screenshot / photo" case — otherwise any copied file data (e.g. a PDF) via item
+    /// providers. Plain text and URLs are skipped here so the text field keeps pasting those as
+    /// text; they never reach this path. Reuses the same `pending` staging as the +-menu pickers.
+    func pasteClipboard(_ pasteboard: UIPasteboard = .general) async {
+        if let images = pasteboard.images, !images.isEmpty {
+            for image in images { addPastedImage(image) }
+            return
+        }
+        for provider in pasteboard.itemProviders {
+            await addPastedFile(provider)
+        }
+    }
+
+    /// Stage a single pasted image as a JPEG attachment. Split out (and non-private) so the
+    /// staging/filename logic is unit-testable without a live `UIPasteboard`.
+    func addPastedImage(_ image: UIImage) {
+        guard let data = image.jpegData(compressionQuality: 0.9) else { return }
+        pending.append(PendingAttachment(data: data,
+                                         filename: "pasted-\(pending.count + 1).jpg",
+                                         mime: "image/jpeg"))
+    }
+
+    /// Stage a pasted non-image file (e.g. a copied PDF) by loading the first non-text, non-URL
+    /// content type the provider advertises. Text/URL identifiers are skipped so they keep
+    /// pasting as text; file-URL references (Files-app copies) fall through to the +-menu picker.
+    private func addPastedFile(_ provider: NSItemProvider) async {
+        guard let typeId = provider.registeredTypeIdentifiers.first(where: {
+            guard let type = UTType($0) else { return false }
+            return !type.conforms(to: .text) && !type.conforms(to: .url)
+        }), let utType = UTType(typeId) else { return }
+        let data: Data? = await withCheckedContinuation { continuation in
+            provider.loadDataRepresentation(forTypeIdentifier: typeId) { data, _ in
+                continuation.resume(returning: data)
+            }
+        }
+        guard let data else { return }
+        let ext = utType.preferredFilenameExtension ?? "dat"
+        let mime = utType.preferredMIMEType ?? "application/octet-stream"
+        pending.append(PendingAttachment(data: data,
+                                         filename: "pasted-\(pending.count + 1).\(ext)",
+                                         mime: mime))
     }
 
     // MARK: - Mic / dictation
