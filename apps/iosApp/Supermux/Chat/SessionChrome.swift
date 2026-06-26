@@ -69,6 +69,12 @@ import Shared
 
     /// Subtitle under the title: branch + sync status when in a repo, else the workdir.
     var navSubtitle: String {
+        // Read the live git from the broker (our stored `session` is only refreshed on
+        // load(for:), so reading it directly would go stale on session_git deltas — parity with ChatView).
+        let lite = broker.sessions.first { $0.id == session.id }?.git ?? session.git
+        if let lite, let badge = GitBadgeKt.gitBadge(git: lite), badge.kind == .base {
+            return lite.compareRef.isEmpty ? badge.text : "\(lite.compareRef) \(badge.text)"
+        }
         if let g = git, g.isRepo, let b = g.branch {
             if g.upstream == nil { return "\(b) · not published" }
             var s = b

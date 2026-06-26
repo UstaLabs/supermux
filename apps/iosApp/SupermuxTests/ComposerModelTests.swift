@@ -1,6 +1,7 @@
 // apps/iosApp/SupermuxTests/ComposerModelTests.swift
 import XCTest
 import Shared
+import UIKit
 @testable import Supermux
 
 /// Unit tests for `ComposerModel`'s pure logic (draft, slash parsing, consume). The mic /
@@ -81,5 +82,77 @@ final class ComposerModelTests: XCTestCase {
         m.applyCommand(cmd("stop", action: ControlAction(kind: "stop", muted: nil)))
         XCTAssertEqual(m.draft, "stop it ")          // token removed, leading space kept
         XCTAssertEqual(m.controlCommandToHandle?.name, "stop")
+    }
+
+    // MARK: - Paste staging
+
+    /// A real 2×2 raster so `jpegData(...)` returns non-nil (SF Symbols can't encode to JPEG).
+    private func tinyImage() -> UIImage {
+        UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).image { ctx in
+            UIColor.red.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
+        }
+    }
+
+    func testAddPastedImageStagesJpeg() {
+        let m = model()
+        m.addPastedImage(tinyImage())
+        XCTAssertEqual(m.pending.count, 1)
+        XCTAssertEqual(m.pending.first?.mime, "image/jpeg")
+        XCTAssertEqual(m.pending.first?.filename, "pasted-1.jpg")
+        XCTAssertFalse(m.pending.first?.data.isEmpty ?? true)
+    }
+
+    func testPastedImagesIncrementFilenames() {
+        let m = model()
+        m.addPastedImage(tinyImage())
+        m.addPastedImage(tinyImage())
+        XCTAssertEqual(m.pending.map(\.filename), ["pasted-1.jpg", "pasted-2.jpg"])
+    }
+
+    /// Pasted-image numbering counts existing staged items (parity with the +-menu pickers).
+    func testPastedImageNumberingFollowsExistingPending() {
+        let m = model()
+        m.addCameraImage(tinyImage())           // photo-1.jpg
+        m.addPastedImage(tinyImage())           // pasted-2.jpg
+        XCTAssertEqual(m.pending.count, 2)
+        XCTAssertEqual(m.pending.last?.filename, "pasted-2.jpg")
+    }
+
+    func testPastedImageMakesComposerSubmittable() {
+        let m = model()
+        XCTAssertFalse(m.canSubmit)
+        m.addPastedImage(tinyImage())
+        XCTAssertTrue(m.canSubmit)
+    }
+
+    // MARK: - Paste interception (PasteTextView — the WhatsApp-style in-box paste)
+
+    func testPasteTextViewStagesImageInsteadOfInserting() {
+        let pb = UIPasteboard.withUniqueName()
+        pb.image = tinyImage()
+        let tv = PasteTextView()
+        tv.pasteboard = pb
+        var staged = false
+        tv.onPasteAttachment = { staged = true; return true }
+        // Edit-menu "Paste" must be enabled for an image clipboard…
+        XCTAssertTrue(tv.canPerformAction(#selector(UIResponder.paste(_:)), withSender: nil))
+        // …and pasting stages it as an attachment rather than inserting into the text.
+        tv.paste(nil)
+        XCTAssertTrue(staged)
+        XCTAssertEqual(tv.text, "")
+        UIPasteboard.remove(withName: pb.name)
+    }
+
+    func testPasteTextViewLetsPlainTextFallThrough() {
+        let pb = UIPasteboard.withUniqueName()
+        pb.string = "hello"
+        let tv = PasteTextView()
+        tv.pasteboard = pb
+        var staged = false
+        tv.onPasteAttachment = { staged = true; return true }
+        tv.paste(nil)                 // no image/PDF → must NOT stage; falls through to text paste
+        XCTAssertFalse(staged)
+        UIPasteboard.remove(withName: pb.name)
     }
 }

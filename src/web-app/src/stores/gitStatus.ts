@@ -8,6 +8,7 @@ export interface GitLiteStatus {
   behind: number
   dirty: number
   unpublished?: boolean
+  touched?: boolean
   computedAt: number
 }
 

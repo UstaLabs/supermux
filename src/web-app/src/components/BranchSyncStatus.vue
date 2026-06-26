@@ -35,9 +35,9 @@ const showState = computed(() => !!base.value || (!!status.value?.hasRemote && !
 const stateLabel = computed(() => {
   if (base.value) {
     const a = base.value.ahead, b = base.value.behind
-    if (a && b) return `↑${a} ↓${b}`
-    if (a) return `↑${a}`
-    if (b) return `↓${b}`
+    if (a && b) return `+${a} −${b}`
+    if (a) return `+${a}`
+    if (b) return `−${b}`
     return "✓"
   }
   if (!published.value) return "not published"
@@ -146,6 +146,7 @@ const itemClass =
     <DropdownMenu v-if="showState" v-model:open="syncOpen">
       <DropdownMenuTrigger as-child>
         <button type="button" :class="segBtn" class="shrink-0" aria-label="Branch sync" :title="stateTitle">
+          <GitBranch v-if="base" class="size-3 shrink-0" />
           <span class="opacity-80">· {{ stateLabel }}</span>
           <Loader2Icon v-if="busy" class="size-3 shrink-0 animate-spin" />
         </button>

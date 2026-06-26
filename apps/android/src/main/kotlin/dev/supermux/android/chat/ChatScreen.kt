@@ -1,6 +1,8 @@
 package dev.supermux.android.chat
 
 import android.Manifest
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -17,7 +19,11 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.content.TransferableContent
+import androidx.compose.foundation.content.consume
+import androidx.compose.foundation.content.contentReceiver
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -115,9 +121,11 @@ import dev.supermux.android.theme.Space
 import dev.supermux.android.theme.rememberHaptics
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
+import dev.supermux.proto.GitBadgeKind
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
+import dev.supermux.proto.gitBadge
 
 enum class SessionPanel { Chat, Native, Editor, Terminal, Display }
 
@@ -137,7 +145,7 @@ private fun timelineItemKey(item: TimelineItem): String = when (item) {
     is TimelineItem.Act -> "a:${item.event.seq ?: -1}:${item.event.ts}"
 }
 
-@OptIn(ExperimentalSharedTransitionApi::class)
+@OptIn(ExperimentalSharedTransitionApi::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
     session: SessionInfo,
@@ -242,6 +250,23 @@ fun ChatScreen(
                 pendingAttachments.removeAt(idx)
             }
         }
+    }
+
+    // Clipboard helpers for paste-to-attach (web parity). Reading the clip *description* (mime
+    // types) is cheap and avoids the OS "pasted from clipboard" toast; only reading the clip data
+    // on the actual paste shows it, which is expected for a user-initiated action.
+    fun clipboardHasImage(): Boolean {
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return false
+        val desc = cm.primaryClipDescription ?: return false
+        return (0 until desc.mimeTypeCount).any { desc.getMimeType(it).startsWith("image/") }
+    }
+
+    fun clipboardImageUris(): List<Uri> {
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return emptyList()
+        val clip = cm.primaryClip ?: return emptyList()
+        return (0 until clip.itemCount)
+            .mapNotNull { clip.getItemAt(it).uri }
+            .filter { context.contentResolver.getType(it)?.startsWith("image/") == true }
     }
 
     // Files: system document picker (any mime).
@@ -527,6 +552,30 @@ fun ChatScreen(
                         style = MaterialTheme.typography.labelMedium,
                         maxLines = 1,
                     )
+                    val badge = gitBadge(session.git)
+                    if (badge != null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
+                            if (badge.kind == GitBadgeKind.BASE) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_git_branch),
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(12.dp),
+                                )
+                            }
+                            val label = if (badge.kind == GitBadgeKind.BASE && badge.compareRef.isNotEmpty())
+                                "${badge.compareRef} ${badge.text}" else badge.text
+                            Text(
+                                text = label,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                            )
+                        }
+                    }
                 }
 
                 // Agent pill (only if non-idle)
@@ -1083,7 +1132,21 @@ fun ChatScreen(
                         keyboardActions = KeyboardActions(onSend = { doSend() }),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .testTag("chat_composer"),
+                            .testTag("chat_composer")
+                            // Paste/drag a copied image straight into the box (web parity). Text
+                            // and non-image content falls through to the field's normal handling.
+                            .contentReceiver { transferable ->
+                                transferable.consume { item ->
+                                    val uri = item.uri
+                                    if (uri != null &&
+                                        context.contentResolver.getType(uri)?.startsWith("image/") == true) {
+                                        scope.launch { stageFromUri(uri) }
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                }
+                            },
                     )
                 }
 
@@ -1147,6 +1210,20 @@ fun ChatScreen(
                             expanded = attachMenu,
                             onDismissRequest = { attachMenu = false },
                         ) {
+                            // Paste — only offered when the clipboard actually holds an image.
+                            if (clipboardHasImage()) {
+                                DropdownMenuItem(
+                                    text = { Text("Paste") },
+                                    leadingIcon = {
+                                        Icon(painterResource(R.drawable.ic_copy), null, modifier = Modifier.size(18.dp))
+                                    },
+                                    modifier = Modifier.testTag("attach_menu_paste"),
+                                    onClick = {
+                                        attachMenu = false
+                                        scope.launch { clipboardImageUris().forEach { stageFromUri(it) } }
+                                    },
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("Photos") },
                                 leadingIcon = {

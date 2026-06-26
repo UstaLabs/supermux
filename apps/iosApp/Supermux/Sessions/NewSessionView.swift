@@ -202,13 +202,16 @@ struct NewSessionView: View {
             if !matches.isEmpty {
                 SlashMenu(matches: matches, showsActionGlyph: false) { composer.applyCommand($0) }
             }
-            HStack(spacing: 16) {
+            // Pickers get their own row so "Claude" / a long model name never get squeezed
+            // into vertical letter-columns (the action buttons used to share this row and
+            // overflow it on a narrow iPhone).
+            HStack(spacing: 12) {
                 Menu {
                     ForEach(agents, id: \.self) { a in Button(a.capitalized) { agent = a } }
                 } label: {
                     HStack(spacing: 5) {
                         AgentLogo(agent: agent, size: 18)
-                        Text(agent.capitalized).font(.subheadline.weight(.medium))
+                        Text(agent.capitalized).font(.subheadline.weight(.medium)).lineLimit(1)
                         Image(systemName: "chevron.down").font(.caption2)
                     }.foregroundStyle(.primary)
                 }
@@ -220,10 +223,14 @@ struct NewSessionView: View {
                     ForEach(models, id: \.id) { m in Button(m.displayName) { model = m.id } }
                 } label: {
                     HStack(spacing: 4) {
-                        Text(modelLabel).font(.subheadline.weight(.medium))
+                        Text(modelLabel).font(.subheadline.weight(.medium)).lineLimit(1)
                         Image(systemName: "chevron.down").font(.caption2)
                     }.foregroundStyle(.secondary)
                 }
+                Spacer(minLength: 0)
+            }
+            // Action row — attach · mic · send.
+            HStack(spacing: 16) {
                 AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera)
                 // Hidden while recording/dictating (the RecordingBar above owns stop/cancel) —
                 // parity with the original launcher + the chat composer.

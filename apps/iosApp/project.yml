@@ -19,8 +19,8 @@ settings:
     TARGETED_DEVICE_FAMILY: "1,2"
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: "57L7J9XA89"
-    MARKETING_VERSION: "1.0"
-    CURRENT_PROJECT_VERSION: "42"
+    MARKETING_VERSION: "1.2"
+    CURRENT_PROJECT_VERSION: "52"
     # Gradle pre-build phase needs filesystem access outside the sandbox.
     ENABLE_USER_SCRIPT_SANDBOXING: "NO"
   # App Store distribution signing is Release-only so Debug/simulator builds stay automatic.
