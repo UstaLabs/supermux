@@ -7,12 +7,12 @@ import UniformTypeIdentifiers
 /// iOS: intercept a PASTE of an image/PDF (long-press "Paste" or ⌘V) and stage it as an attachment,
 /// exactly how WhatsApp/Messages accept a pasted photo. Plain-text paste falls through to normal
 /// behavior. Mirrors the previous `TextField`: bound draft, placeholder, auto-grow up to `maxLines`,
-/// focus bridged to `@FocusState`, hardware Return = send / Shift+Return = newline.
+/// focus mirrored via a plain `Bool` binding, hardware Return = send / Shift+Return = newline.
 struct ComposerInput: UIViewRepresentable {
     @Binding var text: String
     var placeholder: String
     var maxLines: Int
-    var isFocused: FocusState<Bool>.Binding
+    @Binding var isFocused: Bool
     var canSubmit: Bool
     var onSubmit: () -> Void
     /// Invoked on a non-text paste; returns true if it staged something (so the view skips the
@@ -47,9 +47,9 @@ struct ComposerInput: UIViewRepresentable {
         tv.placeholderLabel.isHidden = !text.isEmpty
         tv.maxHeight = ceil((tv.font?.lineHeight ?? 20) * CGFloat(maxLines))
 
-        // Focus bridge — deferred so we never mutate @FocusState *during* a SwiftUI update
+        // Focus bridge — deferred so we never mutate the focus binding *during* a SwiftUI update
         // (which becomeFirstResponder → textViewDidBeginEditing would do synchronously).
-        let want = isFocused.wrappedValue
+        let want = isFocused
         if want != tv.isFirstResponder {
             DispatchQueue.main.async {
                 if want, !tv.isFirstResponder { tv.becomeFirstResponder() }
@@ -81,10 +81,10 @@ struct ComposerInput: UIViewRepresentable {
             }
         }
         func textViewDidBeginEditing(_ textView: UITextView) {
-            if !parent.isFocused.wrappedValue { parent.isFocused.wrappedValue = true }
+            if !parent.isFocused { parent.isFocused = true }
         }
         func textViewDidEndEditing(_ textView: UITextView) {
-            if parent.isFocused.wrappedValue { parent.isFocused.wrappedValue = false }
+            if parent.isFocused { parent.isFocused = false }
         }
         func handleHardwareReturn() {
             // Parity with ComposerEnterAction: Enter sends when there's something to send,

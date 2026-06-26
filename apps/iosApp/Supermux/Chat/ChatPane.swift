@@ -30,7 +30,7 @@ struct ChatPane: View {
     @State private var showPhotos = false
     @State private var showFiles = false
     @State private var showCamera = false
-    @FocusState private var composing: Bool
+    @State private var composing = false
 
     // MARK: - Model / reasoning sheet state
     @State private var modelSheet = false
