@@ -30,8 +30,27 @@ struct SessionsListView: View {
                     Text("No active sessions").font(.footnote).foregroundStyle(.secondary)
                 }
             } else {
-                List(broker.orderedSessions, id: \.id) { session in
-                    NavigationLink(value: session.id) { SessionRow(session: session) }
+                List {
+                    if broker.needsYouCount + broker.workingCount > 0 {
+                        Text(glanceText)
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .listRowBackground(Color.clear)
+                    }
+                    ForEach(broker.orderedSessions, id: \.id) { session in
+                        NavigationLink(value: session.id) { WatchSessionRow(session: session) }
+                            .swipeActions(edge: .trailing) {
+                                Button { broker.send(session.id, "continue") } label: {
+                                    Label("Continue", systemImage: "arrowshape.right.fill")
+                                }.tint(.green)
+                                Button { broker.interrupt(session.id) } label: {
+                                    Label("Stop", systemImage: "stop.fill")
+                                }.tint(.orange)
+                                Button { broker.setMute(session.id, !(session.mute ?? false)) } label: {
+                                    Label((session.mute ?? false) ? "Unmute" : "Mute",
+                                          systemImage: (session.mute ?? false) ? "bell.slash" : "bell")
+                                }.tint(.gray)
+                            }
+                    }
                 }
             }
         }
@@ -52,22 +71,12 @@ struct SessionsListView: View {
             }
         }
     }
-}
 
-private struct SessionRow: View {
-    let session: SessionInfo
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill((session.connected ?? false) ? Color.green : Color.secondary)
-                .frame(width: 8, height: 8)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(session.name).font(.headline).lineLimit(1)
-                Text(session.agent ?? "").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 2)
+    /// "2 need you · 1 working", omitting zero parts.
+    private var glanceText: String {
+        var parts: [String] = []
+        if broker.needsYouCount > 0 { parts.append("\(broker.needsYouCount) need you") }
+        if broker.workingCount > 0 { parts.append("\(broker.workingCount) working") }
+        return parts.joined(separator: " · ")
     }
 }

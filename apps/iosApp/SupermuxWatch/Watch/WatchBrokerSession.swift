@@ -69,12 +69,49 @@ final class WatchBrokerSession {
         }
     }
 
-    /// Active sessions in the broker's order.
-    var orderedSessions: [SessionInfo] { sessions }
+    /// Flat triage order: needs-you (finished+unseen) → working → rest; recency within each.
+    var orderedSessions: [SessionInfo] {
+        sessions.sorted { a, b in
+            let ba = attentionBucket(phase: a.phase, unread: a.unread ?? false)
+            let bb = attentionBucket(phase: b.phase, unread: b.unread ?? false)
+            if ba != bb { return ba < bb }
+            return tsValue(a.lastTs) > tsValue(b.lastTs)
+        }
+    }
+
+    /// Glance-header counts.
+    var needsYouCount: Int { sessions.filter { !isWorking($0.phase) && ($0.unread ?? false) }.count }
+    var workingCount: Int { sessions.filter { isWorking($0.phase) }.count }
+
+    /// Mute/unmute a session (POST /sessions/{id}/mute).
+    func setMute(_ id: String, _ muted: Bool) {
+        Task { [transport] in
+            let body = try? JSONSerialization.data(withJSONObject: ["muted": muted])
+            _ = try? await transport.request(method: "POST", path: "/sessions/\(id)/mute",
+                                             body: body, contentType: "application/json")
+        }
+    }
+
+    /// Interrupt a running agent (POST /sessions/{id}/interrupt).
+    func interrupt(_ id: String) {
+        Task { [transport] in
+            _ = try? await transport.request(method: "POST", path: "/sessions/\(id)/interrupt",
+                                             body: nil, contentType: nil)
+        }
+    }
+
+    /// Clear unread on the server (POST /sessions/{id}/read).
+    func markRead(_ id: String) {
+        Task { [transport] in
+            _ = try? await transport.request(method: "POST", path: "/sessions/\(id)/read",
+                                             body: nil, contentType: nil)
+        }
+    }
 
     /// Open a session's detail: poll its messages, and fetch once immediately.
     func openSession(_ id: String) {
         activeSession = id
+        markRead(id)
         Task {
             if let log = try? await get("/sessions/\(id)/messages", [LogEntry].self) {
                 messages[id] = merge(server: log, sessionId: id)
