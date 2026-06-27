@@ -47,6 +47,13 @@ class NotificationService: UNNotificationServiceExtension {
             if let note = Self.parseNotification(plaintext) {
                 best.title = note.title
                 best.body = note.body
+                // Carry the session id through to the TAP handler so the app opens the
+                // right chat — the original userInfo only holds the encrypted blob.
+                if let sid = note.sessionId, !sid.isEmpty {
+                    var info = best.userInfo
+                    info["sm_session_id"] = sid
+                    best.userInfo = info
+                }
                 NSLog("[supermux NSE] decrypted ok — title=%{public}@ body=%{public}@", note.title, note.body)
                 // Record the last decrypted notification in the shared App Group container
                 // so the host app can read what was delivered (and so the decrypt can be
@@ -84,7 +91,7 @@ class NotificationService: UNNotificationServiceExtension {
 
     // MARK: - Payload parsing (mirrors Android `PushRouter.parseNotification`)
 
-    private struct ParsedNotification { let title: String; let body: String }
+    private struct ParsedNotification { let title: String; let body: String; let sessionId: String? }
 
     /// Parse the decrypted broker `PushPayload` JSON `{session, sessionId?, text?, kind?}`
     /// into a renderable (title, body). `session` is the title; `text` the body, falling
@@ -94,7 +101,8 @@ class NotificationService: UNNotificationServiceExtension {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let session = obj["session"] as? String else { return nil }
         let body = (obj["text"] as? String) ?? mediaLabel(obj["kind"] as? String)
-        return ParsedNotification(title: session, body: body)
+        let sessionId = obj["sessionId"] as? String
+        return ParsedNotification(title: session, body: body, sessionId: sessionId)
     }
 
     private static func mediaLabel(_ kind: String?) -> String {
