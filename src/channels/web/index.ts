@@ -1614,6 +1614,12 @@ export class WebChannel implements Channel {
       this.broadcastToAll({ type: "session_state", session: id, mute: !!body.muted })
       return this.json({ ok: true })
     }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/read$/)) {
+      // The watch (no WS, so no `viewing` frame) clears unread on open via this route.
+      const id = decodeURIComponent(path.split("/")[2]!)
+      this.opts.markRead?.(id)   // advances last_read_at + broadcasts session_read (main.ts:1121)
+      return this.json({ ok: true })
+    }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/interrupt$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       if (!this.opts.interruptSession) return this.json({ error: "not configured" }, 503)
