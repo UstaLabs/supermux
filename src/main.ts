@@ -120,6 +120,7 @@ import { ActivityStore } from "./core/session-manager/activity-store"
 import { AgentStateStore } from "./core/session-manager/agent-state-store"
 import { TranscriptTailer } from "./core/agents/claude/transcript-tailer"
 import { claudeTranscriptPath } from "./core/agents/claude/transcript-path"
+import { renderTranscript } from "./core/search/transcript-render"
 import { normalizeToolName } from "./core/agents/tool-normalize"
 import { gcOrphanAgentHomes, reclaimCursorHomes } from "./core/agents/shared-runtime"
 import { CuratorScheduler } from "./core/curator/scheduler"
@@ -2234,6 +2235,28 @@ const server = await startSocketServer({
           const limit = typeof op.args?.limit === "number" ? op.args.limit : 10
           const includePersonal = s?.role === "personal_assistant"
           return { ok: true, value: searchStore.searchKnowledge(q, { includePersonal, limit }) }
+        }
+        case "find_sessions": {
+          const q = stringArg(op.args, "query")
+          const limit = typeof op.args?.limit === "number" ? op.args.limit : 10
+          return { ok: true, value: searchStore.searchSessions(q, {
+            project: typeof op.args?.project === "string" ? op.args.project : undefined,
+            since: typeof op.args?.since === "string" ? op.args.since : undefined,
+            agent: typeof op.args?.agent === "string" ? op.args.agent : undefined,
+            limit,
+          }) }
+        }
+        case "read_session": {
+          const id = stringArg(op.args, "session_id")
+          const row = db.query("SELECT workdir, agent, agent_session_id FROM sessions WHERE id = ? AND internal = 0").get(id) as { workdir: string; agent: string; agent_session_id: string | null } | null
+          if (!row) return { ok: false, error: "no such session" }
+          if (row.agent !== "claude" || !row.agent_session_id) {
+            return { ok: true, value: { transcript: false, note: "no JSONL transcript for this agent; use the broker message history", messages: messageLog.get(id, 200) } }
+          }
+          const includeToolCalls = op.args?.include_tool_calls !== false
+          const grep = typeof op.args?.grep === "string" ? op.args.grep : undefined
+          const text = renderTranscript(claudeTranscriptPath(row.workdir, row.agent_session_id), { includeToolCalls, grep })
+          return { ok: true, value: { transcript: true, session_id: id, text } }
         }
         case "expose_port": {
           if (!s) return { ok: false, error: "unknown session" }

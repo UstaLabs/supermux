@@ -71,6 +71,24 @@ const ORCHESTRATION_TOOLS = [
       required: ["query"],
     },
   },
+  {
+    name: "find_sessions",
+    description: "Find past agent sessions by what was discussed in them. Returns ranked sessions with id, name, workdir, agent, dates and a transcript_path. Filters: project (workdir), since (ISO), agent.",
+    inputSchema: {
+      type: "object",
+      properties: { query: { type: "string" }, project: { type: "string" }, since: { type: "string" }, agent: { type: "string" }, limit: { type: "number" } },
+      required: ["query"],
+    },
+  },
+  {
+    name: "read_session",
+    description: "Read a past session's full transcript by its session id (from find_sessions). Renders user/assistant text plus tool calls. Options: include_tool_calls (default true), grep (filter lines), to inspect how a session did something.",
+    inputSchema: {
+      type: "object",
+      properties: { session_id: { type: "string" }, include_tool_calls: { type: "boolean" }, grep: { type: "string" } },
+      required: ["session_id"],
+    },
+  },
 ]
 
 export const RPC_TOOLS = [
