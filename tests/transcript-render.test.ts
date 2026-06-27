@@ -34,3 +34,17 @@ test("grep filters to matching lines; missing file returns a marker", () => {
   expect(renderTranscript(p, { includeToolCalls: true, grep: "bug" })).not.toContain("On it.")
   expect(renderTranscript("/no/such.jsonl", {})).toContain("(no transcript")
 })
+
+test("skips malformed lines (null, numbers, junk) without aborting the transcript", () => {
+  const p = join(mkdtempSync(join(tmpdir(), "mux-tx-")), "t.jsonl")
+  const lines = [
+    "null", // valid JSON, but null — must not throw on obj.type
+    "42",
+    "[1,2,3]",
+    "not json at all",
+    JSON.stringify({ type: "user", message: { role: "user", content: "after the junk" }, timestamp: "2026-06-26T10:00:00.000Z" }),
+  ]
+  writeFileSync(p, lines.join("\n") + "\n")
+  const text = renderTranscript(p, { includeToolCalls: true })
+  expect(text).toContain("USER: after the junk")
+})

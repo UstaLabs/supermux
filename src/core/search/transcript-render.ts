@@ -17,7 +17,7 @@ export function renderTranscript(path: string, opts: RenderOpts): string {
     if (!line) continue
     let obj: any
     try { obj = JSON.parse(line) } catch { continue }
-    if (obj.type !== "assistant" && obj.type !== "user") continue
+    if (obj?.type !== "assistant" && obj?.type !== "user") continue
     const content = obj?.message?.content
     if (typeof content === "string") {
       if (content.trim()) out.push(`USER: ${content.trim()}`)
