@@ -26,6 +26,7 @@
 //  (Phase E). The handler is written correctly regardless.
 //
 
+import Combine
 import Foundation
 import Shared
 import UIKit
@@ -140,6 +141,14 @@ final class PushManager: NSObject {
     }
 }
 
+/// Routes a tapped push to the right chat. Set by the notification tap handler
+/// (`didReceive response`), observed by `RootView` to drive session selection.
+@MainActor final class PushRouter: ObservableObject {
+    static let shared = PushRouter()
+    @Published var pendingSessionId: String?
+    private init() {}
+}
+
 /// UIKit application delegate, adapted into the SwiftUI lifecycle via
 /// `@UIApplicationDelegateAdaptor`. Forwards push callbacks to `PushManager`.
 final class PushAppDelegate: NSObject, UIApplicationDelegate {
@@ -178,5 +187,14 @@ extension PushAppDelegate: UNUserNotificationCenterDelegate {
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         [.banner, .sound, .badge]
+    }
+
+    /// User TAPPED a notification → open the session it was about. The NSE stashed the
+    /// session id under `sm_session_id` in the decrypted notification's userInfo.
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse) async {
+        let info = response.notification.request.content.userInfo
+        guard let id = info["sm_session_id"] as? String, !id.isEmpty else { return }
+        await MainActor.run { PushRouter.shared.pendingSessionId = id }
     }
 }

@@ -1,5 +1,6 @@
 import SwiftUI
 import Shared
+import Combine
 
 /// Adaptive shell: `NavigationSplitView` gives iPad sidebar+detail and folds to a
 /// stack on iPhone. Session selection drives the chat (detail); the launcher and
@@ -75,6 +76,14 @@ struct RootView: View {
         }
         .fullScreenCover(item: $debugArchived) { item in
             NavigationStack { ArchivedChatView(broker: broker, archived: item.dto) }
+        }
+        .onReceive(PushRouter.shared.$pendingSessionId) { id in
+            // A tapped push → open that session. Setting `selected` resolves once the
+            // session loads; the default-selection task is guarded on `selected == nil`,
+            // so it won't override this.
+            guard let id else { return }
+            selected = id
+            PushRouter.shared.pendingSessionId = nil
         }
     }
 
