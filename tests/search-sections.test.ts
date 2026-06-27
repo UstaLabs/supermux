@@ -10,12 +10,12 @@ test("splits markdown into heading/body sections, ignoring frontmatter", () => {
   ].join("\n")
   const secs = splitSections(md)
   expect(secs.map((s) => s.heading)).toEqual(["infra", "TTS default (2026-01-01)", "Deploy (2026-02-02)"])
-  expect(secs[1].body).toContain("edge tts")
+  expect(secs[1]!.body).toContain("edge tts")
 })
 
 test("handles a file with no headings as one section", () => {
   const secs = splitSections("just a body, no headings")
   expect(secs.length).toBe(1)
-  expect(secs[0].heading).toBe("")
-  expect(secs[0].body).toContain("just a body")
+  expect(secs[0]!.heading).toBe("")
+  expect(secs[0]!.body).toContain("just a body")
 })

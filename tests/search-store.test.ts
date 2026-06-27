@@ -24,7 +24,7 @@ test("knowledge search ranks digest above raw log and finds sections", () => {
   s.rebuildKnowledge()
   const hits = s.searchKnowledge("deploy", { includePersonal: true, limit: 10 })
   expect(hits.length).toBeGreaterThanOrEqual(2)
-  expect(hits[0].scope).toBe("digest") // digest boosted to the top
+  expect(hits[0]!.scope).toBe("digest") // digest boosted to the top
   expect(hits.some((h) => h.path.endsWith("infra.md"))).toBe(true)
 })
 
@@ -46,5 +46,5 @@ test("session search returns sessions by message text, filtered + deduped", () =
   s.indexMessage("s2", "2026-06-26T10:03:00.000Z", "oauth internal worker")
   const found = s.searchSessions("oauth", { limit: 10 })
   expect(found.map((f) => f.id)).toEqual(["s1"]) // s2 excluded (internal=1); s1 deduped to one row
-  expect(found[0].transcript_path).toContain(".claude/projects/")
+  expect(found[0]!.transcript_path).toContain(".claude/projects/")
 })
