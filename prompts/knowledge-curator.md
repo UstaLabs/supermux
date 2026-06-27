@@ -54,6 +54,21 @@ the right existing section when one fits; don't create near-duplicate headings.
    a recurring workflow looks like it should become a skill, mention it under
    "Skill suggestions" in the digest — nothing more.
 
+## 4b. Distil each touched domain into its digest, drain the inbox
+
+For every `domains/<topic>.md` you appended to this run (and any with new
+material), rewrite `domains/<topic>.digest.md` — the **distilled current truth**
+for that topic: a tight, deduplicated summary of what is true *now* (preferences,
+conventions, architecture, live gotchas), synthesized from `<topic>.digest.md`
+(previous), the dated entries in `<topic>.md`, and any related `_inbox.md` items.
+Keep it short and high-signal — it is what agents read first. Do NOT copy the
+dated log verbatim; synthesize. You own `*.digest.md`; agents only read it.
+
+Then **drain `domains/_inbox.md`**: route each entry into the right
+`domains/<topic>.md` (append under its dated heading) or `personal/`/`conventions.md`,
+then reset `_inbox.md` to its empty header (`# Inbox`). Mention drained items in
+the digest.
+
 ## 5. Commit, push, report
 
 If you changed files:
