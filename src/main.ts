@@ -693,7 +693,11 @@ async function onAssistantMessage(
         nativeDevices,
       }).catch((err) => log.warn("push_hook_failed", { err: err?.message ?? String(err) }))
       const mid = (res.value as any)?.message_id
-      if (mid) replyOwner.set(`${chat_id}:${mid}`, sessionName)
+      // Store the immutable session ID, not the name: classifyInbound's quote-reply
+      // path looks this up via registry.get() (id-only), and names change via /rename.
+      // Storing the name made every reply-to silently miss → fell through to the
+      // active session (masked on Telegram when replying to the already-active one).
+      if (mid) replyOwner.set(`${chat_id}:${mid}`, sessionId)
       messageLog.append(sessionId, {
         id: mid ? `out:${chat_id}:${mid}` : `out:${chat_id}:ts:${Date.now()}`,
         ts: new Date().toISOString(),
@@ -2658,6 +2662,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
     chat_id: msg.chat_id,
     user_id: msg.user_id,
     text: (msg.text ?? "").slice(0, 80),
+    reply_to: msg.reply_to_message_id,
   })
   const decision = classifyInbound(
     { chat_id: msg.chat_id, text: msg.text ?? "", reply_to: msg.reply_to_message_id },
