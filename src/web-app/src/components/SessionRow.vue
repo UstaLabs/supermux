@@ -3,9 +3,8 @@ import { computed, ref, nextTick } from "vue"
 import { useMessages } from "@/stores/messages"
 import { useAgentState, isAgentWorking } from "@/stores/agentState"
 import { useGitStatus } from "@/stores/gitStatus"
-import { gitBadge } from "@/lib/gitBadge"
-import SessionAvatar from "@/components/SessionAvatar.vue"
-import { GitBranch } from "lucide-vue-next"
+import { gitBadge, sessionStatus } from "@/lib/gitBadge"
+import { GitBranch, Check, Cloud, CloudCheck, Loader2Icon } from "lucide-vue-next"
 
 const props = defineProps<{
   id: string
@@ -41,6 +40,7 @@ const working = computed(() => isAgentWorking(agentState.get(props.id).phase))
 
 const gitStatus = useGitStatus()
 const badge = computed(() => gitBadge(gitStatus.get(props.id)))
+const status = computed(() => sessionStatus(gitStatus.get(props.id)))
 
 const renameValue = ref(props.name)
 const renameInput = ref<HTMLInputElement | null>(null)
@@ -90,11 +90,20 @@ defineExpose({ startRename })
         ? 'bg-card border-border shadow-sm'
         : 'border-transparent hover:bg-card/70 active:bg-card',
       props.reserveMenuSpace ? 'pl-3 pr-9 py-2.5' : 'px-3 py-2.5',
+      status?.level === 'done' ? 'border-l-2 border-l-emerald-500'
+        : status?.level === 'not-done' ? 'border-l-2 border-l-amber-500' : '',
     ]"
     @click="handleNavigate"
   >
     <div class="flex items-start gap-3">
-      <SessionAvatar :name="props.name" :connected="props.connected" :agent="props.agent" :working="working" :suspended="props.status === 'suspended'" />
+      <div class="flex w-5 shrink-0 items-center justify-center self-stretch pt-0.5">
+        <Loader2Icon v-if="working" class="size-4 animate-spin text-primary" aria-label="working" />
+        <Check v-else-if="status?.kind === 'worktree' && status.level === 'done'" :title="badge?.title" class="size-4 text-emerald-400" />
+        <GitBranch v-else-if="status?.kind === 'worktree' && status.level === 'not-done'" :title="badge?.title" class="size-4 text-amber-500" />
+        <CloudCheck v-else-if="status?.kind === 'remote' && status.level === 'done'" :title="badge?.title" class="size-4 text-emerald-400" />
+        <Cloud v-else-if="status?.kind === 'remote'" :title="badge?.title" class="size-4 text-amber-500" />
+        <span v-else class="size-1.5 rounded-full bg-muted-foreground/30" aria-hidden="true" />
+      </div>
 
       <div class="min-w-0 flex-1">
         <div class="flex items-baseline justify-between gap-2">
@@ -119,11 +128,10 @@ defineExpose({ startRename })
             {{ lastText || "no messages yet" }}
           </div>
           <span
-            v-if="badge"
+            v-if="status?.kind === 'remote' && status.level === 'not-done' && badge"
             :title="badge.title"
-            class="inline-flex shrink-0 items-center gap-0.5 font-mono text-[10px] tabular-nums"
-            :class="badge.tone === 'muted' ? 'text-muted-foreground/45' : 'text-muted-foreground/80'"
-          ><GitBranch v-if="badge.kind === 'base'" class="size-2.5 shrink-0" />{{ badge.text }}</span>
+            class="shrink-0 font-mono text-[10px] tabular-nums text-amber-500"
+          >{{ badge.text }}</span>
           <span
             v-if="props.unread"
             class="h-5 w-1 rounded-full bg-primary/70 shrink-0"

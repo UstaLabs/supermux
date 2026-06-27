@@ -30,7 +30,7 @@ struct ChatPane: View {
     @State private var showPhotos = false
     @State private var showFiles = false
     @State private var showCamera = false
-    @FocusState private var composing: Bool
+    @State private var composing = false
 
     // MARK: - Model / reasoning sheet state
     @State private var modelSheet = false
@@ -70,6 +70,13 @@ struct ChatPane: View {
     // MARK: - Derived computeds
 
     private var draftKey: String { "cmux:draft:\(session.id)" }
+
+    /// True when the clipboard holds something we can stage as an attachment (an image, or a PDF) —
+    /// gates the composer's "+ → Paste" item. Type-presence check only (privacy-safe; no banner).
+    private var pasteboardHasAttachment: Bool {
+        let pb = UIPasteboard.general
+        return pb.hasImages || pb.contains(pasteboardTypes: [UTType.pdf.identifier])
+    }
 
     /// Composer is expanded (full controls) when focused, when there's a draft or a
     /// staged attachment, or while recording; otherwise it rests as a slim glass pill.
@@ -238,19 +245,33 @@ struct ChatPane: View {
             }
             HStack(alignment: .center, spacing: 10) {
                 if !composerExpanded {
-                    AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera)
+                    AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera,
+                               showPaste: pasteboardHasAttachment,
+                               onPaste: { Task { await composer.pasteClipboard() } })
                 }
-                TextField("Message \(session.name)…", text: $composer.draft, axis: .vertical)
-                    .lineLimit(composerExpanded ? (1...12) : (1...1))
-                    .focused($composing)
-                    .composerHardwareKeyboardSubmit(canSubmit: composer.canSubmit) { sendMessage() }
+                ComposerInput(
+                    text: $composer.draft,
+                    placeholder: "Message \(session.name)…",
+                    maxLines: composerExpanded ? 12 : 1,
+                    isFocused: $composing,
+                    canSubmit: composer.canSubmit,
+                    onSubmit: { sendMessage() },
+                    onPasteAttachment: {
+                        let pb = UIPasteboard.general
+                        guard pb.hasImages || pb.contains(pasteboardTypes: [UTType.pdf.identifier]) else { return false }
+                        Task { await composer.pasteClipboard() }
+                        return true
+                    }
+                )
                 if !composerExpanded {
                     MicButton(model: composer)
                 }
             }
             if composerExpanded {
                 HStack(spacing: 12) {
-                    AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera)
+                    AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera,
+                               showPaste: pasteboardHasAttachment,
+                               onPaste: { Task { await composer.pasteClipboard() } })
                     MicButton(model: composer)
                     pill(modelPillLabel, system: "cpu") { modelSheet = true }
                     if reasoning?.visible ?? false {

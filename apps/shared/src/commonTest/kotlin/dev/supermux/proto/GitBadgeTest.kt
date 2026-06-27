@@ -50,4 +50,46 @@ class GitBadgeTest {
         assertEquals("+1", b?.text)
         assertEquals(GitBadgeKind.BASE, b?.kind)
     }
+
+    @Test fun done_when_in_dev_and_clean() {
+        assertEquals(SessionDoneState.DONE, sessionDoneState(GitLiteStatusDto(mode = "base", compareRef = "dev")))
+    }
+
+    @Test fun not_done_when_ahead() {
+        assertEquals(SessionDoneState.NOT_DONE, sessionDoneState(GitLiteStatusDto(mode = "base", compareRef = "dev", ahead = 2)))
+    }
+
+    @Test fun not_done_when_dirty() {
+        assertEquals(SessionDoneState.NOT_DONE, sessionDoneState(GitLiteStatusDto(mode = "base", compareRef = "dev", dirty = 1)))
+    }
+
+    @Test fun behind_only_is_still_done() {
+        assertEquals(SessionDoneState.DONE, sessionDoneState(GitLiteStatusDto(mode = "base", compareRef = "dev", behind = 3)))
+    }
+
+    @Test fun no_indicator_for_null_or_remote() {
+        assertNull(sessionDoneState(null))
+        assertNull(sessionDoneState(GitLiteStatusDto(mode = "remote", compareRef = "origin/x", ahead = 1)))
+    }
+
+    @Test fun status_worktree_pristine() {
+        val s = sessionStatus(GitLiteStatusDto(mode = "base", compareRef = "dev", touched = false))
+        assertEquals(SessionStatusKind.WORKTREE, s?.kind); assertEquals(SessionStatusLevel.PRISTINE, s?.level)
+    }
+    @Test fun status_worktree_done_when_touched_and_clean() {
+        val s = sessionStatus(GitLiteStatusDto(mode = "base", compareRef = "dev", touched = true))
+        assertEquals(SessionStatusLevel.DONE, s?.level)
+    }
+    @Test fun status_worktree_not_done_when_ahead_or_dirty() {
+        assertEquals(SessionStatusLevel.NOT_DONE, sessionStatus(GitLiteStatusDto(mode = "base", ahead = 1, touched = true))?.level)
+        assertEquals(SessionStatusLevel.NOT_DONE, sessionStatus(GitLiteStatusDto(mode = "base", dirty = 1))?.level)
+    }
+    @Test fun status_remote_synced_vs_not() {
+        assertEquals(SessionStatus(SessionStatusKind.REMOTE, SessionStatusLevel.DONE),
+            sessionStatus(GitLiteStatusDto(mode = "remote", compareRef = "origin/x")))
+        assertEquals(SessionStatusLevel.NOT_DONE, sessionStatus(GitLiteStatusDto(mode = "remote", ahead = 1))?.level)
+        assertEquals(SessionStatusLevel.NOT_DONE, sessionStatus(GitLiteStatusDto(mode = "remote", behind = 1))?.level)
+        assertEquals(SessionStatusLevel.NOT_DONE, sessionStatus(GitLiteStatusDto(mode = "remote", unpublished = true))?.level)
+    }
+    @Test fun status_null_for_null_git() { assertNull(sessionStatus(null)) }
 }

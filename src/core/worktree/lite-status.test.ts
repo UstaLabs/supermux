@@ -29,7 +29,7 @@ test("base mode: counts commits ahead of base and dirty files", async () => {
   writeFileSync(join(h.worktreeDir, "b.txt"), "y") // untracked → dirty
   const r = await computeLiteStatus(
     { workdir: h.worktreeDir, repo_root: repo, base_branch: "main", session_branch: h.sessionBranch }, 123)
-  expect(r).toEqual({ mode: "base", compareRef: "main", ahead: 1, behind: 0, dirty: 1, computedAt: 123 })
+  expect(r).toEqual({ mode: "base", compareRef: "main", ahead: 1, behind: 0, dirty: 1, touched: true, computedAt: 123 })
 })
 
 test("base mode: clean worktree reports zeros", async () => {
@@ -37,7 +37,7 @@ test("base mode: clean worktree reports zeros", async () => {
   const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
   const r = await computeLiteStatus(
     { workdir: h.worktreeDir, repo_root: repo, base_branch: "main", session_branch: h.sessionBranch }, 1)
-  expect(r).toEqual({ mode: "base", compareRef: "main", ahead: 0, behind: 0, dirty: 0, computedAt: 1 })
+  expect(r).toEqual({ mode: "base", compareRef: "main", ahead: 0, behind: 0, dirty: 0, touched: false, computedAt: 1 })
 })
 
 test("base mode: counts commits behind when base advances", async () => {
@@ -71,4 +71,33 @@ test("remote mode: ahead of upstream after a local commit", async () => {
 test("returns null for a non-repo directory", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mux-norepo-"))
   expect(await computeLiteStatus({ workdir: dir }, 1)).toBeNull()
+})
+
+import { rmSync } from "fs"
+
+function git(cwd: string, ...args: string[]) { return execFileSync("git", args, { cwd, encoding: "utf-8" }).trim() }
+
+test("touched: true after a commit even once merged into base; false when pristine", async () => {
+  const root = mkdtempSync(join(tmpdir(), "sm-lite-"))
+  try {
+    git(root, "init", "-q", "-b", "dev")
+    git(root, "config", "user.email", "t@t"); git(root, "config", "user.name", "t")
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "base"], { cwd: root })
+    const baseSha = git(root, "rev-parse", "HEAD")
+    // pristine worktree off dev
+    const wtP = join(root, "wt-pristine")
+    git(root, "worktree", "add", "-q", "-b", "s-pristine", wtP, "dev")
+    // worktree that commits then merges into dev
+    const wtW = join(root, "wt-work")
+    git(root, "worktree", "add", "-q", "-b", "s-work", wtW, "dev")
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "work"], { cwd: wtW })
+    git(root, "checkout", "-q", "dev"); git(root, "merge", "-q", "--no-ff", "-m", "merge", "s-work"); git(root, "checkout", "-q", "-")
+    const [p, w] = await Promise.all([
+      computeLiteStatus({ workdir: wtP, repo_root: root, base_branch: "dev", session_branch: "s-pristine", base_commit: baseSha }),
+      computeLiteStatus({ workdir: wtW, repo_root: root, base_branch: "dev", session_branch: "s-work", base_commit: baseSha }),
+    ])
+    expect(p?.touched).toBe(false)
+    expect(w?.touched).toBe(true)
+    expect(w?.ahead).toBe(0) // merged → not ahead of dev, but touched
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })

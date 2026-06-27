@@ -42,6 +42,8 @@ import dev.supermux.session.formatWorkdir
 import dev.supermux.session.groupSessions
 import kotlinx.coroutines.launch
 
+private fun isWorking(phase: String?): Boolean = phase == "thinking" || phase == "running"
+
 /** Produces a human-readable relative time string from an ISO-8601 timestamp string. */
 fun relTime(ts: String?): String {
     if (ts == null) return ""
@@ -164,6 +166,7 @@ fun SessionRow(
     s: SessionInfo,
     active: Boolean,
     preview: LogEntry? = null,
+    working: Boolean = false,
     onClick: () -> Unit,
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
@@ -198,30 +201,7 @@ fun SessionRow(
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        // Subtle teal left-edge unread indicator
-        if (hasUnread) {
-            Box(
-                Modifier
-                    .width(4.dp)
-                    .height(20.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(cs.primary.copy(alpha = 0.7f))
-                    .align(Alignment.CenterVertically),
-            )
-            Spacer(Modifier.width(Space.sm))
-        } else {
-            // Reserve same horizontal space so avatar aligns consistently
-            Spacer(Modifier.width(4.dp + Space.sm))
-        }
-
-        SessionAvatar(
-            name = s.name,
-            agent = s.agent,
-            sessionId = s.id,
-            sharedScope = sharedScope,
-            animScope = animScope,
-        )
-
+        SessionStatusRail(git = s.git, working = working, modifier = Modifier.align(Alignment.CenterVertically))
         Spacer(Modifier.width(12.dp))
 
         Column(Modifier.weight(1f)) {
@@ -231,7 +211,7 @@ fun SessionRow(
                     s.name,
                     color = cs.onSurface,
                     fontSize = 15.sp,
-                    fontWeight = FontWeight.Medium,
+                    fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
@@ -262,12 +242,6 @@ fun SessionRow(
                 )
             } else {
                 Spacer(Modifier.height(Space.xs))
-            }
-
-            // Git status badge (worktree-vs-base or branch-vs-remote divergence).
-            if (s.git != null) {
-                Spacer(Modifier.height(2.dp))
-                GitBadgeRow(s.git)
             }
 
             // Preview: last message or workdir fallback
@@ -303,6 +277,7 @@ fun SessionListScreen(
     activeId: String?,
     onOpen: (String) -> Unit,
     lastBySession: Map<String, LogEntry?> = emptyMap(),
+    agentState: Map<String, dev.supermux.proto.AgentStatus?> = emptyMap(),
     onNewSession: () -> Unit = {},
     loadProjects: suspend () -> List<String> = { emptyList() },
     validatePath: suspend (String) -> dev.supermux.net.PathValidation? = { null },
@@ -481,6 +456,7 @@ fun SessionListScreen(
                         s,
                         active = s.id == activeId,
                         preview = lastBySession[s.id],
+                        working = isWorking(agentState[s.id]?.phase),
                         onClick = { onOpen(s.id) },
                         sharedScope = sharedScope,
                         animScope = animScope,

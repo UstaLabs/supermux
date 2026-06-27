@@ -168,7 +168,34 @@ class AppViewModel(
                             .mapNotNull { s -> s.finish_job?.let { s.id to it } }
                             .toMap()
                     }
-                    is ServerFrame.SessionAdded -> _sessions.value = _sessions.value + f.session
+                    is ServerFrame.SessionAdded -> {
+                        // The broker re-broadcasts session_added for the SAME session (an early add
+                        // right after spawn, then the authoritative post-register add carrying
+                        // repo_root / session_branch). Dedup by id and backfill — keep existing
+                        // values where the incoming frame omits them — instead of appending a
+                        // duplicate row. (web parity: src/web-app/src/stores/sessions.ts add();
+                        // iOS parity: BrokerSession.reduce().)
+                        val incoming = f.session
+                        _sessions.value = if (_sessions.value.none { it.id == incoming.id }) {
+                            _sessions.value + incoming
+                        } else {
+                            _sessions.value.map { s ->
+                                if (s.id != incoming.id) s
+                                else incoming.copy(
+                                    status = incoming.status ?: s.status,
+                                    mute = incoming.mute ?: s.mute,
+                                    connected = incoming.connected ?: s.connected,
+                                    model = incoming.model ?: s.model,
+                                    repo_root = incoming.repo_root ?: s.repo_root,
+                                    role = incoming.role ?: s.role,
+                                    session_branch = incoming.session_branch ?: s.session_branch,
+                                    git = incoming.git ?: s.git,
+                                    finish_job = incoming.finish_job ?: s.finish_job,
+                                )
+                            }
+                        }
+                        incoming.finish_job?.let { job -> _finishJobs.update { it + (incoming.id to job) } }
+                    }
                     is ServerFrame.SessionRemoved -> _sessions.value = _sessions.value.filterNot { it.id == f.id }
                     is ServerFrame.MessageAppend -> {
                         // Optimistic-echo dedup (iOS BrokerSession parity): when the real inbound

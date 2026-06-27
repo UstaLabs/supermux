@@ -49,6 +49,7 @@ data class GitLiteStatusDto(
     val behind: Int = 0,
     val dirty: Int = 0,
     val unpublished: Boolean? = null,
+    val touched: Boolean = false,
     val computedAt: Double = 0.0,     // epoch millis
 )
 

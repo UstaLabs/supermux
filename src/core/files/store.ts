@@ -13,7 +13,7 @@ const log = makeLogger("core/files/store")
 // call sites (e.g. channels/telegram/inbound.ts) keep working. New code
 // should import from "./kinds" directly.
 export type { AttachmentKind } from "./kinds"
-export type AttachmentOrigin = "web-upload" | "telegram-dl" | "session-outbound"
+export type AttachmentOrigin = "web-upload" | "telegram-dl" | "whatsapp-dl" | "session-outbound"
 
 export interface FileStorePutInput {
   kind: AttachmentKind

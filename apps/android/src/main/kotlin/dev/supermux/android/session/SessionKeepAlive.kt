@@ -136,6 +136,7 @@ fun SessionKeepAlivePhoneHost(
                         activeId = null,
                         onOpen = onSelect,
                         lastBySession = lastBySession,
+                        agentState = agentState,
                         onNewSession = { onNavigate("new") },
                         loadProjects = { vm.listProjects() },
                         validatePath = { vm.validatePath(it) },

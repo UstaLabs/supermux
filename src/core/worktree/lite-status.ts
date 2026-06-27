@@ -10,6 +10,7 @@ export interface GitLiteStatus {
   behind: number            // commits in compareRef not in HEAD
   dirty: number             // uncommitted + untracked (gitignore-respected)
   unpublished?: boolean     // mode:"remote" only — no upstream yet
+  touched?: boolean        // base mode: worktree has commits since creation (rev-list base_commit..HEAD > 0)
   computedAt: number        // epoch ms
 }
 
@@ -18,6 +19,7 @@ export interface LiteStatusInput {
   repo_root?: string | null
   base_branch?: string | null
   session_branch?: string | null
+  base_commit?: string | null   // HEAD SHA at worktree creation (from session base_commits); for `touched`
 }
 
 async function runGit(cwd: string, args: string[], timeout = 30_000): Promise<{ ok: boolean; out: string }> {
@@ -50,8 +52,16 @@ export async function computeLiteStatus(s: LiteStatusInput, now: number = Date.n
     const ab = await runGit(cwd, ["rev-list", "--count", "--left-right", `${base}...HEAD`])
     if (!ab.ok) return null
     const [b, a] = ab.out.split(/\s+/)
+    const ahead = Number(a) || 0
     const dirty = await dirtyCount(cwd)
-    return { mode: "base", compareRef: base, ahead: Number(a) || 0, behind: Number(b) || 0, dirty, computedAt: now }
+    let touched: boolean
+    if (s.base_commit) {
+      const t = await runGit(cwd, ["rev-list", "--count", `${s.base_commit}..HEAD`])
+      touched = t.ok && (Number(t.out) || 0) > 0
+    } else {
+      touched = ahead > 0   // fallback for sessions created before base_commit was recorded
+    }
+    return { mode: "base", compareRef: base, ahead, behind: Number(b) || 0, dirty, touched, computedAt: now }
   }
 
   // remote mode
