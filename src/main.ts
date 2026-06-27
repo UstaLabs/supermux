@@ -2143,7 +2143,7 @@ const server = await startSocketServer({
       const fromSession = msg.session_id
       const s = registry.get(fromSession)  // Look up by UUID
       const op = msg.op
-      const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject"])
+      const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session"])
       if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
         return { ok: false, error: "permission denied (can_orchestrate=false)" }
       }
@@ -2229,6 +2229,12 @@ const server = await startSocketServer({
         case "list_sessions":  { return { ok: true, value: registry.listVisible().map((s: any) => ({ name: s.name, workdir: s.workdir, mute: s.mute })) } }
         case "set_active":     { const t = registry.resolveName(stringArg(op.args, "name")); if (!t) return { ok: false, error: "no such session" }; registry.setActive(stringArg(op.args, "chat_id"), t.id); return { ok: true, value: "ok" } }
         case "get_active":     { return { ok: true, value: registry.getActive(stringArg(op.args, "chat_id")) } }
+        case "memory_search": {
+          const q = stringArg(op.args, "query")
+          const limit = typeof op.args?.limit === "number" ? op.args.limit : 10
+          const includePersonal = s?.role === "personal_assistant"
+          return { ok: true, value: searchStore.searchKnowledge(q, { includePersonal, limit }) }
+        }
         case "expose_port": {
           if (!s) return { ok: false, error: "unknown session" }
           const port = optionalNumberArg(op.args, "port")

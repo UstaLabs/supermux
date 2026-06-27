@@ -62,6 +62,15 @@ const ORCHESTRATION_TOOLS = [
   { name: "list_devices", description: "List attached Android adb devices/emulators available to stream via scrcpy (provider 'scrcpy').", inputSchema: { type: "object", properties: {}, required: [] } },
   { name: "start_display", description: "Start a streamable host display and return its stream id. On Linux this provisions a virtual Xvfb display; on macOS it streams the real screen (enable Screen Sharing). It does NOT launch apps — run apps with DISPLAY=<display> (Linux) to make them appear in the stream. View/control it from the supermux web app.", inputSchema: { type: "object", properties: { provider: { type: "string", description: "Optional: 'linux-xvfb' or 'macos-screen'. Defaults to the host platform." }, device: { type: "string", description: "adb serial for provider 'scrcpy' (e.g. emulator-5554)" }, width: { type: "number", description: "Virtual display width (Linux only, default 1280)" }, height: { type: "number", description: "Virtual display height (Linux only, default 800)" } }, required: [] } },
   { name: "stop_display", description: "Stop a display stream by id and tear down its virtual display/VNC server.", inputSchema: { type: "object", properties: { id: { type: "string", description: "Stream id returned by start_display" } }, required: ["id"] } },
+  {
+    name: "memory_search",
+    description: "Search the shared knowledge base (~/.mux domains + digests) for facts/gotchas. Returns ranked sections with file path, heading and a snippet.",
+    inputSchema: {
+      type: "object",
+      properties: { query: { type: "string" }, limit: { type: "number" } },
+      required: ["query"],
+    },
+  },
 ]
 
 export const RPC_TOOLS = [
