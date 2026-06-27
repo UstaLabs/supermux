@@ -10,8 +10,19 @@ struct SessionInfo: Decodable, Identifiable {
     var agent: String?
     var status: String?
     var connected: Bool?
+    var mute: Bool?
+    // Watch session-list enrichment (GET /sessions; see watch-session-row.ts):
+    var phase: String?
+    var tool: String?
+    var lastText: String?
+    var lastTs: String?
+    var lastFrom: String?
+    var unread: Bool?
+    var git: GitLite?
 
-    enum CodingKeys: String, CodingKey { case id, name, agent, status, connected }
+    enum CodingKeys: String, CodingKey {
+        case id, name, agent, status, connected, mute, phase, tool, lastText, lastTs, lastFrom, unread, git
+    }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.name = try c.decode(String.self, forKey: .name)
@@ -20,6 +31,14 @@ struct SessionInfo: Decodable, Identifiable {
         self.agent = try? c.decode(String.self, forKey: .agent)
         self.status = try? c.decode(String.self, forKey: .status)
         self.connected = try? c.decode(Bool.self, forKey: .connected)
+        self.mute = try? c.decode(Bool.self, forKey: .mute)
+        self.phase = try? c.decode(String.self, forKey: .phase)
+        self.tool = try? c.decode(String.self, forKey: .tool)
+        self.lastText = try? c.decode(String.self, forKey: .lastText)
+        self.lastTs = try? c.decode(String.self, forKey: .lastTs)
+        self.lastFrom = try? c.decode(String.self, forKey: .lastFrom)
+        self.unread = try? c.decode(Bool.self, forKey: .unread)
+        self.git = try? c.decode(GitLite.self, forKey: .git)
     }
 }
 

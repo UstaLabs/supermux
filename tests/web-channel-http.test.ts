@@ -46,7 +46,9 @@ test("GET /sessions with valid token → snapshot", async () => {
   const res = await fetch(`http://127.0.0.1:${PORT}/sessions`, { headers: { Cookie: `cmux_token=${token}` } })
   expect(res.status).toBe(200)
   const body = await res.json()
-  expect(body).toEqual([{ name: "ana", workdir: "/h", mute: false, connected: true, agent: "claude" }])
+  // The watch-facing /sessions route enriches each row (phase/preview/unread); with no
+  // agent-state/log/reads mocked here, only the always-present `unread` flag is added.
+  expect(body).toEqual([{ name: "ana", workdir: "/h", mute: false, connected: true, agent: "claude", unread: false }])
 })
 
 test("GET /devices returns list (no tokens included)", async () => {
