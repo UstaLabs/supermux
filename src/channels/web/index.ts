@@ -1,5 +1,6 @@
 import type { Channel, ChannelCapabilities, InboundAttachment, InboundMessage, OutboundAction, OutboundResult } from "../channel"
 import { DeviceStore } from "./device-store"
+import { watchRowExtras } from "./watch-session-row"
 import { serveStatic } from "./static-serve"
 import { makeLogger } from "../../shared/log"
 import { home } from "../../shared/home"
@@ -1586,7 +1587,21 @@ export class WebChannel implements Channel {
     }
 
     if (method === "GET" && path === "/sessions") {
-      return this.json(this.opts.getSessionsSnapshot())
+      // Watch-only enrichment: fold in agent phase, a last-message preview, and unread —
+      // the signals the watch can't get over WebSocket. Reuses opts the route already has,
+      // keyed exactly like the WS `subscribe` snapshot above (s.id ?? s.name).
+      const reads = this.opts.getReads?.() ?? {}
+      const enriched = this.opts.getSessionsSnapshot().map((s) => {
+        const key = s.id ?? s.name
+        const log = this.opts.getSessionLog(key)
+        const extras = watchRowExtras(
+          this.opts.getSessionAgentState?.(key) as { phase?: string; tool?: string } | undefined,
+          log[log.length - 1] as { ts?: string; direction?: string; text?: string } | undefined,
+          reads[key],
+        )
+        return { ...s, ...extras }
+      })
+      return this.json(enriched)
     }
     if (method === "GET" && path.startsWith("/sessions/") && path.endsWith("/messages")) {
       const id = decodeURIComponent(path.split("/")[2]!)
