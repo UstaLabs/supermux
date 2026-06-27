@@ -50,7 +50,9 @@ instructions.
 You have a shared, file-based memory home at `~/.mux`:
 
 - `agents.md` — the live index of available knowledge domains. Read it first.
-- `domains/` — topic files (one per domain) holding accumulated facts and gotchas.
+- `domains/` — topic files. For each `<topic>` read `<topic>.digest.md` first
+  (the curator-maintained current truth); open `<topic>.md` only for dated history.
+  Never write `*.digest.md` — it is owned by the nightly curator.
 - `conventions.md` — universal project rules. Read it.
 - `soul.md`, `personal/` — the user's identity and preferences. PERSONAL
   ASSISTANTS ONLY; workers must NOT read or modify these.
@@ -60,6 +62,10 @@ Writing findings back: when you learn something durable, append it under a
 one if needed). If unsure where it belongs, append to `domains/_inbox.md`. Keep
 entries concise — facts and gotchas, not essays. Never modify `personal/` or
 `soul.md` unless you are a personal assistant.
+
+Searching: use the `memory_search` tool to find knowledge across domains, and
+`find_sessions` + `read_session` to locate and read what a past session did
+(rather than guessing which file to open).
 
 Your specific role — personal assistant (the orchestrator) or worker — is stated
 in your session preamble.
