@@ -126,6 +126,7 @@ import { CuratorScheduler } from "./core/curator/scheduler"
 import { runCurator, type CuratorDeps } from "./core/curator/run"
 import { curatorPromptPath } from "./core/runtime-assets"
 import { SettingsStore } from "./core/settings/store"
+import { SearchStore } from "./core/search/store"
 import { ForgeStore } from "./core/forge/store"
 import { ForgeService } from "./core/forge/service"
 import { detectForgeClis, importCliToken } from "./core/forge/cli-import"
@@ -315,6 +316,17 @@ if (existsSync(REGISTRY_FILE)) {
 const filesDir = join(STATE_DIR, "files")
 const fileStore = new FileStore(db, filesDir)
 const messageLog = new MessageStore(db, fileStore)
+const searchStore = new SearchStore(db, MUX_HOME)
+try {
+  searchStore.rebuildKnowledge()
+  searchStore.rebuildSessions()
+} catch (err: any) {
+  log.warn("search_index_rebuild_failed", { err: err?.message ?? String(err) })
+}
+// Keep find_sessions fresh: index each new broker message as it lands.
+messageLog.on("append", (sessionId: string, entry: any) => {
+  try { searchStore.indexMessage(sessionId, entry.ts, entry.text ?? "") } catch { /* index is rebuildable */ }
+})
 const activityStore = new ActivityStore()
 const agentStateStore = new AgentStateStore()
 
