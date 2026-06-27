@@ -21,6 +21,8 @@ export type CuratorDeps = {
   archive: (name: string) => void
   /** Post a plain notice into the chat (used for error surfacing). */
   postNotice: (chatId: string, text: string) => Promise<void>
+  /** Rebuild the search index after the curator's edits land. */
+  reindex?: () => void
   sleep?: (ms: number) => Promise<void>
 }
 
@@ -114,6 +116,7 @@ export async function runCurator(deps: CuratorDeps): Promise<void> {
     if (!active) throw new Error("curator did not start after delivery retries")
     await waitForCompletion(deps, sid)
     log.info("curator_run_complete", { name })
+    try { deps.reindex?.() } catch (err: any) { log.warn("curator_reindex_failed", { err: err?.message ?? String(err) }) }
   } catch (err: any) {
     const msg = err?.message ?? String(err)
     log.warn("curator_run_error", { err: msg })

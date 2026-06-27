@@ -3276,6 +3276,7 @@ const modelRefreshInterval = setInterval(() => {
         for (const s of pushStore.all()) await pushSender.sendToDevice(s.device, payload)
         for (const r of deviceTokenStore.all()) if (r.routing_token) await nativeSender.sendToDevice(r.device, payload)
       },
+      reindex: () => { searchStore.rebuildKnowledge() },
   }
   curatorScheduler = new CuratorScheduler(() => runCurator(curatorDeps))
   curatorScheduler.reconfigure(settings.getCurator())
