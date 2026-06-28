@@ -26,6 +26,7 @@ export interface ArchivedSession {
   agent: string
   model?: string
   killed_at?: string
+  repo_root?: string
 }
 
 export const useSessions = defineStore("sessions", () => {

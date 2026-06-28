@@ -101,6 +101,7 @@ export interface ArchivedSessionSnapshot {
   agent: AgentKind
   model?: string
   killed_at?: string
+  repo_root?: string
 }
 
 export interface WebChannelOpts {
