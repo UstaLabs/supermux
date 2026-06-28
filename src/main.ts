@@ -859,7 +859,7 @@ function finishReadinessById(sessionId: string): FinishReadiness | { error: stri
   if (!s) return { error: "no such session" }
   if (!s.repo_root || !s.session_branch || !s.base_branch) return { error: "session is not worktree-backed" }
   const cfg = loadFinishConfig(s.repo_root)
-  return computeReadiness({ repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch, defaultAction: cfg.defaultAction })
+  return computeReadiness({ repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch, defaultAction: cfg.defaultAction, prRequiresGreen: cfg.prRequiresGreen })
 }
 
 // Wire a codex/cursor adapter's structured events into the agent-agnostic
