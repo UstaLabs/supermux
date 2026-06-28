@@ -73,8 +73,8 @@ async function run(body: { action: "merge" | "pr" | "keep" | "discard"; skipVeri
 }
 
 function merge() { void run({ action: "merge" }) }
-function pickMerge() { pendingVerify.value = pendingVerify.value === "merge" ? null : "merge" }
-function pickPr() { pendingVerify.value = pendingVerify.value === "pr" ? null : "pr" }
+function pickMerge() { confirmingDiscard.value = false; pendingVerify.value = pendingVerify.value === "merge" ? null : "merge" }
+function pickPr() { confirmingDiscard.value = false; pendingVerify.value = pendingVerify.value === "pr" ? null : "pr" }
 function chooseRun() { const a = pendingVerify.value; pendingVerify.value = null; if (a) void run({ action: a, skipVerify: false }) }
 function chooseSkip() { const a = pendingVerify.value; pendingVerify.value = null; if (a) void run({ action: a, skipVerify: true }) }
 const canSkip = computed(() => pendingVerify.value != null && canSkipTests(pendingVerify.value, readiness.value?.prRequiresGreen ?? false))
