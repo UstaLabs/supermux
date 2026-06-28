@@ -573,6 +573,11 @@ struct ArchivedView: View {
     let broker: BrokerSession
     @State private var items: [ArchivedDto] = []
     @State private var loading = true
+    @State private var projectFilter: String? = nil
+
+    private var projects: [ArchivedProject] { archivedProjects(sessions: items, home: nil) }
+    private var visible: [ArchivedDto] { filterArchivedByProject(sessions: items, key: projectFilter) }
+
     var body: some View {
         Group {
             if loading && items.isEmpty {
@@ -581,7 +586,7 @@ struct ArchivedView: View {
                 ContentUnavailableView("No archived sessions", systemImage: "archivebox")
             } else {
                 List {
-                    ForEach(items, id: \.id) { a in
+                    ForEach(visible, id: \.id) { a in
                         NavigationLink { ArchivedChatView(broker: broker, archived: a) } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 HStack(alignment: .firstTextBaseline) {
@@ -589,7 +594,7 @@ struct ArchivedView: View {
                                     Spacer(minLength: 6)
                                     Text(a.agent).font(.caption2).foregroundStyle(Theme.teal.opacity(0.8))
                                 }
-                                Text(formatWorkdir(workdir: a.workdir, home: inferHomeDir(workdir: a.workdir)))
+                                Text(formatWorkdir(workdir: a.repo_root ?? a.workdir, home: inferHomeDir(workdir: a.repo_root ?? a.workdir)))
                                     .font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(1)
                                 if let k = a.killed_at {
                                     Text("Archived \(archivedDate(k))").font(.caption2).foregroundStyle(.tertiary)
@@ -599,6 +604,9 @@ struct ArchivedView: View {
                         .swipeActions {
                             Button("Resume") {
                                 broker.resume(a.id); items.removeAll { $0.id == a.id }
+                                if let f = projectFilter, !items.contains(where: { ($0.repo_root ?? $0.workdir) == f }) {
+                                    projectFilter = nil
+                                }
                             }.tint(Theme.teal)
                         }
                     }
@@ -606,6 +614,22 @@ struct ArchivedView: View {
             }
         }
         .navigationTitle("Archived").navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                if !items.isEmpty {
+                    Menu {
+                        Button("All projects") { projectFilter = nil }
+                        ForEach(projects, id: \.key) { p in
+                            Button("\(p.label) (\(p.count))") { projectFilter = p.key }
+                        }
+                    } label: {
+                        Image(systemName: projectFilter == nil
+                            ? "line.3.horizontal.decrease.circle"
+                            : "line.3.horizontal.decrease.circle.fill")
+                    }
+                }
+            }
+        }
         .task { items = await broker.archived(); loading = false }
     }
 }
