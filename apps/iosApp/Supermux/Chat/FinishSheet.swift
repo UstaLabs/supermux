@@ -16,6 +16,7 @@ struct FinishSheet: View {
 
     // Local input state (web's component-local refs).
     @State private var confirmingDiscard = false
+    @State private var pendingVerify: String?    // "merge" | "pr" | nil
     @State private var commitMessage = "Session changes"
     @State private var verifyDraft: VerifyDraft?
     @State private var verifySaving = false
@@ -91,13 +92,18 @@ struct FinishSheet: View {
             Section {
                 if readiness?.nothingToLand == true {
                     Text("No new commits to land").font(.footnote).foregroundStyle(.secondary)
-                    actionRow("Keep", systemImage: "archivebox") { chrome.run(action: "keep"); dismiss() }
+                    actionRow("Keep", systemImage: "archivebox") { pendingVerify = nil; chrome.run(action: "keep"); dismiss() }
                     discardRow
                 } else {
                     actionRow("Merge locally", systemImage: "arrow.triangle.merge",
-                              highlighted: readiness?.recommended == "merge") { chrome.run(action: "merge") }
+                              highlighted: readiness?.recommended == "merge") {
+                        confirmingDiscard = false
+                        pendingVerify = pendingVerify == "merge" ? nil : "merge"
+                    }
+                    if pendingVerify == "merge" { verifyChoiceRows(action: "merge", prompt: "Run tests before merging?") }
                     prRow
-                    actionRow("Keep", systemImage: "archivebox") { chrome.run(action: "keep"); dismiss() }
+                    if pendingVerify == "pr" { verifyChoiceRows(action: "pr", prompt: "Run tests before opening the PR?") }
+                    actionRow("Keep", systemImage: "archivebox") { pendingVerify = nil; chrome.run(action: "keep"); dismiss() }
                     discardRow
                 }
             }
@@ -132,7 +138,7 @@ struct FinishSheet: View {
     @ViewBuilder private var prRow: some View {
         let r = readiness
         let label = (r?.hasRemote == true && r?.ghAvailable == false) ? "Push & open PR" : "Open PR"
-        Button { chrome.run(action: "pr") } label: {
+        Button { confirmingDiscard = false; pendingVerify = pendingVerify == "pr" ? nil : "pr" } label: {
             HStack {
                 Label(label, systemImage: "arrow.triangle.pull")
                 Spacer()
@@ -147,7 +153,7 @@ struct FinishSheet: View {
     }
 
     @ViewBuilder private var discardRow: some View {
-        Button(role: .destructive) { confirmingDiscard = true } label: {
+        Button(role: .destructive) { pendingVerify = nil; confirmingDiscard = true } label: {
             Label("Discard", systemImage: "trash")
         }
         if confirmingDiscard {
@@ -171,6 +177,19 @@ struct FinishSheet: View {
             Label(title, systemImage: systemImage)
                 .fontWeight(.medium)
                 .foregroundStyle(highlighted ? Theme.teal : .primary)
+        }
+    }
+
+    /// Inline Run/Skip choice — shown under Merge/Open PR (mirrors discardRow confirm).
+    @ViewBuilder private func verifyChoiceRows(action: String, prompt: String) -> some View {
+        Text(prompt).font(.footnote).foregroundStyle(.secondary)
+        Button { pendingVerify = nil; chrome.run(action: action, skipVerify: false) } label: {
+            Label("Run tests", systemImage: "checkmark.circle")
+        }
+        if canSkipTests(action: action, prRequiresGreen: readiness?.prRequiresGreen ?? false) {
+            Button { pendingVerify = nil; chrome.run(action: action, skipVerify: true) } label: {
+                Label("Skip tests", systemImage: "forward")
+            }.foregroundStyle(.orange)
         }
     }
 
