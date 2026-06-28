@@ -80,6 +80,7 @@ data class ArchivedDto(
     val workdir: String = "",
     val agent: String = "claude",
     val killed_at: String? = null,
+    val repo_root: String? = null,
 )
 
 @Serializable
