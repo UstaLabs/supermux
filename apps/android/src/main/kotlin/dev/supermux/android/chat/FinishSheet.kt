@@ -241,6 +241,7 @@ private fun MenuBody(
     onDismiss: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
+    var pendingVerify by remember { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxWidth()) {
         // 1) Kickoff error
         if (runError != null) {
@@ -298,12 +299,33 @@ private fun MenuBody(
                 "Merge locally",
                 R.drawable.ic_git_merge,
                 color = if (readiness?.recommended == "merge") cs.primary else cs.onSurface,
-            ) { onFinish("merge", null, null, null, kickoff) }
-            PrRow(readiness, onFinish, kickoff)
-            ActionRow("Keep", R.drawable.ic_archive) {
-                onFinish("keep", null, null, null, kickoff); onDismiss()
+            ) { onConfirmDiscardChange(false); pendingVerify = if (pendingVerify == "merge") null else "merge" }
+            if (pendingVerify == "merge") {
+                VerifyChoiceRows(
+                    prompt = "Run tests before merging?",
+                    showSkip = canSkipTests("merge", readiness?.prRequiresGreen ?: false),
+                    onRun = { pendingVerify = null; onFinish("merge", false, null, null, kickoff) },
+                    onSkip = { pendingVerify = null; onFinish("merge", true, null, null, kickoff) },
+                )
             }
-            DiscardRows(confirmingDiscard, onConfirmDiscardChange, onFinish, kickoff)
+            PrRow(readiness) { onConfirmDiscardChange(false); pendingVerify = if (pendingVerify == "pr") null else "pr" }
+            if (pendingVerify == "pr") {
+                VerifyChoiceRows(
+                    prompt = "Run tests before opening the PR?",
+                    showSkip = canSkipTests("pr", readiness?.prRequiresGreen ?: false),
+                    onRun = { pendingVerify = null; onFinish("pr", false, null, null, kickoff) },
+                    onSkip = { pendingVerify = null; onFinish("pr", true, null, null, kickoff) },
+                )
+            }
+            ActionRow("Keep", R.drawable.ic_archive) {
+                pendingVerify = null; onFinish("keep", null, null, null, kickoff); onDismiss()
+            }
+            DiscardRows(
+                confirmingDiscard = confirmingDiscard,
+                onConfirmDiscardChange = { v -> if (v) pendingVerify = null; onConfirmDiscardChange(v) },
+                onFinish = onFinish,
+                kickoff = kickoff,
+            )
         }
     }
 }
@@ -383,8 +405,7 @@ private fun Chip(iconRes: Int, label: String, color: Color) {
 @Composable
 private fun PrRow(
     readiness: FinishReadiness?,
-    onFinish: (String, Boolean?, Boolean?, String?, (Boolean) -> Unit) -> Unit,
-    kickoff: (Boolean) -> Unit,
+    onClick: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     val label = if (readiness?.hasRemote == true && !readiness.ghAvailable) "Push & open PR" else "Open PR"
@@ -397,7 +418,7 @@ private fun PrRow(
         trailing = if (noRemote) {
             { Text("no remote", color = cs.onSurfaceVariant, fontSize = 12.sp) }
         } else null,
-    ) { onFinish("pr", null, null, null, kickoff) }
+    ) { onClick() }
 }
 
 @Composable
@@ -426,6 +447,34 @@ private fun DiscardRows(
                     ),
                 ) { Text("Discard") }
                 OutlinedButton(onClick = { onConfirmDiscardChange(false) }) { Text("Cancel") }
+            }
+        }
+    }
+}
+
+/** Inline Run/Skip choice shown under Merge/Open PR (mirrors the Discard confirm). */
+@Composable
+private fun VerifyChoiceRows(
+    prompt: String,
+    showSkip: Boolean,
+    onRun: () -> Unit,
+    onSkip: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+    ) {
+        // Lighter weight (onSurfaceVariant, 12.sp) is intentional: this is a neutral
+        // choice prompt, not the destructive Discard confirm (which uses onSurface, 13.sp).
+        Text(prompt, color = cs.onSurfaceVariant, fontSize = 12.sp)
+        Spacer(Modifier.size(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(onClick = onRun) { Text("Run tests") }
+            if (showSkip) {
+                OutlinedButton(
+                    onClick = onSkip,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = cs.tertiary),
+                ) { Text("Skip tests") }
             }
         }
     }
