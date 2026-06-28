@@ -33,7 +33,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
-import dev.supermux.android.DevConfig
 import dev.supermux.android.chat.TimelineItemRow
 import dev.supermux.android.chat.mergeTimeline
 import dev.supermux.android.theme.AppearanceMode
@@ -1251,7 +1250,7 @@ fun ArchivedScreen(
     var openedId by remember { mutableStateOf<String?>(null) }
     var selectedProject by remember { mutableStateOf<String?>(null) }
     var filterOpen by remember { mutableStateOf(false) }
-    val projects = remember(sessions) { archivedProjects(sessions, home) }
+    val projects = remember(sessions, home) { archivedProjects(sessions, home) }
     // Clear the filter if the selected project no longer has any archived sessions.
     LaunchedEffect(projects) {
         if (selectedProject != null && projects.none { it.key == selectedProject }) {
@@ -1337,7 +1336,7 @@ fun ArchivedScreen(
                     modifier = Modifier.align(Alignment.Center),
                 )
                 else -> {
-                    val visible = filterArchivedByProject(sessions, selectedProject)
+                    val visible = remember(sessions, selectedProject) { filterArchivedByProject(sessions, selectedProject) }
                     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
                         items(visible, key = { it.id }) { session ->
                             ArchivedRow(
