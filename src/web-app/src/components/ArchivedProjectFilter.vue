@@ -55,7 +55,7 @@ watch(open, async (isOpen) => {
   el?.focus?.()
 })
 
-watch(filteredProjects, () => {
+watch(options, () => {
   if (activeIndex.value >= options.value.length) {
     activeIndex.value = Math.max(0, options.value.length - 1)
   }
@@ -149,6 +149,10 @@ function onInputKeydown(e: KeyboardEvent) {
           <span class="shrink-0 text-xs tabular-nums text-muted-foreground">{{ opt.count }}</span>
           <Check v-if="opt.key === modelValue" class="size-4 shrink-0 text-primary" />
         </button>
+
+        <div v-if="filteredProjects.length === 0 && draft.trim()" class="px-3 py-8 text-center text-sm text-muted-foreground">
+          No matching projects
+        </div>
       </div>
     </DropdownMenuContent>
   </DropdownMenu>
