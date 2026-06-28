@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -32,6 +33,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
+import dev.supermux.android.DevConfig
 import dev.supermux.android.chat.TimelineItemRow
 import dev.supermux.android.chat.mergeTimeline
 import dev.supermux.android.theme.AppearanceMode
@@ -50,6 +52,9 @@ import dev.supermux.net.OpenCodeProvider
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.UpdateStatus
 import dev.supermux.android.session.relTime
+import dev.supermux.session.archivedProjects
+import dev.supermux.session.filterArchivedByProject
+import dev.supermux.session.formatWorkdir
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
@@ -1235,6 +1240,7 @@ fun ArchivedScreen(
     onBack: () -> Unit,
     onLoad: suspend () -> List<ArchivedDto>,
     onResume: (String) -> Unit,
+    home: String,
     loadLogs: suspend (String) -> List<LogEntry> = { emptyList() },
 ) {
     val cs = MaterialTheme.colorScheme
@@ -1243,6 +1249,15 @@ fun ArchivedScreen(
     var resumedIds by remember { mutableStateOf(setOf<String>()) }
     // Internal nav: tapping a row opens a read-only chat view of that session.
     var openedId by remember { mutableStateOf<String?>(null) }
+    var selectedProject by remember { mutableStateOf<String?>(null) }
+    var filterOpen by remember { mutableStateOf(false) }
+    val projects = remember(sessions) { archivedProjects(sessions, home) }
+    // Clear the filter if the selected project no longer has any archived sessions.
+    LaunchedEffect(projects) {
+        if (selectedProject != null && projects.none { it.key == selectedProject }) {
+            selectedProject = null
+        }
+    }
 
     LaunchedEffect(Unit) {
         sessions = onLoad()
@@ -1278,6 +1293,31 @@ fun ArchivedScreen(
                         )
                     }
                 },
+                actions = {
+                    if (sessions.isNotEmpty()) {
+                        Box {
+                            IconButton(onClick = { filterOpen = true }) {
+                                Icon(
+                                    Icons.Default.FilterList,
+                                    contentDescription = "Filter by project",
+                                    tint = if (selectedProject != null) cs.primary else cs.onSurface,
+                                )
+                            }
+                            DropdownMenu(expanded = filterOpen, onDismissRequest = { filterOpen = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("All projects") },
+                                    onClick = { selectedProject = null; filterOpen = false },
+                                )
+                                projects.forEach { p ->
+                                    DropdownMenuItem(
+                                        text = { Text("${p.label}  (${p.count})") },
+                                        onClick = { selectedProject = p.key; filterOpen = false },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = cs.surfaceContainerHigh,
                 ),
@@ -1296,18 +1336,22 @@ fun ArchivedScreen(
                     color = cs.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.Center),
                 )
-                else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
-                    items(sessions, key = { it.id }) { session ->
-                        ArchivedRow(
-                            session = session,
-                            resumed = session.id in resumedIds,
-                            onOpen = { openedId = session.id },
-                            onResume = {
-                                onResume(session.id)
-                                resumedIds = resumedIds + session.id
-                            },
-                        )
-                        HorizontalDivider(color = cs.outlineVariant)
+                else -> {
+                    val visible = filterArchivedByProject(sessions, selectedProject)
+                    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
+                        items(visible, key = { it.id }) { session ->
+                            ArchivedRow(
+                                session = session,
+                                home = home,
+                                resumed = session.id in resumedIds,
+                                onOpen = { openedId = session.id },
+                                onResume = {
+                                    onResume(session.id)
+                                    resumedIds = resumedIds + session.id
+                                },
+                            )
+                            HorizontalDivider(color = cs.outlineVariant)
+                        }
                     }
                 }
             }
@@ -1316,7 +1360,7 @@ fun ArchivedScreen(
 }
 
 @Composable
-private fun ArchivedRow(session: ArchivedDto, resumed: Boolean, onOpen: () -> Unit, onResume: () -> Unit) {
+private fun ArchivedRow(session: ArchivedDto, home: String, resumed: Boolean, onOpen: () -> Unit, onResume: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Row(
         Modifier
@@ -1328,7 +1372,7 @@ private fun ArchivedRow(session: ArchivedDto, resumed: Boolean, onOpen: () -> Un
         Column(Modifier.weight(1f)) {
             Text(session.name, color = cs.onSurface, fontWeight = FontWeight.Medium, fontSize = 14.sp)
             Text(
-                session.workdir,
+                formatWorkdir(session.repo_root ?: session.workdir, home),
                 color = cs.onSurfaceVariant,
                 fontSize = 11.sp,
                 fontFamily = FontFamily.Monospace,
