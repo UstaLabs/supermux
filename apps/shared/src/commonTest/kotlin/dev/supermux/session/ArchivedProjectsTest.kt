@@ -66,6 +66,34 @@ class ArchivedProjectsTest {
     }
 
     @Test
+    fun ties_break_alphabetically_by_label() {
+        assertEquals(
+            listOf("~/projects/alpha", "~/projects/beta"),
+            archivedProjects(
+                listOf(
+                    a("/home/ahmet/projects/beta", killed = "2026-06-05T00:00:00Z"),
+                    a("/home/ahmet/projects/alpha", killed = "2026-06-05T00:00:00Z"),
+                ),
+                HOME,
+            ).map { it.label },
+        )
+    }
+
+    @Test
+    fun null_killed_at_sorts_last() {
+        assertEquals(
+            listOf("~/projects/recent", "~/projects/null-killed"),
+            archivedProjects(
+                listOf(
+                    a("/home/ahmet/projects/null-killed", killed = null),
+                    a("/home/ahmet/projects/recent", killed = "2026-06-10T00:00:00Z"),
+                ),
+                HOME,
+            ).map { it.label },
+        )
+    }
+
+    @Test
     fun filter_matches_by_key() {
         val sessions = listOf(a("/home/ahmet/projects/foo"), a("/home/ahmet/projects/bar"))
         assertEquals(

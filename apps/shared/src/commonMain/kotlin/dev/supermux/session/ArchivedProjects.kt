@@ -13,7 +13,7 @@ private fun projectKey(s: ArchivedDto): String = s.repo_root ?: s.workdir
  * Label uses [formatWorkdir]; ties broken alphabetically by label.
  */
 fun archivedProjects(sessions: List<ArchivedDto>, home: String?): List<ArchivedProject> {
-    data class Acc(val key: String, val label: String, var count: Int, var latest: String)
+    class Acc(val key: String, val label: String, var count: Int, var latest: String)
     val byKey = LinkedHashMap<String, Acc>()
     for (s in sessions) {
         val key = projectKey(s)
