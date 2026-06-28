@@ -594,7 +594,8 @@ struct ArchivedView: View {
                                     Spacer(minLength: 6)
                                     Text(a.agent).font(.caption2).foregroundStyle(Theme.teal.opacity(0.8))
                                 }
-                                Text(formatWorkdir(workdir: a.repo_root ?? a.workdir, home: inferHomeDir(workdir: a.repo_root ?? a.workdir)))
+                                let projectPath = a.repo_root ?? a.workdir
+                                Text(formatWorkdir(workdir: projectPath, home: inferHomeDir(workdir: projectPath)))
                                     .font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(1)
                                 if let k = a.killed_at {
                                     Text("Archived \(archivedDate(k))").font(.caption2).foregroundStyle(.tertiary)
@@ -626,6 +627,7 @@ struct ArchivedView: View {
                         Image(systemName: projectFilter == nil
                             ? "line.3.horizontal.decrease.circle"
                             : "line.3.horizontal.decrease.circle.fill")
+                            .accessibilityLabel(projectFilter == nil ? "Filter by project" : "Filter active")
                     }
                 }
             }
