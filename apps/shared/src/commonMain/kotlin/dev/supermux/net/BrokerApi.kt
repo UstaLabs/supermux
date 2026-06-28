@@ -311,6 +311,7 @@ data class FinishReadiness(
     val conflictPreflight: String = "unknown", // "clean" | "will_conflict" | "unknown"
     val recommended: String = "merge",         // "merge" | "pr"
     val nothingToLand: Boolean = false,
+    val prRequiresGreen: Boolean = false,
 )
 
 /** POST /sessions/<id>/verify/suggest → suggested verify command/content + its source. */
