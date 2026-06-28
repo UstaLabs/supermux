@@ -62,6 +62,7 @@ export interface FinishReadiness {
   conflictPreflight: "clean" | "will_conflict" | "unknown"
   recommended: "merge" | "pr"
   nothingToLand: boolean
+  prRequiresGreen?: boolean
 }
 // In-app updater (GET /api/update/status). Mirrors the broker's UpdateStatus
 // shape (src/core/update/checker.ts) plus `disabled` when MUX_UPDATE_CHECK=0.
