@@ -2,6 +2,7 @@
 import { ref, computed, watch } from "vue"
 import { api, type FinishReadiness } from "@/api/client"
 import { useFinishJob } from "@/stores/finishJob"
+import { canSkipTests } from "@/lib/finish"
 import { toast } from "vue-sonner"
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet"
 import {
@@ -26,6 +27,7 @@ const job = computed(() => finishJob.bySession[props.sessionId])
 const readiness = ref<FinishReadiness | null>(null)
 const loadingReadiness = ref(false)
 const confirmingDiscard = ref(false)
+const pendingVerify = ref<"merge" | "pr" | null>(null)
 const commitMessage = ref("Session changes")
 const verifyDraft = ref<{ content: string; source: string } | null>(null)
 const verifySaving = ref(false)
@@ -46,6 +48,7 @@ function setOpen(v: boolean) { emit("update:open", v) }
 watch(() => props.open, async (o) => {
   if (!o) return
   confirmingDiscard.value = false
+  pendingVerify.value = null
   verifyDraft.value = null
   if (job.value && job.value.status !== "running") finishJob.ack(props.sessionId)
   if (!job.value || job.value.status === "done") await loadReadiness()
@@ -70,9 +73,13 @@ async function run(body: { action: "merge" | "pr" | "keep" | "discard"; skipVeri
 }
 
 function merge() { void run({ action: "merge" }) }
-function openPr() { void run({ action: "pr" }) }
-function keep() { void run({ action: "keep" }); setOpen(false) }
-function confirmDiscard() { confirmingDiscard.value = true }
+function pickMerge() { pendingVerify.value = pendingVerify.value === "merge" ? null : "merge" }
+function pickPr() { pendingVerify.value = pendingVerify.value === "pr" ? null : "pr" }
+function chooseRun() { const a = pendingVerify.value; pendingVerify.value = null; if (a) void run({ action: a, skipVerify: false }) }
+function chooseSkip() { const a = pendingVerify.value; pendingVerify.value = null; if (a) void run({ action: a, skipVerify: true }) }
+const canSkip = computed(() => pendingVerify.value != null && canSkipTests(pendingVerify.value, readiness.value?.prRequiresGreen ?? false))
+function keep() { pendingVerify.value = null; void run({ action: "keep" }); setOpen(false) }
+function confirmDiscard() { pendingVerify.value = null; confirmingDiscard.value = true }
 function doDiscard() { confirmingDiscard.value = false; void run({ action: "discard" }) }
 function mergeAnyway() { void run({ action: "merge", skipVerify: true }) }
 function commitAndContinue() { void run({ action: job.value?.action === "pr" ? "pr" : "merge", commitFirst: true, commitMessage: commitMessage.value }) }
@@ -186,11 +193,33 @@ function dismiss() { finishJob.clear(props.sessionId); setOpen(false) }
                   ? 'bg-emerald-600 text-white hover:bg-emerald-500'
                   : 'border border-border bg-card text-foreground hover:bg-accent',
               ]"
-              @click="merge"
+              @click="pickMerge"
             >
               <LoaderCircle v-if="busy" class="size-4 animate-spin" /><GitMerge v-else class="size-4" />
               Merge locally
             </button>
+
+            <div
+              v-if="pendingVerify === 'merge'"
+              class="rounded-lg border border-border bg-card px-3 py-2.5 flex flex-col gap-2"
+            >
+              <span class="text-[12px] text-muted-foreground">Run tests before merging?</span>
+              <div class="flex items-center gap-2">
+                <button
+                  type="button"
+                  :disabled="busy"
+                  class="flex-1 text-[12px] px-2.5 py-2 rounded-md bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-60 transition-colors"
+                  @click="chooseRun"
+                >Run tests</button>
+                <button
+                  v-if="canSkip"
+                  type="button"
+                  :disabled="busy"
+                  class="flex-1 text-[12px] px-2.5 py-2 rounded-md border border-amber-500/40 text-amber-400 hover:bg-amber-500/10 disabled:opacity-60 transition-colors"
+                  @click="chooseSkip"
+                >Skip tests</button>
+              </div>
+            </div>
 
             <button
               type="button"
@@ -201,13 +230,35 @@ function dismiss() { finishJob.clear(props.sessionId); setOpen(false) }
                   ? 'bg-emerald-600 text-white hover:bg-emerald-500'
                   : 'border border-border bg-card text-foreground hover:bg-accent',
               ]"
-              @click="openPr"
+              @click="pickPr"
             >
               <LoaderCircle v-if="busy" class="size-4 animate-spin" /><GitPullRequest v-else class="size-4" />
               <span v-if="readiness && readiness.hasRemote && !readiness.ghAvailable">Push &amp; open PR</span>
               <span v-else>Open PR</span>
               <span v-if="readiness && !readiness.hasRemote" class="text-[11px] font-normal opacity-70">no remote</span>
             </button>
+
+            <div
+              v-if="pendingVerify === 'pr'"
+              class="rounded-lg border border-border bg-card px-3 py-2.5 flex flex-col gap-2"
+            >
+              <span class="text-[12px] text-muted-foreground">Run tests before opening the PR?</span>
+              <div class="flex items-center gap-2">
+                <button
+                  type="button"
+                  :disabled="busy"
+                  class="flex-1 text-[12px] px-2.5 py-2 rounded-md bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-60 transition-colors"
+                  @click="chooseRun"
+                >Run tests</button>
+                <button
+                  v-if="canSkip"
+                  type="button"
+                  :disabled="busy"
+                  class="flex-1 text-[12px] px-2.5 py-2 rounded-md border border-amber-500/40 text-amber-400 hover:bg-amber-500/10 disabled:opacity-60 transition-colors"
+                  @click="chooseSkip"
+                >Skip tests</button>
+              </div>
+            </div>
 
             <button
               type="button"
