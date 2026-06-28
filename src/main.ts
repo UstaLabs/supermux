@@ -120,12 +120,14 @@ import { ActivityStore } from "./core/session-manager/activity-store"
 import { AgentStateStore } from "./core/session-manager/agent-state-store"
 import { TranscriptTailer } from "./core/agents/claude/transcript-tailer"
 import { claudeTranscriptPath } from "./core/agents/claude/transcript-path"
+import { renderTranscript } from "./core/search/transcript-render"
 import { normalizeToolName } from "./core/agents/tool-normalize"
 import { gcOrphanAgentHomes, reclaimCursorHomes } from "./core/agents/shared-runtime"
 import { CuratorScheduler } from "./core/curator/scheduler"
 import { runCurator, type CuratorDeps } from "./core/curator/run"
 import { curatorPromptPath } from "./core/runtime-assets"
 import { SettingsStore } from "./core/settings/store"
+import { SearchStore } from "./core/search/store"
 import { ForgeStore } from "./core/forge/store"
 import { ForgeService } from "./core/forge/service"
 import { detectForgeClis, importCliToken } from "./core/forge/cli-import"
@@ -315,6 +317,17 @@ if (existsSync(REGISTRY_FILE)) {
 const filesDir = join(STATE_DIR, "files")
 const fileStore = new FileStore(db, filesDir)
 const messageLog = new MessageStore(db, fileStore)
+const searchStore = new SearchStore(db, MUX_HOME)
+try {
+  searchStore.rebuildKnowledge()
+  searchStore.rebuildSessions()
+} catch (err: any) {
+  log.warn("search_index_rebuild_failed", { err: err?.message ?? String(err) })
+}
+// Keep find_sessions fresh: index each new broker message as it lands.
+messageLog.on("append", (sessionId: string, entry: any) => {
+  try { searchStore.indexMessage(sessionId, entry.ts, entry.text ?? "") } catch { /* index is rebuildable */ }
+})
 const activityStore = new ActivityStore()
 const agentStateStore = new AgentStateStore()
 
@@ -2131,7 +2144,7 @@ const server = await startSocketServer({
       const fromSession = msg.session_id
       const s = registry.get(fromSession)  // Look up by UUID
       const op = msg.op
-      const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject"])
+      const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session"])
       if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
         return { ok: false, error: "permission denied (can_orchestrate=false)" }
       }
@@ -2217,6 +2230,34 @@ const server = await startSocketServer({
         case "list_sessions":  { return { ok: true, value: registry.listVisible().map((s: any) => ({ name: s.name, workdir: s.workdir, mute: s.mute })) } }
         case "set_active":     { const t = registry.resolveName(stringArg(op.args, "name")); if (!t) return { ok: false, error: "no such session" }; registry.setActive(stringArg(op.args, "chat_id"), t.id); return { ok: true, value: "ok" } }
         case "get_active":     { return { ok: true, value: registry.getActive(stringArg(op.args, "chat_id")) } }
+        case "memory_search": {
+          const q = stringArg(op.args, "query")
+          const limit = typeof op.args?.limit === "number" ? op.args.limit : 10
+          const includePersonal = s?.role === "personal_assistant"
+          return { ok: true, value: searchStore.searchKnowledge(q, { includePersonal, limit }) }
+        }
+        case "find_sessions": {
+          const q = stringArg(op.args, "query")
+          const limit = typeof op.args?.limit === "number" ? op.args.limit : 10
+          return { ok: true, value: searchStore.searchSessions(q, {
+            project: typeof op.args?.project === "string" ? op.args.project : undefined,
+            since: typeof op.args?.since === "string" ? op.args.since : undefined,
+            agent: typeof op.args?.agent === "string" ? op.args.agent : undefined,
+            limit,
+          }) }
+        }
+        case "read_session": {
+          const id = stringArg(op.args, "session_id")
+          const row = db.query("SELECT workdir, agent, agent_session_id FROM sessions WHERE id = ? AND internal = 0").get(id) as { workdir: string; agent: string; agent_session_id: string | null } | null
+          if (!row) return { ok: false, error: "no such session" }
+          if (row.agent !== "claude" || !row.agent_session_id) {
+            return { ok: true, value: { transcript: false, note: "no JSONL transcript for this agent; use the broker message history", messages: messageLog.get(id, 200) } }
+          }
+          const includeToolCalls = op.args?.include_tool_calls !== false
+          const grep = typeof op.args?.grep === "string" ? op.args.grep : undefined
+          const text = renderTranscript(claudeTranscriptPath(row.workdir, row.agent_session_id), { includeToolCalls, grep })
+          return { ok: true, value: { transcript: true, session_id: id, text } }
+        }
         case "expose_port": {
           if (!s) return { ok: false, error: "unknown session" }
           const port = optionalNumberArg(op.args, "port")
@@ -3264,6 +3305,7 @@ const modelRefreshInterval = setInterval(() => {
         for (const s of pushStore.all()) await pushSender.sendToDevice(s.device, payload)
         for (const r of deviceTokenStore.all()) if (r.routing_token) await nativeSender.sendToDevice(r.device, payload)
       },
+      reindex: () => { searchStore.rebuildKnowledge() },
   }
   curatorScheduler = new CuratorScheduler(() => runCurator(curatorDeps))
   curatorScheduler.reconfigure(settings.getCurator())
