@@ -380,6 +380,7 @@ class MainActivity : ComponentActivity() {
                             onBack = { navController.popBackStack() },
                             onLoad = { vm.archived() },
                             onResume = { vm.resume(it) },
+                            home = DevConfig.HOME,
                             loadLogs = { vm.archivedLogs(it) },
                         )
                     }
