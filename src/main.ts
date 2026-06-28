@@ -1396,6 +1396,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         agent: s.agent,
         model: s.model,
         killed_at: s.killed_at,
+        repo_root: s.repo_root,
       })),
     resumeFromArchive: (id: string) => resumeFromArchive(id),
     getAppConfig: () => settings.getAppConfig(appConfigEnv),
