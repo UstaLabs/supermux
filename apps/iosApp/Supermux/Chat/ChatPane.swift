@@ -146,6 +146,10 @@ struct ChatPane: View {
 
     /// (Re)load per-session state owned by this pane. Called on first open and session switch.
     private func loadPane() {
+        // Seed the transcript if we don't have it yet — a session resumed from archive arrives
+        // via `session_added` (no history), so without this its chat would be empty until the
+        // next snapshot/restart. No-op for sessions the snapshot already populated.
+        Task { await broker.ensureMessagesLoaded(session.id) }
         Task { reasoning = await broker.reasoning(session.id) }
         Task { await composer.loadGlossary() }
     }

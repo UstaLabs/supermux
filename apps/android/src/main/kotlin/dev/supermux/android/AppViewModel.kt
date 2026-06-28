@@ -606,6 +606,28 @@ class AppViewModel(
     suspend fun archivedLogs(sessionId: String): List<LogEntry> =
         runCatching { api.archivedLogs(sessionId) }.getOrNull() ?: emptyList()
 
+    /**
+     * Lazily fetch a session's transcript when we don't already have it. The WS `Snapshot`
+     * (sent on connect) seeds [messages] for every session live at connect time, and
+     * `MessageAppend` keeps them current — but a session resumed from archive arrives via a
+     * `SessionAdded` frame, which carries NO history, so its transcript stays empty until the
+     * next reconnect/snapshot (e.g. an app restart). Calling this on chat-open closes that gap.
+     * Web/iOS parity: web ChatView.loadMessages / iOS BrokerSession.ensureMessagesLoaded fetch
+     * GET /sessions/:id/messages (the same endpoint [archivedLogs] hits) when the store has
+     * nothing for the session. No-op when the snapshot already populated it.
+     */
+    fun ensureMessagesLoaded(sessionId: String) {
+        if (_messages.value[sessionId]?.isNotEmpty() == true) return
+        viewModelScope.launch {
+            val fetched = archivedLogs(sessionId)
+            // Re-check after the await: a live MessageAppend / optimistic send / fresh snapshot
+            // may have populated the buffer while the fetch was in flight — don't clobber it.
+            if (fetched.isNotEmpty() && _messages.value[sessionId]?.isNotEmpty() != true) {
+                _messages.update { it + (sessionId to fetched) }
+            }
+        }
+    }
+
     // ── Editor filesystem ──────────────────────────────────────────────────────
 
     suspend fun fsList(sessionId: String, path: String): List<FsEntry> =

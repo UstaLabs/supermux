@@ -294,6 +294,24 @@ final class BrokerSession {
     func resume(_ id: String) { Task { [api] in try? await api.resume(id: id) } }
     func archivedLogs(_ id: String) async -> [LogEntry] { (try? await api.archivedLogs(sessionId: id)) ?? [] }
 
+    /// Lazily fetch a session's transcript when we don't already have it. The WS `snapshot`
+    /// (sent on connect) seeds `messages` for every session live at connect time, and
+    /// `message_append` keeps them current — but a session resumed from archive arrives via a
+    /// `session_added` frame, which carries NO history, so its transcript stays empty until the
+    /// next reconnect/snapshot (e.g. an app restart). Calling this on chat-open closes that gap.
+    /// Web parity: `ChatView.vue` `loadMessages()` fetches GET /sessions/:id/messages when its
+    /// store has nothing for the session — and `archivedLogs` hits that same endpoint, which
+    /// serves any session, live or archived.
+    func ensureMessagesLoaded(_ sessionId: String) async {
+        guard messages[sessionId]?.isEmpty ?? true else { return }
+        let fetched = await archivedLogs(sessionId)
+        // Re-check after the await: a live `message_append`, an optimistic send, or a fresh
+        // snapshot may have populated the buffer while the fetch was in flight — don't clobber
+        // newer state with the historical fetch.
+        guard messages[sessionId]?.isEmpty ?? true else { return }
+        if !fetched.isEmpty { messages[sessionId] = fetched }
+    }
+
     // Usage (typed), device mint/revoke, proxy privacy — mirror the web pages.
     func usage() async -> UsageResponse? { try? await api.usage() }
     func addDevice(_ name: String) async -> AddDeviceResponse? { try? await api.addDevice(name: name) }

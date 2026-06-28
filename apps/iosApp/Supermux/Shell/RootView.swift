@@ -74,6 +74,20 @@ struct RootView: View {
                 debugArchived = ArchivedItem(id: a.id, dto: a)
             }
         }
+        .task(id: broker.synced) {
+            // Debug: reproduce resume-from-archive → open the now-live chat, to verify the
+            // transcript loads on open (SM_RESUME_OPEN=<archived session name>). Mirrors the user
+            // repro: resume from archive, tap the chat — it must show messages, not be empty.
+            guard broker.synced, selected == nil else { return }
+            guard let want = ProcessInfo.processInfo.environment["SM_RESUME_OPEN"],
+                  let a = (await broker.archived()).first(where: { $0.name == want }) else { return }
+            broker.resume(a.id)
+            // Wait for the session_added frame to land the resumed session in the live list, then open it.
+            for _ in 0..<40 {
+                if let m = broker.sessions.first(where: { $0.id == a.id }) { selected = m.id; return }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
         .fullScreenCover(item: $debugArchived) { item in
             NavigationStack { ArchivedChatView(broker: broker, archived: item.dto) }
         }

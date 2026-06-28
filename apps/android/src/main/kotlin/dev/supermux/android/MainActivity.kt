@@ -156,6 +156,11 @@ class MainActivity : ComponentActivity() {
                 var selected by rememberSaveable { mutableStateOf<String?>(null) }
                 val liveSessionIds = remember(sessions) { sessions.map { it.id }.toSet() }
                 val (visitedSessions, removeVisited) = rememberVisitedSessions(selected, liveSessionIds)
+                // A session resumed from archive arrives via `session_added` (no history), so its
+                // transcript would be empty until the next snapshot/restart. Seed it whenever a chat
+                // is opened — a no-op for sessions the snapshot already populated. (iOS parity:
+                // ChatPane.loadPane → BrokerSession.ensureMessagesLoaded.)
+                LaunchedEffect(selected) { selected?.let { vm.ensureMessagesLoaded(it) } }
 
                 val windowSizeClass = calculateWindowSizeClass(this)
                 val expanded = windowSizeClass.widthSizeClass == WindowWidthSizeClass.Expanded
