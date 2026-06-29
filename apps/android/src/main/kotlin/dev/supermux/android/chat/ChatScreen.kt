@@ -3,6 +3,7 @@ package dev.supermux.android.chat
 import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibilityScope
@@ -105,6 +106,10 @@ import dev.supermux.util.formatDuration
 import dev.supermux.android.display.DisplayPanel
 import dev.supermux.android.ui.keepAlivePanel
 import dev.supermux.android.editor.EditorPanel
+import dev.supermux.android.editor.PendingEditorOpen
+import dev.supermux.session.inferHomeDir
+import dev.supermux.ui.FilePathRef
+import dev.supermux.ui.toWorkdirRelativePath
 import dev.supermux.android.terminal.TerminalPanel
 import dev.supermux.android.session.SessionAvatar
 import dev.supermux.android.theme.HapticKind
@@ -332,6 +337,19 @@ fun ChatScreen(
     var showKillDialog by remember { mutableStateOf(false) }
     var headerMenuExpanded by remember { mutableStateOf(false) }
     var activePanel by remember { mutableStateOf(SessionPanel.Chat) }
+
+    var pendingEditorOpen by remember(session.id) { mutableStateOf<PendingEditorOpen?>(null) }
+    val onOpenFile: (FilePathRef) -> Unit = remember(session.id) {
+        { ref ->
+            val rel = toWorkdirRelativePath(ref.path, session.workdir, inferHomeDir(session.workdir))
+            if (rel == null) {
+                Toast.makeText(context, "File is outside this session's project", Toast.LENGTH_SHORT).show()
+            } else {
+                pendingEditorOpen = PendingEditorOpen(rel, ref.line, ref.endLine)
+                activePanel = SessionPanel.Editor
+            }
+        }
+    }
 
     // On first composition (or session change) fetch reasoning to decide pill visibility
     LaunchedEffect(session.id) {
@@ -719,7 +737,7 @@ fun ChatScreen(
                 verticalArrangement = Arrangement.spacedBy(Space.lg),
             ) {
                 items(timelineItems, key = { timelineItemKey(it) }) { item ->
-                    TimelineItemRow(item, loadBytes)
+                    TimelineItemRow(item, loadBytes, onOpenFile)
                 }
                 // Live working indicator pinned to the bottom (iOS renders it below the last block).
                 if (working && agent != null) {
@@ -1202,6 +1220,8 @@ fun ChatScreen(
                     lspRpcOut = lspRpcOut,
                     lspClose = lspClose,
                     onConsumesBackChange = onEditorConsumesBackChange,
+                    pendingOpen = pendingEditorOpen,
+                    onPendingOpenConsumed = { pendingEditorOpen = null },
                     modifier = Modifier.keepAlivePanel(activePanel == SessionPanel.Editor),
                 )
             }
