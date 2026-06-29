@@ -1,24 +1,16 @@
 package dev.supermux.android.chat
 
-import android.Manifest
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.content.TransferableContent
@@ -107,7 +99,6 @@ import androidx.compose.ui.unit.sp
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.core.content.FileProvider
 import java.io.File
-import dev.supermux.android.DevConfig
 import dev.supermux.android.R
 import dev.supermux.android.theme.Radii
 import dev.supermux.util.formatDuration
@@ -292,10 +283,9 @@ fun ChatScreen(
         if (ok && uri != null) scope.launch { stageFromUri(uri) }
     }
 
-    // ── voice dictation (record → transcribe → into composer) ─────────────────
-    // Composer draft text. Hoisted here (not inside the composer Column) so the dictation
-    // drive logic below can append cleaned/raw transcripts into the same state the
-    // BasicTextField edits (risk §5). If `text` is ever moved to the VM, move appendToDraft too.
+    // Composer draft text. Hoisted here (not inside the composer Column) so the shared dictation
+    // controller (below) can append cleaned/raw transcripts into the same state the BasicTextField
+    // edits, via its `onAppend` sink (risk §5).
     var text by remember { mutableStateOf("") }
 
     // ── per-session draft persistence (DataStore; survives switch + process death) §3 ──
@@ -315,129 +305,16 @@ fun ChatScreen(
         saveDraft(session.id, text)
     }
 
-    val recorder = remember { VoiceRecorder(context) }
-    val dictation = remember { DictationEngine(context) }
-    var recording by remember { mutableStateOf(false) }     // audio (whisper) path active
-    var listening by remember { mutableStateOf(false) }     // on-device STT active
-    var transcribing by remember { mutableStateOf(false) }  // POST in flight ("Transcribing…")
-    var liveTranscript by remember { mutableStateOf("") }   // on-device partials
-    var recordingSeconds by remember { mutableIntStateOf(0) }
-    var micDenied by remember { mutableStateOf(false) }
-    var banner by remember { mutableStateOf<String?>(null) }
-    val glossary = remember { mutableStateListOf<String>() }
-    LaunchedEffect(session.id) { glossary.clear(); glossary.addAll(loadGlossary()) }
-
-    // Elapsed-seconds timer while either recording mode is active.
-    LaunchedEffect(recording || listening) {
-        if (recording || listening) {
-            recordingSeconds = 0
-            while (true) {
-                delay(1000)
-                recordingSeconds++
-            }
-        }
-    }
-
-    // Auto-clear the transient banner (~4s), parity with iOS showBanner.
-    LaunchedEffect(banner) {
-        if (banner != null) {
-            delay(4000)
-            banner = null
-        }
-    }
-
-    // ── dictation drive logic (kept here so it shares `text`/state) ───────────
-    fun appendToDraft(s: String) {
-        val t = s.trim()
-        if (t.isEmpty()) return
-        text = if (text.isBlank()) t else text.trimEnd() + " " + t
-    }
-
-    suspend fun runTranscription(rawFallback: String?, call: suspend () -> String?) {
-        transcribing = true
-        try {
-            val cleaned = call()?.trim()
-            when {
-                !cleaned.isNullOrEmpty() -> appendToDraft(cleaned)
-                !rawFallback.isNullOrBlank() -> appendToDraft(rawFallback)  // keep on-device draft
-                else -> banner = "Transcription failed"                     // nothing to keep
-            }
-        } finally {
-            transcribing = false
-        }
-    }
-
-    fun startMic() {
-        haptic(HapticKind.Tick)
-        val started =
-            if (DevConfig.ENABLE_ONDEVICE_STT) dictation.start(glossary.toList())
-            else DictationStart.UNAVAILABLE
-        when (started) {
-            DictationStart.STARTED -> {
-                listening = true
-                liveTranscript = ""
-                dictation.onPartial = { liveTranscript = it }
-            }
-            DictationStart.DENIED -> micDenied = true
-            DictationStart.UNAVAILABLE -> {  // whisper path
-                recorder.start()
-                recording = true
-            }
-        }
-    }
-
-    fun stopMic() {
-        haptic(HapticKind.Tick)
-        if (listening) {
-            listening = false
-            val draft = dictation.stop()
-            if (draft.isBlank()) { banner = "Didn't catch that"; return }
-            scope.launch { runTranscription(rawFallback = draft) { transcribeDraft(draft) } }
-        } else if (recording) {
-            recording = false
-            val f = recorder.stop()
-            if (f == null) { banner = "Didn't catch that"; return }
-            scope.launch(Dispatchers.IO) {
-                val bytes = f.readBytes()
-                val name = f.name
-                withContext(Dispatchers.Main) {
-                    runTranscription(rawFallback = null) { transcribeAudio(bytes, name) }
-                }
-            }
-        }
-    }
-
-    fun cancelMic() {
-        dictation.cancel()
-        recorder.cancel()
-        listening = false
-        recording = false
-        liveTranscript = ""
-    }
-
-    // Mic needs RECORD_AUDIO for BOTH paths (MediaRecorder + SpeechRecognizer). A fresh grant
-    // routes through startMic() so it makes the same on-device-vs-audio decision. A permanent
-    // denial returns granted=false with no re-prompt → show the "enable in Settings" dialog.
-    val audioPermLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        if (granted) startMic() else micDenied = true
-    }
-
-    fun onMicClick() {
-        val hasPerm = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.RECORD_AUDIO,
-        ) == PackageManager.PERMISSION_GRANTED
-        if (hasPerm) startMic()
-        else audioPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
-    }
-
-    // Cancel any in-flight recording when this session leaves composition / is switched away,
-    // so a backgrounded recording never leaks the mic or posts stale audio (risk §6, iOS parity).
-    DisposableEffect(session.id) {
-        onDispose { cancelMic() }
-    }
+    // Voice dictation (record → broker cleanup → into the composer draft `text`). The drive logic,
+    // permission flow, and RecordingBar all live in Dictation.kt so chat and the new-session
+    // launcher share ONE implementation (the launcher previously skipped the cleanup pass).
+    val mic = rememberDictation(
+        resetKey = session.id,
+        loadGlossary = loadGlossary,
+        transcribeDraft = transcribeDraft,
+        transcribeAudio = transcribeAudio,
+        onAppend = { text = if (text.isBlank()) it else text.trimEnd() + " " + it },
+    )
 
     // ── model picker state ───────────────────────────────────────────────────
     var modelsData by remember { mutableStateOf<ModelsResponse?>(null) }
@@ -1048,7 +925,7 @@ fun ChatScreen(
             }
 
             // ── transient banner (transcription failed / didn't catch that) ──
-            banner?.let { msg ->
+            mic.banner?.let { msg ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1064,34 +941,15 @@ fun ChatScreen(
             }
 
             // ── "Transcribing…" indicator (parity with iOS transcribingBar) ──
-            if (transcribing) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(12.dp),
-                        color = MaterialTheme.colorScheme.primary,
-                        strokeWidth = 1.5.dp,
-                    )
-                    Text(
-                        text = "Transcribing…",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 12.sp,
-                    )
-                }
-            }
+            if (mic.transcribing) TranscribingIndicator()
 
             // ── Composer takeover: RecordingBar replaces the card while dictating ──
-            if (recording || listening) {
+            if (mic.recording || mic.listening) {
                 RecordingBar(
-                    seconds = recordingSeconds,
-                    liveTranscript = liveTranscript,
-                    onStop = { stopMic() },
-                    onCancel = { cancelMic() },
+                    seconds = mic.recordingSeconds,
+                    liveTranscript = mic.liveTranscript,
+                    onStop = { mic.stopMic() },
+                    onCancel = { mic.cancelMic() },
                 )
             } else Column(
                 modifier = Modifier
@@ -1266,26 +1124,11 @@ fun ChatScreen(
 
                     // Mic button — starts dictation (the RecordingBar takes over while active).
                     // Disabled while a transcription POST is in flight. 48dp tap target / 32dp visual.
-                    IconButton(
-                        onClick = { onMicClick() },
-                        enabled = !transcribing,
+                    MicButton(
+                        onClick = { mic.onMicClick() },
+                        enabled = !mic.transcribing,
                         modifier = Modifier.testTag("chat_mic"),
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(androidx.compose.foundation.shape.CircleShape)
-                                .background(MaterialTheme.colorScheme.surfaceContainer),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_mic),
-                                contentDescription = "Record voice",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(16.dp),
-                            )
-                        }
-                    }
+                    )
 
                     // Circular send button — ALWAYS sends (iOS parity); the Stop/interrupt
                     // affordance lives in the transcript WorkingIndicator, not here. Scale press +
@@ -1450,16 +1293,7 @@ fun ChatScreen(
     }
 
     // ── mic-permission-denied dialog (parity with iOS ChatPane) ───────────────
-    if (micDenied) {
-        AlertDialog(
-            onDismissRequest = { micDenied = false },
-            title = { Text("Microphone access needed") },
-            text = { Text("Enable microphone access in Settings to dictate messages.") },
-            confirmButton = {
-                TextButton(onClick = { micDenied = false }) { Text("OK") }
-            },
-        )
-    }
+    if (mic.micDenied) MicDeniedDialog(onDismiss = { mic.micDenied = false })
 
     // ── bottom sheets ────────────────────────────────────────────────────────
     if (showModelSheet) {
@@ -1482,105 +1316,6 @@ fun ChatScreen(
             onPick = { onPickEffort(it) },
             onDismiss = { showEffortSheet = false },
         )
-    }
-}
-
-/**
- * Recording takeover of the composer row (parity with iOS RecordingBar): a small de-emphasized
- * trash CANCEL far left, a blinking red dot + mono timer, and a big primary STOP where Send
- * normally sits. When on-device STT has partial text, a scrollable live transcript sits above.
- *
- * Touch-target rule: STOP is a 48dp visual inside a ≥48dp IconButton (the obvious large target);
- * CANCEL is a 32dp visual inside the 48dp IconButton min-size, so an accidental cancel is hard.
- */
-@Composable
-private fun RecordingBar(
-    seconds: Int,
-    liveTranscript: String,   // "" when audio-only (no on-device)
-    onStop: () -> Unit,       // big STOP (transcribe)
-    onCancel: () -> Unit,     // small trash (discard)
-) {
-    val cs = MaterialTheme.colorScheme
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 10.dp),
-    ) {
-        // Live transcript area (only when on-device STT has partial text). maxHeight ~120dp, scroll.
-        if (liveTranscript.isNotBlank()) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 120.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(cs.surfaceContainer)
-                    .verticalScroll(rememberScrollState())
-                    .padding(12.dp),
-            ) {
-                Text(liveTranscript, color = cs.onSurface, fontSize = 14.sp)
-            }
-            Spacer(Modifier.height(8.dp))
-        }
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Space.sm),
-        ) {
-            // 1) Small de-emphasized CANCEL (trash), 48dp tap target / 32dp visual, far left.
-            IconButton(onClick = onCancel, modifier = Modifier.testTag("voice_cancel")) {
-                Box(
-                    Modifier
-                        .size(32.dp)
-                        .clip(CircleShape)
-                        .background(cs.surfaceContainer),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        painterResource(R.drawable.ic_trash),
-                        contentDescription = "Discard recording",
-                        tint = cs.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-            }
-            // 2) Blinking red dot + mono timer
-            val blink by rememberInfiniteTransition(label = "rec").animateFloat(
-                initialValue = 1f,
-                targetValue = 0.3f,
-                animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
-                label = "dot",
-            )
-            Box(
-                Modifier
-                    .size(9.dp)
-                    .clip(CircleShape)
-                    .background(cs.error.copy(alpha = blink)),
-            )
-            Text(
-                "%d:%02d".format(seconds / 60, seconds % 60),
-                color = cs.onSurface,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 14.sp,
-            )
-            Spacer(Modifier.weight(1f))
-            // 3) BIG STOP — primary, where Send normally sits. 48dp filled circle, ≥48dp target.
-            IconButton(onClick = onStop, modifier = Modifier.testTag("voice_stop")) {
-                Box(
-                    Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .background(cs.primary),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        painterResource(R.drawable.ic_square),
-                        contentDescription = "Stop and transcribe",
-                        tint = cs.onPrimary,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-            }
-        }
     }
 }
 

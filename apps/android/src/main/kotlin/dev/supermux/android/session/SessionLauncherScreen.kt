@@ -21,8 +21,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
+import dev.supermux.android.chat.MicButton
+import dev.supermux.android.chat.MicDeniedDialog
 import dev.supermux.android.chat.ModelPill
 import dev.supermux.android.chat.PickerSheet
+import dev.supermux.android.chat.RecordingBar
+import dev.supermux.android.chat.TranscribingIndicator
+import dev.supermux.android.chat.rememberDictation
 import dev.supermux.android.theme.HapticKind
 import dev.supermux.android.theme.Space
 import dev.supermux.android.theme.rememberHaptics
@@ -55,6 +60,11 @@ fun SessionLauncherScreen(
     cloneForge: suspend (connectionId: String, owner: String, name: String) -> String? = { _, _, _ -> null },
     createLocalRepo: suspend (name: String) -> String? = { null },
     createForge: suspend (connectionId: String, name: String) -> String? = { _, _ -> null },
+    // Voice dictation — no session yet, so these hit the broker's id-less /transcribe (the session
+    // only enriches cleanup context). Same wiring as chat, minus the session id.
+    loadGlossary: suspend () -> List<String> = { emptyList() },
+    transcribeDraft: suspend (draft: String) -> String? = { null },
+    transcribeAudio: suspend (bytes: ByteArray, filename: String) -> String? = { _, _ -> null },
     onSubmit: suspend (workdir: String, agent: String, model: String?, message: String, worktree: Boolean, baseBranch: String?) -> String,
     onOpenSession: (String) -> Unit,
 ) {
@@ -98,6 +108,16 @@ fun SessionLauncherScreen(
             workdir = sessions.first().workdir.ifBlank { "~" }
         }
     }
+
+    // Voice dictation (shared with the chat composer). No session pre-spawn → the closures below
+    // pass no session id, so cleanup runs off the global glossary/engine/model via /transcribe.
+    val voice = rememberDictation(
+        resetKey = Unit,
+        loadGlossary = loadGlossary,
+        transcribeDraft = transcribeDraft,
+        transcribeAudio = transcribeAudio,
+        onAppend = { message = if (message.isBlank()) it else message.trimEnd() + " " + it; error = null },
+    )
 
     val fieldColors = OutlinedTextFieldDefaults.colors(
         focusedTextColor = cs.onSurface,
@@ -157,15 +177,29 @@ fun SessionLauncherScreen(
                 )
             }
 
-            OutlinedTextField(
-                value = message,
-                onValueChange = { message = it; error = null },
-                placeholder = { Text("What should the agent do?", color = cs.onSurfaceVariant) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 140.dp),
-                colors = fieldColors,
-            )
+            // Message field — while dictating, the RecordingBar takes over (parity with chat).
+            if (voice.active) {
+                RecordingBar(
+                    seconds = voice.recordingSeconds,
+                    liveTranscript = voice.liveTranscript,
+                    onStop = { voice.stopMic() },
+                    onCancel = { voice.cancelMic() },
+                )
+            } else {
+                OutlinedTextField(
+                    value = message,
+                    onValueChange = { message = it; error = null },
+                    placeholder = { Text("What should the agent do?", color = cs.onSurfaceVariant) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 140.dp),
+                    colors = fieldColors,
+                )
+            }
+            if (voice.transcribing) TranscribingIndicator()
+            voice.banner?.let { msg ->
+                Text(msg, color = cs.onSurfaceVariant, fontSize = 12.sp)
+            }
 
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 agents.forEachIndexed { i, a ->
@@ -211,6 +245,13 @@ fun SessionLauncherScreen(
                         modifier = Modifier.testTag("launcher_worktree"),
                     )
                 }
+                Spacer(Modifier.weight(1f))
+                // Mic — dictate the first message (RecordingBar takes over the field while active).
+                MicButton(
+                    onClick = { voice.onMicClick() },
+                    enabled = !voice.transcribing && !voice.active,
+                    modifier = Modifier.testTag("launcher_mic"),
+                )
             }
 
             error?.let { Text(it, color = cs.error, fontSize = 12.sp) }
@@ -313,6 +354,8 @@ fun SessionLauncherScreen(
             onDismiss = { showProjectSheet = false },
         )
     }
+
+    if (voice.micDenied) MicDeniedDialog(onDismiss = { voice.micDenied = false })
 }
 
 /** Capsule pill for the worktree toggle — tinted (primary) when worktree is on. */
