@@ -26,4 +26,53 @@ describe("tmux window IDs", () => {
     expect(await client.livePanePid("@dead")).toBe(null)
     expect(await client.livePanePid("@gone")).toBe(null)
   })
+
+  test("resolveWindowIdByName returns the matching window id", async () => {
+    const calls: string[][] = []
+    const client = createTmuxClient(async (args) => {
+      calls.push(args)
+      if (args[0] === "list-windows") return { code: 0, stdout: "@1\tother\n@7\tMy Session\n", stderr: "" }
+      return { code: 0, stdout: "", stderr: "" }
+    })
+    const id = await client.resolveWindowIdByName("mysession", "My Session")
+    expect(id).toBe("@7")
+    expect(calls.some((args) => args[0] === "list-windows" && args.includes("mysession"))).toBe(true)
+  })
+
+  test("resolveWindowIdByName returns null when no name matches", async () => {
+    const client = createTmuxClient(async (args) => {
+      if (args[0] === "list-windows") return { code: 0, stdout: "@1\tother\n@7\tMy Session\n", stderr: "" }
+      return { code: 0, stdout: "", stderr: "" }
+    })
+    const id = await client.resolveWindowIdByName("mysession", "nonexistent")
+    expect(id).toBe(null)
+  })
+
+  test("capturePaneById returns pane text and issues capture-pane with the window id", async () => {
+    const calls: string[][] = []
+    const client = createTmuxClient(async (args) => {
+      calls.push(args)
+      if (args[0] === "capture-pane") return { code: 0, stdout: "hello from pane\n", stderr: "" }
+      return { code: 0, stdout: "", stderr: "" }
+    })
+    const text = await client.capturePaneById("@7")
+    expect(text).toBe("hello from pane\n")
+    expect(calls.some((args) => args[0] === "capture-pane" && args.includes("@7"))).toBe(true)
+  })
+
+  test("capturePaneById returns null when capture-pane fails", async () => {
+    const client = createTmuxClient(async (args) => {
+      if (args[0] === "capture-pane") return { code: 1, stdout: "", stderr: "can't find window" }
+      return { code: 0, stdout: "", stderr: "" }
+    })
+    expect(await client.capturePaneById("@gone")).toBe(null)
+  })
+
+  test("resolveWindowIdByName returns null when list-windows fails", async () => {
+    const client = createTmuxClient(async (args) => {
+      if (args[0] === "list-windows") return { code: 1, stdout: "", stderr: "can't find session" }
+      return { code: 0, stdout: "", stderr: "" }
+    })
+    expect(await client.resolveWindowIdByName("nosession", "whatever")).toBe(null)
+  })
 })
