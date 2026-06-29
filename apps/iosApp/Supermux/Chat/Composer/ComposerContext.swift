@@ -11,13 +11,13 @@ struct ComposerContext {
     /// Session-less (`broker.fetchGlossary`), identical on both screens.
     var glossary: () async -> [String] = { [] }
 
-    /// Agent cleanup of an on-device dictation draft. Chat passes the session-bound
-    /// `transcribeDraft(sessionId:)`. The launcher has no session pre-spawn → passes `nil`,
-    /// and the raw on-device transcript is used as-is.
+    /// Agent cleanup of an on-device dictation draft. Both screens wire this to
+    /// `transcribeDraft(sessionId:)` — chat with its session id, the launcher with `nil` (the
+    /// broker's id-less `/transcribe`). `nil` here means "no cleanup; use the raw transcript".
     var cleanupTranscript: ((String) async throws -> String)? = nil
 
     /// Whisper transcription of a recorded clip — the fallback when on-device recognition is
-    /// unavailable. Chat passes the session-bound `transcribeAudio(sessionId:)`. When `nil`
-    /// (launcher), a recorded clip is instead staged as a voice attachment.
+    /// unavailable. Both screens wire this to `transcribeAudio(sessionId:)` (launcher passes
+    /// `nil`). When `nil` here, a recorded clip is instead staged as a voice attachment.
     var audioFallbackTranscribe: ((Data, String) async throws -> String)? = nil
 }

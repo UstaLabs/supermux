@@ -27,10 +27,12 @@ struct NewSessionView: View {
     @State private var worktreeFetching = false
     @State private var fetchedRepos: Set<String> = []
     @FocusState private var composing: Bool
+    // All three closures need `broker`, which isn't available in a property initializer, so they
+    // start as no-ops/nil here and are wired in `.task` (below) once `broker` is in scope.
     @State private var composer = ComposerModel(context: ComposerContext(
-        glossary: { [] },           // set in .task once broker is in scope (see below)
-        cleanupTranscript: nil,     // no session pre-spawn → raw on-device text
-        audioFallbackTranscribe: nil // no session → record-and-attach voice memo
+        glossary: { [] },
+        cleanupTranscript: nil,
+        audioFallbackTranscribe: nil
     ))
     @State private var showPhotos = false
     @State private var showFiles = false
@@ -58,10 +60,13 @@ struct NewSessionView: View {
         .navigationTitle("New session").navigationBarTitleDisplayMode(.inline)
         .tint(Theme.teal)
         .task {
+            // No session yet (pre-spawn launcher): the broker's id-less /transcribe cleans the
+            // draft off the global glossary/engine/model — the same AI correction the chat
+            // composer gets, just without prior-message context.
             composer.setContext(ComposerContext(
                 glossary: { (try? await broker.fetchGlossary()) ?? [] },
-                cleanupTranscript: nil,
-                audioFallbackTranscribe: nil
+                cleanupTranscript: { try await broker.transcribeDraft(sessionId: nil, draft: $0) },
+                audioFallbackTranscribe: { try await broker.transcribeAudio(sessionId: nil, data: $0, filename: $1) }
             ))
             await composer.loadGlossary()
             projects = await broker.projects()
