@@ -619,9 +619,11 @@ struct ArchivedView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 if !items.isEmpty {
                     Menu {
-                        Button("All projects") { projectFilter = nil }
-                        ForEach(projects, id: \.key) { p in
-                            Button("\(p.label) (\(p.count))") { projectFilter = p.key }
+                        Picker("Filter by project", selection: $projectFilter) {
+                            Text("All projects").tag(String?.none)
+                            ForEach(projects, id: \.key) { p in
+                                Text("\(p.label) (\(p.count))").tag(String?.some(p.key))
+                            }
                         }
                     } label: {
                         Image(systemName: projectFilter == nil
