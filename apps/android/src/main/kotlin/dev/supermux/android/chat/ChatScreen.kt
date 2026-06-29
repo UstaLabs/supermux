@@ -576,28 +576,33 @@ fun ChatScreen(
                     }
                 }
 
-                // Agent pill (only if non-idle)
+                // Agent pill (only if non-idle). A spinner means "in progress" — so it
+                // shows only while working; the dead state is an error-colored label, no spinner.
                 if (agent != null && agent.state != "idle") {
+                    val isDead = agent.state == "dead"
+                    val pillColor = if (isDead) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                     Row(
                         modifier = Modifier
                             .clip(RoundedCornerShape(20.dp))
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
+                            .background(pillColor.copy(alpha = 0.16f))
                             .padding(horizontal = 8.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(5.dp),
                     ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(12.dp),
-                            color = MaterialTheme.colorScheme.primary,
-                            strokeWidth = 2.dp,
-                        )
+                        if (!isDead) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(12.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                strokeWidth = 2.dp,
+                            )
+                        }
                         Text(
                             text = when {
-                                agent.state == "dead" -> "Not responding"
+                                isDead -> "Not responding"
                                 agent.detail == "running" -> "Running"
                                 else -> "Thinking"
                             },
-                            color = MaterialTheme.colorScheme.primary,
+                            color = pillColor,
                             fontSize = 12.sp,
                         )
                     }
