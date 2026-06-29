@@ -623,6 +623,7 @@ function unregisterSession(id: string): void {
   registry.unregister(id)  // archives the session (resumable via resumeFromArchive)
   if (s) deleteRuntime(s.id)
   commandRegistry.remove(id)
+  agentStateStore.clear(id)  // drop any lingering working/dead state for the now-archived session
   // NOTE: do NOT delete agent_home here — archived sessions are resumable, so
   // their home (cursor runtime symlink + per-session state/history) must
   // survive. Truly orphaned dirs (no registry entry) are reclaimed by the
@@ -1894,10 +1895,18 @@ function optionalProviderArg(args: Record<string, unknown>, key: string): Provid
 const server = await startSocketServer({
   socketsDir: SOCKETS_DIR,
   onStatusChange: (session_id, connected, last_pong_at) => {
-    // session_id is now UUID from the socket
+    // session_id is the UUID from the socket. NOTE: liveness can fire slightly
+    // ahead of registration (markAlive runs before onRegister completes) — that's
+    // safe here: "connected" is a no-op unless the session was "dead", and "dead"
+    // only applies to a registered, non-suspended session.
     registry.sessions.setConnectionStatus(session_id, connected, last_pong_at)
     const s = registry.get(session_id)
     webChannel?.broadcastToAll({ type: "session_state", session: session_id, connected, model: s?.model })
+    if (connected) {
+      agentStateStore.applyEvent(session_id, "connected")          // revives a dead session; no-op otherwise
+    } else if (s && s.status !== "suspended") {
+      agentStateStore.applyEvent(session_id, "dead")               // crash/shim-gone — but NOT an intentional suspend
+    }
   },
   // Safety net: a queued inbound that can't reach a live channel shim within the
   // grace window means the session crashed / never came up. Tell the user in the
