@@ -403,7 +403,8 @@ struct SessionTranscript: View, Equatable {
                     ForEach(blocks) { block in
                         Group {
                             switch block {
-                            case .message(let m): MessageRow(entry: m, broker: broker)
+                            case .message(let m): MessageRow(entry: m, broker: broker,
+                                                             sessionId: session.id, workdir: session.workdir)
                             case .tools(let rows):
                                 VStack(alignment: .leading, spacing: 4) {
                                     ForEach(rows) { ToolRowView(row: $0) }
