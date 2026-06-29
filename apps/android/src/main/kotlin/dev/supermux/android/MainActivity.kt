@@ -297,6 +297,9 @@ class MainActivity : ComponentActivity() {
                                         cloneForge = { cid, owner, name -> vm.cloneForge(cid, owner, name) },
                                         createLocalRepo = { vm.createLocalRepo(it) },
                                         createForge = { cid, name -> vm.createForge(cid, name) },
+                                        loadGlossary = { vm.fetchGlossary() },
+                                        transcribeDraft = { draft -> vm.transcribeDraft(null, draft) },
+                                        transcribeAudio = { bytes, name -> vm.transcribeAudio(null, bytes, name) },
                                         onSubmit = { wd, ag, md, msg, wt, base ->
                                             vm.createSessionWithFirstMessage(wd, ag, md, msg, worktree = wt, baseBranch = base)
                                         },
@@ -318,6 +321,9 @@ class MainActivity : ComponentActivity() {
                                 cloneForge = { cid, owner, name -> vm.cloneForge(cid, owner, name) },
                                 createLocalRepo = { vm.createLocalRepo(it) },
                                 createForge = { cid, name -> vm.createForge(cid, name) },
+                                loadGlossary = { vm.fetchGlossary() },
+                                transcribeDraft = { draft -> vm.transcribeDraft(null, draft) },
+                                transcribeAudio = { bytes, name -> vm.transcribeAudio(null, bytes, name) },
                                 onSubmit = { wd, ag, md, msg, wt, base ->
                                     vm.createSessionWithFirstMessage(wd, ag, md, msg, worktree = wt, baseBranch = base)
                                 },
