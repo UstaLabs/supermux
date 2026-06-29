@@ -121,7 +121,9 @@ final class EditorState {
     func openFileAtLine(_ path: String, line: Int?, endLine: Int?) {
         Task {
             await openFile(path)
-            guard let line else { return }
+            // Reveal only if the open produced a tab (a failed fsRead adds none) and a line was given —
+            // avoids a stale-nonce reveal firing later when the path is reopened from the tree.
+            guard tabs.contains(where: { $0.path == path }), let line else { return }
             revealNonce += 1
             reveal = RevealRequest(path: path, line: line, endLine: endLine, nonce: revealNonce)
         }

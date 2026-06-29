@@ -38,11 +38,15 @@ fun WebCodeEditor(
     onRevealConsumed: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    LaunchedEffect(content, filename, scrollTop, revealLine) {
+    LaunchedEffect(content, filename, scrollTop) {
         engine.setDocument(content, filename, scrollTop)
+    }
+    // Reveal-line in its OWN effect: consuming it (revealLine→null) must NOT re-key the document
+    // push above, or the trailing cmSetScrollTop would race/override cmRevealLine on a cold open.
+    LaunchedEffect(revealLine) {
         revealLine?.let {
             engine.revealLine(it.first, it.second)
-            onRevealConsumed()   // one-shot: clear so returning to this tab won't re-jump (iOS-nonce parity)
+            onRevealConsumed()   // one-shot so returning to this tab restores scroll instead of re-jumping
         }
     }
 

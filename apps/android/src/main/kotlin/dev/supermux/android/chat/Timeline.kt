@@ -169,6 +169,7 @@ fun mergeTimeline(
 fun mdAnnotated(
     text: String,
     onOpenFile: (FilePathRef) -> Unit = {},
+    linkify: Boolean = false,
 ): AnnotatedString {
     val linkColor = MaterialTheme.colorScheme.primary
     return buildAnnotatedString {
@@ -187,7 +188,7 @@ fun mdAnnotated(
                     ) { append(s.text) }
                     SpanStyleKind.LINK -> {
                         val ref = s.ref
-                        if (ref == null) append(s.text) else withLink(
+                        if (ref == null || !linkify) append(s.text) else withLink(
                             LinkAnnotation.Clickable(
                                 tag = "file:${ref.path}",
                                 styles = TextLinkStyles(
@@ -283,6 +284,7 @@ fun AssistantMessage(text: String, onOpenFile: (FilePathRef) -> Unit = {}) {
             .fillMaxWidth()
             .padding(vertical = Space.xs),
         onOpenFile = onOpenFile,
+        linkify = true,
     )
 }
 
@@ -293,7 +295,7 @@ fun AssistantMessage(text: String, onOpenFile: (FilePathRef) -> Unit = {}) {
  * [FencedCodeBlock]. Keep all markdown surfaces routed through this so they never drift.
  */
 @Composable
-fun MarkdownBody(text: String, modifier: Modifier = Modifier, onOpenFile: (FilePathRef) -> Unit = {}) {
+fun MarkdownBody(text: String, modifier: Modifier = Modifier, onOpenFile: (FilePathRef) -> Unit = {}, linkify: Boolean = false) {
     val cs = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
     val blocks = parseMarkdownBlocks(text)
@@ -306,7 +308,7 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier, onOpenFile: (FileP
                 is MdBlock.Prose -> {
                     if (block.text.isNotBlank()) {
                         Text(
-                            text = mdAnnotated(block.text, onOpenFile),
+                            text = mdAnnotated(block.text, onOpenFile, linkify = linkify),
                             color = cs.onSurface,
                             style = typography.bodyLarge,
                             modifier = Modifier.fillMaxWidth(),
@@ -315,7 +317,7 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier, onOpenFile: (FileP
                 }
                 is MdBlock.Code -> FencedCodeBlock(block.code)
                 is MdBlock.Heading -> Text(
-                    text = mdAnnotated(block.text, onOpenFile),
+                    text = mdAnnotated(block.text, onOpenFile, linkify = linkify),
                     color = cs.onSurface,
                     style = when (block.level) {
                         1 -> typography.titleLarge
@@ -337,7 +339,7 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier, onOpenFile: (FileP
                             .background(cs.primary.copy(alpha = 0.5f)),
                     )
                     Text(
-                        text = mdAnnotated(block.text, onOpenFile),
+                        text = mdAnnotated(block.text, onOpenFile, linkify = linkify),
                         color = cs.onSurfaceVariant,
                         style = typography.bodyLarge,
                     )
@@ -348,7 +350,7 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier, onOpenFile: (FileP
                 ) {
                     Text("•", color = cs.onSurfaceVariant, style = typography.bodyLarge)
                     Text(
-                        text = mdAnnotated(block.text, onOpenFile),
+                        text = mdAnnotated(block.text, onOpenFile, linkify = linkify),
                         color = cs.onSurface,
                         style = typography.bodyLarge,
                         modifier = Modifier.weight(1f),
@@ -360,7 +362,7 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier, onOpenFile: (FileP
                 ) {
                     Text("${block.n}.", color = cs.onSurfaceVariant, style = typography.bodyLarge)
                     Text(
-                        text = mdAnnotated(block.text, onOpenFile),
+                        text = mdAnnotated(block.text, onOpenFile, linkify = linkify),
                         color = cs.onSurface,
                         style = typography.bodyLarge,
                         modifier = Modifier.weight(1f),
