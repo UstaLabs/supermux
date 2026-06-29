@@ -123,6 +123,14 @@ struct ChatView: View {
         // onAppear covers first-open + reopen; onChange covers switching (reused view).
         .onAppear { if loadedSessionId != session.id { loadSession() } }
         .onChange(of: session.id) { _, _ in loadSession() }
+        // A tapped file path in this session's transcript brings the Editor tab forward.
+        .onChange(of: broker.editorFocus) { _, f in
+            if let f, f.sessionId == session.id { tab = .editor }
+        }
+        // A path that couldn't be resolved (outside the project) surfaces as the git banner.
+        .onChange(of: broker.editorOpenError) { _, msg in
+            if let msg { showBanner(msg); broker.editorOpenError = nil }
+        }
         .task(id: session.id) {
             if ProcessInfo.processInfo.environment["SM_OPEN_TERMINAL"] == "1" {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)

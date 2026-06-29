@@ -74,6 +74,13 @@ struct IPadWorkspace: View {
             v.displayOpen = true
             layout.setPanes(v, for: s.id)
         }
+        // A tapped file path in the selected session's transcript opens its editor column.
+        .onChange(of: broker.editorFocus) { _, f in
+            guard let f, let s = session, f.sessionId == s.id else { return }
+            var v = layout.panes(for: s.id)
+            v.editorOpen = true
+            layout.setPanes(v, for: s.id)
+        }
     }
 
     /// Ensure `chrome` exists for the selected session and (re)load its git/proxy state.
