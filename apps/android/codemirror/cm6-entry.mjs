@@ -121,6 +121,18 @@ window.cmSetScrollTop = function (px) {
   if (!view) return
   view.scrollDOM.scrollTop = px || 0
 }
+// 1-indexed line; endLine<=0 or absent → caret only. Reveals centered.
+window.cmRevealLine = function (line, endLine) {
+  if (!view) return
+  const doc = view.state.doc
+  const ln = Math.max(1, Math.min(line || 1, doc.lines))
+  const from = doc.line(ln).from
+  const sel = (endLine && endLine > ln)
+    ? { anchor: from, head: doc.line(Math.min(endLine, doc.lines)).to }
+    : { anchor: from }
+  view.dispatch({ selection: sel, effects: EditorView.scrollIntoView(from, { y: "center" }) })
+  view.focus()
+}
 window.cmGetContent = function () { return view ? view.state.doc.toString() : "" }
 window.cmSetLineWrap = function (on) { if (view) view.dispatch({ effects: wrapC.reconfigure(wrapExt(!!on)) }) }
 window.cmSetFontSize = function (px) { if (view) view.dispatch({ effects: fontC.reconfigure(fontExt(px)) }) }
