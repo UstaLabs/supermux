@@ -99,6 +99,8 @@ class AppViewModel(
     val activity: StateFlow<Map<String, List<ActivityEvent>>> = _activity
     private val _agentState = MutableStateFlow<Map<String, AgentStatus>>(emptyMap())
     val agentState: StateFlow<Map<String, AgentStatus>> = _agentState
+    private val _pendingSend = MutableStateFlow<Set<String>>(emptySet())
+    val pendingSend: StateFlow<Set<String>> = _pendingSend
     private val _commands = MutableStateFlow<Map<String, List<SlashCommand>>>(emptyMap())
     val commands: StateFlow<Map<String, List<SlashCommand>>> = _commands
     /** Per-session resolution state of the slash-command set (true = fully resolved). */
@@ -215,10 +217,14 @@ class AppViewModel(
                     }
                     is ServerFrame.AgentState -> {
                         _agentState.value = _agentState.value.toMutableMap().apply {
-                            this[f.session] = AgentStatus(f.phase, f.since ?: f.workingSince)
+                            this[f.session] = AgentStatus(
+                                phase = f.phase, state = f.state, working = f.working,
+                                detail = f.detail, tool = f.tool, since = f.since, workingSince = f.workingSince,
+                            )
                         }
-                        // Clear a prior agent error once the agent leaves the error phase.
-                        if (f.phase != "error" && _agentErrors.value.containsKey(f.session)) {
+                        _pendingSend.update { it - f.session }   // first real state clears the client-local "Sending…"
+                        // Clear a prior agent error once the agent is no longer dead.
+                        if (f.state != "dead" && _agentErrors.value.containsKey(f.session)) {
                             _agentErrors.update { it - f.session }
                         }
                     }
@@ -307,7 +313,10 @@ class AppViewModel(
     fun send(sessionId: String, text: String) {
         if (text.isBlank()) return
         appendOptimistic(sessionId, text.trim())
-        viewModelScope.launch { client.send(ClientFrame.Send(sessionId, args = SendArgs(text))) }
+        viewModelScope.launch {
+            client.send(ClientFrame.Send(sessionId, args = SendArgs(text)))
+            _pendingSend.update { it + sessionId }   // optimistic "Sending…" until the next agent_state
+        }
     }
 
     // ── Per-session composer draft persistence (DataStore) ─────────────────────────
@@ -379,6 +388,7 @@ class AppViewModel(
         viewModelScope.launch {
             runCatching {
                 client.send(ClientFrame.Send(sessionId, args = SendArgs(text, attachments.ifEmpty { null })))
+                _pendingSend.update { it + sessionId }   // optimistic "Sending…" until the next agent_state
             }
         }
     }

@@ -42,8 +42,6 @@ import dev.supermux.session.formatWorkdir
 import dev.supermux.session.groupSessions
 import kotlinx.coroutines.launch
 
-private fun isWorking(phase: String?): Boolean = phase == "thinking" || phase == "running"
-
 /** Produces a human-readable relative time string from an ISO-8601 timestamp string. */
 fun relTime(ts: String?): String {
     if (ts == null) return ""
@@ -456,7 +454,7 @@ fun SessionListScreen(
                         s,
                         active = s.id == activeId,
                         preview = lastBySession[s.id],
-                        working = isWorking(agentState[s.id]?.phase),
+                        working = agentState[s.id]?.working == true,
                         onClick = { onOpen(s.id) },
                         sharedScope = sharedScope,
                         animScope = animScope,
