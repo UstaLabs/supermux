@@ -314,6 +314,7 @@ final class BrokerSession {
 
     // Usage (typed), device mint/revoke, proxy privacy — mirror the web pages.
     func usage() async -> UsageResponse? { try? await api.usage() }
+    func redeemCodexReset() async -> CodexResetResult? { try? await api.redeemCodexReset() }
     func addDevice(_ name: String) async -> AddDeviceResponse? { try? await api.addDevice(name: name) }
     func revokeDevice(_ name: String) async { try? await api.revokeDevice(name: name) }
     func setProxyPublic(_ domain: String, _ isPublic: Bool) async { try? await api.setProxyPublic(domain: domain, isPublic: isPublic) }
