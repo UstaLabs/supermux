@@ -1327,17 +1327,20 @@ class BrokerApi(
 
     // ── Voice dictation (transcribe + cleanup glossary) ──────────────────────────
 
-    /** POST /sessions/<id>/transcribe — JSON { draft } → cleaned text. (on-device-STT path) */
-    suspend fun transcribeDraft(sessionId: String, draft: String): TranscribeResponse =
-        postReturningJson("$httpBase/sessions/$sessionId/transcribe", DraftBody(draft))
+    /** POST {/sessions/<id>,}/transcribe — JSON { draft } → cleaned text. (on-device-STT path)
+     *  `sessionId` is OPTIONAL: null/blank (e.g. the pre-spawn launcher) posts to the id-less
+     *  `/transcribe`; the session only enriches cleanup context server-side, it isn't required. */
+    suspend fun transcribeDraft(sessionId: String?, draft: String): TranscribeResponse =
+        postReturningJson(transcribePath(sessionId), DraftBody(draft))
 
-    /** POST /sessions/<id>/transcribe — multipart field "audio" → cleaned text. (whisper path)
+    /** POST {/sessions/<id>,}/transcribe — multipart field "audio" → cleaned text. (whisper path)
      *  Mirrors `upload()`'s multipart shape; field name is "audio" (NOT "file"), and there is
-     *  no `kind`/`session` part — the route derives the session from the URL. */
+     *  no `kind`/`session` part — the route derives the session from the URL (or none).
+     *  `sessionId` is OPTIONAL (see [transcribeDraft]). */
     suspend fun transcribeAudio(
-        sessionId: String, bytes: ByteArray, filename: String, mime: String = "audio/mp4",
+        sessionId: String?, bytes: ByteArray, filename: String, mime: String = "audio/mp4",
     ): TranscribeResponse {
-        val resp = http.post("$httpBase/sessions/$sessionId/transcribe") {
+        val resp = http.post(transcribePath(sessionId)) {
             header(HttpHeaders.Authorization, "Bearer $token")
             setBody(MultiPartFormDataContent(formData {
                 append("audio", bytes, Headers.build {
@@ -1348,6 +1351,12 @@ class BrokerApi(
         }
         return decode(resp)
     }
+
+    /** Cleanup endpoint URL — id-less `/transcribe` when [sessionId] is null/blank, else
+     *  `/sessions/<id>/transcribe`. The session id is never required (it only adds context). */
+    private fun transcribePath(sessionId: String?): String =
+        if (sessionId.isNullOrBlank()) "$httpBase/transcribe"
+        else "$httpBase/sessions/$sessionId/transcribe"
 
     /** GET /config/voice-glossary → the glossary terms (default-seeded server-side). */
     suspend fun fetchGlossary(): List<String> =

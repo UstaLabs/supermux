@@ -424,9 +424,19 @@ final class BrokerSession {
 
     private struct TranscribeResponse: Decodable { let text: String; let degraded: Bool? }
 
+    /// Cleanup endpoint URL — id-less `/transcribe` when `sessionId` is nil/empty (the session
+    /// only enriches cleanup context server-side; it isn't required), else `/sessions/<id>/transcribe`.
+    private func transcribeURL(_ sessionId: String?) -> URL? {
+        if let id = sessionId, !id.isEmpty {
+            return URL(string: "\(baseURL)/sessions/\(id)/transcribe")
+        }
+        return URL(string: "\(baseURL)/transcribe")
+    }
+
     /// JSON `{ draft }` → cleaned `text`. Used for the on-device-recognition result.
-    func transcribeDraft(sessionId: String, draft: String) async throws -> String {
-        guard let url = URL(string: "\(baseURL)/sessions/\(sessionId)/transcribe") else {
+    /// `sessionId` is optional — `nil` (pre-spawn launcher) hits the id-less `/transcribe`.
+    func transcribeDraft(sessionId: String?, draft: String) async throws -> String {
+        guard let url = transcribeURL(sessionId) else {
             throw URLError(.badURL)
         }
         var req = URLRequest(url: url)
@@ -443,8 +453,9 @@ final class BrokerSession {
 
     /// Multipart (field "audio") → cleaned `text`. Fallback when on-device recognition
     /// isn't available for the device locale; the broker stores + transcribes the clip.
-    func transcribeAudio(sessionId: String, data audioData: Data, filename: String) async throws -> String {
-        guard let url = URL(string: "\(baseURL)/sessions/\(sessionId)/transcribe") else {
+    /// `sessionId` is optional — `nil` (pre-spawn launcher) hits the id-less `/transcribe`.
+    func transcribeAudio(sessionId: String?, data audioData: Data, filename: String) async throws -> String {
+        guard let url = transcribeURL(sessionId) else {
             throw URLError(.badURL)
         }
         let boundary = "Boundary-\(UUID().uuidString)"
