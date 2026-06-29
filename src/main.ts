@@ -375,12 +375,10 @@ function ensureClaudeTailer(sessionUuid: string, _name: string, workdir: string,
   const tailer = new TranscriptTailer({
     path: claudeTranscriptPath(workdir, claudeSid),
     onEvent: (event) => {
+      // The transcript interrupt marker is the SOLE interrupt signal (no hook fires
+      // on ESC) — and it catches terminal-direct ESC too. It is state, not activity.
+      if (event.kind === "interrupt") { agentStateStore.applyEvent(sessionUuid, "interrupt"); return }
       activityStore.append(sessionUuid, event)
-      // Belt-and-braces: if Claude hooks can't reach the broker (stale hooks file,
-      // auth mismatch), flip sending→thinking on first transcript tool activity.
-      if (agentStateStore.get(sessionUuid).phase === "sending" && event.kind === "tool") {
-        agentStateStore.applyEvent(sessionUuid, "UserPromptSubmit")
-      }
     },
     seekToEnd,
   })
