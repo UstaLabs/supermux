@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Shared
 
 /// Agent replies render here. We parse the markdown into blocks and render them
 /// as a vertical stack: runs of "flow" blocks (paragraphs, headings, lists,
@@ -20,6 +21,9 @@ import UIKit
 /// boundaries: text-runs stay one selectable block; tables become grid views.
 struct MarkdownView: View {
     let text: String
+    /// When set (agent messages), tapped file-path links call back here; nil leaves the
+    /// links inert (taps are still intercepted, never opened by the system).
+    var onOpenFile: ((FilePathRef) -> Void)? = nil
 
     var body: some View {
         let segments = groupSegments(parseMarkdown(text))
@@ -27,7 +31,7 @@ struct MarkdownView: View {
             ForEach(segments.indices, id: \.self) { i in
                 switch segments[i] {
                 case .text(let blocks):
-                    SelectableText(attributed: MarkdownAttributed.build(blocks: blocks))
+                    SelectableText(attributed: MarkdownAttributed.build(blocks: blocks), onOpenFile: onOpenFile)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 case .table(let table):
                     MarkdownTableView(table: table)
@@ -76,7 +80,9 @@ private enum MarkdownAttributed {
         for b in blocks {
             if case .table = b { continue }   // tables render via MarkdownTableView
             if !first { out.append(NSAttributedString(string: "\n")) }
-            out.append(attributed(for: b))
+            let piece = NSMutableAttributedString(attributedString: attributed(for: b))
+            FilePathLinks.decorate(piece)     // tag detected file paths as supermux-file:// links
+            out.append(piece)
             first = false
         }
         return out
@@ -185,6 +191,61 @@ private enum MarkdownAttributed {
         }
         if let paragraph { m.addAttribute(.paragraphStyle, value: paragraph, range: whole) }
         return m
+    }
+}
+
+// MARK: - File-path links (tap a path → open it in the editor)
+
+/// Detects file paths in an agent message's rendered text (via the shared KMP
+/// `findFilePathRefs`) and tags them with a custom `supermux-file://` `.link`, so
+/// `SelectableText`'s delegate can intercept the tap and open the editor — instead of
+/// letting the system try to open the URL. The whole `FilePathRef` round-trips through
+/// the URL's query so the delegate can reconstruct it.
+enum FilePathLinks {
+    /// Custom scheme: the UITextView delegate intercepts this (vs. opening a real URL).
+    static let scheme = "supermux-file"
+
+    /// Tag every detected file-path range in `s` with a `supermux-file://` link + teal underline.
+    static func decorate(_ s: NSMutableAttributedString) {
+        let length = (s.string as NSString).length
+        for m in findFilePathRefs(text: s.string) {   // shared KMP
+            // KMP String offsets are UTF-16 (Kotlin Char == UTF-16 code unit) and
+            // NSAttributedString is UTF-16-backed, so start/end map straight onto an NSRange.
+            let range = NSRange(location: Int(m.start), length: Int(m.end - m.start))
+            guard range.length > 0, range.location + range.length <= length else { continue }
+            guard let url = url(for: m.ref) else { continue }
+            s.addAttributes([
+                .link: url,
+                .foregroundColor: UIColor(Theme.teal),
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+            ], range: range)
+        }
+    }
+
+    /// Encode a `FilePathRef` as `supermux-file://open?path=…&line=…&end=…`. The path
+    /// lives in the query (not the URL path) so absolute/`~` paths can't be misread as an
+    /// authority, and URLComponents handles all the percent-encoding.
+    static func url(for ref: FilePathRef) -> URL? {
+        var c = URLComponents()
+        c.scheme = scheme
+        c.host = "open"
+        var q: [URLQueryItem] = [URLQueryItem(name: "path", value: ref.path)]
+        if let line = ref.line { q.append(URLQueryItem(name: "line", value: "\(line.intValue)")) }
+        if let end = ref.endLine { q.append(URLQueryItem(name: "end", value: "\(end.intValue)")) }
+        c.queryItems = q
+        return c.url
+    }
+
+    /// Parse a tapped `supermux-file://` URL back into a `FilePathRef` (nil if not ours).
+    static func ref(from url: URL) -> FilePathRef? {
+        guard url.scheme == scheme else { return nil }
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
+        guard let path = items?.first(where: { $0.name == "path" })?.value, !path.isEmpty else { return nil }
+        let line = items?.first { $0.name == "line" }?.value.flatMap { Int($0) }
+        let end = items?.first { $0.name == "end" }?.value.flatMap { Int($0) }
+        return FilePathRef(path: path,
+                           line: line.map { KotlinInt(int: Int32($0)) },
+                           endLine: end.map { KotlinInt(int: Int32($0)) })
     }
 }
 
@@ -462,6 +523,10 @@ private func normalize(_ aligns: [MDColumnAlign], to n: Int) -> [MDColumnAlign] 
 /// proposes. `isScrollEnabled = false` makes it lay out like a label.
 struct SelectableText: UIViewRepresentable {
     let attributed: NSAttributedString
+    /// Tapped file-path link handler (nil → file links are inert but still intercepted).
+    var onOpenFile: ((FilePathRef) -> Void)? = nil
+
+    func makeCoordinator() -> Coordinator { Coordinator(onOpenFile: onOpenFile) }
 
     func makeUIView(context: Context) -> UITextView {
         let tv = UITextView()
@@ -473,14 +538,16 @@ struct SelectableText: UIViewRepresentable {
         tv.textContainer.lineFragmentPadding = 0
         tv.textContainer.lineBreakMode = .byWordWrapping
         tv.adjustsFontForContentSizeCategory = true
-        tv.dataDetectorTypes = []                 // markdown links already carry .link
+        tv.dataDetectorTypes = []                 // markdown + file-path links already carry .link
         tv.tintColor = UIColor(Theme.teal)         // selection handles + link color
+        tv.delegate = context.coordinator          // intercept supermux-file:// link taps
         tv.setContentHuggingPriority(.required, for: .vertical)
         tv.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return tv
     }
 
     func updateUIView(_ tv: UITextView, context: Context) {
+        context.coordinator.onOpenFile = onOpenFile
         if !tv.attributedText.isEqual(attributed) { tv.attributedText = attributed }
     }
 
@@ -489,5 +556,23 @@ struct SelectableText: UIViewRepresentable {
         let width = (proposed.isFinite && proposed > 0) ? proposed : UIScreen.main.bounds.width
         let fit = tv.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
         return CGSize(width: width, height: ceil(fit.height))
+    }
+
+    /// Intercepts taps on our `supermux-file://` links (→ open in the editor) while letting
+    /// every other link (http(s), etc.) fall through to the system's default handling.
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var onOpenFile: ((FilePathRef) -> Void)?
+        init(onOpenFile: ((FilePathRef) -> Void)?) { self.onOpenFile = onOpenFile }
+
+        // NOTE: `shouldInteractWith` is deprecated on iOS 17+ but still functional, and is the
+        // simplest way to intercept a custom scheme; the modern UITextItem API needs more wiring.
+        func textView(_ textView: UITextView, shouldInteractWith URL: URL,
+                      in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
+            if let ref = FilePathLinks.ref(from: URL) {
+                onOpenFile?(ref)
+                return false   // handled — don't let the system try to open the custom-scheme URL
+            }
+            return true        // non-file links keep their default behavior
+        }
     }
 }
