@@ -9,6 +9,7 @@ import {
   fetchCursorUsage,
   fetchOpenCodeUsage,
   fetchAllUsage,
+  redeemCodexReset,
 } from "../src/core/usage"
 
 let tmpDir: string
@@ -121,6 +122,7 @@ test("fetchCodexUsage returns usage when auth valid", async () => {
           limit_reached: false,
         },
         credits: { has_credits: true, balance: "15.00" },
+        rate_limit_reset_credits: { available_count: 3 },
       }),
     )
   }) as typeof fetch
@@ -135,6 +137,7 @@ test("fetchCodexUsage returns usage when auth valid", async () => {
   expect(result!.credits!.hasCredits).toBe(true)
   expect(result!.credits!.balance).toBe("15.00")
   expect(result!.limitReached).toBe(false)
+  expect(result!.resetCredits).toBe(3)
 })
 
 test("fetchCodexUsage accepts legacy resets_at field", async () => {
@@ -161,6 +164,7 @@ test("fetchCodexUsage accepts legacy resets_at field", async () => {
   const result = await fetchCodexUsage(authPath)
   expect(result!.primaryWindow.resetsAt).toBe(1748200000)
   expect(result!.secondaryWindow.resetsAt).toBe(1748300000)
+  expect(result!.resetCredits).toBe(0)
 })
 
 test("fetchCodexUsage returns null when auth missing", async () => {
@@ -269,4 +273,45 @@ test("fetchAllUsage assembles all providers, captures errors when all creds miss
   expect(result.errors.codex).toBe("credentials not found")
   expect(result.errors.cursor).toBe("credentials not found")
   expect(result.errors.opencode).toBe("no usage recorded yet")
+})
+
+// ── Codex reset redemption ──
+
+test("redeemCodexReset posts idempotency key and maps reset code", async () => {
+  const authPath = join(tmpDir, "auth.json")
+  writeFileSync(authPath, JSON.stringify({ tokens: { access_token: "codex-token-xyz" } }))
+
+  globalThis.fetch = (async (url: any, init: any) => {
+    expect(url).toBe("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume")
+    expect(init?.method).toBe("POST")
+    expect(init?.headers.Authorization).toBe("Bearer codex-token-xyz")
+    expect(init?.headers["Content-Type"]).toBe("application/json")
+    expect(JSON.parse(init.body)).toEqual({ redeem_request_id: "fixed-key-1" })
+    return new Response(JSON.stringify({ code: "reset", windows_reset: 2 }))
+  }) as typeof fetch
+
+  const result = await redeemCodexReset(authPath, "fixed-key-1")
+  expect(result.code).toBe("reset")
+  expect(result.windowsReset).toBe(2)
+})
+
+test("redeemCodexReset maps no_credit code", async () => {
+  const authPath = join(tmpDir, "auth.json")
+  writeFileSync(authPath, JSON.stringify({ tokens: { access_token: "t" } }))
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ code: "no_credit", windows_reset: 0 }))) as unknown as typeof fetch
+  const result = await redeemCodexReset(authPath, "k")
+  expect(result.code).toBe("no_credit")
+  expect(result.windowsReset).toBe(0)
+})
+
+test("redeemCodexReset throws when auth missing", async () => {
+  await expect(redeemCodexReset(join(tmpDir, "nope.json"), "k")).rejects.toThrow()
+})
+
+test("redeemCodexReset throws on API error", async () => {
+  const authPath = join(tmpDir, "auth.json")
+  writeFileSync(authPath, JSON.stringify({ tokens: { access_token: "t" } }))
+  globalThis.fetch = (async () => new Response("boom", { status: 500 })) as unknown as typeof fetch
+  await expect(redeemCodexReset(authPath, "k")).rejects.toThrow()
 })

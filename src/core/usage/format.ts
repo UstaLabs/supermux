@@ -67,6 +67,8 @@ function fmtCodex(c: CodexUsage): string {
     lines.push(`  Credits: $${c.credits.balance}`)
   }
 
+  if (c.resetCredits > 0) lines.push(`  Resets banked: ${c.resetCredits}`)
+
   return lines.join("\n")
 }
 

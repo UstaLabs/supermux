@@ -18,6 +18,7 @@ import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.CuratorSettingsResponse
 import dev.supermux.net.BrokerClient
+import dev.supermux.net.CodexResetResult
 import dev.supermux.net.DeviceDto
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
@@ -513,6 +514,8 @@ class AppViewModel(
     suspend fun updateGlossary(terms: List<String>): List<String>? =
         runCatching { api.updateGlossary(terms) }.getOrNull()
     suspend fun usage(): String? = runCatching { api.usageRaw() }.getOrNull()
+    suspend fun redeemCodexReset(): CodexResetResult? =
+        runCatching { api.redeemCodexReset() }.getOrNull()
     suspend fun curatorSettings(): CuratorSettingsResponse? = runCatching { api.getCuratorSettings() }.getOrNull()
     suspend fun saveCurator(enabled: Boolean, hour: Int, minute: Int): CuratorSettingsResponse? =
         runCatching { api.saveCuratorSettings(enabled, hour, minute) }.getOrNull()
