@@ -2864,8 +2864,6 @@ ch.on("inbound", async (msg: InboundMessage) => {
       await ch.send({ op: "reply", chat_id: msg.chat_id, text: `Failed to resume suspended session "${session.name}". Try /kill and re-spawn.`, disable_notification: false })
       return
     }
-  } else if ((session.agent ?? "claude") === "claude" && !registry.get(session.id)?.connected) {
-    await waitForSessionConnected(session.id, 10_000)
   }
 
   log.debug("send_inbound.before", { session: session.name, text: decision.text.slice(0, 80) })
@@ -2978,12 +2976,6 @@ if (webChannel) {
         webChannel!.send({ op: "reply", chat_id: msg.chat_id, text: `Failed to resume session "${targetSession.name}".` })
         return
       }
-    } else if (
-      targetSession
-      && (targetSession.agent ?? "claude") === "claude"
-      && !registry.get(targetSession.id)?.connected
-    ) {
-      await waitForSessionConnected(targetSession.id, 10_000)
     }
     handleWebInbound(msg, {
       messageLog,
