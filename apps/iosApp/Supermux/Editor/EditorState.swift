@@ -18,6 +18,16 @@ final class EditorState {
         var isDirty: Bool { content != savedContent }
     }
 
+    /// A pending request to scroll the editor to a line once a tab is active (chat tap →
+    /// open at a line). The nonce makes a repeat of the same target a distinct value so the
+    /// webview re-applies it; mirrors Android's `EditorTab.revealLine`.
+    struct RevealRequest: Equatable {
+        let path: String
+        let line: Int
+        let endLine: Int?
+        let nonce: Int
+    }
+
     private(set) var tabs: [Tab] = []
     var activeTabPath: String?
     private(set) var loadingPath: String?
@@ -40,6 +50,11 @@ final class EditorState {
 
     // Paths the broker reported changed on disk (fs_changed) → drives a reload banner.
     private(set) var changedPaths: Set<String> = []
+
+    // Pending reveal-line request (chat tap → open at a line). Read by EditorPane to drive
+    // the webview's cmRevealLine; `revealNonce` keeps repeat taps distinct.
+    private(set) var reveal: RevealRequest?
+    private var revealNonce = 0
 
     let sessionId: String
     private let fsRead: (String) async throws -> String
@@ -99,6 +114,17 @@ final class EditorState {
             loadError = error.localizedDescription
         }
         loadingPath = nil
+    }
+
+    /// Open [path] then, once the tab is active, request a scroll to [line] (1-indexed).
+    /// A nil [line] just opens the file. Mirrors Android's `EditorState.openFileAtLine`.
+    func openFileAtLine(_ path: String, line: Int?, endLine: Int?) {
+        Task {
+            await openFile(path)
+            guard let line else { return }
+            revealNonce += 1
+            reveal = RevealRequest(path: path, line: line, endLine: endLine, nonce: revealNonce)
+        }
     }
 
     func closeTab(_ path: String) {

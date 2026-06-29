@@ -22,6 +22,12 @@ struct EditorWebView: UIViewRepresentable {
     let path: String
     let lineWrap: Bool
     let fontSize: Int
+    /// Optional 1-indexed line to scroll to after the tab's content is pushed (chat tap →
+    /// open at line); nil = no reveal. `revealNonce` makes a repeat of the same line distinct
+    /// so it re-fires, and is gated by the coordinator so it applies at most once per request.
+    var revealLine: Int? = nil
+    var revealEndLine: Int? = nil
+    var revealNonce: Int = 0
     let onChange: (String) -> Void
     let onSave: () -> Void
     /// Hands the live `WKWebView` up to the parent so it can resign the keyboard
@@ -86,6 +92,14 @@ struct EditorWebView: UIViewRepresentable {
             coordinator.fontSize = fontSize
             if coordinator.ready { coordinator.setFontSize(fontSize) }
         }
+
+        // Reveal-line: apply once per new nonce, AFTER the content push above (so the document
+        // exists). If the page isn't ready yet, stash it — `pushCachedDocument` flushes on ready.
+        if let line = revealLine, coordinator.lastRevealNonce != revealNonce {
+            coordinator.lastRevealNonce = revealNonce
+            coordinator.pendingReveal = (line, revealEndLine)
+            if coordinator.ready { coordinator.flushReveal() }
+        }
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -119,6 +133,10 @@ struct EditorWebView: UIViewRepresentable {
         var lastScrollTop = 0
         var lineWrap = true
         var fontSize = 13
+        // Reveal-line bridge: `lastRevealNonce` de-dupes per request; `pendingReveal` holds a
+        // request made before the page was `ready` so it can be flushed on the ready handshake.
+        var lastRevealNonce = 0
+        var pendingReveal: (Int, Int?)?
 
         init(onChange: @escaping (String) -> Void, onSave: @escaping () -> Void,
              onLspOut: @escaping (String, String) -> Void) {
@@ -200,6 +218,7 @@ struct EditorWebView: UIViewRepresentable {
             setLineWrap(lineWrap)
             setFontSize(fontSize)
             setScrollTop(lastScrollTop)
+            flushReveal()   // a reveal requested before `ready` fires here, after the content
         }
 
         func setContent(_ s: String) { evaluate("cmSetContent(\(jsString(s)))") }
@@ -207,6 +226,15 @@ struct EditorWebView: UIViewRepresentable {
         func setLineWrap(_ on: Bool) { evaluate("cmSetLineWrap(\(on ? "true" : "false"))") }
         func setFontSize(_ px: Int) { evaluate("cmSetFontSize(\(px))") }
         func setScrollTop(_ px: Int) { evaluate("cmSetScrollTop(\(px))") }
+
+        /// Scroll to a 1-indexed line (optional end). `endLine <= 0` → caret only (see cm6.js).
+        func revealLine(_ line: Int, _ endLine: Int?) { evaluate("cmRevealLine(\(line), \(endLine ?? -1))") }
+        /// Fire a stashed reveal (called both on a ready document and from the on-ready flush).
+        func flushReveal() {
+            guard let r = pendingReveal else { return }
+            pendingReveal = nil
+            revealLine(r.0, r.1)
+        }
 
         /// Read the live scroll offset (NSNumber return) so the parent can persist it
         /// before switching files — companion to Android's readScrollTop.

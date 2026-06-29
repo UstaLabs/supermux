@@ -246,6 +246,9 @@ struct EditorPane: View {
             } else {
                 EditorWebView(host: host, content: tab.content, path: tab.path,
                               lineWrap: settings.lineWrap, fontSize: settings.fontSize,
+                              revealLine: state.reveal?.path == tab.path ? state.reveal?.line : nil,
+                              revealEndLine: state.reveal?.path == tab.path ? state.reveal?.endLine : nil,
+                              revealNonce: state.reveal?.nonce ?? 0,
                               onChange: { state.updateContent(tab.path, $0) },
                               onSave: { Task { await state.saveActive() } },
                               onMakeView: { webView = $0 },
