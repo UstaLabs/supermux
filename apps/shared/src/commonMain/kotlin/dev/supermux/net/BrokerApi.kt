@@ -211,6 +211,7 @@ data class CodexUsage(
     val secondaryWindow: CodexWindow = CodexWindow(),
     val credits: CodexCredits? = null,
     val limitReached: Boolean = false,
+    val resetCredits: Int = 0,
 )
 
 @Serializable
@@ -241,6 +242,16 @@ data class UsageResponse(
     val cursor: CursorUsage? = null,
     val opencode: OpenCodeUsage? = null,
     val errors: Map<String, String> = emptyMap(),
+)
+
+// Result of redeeming a banked Codex rate-limit reset (POST /usage/codex/reset).
+// `code` ∈ reset | nothing_to_reset | no_credit | already_redeemed; `codex` is the
+// refreshed usage so the card can update in place.
+@Serializable
+data class CodexResetResult(
+    val code: String = "",
+    val windowsReset: Int = 0,
+    val codex: CodexUsage? = null,
 )
 
 // ─── Git status + finish (chat header) ───────────────────────────────────────
@@ -1159,6 +1170,10 @@ class BrokerApi(
 
     /** GET /usage → typed per-provider usage (Claude / Codex / Cursor / opencode) */
     suspend fun usage(): UsageResponse = getJson("$httpBase/usage")
+
+    /** POST /usage/codex/reset → redeem one banked Codex rate-limit reset. */
+    suspend fun redeemCodexReset(): CodexResetResult =
+        postReturningJson("$httpBase/usage/codex/reset", EmptyBody())
 
     /** GET /devices */
     suspend fun devices(): List<DeviceDto> =

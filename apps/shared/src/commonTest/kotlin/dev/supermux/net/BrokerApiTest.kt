@@ -25,6 +25,25 @@ class BrokerApiTest {
     }
 
     @Test
+    fun codex_usage_parses_reset_credits() {
+        val u = json.decodeFromString<CodexUsage>("""{"plan":"plus","resetCredits":3}""")
+        assertEquals(3, u.resetCredits)
+        // absent → 0
+        val u0 = json.decodeFromString<CodexUsage>("""{"plan":"plus"}""")
+        assertEquals(0, u0.resetCredits)
+    }
+
+    @Test
+    fun codex_reset_result_parses() {
+        val r = json.decodeFromString<CodexResetResult>(
+            """{"code":"reset","windowsReset":2,"codex":{"plan":"plus","resetCredits":2}}"""
+        )
+        assertEquals("reset", r.code)
+        assertEquals(2, r.windowsReset)
+        assertEquals(2, r.codex?.resetCredits)
+    }
+
+    @Test
     fun httpBase_strips_ws_scheme() {
         // Access internal field to verify URL conversion logic.
         // Dummy HttpClient — we only test the URL derivation, no real HTTP calls.
