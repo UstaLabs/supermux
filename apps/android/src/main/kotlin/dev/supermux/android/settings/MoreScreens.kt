@@ -40,6 +40,7 @@ import dev.supermux.android.theme.LocalPanes
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
 import dev.supermux.net.ArchivedDto
+import dev.supermux.net.CodexResetResult
 import dev.supermux.net.CuratorSettingsResponse
 import dev.supermux.net.DeviceDto
 import dev.supermux.net.ForgeConnectionsResponse
@@ -742,6 +743,7 @@ fun AppearanceSettingsPage(
 fun UsageScreen(
     onBack: () -> Unit,
     onLoad: suspend () -> String?,
+    onRedeem: suspend () -> CodexResetResult?,
 ) {
     val cs = MaterialTheme.colorScheme
     var usage by remember { mutableStateOf<UsageData?>(null) }
@@ -815,7 +817,7 @@ fun UsageScreen(
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
                         ClaudeUsageCard(u?.claude, u?.errors?.get("claude"))
-                        CodexUsageCard(u?.codex, u?.errors?.get("codex"))
+                        CodexUsageCard(u?.codex, u?.errors?.get("codex"), onRedeem = onRedeem, onRefresh = { reloadKey++ })
                         CursorUsageCard(u?.cursor, u?.errors?.get("cursor"))
                     }
                 }
@@ -842,6 +844,7 @@ private data class CodexUsageData(
     val secondaryWindow: UsageWindowData?,
     val credits: CodexCreditsData?,
     val limitReached: Boolean,
+    val resetCredits: Int,
 )
 private data class CursorUsageData(
     val totalPercentUsed: Double,
@@ -905,6 +908,7 @@ private fun parseUsage(raw: String): UsageData {
                 )
             },
             limitReached = o.optBoolean("limitReached", false),
+            resetCredits = o.optInt("resetCredits", 0),
         )
     }
 
@@ -1083,8 +1087,17 @@ private fun ClaudeUsageCard(claude: ClaudeUsageData?, error: String?) {
 }
 
 @Composable
-private fun CodexUsageCard(codex: CodexUsageData?, error: String?) {
+private fun CodexUsageCard(
+    codex: CodexUsageData?,
+    error: String?,
+    onRedeem: (suspend () -> CodexResetResult?)? = null,
+    onRefresh: () -> Unit = {},
+) {
     val cs = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
+    var redeeming by remember { mutableStateOf(false) }
+    var showDialog by remember { mutableStateOf(false) }
+    var note by remember { mutableStateOf<String?>(null) }
     UsageCard(
         title = "Codex",
         subtitle = codex?.plan ?: "unknown",
@@ -1110,7 +1123,59 @@ private fun CodexUsageCard(codex: CodexUsageData?, error: String?) {
             codex.credits?.takeIf { it.hasCredits }?.let { cr ->
                 UsageFooterRow("Credits balance", "$${cr.balance}")
             }
+            UsageFooterRow("🎟️ Resets banked", "${codex.resetCredits}")
+            if (codex.resetCredits > 0 && onRedeem != null) {
+                OutlinedButton(
+                    onClick = { showDialog = true },
+                    enabled = !redeeming,
+                    modifier = Modifier.padding(top = 8.dp),
+                    border = BorderStroke(1.dp, cs.outline),
+                ) {
+                    Text(if (redeeming) "Redeeming…" else "Use a reset", color = cs.onSurface, fontSize = 13.sp)
+                }
+            }
+            if (note != null) {
+                Text(
+                    note!!,
+                    color = cs.onSurfaceVariant,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
         }
+    }
+    if (showDialog && codex != null) {
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text("Use a banked reset?") },
+            text = { Text("Spends 1 of ${codex.resetCredits} to clear your rate-limit windows now.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDialog = false
+                    scope.launch {
+                        redeeming = true
+                        val r = onRedeem?.invoke()
+                        note = codexResetNote(r)
+                        onRefresh()
+                        redeeming = false
+                    }
+                }) { Text("Use reset", color = cs.primary) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+private fun codexResetNote(r: CodexResetResult?): String {
+    if (r == null) return "Reset failed"
+    return when (r.code) {
+        "reset" -> "✓ Reset — cleared ${r.windowsReset} window${if (r.windowsReset == 1) "" else "s"}"
+        "nothing_to_reset" -> "Nothing to reset right now"
+        "no_credit" -> "No banked resets left"
+        "already_redeemed" -> "That reset was already redeemed"
+        else -> "Reset request completed"
     }
 }
 

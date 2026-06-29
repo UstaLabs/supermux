@@ -371,7 +371,11 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                     composable<Usage> {
-                        UsageScreen(onBack = { navController.popBackStack() }, onLoad = { vm.usage() })
+                        UsageScreen(
+                            onBack = { navController.popBackStack() },
+                            onLoad = { vm.usage() },
+                            onRedeem = { vm.redeemCodexReset() },
+                        )
                     }
                     composable<Devices> {
                         DevicesScreen(
