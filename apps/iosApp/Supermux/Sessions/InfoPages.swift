@@ -398,6 +398,9 @@ struct UsageView: View {
     let broker: BrokerSession
     @State private var data: UsageResponse?
     @State private var loading = true
+    @State private var redeeming = false
+    @State private var showResetConfirm = false
+    @State private var resetNote: String? = nil
 
     var body: some View {
         ScrollView {
@@ -432,6 +435,31 @@ struct UsageView: View {
         loading = false
     }
 
+    /// Redeem one banked Codex rate-limit reset, then refresh the card. Gated behind the
+    /// confirmationDialog above; mirrors the web UsageView handler.
+    private func useReset() async {
+        redeeming = true
+        defer { redeeming = false; showResetConfirm = false }
+        let res = await broker.redeemCodexReset()
+        if let res {
+            resetNote = codexResetNote(res.code, Int(res.windowsReset))
+            await load()
+        } else {
+            resetNote = "Reset failed"
+        }
+    }
+
+    /// Map a redeem result `code` to a short user-facing note (web/Android parity).
+    private func codexResetNote(_ code: String, _ windows: Int) -> String {
+        switch code {
+        case "reset": return "✓ Reset — cleared \(windows) window\(windows == 1 ? "" : "s")"
+        case "nothing_to_reset": return "Nothing to reset right now"
+        case "no_credit": return "No banked resets left"
+        case "already_redeemed": return "That reset was already redeemed"
+        default: return "Reset request completed"
+        }
+    }
+
     @ViewBuilder private func claudeCard(_ u: ClaudeUsage?, err: String?) -> some View {
         UsageCard(title: "Claude", subtitle: "Pro plan", dimmed: u == nil) {
             if let u {
@@ -454,6 +482,25 @@ struct UsageView: View {
                 usageBar("7-day window", u.secondaryWindow.used, reset: resetCodex(u.secondaryWindow.resetsAt))
                 if let c = u.credits, c.hasCredits {
                     Divider(); rowLine("Credits balance", "$\(c.balance)")
+                }
+                Divider()
+                rowLine("🎟️ Resets banked", "\(u.resetCredits)")
+                if u.resetCredits > 0 {
+                    Button("Use a reset") { showResetConfirm = true }
+                        .buttonStyle(.bordered).controlSize(.small).tint(Theme.teal)
+                        .disabled(redeeming)
+                        .confirmationDialog("Use a banked reset?", isPresented: $showResetConfirm,
+                                            titleVisibility: .visible) {
+                            Button("Use a reset (spends 1 of \(u.resetCredits))") {
+                                Task { await useReset() }
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("Spends one of your banked Codex resets to clear your rate-limit windows now.")
+                        }
+                }
+                if let note = resetNote {
+                    Text(note).font(.caption2).foregroundStyle(.secondary)
                 }
             } else { unavailable(err) }
         }

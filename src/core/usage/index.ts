@@ -27,6 +27,7 @@ export interface CodexUsage {
   secondaryWindow: UsageWindow
   credits: { hasCredits: boolean; balance: string } | null
   limitReached: boolean
+  resetCredits: number
 }
 
 export interface CursorUsage {
@@ -152,7 +153,37 @@ export async function fetchCodexUsage(
     secondaryWindow: mapWindow(rl.secondary_window),
     credits,
     limitReached: rl.limit_reached ?? false,
+    resetCredits: data.rate_limit_reset_credits?.available_count ?? 0,
   }
+}
+
+// Known backend codes (documentation + tests). `code` is typed as string on the
+// result so an unrecognized future code passes through instead of crashing.
+export type CodexResetCode = "reset" | "nothing_to_reset" | "no_credit" | "already_redeemed"
+export interface CodexResetResult { code: string; windowsReset: number }
+
+const CODEX_RESET_CONSUME_URL =
+  "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
+
+export async function redeemCodexReset(
+  authPath: string = CODEX_AUTH,
+  idempotencyKey: string = globalThis.crypto.randomUUID(),
+): Promise<CodexResetResult> {
+  if (!existsSync(authPath)) throw new Error("Codex auth not found")
+  const raw = JSON.parse(readFileSync(authPath, "utf-8"))
+  const token = raw.tokens?.access_token
+  if (!token) throw new Error("Codex access token not found")
+
+  const res = await fetch(CODEX_RESET_CONSUME_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ redeem_request_id: idempotencyKey }),
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  })
+  if (!res.ok) throw new Error(`Codex reset API ${res.status}: ${await res.text()}`)
+
+  const data = (await res.json()) as any
+  return { code: String(data.code ?? "unknown"), windowsReset: data.windows_reset ?? 0 }
 }
 
 // ── Cursor ──
