@@ -111,7 +111,7 @@ async function confirmKill() {
             class="rounded-xl"
             :class="s.id === activeId ? 'ring-2 ring-primary ring-offset-2 ring-offset-[var(--cmux-rail)]' : ''"
           >
-            <SessionAvatar :name="s.name" :connected="s.connected" :agent="s.agent" :working="isAgentWorking(agentState.get(s.id).phase)" :suspended="s.status === 'suspended'" />
+            <SessionAvatar :name="s.name" :connected="s.connected" :agent="s.agent" :working="isAgentWorking(agentState.get(s.id))" :suspended="s.status === 'suspended'" />
           </div>
           <span
             v-if="unread.isUnread(s.id)"
