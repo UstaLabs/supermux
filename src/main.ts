@@ -441,7 +441,6 @@ async function maybeAutoSendSoulSetup(sessionId: string): Promise<void> {
   const deliver = async (id: string, text: string, meta: Record<string, string>) => {
     const current = registry.get(id)
     const adapter = current ? adapters.get(current.id) : undefined
-    agentStateStore.applyEvent(id, "deliver")
     if (adapter) {
       await adapter.send(text, meta)
     } else {
@@ -2358,7 +2357,6 @@ function deliverInbound(sessionId: string, text: string, meta: any): Promise<Inb
   return deliverInboundCore({
     getAdapter: (id) => adapters.get(id),
     isClaude: (id) => (registry.get(id)?.agent ?? "claude") === "claude",
-    applyDeliver: (id) => agentStateStore.applyEvent(id, "deliver"),
     sendInboundSocket: (id, payload) => server.sendInbound(id, payload),
     seen: recentInboundIds,
   }, sessionId, text, meta)
