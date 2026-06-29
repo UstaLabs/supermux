@@ -1969,6 +1969,17 @@ export class WebChannel implements Channel {
       return this.json(data)
     }
 
+    if (method === "POST" && path === "/usage/codex/reset") {
+      const { redeemCodexReset, fetchCodexUsage } = await import("../../core/usage/index")
+      try {
+        const result = await redeemCodexReset()
+        const codex = await fetchCodexUsage().catch(() => null) // best-effort refresh
+        return this.json({ ...result, codex })
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 502)
+      }
+    }
+
     if (method === "GET" && path === "/proxies") {
       const proxies = this.opts.listProxies?.() ?? []
       return this.json(proxies)

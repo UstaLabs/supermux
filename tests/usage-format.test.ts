@@ -18,8 +18,18 @@ function makeCodex(): CodexUsage {
     secondaryWindow: { used: 73, resetsAt: Math.floor((Date.now() + 6 * 24 * 3_600_000) / 1000) },
     credits: { hasCredits: true, balance: "15.00" },
     limitReached: false,
+    resetCredits: 0,
   }
 }
+
+const codexFixture = (resetCredits: number): CodexUsage => ({
+  plan: "plus",
+  primaryWindow: { used: 10, resetsAt: null },
+  secondaryWindow: { used: 5, resetsAt: null },
+  credits: null,
+  limitReached: false,
+  resetCredits,
+})
 
 function makeCursor(): CursorUsage {
   return {
@@ -74,4 +84,14 @@ test("formatUsageTelegram returns fallback when all null", () => {
   }
   const out = formatUsageTelegram(data)
   expect(out).toContain("unavailable")
+})
+
+test("formatUsageTelegram shows Codex banked resets when > 0", () => {
+  const out = formatUsageTelegram({ claude: null, codex: codexFixture(3), cursor: null, opencode: null, errors: {} } as any)
+  expect(out).toContain("Resets banked: 3")
+})
+
+test("formatUsageTelegram omits banked resets when 0", () => {
+  const out = formatUsageTelegram({ claude: null, codex: codexFixture(0), cursor: null, opencode: null, errors: {} } as any)
+  expect(out).not.toContain("Resets banked")
 })
