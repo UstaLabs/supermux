@@ -48,6 +48,16 @@ export async function startSocketServer(opts: {
   const channelConns = new Map<string, Set<Socket>>()
   const servers = new Map<string, Server>()
   const lastPong = new Map<string, number>()
+  const STALE_AFTER_MS = 45_000
+  const PING_INTERVAL_MS = 15_000
+  // Any frame from a shim proves liveness; only announce the false->true edge.
+  function markAlive(session_id: string): void {
+    const now = Date.now()
+    const prev = lastPong.get(session_id)
+    const wasStale = prev == null || (now - prev) > STALE_AFTER_MS
+    lastPong.set(session_id, now)
+    if (wasStale) opts.onStatusChange?.(session_id, true, now)
+  }
 
   // Single-flight dedup for orchestration calls. A Claude session runs TWO shim
   // processes (tools + channel), both advertising the orchestration tools, so one
@@ -185,16 +195,11 @@ export async function startSocketServer(opts: {
           log.warn("socket_frame_invalid", { session_id, err: err instanceof Error ? err.message : String(err) })
           continue
         }
+        markAlive(session_id)
         if (m.kind === "register") {
           const reply = await opts.handler.onRegister({ ...m, session_id })
           socket.write(encodeFrame({ kind: "registered", display_name: reply.name, session_id: reply.session_id }))
-          // A shim that just registered is reachable NOW — mark the session
-          // connected immediately instead of waiting up to a full 15s ping→pong
-          // cycle for the first pong (that lag made fresh resumes hang ~10s in
-          // waitForSessionConnected). Seed lastPong so stale-detection has a baseline.
-          const registeredAt = Date.now()
-          lastPong.set(session_id, registeredAt)
-          opts.onStatusChange?.(session_id, true, registeredAt)
+          // Liveness (lastPong + onStatusChange) is handled by markAlive above.
           if (m.channel_only) {
             trackChannelConn(session_id, socket, true)
             flushQueue(session_id)
@@ -239,9 +244,7 @@ export async function startSocketServer(opts: {
         } else if (m.kind === "ping") {
           socket.write(encodeFrame({ kind: "pong" }))
         } else if (m.kind === "pong") {
-          const now = Date.now()
-          lastPong.set(session_id, now)
-          opts.onStatusChange?.(session_id, true, now)
+          // liveness handled by markAlive above
         }
       }
     })
@@ -268,9 +271,6 @@ export async function startSocketServer(opts: {
   async function ensureBound(session_id: string): Promise<void> {
     if (!servers.has(session_id)) await bindOne(session_id)
   }
-
-  const PING_INTERVAL_MS = 15_000
-  const STALE_AFTER_MS = 45_000
 
   setInterval(() => {
     const now = Date.now()
