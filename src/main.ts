@@ -2942,16 +2942,6 @@ agentStateStore.on("thoughtComplete", (sessionId: string, durationMs: number, no
   const sec = Math.max(1, Math.round(durationMs / 1000))
   activityStore.append(sessionId, { ts: new Date(now).toISOString(), kind: "thinking", title: `Thought for ${sec}s` })
 })
-// Watchdog: a turn that sits in "sending" with no progress signal past this
-// deadline becomes "stalled" (UI shows Retry/Stop) instead of hanging forever.
-// Conservative for M1 to avoid false stalls on slow cold-starts; tightened in M2
-// once richer per-phase signals exist.
-const STALL_SENDING_MS = 30_000
-const stallInterval = setInterval(() => {
-  const stalled = agentStateStore.sweepStalled(Date.now(), STALL_SENDING_MS)
-  for (const sid of stalled) log.warn("turn_stalled", { sessionId: sid })
-}, 1_000)
-
 messageLog.on("update", (sessionId, entry_id, patch) => {
   webChannel?.broadcastToAll({ type: "message_update", session: sessionId, entry_id, text: patch.text, edited_at: patch.edited_at })
 })
@@ -3356,7 +3346,6 @@ async function gracefulShutdown(signal: string) {
   } catch (err: any) { log.warn("curator_scheduler_stop_failed", { err: err?.message }) }
   try {
     clearInterval(gcInterval)
-    clearInterval(stallInterval)
     clearInterval(modelRefreshInterval)
   } catch (err: any) { log.warn("gc_interval_clear_failed", { err: err?.message ?? String(err) }) }
   try {
