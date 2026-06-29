@@ -200,8 +200,10 @@ export async function spawnPA(opts: {
         workdir,
       }),
     })
-    if (tmuxWindow?.windowId) registry.sessions.setTmuxWindowId(id, tmuxWindow.windowId)
-    if (tmuxWindow?.windowId) void sendChannelConsentEnter(tmuxWindow.windowId)
+    if (tmuxWindow?.windowId) {
+      registry.sessions.setTmuxWindowId(id, tmuxWindow.windowId)
+      void sendChannelConsentEnter(tmuxWindow.windowId)
+    }
     opts.onClaudeSessionId?.(id, claudeSessionId)
   } else if (agent === AgentKind.Codex) {
     const sessionHome = join(STATE_DIR, "agents", "codex", name)

@@ -77,7 +77,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const resolvedPaWorkdir = opts.paWorkdir || `${home()}/.mux/workspace`
 
   async function respawnPA(pa: Session) {
-    // Kill stale windows/processes
+    // Kill the prior window by id. A legacy PA with no persisted tmux_window_id
+    // skips teardown; any orphan window is harmless (we address by id, never name)
+    // and is reclaimed on the next reconcile cycle.
     if (pa.agent === AgentKind.Claude && pa.tmux_window_id) {
       await killWindowById(pa.tmux_window_id).catch(() => {})
     }
