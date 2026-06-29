@@ -84,7 +84,7 @@ test("agent terminal: rejects non-claude, accepts claude and attaches with targe
     setMute: () => {},
     onSendFromWeb: () => {},
     getSessionWorkdir: (id) => (id === "claudeSess" || id === "codexSess" ? "/w" : undefined),
-    getSessionTmuxTarget: (id) => (id === "claudeSess" ? "mux:claudeSess" : undefined),
+    getSessionTmuxTarget: async (id) => (id === "claudeSess" ? "mux:claudeSess" : undefined),
     terminalManager: {
       attach: (o: any) => { attachCalls.push(o); return { ok: true } },
       detach: () => {},

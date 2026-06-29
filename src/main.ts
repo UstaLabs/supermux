@@ -1384,14 +1384,14 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     stopDisplay: (id) => displayManager.stop(id),
     fsWatcher,
     getSessionWorkdir: (id) => registry.get(id)?.workdir,
-    getSessionTmuxTarget: (id) => {
+    getSessionTmuxTarget: async (id) => {
       const s = registry.get(id)
       if (!s || s.agent !== AgentKind.Claude) return undefined
-      // Stable window-id, claude-gated (the same target the broker uses for
-      // send-keys). The agent terminal resolves the session+index from this id
-      // at attach time, so it survives renames / duplicate names. Id-only — the
-      // legacy name-string fallback is retired; an unhealed row yields undefined.
-      return s.tmux_window_id
+      // Heal-on-read: resolve and persist the window-id if not yet stored.
+      // For sessions that already have tmux_window_id, widOf short-circuits with
+      // no tmux call. Legacy/unhealed sessions resolve by name once, then persist,
+      // so the agent terminal no longer 404s on first attach.
+      return (await widOf(s)) ?? undefined
     },
     getSessionBaseCommits: (id) => registry.get(id)?.base_commits,
     getSessionCreatedAt: (id) => registry.get(id)?.created_at,

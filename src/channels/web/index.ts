@@ -173,7 +173,7 @@ export interface WebChannelOpts {
   /** Resolve a claude session's tmux "session:window" target (for kind=agent
    * terminals). Returns undefined for non-claude/unknown sessions. When this opt
    * is absent, all kind=agent requests return 404 (the feature is opt-in). */
-  getSessionTmuxTarget?: (name: string) => string | undefined
+  getSessionTmuxTarget?: (name: string) => Promise<string | undefined>
   getSessionBaseCommits?: (name: string) => Record<string, string> | undefined
   getSessionCreatedAt?: (name: string) => string | undefined
   listArchivedSessions?: () => ArchivedSessionSnapshot[]
@@ -446,7 +446,7 @@ export class WebChannel implements Channel {
       // for non-claude / unknown sessions (see main.ts).
       let agentTarget: string | undefined
       if (kind === "agent") {
-        agentTarget = this.opts.getSessionTmuxTarget?.(sessionName)
+        agentTarget = await this.opts.getSessionTmuxTarget?.(sessionName)
         if (!agentTarget) return new Response("agent terminal unsupported", { status: 404 })
       }
       const upgraded = server.upgrade(req, {
