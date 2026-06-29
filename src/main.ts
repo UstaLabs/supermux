@@ -118,6 +118,7 @@ import { FsWatcher } from "./core/editor/fs-watcher"
 import { scanRepos } from "./core/editor/repo-scanner"
 import { ActivityStore } from "./core/session-manager/activity-store"
 import { AgentStateStore } from "./core/session-manager/agent-state-store"
+import { toAgentStateFrame } from "./core/session-manager/agent-state-frame"
 import { TranscriptTailer } from "./core/agents/claude/transcript-tailer"
 import { claudeTranscriptPath } from "./core/agents/claude/transcript-path"
 import { renderTranscript } from "./core/search/transcript-render"
@@ -1070,7 +1071,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
     getSessionAgentState: (id) => {
       const s = registry.get(id)
-      return s ? agentStateStore.get(s.id) : { phase: "idle", since: 0 }
+      const st = s ? agentStateStore.get(s.id) : { phase: "idle" as const, since: 0 }
+      const { type: _type, session: _session, ...payload } = toAgentStateFrame(s?.id ?? id, st)
+      return payload
     },
     getSessionCommands: (id) => {
       const s = registry.get(id)
@@ -2919,7 +2922,7 @@ activityStore.on("append", (sessionId: string, event) => {
   webChannel?.broadcastToAll({ type: "activity_append", session: sessionId, event })
 })
 agentStateStore.on("change", (sessionId: string, state) => {
-  webChannel?.broadcastToAll({ type: "agent_state", session: sessionId, phase: state.phase, tool: state.tool, since: state.since, workingSince: state.workingSince })
+  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, state))
   if (state.phase === "idle" && pendingReapply.has(sessionId)) {
     const olds = pendingReapply.take(sessionId)!
     void reapplySessionAgentConfig(sessionId).then((r) => {
