@@ -35,11 +35,15 @@ fun WebCodeEditor(
     revealLine: Pair<Int, Int?>? = null,
     onChange: (String) -> Unit,
     onSave: () -> Unit,
+    onRevealConsumed: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     LaunchedEffect(content, filename, scrollTop, revealLine) {
         engine.setDocument(content, filename, scrollTop)
-        revealLine?.let { engine.revealLine(it.first, it.second) }
+        revealLine?.let {
+            engine.revealLine(it.first, it.second)
+            onRevealConsumed()   // one-shot: clear so returning to this tab won't re-jump (iOS-nonce parity)
+        }
     }
 
     LaunchedEffect(engine) {

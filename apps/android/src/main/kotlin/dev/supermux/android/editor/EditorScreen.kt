@@ -442,6 +442,7 @@ fun EditorPanel(
                                 fontSize = fontSize,
                                 scrollTop = activeTab?.scrollTop ?: 0,
                                 revealLine = activeTab?.revealLine,
+                                onRevealConsumed = { activeTab?.revealLine = null },
                                 onChange = { content ->
                                     activeTab?.path?.let { editor.updateContent(it, content) }
                                 },

@@ -31,7 +31,7 @@ struct MarkdownView: View {
             ForEach(segments.indices, id: \.self) { i in
                 switch segments[i] {
                 case .text(let blocks):
-                    SelectableText(attributed: MarkdownAttributed.build(blocks: blocks), onOpenFile: onOpenFile)
+                    SelectableText(attributed: MarkdownAttributed.build(blocks: blocks, linkify: onOpenFile != nil), onOpenFile: onOpenFile)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 case .table(let table):
                     MarkdownTableView(table: table)
@@ -74,14 +74,14 @@ func groupSegments(_ blocks: [MDBlock]) -> [MDSegment] {
 
 private enum MarkdownAttributed {
     /// Build the attributed string for a run of NON-table blocks.
-    static func build(blocks: [MDBlock]) -> NSAttributedString {
+    static func build(blocks: [MDBlock], linkify: Bool = false) -> NSAttributedString {
         let out = NSMutableAttributedString()
         var first = true
         for b in blocks {
             if case .table = b { continue }   // tables render via MarkdownTableView
             if !first { out.append(NSAttributedString(string: "\n")) }
             let piece = NSMutableAttributedString(attributedString: attributed(for: b))
-            FilePathLinks.decorate(piece)     // tag detected file paths as supermux-file:// links
+            if linkify { FilePathLinks.decorate(piece) }  // only agent messages get tappable file links
             out.append(piece)
             first = false
         }
