@@ -31,7 +31,9 @@ function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
 import { startSocketServer } from "./core/session-manager/socket-server"
 import { createSupervisor, reconcileOnStartup } from "./core/session-manager/supervisor"
 import { acquirePidFile, releasePidFile } from "./core/session-manager/pid-file"
-import { spawnSessionWindow, killSessionWindow, killWindowById, listSessionWindows, livePanePid, sendKeys, sendKeysToWindowId } from "./core/session-manager/tmux"
+import { spawnSessionWindow, killWindowById, listSessionWindows, livePanePid, sendKeysToWindowId, resolveWindowIdByName } from "./core/session-manager/tmux"
+import { ensureWindowId } from "./core/session-manager/window-id"
+import { liveWindowId } from "./core/session-manager/live-window"
 import { spawnSession as spawnSessionHelper, spawnPA, resumeOpenCodeSession } from "./core/session-manager/spawn-helper"
 import { RuntimeRegistry, type SessionRuntime } from "./core/session-manager/runtime"
 import { buildClaudeSpawnCommand } from "./core/session-manager/spawn-command"
@@ -480,6 +482,16 @@ const gcInterval = setInterval(() => {
 }, 60 * 60 * 1000)
 
 const TMUX_SESSION = process.env.MUX_TMUX_SESSION ?? "mux"
+// The addressable tmux window id for a session, healing a missing id once via a
+// name->id resolve (then persisted), so every kill/interrupt/liveness/consent
+// path routes by id — never by window name. Returns null when no live window
+// can be found, so callers no-op + log instead of routing by a stale name.
+const widOf = (s: { id: string; name: string; tmux_window_id?: string }) =>
+  ensureWindowId(s, {
+    tmuxSession: TMUX_SESSION,
+    resolve: resolveWindowIdByName,
+    persist: (id, wid) => registry.sessions.setTmuxWindowId(id, wid),
+  })
 const replyOwner = new Map<string, string>()              // key: `${chat_id}:${message_id}`
 const pendingSpawnActive = new Map<string, string>()      // expectedName → channelChatId
 const pendingClaudeSessionId = new Map<string, string>()  // brokerSessionId → claudeSessionId
@@ -753,32 +765,14 @@ async function notifyAgentError(sessionId: string, sessionName: string, errorTyp
 
 // Soft-interrupt a Claude session by sending a single Esc to its tmux pane —
 // Claude's native "stop generating" key. The pane runs Claude as the foreground
-// process, so send-keys to its window reaches the REPL. Resolved live from the
-// registry so a rename can't leave us aiming at a stale window name.
-function claudeTmuxTarget(session: { name: string; tmux_window_id?: string; tmux_target?: string | null }): string {
-  if (session.tmux_window_id) return session.tmux_window_id
-  const t = session.tmux_target
-  if (t?.includes(":")) return t
-  return `${TMUX_SESSION}:${session.name}`
-}
-
-function requireClaudeTmux(session: import("./core/session-manager/types").Session): { ok: true; target: string } | { ok: false; error: string } {
-  if (session.agent !== AgentKind.Claude) return { ok: false, error: `session ${session.name} is not tmux-backed` }
-  const target = claudeTmuxTarget(session)
-  if (!target) return { ok: false, error: `session ${session.name} has no tmux target` }
-  return { ok: true, target }
-}
-
+// process, so send-keys to its window reaches the REPL. Addressed strictly by
+// window id (healed from the registry) so a rename can't aim us at a stale name.
 async function interruptClaudePane(sessionId: string): Promise<void> {
   const s = registry.get(sessionId)
-  if (!s) return
-  const tmux = requireClaudeTmux(s)
-  if (!tmux.ok) {
-    log.warn("claude_interrupt_no_tmux", { sessionId, error: tmux.error })
-    return
-  }
-  if (s.tmux_window_id) await sendKeysToWindowId(s.tmux_window_id, ["Escape"])
-  else await sendKeys(tmux.target, ["Escape"])
+  if (!s || s.agent !== AgentKind.Claude) return
+  const wid = await widOf(s)
+  if (!wid) { log.warn("claude_interrupt_no_tmux", { sessionId }); return }
+  await sendKeysToWindowId(wid, ["Escape"])
 }
 
 // The one funnel every Stop surface (web button, /stop command) routes through:
@@ -1392,12 +1386,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getSessionWorkdir: (id) => registry.get(id)?.workdir,
     getSessionTmuxTarget: (id) => {
       const s = registry.get(id)
-      if (!s) return undefined
-      // Stable window-id when available (the same target the broker uses for
-      // send-keys), claude-gated. The agent terminal resolves the session+index
-      // from this id at attach time, so it survives renames / duplicate names.
-      const r = requireClaudeTmux(s)
-      return r.ok ? r.target : undefined
+      if (!s || s.agent !== AgentKind.Claude) return undefined
+      // Stable window-id, claude-gated (the same target the broker uses for
+      // send-keys). The agent terminal resolves the session+index from this id
+      // at attach time, so it survives renames / duplicate names. Id-only — the
+      // legacy name-string fallback is retired; an unhealed row yields undefined.
+      return s.tmux_window_id
     },
     getSessionBaseCommits: (id) => registry.get(id)?.base_commits,
     getSessionCreatedAt: (id) => registry.get(id)?.created_at,
@@ -1576,12 +1570,9 @@ async function killSession(id: string) {
   }
 
   if (s.agent === "claude") {
-    const tmux = requireClaudeTmux(s)
-    if (tmux.ok) {
-      if (s.tmux_window_id) await killWindowById(s.tmux_window_id)
-      else await killSessionWindow({ session: TMUX_SESSION, window: displayName })
-    }
-    else log.warn("kill_session_no_tmux", { name: displayName, error: tmux.error })
+    const wid = await widOf(s)
+    if (wid) await killWindowById(wid)
+    else log.warn("kill_session_no_tmux", { name: displayName })
   } else if (s.agent === "codex") {
     const runtime = runtimes.get(s.id)
     if (runtime?.kind === AgentKind.Codex) runtime.handle.kill()
@@ -1673,8 +1664,7 @@ async function resumeSuspendedSession(session: { id: string; name: string; agent
         command: cmd,
       })
       if (tmuxWindow.windowId) registry.sessions.setTmuxWindowId(session.id, tmuxWindow.windowId)
-      const tmuxTarget = `${TMUX_SESSION}:${windowName}`
-      await sendChannelConsentEnter(tmuxTarget)
+      if (tmuxWindow.windowId) await sendChannelConsentEnter(tmuxWindow.windowId)
       await waitForSessionConnected(session.id, 25_000)
     } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
       await server.bind(session.id)
@@ -1766,7 +1756,7 @@ async function resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name
         command: cmd,
       })
       resumedTmuxWindowId = tmuxWindow.windowId
-      void sendChannelConsentEnter(`${TMUX_SESSION}:${name}`)
+      if (tmuxWindow.windowId) void sendChannelConsentEnter(tmuxWindow.windowId)
     } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
       await server.bind(sessionId)
       const auth = await resolveCodexAuth({
@@ -2503,7 +2493,17 @@ async function spawnSession(args: { workdir: string; requestedName?: string; age
       id: r.session_id,
       name: r.name,
       lookup: (id, name) => registry.get(id) ?? registry.resolveName(name),
-      stillAlive: async () => (await listSessionWindows(TMUX_SESSION)).includes(r.name),
+      stillAlive: async () => {
+        // Pre-registration the row isn't in the registry yet — the freshly
+        // spawned window id lives in pendingTmuxWindowId until onRegister drains
+        // it. Check both, else liveness fails on every claude spawn (~50ms in).
+        const wid = liveWindowId(
+          r.session_id,
+          (id) => registry.get(id)?.tmux_window_id,
+          (id) => pendingTmuxWindowId.get(id),
+        )
+        return wid ? (await livePanePid(wid)) !== null : false
+      },
     }).catch((err) => {
       log.warn("spawn_post_check_failed", { name: r.name, workdir })
       throw err
@@ -2534,10 +2534,8 @@ async function reapplySessionAgentConfig(sessionId: string): Promise<{ ok: true 
     try {
       await ensureSessionWorktree(session)
       stopClaudeTailer(session.id)
-      const tmux = requireClaudeTmux(session)
-      if (!tmux.ok) return { ok: false, error: tmux.error }
-      if (session.tmux_window_id) await killWindowById(session.tmux_window_id)
-      else await killSessionWindow({ session: TMUX_SESSION, window: session.name })
+      const wid = await widOf(session)
+      if (wid) await killWindowById(wid)
       deleteRuntime(session.id)
       await server.bind(session.id)
       const cmd = buildClaudeSpawnCommand({
@@ -3076,8 +3074,8 @@ respawnPAsAfterOnboarding = async () => {
     const pas = registry.listPAs()
     for (const pa of pas) {
       try {
-        if (pa.tmux_window_id) await killWindowById(pa.tmux_window_id).catch(() => {})
-        else await killSessionWindow({ session: TMUX_SESSION, window: pa.name }).catch(() => {})
+        const wid = await widOf(pa)
+        if (wid) await killWindowById(wid).catch(() => {})
         registry.unregister(pa.name)
         log.info("pa_respawn_killed", { name: pa.name })
       } catch (err: any) {
