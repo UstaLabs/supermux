@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
@@ -1306,11 +1307,17 @@ fun ArchivedScreen(
                                 DropdownMenuItem(
                                     text = { Text("All projects") },
                                     onClick = { selectedProject = null; filterOpen = false },
+                                    trailingIcon = if (selectedProject == null) {
+                                        { Icon(Icons.Default.Check, contentDescription = null) }
+                                    } else null,
                                 )
                                 projects.forEach { p ->
                                     DropdownMenuItem(
                                         text = { Text("${p.label}  (${p.count})") },
                                         onClick = { selectedProject = p.key; filterOpen = false },
+                                        trailingIcon = if (selectedProject == p.key) {
+                                            { Icon(Icons.Default.Check, contentDescription = null) }
+                                        } else null,
                                     )
                                 }
                             }

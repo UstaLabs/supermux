@@ -1495,7 +1495,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     // Closes over the `agentRpc` `let` binding; runs at request time, by which
     // point agentRpc is assigned (same pattern as the login closures below).
     transcribe: async (sessionId, input) => {
-      const s = registry.get(sessionId)
+      // The session id is OPTIONAL (id-less /transcribe is used by the pre-spawn launcher). When
+      // present it enriches the cleanup with prior messages + the session's agent skills; when
+      // absent the cleanup still runs off the draft + global glossary/engine/model.
+      const s = sessionId ? registry.get(sessionId) : undefined
       const cfg = settings.getAppConfig(appConfigEnv)
       let draft = input.draft ?? ""
       let whisperMs = 0
@@ -1506,12 +1509,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         draft = r.text
       }
       const source = input.audioPath ? "whisper" : "client"
-      if (!draft.trim()) { log.info("voice_transcribe_empty", { sessionId, source, whisperMs }); return { text: "" } }
+      if (!draft.trim()) { log.info("voice_transcribe_empty", { sessionId: sessionId ?? null, source, whisperMs }); return { text: "" } }
       const skills = s ? commandRegistry.get(s.name).filter((c) => c.family === "agent").map((c) => c.name) : []
-      const messages = messageLog.get(s?.id ?? sessionId, 10)
+      const messages = sessionId ? messageLog.get(s?.id ?? sessionId, 10) : []
       const payload = buildVoicePayload(draft, messages, skills)
       // Full visibility into exactly what the cleanup is fed + the whisper/cleanup timing split.
-      log.info("voice_transcribe_in", { sessionId, source, draft, whisperMs, ctxMsgs: messages.length, skills, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
+      log.info("voice_transcribe_in", { sessionId: sessionId ?? null, source, draft, whisperMs, ctxMsgs: messages.length, skills, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
       try {
         const t1 = Date.now()
         const out = await cleanupDraft(
@@ -1520,10 +1523,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         )
         const cleanupMs = Date.now() - t1
         const text = out.text || draft
-        log.info("voice_transcribe_out", { sessionId, draft, text, whisperMs, cleanupMs, engine: out.engine, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
+        log.info("voice_transcribe_out", { sessionId: sessionId ?? null, draft, text, whisperMs, cleanupMs, engine: out.engine, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
         return { text }
       } catch (e) {
-        log.warn("voice_cleanup_failed", { sessionId, draft, whisperMs, err: String(e) })
+        log.warn("voice_cleanup_failed", { sessionId: sessionId ?? null, draft, whisperMs, err: String(e) })
         return { text: draft, degraded: true }
       }
     },

@@ -144,7 +144,7 @@ export interface WebChannelOpts {
   spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string }>
   killSession?: (name: string) => Promise<void>
   renameSession?: (oldName: string, newName: string) => Promise<void>
-  transcribe?: (sessionId: string, input: { draft?: string; audioPath?: string }) => Promise<{ text: string; degraded?: boolean }>
+  transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string }) => Promise<{ text: string; degraded?: boolean }>
   spawnPA?: (args: { name: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string }>
   listPAs?: () => SessionSnapshot[]
   updatePA?: (name: string, patch: { model?: string; reasoningLevel?: string }) => Promise<{ ok: boolean; error?: string }>
@@ -1924,8 +1924,14 @@ export class WebChannel implements Channel {
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
     }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/transcribe$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
+    if (method === "POST" && (path === "/transcribe" || path.match(/^\/sessions\/[^/]+\/transcribe$/))) {
+      // The session id is OPTIONAL. `/transcribe` (id-less — e.g. the pre-spawn launcher)
+      // or `/transcribe?session=<id>` or the legacy `/sessions/<id>/transcribe`. When present
+      // it only enriches cleanup context (recent messages + skills); the cleanup engine/model/
+      // glossary always come from global config, so a live session is never required.
+      const id = path === "/transcribe"
+        ? (url.searchParams.get("session")?.trim() || undefined)
+        : decodeURIComponent(path.split("/")[2]!)
       if (!this.opts.transcribe) return this.json({ error: "not configured" }, 503)
       const ctype = req.headers.get("content-type") ?? ""
       let input: { draft?: string; audioPath?: string }

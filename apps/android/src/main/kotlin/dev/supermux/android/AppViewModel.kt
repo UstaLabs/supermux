@@ -366,12 +366,15 @@ class AppViewModel(
 
     // ── Voice dictation ──────────────────────────────────────────────────────────
 
+    // sessionId is OPTIONAL — null (e.g. the pre-spawn launcher) posts to the id-less /transcribe;
+    // the session only enriches cleanup context server-side (see BrokerApi.transcribePath).
+
     /** Whisper path: multipart audio → cleaned text. Returns null on failure (caller keeps draft). */
-    suspend fun transcribeAudio(sessionId: String, bytes: ByteArray, filename: String): String? =
+    suspend fun transcribeAudio(sessionId: String?, bytes: ByteArray, filename: String): String? =
         runCatching { api.transcribeAudio(sessionId, bytes, filename).text }.getOrNull()
 
     /** On-device-STT path: JSON draft → cleaned text. Returns null on failure. */
-    suspend fun transcribeDraft(sessionId: String, draft: String): String? =
+    suspend fun transcribeDraft(sessionId: String?, draft: String): String? =
         runCatching { api.transcribeDraft(sessionId, draft).text }.getOrNull()
 
     fun sendWith(sessionId: String, text: String, attachments: List<String>) {

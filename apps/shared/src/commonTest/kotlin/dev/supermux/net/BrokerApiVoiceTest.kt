@@ -77,6 +77,29 @@ class BrokerApiVoiceTest {
             "ct=${r.body.contentType}")
     }
 
+    @Test fun transcribe_draft_null_session_posts_to_idless_path() = runTest {
+        val reqs = mutableListOf<HttpRequestData>()
+        val api = captured(body = """{"text":"hi there"}""", sink = reqs)
+        val res = api.transcribeDraft(null, "hi")
+        assertEquals("hi there", res.text)
+        val r = reqs.single()
+        assertEquals(HttpMethod.Post, r.method)
+        assertEquals("http://h/transcribe", r.url.toString())
+        assertEquals("""{"draft":"hi"}""", r.bodyText())
+    }
+
+    @Test fun transcribe_audio_null_session_posts_to_idless_path() = runTest {
+        val reqs = mutableListOf<HttpRequestData>()
+        val api = captured(body = """{"text":"spoken"}""", sink = reqs)
+        val res = api.transcribeAudio(null, byteArrayOf(1, 2, 3), "voice.m4a")
+        assertEquals("spoken", res.text)
+        val r = reqs.single()
+        assertEquals(HttpMethod.Post, r.method)
+        assertEquals("http://h/transcribe", r.url.toString())
+        assertTrue(r.body.contentType?.toString()?.startsWith("multipart/form-data") == true,
+            "ct=${r.body.contentType}")
+    }
+
     @Test fun fetch_glossary_gets_and_returns_terms() = runTest {
         val reqs = mutableListOf<HttpRequestData>()
         val api = captured(body = """{"glossary":["Supermux","Ktor"]}""", sink = reqs)
