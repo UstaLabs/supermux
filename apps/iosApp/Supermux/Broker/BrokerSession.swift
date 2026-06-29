@@ -533,6 +533,31 @@ final class BrokerSession {
     func editorOpen(_ id: String) { Task { [client] in try? await client.send(frame: ClientFrameEditorOpen(session: id)) } }
     func editorClose(_ id: String) { Task { [client] in try? await client.send(frame: ClientFrameEditorClose(session: id)) } }
 
+    // MARK: - Open a tapped file path (chat message → editor)
+    /// A chat-initiated request to bring a session's editor to the front. The nonce makes
+    /// each tap a distinct value so `.onChange` observers fire even on a repeat of the same id.
+    struct EditorFocusRequest: Equatable { let sessionId: String; let nonce: Int }
+    /// Set when a path is tapped → observed by the chat container to surface the editor.
+    var editorFocus: EditorFocusRequest?
+    /// Transient "couldn't open" message surfaced by the chat container as a banner.
+    var editorOpenError: String?
+
+    /// Resolve a tapped path against the session workdir, open it in that session's editor at
+    /// the cited line, and ask the UI to bring the editor forward. A path that resolves outside
+    /// the workdir surfaces a transient error instead (parity with Android's toast / the web).
+    func openFileFromMessage(sessionId: String, workdir: String, ref: FilePathRef) {
+        let home = inferHomeDir(workdir: workdir)
+        guard let rel = toWorkdirRelativePath(path: ref.path, workdir: workdir, homeDir: home) else {
+            editorOpenError = "File is outside this session's project"
+            return
+        }
+        // `ref.line`/`endLine` bridge as boxed `KotlinInt?`; `.intValue` is `Int32`, so map to Swift Int.
+        editorState(for: sessionId).openFileAtLine(rel,
+                                                   line: ref.line.map { Int($0.intValue) },
+                                                   endLine: ref.endLine.map { Int($0.intValue) })
+        editorFocus = EditorFocusRequest(sessionId: sessionId, nonce: (editorFocus?.nonce ?? 0) + 1)
+    }
+
     // MARK: - Editor state (one per session, cached so open tabs / tree expansion /
     // scroll survive pane AND session switches — full state preservation is required).
     @ObservationIgnored private var editorStates: [String: EditorState] = [:]
