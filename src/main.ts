@@ -781,14 +781,11 @@ async function interruptClaudePane(sessionId: string): Promise<void> {
 }
 
 // The one funnel every Stop surface (web button, /stop command) routes through:
-// dispatch to the agent's own interrupt(), then optimistically flip the live
-// status to idle so the UI clears "Working…" at once. The agent's own turn-end
-// (Claude's Esc, codex turn/completed, cursor child exit) reconverges on idle.
+// dispatch to the agent's own interrupt(). The broker does NOT flip the live
+// status itself — idle is reflected from the session: Claude's interrupt marker
+// in the transcript, or codex/cursor turn-complete.
 async function interruptSessionById(sessionId: string): Promise<{ ok: boolean; reason?: string }> {
-  return runInterrupt({
-    adapter: adapters.get(sessionId),
-    onClear: () => agentStateStore.applyEvent(sessionId, "Stop"),
-  })
+  return runInterrupt({ adapter: adapters.get(sessionId) })
 }
 
 type FinishRequest = { action: FinishAction; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }
