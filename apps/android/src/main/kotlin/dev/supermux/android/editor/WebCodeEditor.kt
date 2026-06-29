@@ -32,12 +32,14 @@ fun WebCodeEditor(
     filename: String,
     fontSize: Int,
     scrollTop: Int = 0,
+    revealLine: Pair<Int, Int?>? = null,
     onChange: (String) -> Unit,
     onSave: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    LaunchedEffect(content, filename, scrollTop) {
+    LaunchedEffect(content, filename, scrollTop, revealLine) {
         engine.setDocument(content, filename, scrollTop)
+        revealLine?.let { engine.revealLine(it.first, it.second) }
     }
 
     LaunchedEffect(engine) {

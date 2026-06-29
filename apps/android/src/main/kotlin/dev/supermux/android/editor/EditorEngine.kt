@@ -67,6 +67,7 @@ class EditorEngine(
     }
 
     private var lastScrollTop = 0
+    private var pendingReveal: Pair<Int, Int?>? = null
 
     fun readScrollTop(callback: (Int) -> Unit) {
         val view = webView ?: return callback(lastScrollTop)
@@ -81,6 +82,18 @@ class EditorEngine(
         lastFilename = filename
         lastScrollTop = scrollTop
         if (ready) pushToView(content, filename, scrollTop)
+    }
+
+    /** Scroll to a 1-indexed line (optional end). Deferred until [ready], like scrollTop. */
+    fun revealLine(line: Int, endLine: Int?) {
+        pendingReveal = line to endLine
+        if (ready) flushReveal()
+    }
+
+    private fun flushReveal() {
+        val r = pendingReveal ?: return
+        pendingReveal = null
+        webView?.evaluateJavascript("cmRevealLine(${r.first}, ${r.second ?: -1})", null)
     }
 
     fun destroy() {
@@ -175,6 +188,7 @@ class EditorEngine(
         view.evaluateJavascript("cmSetLineWrap($lineWrap)", null)
         view.evaluateJavascript("cmSetFontSize($fontSize)", null)
         view.evaluateJavascript("cmSetScrollTop($scrollTop)", null)
+        flushReveal()
     }
 
     // ── LSP bridge (mirrors cmSet* — drives the cm6 LSPClient over the shim) ────
