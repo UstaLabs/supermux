@@ -86,11 +86,6 @@ export function createTmuxClient(run: TmuxRunner = runTmux, runRaw: CmdRunner = 
     return { windowId: r.stdout.trim() }
   }
 
-  async function killSessionWindow(opts: { session: string; window: string }): Promise<void> {
-    const r = await run(["kill-window", "-t", `${opts.session}:${opts.window}`])
-    if (r.code !== 0 && !/can't find (window|session)/.test(r.stderr)) throw new Error(`tmux kill-window failed: ${r.stderr}`)
-  }
-
   async function killWindowById(windowId: string): Promise<void> {
     const r = await run(["kill-window", "-t", windowId])
     if (r.code !== 0 && !/can't find (window|session)/.test(r.stderr)) throw new Error(`tmux kill-window failed: ${r.stderr}`)
@@ -118,11 +113,6 @@ export function createTmuxClient(run: TmuxRunner = runTmux, runRaw: CmdRunner = 
     return null
   }
 
-  async function sendKeys(target: string, keys: string[]): Promise<void> {
-    const r = await run(["send-keys", "-t", target, ...keys])
-    if (r.code !== 0) throw new Error(`tmux send-keys failed: ${r.stderr}`)
-  }
-
   async function sendKeysToWindowId(windowId: string, keys: string[]): Promise<void> {
     const r = await run(["send-keys", "-t", windowId, ...keys])
     if (r.code !== 0) throw new Error(`tmux send-keys failed: ${r.stderr}`)
@@ -148,16 +138,14 @@ export function createTmuxClient(run: TmuxRunner = runTmux, runRaw: CmdRunner = 
     return null
   }
 
-  return { spawnSessionWindow, killSessionWindow, killWindowById, listSessionWindows, livePanePid, sendKeys, sendKeysToWindowId, capturePaneById, resolveWindowIdByName }
+  return { spawnSessionWindow, killWindowById, listSessionWindows, livePanePid, sendKeysToWindowId, capturePaneById, resolveWindowIdByName }
 }
 
 export const {
   spawnSessionWindow,
-  killSessionWindow,
   killWindowById,
   listSessionWindows,
   livePanePid,
-  sendKeys,
   sendKeysToWindowId,
   capturePaneById,
   resolveWindowIdByName,
