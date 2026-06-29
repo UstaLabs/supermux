@@ -167,3 +167,30 @@ which the existing injectable seams make observable.
 - Optionally slugify the window name in `spawnClaudeSession` for consistency with
   the PA path. Not required (id-addressed), so deferred.
 - Optionally drop the now-vestigial `tmux_target` column in a later migration.
+
+## Implementation amendments (2026-06-29, post-review)
+
+Three refinements surfaced during implementation/review and are now in the code:
+
+1. **Pre-registration liveness (`live-window.ts`).** The spawn post-check
+   (`waitForRegisteredSession`) polls liveness *before* the session is registered,
+   so a registry-only window-id lookup is null during that window and would throw
+   "spawn failed" on every claude spawn. Fixed with `liveWindowId(sessionId,
+   getRegistered, getPending)` which reads the registry OR the `pendingTmuxWindowId`
+   map (where the id lives until `onRegister` drains it). Unit-tested.
+
+2. **D3 heal slug-fallback.** D3 assumed the lookup name equals the window name —
+   false for PA windows, which are named with `normalizeName(name)` (the slug)
+   while the registry stores the free-form display name. `ensureWindowId` now tries
+   the display name, then the slug, so legacy/null-id PA rows heal correctly
+   instead of returning null (which would 404 the agent terminal). Unit-tested.
+
+3. **`getSessionTmuxTarget` heal-on-read (Task 8).** Made async and routed through
+   the heal so the web agent-terminal attach never falls back to a name string and
+   legacy rows don't 404. (`agent-tmux.ts` already accepts window-id targets.)
+
+4. **Dead name-target primitives removed.** `sendKeys(target)` and
+   `killSessionWindow({session,window})` had zero runtime callers after the
+   refactor and were the exact string/name-target helpers that could reintroduce
+   the spaced-name bug, so they were deleted from `tmux.ts` (`listSessionWindows`
+   stays — still used for cosmetic window-name uniquification).
