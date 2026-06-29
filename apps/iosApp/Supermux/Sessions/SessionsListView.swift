@@ -138,7 +138,7 @@ struct SessionsListView: View {
 
     @ViewBuilder private func row(_ s: SessionInfo) -> some View {
         let muted = s.mute?.boolValue ?? false
-        SessionRow(session: s, preview: broker.messages[s.id]?.last?.text,
+        SessionRow(broker: broker, session: s, preview: broker.messages[s.id]?.last?.text,
                    phase: broker.agentPhase[s.id], muted: muted)
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 Button(role: .destructive) { killTarget = s } label: { Label("Kill", systemImage: "xmark.circle") }
@@ -170,15 +170,13 @@ struct SessionsListView: View {
 }
 
 struct SessionRow: View {
+    let broker: BrokerSession
     let session: SessionInfo
     var preview: String?
     var phase: String?
     var muted: Bool = false
 
-    private var working: Bool {
-        guard let phase else { return false }
-        return ["working", "thinking", "running", "tool", "busy", "sending"].contains(phase)
-    }
+    private var working: Bool { broker.agentWorking[session.id] == true }
 
     var body: some View {
         HStack(spacing: 8) {
