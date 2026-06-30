@@ -48,7 +48,10 @@ function applyPredOps(ops: DisplayOp[]) {
   for (const op of ops) {
     if (op.op === "predict") {
       // Snapshot the cell BEFORE the dim guess overwrites it, so a rollback can
-      // restore exactly what was there.
+      // restore what was there. Caveat: a cell re-predicted before any confirm
+      // (backspace-then-retype over non-space text) snapshots the intervening dim
+      // guess, so a rollback may restore a space until the next server redraw —
+      // narrow and self-healing, and still better than re-affirming a wrong glyph.
       const prev = predAdapter.readCell(op.row, op.col)
       predCells.set(op.id, { row: op.row, col: op.col, prev })
       predAdapter.apply([op])
