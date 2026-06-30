@@ -139,6 +139,32 @@ describe("TerminalManager (hermetic)", () => {
     expect(received).toContain("hello world")
   })
 
+  it("backpressure: pauses reading until onData's returned promise resolves", async () => {
+    const { mgr, world } = makeMgr()
+    const received: string[] = []
+    let release!: () => void
+    mgr.attach({
+      deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach,
+      onData: (d) => {
+        received.push(new TextDecoder().decode(d))
+        // First chunk only: return a pending promise to simulate a congested
+        // socket. pumpOutput must not pull chunk 2 until we release().
+        if (received.length === 1) return new Promise<void>((r) => { release = r })
+      },
+    })
+    const proc = world.procs[0]!
+    proc.emit("chunk-1")
+    proc.emit("chunk-2")
+    proc.emit("chunk-3")
+    await flush()
+    expect(received).toEqual(["chunk-1"]) // paused: 2 & 3 still buffered upstream
+
+    release()
+    await flush()
+    await flush()
+    expect(received).toEqual(["chunk-1", "chunk-2", "chunk-3"]) // resumed, drained
+  })
+
   it("write/resize target the viewer's stdin and reject unknown terminals", () => {
     const { mgr, world } = makeMgr()
     mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach })
