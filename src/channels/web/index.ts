@@ -297,6 +297,14 @@ export class WebChannel implements Channel {
       port: this.opts.port,
       fetch: (req, server) => this.routeRequestOrUpgrade(req, server),
       websocket: {
+        // Negotiated per-connection (clients that don't support it are unaffected).
+        // Terminal + control-channel JSON are highly compressible; the heavy win
+        // is on slow links. NOTE: this is server-wide, so it also applies to the
+        // /ws/display + /ws/scrcpy binary streams, whose payloads are already
+        // compressed — deflate achieves a near-1.0 ratio on them (small header
+        // overhead) but still costs CPU. If that CPU shows up on this shared box,
+        // the fallback is terminal-only app-level deflate (see the perf plan).
+        perMessageDeflate: true,
         open: (ws) => {
           if ((ws.data as any)?.proxyUpstream) {
             const { proxyUpstream, proxyPath, proxyWsProtocol } = ws.data as any
