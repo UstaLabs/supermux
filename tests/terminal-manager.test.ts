@@ -160,8 +160,8 @@ describe("TerminalManager (hermetic)", () => {
     expect(received).toEqual(["chunk-1"]) // paused: 2 & 3 still buffered upstream
 
     release()
-    await flush()
-    await flush()
+    await flush() // pumpOutput's awaited continuation resumes + drains (microtasks)
+    await flush() // belt-and-suspenders macrotask margin; not load-bearing
     expect(received).toEqual(["chunk-1", "chunk-2", "chunk-3"]) // resumed, drained
   })
 

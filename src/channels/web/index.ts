@@ -77,8 +77,11 @@ export type StoredClientLogEntry = {
 const MUTATING_METHODS = new Set(["POST", "PUT", "DELETE", "PATCH"])
 
 // Pause feeding a terminal viewer's output once this many bytes are queued on
-// its socket; resume on the websocket `drain`. Bounds how far a slow client can
-// fall behind (and how much the broker buffers). Tune via the perf measurement.
+// its socket; resume on the websocket `drain`. Bounds the broker's per-viewer
+// send-buffer memory and how far a slow client falls behind. NB: getBufferedAmount
+// reports POST-compression (permessage-deflate) wire bytes — terminal streams
+// deflate ~5-10x, so 256KB here is several MB of logical redraws: a generous bound
+// that won't trip on burst repaints. Tune via the perf measurement.
 const TERMINAL_BP_HIGH_WATER = 256 * 1024
 
 function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
