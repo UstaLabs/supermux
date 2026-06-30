@@ -83,8 +83,8 @@ const isDesktop = useIsDesktop()
 // Live agent-state indicator (Sending… / Working… / nothing)
 const liveState = computed(() => agentState.get(props.id))
 
-// "Working…" timer: counts continuously from when the agent entered the working
-// state (thinking/running), THROUGH tool transitions, until it goes idle/sending.
+// "Working…" timer: counts continuously from workingSince — through tool
+// transitions — until working becomes false (the agent goes idle or dead).
 const now = ref(Date.now())
 let _tick: ReturnType<typeof setInterval> | undefined
 onMounted(() => { _tick = setInterval(() => { now.value = Date.now() }, 1000) })
@@ -560,7 +560,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
               <!-- Live status: "Sending…" until the agent's real start signal,
                    then "Working…" until idle. Nothing when idle. -->
               <div
-                v-if="!isArchived && liveState.phase === 'stalled'"
+                v-if="!isArchived && liveState.state === 'dead'"
                 class="flex items-center gap-1.5 px-1 py-0.5 text-xs italic text-muted-foreground/70 ml-2"
               >
                 <AlertTriangleIcon class="size-3.5 shrink-0 text-amber-500" />
@@ -584,7 +584,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
                 </button>
               </div>
               <div
-                v-else-if="!isArchived && liveState.phase === 'sending'"
+                v-else-if="!isArchived && agentState.isSending(props.id)"
                 class="flex items-center gap-1.5 px-1 py-0.5 text-xs italic text-muted-foreground/70 ml-2"
               >
                 <SendHorizonalIcon class="size-3.5 shrink-0 animate-pulse" />
@@ -600,7 +600,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
                 </button>
               </div>
               <div
-                v-else-if="!isArchived && (liveState.phase === 'thinking' || liveState.phase === 'running')"
+                v-else-if="!isArchived && liveState.working"
                 class="flex items-center gap-1.5 px-1 py-0.5 text-xs text-muted-foreground ml-2"
               >
                 <Loader2Icon class="size-3.5 shrink-0 animate-spin text-primary" />

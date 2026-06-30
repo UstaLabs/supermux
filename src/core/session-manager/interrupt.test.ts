@@ -27,3 +27,10 @@ test("adapter succeeds: clears state and reports ok", async () => {
   expect(r).toEqual({ ok: true })
   expect(cleared).toBe(1)
 })
+
+test("runInterrupt works with no onClear (broker no longer self-records)", async () => {
+  let interrupted = false
+  const r = await runInterrupt({ adapter: { interrupt: async () => { interrupted = true } } })
+  expect(r.ok).toBe(true)
+  expect(interrupted).toBe(true)
+})

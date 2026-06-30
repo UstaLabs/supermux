@@ -125,9 +125,6 @@ import dev.supermux.proto.gitBadge
 
 enum class SessionPanel { Chat, Native, Editor, Terminal, Display }
 
-/** Phases where the agent is busy → show the working indicator (iOS workingIndicator gate). */
-private val WORKING_PHASES = setOf("working", "thinking", "running", "tool", "busy", "sending")
-
 /**
  * Active "/command" token at the END of the draft (cursor assumed at end), at line start or
  * after whitespace — mirrors iOS slashQuery (ChatPane.swift:508). Group 1 is the slash token.
@@ -148,6 +145,7 @@ fun ChatScreen(
     messages: List<LogEntry>,
     activity: List<ActivityEvent>,
     agent: AgentStatus?,
+    sending: Boolean = false,
     onBack: () -> Unit,
     onSendWith: (text: String, attachments: List<String>) -> Unit,
     onUpload: suspend (bytes: ByteArray, name: String, mime: String, kind: String?) -> String?,
@@ -473,24 +471,33 @@ fun ChatScreen(
                     }
                 }
 
-                // Agent pill (only if non-idle)
-                if (agent != null && agent.phase != "idle") {
+                // Agent pill (only if non-idle). A spinner means "in progress" — so it
+                // shows only while working; the dead state is an error-colored label, no spinner.
+                if (agent != null && agent.state != "idle") {
+                    val isDead = agent.state == "dead"
+                    val pillColor = if (isDead) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                     Row(
                         modifier = Modifier
                             .clip(RoundedCornerShape(20.dp))
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
+                            .background(pillColor.copy(alpha = 0.16f))
                             .padding(horizontal = 8.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(5.dp),
                     ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(12.dp),
-                            color = MaterialTheme.colorScheme.primary,
-                            strokeWidth = 2.dp,
-                        )
+                        if (!isDead) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(12.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                strokeWidth = 2.dp,
+                            )
+                        }
                         Text(
-                            text = agent.phase.replaceFirstChar { it.uppercaseChar() },
-                            color = MaterialTheme.colorScheme.primary,
+                            text = when {
+                                isDead -> "Not responding"
+                                agent.detail == "running" -> "Running"
+                                else -> "Thinking"
+                            },
+                            color = pillColor,
                             fontSize = 12.sp,
                         )
                     }
@@ -669,9 +676,9 @@ fun ChatScreen(
         val listState = rememberLazyListState()
         var prevTimelineSize by remember { mutableIntStateOf(0) }
 
-        // Working ⇔ the agent is in a busy phase (iOS workingIndicator gate). Drives both the
+        // Working ⇔ the broker says the agent is busy (iOS workingIndicator gate). Drives both the
         // bottom WorkingIndicator row and the auto-scroll target (so the spinner stays in view).
-        val working = agent != null && agent.phase in WORKING_PHASES
+        val working = agent?.working == true
 
         // Auto-scroll on new content AND when the working row appears/disappears.
         LaunchedEffect(timelineItems.size, working, activePanel) {
@@ -743,6 +750,10 @@ fun ChatScreen(
                 if (working && agent != null) {
                     item(key = "__working__") {
                         WorkingIndicator(agent, onStop = onInterrupt)
+                    }
+                } else if (sending) {
+                    item(key = "__sending__") {
+                        SendingIndicator(onStop = onInterrupt)
                     }
                 }
             }
@@ -1355,11 +1366,10 @@ private fun WorkingIndicator(agent: AgentStatus, onStop: () -> Unit) {
             now = System.currentTimeMillis()
         }
     }
-    val elapsed = agent.since?.let { ((now - it).coerceAtLeast(0)) / 1000 }
-    val label = when (agent.phase) {
-        "sending" -> "Sending…"
-        "thinking" -> "Thinking…"
-        else -> "Working…"
+    val elapsed = agent.workingSince?.let { ((now - it).coerceAtLeast(0)) / 1000 }
+    val label = when (agent.detail) {
+        "running" -> "Working…"
+        else -> "Thinking…"
     }
     Row(
         modifier = Modifier.padding(vertical = Space.xs),
@@ -1383,6 +1393,52 @@ private fun WorkingIndicator(agent: AgentStatus, onStop: () -> Unit) {
                 .background(cs.error.copy(alpha = 0.12f))
                 .clickable { haptic(HapticKind.Tick); onStop() }
                 .testTag("working_stop")
+                .padding(horizontal = Space.sm, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_square),
+                contentDescription = "Stop",
+                tint = cs.error,
+                modifier = Modifier.size(11.dp),
+            )
+            Text("Stop", style = MaterialTheme.typography.labelMedium, color = cs.error)
+        }
+    }
+}
+
+/**
+ * Client-local "Sending…" indicator shown between the user tapping Send and the first
+ * `agent_state` frame arriving from the broker. No timer (no elapsed), static label.
+ * Same Stop capsule as WorkingIndicator so the user can cancel immediately after sending.
+ */
+@Composable
+private fun SendingIndicator(onStop: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val haptic = rememberHaptics()
+    Row(
+        modifier = Modifier.padding(vertical = Space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Space.sm),
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(14.dp),
+            strokeWidth = 2.dp,
+            color = cs.primary,
+        )
+        Text(
+            text = "Sending…",
+            style = MaterialTheme.typography.bodySmall,
+            color = cs.onSurfaceVariant,
+        )
+        // Red Stop capsule → interrupt
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(cs.error.copy(alpha = 0.12f))
+                .clickable { haptic(HapticKind.Tick); onStop() }
+                .testTag("sending_stop")
                 .padding(horizontal = Space.sm, vertical = 3.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(3.dp),

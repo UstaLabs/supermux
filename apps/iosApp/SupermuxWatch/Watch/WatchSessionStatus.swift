@@ -35,8 +35,9 @@ func sessionStatus(_ git: GitLite?) -> (kind: WatchStatusKind, level: WatchStatu
     }
 }
 
-/// Agent phases that mean "actively working" — verbatim from the iPhone's SessionRow.
-private let workingPhases: Set<String> = ["working", "thinking", "running", "tool", "busy", "sending"]
+// The broker's legacy `phase` alias is one of idle|thinking|running|stalled; the
+// watch infers "working" from the forwarded phase (it can't receive the agent_state frame).
+private let workingPhases: Set<String> = ["thinking", "running"]
 
 func isWorking(_ phase: String?) -> Bool {
     guard let phase else { return false }

@@ -17,6 +17,11 @@ final class BrokerSession {
     private(set) var activity: [String: [ActivityEvent]] = [:]
     private(set) var agentPhase: [String: String] = [:]
     private(set) var agentSince: [String: Int64] = [:]
+    private(set) var agentWorking: [String: Bool] = [:]
+    private(set) var agentState: [String: String] = [:]       // idle | working | dead
+    private(set) var agentDetail: [String: String] = [:]      // thinking | running
+    private(set) var agentWorkingSince: [String: Int64] = [:]
+    private(set) var pendingSend: Set<String> = []            // client-local "Sending…"
     private(set) var commands: [String: [SlashCommand]] = [:]
     private(set) var displays: [DisplayStream] = []
     private(set) var finishJobs: [String: FinishJobDto] = [:]
@@ -80,6 +85,10 @@ final class BrokerSession {
             activity = s.activity
             agentPhase = s.agentState.mapValues { $0.phase }
             agentSince = s.agentState.compactMapValues { $0.since?.int64Value }
+            agentWorking = s.agentState.mapValues { $0.working }
+            agentState = s.agentState.mapValues { $0.state }
+            agentDetail = s.agentState.compactMapValues { $0.detail }
+            agentWorkingSince = s.agentState.compactMapValues { $0.workingSince?.int64Value }
             commands = s.commands
             finishJobs = Dictionary(uniqueKeysWithValues: s.sessions.compactMap { sess in sess.finish_job.map { (sess.id, $0) } })
             synced = true
@@ -120,6 +129,11 @@ final class BrokerSession {
         case .agentState(let st):
             agentPhase[st.session] = st.phase
             agentSince[st.session] = (st.since ?? st.workingSince)?.int64Value
+            agentWorking[st.session] = st.working
+            agentState[st.session] = st.state
+            if let d = st.detail { agentDetail[st.session] = d } else { agentDetail[st.session] = nil }
+            agentWorkingSince[st.session] = st.workingSince?.int64Value
+            pendingSend.remove(st.session)   // first real state clears the client-local Sending…
         case .commandsChanged(let c): commands[c.session] = c.commands
         case .fsChanged(let f): editorStates[f.session]?.markChanged(f.paths)
         case .displayAdded(let f):
@@ -171,6 +185,7 @@ final class BrokerSession {
         let frame = ClientFrameSend(session: sessionId, op: "reply",
                                     args: SendArgs(text: t, attachments: atts.isEmpty ? nil : atts))
         Task { [client] in try? await client.send(frame: frame) }
+        pendingSend.insert(sessionId)   // client-local "Sending…" until the next agent_state
     }
 
     /// Upload bytes (base64 over the wire) → file id, for composing attachments.

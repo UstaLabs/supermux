@@ -1,12 +1,13 @@
-// The Stop funnel, extracted so it is unit-testable and so the live status is
-// ALWAYS cleared — including when the interrupt fails. Previously a failed Stop
-// left the UI stuck on "Working…" because the state-clear ran only on success.
+// The Stop funnel, extracted so it is unit-testable. It dispatches the agent's
+// own interrupt(); an optional onClear (when a caller supplies one) runs even if
+// the interrupt fails. The broker-issued path supplies NO onClear — idle is
+// reflected from the session itself (Claude's transcript interrupt marker).
 export async function runInterrupt(deps: {
   adapter?: { interrupt: () => Promise<void> }
-  onClear: () => void
+  onClear?: () => void
 }): Promise<{ ok: boolean; reason?: string }> {
   if (!deps.adapter) {
-    deps.onClear()
+    deps.onClear?.()
     return { ok: false, reason: "session not interruptible" }
   }
   try {
@@ -15,9 +16,8 @@ export async function runInterrupt(deps: {
   } catch (err: any) {
     return { ok: false, reason: err?.message ?? String(err) }
   } finally {
-    // Always clear the live status — even on a failed interrupt — so the UI
-    // never stays stuck "Working…". The watchdog is the backstop; the agent's
-    // real turn-end reconverges on idle.
-    deps.onClear()
+    // Run onClear if a caller provided one — even on a failed interrupt. The
+    // broker-issued path provides none; idle is reflected from the session.
+    deps.onClear?.()
   }
 }

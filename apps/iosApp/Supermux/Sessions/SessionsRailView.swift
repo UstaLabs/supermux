@@ -69,8 +69,5 @@ struct SessionsRailView: View {
         }
     }
 
-    private func working(_ s: SessionInfo) -> Bool {
-        guard let phase = broker.agentPhase[s.id] else { return false }
-        return ["working", "thinking", "running", "tool", "busy", "sending"].contains(phase)
-    }
+    private func working(_ s: SessionInfo) -> Bool { broker.agentWorking[s.id] == true }
 }

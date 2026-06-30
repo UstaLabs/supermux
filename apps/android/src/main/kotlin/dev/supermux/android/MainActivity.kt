@@ -150,6 +150,7 @@ class MainActivity : ComponentActivity() {
                 val messages by vm.messages.collectAsStateWithLifecycle()
                 val activity by vm.activity.collectAsStateWithLifecycle()
                 val agentState by vm.agentState.collectAsStateWithLifecycle()
+                val pendingSend by vm.pendingSend.collectAsStateWithLifecycle()
                 val commands by vm.commands.collectAsStateWithLifecycle()
                 val commandsResolved by vm.commandsResolved.collectAsStateWithLifecycle()
                 val lastBySession = messages.mapValues { it.value.lastOrNull() }
@@ -231,6 +232,7 @@ class MainActivity : ComponentActivity() {
                                         messages = messages,
                                         activityMap = activity,
                                         agentState = agentState,
+                                        pendingSend = pendingSend,
                                         commands = commands,
                                         commandsResolved = commandsResolved,
                                         vm = vm,
@@ -250,6 +252,7 @@ class MainActivity : ComponentActivity() {
                                 messages = messages,
                                 activityMap = activity,
                                 agentState = agentState,
+                                pendingSend = pendingSend,
                                 commands = commands,
                                 commandsResolved = commandsResolved,
                                 lastBySession = lastBySession,
@@ -457,6 +460,7 @@ private fun PhoneNavHost(
     messages: Map<String, List<LogEntry>>,
     activityMap: Map<String, List<ActivityEvent>>,
     agentState: Map<String, AgentStatus?>,
+    pendingSend: Set<String> = emptySet(),
     commands: Map<String, List<SlashCommand>>,
     commandsResolved: Map<String, Boolean>,
     lastBySession: Map<String, LogEntry?>,
@@ -474,6 +478,7 @@ private fun PhoneNavHost(
         messages = messages,
         activityMap = activityMap,
         agentState = agentState,
+        pendingSend = pendingSend,
         commands = commands,
         commandsResolved = commandsResolved,
         lastBySession = lastBySession,

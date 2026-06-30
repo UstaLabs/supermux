@@ -3,6 +3,7 @@ package dev.supermux.proto
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private val json = Json { ignoreUnknownKeys = true; classDiscriminator = "type" }
@@ -53,5 +54,27 @@ class FramesTest {
         )
         assertTrue(f is ServerFrame.DisplayRemoved)
         assertEquals("d-1504c1bf", (f as ServerFrame.DisplayRemoved).id)
+    }
+
+    @Test fun decodesAgentStateWithNewFields() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"agent_state","session":"s1","state":"working","working":true,"detail":"running","tool":"Bash","since":5,"workingSince":4,"phase":"running"}""",
+        )
+        assertTrue(f is ServerFrame.AgentState)
+        val a = f as ServerFrame.AgentState
+        assertEquals("working", a.state)
+        assertEquals(true, a.working)
+        assertEquals("running", a.detail)
+        assertEquals("Bash", a.tool)
+        assertEquals(4L, a.workingSince)
+    }
+
+    @Test fun agentStatusDefaultsAreSafe() {
+        val s = json.decodeFromString<AgentStatus>("""{"phase":"idle"}""")
+        assertEquals(false, s.working)
+        assertEquals("idle", s.state)
+        assertNull(s.detail)
+        assertNull(s.tool)
+        assertNull(s.workingSince)
     }
 }

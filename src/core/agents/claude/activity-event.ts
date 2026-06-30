@@ -2,7 +2,7 @@
 // Agent-agnostic shape so Cursor/Codex tool-call events can map in later.
 export interface ActivityEvent {
   ts: string
-  kind: "thinking" | "tool" | "tool_result"
+  kind: "thinking" | "tool" | "tool_result" | "interrupt"
   tool?: string
   title: string
   detail?: string
