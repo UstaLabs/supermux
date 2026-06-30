@@ -34,33 +34,40 @@ export class PredictionEngine {
     if (!this.active()) return []
     if (ev.kind === "opaque") return []
     if (this.pending.length === 0) this.cursor = { ...serverCursor }
-    if (!this.cursor) this.cursor = { ...serverCursor }
     if (this.pending.length >= this.cfg.maxPending) return []
+    // invariant: cursor is non-null here — seeded above when pending was empty,
+    // and retained (never cleared without also clearing pending) while pending > 0.
+    const cursor = this.cursor!
 
     if (ev.kind === "char") {
       const p: Pending = {
-        id: this.nextId++, row: this.cursor.row, col: this.cursor.col,
+        id: this.nextId++, row: cursor.row, col: cursor.col,
         char: ev.text, predictedAt: this.now(),
       }
       this.pending.push(p)
-      this.cursor.col += 1
+      cursor.col += 1
       return [{ op: "predict", id: p.id, row: p.row, col: p.col, char: p.char }]
     }
     if (ev.kind === "backspace") {
-      if (this.cursor.col <= 0) return []
-      this.cursor.col -= 1
+      if (cursor.col <= 0) return []
+      cursor.col -= 1
       const p: Pending = {
-        id: this.nextId++, row: this.cursor.row, col: this.cursor.col,
+        id: this.nextId++, row: cursor.row, col: cursor.col,
         char: " ", predictedAt: this.now(),
       }
       this.pending.push(p)
       return [{ op: "predict", id: p.id, row: p.row, col: p.col, char: " " }]
     }
-    if (ev.kind === "cursorLeft") { if (this.cursor.col > 0) this.cursor.col -= 1; return [] }
-    if (ev.kind === "cursorRight") { this.cursor.col += 1; return [] }
+    if (ev.kind === "cursorLeft") { if (cursor.col > 0) cursor.col -= 1; return [] }
+    if (ev.kind === "cursorRight") { cursor.col += 1; return [] }
     return []
   }
 
+  // v1 reconciliation limitations (all self-heal via rollback + cooldown):
+  // - a CSI sequence split across two onServerData calls misreads the leading '[' (spurious rollback);
+  // - only ESC[ (CSI) is fully skipped, so a mid-stream OSC (ESC]) can leak content bytes to the matcher;
+  // - wide chars (CJK/emoji) advance col by 1 not 2, so predictions after one are a column early.
+  // Cross-call escape buffering + wcwidth are deferred to a later version.
   onServerData(bytes: Uint8Array): DisplayOp[] {
     if (this.pending.length === 0) return []
     const ops: DisplayOp[] = []
@@ -88,7 +95,7 @@ export class PredictionEngine {
         this.pending = []
         this.cursor = null
         this.cooldownUntil = this.now() + this.cfg.cooldownMs
-        return [{ op: "rollback", ids }]
+        return [...ops, { op: "rollback", ids }]
       }
     }
     return ops

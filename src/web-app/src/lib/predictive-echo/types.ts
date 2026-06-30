@@ -19,9 +19,9 @@ export interface PredictionConfig {
 }
 
 export const DEFAULT_CONFIG: PredictionConfig = {
-  latencyThresholdMs: 40,
-  cooldownMs: 600,
-  maxPending: 50,
+  latencyThresholdMs: 40, // engage only above ~typical-WiFi RTT (predictions add no value on a fast link)
+  cooldownMs: 600,        // after a mispredict, pause long enough to avoid flicker storms
+  maxPending: 50,         // cap outstanding predictions so state can't grow unbounded if the server stalls
 }
 
 /** Decode one xterm onData payload into a prediction input event.

@@ -78,6 +78,22 @@ describe("PredictionEngine — reconciliation", () => {
     eng.onInput({ kind: "char", text: "a" }, { row: 0, col: 5 })
     expect(eng.onServerData(enc("\x1b[1G\ra"))).toEqual([{ op: "confirm", id: 1 }])
   })
+  it("returns confirms accumulated before a mid-buffer divergence, then rolls back the rest", () => {
+    const { eng } = mkEngine()
+    eng.setLatencyEstimate(120)
+    eng.onInput({ kind: "char", text: "a" }, { row: 0, col: 5 })
+    eng.onInput({ kind: "char", text: "b" }, { row: 0, col: 5 })
+    expect(eng.onServerData(enc("aX")))
+      .toEqual([{ op: "confirm", id: 1 }, { op: "rollback", ids: [2] }])
+  })
+  it("stops predicting once maxPending is reached", () => {
+    let t = 1000
+    const eng = new PredictionEngine({ latencyThresholdMs: 40, cooldownMs: 600, maxPending: 2 }, () => t)
+    eng.setLatencyEstimate(120)
+    expect(eng.onInput({ kind: "char", text: "a" }, { row: 0, col: 0 }).length).toBe(1)
+    expect(eng.onInput({ kind: "char", text: "b" }, { row: 0, col: 0 }).length).toBe(1)
+    expect(eng.onInput({ kind: "char", text: "c" }, { row: 0, col: 0 })).toEqual([])
+  })
 })
 
 describe("PredictionEngine — latency measurement + reset", () => {
