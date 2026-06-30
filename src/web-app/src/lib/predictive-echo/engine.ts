@@ -26,7 +26,12 @@ export class PredictionEngine {
   // cursor column when this prediction run began, right after the prompt).
   // Backspace/cursor-left predictions are refused at or left of it so we never
   // predict-delete the prompt. null = unseeded; set on the first prediction of a
-  // line, reset when the line context changes.
+  // line, reset when the line context changes. Invariant: non-null whenever
+  // pending > 0 (seeded on the 0→1 transition; resets always co-clear pending).
+  // Limitation: for a recalled line (history up-arrow redraws existing text with
+  // the cursor at its END), this seeds at that end column, so predictive
+  // backspace is over-refused for that line — safe (never eats the prompt), but
+  // no predictive backspace there; proper boundary tracking is a Step 2 item.
   private epochStartCol: number | null = null
 
   constructor(cfg: PredictionConfig, now: () => number) {
@@ -68,6 +73,8 @@ export class PredictionEngine {
     }
     if (ev.kind === "backspace") {
       // Never predict-delete past the line's start column (into the prompt).
+      // `?? 0` is defensive only — epochStartCol is non-null whenever pending > 0
+      // (it's seeded just above on the 0→1 transition), so the fallback is unreached.
       if (cursor.col <= (this.epochStartCol ?? 0)) return []
       cursor.col -= 1
       const p: Pending = {

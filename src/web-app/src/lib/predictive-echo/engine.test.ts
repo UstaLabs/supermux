@@ -28,6 +28,18 @@ describe("PredictionEngine — char prediction + latency gate", () => {
     // Server echoes 'a': epoch confirms; 'a' was undrawn (no confirm op); backlog 'b' draws at col 6.
     expect(eng.onServerData(enc("a"))).toEqual([{ op: "predict", id: 2, row: 0, col: 6, char: "b" }])
   })
+  it("keeps the epoch confirmed across a pending-drain (slow typing still predicts every char after the first)", () => {
+    // The trap: if the epoch reset whenever the queue drained, typing slower than
+    // the round-trip would make EVERY char "first in epoch" → tentative → nothing
+    // ever draws. The epoch must persist across a natural drain.
+    const { eng } = mkEngine()
+    eng.setLatencyEstimate(120)
+    expect(eng.onInput({ kind: "char", text: "a" }, { row: 0, col: 5 })).toEqual([]) // first char tentative
+    eng.onServerData(enc("a"))                                                        // confirms epoch; queue drains empty
+    // Queue is empty but the epoch stays confirmed — the next char draws instantly.
+    expect(eng.onInput({ kind: "char", text: "b" }, { row: 0, col: 6 }))
+      .toEqual([{ op: "predict", id: 2, row: 0, col: 6, char: "b" }])
+  })
   it("returns no ops for opaque input when nothing is pending", () => {
     const { eng } = mkEngine()
     eng.setLatencyEstimate(120)
