@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftTerm
+import Shared
 import GameController
 import UIKit
 
@@ -49,12 +50,16 @@ final class TerminalHost {
 /// the policy and the FIFO input wiring survive remounts. Plain `NSObject` (not @MainActor)
 /// so it satisfies SwiftTerm's nonisolated `TerminalViewDelegate` — the @MainActor session
 /// is reached via `assumeIsolated` (we ARE on the main thread when SwiftTerm calls us).
-final class TerminalCoordinator: NSObject, TerminalViewDelegate {
+final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIGestureRecognizerDelegate {
     let session: TerminalSession
     private weak var tv: TerminalView?
     private var savedAccessory: UIView?
     private var suppressed = false
     private lazy var emptyInputView = UIView(frame: .zero)
+    // Our own one-finger scroll pan (installTouchScroll). Stored so the gesture-recognizer
+    // delegate can identify it, and to carry accumulated sub-row drag pixels across callbacks.
+    private var scrollPan: UIPanGestureRecognizer?
+    private var scrollAccumPx: Double = 0
 
     init(session: TerminalSession) {
         self.session = session
@@ -75,6 +80,67 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate {
         tv = terminal
         savedAccessory = terminal.inputAccessoryView   // SwiftTerm's TerminalAccessory (set in its setup)
         applyKeyboardPolicy()
+        installTouchScroll(terminal)
+    }
+
+    /// SwiftTerm forwards a one-finger drag to the app as a pressed-button drag (tmux reads it as a
+    /// selection, not a scroll), so swiping never scrolls. We add our own one-finger pan that turns
+    /// a vertical drag into SGR mouse-wheel bytes sent to the pty — tmux then scrolls its history.
+    /// Mirrors the web PWA (src/web-app/src/lib/touch-scroll.ts) and shares its math (Shared
+    /// `TerminalScroll.kt`). A gesture-delegate failure requirement (below) makes SwiftTerm's own
+    /// pan recognizers yield to ours, so we win the drag WITHOUT disabling them (SwiftTerm toggles
+    /// them on mouse-mode changes, which would defeat a one-time disable). Taps / long-press /
+    /// double-tap (selection) and pinch (font zoom) are not pans, so they — and click-forwarding to
+    /// the TUI — keep working.
+    private func installTouchScroll(_ terminal: TerminalView) {
+        guard scrollPan == nil else { return }
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleScrollPan(_:)))
+        pan.minimumNumberOfTouches = 1
+        pan.maximumNumberOfTouches = 1
+        pan.delegate = self
+        terminal.addGestureRecognizer(pan)
+        scrollPan = pan
+    }
+
+    @objc private func handleScrollPan(_ gesture: UIPanGestureRecognizer) {
+        guard let tv else { return }
+        switch gesture.state {
+        case .began:
+            scrollAccumPx = 0
+        case .changed:
+            // Incremental delta since the last callback (then zero it for the next).
+            let dy = gesture.translation(in: tv).y
+            gesture.setTranslation(.zero, in: tv)
+            let terminal = tv.getTerminal()
+            let rows = terminal.rows
+            let cell = rows > 0 ? Double(tv.bounds.height) / Double(rows) : 0
+            guard cell > 0 else { return }
+            // finger up (dy < 0) → scroll toward newer output (positive accumulator).
+            scrollAccumPx += Double(-dy)
+            let step = TerminalScrollKt.linesFromPixels(accumPx: scrollAccumPx, cellHeightPx: cell)
+            scrollAccumPx = step.remainderPx
+            if step.lines != 0 {
+                let cols = terminal.cols
+                let col = Int32(cols > 1 ? cols / 2 : 1)
+                let row = Int32(rows > 1 ? rows / 2 : 1)
+                let bytes = TerminalScrollKt.wheelEventsFromLines(lines: step.lines, col: col, row: row)
+                MainActor.assumeIsolated { session.sendInput(bytes.toUInt8()) }
+            }
+        default:
+            break
+        }
+    }
+
+    /// Make SwiftTerm's own pan recognizers (mouse-drag / selection) yield to ours: they are
+    /// required to fail when our scroll pan recognizes, so a vertical drag scrolls instead of
+    /// selecting. Only gates other PAN recognizers — taps and pinch are untouched.
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        gestureRecognizer == scrollPan
+            && otherGestureRecognizer !== scrollPan
+            && otherGestureRecognizer is UIPanGestureRecognizer
     }
 
     @objc private func hardwareKeyboardChanged() { applyKeyboardPolicy() }
