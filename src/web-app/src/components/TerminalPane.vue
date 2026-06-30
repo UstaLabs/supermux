@@ -30,7 +30,16 @@ let lastSentSize: { cols: number; rows: number } | null = null
 
 let predictor: PredictionEngine | null = null
 let predAdapter: XtermPredictionAdapter | null = null
-const predCells = new Map<number, { row: number; col: number }>()
+// id → cell, plus `prev`: the char that was in the cell before we drew the dim
+// guess, so a rollback can restore it (the cell can't be re-read correctly at
+// rollback time — reconcile runs before the server's bytes are painted).
+const predCells = new Map<number, { row: number; col: number; prev: string }>()
+// performance.now() of the last keystroke still awaiting its echo (0 = none).
+// Feeds the latency gate from a real keystroke→echo measurement, INDEPENDENTLY
+// of the prediction path — without this the gate could never open: latency
+// starts at 0, predictions need latency ≥ threshold, and latency was otherwise
+// only ever learned from confirmed predictions (which need the gate already open).
+let lastKeyAt = 0
 
 // Apply the engine's display ops to the terminal: draw dim predicts, dismiss on
 // confirm (the real server byte overwrites the cell), erase on rollback.
@@ -38,14 +47,17 @@ function applyPredOps(ops: DisplayOp[]) {
   if (!predAdapter) return
   for (const op of ops) {
     if (op.op === "predict") {
-      predCells.set(op.id, { row: op.row, col: op.col })
+      // Snapshot the cell BEFORE the dim guess overwrites it, so a rollback can
+      // restore exactly what was there.
+      const prev = predAdapter.readCell(op.row, op.col)
+      predCells.set(op.id, { row: op.row, col: op.col, prev })
       predAdapter.apply([op])
     } else if (op.op === "confirm") {
       predCells.delete(op.id)
     } else if (op.op === "rollback") {
       for (const id of op.ids) {
         const c = predCells.get(id)
-        if (c) predAdapter.erasePredicted(c.row, c.col)
+        if (c) predAdapter.restoreCell(c.row, c.col, c.prev)
         predCells.delete(id)
       }
     }
@@ -209,6 +221,7 @@ onMounted(() => {
   // Pipe terminal input → WS (+ predictive local echo: show the keystroke instantly)
   term.onData((data) => {
     if (predictor && predAdapter) applyPredOps(predictor.onInput(decodeInput(data), predAdapter.cursor()))
+    lastKeyAt = performance.now() // mark for the keystroke→echo RTT measured below
     const encoder = new TextEncoder()
     terminal.sendInput(encoder.encode(data))
   })
@@ -225,6 +238,17 @@ onMounted(() => {
   // Pipe WS binary → terminal (reconcile predictions against the authoritative
   // bytes first — confirm/rollback — then render the bytes).
   terminal.onData((data: Uint8Array) => {
+    // Coarse keystroke→echo RTT drives the latency gate. Deliberately rough: the
+    // first server byte after a keystroke may be unrelated output, and during
+    // rapid typing only the most recent keystroke is timed (a slight underestimate
+    // that biases conservatively, toward not predicting). The engine's EWMA and
+    // threshold absorb the noise; a stray low sample just declines to predict for
+    // a beat. The point is that this runs even while predictions are inert, which
+    // is what lets the gate open in the first place.
+    if (predictor && lastKeyAt > 0) {
+      predictor.setLatencyEstimate(performance.now() - lastKeyAt)
+      lastKeyAt = 0
+    }
     if (predictor && predAdapter) applyPredOps(predictor.onServerData(data))
     term?.write(data)
   })

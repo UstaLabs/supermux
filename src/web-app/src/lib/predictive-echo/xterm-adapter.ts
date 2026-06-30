@@ -9,7 +9,7 @@ const RESET = "\x1b[0m"
  *  so the real cursor position is unaffected. `confirm` is a no-op for display —
  *  the authoritative server byte that matched overwrites the same cell at full
  *  intensity as it streams in. `rollback` is handled by the wiring via
- *  erasePredicted() (the wiring owns the id→cell map).
+ *  restoreCell() (the wiring owns the id→cell map and the pre-prediction snapshot).
  *
  *  This is the fragile, best-effort rendering layer — it is validated on a
  *  throttled link, not by a unit test. Known v1 risk: DECSC/DECRC (\x1b7/\x1b8)
@@ -36,16 +36,24 @@ export class XtermPredictionAdapter {
     }
   }
 
-  /** Erase a predicted glyph at a (viewport-relative) cell by repainting the
-   *  authoritative char currently in xterm's buffer there (or a space). Note:
-   *  getLine() takes an ABSOLUTE buffer index, so we add baseY to the
-   *  viewport-relative row. v1 caveats: the repaint uses default SGR (the cell's
-   *  color/weight is briefly lost until the server corrects it), and a viewport
-   *  scroll between predict and erase reads the wrong line (rare; self-corrects). */
-  erasePredicted(row: number, col: number): void {
+  /** Read the character currently in a (viewport-relative) cell, so the wiring
+   *  can snapshot it BEFORE a prediction overwrites it. getLine() takes an
+   *  ABSOLUTE buffer index, so we add baseY to the viewport-relative row.
+   *  Returns a single space for an empty or missing cell. */
+  readCell(row: number, col: number): string {
     const buf = this.term.buffer.active
-    const line = buf.getLine(buf.baseY + row)
-    const ch = line?.getCell(col)?.getChars() || " "
-    this.term.write(`\x1b7\x1b[${row + 1};${col + 1}H${ch}\x1b8`)
+    return buf.getLine(buf.baseY + row)?.getCell(col)?.getChars() || " "
+  }
+
+  /** Erase a rolled-back prediction by restoring the cell to the snapshot the
+   *  wiring took before predicting. We must NOT re-read the cell here: reconcile
+   *  runs before the server's authoritative bytes are painted, so at rollback
+   *  time the cell still holds our own dim guess — re-reading it would just
+   *  rewrite that wrong guess at full intensity (the bug this replaces). v1
+   *  caveats: the repaint uses default SGR (the cell's original color/weight is
+   *  briefly lost until the server corrects it), and a viewport scroll between
+   *  predict and restore lands on the wrong line (rare; self-corrects). */
+  restoreCell(row: number, col: number, ch: string): void {
+    this.term.write(`\x1b7\x1b[${row + 1};${col + 1}H${ch || " "}\x1b8`)
   }
 }

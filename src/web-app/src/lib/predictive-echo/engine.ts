@@ -66,7 +66,12 @@ export class PredictionEngine {
   // v1 reconciliation limitations (all self-heal via rollback + cooldown):
   // - a CSI sequence split across two onServerData calls misreads the leading '[' (spurious rollback);
   // - only ESC[ (CSI) is fully skipped, so a mid-stream OSC (ESC]) can leak content bytes to the matcher;
-  // - wide chars (CJK/emoji) advance col by 1 not 2, so predictions after one are a column early.
+  // - wide chars (CJK/emoji) advance col by 1 not 2, so predictions after one are a column early;
+  // - no-echo input (password prompts, `read -s`) is never confirmed, so its dim guesses linger until
+  //   some later printable byte forces a rollback — or indefinitely if none arrives. We deliberately do
+  //   NOT auto-expire on a timer in v1: a timeout short enough to clear a password ghost would also kill
+  //   legitimate predictions on the slowest links (exactly where prediction matters most). Bounded
+  //   timeout expiry, tuned against the live latency estimate, is deferred to v2.
   // Cross-call escape buffering + wcwidth are deferred to a later version.
   onServerData(bytes: Uint8Array): DisplayOp[] {
     if (this.pending.length === 0) return []
