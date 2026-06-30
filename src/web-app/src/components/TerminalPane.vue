@@ -8,6 +8,9 @@ import { ClipboardPaste } from "lucide-vue-next"
 import "@xterm/xterm/css/xterm.css"
 import { useTerminal } from "@/composables/useTerminal"
 import { linesFromPixels, wheelEventsFromLines } from "@/lib/touch-scroll"
+import { PredictionEngine } from "@/lib/predictive-echo/engine"
+import { XtermPredictionAdapter } from "@/lib/predictive-echo/xterm-adapter"
+import { decodeInput, DEFAULT_CONFIG, type DisplayOp } from "@/lib/predictive-echo/types"
 
 const props = defineProps<{
   sessionName: string
@@ -24,6 +27,30 @@ let term: Terminal | null = null
 let fitAddon: FitAddon | null = null
 let ro: ResizeObserver | null = null
 let lastSentSize: { cols: number; rows: number } | null = null
+
+let predictor: PredictionEngine | null = null
+let predAdapter: XtermPredictionAdapter | null = null
+const predCells = new Map<number, { row: number; col: number }>()
+
+// Apply the engine's display ops to the terminal: draw dim predicts, dismiss on
+// confirm (the real server byte overwrites the cell), erase on rollback.
+function applyPredOps(ops: DisplayOp[]) {
+  if (!predAdapter) return
+  for (const op of ops) {
+    if (op.op === "predict") {
+      predCells.set(op.id, { row: op.row, col: op.col })
+      predAdapter.apply([op])
+    } else if (op.op === "confirm") {
+      predCells.delete(op.id)
+    } else if (op.op === "rollback") {
+      for (const id of op.ids) {
+        const c = predCells.get(id)
+        if (c) predAdapter.erasePredicted(c.row, c.col)
+        predCells.delete(id)
+      }
+    }
+  }
+}
 
 // Touch-drag scrolling. xterm v6 ships a gesture engine but never registers the
 // terminal as a target, so finger swipes are ignored; we drive scrollLines()
@@ -175,8 +202,13 @@ onMounted(() => {
 
   fit()
 
-  // Pipe terminal input → WS
+  // Predictive local echo: pure-logic engine + xterm dim-render adapter.
+  predictor = new PredictionEngine(DEFAULT_CONFIG, () => performance.now())
+  predAdapter = new XtermPredictionAdapter(term)
+
+  // Pipe terminal input → WS (+ predictive local echo: show the keystroke instantly)
   term.onData((data) => {
+    if (predictor && predAdapter) applyPredOps(predictor.onInput(decodeInput(data), predAdapter.cursor()))
     const encoder = new TextEncoder()
     terminal.sendInput(encoder.encode(data))
   })
@@ -190,8 +222,10 @@ onMounted(() => {
   // in Firefox). For touch devices, the explicit paste button below is the
   // reliable fallback.
 
-  // Pipe WS binary → terminal
+  // Pipe WS binary → terminal (reconcile predictions against the authoritative
+  // bytes first — confirm/rollback — then render the bytes).
   terminal.onData((data: Uint8Array) => {
+    if (predictor && predAdapter) applyPredOps(predictor.onServerData(data))
     term?.write(data)
   })
 
@@ -230,6 +264,9 @@ onUnmounted(() => {
     touchSurface = null
   }
   terminal.disconnect()
+  predictor = null
+  predAdapter = null
+  predCells.clear()
   term?.dispose()
   term = null
   fitAddon = null
