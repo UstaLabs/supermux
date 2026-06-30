@@ -2,6 +2,7 @@ package dev.supermux.android.terminal
 
 import android.graphics.Typeface
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -23,9 +24,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.theme.LocalPanes
@@ -33,6 +39,9 @@ import dev.supermux.android.theme.Radii
 import dev.supermux.android.theme.Space
 import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalStatus
+import dev.supermux.net.linesFromPixels
+import dev.supermux.net.wheelEventsFromLines
+import kotlin.math.abs
 import kotlinx.coroutines.launch
 import org.connectbot.terminal.Terminal
 import org.connectbot.terminal.TerminalEmulator
@@ -93,6 +102,9 @@ fun TerminalPanel(
         }
     }
 
+    // Pixel height of the laid-out terminal viewport, for converting drag pixels → rows.
+    var boxHeightPx by remember { mutableStateOf(0) }
+
     // Shrink the terminal above the soft keyboard (and nav bar) under edge-to-edge — mirrors the
     // chat composer's inset handling. Resizing the view makes termlib recompute its grid and emit a
     // pty resize, so the shell reflows to the visible rows/cols instead of the cursor line hiding
@@ -101,7 +113,60 @@ fun TerminalPanel(
         modifier
             .fillMaxSize()
             .background(Color(c.terminal))
-            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
+            .onSizeChanged { boxHeightPx = it.height }
+            // Touch-drag → tmux scroll, mirroring the web PWA (src/web-app/.../touch-scroll.ts).
+            // termlib's own drag only scrolls its LOCAL scrollback — empty under tmux's alternate
+            // screen — and it exposes no mouse-forwarding, so we translate a vertical drag into SGR
+            // mouse-wheel bytes (TerminalScroll.kt) and send them down the pty; tmux scrolls its
+            // history. We read events in the Initial pass and consume them once a vertical drag is
+            // recognized, so termlib never also acts on the gesture. Taps (keyboard focus) and
+            // multi-touch (pinch-zoom) fall through untouched.
+            .pointerInput(client, emulator) {
+                val slop = viewConfiguration.touchSlop
+                awaitPointerEventScope {
+                    while (true) {
+                        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        var accumPx = 0.0
+                        var totalDx = 0f
+                        var totalDy = 0f
+                        var scrolling = false
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            if (event.changes.size > 1) break // multi-touch → let termlib handle it
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) break // pointer lifted
+                            val d = change.positionChange()
+                            totalDx += d.x
+                            totalDy += d.y
+                            if (!scrolling && abs(totalDy) > slop && abs(totalDy) > abs(totalDx)) {
+                                scrolling = true
+                            }
+                            if (scrolling) {
+                                val rows = emulator.dimensions.rows
+                                val cell = if (rows > 0 && boxHeightPx > 0) boxHeightPx.toDouble() / rows else 0.0
+                                if (cell > 0.0) {
+                                    // finger up (d.y < 0) → scroll toward newer output (positive accum)
+                                    accumPx += -d.y.toDouble()
+                                    val step = linesFromPixels(accumPx, cell)
+                                    accumPx = step.remainderPx
+                                    if (step.lines != 0) {
+                                        val cols = emulator.dimensions.columns
+                                        client.sendInput(
+                                            wheelEventsFromLines(
+                                                step.lines,
+                                                if (cols > 1) cols / 2 else 1,
+                                                if (rows > 1) rows / 2 else 1,
+                                            ),
+                                        )
+                                    }
+                                }
+                                change.consume()
+                            }
+                        }
+                    }
+                }
+            },
     ) {
         Terminal(
             terminalEmulator = emulator,
