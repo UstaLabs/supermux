@@ -3,6 +3,7 @@ import { ref, watch, onMounted, onUnmounted, onActivated, nextTick, toRef } from
 import { Terminal } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import { WebLinksAddon } from "@xterm/addon-web-links"
+import { WebglAddon } from "@xterm/addon-webgl"
 import { ClipboardPaste } from "lucide-vue-next"
 import "@xterm/xterm/css/xterm.css"
 import { useTerminal } from "@/composables/useTerminal"
@@ -159,6 +160,19 @@ onMounted(() => {
   term.loadAddon(new WebLinksAddon())
 
   term.open(containerRef.value)
+
+  // GPU renderer. Must load AFTER open(). xterm falls back to its DOM renderer
+  // automatically if we never attach a renderer addon, so any failure here
+  // (no WebGL2, context creation refused, addon throws) must be swallowed — a
+  // missing GPU path is a perf regression, never a broken terminal.
+  try {
+    const webgl = new WebglAddon()
+    // The browser can drop the GL context (OOM, tab backgrounded, GPU reset).
+    // Dispose on loss so xterm reverts to the DOM renderer instead of freezing.
+    webgl.onContextLoss(() => { try { webgl.dispose() } catch {} })
+    term.loadAddon(webgl)
+  } catch { /* no WebGL2 → DOM renderer stays */ }
+
   fit()
 
   // Pipe terminal input → WS
