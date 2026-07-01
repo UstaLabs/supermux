@@ -58,6 +58,11 @@ class PredictionAdapter(private val emulator: TerminalEmulator) {
     private val cap = DEFAULT_CONFIG.maxPending + 16
 
     // --- termlib internal-snapshot access (see the class KDoc) --------------------------------
+    // ACCEPTED FOR v1 (reflection). Recommended hardening fast-follow: a small Java interop shim
+    // can call `((TerminalEmulatorImpl) emulator).getSnapshot$lib()` (and the snapshot/line/cell
+    // getters) by compile-time reference — Java ignores Kotlin `internal` — converting a future
+    // termlib-bump break from a SILENT runtime no-prediction into a LOUD build error, and
+    // collapsing this whole reflection ladder + the [available] cell-chain probe into typed calls.
     /** The emulator's live `StateFlow<TerminalSnapshot>` (internal `getSnapshot$lib`), or null
      *  if the reflection failed - in which case [available] is false and prediction is disabled. */
     private val snapshotFlow: StateFlow<*>? = runCatching {
@@ -70,11 +75,24 @@ class PredictionAdapter(private val emulator: TerminalEmulator) {
     private fun method(target: Any, name: String): Method =
         methodCache.getOrPut(target.javaClass.name + "#" + name) { target.javaClass.getMethod(name) }
 
-    /** True iff the internal snapshot is reachable AND exposes the cursor/line getters we need.
-     *  When false the pipeline skips creating the engine, so the terminal runs unaffected. */
+    /** True iff the internal snapshot is reachable AND exposes the FULL cursor + line/cell read
+     *  chain [cursor]/[readCell] need. Probes the cursor getters, `getLines`, and — critically —
+     *  `TerminalLine.getCells()` (on the first line) plus `Cell.getChar()` (on a sampled cell, if
+     *  any). Without the line/cell probe, a termlib bump that changed ONLY the line/cell API would
+     *  leave this `true` while [readCell] silently returned " " for every cell (repainting spaces
+     *  on rollback); probing the whole chain instead disables prediction wholesale on such a break
+     *  — clean no-prediction, like every other reflection failure. A fresh 24x80 terminal's initial
+     *  snapshot has populated lines AND cells, so the full chain is validated here at attach. When
+     *  false the pipeline skips creating the engine, so the terminal runs unaffected. */
     val available: Boolean = snapshotFlow?.value?.let { snap ->
         runCatching {
-            method(snap, "getCursorRow"); method(snap, "getCursorCol"); method(snap, "getLines")
+            method(snap, "getCursorRow").invoke(snap)
+            method(snap, "getCursorCol").invoke(snap)
+            val lines = method(snap, "getLines").invoke(snap) as List<*>
+            lines.firstOrNull()?.let { line ->
+                val cells = method(line, "getCells").invoke(line) as List<*>
+                cells.firstOrNull()?.let { cell -> method(cell, "getChar").invoke(cell) }
+            }
         }.isSuccess
     } ?: false
 
@@ -93,24 +111,30 @@ class PredictionAdapter(private val emulator: TerminalEmulator) {
      *  in order and the engine brackets reconcile batches with Hide/ShowCaret, so a whole op
      *  batch lands with no intermediate caret flicker. */
     fun render(ops: List<DisplayOp>) {
-        for (op in ops) when (op) {
-            is HideCaret -> feed(HIDE)
-            is ShowCaret -> feed(SHOW)
-            is MoveCaret -> feed(cup(op.row, op.col))
-            is DrawDim -> {
-                // Snapshot the pre-prediction cell BEFORE the dim write (mirror web/iOS order).
-                snapshots[op.id] = readCell(op.row, op.col)
-                evictIfNeeded()
-                feed(cup(op.row, op.col) + DIM + op.char + UNDIM)
+        for (op in ops) {
+            // Assign the `when` to a Unit val so it is an EXHAUSTIVE EXPRESSION: a future 7th
+            // DisplayOp added to the shared sealed interface then fails to compile here instead of
+            // being silently dropped on Android.
+            @Suppress("UNUSED_VARIABLE")
+            val rendered: Unit = when (op) {
+                is HideCaret -> feed(HIDE)
+                is ShowCaret -> feed(SHOW)
+                is MoveCaret -> feed(cup(op.row, op.col))
+                is DrawDim -> {
+                    // Snapshot the pre-prediction cell BEFORE the dim write (mirror web/iOS order).
+                    snapshots[op.id] = readCell(op.row, op.col)
+                    evictIfNeeded()
+                    feed(cup(op.row, op.col) + DIM + op.char + UNDIM)
+                }
+                is RestoreCell -> {
+                    val prev = snapshots.remove(op.id) ?: " "
+                    feed(cup(op.row, op.col) + prev)
+                }
+                is Passthrough ->
+                    // Authoritative server bytes, written as-is (lossless). Confirmed echoes paint
+                    // over their dim cells here - that IS the confirm.
+                    emulator.writeInput(op.bytes)
             }
-            is RestoreCell -> {
-                val prev = snapshots.remove(op.id) ?: " "
-                feed(cup(op.row, op.col) + prev)
-            }
-            is Passthrough ->
-                // Authoritative server bytes, written as-is (lossless). Confirmed echoes paint
-                // over their dim cells here - that IS the confirm.
-                emulator.writeInput(op.bytes)
         }
     }
 

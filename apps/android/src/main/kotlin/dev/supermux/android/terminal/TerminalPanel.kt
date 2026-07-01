@@ -285,7 +285,12 @@ private class PredictionPipeline {
             e.setLatencyEstimate(nowMonotonicMs() - lastKeyAt)
             lastKeyAt = 0L
         }
-        a.render(e.onServerData(bytes))
+        // Guard ONLY the predicted-output render: an exception thrown here would propagate out of
+        // output.collect and CANCEL the collector -> the terminal freezes, which is worse than
+        // losing prediction. On any engine/adapter failure, fall back to a direct write so the
+        // byte stream (and terminal) stays alive. The INPUT path is deliberately NOT guarded — we
+        // want engine bugs to surface there, not be masked.
+        runCatching { a.render(e.onServerData(bytes)) }.onFailure { fallback() }
     }
 
     /** Drop the engine + adapter (teardown). Later output falls back to a direct write. */

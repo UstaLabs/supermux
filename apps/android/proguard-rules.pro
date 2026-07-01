@@ -52,6 +52,10 @@
 # termlib (terminal emulator) — [required] the native lib (libjni_cb_term.so) resolves
 # TerminalNative + the TerminalCallbacks methods/fields BY NAME via JNI; renaming any of
 # them aborts in Terminal::Terminal on open. Coordinate is org.connectbot:termlib.
+# ALSO [required for predictive echo]: PredictionAdapter reflects termlib's internal
+# getSnapshot$lib()/TerminalSnapshot/TerminalLine/Cell getters BY NAME to read the cursor +
+# cells — do NOT narrow this keep, or prediction silently degrades to no-prediction if minify
+# is ever re-enabled.
 -keep class org.connectbot.terminal.** { *; }
 -keepclassmembers class org.connectbot.terminal.** { *; }
 -dontwarn org.connectbot.terminal.**
