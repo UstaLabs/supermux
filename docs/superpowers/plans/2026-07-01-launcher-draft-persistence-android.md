@@ -4,7 +4,9 @@
 
 **Goal:** Persist `SessionLauncherScreen`'s project pick, worktree settings, agent/model choice, and typed message text via Jetpack DataStore, so they survive leaving New Session and coming back — or a full process death/relaunch — and the draft (not the agent/model prefs) clears automatically once a session is actually created. Attachments are explicitly out of scope (ephemeral upload blobs — see the spec's Decisions §2).
 
-**Architecture:** Two new `@Serializable` data classes (`LauncherPrefs`, `LauncherDraft`) plus load/save methods on `AppViewModel`, mirroring its existing per-session chat-draft DataStore pattern exactly (`AppViewModel.kt:74-76,323-334`) but in a separate `launcher_state` DataStore file. `SessionLauncherScreen` — which has no ViewModel of its own today, just `remember{}` — gains new callback params (matching its existing all-callbacks style) wired from `MainActivity.kt`. A `launcherRestoring` gate (mirroring `ChatScreen.kt`'s `draftLoaded` gate, generalized to also protect two OTHER effects from clobbering restored state) blocks the agent-list-fetch and repo-info effects until the one-time restore has fully landed.
+**Architecture:** Two new `@Serializable` data classes (`LauncherPrefs`, `LauncherDraft`) plus load/save methods on `AppViewModel`, mirroring its existing per-session chat-draft DataStore pattern exactly (`AppViewModel.kt:74-76,323-334`) but in a separate `launcher_state` DataStore file. `SessionLauncherScreen` — which has no ViewModel of its own today, just `remember{}` — gains new callback params (matching its existing all-callbacks style) wired from `MainActivity.kt`. A `launcherRestoring` gate (mirroring `ChatScreen.kt`'s `draftLoaded` gate, generalized to also protect two OTHER effects from clobbering restored state) blocks the agent-list-fetch and repo-info effects until the one-time restore has fully landed; a `lastSeenAgent`/`lastSeenWorkdir` comparison (not a one-shot "armed" boolean) then decides whether a change is the restore settling or a genuine later switch — see the **2026-07-01 update** below for why.
+
+> **Update (2026-07-01, after this plan was first written):** the iOS version of this exact mechanism (a shared `launcherRestoring`-style flag plus one-shot `modelResetArmed`/`baseBranchResetArmed` booleans) passed two static code reviews, then was found via **real on-device testing** to fail 100% of the time — restored `model`/`baseBranch` were silently clobbered back to their reset values on every fresh mount, because SwiftUI's `.task(id:)` turned out to spin up a second task instance for the *same, already-settled* id shortly after the first, and a one-shot boolean can't distinguish "second invocation for an unchanged id" from "id genuinely changed." iOS's fix replaced the one-shot booleans with `lastSeenAgent`/`lastSeenWorkdir` — recording the actual last-observed value and only resetting when the *live* value differs from it, which is correct regardless of how many duplicate invocations occur for the same key. **This plan (below) already reflects that lesson** — it specifies `lastSeenAgent`/`lastSeenWorkdir`, not one-shot booleans, even though it's unconfirmed whether Compose's `LaunchedEffect(key1, key2)` actually shares SwiftUI's duplicate-invocation behavior. The `lastSeen` approach costs nothing extra either way and is strictly safer, so use it regardless of whether the underlying Compose behavior turns out to match SwiftUI's. **Given a materially similar mechanism already fooled two static reviews once, Task 3's manual/emulator verification for this specific mechanism is not optional — treat it as the real acceptance gate, the same way it was for iOS.**
 
 **Tech Stack:** Jetpack Compose, Kotlin coroutines (`LaunchedEffect`, `delay`), Jetpack DataStore (Preferences), `kotlinx.serialization`.
 
@@ -154,7 +156,10 @@ Two existing effects unconditionally reset state that this task now restores fro
 - `LaunchedEffect(agent) { model = null; models = loadModels(agent) }` (line 87-90) — fires once on first composition too, for the plain `"claude"` default.
 - `LaunchedEffect(workdir) { ...; baseBranch = info?.currentBranch ?: "" }` (line 97-101) — same issue for `baseBranch`.
 
-**A plain "have I run once" flag per effect is not enough.** `loadLauncherPrefs()`/`loadLauncherDraft()` are real DataStore reads (suspend, not instant) — so there's a window where `LaunchedEffect(agent)` runs for the untouched `"claude"` default, completes its "first run" bookkeeping, *and only then* does the restore effect change `agent` to the persisted value. Compose then cancels and relaunches `LaunchedEffect(agent)` for the new key, but a plain "have I run once" flag would already be flipped from that earlier, stale run — causing a wrong reset right after the value you restored. The fix: a shared `launcherRestoring` flag (starts `true`) that blocks *both* effects' bodies outright until the restore has applied every field. The restore effect (Step 3) has two suspend points of its own (`loadLauncherPrefs()`, then `loadLauncherDraft()`), so its assignments land across more than one recomposition — that's fine, because the only property that matters is that `launcherRestoring = false` is its *last* assignment, after every other field. Whichever recomposition pass finally flips it, both guarded effects have already seen every restored field by then, so their first *unblocked* run is guaranteed to be the fully-settled one, never a partial one. Once unblocked, each effect uses its own "first real run vs. a later genuine change" flag exactly as before — that flag is now safe to use because its first real run is guaranteed to be the restore-settled one.
+**A plain "have I run once" flag per effect is not enough — and neither is a one-shot "armed" boolean.** `loadLauncherPrefs()`/`loadLauncherDraft()` are real DataStore reads (suspend, not instant) — so there's a window where `LaunchedEffect(agent)` runs for the untouched `"claude"` default, completes its "first run" bookkeeping, *and only then* does the restore effect change `agent` to the persisted value. Compose then cancels and relaunches `LaunchedEffect(agent)` for the new key. The fix needs two layers:
+
+1. A shared `launcherRestoring` flag (starts `true`) that blocks *both* effects' bodies outright until the restore has applied every field. The restore effect (Step 3) has two suspend points of its own (`loadLauncherPrefs()`, then `loadLauncherDraft()`), so its assignments land across more than one recomposition — that's fine, because the only property that matters is that `launcherRestoring = false` is its *last* assignment, after every other field. Whichever recomposition pass finally flips it, both guarded effects have already seen every restored field by then, so their first *unblocked* run is guaranteed to be the fully-settled one, never a partial one.
+2. Once unblocked, each effect must still distinguish "this is the first run after the restore settled" from "the user genuinely changed agent/workdir." **Do not use a one-shot boolean for this** (e.g. `if (modelResetArmed) model = null else modelResetArmed = true`) — this is the exact mechanism that shipped on iOS, passed two independent static code reviews, and then was found via real on-device testing to fail 100% of the time: SwiftUI's `.task(id:)` turned out to spin up a *second* task instance for the same, already-settled id shortly after the first, and a one-shot boolean can't tell that apart from a genuine id change (the first instance arms it, the second — for the identical id — sees it already armed and wrongly resets). It's unconfirmed whether Compose's `LaunchedEffect(key1, key2)` has the same duplicate-invocation behavior, but there's no reason to risk it: use `lastSeenAgent: String?`/`lastSeenWorkdir: String?` (nullable, start `null`) instead, and reset only when the *live* value differs from what was last recorded (`null` means "never recorded yet" and must never itself count as a difference). This is correct regardless of how many duplicate invocations occur for the same key, not just the first one — see the Step 2/3 code below.
 
 Agent and model persist from their explicit pick sites (the agent `SegmentedButton` and the model `PickerSheet`), **not** a generic effect keyed on `agent`/`model`. Reason: `LaunchedEffect(agent)`'s `model = null` reset (above) is a real state change too, and persisting on *every* model change can't tell "the user picked a model" apart from "the code just reset it because the agent changed" — that would silently erase the previous agent's remembered model the instant you switch away from it. `workdir`/`useWorktree`/`baseBranch`/`message` don't have this problem — for those, "whatever's currently on screen" is exactly what the draft should remember, so persisting on every change (including a programmatic default) is correct, not a bug; they get one shared debounced save effect, mirroring `ChatScreen.kt:297-308`'s 400ms-`delay` pattern.
 
@@ -217,12 +222,13 @@ Replace with:
     var showProjectSheet by remember { mutableStateOf(false) }
     var submitting by remember { mutableStateOf(false) }
     // Launcher state persistence — see this task's header note for why launcherRestoring gates
-    // the agent/workdir effects below, and why modelResetArmed/baseBranchResetArmed are then
-    // safe to use as plain first-run flags. launcherModels mirrors LauncherPrefs.models (the
-    // per-agent memory) so a pick can reconstruct the whole prefs blob to persist.
+    // the agent/workdir effects below, and why lastSeenAgent/lastSeenWorkdir (not one-shot
+    // "armed" booleans) are the safe way to distinguish restore-settling from a genuine later
+    // change. launcherModels mirrors LauncherPrefs.models (the per-agent memory) so a pick can
+    // reconstruct the whole prefs blob to persist.
     var launcherRestoring by remember { mutableStateOf(true) }
-    var modelResetArmed by remember { mutableStateOf(false) }
-    var baseBranchResetArmed by remember { mutableStateOf(false) }
+    var lastSeenAgent by remember { mutableStateOf<String?>(null) }
+    var lastSeenWorkdir by remember { mutableStateOf<String?>(null) }
     var launcherModels by remember { mutableStateOf(emptyMap<String, String>()) }
 ```
 
@@ -242,8 +248,15 @@ Replace with:
 ```kotlin
     LaunchedEffect(agent, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
-        if (modelResetArmed) model = null else modelResetArmed = true
         models = loadModels(agent)
+        // Reset only when the live agent genuinely differs from what this effect last recorded
+        // — safe against any number of duplicate invocations for the same agent, unlike a
+        // one-shot "armed" boolean (see this task's header note for why that broke on iOS).
+        // lastSeenAgent == null means "never recorded yet" and must never count as a difference.
+        if (lastSeenAgent != null && lastSeenAgent != agent) {
+            model = null
+        }
+        lastSeenAgent = agent
     }
 ```
 
@@ -266,12 +279,12 @@ Replace with:
         if (launcherRestoring) { repoInfo = null; return@LaunchedEffect }
         val info = if (workdir.isBlank()) null else loadRepoInfo(workdir)
         repoInfo = info
-        if (baseBranchResetArmed) {
+        if (lastSeenWorkdir != null && lastSeenWorkdir != workdir) {
             baseBranch = info?.currentBranch ?: ""
-        } else {
-            baseBranchResetArmed = true
-            if (baseBranch.isBlank()) baseBranch = info?.currentBranch ?: ""
+        } else if (baseBranch.isBlank()) {
+            baseBranch = info?.currentBranch ?: ""
         }
+        lastSeenWorkdir = workdir
     }
 
     // Restore persisted launcher state once. Runs after useWorktree/baseBranch are declared
@@ -487,11 +500,15 @@ No existing automated coverage exercises the chat draft's full screen wiring eit
 1. With the same in-progress draft from Step 1, force-stop the app (e.g. from Android's App Info screen, or `adb shell am force-stop dev.supermux.android`) and relaunch it.
 2. Confirm the draft is still restored.
 
-- [ ] **Step 3: Smoke-test agent switching doesn't erase the other agent's remembered model**
+- [ ] **Step 3: Smoke-test agent switching doesn't erase the other agent's remembered model, across mounts — and stress-test the restore-guard mechanism**
+
+Agent/model prefs are only read from persisted storage once per screen instance (at restore time), matching the design doc's "pre-fill every future launch" wording and the web/iOS versions of this same feature — so this must be tested across a remount, not as one continuous live switch. **This is also the mechanism (`lastSeenAgent`/`lastSeenWorkdir`, see Task 2's header) that replaced a design proven buggy on iOS via exactly this kind of on-device test — treat this step as mandatory, not optional, before considering Android done.**
 
 1. On New Session, pick agent Claude and a specific (non-default) model.
-2. Switch to agent Codex — confirm the model resets to "Default" (existing behavior, unchanged).
-3. Switch back to Claude — confirm your earlier model choice for Claude is still selected (this is the scenario Task 2 Steps 5-6 exist for; persisting on every model change instead of only at the pick site would fail this check by erasing Claude's saved model the moment you switched away from it).
+2. Switch to agent Codex (still same visit) — confirm the model resets to "Default" (expected, unchanged pre-existing behavior).
+3. **Navigate away (back to session list) and open New Session again** — do NOT just switch agents within the same continuous screen instance.
+4. Pick agent Claude again — confirm your earlier model choice for Claude is restored (not "Default"). This is the scenario Task 2 Steps 5-6 exist for; persisting on every model change instead of only at the pick site would fail this check by erasing Claude's saved model the moment you switched away from it.
+5. As a stress test of the restore-guard mechanism itself: rapidly switch agents back and forth several times (Claude → Codex → Cursor → Opencode → Claude, quickly) *within one visit*, then navigate away and back once more, and confirm the final restored state (agent + model) is coherent and matches whatever you last explicitly picked — not garbled, not showing a stale/wrong model for the current agent. Also repeat Step 1's base-branch check (pick a non-current branch, navigate away and back) a few times in a row to stress the `lastSeenWorkdir` path the same way.
 
 - [ ] **Step 4: Smoke-test clearing on submit**
 
