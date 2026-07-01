@@ -103,8 +103,11 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIGestureRecogn
         // + SwiftTerm dim-render adapter. The engine owns all reconcile/cursor math; the
         // adapter just translates its ops to SwiftTerm feeds.
         predAdapter = PredictionAdapter(terminal)
+        // SKIE boxes a `() -> Long` closure's return (generic position), so it must yield
+        // KotlinLong, not Int64. (setLatencyEstimate's Long *parameter* stays Int64 — only the
+        // closure return needs this.)
         engine = PredictionEngine(cfg: PredictiveEchoKt.DEFAULT_CONFIG,
-                                  now: { TerminalCoordinator.nowMs() })
+                                  now: { KotlinLong(value: TerminalCoordinator.nowMs()) })
         applyKeyboardPolicy()
         installTouchScroll(terminal)
     }
