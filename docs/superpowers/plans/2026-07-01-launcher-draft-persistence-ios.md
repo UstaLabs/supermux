@@ -6,6 +6,12 @@
 
 **Architecture:** A new `@Observable` `LauncherStateStore` class (`apps/iosApp/Supermux/Sessions/LauncherStateStore.swift`), shaped like the existing `WorkspaceLayoutModel` (injectable `UserDefaults` for testability, `Codable` structs JSON-encoded on write). `NewSessionView` restores from it inside its existing `.task { }` block and persists ongoing changes via `.onChange` — except agent/model, which persist at their explicit Menu-pick call sites (see Task 2's header for why). Two existing `.task(id:)` blocks unconditionally reset `model`/`baseBranch`; since the restore itself happens inside an async `.task`, they need a restore-pending gate (not just a one-time-skip flag) so neither can clobber a just-restored value — see Task 2's header for why a simpler flag isn't enough.
 
+> **⚠️ As-shipped correction (2026-07-01, after this plan's Task 2 was implemented and reviewed):** the mechanism described in Task 2 below (a `launcherRestoring` gate folded into `.task(id:)` keys, plus one-shot `modelResetArmed`/`baseBranchResetArmed` booleans) passed **two independent static code reviews**, then was found via **real on-device testing** (driving an actual booted simulator, not just reading code) to fail **100% of the time** — restored `model`/`baseBranch` were silently clobbered back to reset values on every fresh mount. Root cause, confirmed via debug logging on a real device: SwiftUI's `.task(id:)` spun up a *second* task instance for the same, already-settled id shortly after the first, and a one-shot boolean couldn't distinguish that from a genuine id change.
+>
+> **What actually shipped instead** (commit `0a7e880`, on top of the `99fe5a8` this plan describes): `agent`/`model`/`workdir`/`useWorktree`/`baseBranch`/the composer's draft text are seeded **synchronously in a custom `init(broker:onSpawned:)`**, before first render — eliminating the async restore window entirely, so `launcherRestoring` is gone. The one-shot `modelResetArmed`/`baseBranchResetArmed` booleans were replaced with `lastSeenAgent: String?`/`lastSeenWorkdir: String?` — recording the actual last-observed value and resetting only when the *live* value differs from it, which stays correct under any number of duplicate same-id invocations (not just the one specific pattern that broke the original design). `.task(id: agent)`/`.task(id: workdir)` reverted to their plain (non-string-interpolated) ids.
+>
+> Task 2's text below is kept as originally written for historical/process reference (it's what a subagent-driven-development execution should still start from, since re-deriving the fix from first principles has real value) — but an implementer should expect to hit the bug described here at Step 8's verification, and should apply the `init()`-seeding + `lastSeenAgent`/`lastSeenWorkdir` fix described above rather than trusting the one-shot-boolean text as final. See `git show 0a7e880` for the actual diff, and the Android plan's equivalent update (in that plan's own Architecture section) for the same lesson applied proactively before implementation there.
+
 **Tech Stack:** SwiftUI, `@Observable` (Observation framework), `UserDefaults` + `Codable`/`JSONEncoder`/`JSONDecoder`, XCTest.
 
 **Spec:** `docs/superpowers/specs/2026-07-01-launcher-draft-persistence-design.md`
@@ -491,11 +497,15 @@ No existing automated coverage exercises `ChatPane`'s per-session draft persiste
 1. With the same in-progress draft from Step 1, force-quit and relaunch the app.
 2. Confirm the draft is still restored.
 
-- [ ] **Step 3: Smoke-test agent switching doesn't erase the other agent's remembered model**
+- [ ] **Step 3 (corrected — see note below): Smoke-test agent switching doesn't erase the other agent's remembered model, across mounts**
+
+> **As-shipped correction:** the steps below originally read like a live, same-visit check ("switch to Codex, then switch back to Claude"). That's not how this shipped, and it isn't a bug — agent/model prefs are only read from persisted storage **once per screen instance** (at mount-time restore), matching the design doc's "pre-fill every future launch" wording and the web version's identical mount-time-only behavior. A live switch-back within one continuous visit will show "Default" for Claude, not its remembered model — that's expected. Step 4 below inserts the remount this check actually needs.
 
 1. On New Session, pick agent Claude and a specific (non-default) model.
-2. Switch to agent Codex — confirm the model resets to "Default" (existing behavior, unchanged).
-3. Switch back to Claude — confirm your earlier model choice for Claude is still selected (this is the scenario Task 2 Step 6 exists for; a naive `onChange(of: model)` implementation would fail this check by erasing Claude's saved model the moment you switched away from it).
+2. Switch to agent Codex (still same visit) — confirm the model resets to "Default" (expected, unchanged pre-existing behavior).
+3. **Navigate away (back to session list) and open New Session again** — do NOT just switch agents within the same continuous screen instance.
+4. Pick agent Claude again — confirm your earlier model choice for Claude is restored (not "Default"). This is the scenario Task 2 Step 6 exists for; persisting on every model change instead of only at the pick site would fail this check by erasing Claude's saved model the moment you switched away from it.
+5. As a stress test of the restore-guard mechanism itself (see Task 2's as-shipped correction above): rapidly switch agents back and forth several times (Claude → Codex → Cursor → Opencode → Claude, quickly) *within one visit*, then navigate away and back once more, and confirm the final restored state (agent + model) is coherent — not garbled, not showing a stale/wrong model for the current agent.
 
 - [ ] **Step 4: Smoke-test clearing on submit**
 

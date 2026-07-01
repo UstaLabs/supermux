@@ -225,6 +225,8 @@ There's no existing test file for the component this mirrors (`PromptInputDraftS
 
 - [ ] **Step 1: Write the component**
 
+> **As-shipped correction (2026-07-01, after this task was implemented and reviewed):** the `onBeforeUnmount` below as originally written just cancels the pending timer — a code-quality review caught that this silently drops up to 800ms of typed text if the user navigates away right after typing, since (unlike `PromptInputDraftSync.vue`, where the local store write is synchronous and only the network send is debounced) this component's debounce gates its *only* persistence path. The version below already includes the fix (flush the pending text instead of discarding it) — see `git show e9eb0ed` for the original bug/fix diff.
+
 ```vue
 <!-- src/web-app/src/components/LauncherDraftSync.vue -->
 <script setup lang="ts">
@@ -249,7 +251,10 @@ watch(textInput, (text) => {
 })
 
 onBeforeUnmount(() => {
-  if (timer) clearTimeout(timer)
+  if (timer) {
+    clearTimeout(timer)
+    draft.setText(textInput.value)
+  }
 })
 </script>
 
@@ -363,6 +368,8 @@ async function refreshRepoInfo(p: string) {
 
 - [ ] **Step 4: Seed the composer's initial text and persist changes**
 
+> **As-shipped correction (2026-07-01, after this task was implemented and reviewed):** the watcher below as originally written persisted `useWorktree`/`baseBranch` *unconditionally*, while only `workdir` was gated on `workdirTouched`. A spec-compliance review traced a real gap: if a user adjusts worktree settings while the launcher is still on its untouched recency-default project, then later revisits with a *different* recency-default project, the stale worktree settings would restore against the wrong repo. The version below already includes the fix (gate all three fields on `workdirTouched`) — see `git show 35f770b` for the original bug/fix diff.
+
 Modify `src/web-app/src/views/SessionLauncherView.vue:130-132` (currently):
 
 ```typescript
@@ -375,9 +382,11 @@ Add immediately after it:
 
 ```typescript
 watch([workdir, workdirTouched, useWorktree, baseBranch], () => {
-  if (workdirTouched.value) launcherDraft.setWorkdir(workdir.value)
-  launcherDraft.setWorktree(useWorktree.value)
-  launcherDraft.setBaseBranch(baseBranch.value)
+  if (workdirTouched.value) {
+    launcherDraft.setWorkdir(workdir.value)
+    launcherDraft.setWorktree(useWorktree.value)
+    launcherDraft.setBaseBranch(baseBranch.value)
+  }
 })
 ```
 

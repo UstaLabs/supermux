@@ -335,7 +335,33 @@ Add immediately after the restore effect from Step 3:
     }
 ```
 
+> **As-shipped addition (2026-07-01, found by a post-implementation holistic review, after web's equivalent debounce-flush bug — see Task 2 of the web plan — was never cross-checked against this Android effect):** the debounce above has no flush-on-dispose, so navigating away within the 400ms window silently drops the edit, exactly like the web bug it mirrors. The shipped fix (`git show 47c4cfc`) adds, immediately after the effect above:
+> ```kotlin
+>     // A draft edit within the 400ms debounce window above would otherwise be silently lost
+>     // if the user navigates away before it fires — mirrors the web LauncherDraftSync.vue
+>     // flush-on-unmount fix. draftCleared (set in Step 7, on a successful submit) prevents
+>     // this from resurrecting an already-cleared draft right after session creation.
+>     var draftCleared by remember { mutableStateOf(false) }
+>     DisposableEffect(Unit) {
+>         onDispose {
+>             if (!launcherRestoring && !draftCleared) {
+>                 onLauncherDraftChange(
+>                     LauncherDraft(
+>                         workdir = if (workdirTouched) workdir else null,
+>                         useWorktree = useWorktree,
+>                         baseBranch = baseBranch,
+>                         text = message,
+>                     )
+>                 )
+>             }
+>         }
+>     }
+> ```
+> `draftCleared` needs declaring alongside this task's other `remember`-backed state (Step 1), and `draftCleared = true` needs adding right after the draft-clear call in Step 7's submit success path — see `git show 47c4cfc` for the exact diff.
+
 - [ ] **Step 5: Persist agent at its pick site**
+
+> **As-shipped addition (2026-07-01, found by a code-quality review of the initial Task 2 implementation):** neither pick site below is gated on `launcherRestoring`, so a tap in the brief window before `loadLauncherPrefs()` resolves could persist prefs built from the not-yet-restored `launcherModels` (still `emptyMap()`), wiping every previously-remembered agent→model pick — or make a fast tap appear to "revert itself" once the restore lands. The code blocks below already include the shipped fix (`git show c6271d5`): the agent `SegmentedButton` gets `enabled = !launcherRestoring`; `ModelPill` has no `enabled` param to hook into (it's a plain shared `Row.clickable`), so its `onClick` is gated inline instead.
 
 Modify `apps/android/src/main/kotlin/dev/supermux/android/session/SessionLauncherScreen.kt:204-215` (currently):
 
@@ -366,6 +392,9 @@ Replace with:
                             onLauncherPrefsChange(LauncherPrefs(agent = a, models = launcherModels))
                         },
                         shape = SegmentedButtonDefaults.itemShape(i, agents.size),
+                        // Ignore taps until the restore has landed — see this step's as-shipped
+                        // note above for why.
+                        enabled = !launcherRestoring,
                         modifier = Modifier.testTag("agent_$a"),
                     ) {
                         Text(a)
@@ -411,6 +440,16 @@ Replace with:
     }
 ```
 
+Also update the `ModelPill` call site (a few lines above, where `showModelSheet` is set) — `ModelPill` has no `enabled` param, so gate the callback itself:
+
+```kotlin
+    ModelPill(
+        current = modelLabel,
+        // Same restore-window guard as the agent SegmentedButton above.
+        onClick = { if (!launcherRestoring) showModelSheet = true },
+    )
+```
+
 - [ ] **Step 7: Clear the draft when a session is created**
 
 Modify `apps/android/src/main/kotlin/dev/supermux/android/session/SessionLauncherScreen.kt` — find the submit button's `onClick` (around line 273-289, currently):
@@ -449,6 +488,8 @@ Replace with:
                                 base,
                             )
                             onLauncherDraftChange(LauncherDraft())
+                            draftCleared = true // see Step 4's as-shipped addition — stops the
+                                                 // dispose-flush from resurrecting this draft
                             onOpenSession(sessionId)
                         } catch (e: Exception) {
                             error = e.message ?: "Failed to create session"

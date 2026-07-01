@@ -78,6 +78,10 @@ LauncherDraft { workdir: string | null; useWorktree: bool; baseBranch: string; t
 - Any change to the existing recency-follow default-project logic itself (`chooseDefaultProject` on web, the Android `LaunchedEffect(sessions)` equivalent, iOS's simpler one-shot default) — this feature only adds a persisted override on top, following each platform's existing rules for what freezes it.
 - A shared KMP settings abstraction (see Decision 5) — three native implementations instead.
 
+## Known accepted difference (found post-implementation)
+
+A final cross-platform review (2026-07-01, after all 3 platforms shipped) found that iOS persists `workdir` on *any* non-empty value via `.onChange(of: workdir)`, including the impersonal `projects.first` fallback default — not gated on an explicit-pick flag the way web (`workdirTouched`) and Android (`workdirTouched`) are. Practical effect: once any workdir is set (even via the fallback, not a real pick), iOS treats it as sticky until a session is created, whereas web/Android would keep following a fresh default if the underlying project list changes. Web's `/projects` list is sorted alphabetically (not by recency), so in practice this is narrow and low-severity — it self-heals the moment the user explicitly picks a project or creates a session. Deliberately left as a known, accepted platform difference rather than a required fix, given the cost of another full iOS device-verification round for a narrow edge case; revisit if it turns out to matter more in practice than expected.
+
 ## Open questions
 
 None outstanding — scope (exclude attachments), storage shape (two-key split), and rollout (all 3 platforms in one pass) were confirmed with the user before writing this spec.
