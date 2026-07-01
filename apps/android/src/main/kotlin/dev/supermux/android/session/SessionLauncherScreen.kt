@@ -91,6 +91,13 @@ fun SessionLauncherScreen(
     // change. launcherModels mirrors LauncherPrefs.models (the per-agent memory) so a pick can
     // reconstruct the whole prefs blob to persist.
     var launcherRestoring by remember { mutableStateOf(true) }
+    // Set once a session is actually created (onSubmit's success path below), which clears the
+    // persisted draft but — unlike web's composer, which blanks its own input on submit — leaves
+    // this screen's local workdir/message state untouched. onOpenSession pops this screen off the
+    // back stack right after, disposing it; the dispose-flush effect further down reads that
+    // still-populated (now-stale) local state, so it needs this flag to know the draft was
+    // already intentionally cleared and must not be resurrected.
+    var draftCleared by remember { mutableStateOf(false) }
     var lastSeenAgent by remember { mutableStateOf<String?>(null) }
     var lastSeenWorkdir by remember { mutableStateOf<String?>(null) }
     var launcherModels by remember { mutableStateOf(emptyMap<String, String>()) }
@@ -169,6 +176,27 @@ fun SessionLauncherScreen(
                 text = message,
             )
         )
+    }
+
+    // Flush the current (not debounced) draft state on dispose, so navigating away mid-debounce
+    // always saves whatever's on screen instead of losing it to a cancelled coroutine — mirrors
+    // LauncherDraftSync.vue's onBeforeUnmount flush on web (commit e9eb0ed). draftCleared guards
+    // the one case where flushing the live state would be wrong: a successful submit already
+    // cleared the persisted draft and is about to dispose this screen via popBackStack, so the
+    // flush must not resurrect that now-stale (just-submitted) state over the intentional clear.
+    DisposableEffect(Unit) {
+        onDispose {
+            if (!launcherRestoring && !draftCleared) {
+                onLauncherDraftChange(
+                    LauncherDraft(
+                        workdir = if (workdirTouched) workdir else null,
+                        useWorktree = useWorktree,
+                        baseBranch = baseBranch,
+                        text = message,
+                    )
+                )
+            }
+        }
     }
 
     LaunchedEffect(Unit) { projects = loadProjects() }
@@ -362,6 +390,7 @@ fun SessionLauncherScreen(
                                 base,
                             )
                             onLauncherDraftChange(LauncherDraft())
+                            draftCleared = true
                             onOpenSession(sessionId)
                         } catch (e: Exception) {
                             error = e.message ?: "Failed to create session"
