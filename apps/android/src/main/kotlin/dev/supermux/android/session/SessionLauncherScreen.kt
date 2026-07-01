@@ -281,6 +281,10 @@ fun SessionLauncherScreen(
                             onLauncherPrefsChange(LauncherPrefs(agent = a, models = launcherModels))
                         },
                         shape = SegmentedButtonDefaults.itemShape(i, agents.size),
+                        // Ignore taps until the restore has landed — otherwise a fast tap could
+                        // persist prefs built from the not-yet-restored launcherModels (still
+                        // emptyMap()), wiping every previously-remembered agent→model pick.
+                        enabled = !launcherRestoring,
                         modifier = Modifier.testTag("agent_$a"),
                     ) {
                         Text(a)
@@ -301,7 +305,10 @@ fun SessionLauncherScreen(
                         ?: "Default"
                     ModelPill(
                         current = modelLabel,
-                        onClick = { showModelSheet = true },
+                        // Same restore-window guard as the agent SegmentedButton above —
+                        // ModelPill has no `enabled` param to hook into, so gate the callback
+                        // itself: the sheet must not even open while state is still restoring.
+                        onClick = { if (!launcherRestoring) showModelSheet = true },
                     )
                 }
 
