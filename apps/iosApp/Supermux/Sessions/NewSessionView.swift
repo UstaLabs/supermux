@@ -26,6 +26,14 @@ struct NewSessionView: View {
     @State private var worktreeSheet = false
     @State private var worktreeFetching = false
     @State private var fetchedRepos: Set<String> = []
+    // New Session draft persistence (survives navigation + relaunch). See Task 2's header note
+    // for why all three flags exist — launcherRestoring gates both guarded effects until the
+    // restore in Step 2 has fully landed; the other two then gate first-real-run vs. a later
+    // genuine change.
+    @State private var launcherState = LauncherStateStore()
+    @State private var launcherRestoring = true
+    @State private var modelResetArmed = false
+    @State private var baseBranchResetArmed = false
     @FocusState private var composing: Bool
     // All three closures need `broker`, which isn't available in a property initializer, so they
     // start as no-ops/nil here and are wired in `.task` (below) once `broker` is in scope.
@@ -60,6 +68,24 @@ struct NewSessionView: View {
         .navigationTitle("New session").navigationBarTitleDisplayMode(.inline)
         .tint(Theme.teal)
         .task {
+            // Restore persisted launcher state first, synchronously (no `await` on this path),
+            // before any of the awaits below — agent/model/workdir/useWorktree/baseBranch/
+            // composer.draft all start at their plain defaults (see their @State declarations
+            // above), so this only has visible effect when a prior prefs/draft actually exists.
+            // launcherRestoring flips false LAST, in this same synchronous run, so the two
+            // guarded effects below never see a partially-restored state (see Task 2's header).
+            // Validate against the known agent list — web's loadPrefs() does the same
+            // (SessionLauncherView.vue:126) — so a future agent type added after this prefs
+            // blob was written can't leave `agent` holding a value the Menu below has no
+            // matching row for.
+            let restoredAgent = launcherState.prefs.agent
+            agent = agents.contains(restoredAgent) ? restoredAgent : "claude"
+            model = launcherState.prefs.models[agent]
+            if let draftWorkdir = launcherState.draft.workdir { workdir = draftWorkdir }
+            useWorktree = launcherState.draft.useWorktree
+            baseBranch = launcherState.draft.baseBranch
+            composer.draft = launcherState.draft.text
+            launcherRestoring = false
             // No session yet (pre-spawn launcher): the broker's id-less /transcribe cleans the
             // draft off the global glossary/engine/model — the same AI correction the chat
             // composer gets, just without prior-message context.
@@ -87,20 +113,36 @@ struct NewSessionView: View {
                 projectSearch = true
             }
         }
-        .task(id: agent) {
+        .task(id: "\(agent)|\(launcherRestoring)") {
+            guard !launcherRestoring else { return }
             models = await broker.listModels(agent)
-            model = nil
+            // First real run (launcherRestoring just became false) corresponds to whatever
+            // agent Step 2 restored, and model was already restored alongside it — skip the
+            // reset. A genuine agent switch (this task re-running because `agent` changed,
+            // with launcherRestoring already false) still resets to Default, matching today's
+            // behavior. See Task 2's header note for why launcherRestoring must also gate this.
+            if modelResetArmed {
+                model = nil
+            } else {
+                modelResetArmed = true
+            }
         }
         // Agent slash commands depend on both the agent and the chosen project.
         .task(id: "\(agent)|\(workdir)") {
             launcherCommands = workdir.isEmpty ? [] : await broker.previewCommands(agent, workdir)
         }
         // Git repo info for the worktree picker — refreshes whenever the project changes.
-        .task(id: workdir) {
+        .task(id: "\(workdir)|\(launcherRestoring)") {
+            guard !launcherRestoring else { repoInfo = nil; return }
             guard !workdir.isEmpty else { repoInfo = nil; return }
             let info = await broker.repoInfo(workdir)
             repoInfo = info
-            baseBranch = info?.currentBranch ?? ""
+            if baseBranchResetArmed {
+                baseBranch = info?.currentBranch ?? ""
+            } else {
+                baseBranchResetArmed = true
+                if baseBranch.isEmpty { baseBranch = info?.currentBranch ?? "" }
+            }
         }
         .sheet(isPresented: $projectSearch) {
             ProjectPickerSheet(broker: broker, projects: projects, current: workdir) { workdir = $0 }
@@ -121,6 +163,18 @@ struct NewSessionView: View {
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { composer.handleFiles($0) }
         .fullScreenCover(isPresented: $showCamera) { CameraPicker { composer.addCameraImage($0) } }
         .onChange(of: composer.refocusToken) { _, _ in composing = true }
+        .onChange(of: workdir) { _, new in
+            launcherState.draft.workdir = new.isEmpty ? nil : new
+        }
+        .onChange(of: useWorktree) { _, new in
+            launcherState.draft.useWorktree = new
+        }
+        .onChange(of: baseBranch) { _, new in
+            launcherState.draft.baseBranch = new
+        }
+        .onChange(of: composer.draft) { _, new in
+            launcherState.draft.text = new
+        }
         .alert("Microphone access needed", isPresented: $composer.micDenied) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -212,7 +266,9 @@ struct NewSessionView: View {
             // overflow it on a narrow iPhone).
             HStack(spacing: 12) {
                 Menu {
-                    ForEach(agents, id: \.self) { a in Button(a.capitalized) { agent = a } }
+                    ForEach(agents, id: \.self) { a in
+                        Button(a.capitalized) { agent = a; launcherState.prefs.agent = a }
+                    }
                 } label: {
                     HStack(spacing: 5) {
                         AgentLogo(agent: agent, size: 18)
@@ -224,8 +280,16 @@ struct NewSessionView: View {
                 // when the list is empty made cursor/opencode look model-less after a
                 // transient /models miss or before the cache warmed.
                 Menu {
-                    Button("Default") { model = nil }
-                    ForEach(models, id: \.id) { m in Button(m.displayName) { model = m.id } }
+                    Button("Default") {
+                        model = nil
+                        launcherState.prefs.models.removeValue(forKey: agent)
+                    }
+                    ForEach(models, id: \.id) { m in
+                        Button(m.displayName) {
+                            model = m.id
+                            launcherState.prefs.models[agent] = m.id
+                        }
+                    }
                 } label: {
                     HStack(spacing: 4) {
                         Text(modelLabel).font(.subheadline.weight(.medium)).lineLimit(1)
@@ -263,6 +327,7 @@ struct NewSessionView: View {
 
     private func spawn() {
         spawning = true
+        launcherState.clearDraft()
         let (raw, toUpload) = composer.consume()
         let firstMsg = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let eligible = repoInfo?.eligible == true
