@@ -177,8 +177,10 @@ class PredictionEngine(private val cfg: PredictionConfig, private val now: () ->
 
     fun setLatencyEstimate(ms: Long) { latencyMs = ms }
 
-    /** Test-only: prime the estimate so predictions are allowed past the latency gate. */
-    fun primeForTest() { latencyMs = cfg.latencyThresholdMs.toLong() }
+    /** Test-only: prime the estimate so predictions are allowed past the latency gate.
+     *  `internal` so it stays out of the exported iOS (SKIE) / Android public API —
+     *  commonTest is in the same module and can still call it. */
+    internal fun primeForTest() { latencyMs = cfg.latencyThresholdMs.toLong() }
 
     private fun active(): Boolean =
         latencyMs >= cfg.latencyThresholdMs && now() >= cooldownUntil
@@ -239,7 +241,12 @@ class PredictionEngine(private val cfg: PredictionConfig, private val now: () ->
         // Cells of every currently-drawn prediction, captured BEFORE the walk mutates
         // pending — needed to erase them all on divergence.
         val drawnCells = pending.filter { it.drawn }.map { Triple(it.id, it.row, it.col) }
-        val chars = bytes.decodeToString().toList()   // List<Char>; ASCII/BMP only (wide-char deferred)
+        // List<Char>; ASCII/BMP only (wide-char deferred). NB: an astral echo (emoji) is two
+        // surrogate Chars here, so it never matches a single-code-point prediction → it always
+        // diverges (safe — the replay renders it correctly, just with a cooldown, vs the TS
+        // spec which confirms-then-col-drifts). Swap toList() for code-point iteration to add
+        // wide-char support.
+        val chars = bytes.decodeToString().toList()
         val backlog = mutableListOf<DisplayOp>()
         var diverged = false
         var sawComplex = false // any escape/control byte → suppress tentative reposition
