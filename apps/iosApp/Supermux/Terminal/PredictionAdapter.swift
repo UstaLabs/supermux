@@ -12,12 +12,17 @@ import Shared
 /// character on `DrawDim` (keyed by prediction id, captured BEFORE the dim write) and
 /// restores it on `RestoreCell`. Confirmed predictions never emit a `RestoreCell` (their
 /// echo paints over the dim cell via a `Passthrough`), so the snapshot map would grow
-/// unbounded; it is capped by eviction — the cap (64) sits above the engine's maxPending
-/// (50), so a live snapshot is never wrongly evicted.
+/// unbounded; it is capped by eviction — the cap is derived from the engine's maxPending
+/// (plus headroom), so a live snapshot is never wrongly evicted.
 final class PredictionAdapter {
     private let tv: TerminalView
     /// prediction id → the character that occupied the cell before the dim glyph.
     private var snapshots: [Int32: String] = [:]
+    /// Cap on live snapshots. DERIVED from the engine's maxPending (not a bare literal) so it
+    /// can't silently drift below it — the cap must stay above maxPending or a live snapshot
+    /// could be evicted and its rollback would repaint a space. +16 headroom (matches the web's
+    /// 64 = 50 + 14, rounded up).
+    private let snapshotCap = Int(PredictiveEchoKt.DEFAULT_CONFIG.maxPending) + 16
 
     init(_ tv: TerminalView) { self.tv = tv }
 
@@ -93,10 +98,10 @@ final class PredictionAdapter {
     /// Keep the snapshot map bounded. Confirmed predictions never emit `RestoreCell`, so
     /// their snapshots would otherwise linger. Engine ids are monotonic, so the smallest
     /// key is the oldest snapshot — evicting it mirrors the web adapter's insertion-order
-    /// "drop the oldest". The cap (64) sits above the engine's maxPending (50), so a live
-    /// snapshot (id among the outstanding ≤50) is never the smallest, hence never evicted.
+    /// "drop the oldest". snapshotCap sits above the engine's maxPending, so a live snapshot
+    /// (id among the outstanding ≤maxPending) is never the smallest, hence never evicted.
     private func evictIfNeeded() {
-        guard snapshots.count > 64 else { return }
+        guard snapshots.count > snapshotCap else { return }
         if let oldest = snapshots.keys.min() { snapshots[oldest] = nil }
     }
 }

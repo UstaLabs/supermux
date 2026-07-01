@@ -228,16 +228,25 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIGestureRecogn
     /// engine reconcile and re-emit the server bytes via its ops. There is NO separate
     /// tv.feed — the Passthrough op carries the bytes (web parity). Only after teardown
     /// (engine gone) do we feed the bytes directly. Runs on the main actor.
-    func handleOutput(_ bytes: [UInt8]) {
-        guard let engine, let predAdapter else {
-            tv?.feed(byteArray: ArraySlice(bytes))
-            return
+    func handleOutput(_ bytes: KotlinByteArray) {
+        // Runs on the MainActor today (invoked from onBytes' @MainActor Task). The engine is
+        // NOT thread-safe, so assert isolation explicitly (same guard as send / sizeChanged) —
+        // a future off-main caller then traps loudly instead of silently racing.
+        MainActor.assumeIsolated {
+            guard let engine, let predAdapter else {
+                // Teardown / no engine: the ONE conversion needed for a direct feed.
+                tv?.feed(byteArray: ArraySlice(bytes.toUInt8()))
+                return
+            }
+            if lastKeyAt > 0 {
+                engine.setLatencyEstimate(ms: TerminalCoordinator.nowMs() - lastKeyAt)
+                lastKeyAt = 0
+            }
+            // Pass the raw KotlinByteArray straight to the engine (no round-trip bridge); it
+            // re-emits the bytes inside a Passthrough op, where the adapter does the single
+            // KotlinByteArray→[UInt8] conversion the SwiftTerm feed actually needs.
+            predAdapter.render(engine.onServerData(bytes: bytes))
         }
-        if lastKeyAt > 0 {
-            engine.setLatencyEstimate(ms: TerminalCoordinator.nowMs() - lastKeyAt)
-            lastKeyAt = 0
-        }
-        predAdapter.render(engine.onServerData(bytes: bytes.toKotlin()))
     }
 
     /// Drop the engine + adapter (teardown). Later output falls back to a direct feed.
