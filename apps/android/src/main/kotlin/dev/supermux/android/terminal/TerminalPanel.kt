@@ -1,6 +1,7 @@
 package dev.supermux.android.terminal
 
 import android.graphics.Typeface
+import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
@@ -37,8 +38,11 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.android.theme.LocalPanes
 import dev.supermux.android.theme.Radii
 import dev.supermux.android.theme.Space
+import dev.supermux.net.DEFAULT_CONFIG
+import dev.supermux.net.PredictionEngine
 import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalStatus
+import dev.supermux.net.decodeInput
 import dev.supermux.net.linesFromPixels
 import dev.supermux.net.wheelEventsFromLines
 import kotlin.math.abs
@@ -63,6 +67,11 @@ fun TerminalPanel(
     val scope = rememberCoroutineScope()
     val client = remember { connect() }
 
+    // Predictive local echo: the shared Kotlin engine + termlib op-renderer + keystroke->echo
+    // RTT stamp, bundled so the emulator's onKeyboardInput closure (baked in at create time) can
+    // reach an engine/adapter built AFTER the emulator exists. Mirrors iOS TerminalCoordinator.
+    val pred = remember(client) { PredictionPipeline() }
+
     val emulator: TerminalEmulator = remember(client) {
         TerminalEmulatorFactory.create(
             initialRows = 24,
@@ -70,12 +79,20 @@ fun TerminalPanel(
             defaultForeground = Color(c.terminalForeground),
             defaultBackground = Color(c.terminal),
             onKeyboardInput = { data ->
+                pred.handleInput(data) // predictive echo BEFORE the send (web/iOS parity)
                 scope.launch { client.sendInput(data) }
             },
             onResize = { dims ->
                 scope.launch { client.resize(dims.columns, dims.rows) }
             },
         )
+    }
+
+    // Build the engine+adapter once the emulator exists; drop them on teardown (web parity:
+    // predictor = null). Runs on the main thread, before any input/output can arrive.
+    DisposableEffect(emulator) {
+        pred.attach(emulator)
+        onDispose { pred.teardown() }
     }
 
     LaunchedEffect(client) { client.run() }
@@ -98,7 +115,10 @@ fun TerminalPanel(
 
     LaunchedEffect(client, emulator) {
         client.output.collect { bytes ->
-            emulator.writeInput(bytes)
+            // Reconcile predictions against the authoritative bytes; the engine re-emits them
+            // inside a Passthrough op, so there is NO separate emulator.writeInput here (web/iOS
+            // parity). Falls back to a direct write only after teardown (engine gone).
+            pred.handleOutput(bytes) { emulator.writeInput(bytes) }
         }
     }
 
@@ -207,5 +227,84 @@ private fun StatusChip(status: TerminalStatus, modifier: Modifier = Modifier) {
                 .background(tint, RoundedCornerShape(Radii.pill)),
         )
         Text(label, color = cs.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp))
+    }
+}
+
+/**
+ * Bundles the predictive-echo engine + termlib [PredictionAdapter] + keystroke->echo RTT clock
+ * for one terminal, so the emulator's `onKeyboardInput` closure (fixed at create time) can reach
+ * an engine/adapter built AFTER the emulator. The Android twin of iOS `TerminalCoordinator`'s
+ * engine/predAdapter/lastKeyAt + handleInput/handleOutput/teardownPrediction.
+ *
+ * THREADING: the shared engine is NOT thread-safe. All entry points run on the MAIN thread —
+ * [handleInput] from the emulator's `onKeyboardInput` (termlib posts it to its default
+ * `Looper.getMainLooper()` handler), [handleOutput] from the `output.collect` LaunchedEffect
+ * (Compose main dispatcher), and [attach]/[teardown] from a DisposableEffect (main). So engine
+ * access is single-threaded with no extra confinement needed.
+ */
+private class PredictionPipeline {
+    private var engine: PredictionEngine? = null
+    private var adapter: PredictionAdapter? = null
+    // nowMs of the last keystroke still awaiting its echo (0 = none). Bootstraps the latency gate
+    // from a real keystroke->echo RTT, INDEPENDENTLY of the prediction path — without it the gate
+    // could never open (latency starts at 0, predictions need latency >= threshold).
+    private var lastKeyAt = 0L
+
+    /** Build the engine + adapter once the terminal exists (mirror iOS `attach`). If the adapter
+     *  can't read termlib's cursor (its internal snapshot is unreachable), leave the engine null
+     *  so prediction is disabled and the terminal runs unaffected. */
+    fun attach(emulator: TerminalEmulator) {
+        val a = PredictionAdapter(emulator)
+        lastKeyAt = 0L
+        if (!a.available) {
+            adapter = null
+            engine = null
+            return
+        }
+        adapter = a
+        engine = PredictionEngine(DEFAULT_CONFIG) { nowMonotonicMs() }
+    }
+
+    /** INPUT: decode the keystroke, render the engine's predicted ops, then stamp the RTT clock.
+     *  Called from `onKeyboardInput` BEFORE the bytes reach the pty. No-op until attached. */
+    fun handleInput(data: ByteArray) {
+        val e = engine ?: return
+        val a = adapter ?: return
+        a.render(e.onInput(decodeInput(data.decodeToString()), a.cursor()))
+        lastKeyAt = nowMonotonicMs()
+    }
+
+    /** OUTPUT: bootstrap the latency estimate from the keystroke->echo RTT, then let the engine
+     *  reconcile and re-emit the server bytes via its ops (the Passthrough op carries them — NO
+     *  separate writeInput). Before attach / after teardown, [fallback] writes the bytes directly
+     *  so none are lost. */
+    fun handleOutput(bytes: ByteArray, fallback: () -> Unit) {
+        val e = engine ?: return fallback()
+        val a = adapter ?: return fallback()
+        if (lastKeyAt > 0L) {
+            e.setLatencyEstimate(nowMonotonicMs() - lastKeyAt)
+            lastKeyAt = 0L
+        }
+        // Guard ONLY the predicted-output render: an exception thrown here would propagate out of
+        // output.collect and CANCEL the collector -> the terminal freezes, which is worse than
+        // losing prediction. On any engine/adapter failure, fall back to a direct write so the
+        // byte stream (and terminal) stays alive. The INPUT path is deliberately NOT guarded — we
+        // want engine bugs to surface there, not be masked.
+        runCatching { a.render(e.onServerData(bytes)) }.onFailure { fallback() }
+    }
+
+    /** Drop the engine + adapter (teardown). Later output falls back to a direct write. */
+    fun teardown() {
+        engine = null
+        adapter = null
+        lastKeyAt = 0L
+    }
+
+    private companion object {
+        /** Monotonic millisecond clock (does not jump on wall-clock changes) — the Android twin of
+         *  the web's performance.now() / iOS's DispatchTime.uptimeNanoseconds. Drives the engine
+         *  timing AND the keystroke->echo RTT, so both share one source. Returns Long directly
+         *  (no boxing — direct Kotlin, unlike iOS's SKIE KotlinLong). */
+        fun nowMonotonicMs(): Long = SystemClock.uptimeMillis()
     }
 }
