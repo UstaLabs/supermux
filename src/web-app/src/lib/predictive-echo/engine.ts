@@ -6,6 +6,7 @@ interface Pending {
   col: number
   char: string
   predictedAt: number
+  drawn: boolean
 }
 
 export class PredictionEngine {
@@ -16,6 +17,22 @@ export class PredictionEngine {
   private latencyMs = 0
   private cursor: CursorPos | null = null
   private cooldownUntil = 0
+  // Whether the current epoch has had a server-confirmed prediction. Until it
+  // does, predictions are tracked but NOT drawn ("wait for first confirmation"):
+  // this hides post-Enter / into-prompt mispredicts, and means a no-echo context
+  // (a password prompt) never draws anything. Reset on opaque input / divergence.
+  private epochConfirmed = false
+  // Leftmost column the current line's editing may touch (= the authoritative
+  // cursor column when this prediction run began, right after the prompt).
+  // Backspace/cursor-left predictions are refused at or left of it so we never
+  // predict-delete the prompt. null = unseeded; set on the first prediction of a
+  // line, reset when the line context changes. Invariant: non-null whenever
+  // pending > 0 (seeded on the 0→1 transition; resets always co-clear pending).
+  // Limitation: for a recalled line (history up-arrow redraws existing text with
+  // the cursor at its END), this seeds at that end column, so predictive
+  // backspace is over-refused for that line — safe (never eats the prompt), but
+  // no predictive backspace there; proper boundary tracking is a Step 2 item.
+  private epochStartCol: number | null = null
 
   constructor(cfg: PredictionConfig, now: () => number) {
     this.cfg = cfg
@@ -23,7 +40,7 @@ export class PredictionEngine {
   }
 
   setLatencyEstimate(ms: number): void { this.latencyMs = ms }
-  /** test-only: prime the estimate so the first prediction is allowed */
+  /** test-only: prime the estimate so predictions are allowed past the latency gate */
   primeForTest(): void { this.latencyMs = this.cfg.latencyThresholdMs }
 
   private active(): boolean {
@@ -32,8 +49,13 @@ export class PredictionEngine {
 
   onInput(ev: InputEvent, serverCursor: CursorPos): DisplayOp[] {
     if (!this.active()) return []
-    if (ev.kind === "opaque") return []
-    if (this.pending.length === 0) this.cursor = { ...serverCursor }
+    // Opaque input (Enter, Tab, Ctrl-keys, escapes, paste) changes the line
+    // unpredictably → roll back drawn predictions and reset the epoch.
+    if (ev.kind === "opaque") return this.resetEpoch()
+    if (this.pending.length === 0) {
+      this.cursor = { ...serverCursor }
+      if (this.epochStartCol === null) this.epochStartCol = serverCursor.col
+    }
     if (this.pending.length >= this.cfg.maxPending) return []
     // invariant: cursor is non-null here — seeded above when pending was empty,
     // and retained (never cleared without also clearing pending) while pending > 0.
@@ -42,23 +64,27 @@ export class PredictionEngine {
     if (ev.kind === "char") {
       const p: Pending = {
         id: this.nextId++, row: cursor.row, col: cursor.col,
-        char: ev.text, predictedAt: this.now(),
+        char: ev.text, predictedAt: this.now(), drawn: this.epochConfirmed,
       }
       this.pending.push(p)
       cursor.col += 1
-      return [{ op: "predict", id: p.id, row: p.row, col: p.col, char: p.char }]
+      // Tentative (epoch not yet confirmed) → tracked for matching but not drawn.
+      return p.drawn ? [{ op: "predict", id: p.id, row: p.row, col: p.col, char: p.char }] : []
     }
     if (ev.kind === "backspace") {
-      if (cursor.col <= 0) return []
+      // Never predict-delete past the line's start column (into the prompt).
+      // `?? 0` is defensive only — epochStartCol is non-null whenever pending > 0
+      // (it's seeded just above on the 0→1 transition), so the fallback is unreached.
+      if (cursor.col <= (this.epochStartCol ?? 0)) return []
       cursor.col -= 1
       const p: Pending = {
         id: this.nextId++, row: cursor.row, col: cursor.col,
-        char: " ", predictedAt: this.now(),
+        char: " ", predictedAt: this.now(), drawn: this.epochConfirmed,
       }
       this.pending.push(p)
-      return [{ op: "predict", id: p.id, row: p.row, col: p.col, char: " " }]
+      return p.drawn ? [{ op: "predict", id: p.id, row: p.row, col: p.col, char: " " }] : []
     }
-    if (ev.kind === "cursorLeft") { if (cursor.col > 0) cursor.col -= 1; return [] }
+    if (ev.kind === "cursorLeft") { if (cursor.col > (this.epochStartCol ?? 0)) cursor.col -= 1; return [] }
     if (ev.kind === "cursorRight") { cursor.col += 1; return [] }
     return []
   }
@@ -67,11 +93,10 @@ export class PredictionEngine {
   // - a CSI sequence split across two onServerData calls misreads the leading '[' (spurious rollback);
   // - only ESC[ (CSI) is fully skipped, so a mid-stream OSC (ESC]) can leak content bytes to the matcher;
   // - wide chars (CJK/emoji) advance col by 1 not 2, so predictions after one are a column early;
-  // - no-echo input (password prompts, `read -s`) is never confirmed, so its dim guesses linger until
-  //   some later printable byte forces a rollback — or indefinitely if none arrives. We deliberately do
-  //   NOT auto-expire on a timer in v1: a timeout short enough to clear a password ghost would also kill
-  //   legitimate predictions on the slowest links (exactly where prediction matters most). Bounded
-  //   timeout expiry, tuned against the live latency estimate, is deferred to v2.
+  // - no-echo input (password prompts, `read -s`) never confirms the epoch, so nothing is ever DRAWN
+  //   (predictions stay tentative) — the v1 password-ghost is gone. A line whose app stops echoing
+  //   mid-way, AFTER the epoch already confirmed, can still leave drawn predictions lingering until the
+  //   next divergence; bounded timeout expiry for that residual case is deferred to a later version.
   // Cross-call escape buffering + wcwidth are deferred to a later version.
   onServerData(bytes: Uint8Array): DisplayOp[] {
     if (this.pending.length === 0) return []
@@ -92,15 +117,29 @@ export class PredictionEngine {
       const head = this.pending[0]!
       if (ch === head.char) {
         this.sampleLatency(this.now() - head.predictedAt)
-        ops.push({ op: "confirm", id: head.id })
+        if (head.drawn) ops.push({ op: "confirm", id: head.id })
         this.pending.shift()
+        // First confirmation in this epoch → the app echoes, so trust it: confirm
+        // the epoch and draw the backlog of tentative predictions queued behind it.
+        if (!this.epochConfirmed) {
+          this.epochConfirmed = true
+          for (const p of this.pending) {
+            if (!p.drawn) {
+              p.drawn = true
+              ops.push({ op: "predict", id: p.id, row: p.row, col: p.col, char: p.char })
+            }
+          }
+        }
         if (this.pending.length === 0) break
       } else {
-        const ids = this.pending.map((p) => p.id)
+        // Divergence → roll back what we drew, reset the epoch, enter cooldown.
+        const ids = this.pending.filter((p) => p.drawn).map((p) => p.id)
         this.pending = []
         this.cursor = null
+        this.epochConfirmed = false
+        this.epochStartCol = null
         this.cooldownUntil = this.now() + this.cfg.cooldownMs
-        return [...ops, { op: "rollback", ids }]
+        return ids.length ? [...ops, { op: "rollback", ids }] : ops
       }
     }
     return ops
@@ -110,11 +149,18 @@ export class PredictionEngine {
     this.latencyMs = this.latencyMs === 0 ? ms : Math.round(this.latencyMs * 0.7 + ms * 0.3)
   }
 
-  reset(): DisplayOp[] {
-    if (this.pending.length === 0) { this.cursor = null; return [] }
-    const ids = this.pending.map((p) => p.id)
+  /** Roll back any drawn predictions and clear all epoch state. Used on opaque
+   *  input (Enter/Tab/Ctrl/paste) and on reconnect via reset(). */
+  private resetEpoch(): DisplayOp[] {
+    const ids = this.pending.filter((p) => p.drawn).map((p) => p.id)
     this.pending = []
     this.cursor = null
-    return [{ op: "rollback", ids }]
+    this.epochConfirmed = false
+    this.epochStartCol = null
+    return ids.length ? [{ op: "rollback", ids }] : []
+  }
+
+  reset(): DisplayOp[] {
+    return this.resetEpoch()
   }
 }
