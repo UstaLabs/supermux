@@ -20,7 +20,10 @@ watch(textInput, (text) => {
 })
 
 onBeforeUnmount(() => {
-  if (timer) clearTimeout(timer)
+  if (timer) {
+    clearTimeout(timer)
+    draft.setText(textInput.value)
+  }
 })
 </script>
 
