@@ -303,6 +303,10 @@ class MainActivity : ComponentActivity() {
                                         loadGlossary = { vm.fetchGlossary() },
                                         transcribeDraft = { draft -> vm.transcribeDraft(null, draft) },
                                         transcribeAudio = { bytes, name -> vm.transcribeAudio(null, bytes, name) },
+                                        loadLauncherPrefs = { vm.loadLauncherPrefs() },
+                                        onLauncherPrefsChange = { vm.saveLauncherPrefs(it) },
+                                        loadLauncherDraft = { vm.loadLauncherDraft() },
+                                        onLauncherDraftChange = { vm.saveLauncherDraft(it) },
                                         onSubmit = { wd, ag, md, msg, wt, base ->
                                             vm.createSessionWithFirstMessage(wd, ag, md, msg, worktree = wt, baseBranch = base)
                                         },
@@ -327,6 +331,10 @@ class MainActivity : ComponentActivity() {
                                 loadGlossary = { vm.fetchGlossary() },
                                 transcribeDraft = { draft -> vm.transcribeDraft(null, draft) },
                                 transcribeAudio = { bytes, name -> vm.transcribeAudio(null, bytes, name) },
+                                loadLauncherPrefs = { vm.loadLauncherPrefs() },
+                                onLauncherPrefsChange = { vm.saveLauncherPrefs(it) },
+                                loadLauncherDraft = { vm.loadLauncherDraft() },
+                                onLauncherDraftChange = { vm.saveLauncherDraft(it) },
                                 onSubmit = { wd, ag, md, msg, wt, base ->
                                     vm.createSessionWithFirstMessage(wd, ag, md, msg, worktree = wt, baseBranch = base)
                                 },
