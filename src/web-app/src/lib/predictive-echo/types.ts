@@ -7,10 +7,22 @@ export type InputEvent =
 
 export interface CursorPos { row: number; col: number }
 
+// Step 2 (caret rewrite): the engine orchestrates the written stream via these
+// abstract ops so the caret rides the user's typing. The adapter maps each op to
+// its terminal's primitives (xterm here; SwiftTerm/termlib in later phases).
 export type DisplayOp =
-  | { op: "predict"; id: number; row: number; col: number; char: string }
-  | { op: "confirm"; id: number }
-  | { op: "rollback"; ids: number[] }
+  // Draw an unconfirmed glyph at a cell (adapter: dim SGR).
+  | { op: "drawDim"; id: number; row: number; col: number; char: string }
+  // Reposition the real caret (adapter: absolute CUP).
+  | { op: "moveCaret"; row: number; col: number }
+  // Erase a rolled-back prediction, restoring the pre-prediction snapshot.
+  | { op: "restoreCell"; id: number; row: number; col: number }
+  // Write authoritative server bytes as-is (adapter: term.write). Confirmed
+  // echoes paint over the dim cells here — that IS the confirm.
+  | { op: "passthrough"; bytes: Uint8Array }
+  // Bracket a reconcile batch to hide repositioning flicker.
+  | { op: "hideCaret" }
+  | { op: "showCaret" }
 
 export interface PredictionConfig {
   latencyThresholdMs: number

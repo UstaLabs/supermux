@@ -10,7 +10,7 @@ import { useTerminal } from "@/composables/useTerminal"
 import { linesFromPixels, wheelEventsFromLines } from "@/lib/touch-scroll"
 import { PredictionEngine } from "@/lib/predictive-echo/engine"
 import { XtermPredictionAdapter } from "@/lib/predictive-echo/xterm-adapter"
-import { decodeInput, DEFAULT_CONFIG, type DisplayOp } from "@/lib/predictive-echo/types"
+import { decodeInput, DEFAULT_CONFIG } from "@/lib/predictive-echo/types"
 
 const props = defineProps<{
   sessionName: string
@@ -30,42 +30,12 @@ let lastSentSize: { cols: number; rows: number } | null = null
 
 let predictor: PredictionEngine | null = null
 let predAdapter: XtermPredictionAdapter | null = null
-// id → cell, plus `prev`: the char that was in the cell before we drew the dim
-// guess, so a rollback can restore it (the cell can't be re-read correctly at
-// rollback time — reconcile runs before the server's bytes are painted).
-const predCells = new Map<number, { row: number; col: number; prev: string }>()
 // performance.now() of the last keystroke still awaiting its echo (0 = none).
 // Feeds the latency gate from a real keystroke→echo measurement, INDEPENDENTLY
 // of the prediction path — without this the gate could never open: latency
 // starts at 0, predictions need latency ≥ threshold, and latency was otherwise
 // only ever learned from confirmed predictions (which need the gate already open).
 let lastKeyAt = 0
-
-// Apply the engine's display ops to the terminal: draw dim predicts, dismiss on
-// confirm (the real server byte overwrites the cell), erase on rollback.
-function applyPredOps(ops: DisplayOp[]) {
-  if (!predAdapter) return
-  for (const op of ops) {
-    if (op.op === "predict") {
-      // Snapshot the cell BEFORE the dim guess overwrites it, so a rollback can
-      // restore what was there. Caveat: a cell re-predicted before any confirm
-      // (backspace-then-retype over non-space text) snapshots the intervening dim
-      // guess, so a rollback may restore a space until the next server redraw —
-      // narrow and self-healing, and still better than re-affirming a wrong glyph.
-      const prev = predAdapter.readCell(op.row, op.col)
-      predCells.set(op.id, { row: op.row, col: op.col, prev })
-      predAdapter.apply([op])
-    } else if (op.op === "confirm") {
-      predCells.delete(op.id)
-    } else if (op.op === "rollback") {
-      for (const id of op.ids) {
-        const c = predCells.get(id)
-        if (c) predAdapter.restoreCell(c.row, c.col, c.prev)
-        predCells.delete(id)
-      }
-    }
-  }
-}
 
 // Touch-drag scrolling. xterm v6 ships a gesture engine but never registers the
 // terminal as a target, so finger swipes are ignored; we drive scrollLines()
@@ -221,9 +191,10 @@ onMounted(() => {
   predictor = new PredictionEngine(DEFAULT_CONFIG, () => performance.now())
   predAdapter = new XtermPredictionAdapter(term)
 
-  // Pipe terminal input → WS (+ predictive local echo: show the keystroke instantly)
+  // Pipe terminal input → WS (+ predictive local echo: show the keystroke instantly
+  // and advance the caret — the engine emits caret-aware ops, the adapter renders them).
   term.onData((data) => {
-    if (predictor && predAdapter) applyPredOps(predictor.onInput(decodeInput(data), predAdapter.cursor()))
+    if (predictor && predAdapter) predAdapter.render(predictor.onInput(decodeInput(data), predAdapter.cursor()))
     lastKeyAt = performance.now() // mark for the keystroke→echo RTT measured below
     const encoder = new TextEncoder()
     terminal.sendInput(encoder.encode(data))
@@ -238,8 +209,12 @@ onMounted(() => {
   // in Firefox). For touch devices, the explicit paste button below is the
   // reliable fallback.
 
-  // Pipe WS binary → terminal (reconcile predictions against the authoritative
-  // bytes first — confirm/rollback — then render the bytes).
+  // Pipe WS binary → terminal. The engine reconciles predictions against the
+  // authoritative bytes and orchestrates ALL writes: the server bytes flow back out
+  // inside `passthrough` ops (confirmed echoes paint over their dim cells = confirm),
+  // interleaved with caret moves and rollbacks. So there is no separate term.write
+  // here — render(onServerData) does it. Only if the predictor is gone (teardown)
+  // do we write the bytes directly.
   terminal.onData((data: Uint8Array) => {
     // Coarse keystroke→echo RTT drives the latency gate. Deliberately rough: the
     // first server byte after a keystroke may be unrelated output, and during
@@ -252,8 +227,8 @@ onMounted(() => {
       predictor.setLatencyEstimate(performance.now() - lastKeyAt)
       lastKeyAt = 0
     }
-    if (predictor && predAdapter) applyPredOps(predictor.onServerData(data))
-    term?.write(data)
+    if (predictor && predAdapter) predAdapter.render(predictor.onServerData(data))
+    else term?.write(data)
   })
 
   // Handle session exit — the shell/tmux session actually ended (a detach does
@@ -293,7 +268,6 @@ onUnmounted(() => {
   terminal.disconnect()
   predictor = null
   predAdapter = null
-  predCells.clear()
   term?.dispose()
   term = null
   fitAddon = null
