@@ -1,4 +1,5 @@
 import { patchLSPPluginGet } from "./lib/lsp-plugin"
+import { initVisualViewportVar } from "./lib/visual-viewport"
 import { createApp } from "vue"
 import { createPinia } from "pinia"
 import App from "./App.vue"
@@ -8,6 +9,7 @@ import "vue-sonner/style.css"
 import "./style.css"
 
 patchLSPPluginGet()
+initVisualViewportVar() // publish --vvh so full-height shells fit above the soft keyboard
 
 if ("serviceWorker" in navigator) {
   const hadController = Boolean(navigator.serviceWorker.controller)
