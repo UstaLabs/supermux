@@ -152,9 +152,11 @@ watch([agent, model], () => {
 })
 
 watch([workdir, workdirTouched, useWorktree, baseBranch], () => {
-  if (workdirTouched.value) launcherDraft.setWorkdir(workdir.value)
-  launcherDraft.setWorktree(useWorktree.value)
-  launcherDraft.setBaseBranch(baseBranch.value)
+  if (workdirTouched.value) {
+    launcherDraft.setWorkdir(workdir.value)
+    launcherDraft.setWorktree(useWorktree.value)
+    launcherDraft.setBaseBranch(baseBranch.value)
+  }
 })
 
 const submitting = ref(false)
