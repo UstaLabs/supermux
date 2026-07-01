@@ -89,3 +89,29 @@ test("tool_use without id produces no callId key", () => {
   expect(ev).toBeDefined()
   expect("callId" in ev!).toBe(false)
 })
+
+test("parses the interrupt marker (generation) into an interrupt event", () => {
+  const line = JSON.stringify({
+    type: "user", timestamp: "2026-06-29T07:01:18.501Z",
+    message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user]" }] },
+  })
+  const out = parseTranscriptLine(line)
+  expect(out).toHaveLength(1)
+  expect(out[0]!.kind).toBe("interrupt")
+})
+
+test("parses the tool-use interrupt marker too", () => {
+  const line = JSON.stringify({
+    type: "user", timestamp: "2026-06-29T07:02:09.113Z",
+    message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user for tool use]" }] },
+  })
+  expect(parseTranscriptLine(line)[0]!.kind).toBe("interrupt")
+})
+
+test("ordinary assistant text is NOT an interrupt", () => {
+  const line = JSON.stringify({
+    type: "assistant", timestamp: "2026-06-29T07:01:18.445Z",
+    message: { role: "assistant", content: [{ type: "text", text: "The history of operating systems begins…" }] },
+  })
+  expect(parseTranscriptLine(line)).toHaveLength(0)
+})

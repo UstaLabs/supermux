@@ -62,6 +62,7 @@ export interface FinishReadiness {
   conflictPreflight: "clean" | "will_conflict" | "unknown"
   recommended: "merge" | "pr"
   nothingToLand: boolean
+  prRequiresGreen?: boolean
 }
 // In-app updater (GET /api/update/status). Mirrors the broker's UpdateStatus
 // shape (src/core/update/checker.ts) plus `disabled` when MUX_UPDATE_CHECK=0.
@@ -124,6 +125,10 @@ export const api = {
   addDevice:   (name: string) => request("POST", "/devices", { name }),
   revokeDevice: (name: string) => request("DELETE", `/devices/${encodeURIComponent(name)}`),
   getUsage:     () => request("GET", "/usage"),
+  redeemCodexReset: () =>
+    request("POST", "/usage/codex/reset", {}) as Promise<{
+      code: string; windowsReset: number; codex: unknown
+    }>,
   listProjects: () => request("GET", "/projects") as Promise<{ projects: { path: string }[] }>,
   listModels: (agent: string) =>
     request("GET", `/models?agent=${encodeURIComponent(agent)}`) as Promise<{

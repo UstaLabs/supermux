@@ -1,5 +1,4 @@
-import { sendKeys } from "./tmux"
-import { spawn } from "child_process"
+import { sendKeysToWindowId, capturePaneById } from "./tmux"
 import { makeLogger } from "../../shared/log"
 
 const log = makeLogger("post-spawn-keys")
@@ -22,20 +21,6 @@ const LISTENING_MARKER = "Listening for channel messages"
 // option is "No, exit" — so a bare consent Enter would QUIT claude (this was a
 // real PA-death). We detect it and accept it instead.
 const BYPASS_WARNING_MARKER = "Bypass Permissions mode"
-
-function capturePaneText(tmuxTarget: string): Promise<string> {
-  return new Promise((resolve) => {
-    // Scrollback: startup prompts (--resume menu, channel consent) are often
-    // above the visible tail; a plain capture-pane misses them.
-    const proc = spawn("tmux", ["capture-pane", "-t", tmuxTarget, "-p", "-S", "-150"], {
-      stdio: ["ignore", "pipe", "pipe"],
-    })
-    let out = ""
-    proc.stdout.on("data", (d: Buffer) => { out += d.toString("utf8") })
-    proc.on("close", () => resolve(out))
-    proc.on("error", () => resolve(""))
-  })
-}
 
 // Poll the tmux pane and dismiss Claude's startup prompts so a freshly-spawned
 // session reaches its working prompt and loads the inbound channel:
@@ -60,22 +45,22 @@ function capturePaneText(tmuxTarget: string): Promise<string> {
 // the dev-channels one (default = accept), never the bypass warning (default
 // "No, exit"), which a blind Enter would turn into an exit.
 export async function sendChannelConsentEnter(
-  tmuxTarget: string,
+  windowId: string,
   opts?: {
     pollIntervalMs?: number
     maxWaitMs?: number
     retryAfterMs?: number
     keyDelayMs?: number
-    sendKeysFn?: (target: string, keys: string[]) => Promise<void>
-    capturePane?: (target: string) => Promise<string>
+    sendKeysFn?: (windowId: string, keys: string[]) => Promise<void>
+    capturePane?: (windowId: string) => Promise<string | null>
   },
 ): Promise<void> {
   const interval = opts?.pollIntervalMs ?? POLL_INTERVAL_MS
   const maxWait = opts?.maxWaitMs ?? MAX_WAIT_MS
   const retryAfter = opts?.retryAfterMs ?? RETRY_AFTER_MS
   const keyDelay = opts?.keyDelayMs ?? BYPASS_KEY_DELAY_MS
-  const send = opts?.sendKeysFn ?? sendKeys
-  const capture = opts?.capturePane ?? capturePaneText
+  const send = opts?.sendKeysFn ?? sendKeysToWindowId
+  const capture = opts?.capturePane ?? capturePaneById
 
   let resumeMenuDismissed = false
   const deadline = Date.now() + maxWait
@@ -84,10 +69,10 @@ export async function sendChannelConsentEnter(
   let lastBypassAt = 0
   while (Date.now() < deadline) {
     try {
-      const text = await capture(tmuxTarget)
+      const text = (await capture(windowId)) ?? ""
       // Claude is live on the channel → past all startup prompts.
       if (text.includes(LISTENING_MARKER)) {
-        log.debug("channel_consent_already_past", { target: tmuxTarget })
+        log.debug("channel_consent_already_past", { windowId })
         return
       }
       // Bypass Permissions warning: default is "No, exit", so a bare Enter would
@@ -100,11 +85,11 @@ export async function sendChannelConsentEnter(
       if (text.includes(BYPASS_WARNING_MARKER)) {
         const now = Date.now()
         if (lastBypassAt === 0 || now - lastBypassAt >= retryAfter) {
-          await send(tmuxTarget, ["Down"])
+          await send(windowId, ["Down"])
           await new Promise<void>(r => setTimeout(r, keyDelay))
-          await send(tmuxTarget, ["Enter"])
+          await send(windowId, ["Enter"])
           lastBypassAt = now
-          log.info("bypass_warning_accepted", { target: tmuxTarget })
+          log.info("bypass_warning_accepted", { windowId })
         }
         await new Promise<void>(r => setTimeout(r, interval))
         continue
@@ -112,9 +97,9 @@ export async function sendChannelConsentEnter(
       // --resume "summary vs full session" menu (also contains "Enter to
       // confirm"): "2" = resume the full session. Dismiss once.
       if (text.includes(RESUME_MENU_MARKER) && !resumeMenuDismissed) {
-        await send(tmuxTarget, ["2", "Enter"])
+        await send(windowId, ["2", "Enter"])
         resumeMenuDismissed = true
-        log.info("resume_menu_full_session_sent", { target: tmuxTarget })
+        log.info("resume_menu_full_session_sent", { windowId })
         await new Promise<void>(r => setTimeout(r, interval))
         continue
       }
@@ -122,24 +107,24 @@ export async function sendChannelConsentEnter(
       if (text.includes(CHANNEL_CONSENT_MARKER) && !text.includes(RESUME_MENU_MARKER)) {
         const now = Date.now()
         if (sent === 0 || now - lastSentAt >= retryAfter) {
-          await send(tmuxTarget, ["Enter"])
+          await send(windowId, ["Enter"])
           sent++
           lastSentAt = now
           log.info(sent === 1 ? "channel_consent_enter_sent" : "channel_consent_enter_retried", {
-            target: tmuxTarget,
+            windowId,
             attempt: sent,
           })
         }
       } else if (sent > 0) {
         // The consent prompt we were dismissing is gone → an Enter landed and
         // Claude accepted. (A dropped Enter would have left the marker up.)
-        log.info("channel_consent_accepted", { target: tmuxTarget, attempts: sent })
+        log.info("channel_consent_accepted", { windowId, attempts: sent })
         return
       }
     } catch (err) {
-      log.debug("channel_consent_capture_failed", { target: tmuxTarget, err: String(err) })
+      log.debug("channel_consent_capture_failed", { windowId, err: String(err) })
     }
     await new Promise<void>(r => setTimeout(r, interval))
   }
-  log.warn("channel_consent_timeout", { target: tmuxTarget, maxWaitMs: maxWait, enters: sent, resumeMenuDismissed })
+  log.warn("channel_consent_timeout", { windowId, maxWaitMs: maxWait, enters: sent, resumeMenuDismissed })
 }

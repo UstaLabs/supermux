@@ -1,7 +1,7 @@
 package dev.supermux.ui
 
-enum class SpanStyleKind { PLAIN, BOLD, ITALIC, CODE }
-data class MdSpan(val text: String, val kind: SpanStyleKind)
+enum class SpanStyleKind { PLAIN, BOLD, ITALIC, CODE, LINK }
+data class MdSpan(val text: String, val kind: SpanStyleKind, val ref: FilePathRef? = null)
 
 sealed interface MdBlock {
     data class Prose(val text: String) : MdBlock
@@ -175,5 +175,22 @@ fun parseInlineMarkdown(input: String): List<MdSpan> {
     }
 
     flushPlain()
-    return spans
+    return spans.flatMap { splitLinks(it) }
+}
+
+/** Split a PLAIN or CODE span into PLAIN/CODE + LINK sub-spans on detected file paths.
+ *  Other kinds (BOLD/ITALIC/already-LINK) pass through unchanged. */
+private fun splitLinks(span: MdSpan): List<MdSpan> {
+    if (span.kind != SpanStyleKind.PLAIN && span.kind != SpanStyleKind.CODE) return listOf(span)
+    val matches = findFilePathRefs(span.text)
+    if (matches.isEmpty()) return listOf(span)
+    val out = mutableListOf<MdSpan>()
+    var cursor = 0
+    for (m in matches) {
+        if (m.start > cursor) out.add(MdSpan(span.text.substring(cursor, m.start), span.kind))
+        out.add(MdSpan(span.text.substring(m.start, m.end), SpanStyleKind.LINK, m.ref))
+        cursor = m.end
+    }
+    if (cursor < span.text.length) out.add(MdSpan(span.text.substring(cursor), span.kind))
+    return out
 }

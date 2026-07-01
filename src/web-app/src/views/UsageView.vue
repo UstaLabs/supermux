@@ -2,11 +2,12 @@
 import { ref, onMounted, computed } from "vue"
 import { ChevronLeft, RefreshCw } from "@lucide/vue"
 import { api } from "@/api/client"
+import { codexResetNote } from "@/lib/codex-reset"
 
 interface UsageWindow { used: number; resetsAt: string | number | null }
 interface ClaudeExtraUsage { enabled: boolean; monthlyLimit: number; usedCredits: number; currency: string }
 interface ClaudeUsage { fiveHour: UsageWindow; sevenDay: UsageWindow; sevenDaySonnet: UsageWindow; extraUsage: ClaudeExtraUsage | null }
-interface CodexUsage { plan: string; primaryWindow: UsageWindow; secondaryWindow: UsageWindow; credits: { hasCredits: boolean; balance: string } | null; limitReached: boolean }
+interface CodexUsage { plan: string; primaryWindow: UsageWindow; secondaryWindow: UsageWindow; credits: { hasCredits: boolean; balance: string } | null; limitReached: boolean; resetCredits: number }
 interface CursorUsage { totalPercentUsed: number; totalSpendCents: number; includedCents: number; limitCents: number; billingCycleStart: string; billingCycleEnd: string }
 interface OpenCodeUsage { sessions: number; messages: number; totalCostUsd: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
 interface UsageResponse { claude: ClaudeUsage | null; codex: CodexUsage | null; cursor: CursorUsage | null; opencode: OpenCodeUsage | null; errors: Record<string, string> }
@@ -72,6 +73,26 @@ const codex = computed(() => data.value?.codex ?? null)
 const cursor = computed(() => data.value?.cursor ?? null)
 const opencode = computed(() => data.value?.opencode ?? null)
 const errors = computed(() => data.value?.errors ?? {})
+
+const confirmingReset = ref(false)
+const redeeming = ref(false)
+const resetNote = ref<string | null>(null)
+
+async function useReset() {
+  redeeming.value = true
+  resetNote.value = null
+  try {
+    const res = await api.redeemCodexReset()
+    if (res.codex && data.value) data.value.codex = res.codex as CodexUsage
+    else await refresh()
+    resetNote.value = codexResetNote(res.code, res.windowsReset)
+  } catch (e: any) {
+    resetNote.value = e?.message ?? "Reset failed"
+  } finally {
+    redeeming.value = false
+    confirmingReset.value = false
+  }
+}
 </script>
 
 <template>
@@ -201,6 +222,37 @@ const errors = computed(() => data.value?.errors ?? {})
                 <span class="text-muted-foreground">Credits balance</span>
                 <span>${{ codex.credits.balance }}</span>
               </div>
+            </div>
+            <!-- Banked rate-limit resets -->
+            <div class="pt-2 mt-2 border-t border-border">
+              <div class="flex items-center justify-between text-xs">
+                <span class="text-muted-foreground">🎟️ Resets banked</span>
+                <span>{{ codex.resetCredits }}</span>
+              </div>
+              <div v-if="codex.resetCredits > 0" class="mt-2">
+                <button
+                  v-if="!confirmingReset"
+                  @click="confirmingReset = true"
+                  :disabled="redeeming"
+                  class="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-muted transition disabled:opacity-50"
+                >Use a reset</button>
+                <div v-else class="flex items-center gap-2">
+                  <button
+                    @click="useReset"
+                    :disabled="redeeming"
+                    class="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 transition disabled:opacity-50 flex items-center gap-1.5"
+                  >
+                    <RefreshCw v-if="redeeming" class="size-3.5 animate-spin" />
+                    Confirm · spends 1 of {{ codex.resetCredits }}
+                  </button>
+                  <button
+                    @click="confirmingReset = false"
+                    :disabled="redeeming"
+                    class="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-muted transition disabled:opacity-50"
+                  >Cancel</button>
+                </div>
+              </div>
+              <p v-if="resetNote" class="text-[11px] text-muted-foreground mt-2">{{ resetNote }}</p>
             </div>
           </template>
           <p v-else class="text-xs text-muted-foreground">{{ errors.codex || 'Not available' }}</p>

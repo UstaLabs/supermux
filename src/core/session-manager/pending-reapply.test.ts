@@ -6,8 +6,7 @@ test("shouldDeferReapply: defer only when busy and not applyNow", () => {
   expect(shouldDeferReapply("idle", true)).toBe(false)
   expect(shouldDeferReapply("thinking", false)).toBe(true)
   expect(shouldDeferReapply("running", false)).toBe(true)
-  expect(shouldDeferReapply("sending", false)).toBe(true)
-  expect(shouldDeferReapply("stalled", false)).toBe(true)
+  expect(shouldDeferReapply("dead", false)).toBe(true)
   expect(shouldDeferReapply("thinking", true)).toBe(false) // applyNow overrides
 })
 

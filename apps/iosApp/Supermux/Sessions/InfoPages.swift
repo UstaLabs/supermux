@@ -398,6 +398,9 @@ struct UsageView: View {
     let broker: BrokerSession
     @State private var data: UsageResponse?
     @State private var loading = true
+    @State private var redeeming = false
+    @State private var showResetConfirm = false
+    @State private var resetNote: String? = nil
 
     var body: some View {
         ScrollView {
@@ -432,6 +435,31 @@ struct UsageView: View {
         loading = false
     }
 
+    /// Redeem one banked Codex rate-limit reset, then refresh the card. Gated behind the
+    /// confirmationDialog above; mirrors the web UsageView handler.
+    private func useReset() async {
+        redeeming = true
+        defer { redeeming = false; showResetConfirm = false }
+        let res = await broker.redeemCodexReset()
+        if let res {
+            resetNote = codexResetNote(res.code, Int(res.windowsReset))
+            await load()
+        } else {
+            resetNote = "Reset failed"
+        }
+    }
+
+    /// Map a redeem result `code` to a short user-facing note (web/Android parity).
+    private func codexResetNote(_ code: String, _ windows: Int) -> String {
+        switch code {
+        case "reset": return "✓ Reset — cleared \(windows) window\(windows == 1 ? "" : "s")"
+        case "nothing_to_reset": return "Nothing to reset right now"
+        case "no_credit": return "No banked resets left"
+        case "already_redeemed": return "That reset was already redeemed"
+        default: return "Reset request completed"
+        }
+    }
+
     @ViewBuilder private func claudeCard(_ u: ClaudeUsage?, err: String?) -> some View {
         UsageCard(title: "Claude", subtitle: "Pro plan", dimmed: u == nil) {
             if let u {
@@ -454,6 +482,25 @@ struct UsageView: View {
                 usageBar("7-day window", u.secondaryWindow.used, reset: resetCodex(u.secondaryWindow.resetsAt))
                 if let c = u.credits, c.hasCredits {
                     Divider(); rowLine("Credits balance", "$\(c.balance)")
+                }
+                Divider()
+                rowLine("🎟️ Resets banked", "\(u.resetCredits)")
+                if u.resetCredits > 0 {
+                    Button("Use a reset") { showResetConfirm = true }
+                        .buttonStyle(.bordered).controlSize(.small).tint(Theme.teal)
+                        .disabled(redeeming)
+                        .confirmationDialog("Use a banked reset?", isPresented: $showResetConfirm,
+                                            titleVisibility: .visible) {
+                            Button("Use a reset (spends 1 of \(u.resetCredits))") {
+                                Task { await useReset() }
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("Spends one of your banked Codex resets to clear your rate-limit windows now.")
+                        }
+                }
+                if let note = resetNote {
+                    Text(note).font(.caption2).foregroundStyle(.secondary)
                 }
             } else { unavailable(err) }
         }
@@ -573,6 +620,11 @@ struct ArchivedView: View {
     let broker: BrokerSession
     @State private var items: [ArchivedDto] = []
     @State private var loading = true
+    @State private var projectFilter: String? = nil
+
+    private var projects: [ArchivedProject] { archivedProjects(sessions: items, home: nil) }
+    private var visible: [ArchivedDto] { filterArchivedByProject(sessions: items, key: projectFilter) }
+
     var body: some View {
         Group {
             if loading && items.isEmpty {
@@ -581,7 +633,7 @@ struct ArchivedView: View {
                 ContentUnavailableView("No archived sessions", systemImage: "archivebox")
             } else {
                 List {
-                    ForEach(items, id: \.id) { a in
+                    ForEach(visible, id: \.id) { a in
                         NavigationLink { ArchivedChatView(broker: broker, archived: a) } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 HStack(alignment: .firstTextBaseline) {
@@ -589,7 +641,8 @@ struct ArchivedView: View {
                                     Spacer(minLength: 6)
                                     Text(a.agent).font(.caption2).foregroundStyle(Theme.teal.opacity(0.8))
                                 }
-                                Text(formatWorkdir(workdir: a.workdir, home: inferHomeDir(workdir: a.workdir)))
+                                let projectPath = a.repo_root ?? a.workdir
+                                Text(formatWorkdir(workdir: projectPath, home: inferHomeDir(workdir: projectPath)))
                                     .font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(1)
                                 if let k = a.killed_at {
                                     Text("Archived \(archivedDate(k))").font(.caption2).foregroundStyle(.tertiary)
@@ -599,6 +652,9 @@ struct ArchivedView: View {
                         .swipeActions {
                             Button("Resume") {
                                 broker.resume(a.id); items.removeAll { $0.id == a.id }
+                                if let f = projectFilter, !items.contains(where: { ($0.repo_root ?? $0.workdir) == f }) {
+                                    projectFilter = nil
+                                }
                             }.tint(Theme.teal)
                         }
                     }
@@ -606,6 +662,25 @@ struct ArchivedView: View {
             }
         }
         .navigationTitle("Archived").navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                if !items.isEmpty {
+                    Menu {
+                        Picker("Filter by project", selection: $projectFilter) {
+                            Text("All projects").tag(String?.none)
+                            ForEach(projects, id: \.key) { p in
+                                Text("\(p.label) (\(p.count))").tag(String?.some(p.key))
+                            }
+                        }
+                    } label: {
+                        Image(systemName: projectFilter == nil
+                            ? "line.3.horizontal.decrease.circle"
+                            : "line.3.horizontal.decrease.circle.fill")
+                            .accessibilityLabel(projectFilter == nil ? "Filter by project" : "Filter active")
+                    }
+                }
+            }
+        }
         .task { items = await broker.archived(); loading = false }
     }
 }

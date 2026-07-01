@@ -150,12 +150,18 @@ class MainActivity : ComponentActivity() {
                 val messages by vm.messages.collectAsStateWithLifecycle()
                 val activity by vm.activity.collectAsStateWithLifecycle()
                 val agentState by vm.agentState.collectAsStateWithLifecycle()
+                val pendingSend by vm.pendingSend.collectAsStateWithLifecycle()
                 val commands by vm.commands.collectAsStateWithLifecycle()
                 val commandsResolved by vm.commandsResolved.collectAsStateWithLifecycle()
                 val lastBySession = messages.mapValues { it.value.lastOrNull() }
                 var selected by rememberSaveable { mutableStateOf<String?>(null) }
                 val liveSessionIds = remember(sessions) { sessions.map { it.id }.toSet() }
                 val (visitedSessions, removeVisited) = rememberVisitedSessions(selected, liveSessionIds)
+                // A session resumed from archive arrives via `session_added` (no history), so its
+                // transcript would be empty until the next snapshot/restart. Seed it whenever a chat
+                // is opened — a no-op for sessions the snapshot already populated. (iOS parity:
+                // ChatPane.loadPane → BrokerSession.ensureMessagesLoaded.)
+                LaunchedEffect(selected) { selected?.let { vm.ensureMessagesLoaded(it) } }
 
                 val windowSizeClass = calculateWindowSizeClass(this)
                 val expanded = windowSizeClass.widthSizeClass == WindowWidthSizeClass.Expanded
@@ -226,6 +232,7 @@ class MainActivity : ComponentActivity() {
                                         messages = messages,
                                         activityMap = activity,
                                         agentState = agentState,
+                                        pendingSend = pendingSend,
                                         commands = commands,
                                         commandsResolved = commandsResolved,
                                         vm = vm,
@@ -245,6 +252,7 @@ class MainActivity : ComponentActivity() {
                                 messages = messages,
                                 activityMap = activity,
                                 agentState = agentState,
+                                pendingSend = pendingSend,
                                 commands = commands,
                                 commandsResolved = commandsResolved,
                                 lastBySession = lastBySession,
@@ -292,6 +300,9 @@ class MainActivity : ComponentActivity() {
                                         cloneForge = { cid, owner, name -> vm.cloneForge(cid, owner, name) },
                                         createLocalRepo = { vm.createLocalRepo(it) },
                                         createForge = { cid, name -> vm.createForge(cid, name) },
+                                        loadGlossary = { vm.fetchGlossary() },
+                                        transcribeDraft = { draft -> vm.transcribeDraft(null, draft) },
+                                        transcribeAudio = { bytes, name -> vm.transcribeAudio(null, bytes, name) },
                                         onSubmit = { wd, ag, md, msg, wt, base ->
                                             vm.createSessionWithFirstMessage(wd, ag, md, msg, worktree = wt, baseBranch = base)
                                         },
@@ -313,6 +324,9 @@ class MainActivity : ComponentActivity() {
                                 cloneForge = { cid, owner, name -> vm.cloneForge(cid, owner, name) },
                                 createLocalRepo = { vm.createLocalRepo(it) },
                                 createForge = { cid, name -> vm.createForge(cid, name) },
+                                loadGlossary = { vm.fetchGlossary() },
+                                transcribeDraft = { draft -> vm.transcribeDraft(null, draft) },
+                                transcribeAudio = { bytes, name -> vm.transcribeAudio(null, bytes, name) },
                                 onSubmit = { wd, ag, md, msg, wt, base ->
                                     vm.createSessionWithFirstMessage(wd, ag, md, msg, worktree = wt, baseBranch = base)
                                 },
@@ -366,7 +380,11 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                     composable<Usage> {
-                        UsageScreen(onBack = { navController.popBackStack() }, onLoad = { vm.usage() })
+                        UsageScreen(
+                            onBack = { navController.popBackStack() },
+                            onLoad = { vm.usage() },
+                            onRedeem = { vm.redeemCodexReset() },
+                        )
                     }
                     composable<Devices> {
                         DevicesScreen(
@@ -380,6 +398,7 @@ class MainActivity : ComponentActivity() {
                             onBack = { navController.popBackStack() },
                             onLoad = { vm.archived() },
                             onResume = { vm.resume(it) },
+                            home = DevConfig.HOME,
                             loadLogs = { vm.archivedLogs(it) },
                         )
                     }
@@ -441,6 +460,7 @@ private fun PhoneNavHost(
     messages: Map<String, List<LogEntry>>,
     activityMap: Map<String, List<ActivityEvent>>,
     agentState: Map<String, AgentStatus?>,
+    pendingSend: Set<String> = emptySet(),
     commands: Map<String, List<SlashCommand>>,
     commandsResolved: Map<String, Boolean>,
     lastBySession: Map<String, LogEntry?>,
@@ -458,6 +478,7 @@ private fun PhoneNavHost(
         messages = messages,
         activityMap = activityMap,
         agentState = agentState,
+        pendingSend = pendingSend,
         commands = commands,
         commandsResolved = commandsResolved,
         lastBySession = lastBySession,

@@ -80,6 +80,7 @@ data class ArchivedDto(
     val workdir: String = "",
     val agent: String = "claude",
     val killed_at: String? = null,
+    val repo_root: String? = null,
 )
 
 @Serializable
@@ -210,6 +211,7 @@ data class CodexUsage(
     val secondaryWindow: CodexWindow = CodexWindow(),
     val credits: CodexCredits? = null,
     val limitReached: Boolean = false,
+    val resetCredits: Int = 0,
 )
 
 @Serializable
@@ -240,6 +242,16 @@ data class UsageResponse(
     val cursor: CursorUsage? = null,
     val opencode: OpenCodeUsage? = null,
     val errors: Map<String, String> = emptyMap(),
+)
+
+// Result of redeeming a banked Codex rate-limit reset (POST /usage/codex/reset).
+// `code` ∈ reset | nothing_to_reset | no_credit | already_redeemed; `codex` is the
+// refreshed usage so the card can update in place.
+@Serializable
+data class CodexResetResult(
+    val code: String = "",
+    val windowsReset: Int = 0,
+    val codex: CodexUsage? = null,
 )
 
 // ─── Git status + finish (chat header) ───────────────────────────────────────
@@ -311,6 +323,7 @@ data class FinishReadiness(
     val conflictPreflight: String = "unknown", // "clean" | "will_conflict" | "unknown"
     val recommended: String = "merge",         // "merge" | "pr"
     val nothingToLand: Boolean = false,
+    val prRequiresGreen: Boolean = false,
 )
 
 /** POST /sessions/<id>/verify/suggest → suggested verify command/content + its source. */
@@ -1158,6 +1171,10 @@ class BrokerApi(
     /** GET /usage → typed per-provider usage (Claude / Codex / Cursor / opencode) */
     suspend fun usage(): UsageResponse = getJson("$httpBase/usage")
 
+    /** POST /usage/codex/reset → redeem one banked Codex rate-limit reset. */
+    suspend fun redeemCodexReset(): CodexResetResult =
+        postReturningJson("$httpBase/usage/codex/reset", EmptyBody())
+
     /** GET /devices */
     suspend fun devices(): List<DeviceDto> =
         getJson("$httpBase/devices")
@@ -1325,17 +1342,20 @@ class BrokerApi(
 
     // ── Voice dictation (transcribe + cleanup glossary) ──────────────────────────
 
-    /** POST /sessions/<id>/transcribe — JSON { draft } → cleaned text. (on-device-STT path) */
-    suspend fun transcribeDraft(sessionId: String, draft: String): TranscribeResponse =
-        postReturningJson("$httpBase/sessions/$sessionId/transcribe", DraftBody(draft))
+    /** POST {/sessions/<id>,}/transcribe — JSON { draft } → cleaned text. (on-device-STT path)
+     *  `sessionId` is OPTIONAL: null/blank (e.g. the pre-spawn launcher) posts to the id-less
+     *  `/transcribe`; the session only enriches cleanup context server-side, it isn't required. */
+    suspend fun transcribeDraft(sessionId: String?, draft: String): TranscribeResponse =
+        postReturningJson(transcribePath(sessionId), DraftBody(draft))
 
-    /** POST /sessions/<id>/transcribe — multipart field "audio" → cleaned text. (whisper path)
+    /** POST {/sessions/<id>,}/transcribe — multipart field "audio" → cleaned text. (whisper path)
      *  Mirrors `upload()`'s multipart shape; field name is "audio" (NOT "file"), and there is
-     *  no `kind`/`session` part — the route derives the session from the URL. */
+     *  no `kind`/`session` part — the route derives the session from the URL (or none).
+     *  `sessionId` is OPTIONAL (see [transcribeDraft]). */
     suspend fun transcribeAudio(
-        sessionId: String, bytes: ByteArray, filename: String, mime: String = "audio/mp4",
+        sessionId: String?, bytes: ByteArray, filename: String, mime: String = "audio/mp4",
     ): TranscribeResponse {
-        val resp = http.post("$httpBase/sessions/$sessionId/transcribe") {
+        val resp = http.post(transcribePath(sessionId)) {
             header(HttpHeaders.Authorization, "Bearer $token")
             setBody(MultiPartFormDataContent(formData {
                 append("audio", bytes, Headers.build {
@@ -1346,6 +1366,12 @@ class BrokerApi(
         }
         return decode(resp)
     }
+
+    /** Cleanup endpoint URL — id-less `/transcribe` when [sessionId] is null/blank, else
+     *  `/sessions/<id>/transcribe`. The session id is never required (it only adds context). */
+    private fun transcribePath(sessionId: String?): String =
+        if (sessionId.isNullOrBlank()) "$httpBase/transcribe"
+        else "$httpBase/sessions/$sessionId/transcribe"
 
     /** GET /config/voice-glossary → the glossary terms (default-seeded server-side). */
     suspend fun fetchGlossary(): List<String> =

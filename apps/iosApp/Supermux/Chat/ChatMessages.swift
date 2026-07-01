@@ -6,6 +6,8 @@ import QuickLook
 struct MessageRow: View {
     let entry: LogEntry
     let broker: BrokerSession
+    let sessionId: String
+    let workdir: String
     private var isAgent: Bool { entry.direction.hasPrefix("out") }
 
     var body: some View {
@@ -13,7 +15,10 @@ struct MessageRow: View {
             let text = entry.text ?? ""
             if !text.isEmpty {
                 if isAgent {
-                    MarkdownView(text: text).font(.subheadline)
+                    MarkdownView(text: text, onOpenFile: { ref in
+                        broker.openFileFromMessage(sessionId: sessionId, workdir: workdir, ref: ref)
+                    })
+                        .font(.subheadline)
                         .transcriptBody()
                 } else {
                     Text(text).font(.subheadline.weight(.medium))

@@ -3,10 +3,14 @@ import { ref, watch, onMounted, onUnmounted, onActivated, nextTick, toRef } from
 import { Terminal } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import { WebLinksAddon } from "@xterm/addon-web-links"
+import { WebglAddon } from "@xterm/addon-webgl"
 import { ClipboardPaste } from "lucide-vue-next"
 import "@xterm/xterm/css/xterm.css"
 import { useTerminal } from "@/composables/useTerminal"
 import { linesFromPixels, wheelEventsFromLines } from "@/lib/touch-scroll"
+import { PredictionEngine } from "@/lib/predictive-echo/engine"
+import { XtermPredictionAdapter } from "@/lib/predictive-echo/xterm-adapter"
+import { decodeInput, DEFAULT_CONFIG } from "@/lib/predictive-echo/types"
 
 const props = defineProps<{
   sessionName: string
@@ -23,6 +27,15 @@ let term: Terminal | null = null
 let fitAddon: FitAddon | null = null
 let ro: ResizeObserver | null = null
 let lastSentSize: { cols: number; rows: number } | null = null
+
+let predictor: PredictionEngine | null = null
+let predAdapter: XtermPredictionAdapter | null = null
+// performance.now() of the last keystroke still awaiting its echo (0 = none).
+// Feeds the latency gate from a real keystroke→echo measurement, INDEPENDENTLY
+// of the prediction path — without this the gate could never open: latency
+// starts at 0, predictions need latency ≥ threshold, and latency was otherwise
+// only ever learned from confirmed predictions (which need the gate already open).
+let lastKeyAt = 0
 
 // Touch-drag scrolling. xterm v6 ships a gesture engine but never registers the
 // terminal as a target, so finger swipes are ignored; we drive scrollLines()
@@ -159,10 +172,30 @@ onMounted(() => {
   term.loadAddon(new WebLinksAddon())
 
   term.open(containerRef.value)
+
+  // GPU renderer. Must load AFTER open(). xterm falls back to its DOM renderer
+  // automatically if we never attach a renderer addon, so any failure here
+  // (no WebGL2, context creation refused, addon throws) must be swallowed — a
+  // missing GPU path is a perf regression, never a broken terminal.
+  try {
+    const webgl = new WebglAddon()
+    // The browser can drop the GL context (OOM, tab backgrounded, GPU reset).
+    // Dispose on loss so xterm reverts to the DOM renderer instead of freezing.
+    webgl.onContextLoss(() => { try { webgl.dispose() } catch {} })
+    term.loadAddon(webgl)
+  } catch { /* no WebGL2 → DOM renderer stays */ }
+
   fit()
 
-  // Pipe terminal input → WS
+  // Predictive local echo: pure-logic engine + xterm dim-render adapter.
+  predictor = new PredictionEngine(DEFAULT_CONFIG, () => performance.now())
+  predAdapter = new XtermPredictionAdapter(term)
+
+  // Pipe terminal input → WS (+ predictive local echo: show the keystroke instantly
+  // and advance the caret — the engine emits caret-aware ops, the adapter renders them).
   term.onData((data) => {
+    if (predictor && predAdapter) predAdapter.render(predictor.onInput(decodeInput(data), predAdapter.cursor()))
+    lastKeyAt = performance.now() // mark for the keystroke→echo RTT measured below
     const encoder = new TextEncoder()
     terminal.sendInput(encoder.encode(data))
   })
@@ -176,9 +209,26 @@ onMounted(() => {
   // in Firefox). For touch devices, the explicit paste button below is the
   // reliable fallback.
 
-  // Pipe WS binary → terminal
+  // Pipe WS binary → terminal. The engine reconciles predictions against the
+  // authoritative bytes and orchestrates ALL writes: the server bytes flow back out
+  // inside `passthrough` ops (confirmed echoes paint over their dim cells = confirm),
+  // interleaved with caret moves and rollbacks. So there is no separate term.write
+  // here — render(onServerData) does it. Only if the predictor is gone (teardown)
+  // do we write the bytes directly.
   terminal.onData((data: Uint8Array) => {
-    term?.write(data)
+    // Coarse keystroke→echo RTT drives the latency gate. Deliberately rough: the
+    // first server byte after a keystroke may be unrelated output, and during
+    // rapid typing only the most recent keystroke is timed (a slight underestimate
+    // that biases conservatively, toward not predicting). The engine's EWMA and
+    // threshold absorb the noise; a stray low sample just declines to predict for
+    // a beat. The point is that this runs even while predictions are inert, which
+    // is what lets the gate open in the first place.
+    if (predictor && lastKeyAt > 0) {
+      predictor.setLatencyEstimate(performance.now() - lastKeyAt)
+      lastKeyAt = 0
+    }
+    if (predictor && predAdapter) predAdapter.render(predictor.onServerData(data))
+    else term?.write(data)
   })
 
   // Handle session exit — the shell/tmux session actually ended (a detach does
@@ -216,6 +266,8 @@ onUnmounted(() => {
     touchSurface = null
   }
   terminal.disconnect()
+  predictor = null
+  predAdapter = null
   term?.dispose()
   term = null
   fitAddon = null

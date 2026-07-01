@@ -69,11 +69,15 @@ import androidx.core.content.FileProvider
 import java.io.File
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -83,6 +87,7 @@ import dev.supermux.android.theme.Radii
 import dev.supermux.android.theme.Space
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.LogEntry
+import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.MdBlock
 import dev.supermux.ui.SpanStyleKind
 import dev.supermux.ui.parseInlineMarkdown
@@ -161,21 +166,39 @@ fun mergeTimeline(
  *       [FencedCodeBlock] composables instead of inline spans.
  */
 @Composable
-fun mdAnnotated(text: String): AnnotatedString = buildAnnotatedString {
-    text.split("\n").forEachIndexed { i, line ->
-        if (i > 0) append("\n")
-        for (s in parseInlineMarkdown(line)) {
-            when (s.kind) {
-                SpanStyleKind.BOLD -> withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(s.text) }
-                SpanStyleKind.ITALIC -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(s.text) }
-                SpanStyleKind.CODE -> withStyle(
-                    SpanStyle(
-                        fontFamily = MonoFontFamily,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Normal,
-                    )
-                ) { append(s.text) }
-                SpanStyleKind.PLAIN -> append(s.text)
+fun mdAnnotated(
+    text: String,
+    onOpenFile: (FilePathRef) -> Unit = {},
+    linkify: Boolean = false,
+): AnnotatedString {
+    val linkColor = MaterialTheme.colorScheme.primary
+    return buildAnnotatedString {
+        text.split("\n").forEachIndexed { i, line ->
+            if (i > 0) append("\n")
+            for (s in parseInlineMarkdown(line)) {
+                when (s.kind) {
+                    SpanStyleKind.BOLD -> withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(s.text) }
+                    SpanStyleKind.ITALIC -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(s.text) }
+                    SpanStyleKind.CODE -> withStyle(
+                        SpanStyle(
+                            fontFamily = MonoFontFamily,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Normal,
+                        )
+                    ) { append(s.text) }
+                    SpanStyleKind.LINK -> {
+                        val ref = s.ref
+                        if (ref == null || !linkify) append(s.text) else withLink(
+                            LinkAnnotation.Clickable(
+                                tag = "file:${ref.path}",
+                                styles = TextLinkStyles(
+                                    style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)
+                                ),
+                            ) { onOpenFile(ref) }
+                        ) { append(s.text) }
+                    }
+                    SpanStyleKind.PLAIN -> append(s.text)
+                }
             }
         }
     }
@@ -254,12 +277,14 @@ fun FencedCodeBlock(code: String) {
  * Code: FencedCodeBlock composable (mono, horizontal scroll, left accent).
  */
 @Composable
-fun AssistantMessage(text: String) {
+fun AssistantMessage(text: String, onOpenFile: (FilePathRef) -> Unit = {}) {
     MarkdownBody(
         text = text,
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = Space.xs),
+        onOpenFile = onOpenFile,
+        linkify = true,
     )
 }
 
@@ -270,7 +295,7 @@ fun AssistantMessage(text: String) {
  * [FencedCodeBlock]. Keep all markdown surfaces routed through this so they never drift.
  */
 @Composable
-fun MarkdownBody(text: String, modifier: Modifier = Modifier) {
+fun MarkdownBody(text: String, modifier: Modifier = Modifier, onOpenFile: (FilePathRef) -> Unit = {}, linkify: Boolean = false) {
     val cs = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
     val blocks = parseMarkdownBlocks(text)
@@ -283,7 +308,7 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier) {
                 is MdBlock.Prose -> {
                     if (block.text.isNotBlank()) {
                         Text(
-                            text = mdAnnotated(block.text),
+                            text = mdAnnotated(block.text, onOpenFile, linkify = linkify),
                             color = cs.onSurface,
                             style = typography.bodyLarge,
                             modifier = Modifier.fillMaxWidth(),
@@ -292,7 +317,7 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier) {
                 }
                 is MdBlock.Code -> FencedCodeBlock(block.code)
                 is MdBlock.Heading -> Text(
-                    text = mdAnnotated(block.text),
+                    text = mdAnnotated(block.text, onOpenFile, linkify = linkify),
                     color = cs.onSurface,
                     style = when (block.level) {
                         1 -> typography.titleLarge
@@ -314,7 +339,7 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier) {
                             .background(cs.primary.copy(alpha = 0.5f)),
                     )
                     Text(
-                        text = mdAnnotated(block.text),
+                        text = mdAnnotated(block.text, onOpenFile, linkify = linkify),
                         color = cs.onSurfaceVariant,
                         style = typography.bodyLarge,
                     )
@@ -325,7 +350,7 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier) {
                 ) {
                     Text("•", color = cs.onSurfaceVariant, style = typography.bodyLarge)
                     Text(
-                        text = mdAnnotated(block.text),
+                        text = mdAnnotated(block.text, onOpenFile, linkify = linkify),
                         color = cs.onSurface,
                         style = typography.bodyLarge,
                         modifier = Modifier.weight(1f),
@@ -337,7 +362,7 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier) {
                 ) {
                     Text("${block.n}.", color = cs.onSurfaceVariant, style = typography.bodyLarge)
                     Text(
-                        text = mdAnnotated(block.text),
+                        text = mdAnnotated(block.text, onOpenFile, linkify = linkify),
                         color = cs.onSurface,
                         style = typography.bodyLarge,
                         modifier = Modifier.weight(1f),
@@ -605,7 +630,11 @@ fun ReasoningLine(event: ActivityEvent) {
 
 /** Dispatches a single TimelineItem to the correct composable. */
 @Composable
-fun TimelineItemRow(item: TimelineItem, loadBytes: suspend (String) -> ByteArray? = { null }) {
+fun TimelineItemRow(
+    item: TimelineItem,
+    loadBytes: suspend (String) -> ByteArray? = { null },
+    onOpenFile: (FilePathRef) -> Unit = {},
+) {
     when (item) {
         is TimelineItem.Msg -> {
             // Local vals avoid cross-module smart-cast restriction on nullable fields
@@ -618,7 +647,7 @@ fun TimelineItemRow(item: TimelineItem, loadBytes: suspend (String) -> ByteArray
                     horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
                 ) {
                     if (!text.isNullOrBlank()) {
-                        if (isUser) UserMessage(text) else AssistantMessage(text)
+                        if (isUser) UserMessage(text) else AssistantMessage(text, onOpenFile)
                     }
                     if (!atts.isNullOrEmpty()) AttachmentList(atts, isUser, loadBytes)
                 }

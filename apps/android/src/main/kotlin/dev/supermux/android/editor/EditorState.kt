@@ -15,6 +15,7 @@ class EditorTab(path: String, content: String) {
     var content by mutableStateOf(content)
     var savedContent by mutableStateOf(content)
     var scrollTop by mutableStateOf(0)
+    var revealLine by mutableStateOf<Pair<Int, Int?>?>(null)
 }
 
 class EditorState(
@@ -79,6 +80,25 @@ class EditorState(
                     loadError = err.message ?: "Could not open file"
                     loadingPath = null
                 }
+        }
+    }
+
+    /** Open [path] and, once present, request a scroll to [line] (1-indexed). */
+    fun openFileAtLine(path: String, line: Int?, endLine: Int?) {
+        openFile(path)
+        // openFile may add the tab synchronously (cache hit) or after fsRead; set on the tab
+        // when it exists, else stash on a fresh open via a one-shot.
+        val tab = tabs.find { it.path == path }
+        if (line != null) {
+            if (tab != null) tab.revealLine = line to endLine
+            else scope.launch {
+                // tab arrives after fsRead completes; poll the state list briefly.
+                repeat(50) {
+                    val t = tabs.find { it.path == path }
+                    if (t != null) { t.revealLine = line to endLine; return@launch }
+                    kotlinx.coroutines.delay(20)
+                }
+            }
         }
     }
 

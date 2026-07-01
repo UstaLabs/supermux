@@ -146,6 +146,10 @@ struct ChatPane: View {
 
     /// (Re)load per-session state owned by this pane. Called on first open and session switch.
     private func loadPane() {
+        // Seed the transcript if we don't have it yet — a session resumed from archive arrives
+        // via `session_added` (no history), so without this its chat would be empty until the
+        // next snapshot/restart. No-op for sessions the snapshot already populated.
+        Task { await broker.ensureMessagesLoaded(session.id) }
         Task { reasoning = await broker.reasoning(session.id) }
         Task { await composer.loadGlossary() }
     }
@@ -379,9 +383,8 @@ struct SessionTranscript: View, Equatable {
 
     private var log: [LogEntry] { broker.messages[session.id] ?? [] }
     private var phase: String? { broker.agentPhase[session.id] }
-    private var working: Bool {
-        ["working", "thinking", "running", "tool", "busy", "sending"].contains(phase ?? "")
-    }
+    private var working: Bool { broker.agentWorking[session.id] == true }
+    private var sending: Bool { broker.pendingSend.contains(session.id) }
     private var activityEvents: [ActivityEvent] { broker.activity[session.id] ?? [] }
     /// Messages + tool-call activity, time-merged into blocks (parity with the web ChatView).
     private var blocks: [ChatBlock] { buildChatBlocks(messages: log, activity: activityEvents) }
@@ -399,7 +402,8 @@ struct SessionTranscript: View, Equatable {
                     ForEach(blocks) { block in
                         Group {
                             switch block {
-                            case .message(let m): MessageRow(entry: m, broker: broker)
+                            case .message(let m): MessageRow(entry: m, broker: broker,
+                                                             sessionId: session.id, workdir: session.workdir)
                             case .tools(let rows):
                                 VStack(alignment: .leading, spacing: 4) {
                                     ForEach(rows) { ToolRowView(row: $0) }
@@ -412,6 +416,11 @@ struct SessionTranscript: View, Equatable {
                     }
                     if working {
                         workingIndicator
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                            .listRowBackground(Color.clear)
+                    } else if sending {
+                        sendingIndicator
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
                             .listRowBackground(Color.clear)
@@ -452,7 +461,7 @@ struct SessionTranscript: View, Equatable {
 
     private var workingIndicator: some View {
         TimelineView(.periodic(from: .now, by: 1)) { _ in
-            let since = broker.agentSince[session.id]
+            let since = broker.agentWorkingSince[session.id]
             let elapsed = since.map { max(0, Int64(Date().timeIntervalSince1970 - Double($0) / 1000.0)) }
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
@@ -474,11 +483,30 @@ struct SessionTranscript: View, Equatable {
         }
     }
     private var workingLabel: String {
-        switch phase {
-        case "sending": return "Sending…"
-        case "thinking": return "Thinking…"
-        default: return "Working…"
+        switch broker.agentDetail[session.id] {
+        case "running": return "Working…"
+        default: return "Thinking…"
         }
+    }
+
+    private var sendingIndicator: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("Sending…")
+                .font(.caption).foregroundStyle(.secondary)
+            Button { broker.interrupt(session.id) } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "stop.fill").font(.caption2)
+                    Text("Stop").font(.caption.weight(.medium))
+                }
+                .foregroundStyle(.red)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(Color.red.opacity(0.12), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var starterPrompts: some View {

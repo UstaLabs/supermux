@@ -15,7 +15,7 @@ export function buildDomainIndex(domainsDir: string): string {
   if (!existsSync(domainsDir)) return "- (no domains yet)"
 
   const files = readdirSync(domainsDir).filter(
-    (f) => f.endsWith(".md") && f !== "_inbox.md"
+    (f) => f.endsWith(".md") && f !== "_inbox.md" && !f.endsWith(".digest.md")
   )
 
   if (files.length === 0) return "- (no domains yet)"

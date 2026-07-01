@@ -124,7 +124,7 @@ export const useWS = defineStore("ws", () => {
     else if   (frame.type === "draft_clear")      drafts.applyRemote(frame.session, "")
     else if   (frame.type === "message_append")   messages.append(frame.session, frame.entry)
     else if   (frame.type === "activity_append")  activity.append(frame.session, frame.event)
-    else if   (frame.type === "agent_state")      agentState.set(frame.session, { phase: frame.phase, tool: frame.tool, since: frame.since, workingSince: frame.workingSince })
+    else if   (frame.type === "agent_state")      agentState.set(frame.session, { state: frame.state, working: frame.working, detail: frame.detail, tool: frame.tool, since: frame.since, workingSince: frame.workingSince })
     else if   (frame.type === "agent_error")      toast.error(`${frame.session}: ${frame.errorMessage}`, { description: frame.errorType, duration: 10000 })
     else if   (frame.type === "message_update")   messages.update(frame.session, frame.entry_id, { text: frame.text, edited_at: frame.edited_at })
     else if   (frame.type === "message_reaction") messages.addReaction(frame.session, frame.entry_id, frame.emoji, frame.ts)

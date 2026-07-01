@@ -17,6 +17,11 @@ final class BrokerSession {
     private(set) var activity: [String: [ActivityEvent]] = [:]
     private(set) var agentPhase: [String: String] = [:]
     private(set) var agentSince: [String: Int64] = [:]
+    private(set) var agentWorking: [String: Bool] = [:]
+    private(set) var agentState: [String: String] = [:]       // idle | working | dead
+    private(set) var agentDetail: [String: String] = [:]      // thinking | running
+    private(set) var agentWorkingSince: [String: Int64] = [:]
+    private(set) var pendingSend: Set<String> = []            // client-local "Sending…"
     private(set) var commands: [String: [SlashCommand]] = [:]
     private(set) var displays: [DisplayStream] = []
     private(set) var finishJobs: [String: FinishJobDto] = [:]
@@ -80,6 +85,10 @@ final class BrokerSession {
             activity = s.activity
             agentPhase = s.agentState.mapValues { $0.phase }
             agentSince = s.agentState.compactMapValues { $0.since?.int64Value }
+            agentWorking = s.agentState.mapValues { $0.working }
+            agentState = s.agentState.mapValues { $0.state }
+            agentDetail = s.agentState.compactMapValues { $0.detail }
+            agentWorkingSince = s.agentState.compactMapValues { $0.workingSince?.int64Value }
             commands = s.commands
             finishJobs = Dictionary(uniqueKeysWithValues: s.sessions.compactMap { sess in sess.finish_job.map { (sess.id, $0) } })
             synced = true
@@ -120,6 +129,11 @@ final class BrokerSession {
         case .agentState(let st):
             agentPhase[st.session] = st.phase
             agentSince[st.session] = (st.since ?? st.workingSince)?.int64Value
+            agentWorking[st.session] = st.working
+            agentState[st.session] = st.state
+            if let d = st.detail { agentDetail[st.session] = d } else { agentDetail[st.session] = nil }
+            agentWorkingSince[st.session] = st.workingSince?.int64Value
+            pendingSend.remove(st.session)   // first real state clears the client-local Sending…
         case .commandsChanged(let c): commands[c.session] = c.commands
         case .fsChanged(let f): editorStates[f.session]?.markChanged(f.paths)
         case .displayAdded(let f):
@@ -171,6 +185,7 @@ final class BrokerSession {
         let frame = ClientFrameSend(session: sessionId, op: "reply",
                                     args: SendArgs(text: t, attachments: atts.isEmpty ? nil : atts))
         Task { [client] in try? await client.send(frame: frame) }
+        pendingSend.insert(sessionId)   // client-local "Sending…" until the next agent_state
     }
 
     /// Upload bytes (base64 over the wire) → file id, for composing attachments.
@@ -294,8 +309,27 @@ final class BrokerSession {
     func resume(_ id: String) { Task { [api] in try? await api.resume(id: id) } }
     func archivedLogs(_ id: String) async -> [LogEntry] { (try? await api.archivedLogs(sessionId: id)) ?? [] }
 
+    /// Lazily fetch a session's transcript when we don't already have it. The WS `snapshot`
+    /// (sent on connect) seeds `messages` for every session live at connect time, and
+    /// `message_append` keeps them current — but a session resumed from archive arrives via a
+    /// `session_added` frame, which carries NO history, so its transcript stays empty until the
+    /// next reconnect/snapshot (e.g. an app restart). Calling this on chat-open closes that gap.
+    /// Web parity: `ChatView.vue` `loadMessages()` fetches GET /sessions/:id/messages when its
+    /// store has nothing for the session — and `archivedLogs` hits that same endpoint, which
+    /// serves any session, live or archived.
+    func ensureMessagesLoaded(_ sessionId: String) async {
+        guard messages[sessionId]?.isEmpty ?? true else { return }
+        let fetched = await archivedLogs(sessionId)
+        // Re-check after the await: a live `message_append`, an optimistic send, or a fresh
+        // snapshot may have populated the buffer while the fetch was in flight — don't clobber
+        // newer state with the historical fetch.
+        guard messages[sessionId]?.isEmpty ?? true else { return }
+        if !fetched.isEmpty { messages[sessionId] = fetched }
+    }
+
     // Usage (typed), device mint/revoke, proxy privacy — mirror the web pages.
     func usage() async -> UsageResponse? { try? await api.usage() }
+    func redeemCodexReset() async -> CodexResetResult? { try? await api.redeemCodexReset() }
     func addDevice(_ name: String) async -> AddDeviceResponse? { try? await api.addDevice(name: name) }
     func revokeDevice(_ name: String) async { try? await api.revokeDevice(name: name) }
     func setProxyPublic(_ domain: String, _ isPublic: Bool) async { try? await api.setProxyPublic(domain: domain, isPublic: isPublic) }
@@ -406,9 +440,19 @@ final class BrokerSession {
 
     private struct TranscribeResponse: Decodable { let text: String; let degraded: Bool? }
 
+    /// Cleanup endpoint URL — id-less `/transcribe` when `sessionId` is nil/empty (the session
+    /// only enriches cleanup context server-side; it isn't required), else `/sessions/<id>/transcribe`.
+    private func transcribeURL(_ sessionId: String?) -> URL? {
+        if let id = sessionId, !id.isEmpty {
+            return URL(string: "\(baseURL)/sessions/\(id)/transcribe")
+        }
+        return URL(string: "\(baseURL)/transcribe")
+    }
+
     /// JSON `{ draft }` → cleaned `text`. Used for the on-device-recognition result.
-    func transcribeDraft(sessionId: String, draft: String) async throws -> String {
-        guard let url = URL(string: "\(baseURL)/sessions/\(sessionId)/transcribe") else {
+    /// `sessionId` is optional — `nil` (pre-spawn launcher) hits the id-less `/transcribe`.
+    func transcribeDraft(sessionId: String?, draft: String) async throws -> String {
+        guard let url = transcribeURL(sessionId) else {
             throw URLError(.badURL)
         }
         var req = URLRequest(url: url)
@@ -425,8 +469,9 @@ final class BrokerSession {
 
     /// Multipart (field "audio") → cleaned `text`. Fallback when on-device recognition
     /// isn't available for the device locale; the broker stores + transcribes the clip.
-    func transcribeAudio(sessionId: String, data audioData: Data, filename: String) async throws -> String {
-        guard let url = URL(string: "\(baseURL)/sessions/\(sessionId)/transcribe") else {
+    /// `sessionId` is optional — `nil` (pre-spawn launcher) hits the id-less `/transcribe`.
+    func transcribeAudio(sessionId: String?, data audioData: Data, filename: String) async throws -> String {
+        guard let url = transcribeURL(sessionId) else {
             throw URLError(.badURL)
         }
         let boundary = "Boundary-\(UUID().uuidString)"
@@ -502,6 +547,31 @@ final class BrokerSession {
     /// driving the editor's "changed on disk" banner via fs_changed frames.
     func editorOpen(_ id: String) { Task { [client] in try? await client.send(frame: ClientFrameEditorOpen(session: id)) } }
     func editorClose(_ id: String) { Task { [client] in try? await client.send(frame: ClientFrameEditorClose(session: id)) } }
+
+    // MARK: - Open a tapped file path (chat message → editor)
+    /// A chat-initiated request to bring a session's editor to the front. The nonce makes
+    /// each tap a distinct value so `.onChange` observers fire even on a repeat of the same id.
+    struct EditorFocusRequest: Equatable { let sessionId: String; let nonce: Int }
+    /// Set when a path is tapped → observed by the chat container to surface the editor.
+    var editorFocus: EditorFocusRequest?
+    /// Transient "couldn't open" message surfaced by the chat container as a banner.
+    var editorOpenError: String?
+
+    /// Resolve a tapped path against the session workdir, open it in that session's editor at
+    /// the cited line, and ask the UI to bring the editor forward. A path that resolves outside
+    /// the workdir surfaces a transient error instead (parity with Android's toast / the web).
+    func openFileFromMessage(sessionId: String, workdir: String, ref: FilePathRef) {
+        let home = inferHomeDir(workdir: workdir)
+        guard let rel = toWorkdirRelativePath(path: ref.path, workdir: workdir, homeDir: home) else {
+            editorOpenError = "File is outside this session's project"
+            return
+        }
+        // `ref.line`/`endLine` bridge as boxed `KotlinInt?`; `.intValue` is `Int32`, so map to Swift Int.
+        editorState(for: sessionId).openFileAtLine(rel,
+                                                   line: ref.line.map { Int($0.intValue) },
+                                                   endLine: ref.endLine.map { Int($0.intValue) })
+        editorFocus = EditorFocusRequest(sessionId: sessionId, nonce: (editorFocus?.nonce ?? 0) + 1)
+    }
 
     // MARK: - Editor state (one per session, cached so open tabs / tree expansion /
     // scroll survive pane AND session switches — full state preservation is required).

@@ -70,6 +70,9 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
+/** A chat-initiated request to open a workdir-relative [path] at an optional [line]. */
+data class PendingEditorOpen(val path: String, val line: Int?, val endLine: Int?)
+
 /**
  * Code editor panel: lazy file tree, multi-tab editing, filename search.
  * Tablet (Expanded): split sidebar. Phone: slide-over tree drawer.
@@ -99,6 +102,8 @@ fun EditorPanel(
     lspRpcOut: (String, String, String) -> Unit = { _, _, _ -> },
     lspClose: (String, String) -> Unit = { _, _ -> },
     onConsumesBackChange: (Boolean) -> Unit = {},
+    pendingOpen: PendingEditorOpen? = null,
+    onPendingOpenConsumed: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val c = LocalPanes.current
@@ -197,13 +202,20 @@ fun EditorPanel(
         engine.lspConnect(serverId, rootUri, fileUri, status.languageId ?: "")
     }
 
-    fun revealFile(path: String) {
+    fun revealFile(path: String, line: Int? = null, endLine: Int? = null) {
         focusManager.clearFocus()
         engine.readScrollTop { scroll -> editor.captureActiveScroll(scroll) }
-        editor.openFile(path)
+        editor.openFileAtLine(path, line, endLine)
         editor.searchQuery = ""
         searchResults.clear()
         if (!expanded) editor.treeVisible = false
+    }
+
+    LaunchedEffect(pendingOpen) {
+        pendingOpen?.let {
+            revealFile(it.path, it.line, it.endLine)
+            onPendingOpenConsumed()
+        }
     }
     val searchOpen = searchResults.isNotEmpty()
     val treeDrawerOpen = !expanded && treeVisible
@@ -429,6 +441,8 @@ fun EditorPanel(
                                 filename = activeTab?.path ?: "",
                                 fontSize = fontSize,
                                 scrollTop = activeTab?.scrollTop ?: 0,
+                                revealLine = activeTab?.revealLine,
+                                onRevealConsumed = { activeTab?.revealLine = null },
                                 onChange = { content ->
                                     activeTab?.path?.let { editor.updateContent(it, content) }
                                 },

@@ -5,15 +5,13 @@ import { toast } from "vue-sonner"
 import { useMediaRecorder, type RecordedClip } from "@/composables/useMediaRecorder"
 import { useWaveform } from "@/composables/useWaveform"
 import { useTranscriber } from "@/composables/useTranscriber"
-import { useVoicePreviews } from "@/stores/voice-previews"
 import { usePromptInput } from "@/components/ai-elements/prompt-input/context"
 
 const props = defineProps<{ sessionId?: string }>()
 
 const waveform = useWaveform()
-const previews = useVoicePreviews()
 const promptInput = usePromptInput()
-const { addFiles, setTextInput } = promptInput
+const { setTextInput } = promptInput
 const { transcribe } = useTranscriber()
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -26,7 +24,7 @@ const emit = defineEmits<{ (e: "done"): void }>()
 const recorder = useMediaRecorder({
   maxSeconds: Number(import.meta.env.VITE_WEB_VOICE_MAX_SEC ?? 600),
   onAutoStop: (clip) => {
-    toast.info(props.sessionId ? "Max recording length reached." : "Max recording length reached — saved to composer.")
+    toast.info("Max recording length reached.")
     void finalize(clip)
   },
 })
@@ -72,32 +70,21 @@ async function finalize(clip: RecordedClip) {
   const stamp = `${now.getFullYear()}${(now.getMonth() + 1).toString().padStart(2, "0")}${now.getDate().toString().padStart(2, "0")}-${now.getHours().toString().padStart(2, "0")}${now.getMinutes().toString().padStart(2, "0")}${now.getSeconds().toString().padStart(2, "0")}-${now.getMilliseconds().toString().padStart(3, "0")}`
   const filename = `voice-${stamp}.${extFromMime(clip.mime)}`
 
-  // DICTATE: when mounted with a session, transcribe the clip and drop the text
-  // into the composer (not sent). No waveform snapshot / attachment is needed.
-  if (props.sessionId) {
-    cleaning.value = true
-    try {
-      const { text, degraded } = await transcribe(props.sessionId, clip.blob, filename)
-      const prev = promptInput.textInput.value
-      setTextInput(prev ? prev + " " + text : text)
-      if (degraded) toast.warning("Transcription may be rough")
-    } catch (err: any) {
-      toast.error("Transcription failed", { description: err?.message })
-    } finally {
-      cleaning.value = false
-      emit("done")
-    }
-    return
+  // DICTATE: transcribe the clip (whisper + agent cleanup) and drop the text into the composer
+  // (not sent). The session id is OPTIONAL — the launcher has none pre-spawn and uses the
+  // broker's id-less /transcribe, so the new-session composer gets the same AI cleanup as chat.
+  cleaning.value = true
+  try {
+    const { text, degraded } = await transcribe(props.sessionId, clip.blob, filename)
+    const prev = promptInput.textInput.value
+    setTextInput(prev ? prev + " " + text : text)
+    if (degraded) toast.warning("Transcription may be rough")
+  } catch (err: any) {
+    toast.error("Transcription failed", { description: err?.message })
+  } finally {
+    cleaning.value = false
+    emit("done")
   }
-
-  // LEGACY (launcher, no session id): attach the recording as a voice file.
-  const snapshot = waveform.snapshot()
-  const file = new File([clip.blob], filename, { type: clip.mime })
-  ;(file as any)._cmuxKind = "voice"
-  ;(file as any)._cmuxDurationMs = clip.durationMs
-  previews.set(filename, snapshot)
-  addFiles([file])
-  emit("done")
 }
 
 async function onStop() {

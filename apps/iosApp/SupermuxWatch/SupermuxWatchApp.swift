@@ -1,7 +1,11 @@
+import Combine
 import SwiftUI
+import UserNotifications
+import WatchKit
 
 @main
 struct SupermuxWatchApp: App {
+    @WKApplicationDelegateAdaptor(WatchAppDelegate.self) private var appDelegate
     @State private var provisioning = WatchProvisioning()
     @State private var broker: WatchBrokerSession?
     @State private var path: [String] = []
@@ -25,6 +29,13 @@ struct SupermuxWatchApp: App {
             .onChange(of: credsKey) { rebuildBroker() }
             .onChange(of: broker?.synced ?? false) { _, synced in
                 if synced { maybeAutoOpen() }
+            }
+            .onReceive(WatchPushRouter.shared.$pendingSessionId) { id in
+                // A tapped (mirrored) notification → open that session. Resolves once
+                // the session loads (navigationDestination reads broker.sessions).
+                guard let id else { return }
+                path = [id]
+                WatchPushRouter.shared.pendingSessionId = nil
             }
         }
     }
@@ -67,5 +78,29 @@ private struct NotConnectedView: View {
                 .foregroundStyle(.secondary)
         }
         .padding()
+    }
+}
+
+/// Routes a tapped (mirrored) notification to the right session on the watch. The
+/// iPhone's NSE stamps `sm_session_id` onto the notification before it mirrors over,
+/// so the watch reads it on tap — no on-device decryption needed (the key is on the phone).
+@MainActor final class WatchPushRouter: ObservableObject {
+    static let shared = WatchPushRouter()
+    @Published var pendingSessionId: String?
+    private init() {}
+}
+
+/// Catches notification taps on the watch and records the target session id for the app.
+final class WatchAppDelegate: NSObject, WKApplicationDelegate, UNUserNotificationCenterDelegate {
+    func applicationDidFinishLaunching() {
+        UNUserNotificationCenter.current().delegate = self
+    }
+
+    /// User tapped a notification → open the session it was about.
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse) async {
+        let info = response.notification.request.content.userInfo
+        guard let id = info["sm_session_id"] as? String, !id.isEmpty else { return }
+        await MainActor.run { WatchPushRouter.shared.pendingSessionId = id }
     }
 }

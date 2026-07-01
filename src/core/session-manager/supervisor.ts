@@ -3,7 +3,7 @@ import { mkdirSync, existsSync } from "fs"
 import { isWorktreeReclaimable } from "../worktree/gc"
 import { removeWorktree } from "../worktree/manager"
 import { Registry } from "./registry"
-import { spawnSessionWindow, killSessionWindow, listSessionWindows } from "./tmux"
+import { spawnSessionWindow, killWindowById } from "./tmux"
 import { isProcessAlive } from "./pid-file"
 import { buildClaudeSpawnCommand } from "./spawn-command"
 import { preAcceptTrust } from "./trust"
@@ -77,17 +77,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const resolvedPaWorkdir = opts.paWorkdir || `${home()}/.mux/workspace`
 
   async function respawnPA(pa: Session) {
-    // Kill stale windows/processes
-    if (pa.agent === AgentKind.Claude) {
-      const tmuxWindowName = normalizeName(pa.name)
-      let windows = await listSessionWindows(TMUX_SESSION)
-      while (windows.includes(tmuxWindowName)) {
-        await killSessionWindow({ session: TMUX_SESSION, window: tmuxWindowName }).catch(() => {})
-        windows = await listSessionWindows(TMUX_SESSION)
-      }
-    } else {
-      // Non-Claude: kill adapter process via registry lookup
-      // For now, skip cleanup (adapter will be replaced on respawn)
+    // Kill the prior window by id. A legacy PA with no persisted tmux_window_id
+    // skips teardown; any orphan window is harmless (we address by id, never name)
+    // and is reclaimed on the next reconcile cycle.
+    if (pa.agent === AgentKind.Claude && pa.tmux_window_id) {
+      await killWindowById(pa.tmux_window_id).catch(() => {})
     }
 
     if (pa.agent === AgentKind.Claude) {
@@ -118,7 +112,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       if (tmuxWindow?.windowId) opts.registry.sessions.setTmuxWindowId(pa.id, tmuxWindow.windowId)
       if (!pa.agent_session_id) opts.onClaudeSessionId?.(pa.id, claudeSessionId)
       opts.registry.sessions.activate(pa.id, process.pid)
-      void sendChannelConsentEnter(`${TMUX_SESSION}:${tmuxWindowName}`)
+      if (tmuxWindow?.windowId) void sendChannelConsentEnter(tmuxWindow.windowId)
     } else {
       await spawnPA({
         registry: opts.registry,
@@ -160,15 +154,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // non-fatal (never block a spawn over a soul.md write).
     try { seedSoulName(name) } catch {}
 
-    if (agent === AgentKind.Claude) {
-      const tmuxWindowName = normalizeName(name)
-      // Kill any stale tmux windows matching name
-      let windows = await listSessionWindows(TMUX_SESSION)
-      while (windows.includes(tmuxWindowName)) {
-        await killSessionWindow({ session: TMUX_SESSION, window: tmuxWindowName }).catch(() => {})
-        windows = await listSessionWindows(TMUX_SESSION)
-      }
-    }
+    // No stale-window cleanup by name: windows are addressed by id now, so a
+    // same-named orphan from a previous run is harmless and is reclaimed on
+    // reconcile/restart.
 
     try {
       await spawnPA({

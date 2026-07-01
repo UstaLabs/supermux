@@ -74,6 +74,17 @@ class BrokerApiSettingsTest {
         assertFalse(r.nothingToLand)
     }
 
+    @Test fun finish_readiness_decodes_prRequiresGreen() {
+        val withFlag = json.decodeFromString<FinishReadiness>(
+            """{"branch":"b","base":"main","prRequiresGreen":true}"""
+        )
+        assertTrue(withFlag.prRequiresGreen)
+        val omitted = json.decodeFromString<FinishReadiness>(
+            """{"branch":"b","base":"main"}"""
+        )
+        assertFalse(omitted.prRequiresGreen)
+    }
+
     @Test fun verify_results_decode() {
         val s = json.decodeFromString<VerifySuggestResult>("""{"content":"bun test","source":"package.json"}""")
         assertEquals("bun test", s.content)

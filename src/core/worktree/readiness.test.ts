@@ -47,3 +47,17 @@ test("defaultAction override forces the recommendation", async () => {
   const r = computeReadiness({ repoRoot: repo, worktreeDir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main", defaultAction: "pr" })
   expect(r.recommended).toBe("pr")
 })
+
+test("prRequiresGreen defaults to false when not provided", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  const r = computeReadiness({ repoRoot: repo, worktreeDir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" })
+  expect(r.prRequiresGreen).toBe(false)
+})
+
+test("prRequiresGreen is passed through from input", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  const r = computeReadiness({ repoRoot: repo, worktreeDir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main", prRequiresGreen: true })
+  expect(r.prRequiresGreen).toBe(true)
+})

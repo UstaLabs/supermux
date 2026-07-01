@@ -86,11 +86,6 @@ export function createTmuxClient(run: TmuxRunner = runTmux, runRaw: CmdRunner = 
     return { windowId: r.stdout.trim() }
   }
 
-  async function killSessionWindow(opts: { session: string; window: string }): Promise<void> {
-    const r = await run(["kill-window", "-t", `${opts.session}:${opts.window}`])
-    if (r.code !== 0 && !/can't find (window|session)/.test(r.stderr)) throw new Error(`tmux kill-window failed: ${r.stderr}`)
-  }
-
   async function killWindowById(windowId: string): Promise<void> {
     const r = await run(["kill-window", "-t", windowId])
     if (r.code !== 0 && !/can't find (window|session)/.test(r.stderr)) throw new Error(`tmux kill-window failed: ${r.stderr}`)
@@ -118,25 +113,40 @@ export function createTmuxClient(run: TmuxRunner = runTmux, runRaw: CmdRunner = 
     return null
   }
 
-  async function sendKeys(target: string, keys: string[]): Promise<void> {
-    const r = await run(["send-keys", "-t", target, ...keys])
-    if (r.code !== 0) throw new Error(`tmux send-keys failed: ${r.stderr}`)
-  }
-
   async function sendKeysToWindowId(windowId: string, keys: string[]): Promise<void> {
     const r = await run(["send-keys", "-t", windowId, ...keys])
     if (r.code !== 0) throw new Error(`tmux send-keys failed: ${r.stderr}`)
   }
 
-  return { spawnSessionWindow, killSessionWindow, killWindowById, listSessionWindows, livePanePid, sendKeys, sendKeysToWindowId }
+  /** Capture a window's active pane (scrollback included) by tmux window id (@N). Returns null if the window/pane is gone. */
+  async function capturePaneById(windowId: string): Promise<string | null> {
+    const r = await run(["capture-pane", "-t", windowId, "-p", "-S", "-150"])
+    return r.code === 0 ? r.stdout : null
+  }
+
+  /** Resolve a tmux window's id (@N) from its name within a session; null if no window matches. */
+  async function resolveWindowIdByName(session: string, name: string): Promise<string | null> {
+    const r = await run(["list-windows", "-t", session, "-F", "#{window_id}\t#{window_name}"])
+    if (r.code !== 0) return null
+    for (const line of r.stdout.split("\n")) {
+      const tab = line.indexOf("\t")
+      if (tab < 0) continue
+      const id = line.slice(0, tab).trim()
+      const wname = line.slice(tab + 1)
+      if (wname === name && id) return id
+    }
+    return null
+  }
+
+  return { spawnSessionWindow, killWindowById, listSessionWindows, livePanePid, sendKeysToWindowId, capturePaneById, resolveWindowIdByName }
 }
 
 export const {
   spawnSessionWindow,
-  killSessionWindow,
   killWindowById,
   listSessionWindows,
   livePanePid,
-  sendKeys,
   sendKeysToWindowId,
+  capturePaneById,
+  resolveWindowIdByName,
 } = createTmuxClient()

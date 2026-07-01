@@ -18,6 +18,7 @@ import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.CuratorSettingsResponse
 import dev.supermux.net.BrokerClient
+import dev.supermux.net.CodexResetResult
 import dev.supermux.net.DeviceDto
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
@@ -99,6 +100,8 @@ class AppViewModel(
     val activity: StateFlow<Map<String, List<ActivityEvent>>> = _activity
     private val _agentState = MutableStateFlow<Map<String, AgentStatus>>(emptyMap())
     val agentState: StateFlow<Map<String, AgentStatus>> = _agentState
+    private val _pendingSend = MutableStateFlow<Set<String>>(emptySet())
+    val pendingSend: StateFlow<Set<String>> = _pendingSend
     private val _commands = MutableStateFlow<Map<String, List<SlashCommand>>>(emptyMap())
     val commands: StateFlow<Map<String, List<SlashCommand>>> = _commands
     /** Per-session resolution state of the slash-command set (true = fully resolved). */
@@ -215,10 +218,14 @@ class AppViewModel(
                     }
                     is ServerFrame.AgentState -> {
                         _agentState.value = _agentState.value.toMutableMap().apply {
-                            this[f.session] = AgentStatus(f.phase, f.since ?: f.workingSince)
+                            this[f.session] = AgentStatus(
+                                phase = f.phase, state = f.state, working = f.working,
+                                detail = f.detail, tool = f.tool, since = f.since, workingSince = f.workingSince,
+                            )
                         }
-                        // Clear a prior agent error once the agent leaves the error phase.
-                        if (f.phase != "error" && _agentErrors.value.containsKey(f.session)) {
+                        _pendingSend.update { it - f.session }   // first real state clears the client-local "Sending…"
+                        // Clear a prior agent error once the agent is no longer dead.
+                        if (f.state != "dead" && _agentErrors.value.containsKey(f.session)) {
                             _agentErrors.update { it - f.session }
                         }
                     }
@@ -307,7 +314,10 @@ class AppViewModel(
     fun send(sessionId: String, text: String) {
         if (text.isBlank()) return
         appendOptimistic(sessionId, text.trim())
-        viewModelScope.launch { client.send(ClientFrame.Send(sessionId, args = SendArgs(text))) }
+        viewModelScope.launch {
+            client.send(ClientFrame.Send(sessionId, args = SendArgs(text)))
+            _pendingSend.update { it + sessionId }   // optimistic "Sending…" until the next agent_state
+        }
     }
 
     // ── Per-session composer draft persistence (DataStore) ─────────────────────────
@@ -366,12 +376,15 @@ class AppViewModel(
 
     // ── Voice dictation ──────────────────────────────────────────────────────────
 
+    // sessionId is OPTIONAL — null (e.g. the pre-spawn launcher) posts to the id-less /transcribe;
+    // the session only enriches cleanup context server-side (see BrokerApi.transcribePath).
+
     /** Whisper path: multipart audio → cleaned text. Returns null on failure (caller keeps draft). */
-    suspend fun transcribeAudio(sessionId: String, bytes: ByteArray, filename: String): String? =
+    suspend fun transcribeAudio(sessionId: String?, bytes: ByteArray, filename: String): String? =
         runCatching { api.transcribeAudio(sessionId, bytes, filename).text }.getOrNull()
 
     /** On-device-STT path: JSON draft → cleaned text. Returns null on failure. */
-    suspend fun transcribeDraft(sessionId: String, draft: String): String? =
+    suspend fun transcribeDraft(sessionId: String?, draft: String): String? =
         runCatching { api.transcribeDraft(sessionId, draft).text }.getOrNull()
 
     fun sendWith(sessionId: String, text: String, attachments: List<String>) {
@@ -379,6 +392,7 @@ class AppViewModel(
         viewModelScope.launch {
             runCatching {
                 client.send(ClientFrame.Send(sessionId, args = SendArgs(text, attachments.ifEmpty { null })))
+                _pendingSend.update { it + sessionId }   // optimistic "Sending…" until the next agent_state
             }
         }
     }
@@ -510,6 +524,8 @@ class AppViewModel(
     suspend fun updateGlossary(terms: List<String>): List<String>? =
         runCatching { api.updateGlossary(terms) }.getOrNull()
     suspend fun usage(): String? = runCatching { api.usageRaw() }.getOrNull()
+    suspend fun redeemCodexReset(): CodexResetResult? =
+        runCatching { api.redeemCodexReset() }.getOrNull()
     suspend fun curatorSettings(): CuratorSettingsResponse? = runCatching { api.getCuratorSettings() }.getOrNull()
     suspend fun saveCurator(enabled: Boolean, hour: Int, minute: Int): CuratorSettingsResponse? =
         runCatching { api.saveCuratorSettings(enabled, hour, minute) }.getOrNull()
@@ -605,6 +621,28 @@ class AppViewModel(
     suspend fun fileBytes(fileId: String): ByteArray? = api.fileBytes(fileId)
     suspend fun archivedLogs(sessionId: String): List<LogEntry> =
         runCatching { api.archivedLogs(sessionId) }.getOrNull() ?: emptyList()
+
+    /**
+     * Lazily fetch a session's transcript when we don't already have it. The WS `Snapshot`
+     * (sent on connect) seeds [messages] for every session live at connect time, and
+     * `MessageAppend` keeps them current — but a session resumed from archive arrives via a
+     * `SessionAdded` frame, which carries NO history, so its transcript stays empty until the
+     * next reconnect/snapshot (e.g. an app restart). Calling this on chat-open closes that gap.
+     * Web/iOS parity: web ChatView.loadMessages / iOS BrokerSession.ensureMessagesLoaded fetch
+     * GET /sessions/:id/messages (the same endpoint [archivedLogs] hits) when the store has
+     * nothing for the session. No-op when the snapshot already populated it.
+     */
+    fun ensureMessagesLoaded(sessionId: String) {
+        if (_messages.value[sessionId]?.isNotEmpty() == true) return
+        viewModelScope.launch {
+            val fetched = archivedLogs(sessionId)
+            // Re-check after the await: a live MessageAppend / optimistic send / fresh snapshot
+            // may have populated the buffer while the fetch was in flight — don't clobber it.
+            if (fetched.isNotEmpty() && _messages.value[sessionId]?.isNotEmpty() != true) {
+                _messages.update { it + (sessionId to fetched) }
+            }
+        }
+    }
 
     // ── Editor filesystem ──────────────────────────────────────────────────────
 

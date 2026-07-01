@@ -1,5 +1,6 @@
 import type { Channel, ChannelCapabilities, InboundAttachment, InboundMessage, OutboundAction, OutboundResult } from "../channel"
 import { DeviceStore } from "./device-store"
+import { watchRowExtras } from "./watch-session-row"
 import { serveStatic } from "./static-serve"
 import { makeLogger } from "../../shared/log"
 import { home } from "../../shared/home"
@@ -75,7 +76,21 @@ export type StoredClientLogEntry = {
 }
 const MUTATING_METHODS = new Set(["POST", "PUT", "DELETE", "PATCH"])
 
-type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalAgentTarget?: string; display?: true; scrcpy?: true; displayStreamId?: string }
+// Pause feeding a terminal viewer's output once this many bytes are queued on
+// its socket; resume on the websocket `drain`. Bounds the broker's per-viewer
+// send-buffer memory and how far a slow client falls behind. NB: getBufferedAmount
+// reports POST-compression (permessage-deflate) wire bytes — terminal streams
+// deflate ~5-10x, so 256KB here is several MB of logical redraws: a generous bound
+// that won't trip on burst repaints. Tune via the perf measurement.
+const TERMINAL_BP_HIGH_WATER = 256 * 1024
+
+function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void
+  const promise = new Promise<void>((r) => { resolve = r })
+  return { promise, resolve }
+}
+
+type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalAgentTarget?: string; display?: true; scrcpy?: true; displayStreamId?: string; _termDrain?: { promise: Promise<void>; resolve: () => void } }
 
 export interface SessionSnapshot {
   id?: string
@@ -100,6 +115,7 @@ export interface ArchivedSessionSnapshot {
   agent: AgentKind
   model?: string
   killed_at?: string
+  repo_root?: string
 }
 
 export interface WebChannelOpts {
@@ -142,7 +158,7 @@ export interface WebChannelOpts {
   spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string }>
   killSession?: (name: string) => Promise<void>
   renameSession?: (oldName: string, newName: string) => Promise<void>
-  transcribe?: (sessionId: string, input: { draft?: string; audioPath?: string }) => Promise<{ text: string; degraded?: boolean }>
+  transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string }) => Promise<{ text: string; degraded?: boolean }>
   spawnPA?: (args: { name: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string }>
   listPAs?: () => SessionSnapshot[]
   updatePA?: (name: string, patch: { model?: string; reasoningLevel?: string }) => Promise<{ ok: boolean; error?: string }>
@@ -171,7 +187,7 @@ export interface WebChannelOpts {
   /** Resolve a claude session's tmux "session:window" target (for kind=agent
    * terminals). Returns undefined for non-claude/unknown sessions. When this opt
    * is absent, all kind=agent requests return 404 (the feature is opt-in). */
-  getSessionTmuxTarget?: (name: string) => string | undefined
+  getSessionTmuxTarget?: (name: string) => Promise<string | undefined>
   getSessionBaseCommits?: (name: string) => Record<string, string> | undefined
   getSessionCreatedAt?: (name: string) => string | undefined
   listArchivedSessions?: () => ArchivedSessionSnapshot[]
@@ -295,6 +311,14 @@ export class WebChannel implements Channel {
       port: this.opts.port,
       fetch: (req, server) => this.routeRequestOrUpgrade(req, server),
       websocket: {
+        // Negotiated per-connection (clients that don't support it are unaffected).
+        // Terminal + control-channel JSON are highly compressible; the heavy win
+        // is on slow links. NOTE: this is server-wide, so it also applies to the
+        // /ws/display + /ws/scrcpy binary streams, whose payloads are already
+        // compressed — deflate achieves a near-1.0 ratio on them (small header
+        // overhead) but still costs CPU. If that CPU shows up on this shared box,
+        // the fallback is terminal-only app-level deflate (see the perf plan).
+        perMessageDeflate: true,
         open: (ws) => {
           if ((ws.data as any)?.proxyUpstream) {
             const { proxyUpstream, proxyPath, proxyWsProtocol } = ws.data as any
@@ -350,6 +374,11 @@ export class WebChannel implements Channel {
             return
           }
           this.onWsClose(ws)
+        },
+        drain: (ws) => {
+          // Socket buffer emptied — release any terminal viewer we paused.
+          const d = ws.data._termDrain
+          if (d) { ws.data._termDrain = undefined; d.resolve() }
         },
       },
     })
@@ -444,7 +473,7 @@ export class WebChannel implements Channel {
       // for non-claude / unknown sessions (see main.ts).
       let agentTarget: string | undefined
       if (kind === "agent") {
-        agentTarget = this.opts.getSessionTmuxTarget?.(sessionName)
+        agentTarget = await this.opts.getSessionTmuxTarget?.(sessionName)
         if (!agentTarget) return new Response("agent terminal unsupported", { status: 404 })
       }
       const upgraded = server.upgrade(req, {
@@ -535,7 +564,17 @@ export class WebChannel implements Channel {
       rows: 24,
       kind: ws.data.terminalKind ?? "scratch",
       agentTarget: ws.data.terminalAgentTarget,
-      onData: (data) => { try { ws.sendBinary(data) } catch {} },
+      onData: (data) => {
+        try { ws.sendBinary(data) } catch {}
+        // Past the high-water mark: hand pumpOutput a promise that resolves on
+        // the socket's `drain`, so we stop pulling pty-helper output (→ tmux
+        // sees a slow client and redraws current state instead of replaying).
+        if (ws.getBufferedAmount() > TERMINAL_BP_HIGH_WATER) {
+          const d = ws.data._termDrain ?? makeDeferred()
+          ws.data._termDrain = d
+          return d.promise
+        }
+      },
       onExit: (code) => { try { ws.send(JSON.stringify({ type: "exit", code })); ws.close() } catch {} },
     })
     if (!result.ok) {
@@ -567,6 +606,10 @@ export class WebChannel implements Channel {
   }
 
   private onTerminalWsClose(ws: import("bun").ServerWebSocket<WSData>): void {
+    // Wake a paused pumpOutput so it can observe the (about-to-be-killed) stream
+    // ending — otherwise it would await a drain that never comes.
+    const d = ws.data._termDrain
+    if (d) { ws.data._termDrain = undefined; d.resolve() }
     // Socket dropped (reload / nav / network): DETACH — the tmux session lives on.
     this.opts.terminalManager?.detach(ws.data.deviceName, ws.data.terminalSession!, ws.data.terminalId!)
   }
@@ -1586,7 +1629,21 @@ export class WebChannel implements Channel {
     }
 
     if (method === "GET" && path === "/sessions") {
-      return this.json(this.opts.getSessionsSnapshot())
+      // Watch-only enrichment: fold in agent phase, a last-message preview, and unread —
+      // the signals the watch can't get over WebSocket. Reuses opts the route already has,
+      // keyed exactly like the WS `subscribe` snapshot above (s.id ?? s.name).
+      const reads = this.opts.getReads?.() ?? {}
+      const enriched = this.opts.getSessionsSnapshot().map((s) => {
+        const key = s.id ?? s.name
+        const log = this.opts.getSessionLog(key)
+        const extras = watchRowExtras(
+          this.opts.getSessionAgentState?.(key) as { phase?: string; tool?: string } | undefined,
+          log[log.length - 1] as { ts?: string; direction?: string; text?: string } | undefined,
+          reads[key],
+        )
+        return { ...s, ...extras }
+      })
+      return this.json(enriched)
     }
     if (method === "GET" && path.startsWith("/sessions/") && path.endsWith("/messages")) {
       const id = decodeURIComponent(path.split("/")[2]!)
@@ -1597,6 +1654,12 @@ export class WebChannel implements Channel {
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       this.opts.setMute(id, !!body.muted)
       this.broadcastToAll({ type: "session_state", session: id, mute: !!body.muted })
+      return this.json({ ok: true })
+    }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/read$/)) {
+      // The watch (no WS, so no `viewing` frame) clears unread on open via this route.
+      const id = decodeURIComponent(path.split("/")[2]!)
+      this.opts.markRead?.(id)   // advances last_read_at + broadcasts session_read (main.ts:1121)
       return this.json({ ok: true })
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/interrupt$/)) {
@@ -1902,8 +1965,14 @@ export class WebChannel implements Channel {
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
     }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/transcribe$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
+    if (method === "POST" && (path === "/transcribe" || path.match(/^\/sessions\/[^/]+\/transcribe$/))) {
+      // The session id is OPTIONAL. `/transcribe` (id-less — e.g. the pre-spawn launcher)
+      // or `/transcribe?session=<id>` or the legacy `/sessions/<id>/transcribe`. When present
+      // it only enriches cleanup context (recent messages + skills); the cleanup engine/model/
+      // glossary always come from global config, so a live session is never required.
+      const id = path === "/transcribe"
+        ? (url.searchParams.get("session")?.trim() || undefined)
+        : decodeURIComponent(path.split("/")[2]!)
       if (!this.opts.transcribe) return this.json({ error: "not configured" }, 503)
       const ctype = req.headers.get("content-type") ?? ""
       let input: { draft?: string; audioPath?: string }
@@ -1945,6 +2014,17 @@ export class WebChannel implements Channel {
       const { fetchAllUsage } = await import("../../core/usage/index")
       const data = await fetchAllUsage()
       return this.json(data)
+    }
+
+    if (method === "POST" && path === "/usage/codex/reset") {
+      const { redeemCodexReset, fetchCodexUsage } = await import("../../core/usage/index")
+      try {
+        const result = await redeemCodexReset()
+        const codex = await fetchCodexUsage().catch(() => null) // best-effort refresh
+        return this.json({ ...result, codex })
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 502)
+      }
     }
 
     if (method === "GET" && path === "/proxies") {

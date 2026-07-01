@@ -31,7 +31,9 @@ function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
 import { startSocketServer } from "./core/session-manager/socket-server"
 import { createSupervisor, reconcileOnStartup } from "./core/session-manager/supervisor"
 import { acquirePidFile, releasePidFile } from "./core/session-manager/pid-file"
-import { spawnSessionWindow, killSessionWindow, killWindowById, listSessionWindows, livePanePid, sendKeys, sendKeysToWindowId } from "./core/session-manager/tmux"
+import { spawnSessionWindow, killWindowById, listSessionWindows, livePanePid, sendKeysToWindowId, resolveWindowIdByName } from "./core/session-manager/tmux"
+import { ensureWindowId } from "./core/session-manager/window-id"
+import { liveWindowId } from "./core/session-manager/live-window"
 import { spawnSession as spawnSessionHelper, spawnPA, resumeOpenCodeSession } from "./core/session-manager/spawn-helper"
 import { RuntimeRegistry, type SessionRuntime } from "./core/session-manager/runtime"
 import { buildClaudeSpawnCommand } from "./core/session-manager/spawn-command"
@@ -118,14 +120,17 @@ import { FsWatcher } from "./core/editor/fs-watcher"
 import { scanRepos } from "./core/editor/repo-scanner"
 import { ActivityStore } from "./core/session-manager/activity-store"
 import { AgentStateStore } from "./core/session-manager/agent-state-store"
+import { toAgentStateFrame } from "./core/session-manager/agent-state-frame"
 import { TranscriptTailer } from "./core/agents/claude/transcript-tailer"
 import { claudeTranscriptPath } from "./core/agents/claude/transcript-path"
+import { renderTranscript } from "./core/search/transcript-render"
 import { normalizeToolName } from "./core/agents/tool-normalize"
 import { gcOrphanAgentHomes, reclaimCursorHomes } from "./core/agents/shared-runtime"
 import { CuratorScheduler } from "./core/curator/scheduler"
 import { runCurator, type CuratorDeps } from "./core/curator/run"
 import { curatorPromptPath } from "./core/runtime-assets"
 import { SettingsStore } from "./core/settings/store"
+import { SearchStore } from "./core/search/store"
 import { ForgeStore } from "./core/forge/store"
 import { ForgeService } from "./core/forge/service"
 import { detectForgeClis, importCliToken } from "./core/forge/cli-import"
@@ -315,6 +320,17 @@ if (existsSync(REGISTRY_FILE)) {
 const filesDir = join(STATE_DIR, "files")
 const fileStore = new FileStore(db, filesDir)
 const messageLog = new MessageStore(db, fileStore)
+const searchStore = new SearchStore(db, MUX_HOME)
+try {
+  searchStore.rebuildKnowledge()
+  searchStore.rebuildSessions()
+} catch (err: any) {
+  log.warn("search_index_rebuild_failed", { err: err?.message ?? String(err) })
+}
+// Keep find_sessions fresh: index each new broker message as it lands.
+messageLog.on("append", (sessionId: string, entry: any) => {
+  try { searchStore.indexMessage(sessionId, entry.ts, entry.text ?? "") } catch { /* index is rebuildable */ }
+})
 const activityStore = new ActivityStore()
 const agentStateStore = new AgentStateStore()
 
@@ -362,12 +378,10 @@ function ensureClaudeTailer(sessionUuid: string, _name: string, workdir: string,
   const tailer = new TranscriptTailer({
     path: claudeTranscriptPath(workdir, claudeSid),
     onEvent: (event) => {
+      // The transcript interrupt marker is the SOLE interrupt signal (no hook fires
+      // on ESC) — and it catches terminal-direct ESC too. It is state, not activity.
+      if (event.kind === "interrupt") { agentStateStore.applyEvent(sessionUuid, "interrupt"); return }
       activityStore.append(sessionUuid, event)
-      // Belt-and-braces: if Claude hooks can't reach the broker (stale hooks file,
-      // auth mismatch), flip sending→thinking on first transcript tool activity.
-      if (agentStateStore.get(sessionUuid).phase === "sending" && event.kind === "tool") {
-        agentStateStore.applyEvent(sessionUuid, "UserPromptSubmit")
-      }
     },
     seekToEnd,
   })
@@ -428,7 +442,6 @@ async function maybeAutoSendSoulSetup(sessionId: string): Promise<void> {
   const deliver = async (id: string, text: string, meta: Record<string, string>) => {
     const current = registry.get(id)
     const adapter = current ? adapters.get(current.id) : undefined
-    agentStateStore.applyEvent(id, "deliver")
     if (adapter) {
       await adapter.send(text, meta)
     } else {
@@ -467,6 +480,16 @@ const gcInterval = setInterval(() => {
 }, 60 * 60 * 1000)
 
 const TMUX_SESSION = process.env.MUX_TMUX_SESSION ?? "mux"
+// The addressable tmux window id for a session, healing a missing id once via a
+// name->id resolve (then persisted), so every kill/interrupt/liveness/consent
+// path routes by id — never by window name. Returns null when no live window
+// can be found, so callers no-op + log instead of routing by a stale name.
+const widOf = (s: { id: string; name: string; tmux_window_id?: string }) =>
+  ensureWindowId(s, {
+    tmuxSession: TMUX_SESSION,
+    resolve: resolveWindowIdByName,
+    persist: (id, wid) => registry.sessions.setTmuxWindowId(id, wid),
+  })
 const replyOwner = new Map<string, string>()              // key: `${chat_id}:${message_id}`
 const pendingSpawnActive = new Map<string, string>()      // expectedName → channelChatId
 const pendingClaudeSessionId = new Map<string, string>()  // brokerSessionId → claudeSessionId
@@ -612,6 +635,7 @@ function unregisterSession(id: string): void {
   registry.unregister(id)  // archives the session (resumable via resumeFromArchive)
   if (s) deleteRuntime(s.id)
   commandRegistry.remove(id)
+  agentStateStore.clear(id)  // drop any lingering working/dead state for the now-archived session
   // NOTE: do NOT delete agent_home here — archived sessions are resumable, so
   // their home (cursor runtime symlink + per-session state/history) must
   // survive. Truly orphaned dirs (no registry entry) are reclaimed by the
@@ -693,7 +717,11 @@ async function onAssistantMessage(
         nativeDevices,
       }).catch((err) => log.warn("push_hook_failed", { err: err?.message ?? String(err) }))
       const mid = (res.value as any)?.message_id
-      if (mid) replyOwner.set(`${chat_id}:${mid}`, sessionName)
+      // Store the immutable session ID, not the name: classifyInbound's quote-reply
+      // path looks this up via registry.get() (id-only), and names change via /rename.
+      // Storing the name made every reply-to silently miss → fell through to the
+      // active session (masked on Telegram when replying to the already-active one).
+      if (mid) replyOwner.set(`${chat_id}:${mid}`, sessionId)
       messageLog.append(sessionId, {
         id: mid ? `out:${chat_id}:${mid}` : `out:${chat_id}:ts:${Date.now()}`,
         ts: new Date().toISOString(),
@@ -736,43 +764,22 @@ async function notifyAgentError(sessionId: string, sessionName: string, errorTyp
 
 // Soft-interrupt a Claude session by sending a single Esc to its tmux pane —
 // Claude's native "stop generating" key. The pane runs Claude as the foreground
-// process, so send-keys to its window reaches the REPL. Resolved live from the
-// registry so a rename can't leave us aiming at a stale window name.
-function claudeTmuxTarget(session: { name: string; tmux_window_id?: string; tmux_target?: string | null }): string {
-  if (session.tmux_window_id) return session.tmux_window_id
-  const t = session.tmux_target
-  if (t?.includes(":")) return t
-  return `${TMUX_SESSION}:${session.name}`
-}
-
-function requireClaudeTmux(session: import("./core/session-manager/types").Session): { ok: true; target: string } | { ok: false; error: string } {
-  if (session.agent !== AgentKind.Claude) return { ok: false, error: `session ${session.name} is not tmux-backed` }
-  const target = claudeTmuxTarget(session)
-  if (!target) return { ok: false, error: `session ${session.name} has no tmux target` }
-  return { ok: true, target }
-}
-
+// process, so send-keys to its window reaches the REPL. Addressed strictly by
+// window id (healed from the registry) so a rename can't aim us at a stale name.
 async function interruptClaudePane(sessionId: string): Promise<void> {
   const s = registry.get(sessionId)
-  if (!s) return
-  const tmux = requireClaudeTmux(s)
-  if (!tmux.ok) {
-    log.warn("claude_interrupt_no_tmux", { sessionId, error: tmux.error })
-    return
-  }
-  if (s.tmux_window_id) await sendKeysToWindowId(s.tmux_window_id, ["Escape"])
-  else await sendKeys(tmux.target, ["Escape"])
+  if (!s || s.agent !== AgentKind.Claude) return
+  const wid = await widOf(s)
+  if (!wid) { log.warn("claude_interrupt_no_tmux", { sessionId }); return }
+  await sendKeysToWindowId(wid, ["Escape"])
 }
 
 // The one funnel every Stop surface (web button, /stop command) routes through:
-// dispatch to the agent's own interrupt(), then optimistically flip the live
-// status to idle so the UI clears "Working…" at once. The agent's own turn-end
-// (Claude's Esc, codex turn/completed, cursor child exit) reconverges on idle.
+// dispatch to the agent's own interrupt(). The broker does NOT flip the live
+// status itself — idle is reflected from the session: Claude's interrupt marker
+// in the transcript, or codex/cursor turn-complete.
 async function interruptSessionById(sessionId: string): Promise<{ ok: boolean; reason?: string }> {
-  return runInterrupt({
-    adapter: adapters.get(sessionId),
-    onClear: () => agentStateStore.applyEvent(sessionId, "Stop"),
-  })
+  return runInterrupt({ adapter: adapters.get(sessionId) })
 }
 
 type FinishRequest = { action: FinishAction; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }
@@ -842,7 +849,7 @@ function finishReadinessById(sessionId: string): FinishReadiness | { error: stri
   if (!s) return { error: "no such session" }
   if (!s.repo_root || !s.session_branch || !s.base_branch) return { error: "session is not worktree-backed" }
   const cfg = loadFinishConfig(s.repo_root)
-  return computeReadiness({ repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch, defaultAction: cfg.defaultAction })
+  return computeReadiness({ repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch, defaultAction: cfg.defaultAction, prRequiresGreen: cfg.prRequiresGreen })
 }
 
 // Wire a codex/cursor adapter's structured events into the agent-agnostic
@@ -1059,7 +1066,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
     getSessionAgentState: (id) => {
       const s = registry.get(id)
-      return s ? agentStateStore.get(s.id) : { phase: "idle", since: 0 }
+      const st = s ? agentStateStore.get(s.id) : { phase: "idle" as const, since: 0 }
+      const { type: _type, session: _session, ...payload } = toAgentStateFrame(s?.id ?? id, st)
+      return payload
     },
     getSessionCommands: (id) => {
       const s = registry.get(id)
@@ -1373,14 +1382,14 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     stopDisplay: (id) => displayManager.stop(id),
     fsWatcher,
     getSessionWorkdir: (id) => registry.get(id)?.workdir,
-    getSessionTmuxTarget: (id) => {
+    getSessionTmuxTarget: async (id) => {
       const s = registry.get(id)
-      if (!s) return undefined
-      // Stable window-id when available (the same target the broker uses for
-      // send-keys), claude-gated. The agent terminal resolves the session+index
-      // from this id at attach time, so it survives renames / duplicate names.
-      const r = requireClaudeTmux(s)
-      return r.ok ? r.target : undefined
+      if (!s || s.agent !== AgentKind.Claude) return undefined
+      // Heal-on-read: resolve and persist the window-id if not yet stored.
+      // For sessions that already have tmux_window_id, widOf short-circuits with
+      // no tmux call. Legacy/unhealed sessions resolve by name once, then persist,
+      // so the agent terminal no longer 404s on first attach.
+      return (await widOf(s)) ?? undefined
     },
     getSessionBaseCommits: (id) => registry.get(id)?.base_commits,
     getSessionCreatedAt: (id) => registry.get(id)?.created_at,
@@ -1392,6 +1401,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         agent: s.agent,
         model: s.model,
         killed_at: s.killed_at,
+        repo_root: s.repo_root,
       })),
     resumeFromArchive: (id: string) => resumeFromArchive(id),
     getAppConfig: () => settings.getAppConfig(appConfigEnv),
@@ -1483,7 +1493,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     // Closes over the `agentRpc` `let` binding; runs at request time, by which
     // point agentRpc is assigned (same pattern as the login closures below).
     transcribe: async (sessionId, input) => {
-      const s = registry.get(sessionId)
+      // The session id is OPTIONAL (id-less /transcribe is used by the pre-spawn launcher). When
+      // present it enriches the cleanup with prior messages + the session's agent skills; when
+      // absent the cleanup still runs off the draft + global glossary/engine/model.
+      const s = sessionId ? registry.get(sessionId) : undefined
       const cfg = settings.getAppConfig(appConfigEnv)
       let draft = input.draft ?? ""
       let whisperMs = 0
@@ -1494,12 +1507,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         draft = r.text
       }
       const source = input.audioPath ? "whisper" : "client"
-      if (!draft.trim()) { log.info("voice_transcribe_empty", { sessionId, source, whisperMs }); return { text: "" } }
+      if (!draft.trim()) { log.info("voice_transcribe_empty", { sessionId: sessionId ?? null, source, whisperMs }); return { text: "" } }
       const skills = s ? commandRegistry.get(s.name).filter((c) => c.family === "agent").map((c) => c.name) : []
-      const messages = messageLog.get(s?.id ?? sessionId, 10)
+      const messages = sessionId ? messageLog.get(s?.id ?? sessionId, 10) : []
       const payload = buildVoicePayload(draft, messages, skills)
       // Full visibility into exactly what the cleanup is fed + the whisper/cleanup timing split.
-      log.info("voice_transcribe_in", { sessionId, source, draft, whisperMs, ctxMsgs: messages.length, skills, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
+      log.info("voice_transcribe_in", { sessionId: sessionId ?? null, source, draft, whisperMs, ctxMsgs: messages.length, skills, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
       try {
         const t1 = Date.now()
         const out = await cleanupDraft(
@@ -1508,10 +1521,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         )
         const cleanupMs = Date.now() - t1
         const text = out.text || draft
-        log.info("voice_transcribe_out", { sessionId, draft, text, whisperMs, cleanupMs, engine: out.engine, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
+        log.info("voice_transcribe_out", { sessionId: sessionId ?? null, draft, text, whisperMs, cleanupMs, engine: out.engine, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
         return { text }
       } catch (e) {
-        log.warn("voice_cleanup_failed", { sessionId, draft, whisperMs, err: String(e) })
+        log.warn("voice_cleanup_failed", { sessionId: sessionId ?? null, draft, whisperMs, err: String(e) })
         return { text: draft, degraded: true }
       }
     },
@@ -1558,12 +1571,9 @@ async function killSession(id: string) {
   }
 
   if (s.agent === "claude") {
-    const tmux = requireClaudeTmux(s)
-    if (tmux.ok) {
-      if (s.tmux_window_id) await killWindowById(s.tmux_window_id)
-      else await killSessionWindow({ session: TMUX_SESSION, window: displayName })
-    }
-    else log.warn("kill_session_no_tmux", { name: displayName, error: tmux.error })
+    const wid = await widOf(s)
+    if (wid) await killWindowById(wid)
+    else log.warn("kill_session_no_tmux", { name: displayName })
   } else if (s.agent === "codex") {
     const runtime = runtimes.get(s.id)
     if (runtime?.kind === AgentKind.Codex) runtime.handle.kill()
@@ -1655,8 +1665,7 @@ async function resumeSuspendedSession(session: { id: string; name: string; agent
         command: cmd,
       })
       if (tmuxWindow.windowId) registry.sessions.setTmuxWindowId(session.id, tmuxWindow.windowId)
-      const tmuxTarget = `${TMUX_SESSION}:${windowName}`
-      await sendChannelConsentEnter(tmuxTarget)
+      if (tmuxWindow.windowId) await sendChannelConsentEnter(tmuxWindow.windowId)
       await waitForSessionConnected(session.id, 25_000)
     } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
       await server.bind(session.id)
@@ -1748,7 +1757,7 @@ async function resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name
         command: cmd,
       })
       resumedTmuxWindowId = tmuxWindow.windowId
-      void sendChannelConsentEnter(`${TMUX_SESSION}:${name}`)
+      if (tmuxWindow.windowId) void sendChannelConsentEnter(tmuxWindow.windowId)
     } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
       await server.bind(sessionId)
       const auth = await resolveCodexAuth({
@@ -1879,10 +1888,18 @@ function optionalProviderArg(args: Record<string, unknown>, key: string): Provid
 const server = await startSocketServer({
   socketsDir: SOCKETS_DIR,
   onStatusChange: (session_id, connected, last_pong_at) => {
-    // session_id is now UUID from the socket
+    // session_id is the UUID from the socket. NOTE: liveness can fire slightly
+    // ahead of registration (markAlive runs before onRegister completes) — that's
+    // safe here: "connected" is a no-op unless the session was "dead", and "dead"
+    // only applies to a registered, non-suspended session.
     registry.sessions.setConnectionStatus(session_id, connected, last_pong_at)
     const s = registry.get(session_id)
     webChannel?.broadcastToAll({ type: "session_state", session: session_id, connected, model: s?.model })
+    if (connected) {
+      agentStateStore.applyEvent(session_id, "connected")          // revives a dead session; no-op otherwise
+    } else if (s && s.status !== "suspended") {
+      agentStateStore.applyEvent(session_id, "dead")               // crash/shim-gone — but NOT an intentional suspend
+    }
   },
   // Safety net: a queued inbound that can't reach a live channel shim within the
   // grace window means the session crashed / never came up. Tell the user in the
@@ -2127,7 +2144,7 @@ const server = await startSocketServer({
       const fromSession = msg.session_id
       const s = registry.get(fromSession)  // Look up by UUID
       const op = msg.op
-      const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject"])
+      const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session"])
       if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
         return { ok: false, error: "permission denied (can_orchestrate=false)" }
       }
@@ -2213,6 +2230,34 @@ const server = await startSocketServer({
         case "list_sessions":  { return { ok: true, value: registry.listVisible().map((s: any) => ({ name: s.name, workdir: s.workdir, mute: s.mute })) } }
         case "set_active":     { const t = registry.resolveName(stringArg(op.args, "name")); if (!t) return { ok: false, error: "no such session" }; registry.setActive(stringArg(op.args, "chat_id"), t.id); return { ok: true, value: "ok" } }
         case "get_active":     { return { ok: true, value: registry.getActive(stringArg(op.args, "chat_id")) } }
+        case "memory_search": {
+          const q = stringArg(op.args, "query")
+          const limit = typeof op.args?.limit === "number" ? op.args.limit : 10
+          const includePersonal = s?.role === "personal_assistant"
+          return { ok: true, value: searchStore.searchKnowledge(q, { includePersonal, limit }) }
+        }
+        case "find_sessions": {
+          const q = stringArg(op.args, "query")
+          const limit = typeof op.args?.limit === "number" ? op.args.limit : 10
+          return { ok: true, value: searchStore.searchSessions(q, {
+            project: typeof op.args?.project === "string" ? op.args.project : undefined,
+            since: typeof op.args?.since === "string" ? op.args.since : undefined,
+            agent: typeof op.args?.agent === "string" ? op.args.agent : undefined,
+            limit,
+          }) }
+        }
+        case "read_session": {
+          const id = stringArg(op.args, "session_id")
+          const row = db.query("SELECT workdir, agent, agent_session_id FROM sessions WHERE id = ? AND internal = 0").get(id) as { workdir: string; agent: string; agent_session_id: string | null } | null
+          if (!row) return { ok: false, error: "no such session" }
+          if (row.agent !== "claude" || !row.agent_session_id) {
+            return { ok: true, value: { transcript: false, note: "no JSONL transcript for this agent; use the broker message history", messages: messageLog.get(id, 200) } }
+          }
+          const includeToolCalls = op.args?.include_tool_calls !== false
+          const grep = typeof op.args?.grep === "string" ? op.args.grep : undefined
+          const text = renderTranscript(claudeTranscriptPath(row.workdir, row.agent_session_id), { includeToolCalls, grep })
+          return { ok: true, value: { transcript: true, session_id: id, text } }
+        }
         case "expose_port": {
           if (!s) return { ok: false, error: "unknown session" }
           const port = optionalNumberArg(op.args, "port")
@@ -2312,7 +2357,6 @@ function deliverInbound(sessionId: string, text: string, meta: any): Promise<Inb
   return deliverInboundCore({
     getAdapter: (id) => adapters.get(id),
     isClaude: (id) => (registry.get(id)?.agent ?? "claude") === "claude",
-    applyDeliver: (id) => agentStateStore.applyEvent(id, "deliver"),
     sendInboundSocket: (id, payload) => server.sendInbound(id, payload),
     seen: recentInboundIds,
   }, sessionId, text, meta)
@@ -2457,7 +2501,17 @@ async function spawnSession(args: { workdir: string; requestedName?: string; age
       id: r.session_id,
       name: r.name,
       lookup: (id, name) => registry.get(id) ?? registry.resolveName(name),
-      stillAlive: async () => (await listSessionWindows(TMUX_SESSION)).includes(r.name),
+      stillAlive: async () => {
+        // Pre-registration the row isn't in the registry yet — the freshly
+        // spawned window id lives in pendingTmuxWindowId until onRegister drains
+        // it. Check both, else liveness fails on every claude spawn (~50ms in).
+        const wid = liveWindowId(
+          r.session_id,
+          (id) => registry.get(id)?.tmux_window_id,
+          (id) => pendingTmuxWindowId.get(id),
+        )
+        return wid ? (await livePanePid(wid)) !== null : false
+      },
     }).catch((err) => {
       log.warn("spawn_post_check_failed", { name: r.name, workdir })
       throw err
@@ -2488,10 +2542,8 @@ async function reapplySessionAgentConfig(sessionId: string): Promise<{ ok: true 
     try {
       await ensureSessionWorktree(session)
       stopClaudeTailer(session.id)
-      const tmux = requireClaudeTmux(session)
-      if (!tmux.ok) return { ok: false, error: tmux.error }
-      if (session.tmux_window_id) await killWindowById(session.tmux_window_id)
-      else await killSessionWindow({ session: TMUX_SESSION, window: session.name })
+      const wid = await widOf(session)
+      if (wid) await killWindowById(wid)
       deleteRuntime(session.id)
       await server.bind(session.id)
       const cmd = buildClaudeSpawnCommand({
@@ -2658,6 +2710,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
     chat_id: msg.chat_id,
     user_id: msg.user_id,
     text: (msg.text ?? "").slice(0, 80),
+    reply_to: msg.reply_to_message_id,
   })
   const decision = classifyInbound(
     { chat_id: msg.chat_id, text: msg.text ?? "", reply_to: msg.reply_to_message_id },
@@ -2812,8 +2865,6 @@ ch.on("inbound", async (msg: InboundMessage) => {
       await ch.send({ op: "reply", chat_id: msg.chat_id, text: `Failed to resume suspended session "${session.name}". Try /kill and re-spawn.`, disable_notification: false })
       return
     }
-  } else if ((session.agent ?? "claude") === "claude" && !registry.get(session.id)?.connected) {
-    await waitForSessionConnected(session.id, 10_000)
   }
 
   log.debug("send_inbound.before", { session: session.name, text: decision.text.slice(0, 80) })
@@ -2879,7 +2930,7 @@ activityStore.on("append", (sessionId: string, event) => {
   webChannel?.broadcastToAll({ type: "activity_append", session: sessionId, event })
 })
 agentStateStore.on("change", (sessionId: string, state) => {
-  webChannel?.broadcastToAll({ type: "agent_state", session: sessionId, phase: state.phase, tool: state.tool, since: state.since, workingSince: state.workingSince })
+  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, state))
   if (state.phase === "idle" && pendingReapply.has(sessionId)) {
     const olds = pendingReapply.take(sessionId)!
     void reapplySessionAgentConfig(sessionId).then((r) => {
@@ -2900,16 +2951,6 @@ agentStateStore.on("thoughtComplete", (sessionId: string, durationMs: number, no
   const sec = Math.max(1, Math.round(durationMs / 1000))
   activityStore.append(sessionId, { ts: new Date(now).toISOString(), kind: "thinking", title: `Thought for ${sec}s` })
 })
-// Watchdog: a turn that sits in "sending" with no progress signal past this
-// deadline becomes "stalled" (UI shows Retry/Stop) instead of hanging forever.
-// Conservative for M1 to avoid false stalls on slow cold-starts; tightened in M2
-// once richer per-phase signals exist.
-const STALL_SENDING_MS = 30_000
-const stallInterval = setInterval(() => {
-  const stalled = agentStateStore.sweepStalled(Date.now(), STALL_SENDING_MS)
-  for (const sid of stalled) log.warn("turn_stalled", { sessionId: sid })
-}, 1_000)
-
 messageLog.on("update", (sessionId, entry_id, patch) => {
   webChannel?.broadcastToAll({ type: "message_update", session: sessionId, entry_id, text: patch.text, edited_at: patch.edited_at })
 })
@@ -2936,12 +2977,6 @@ if (webChannel) {
         webChannel!.send({ op: "reply", chat_id: msg.chat_id, text: `Failed to resume session "${targetSession.name}".` })
         return
       }
-    } else if (
-      targetSession
-      && (targetSession.agent ?? "claude") === "claude"
-      && !registry.get(targetSession.id)?.connected
-    ) {
-      await waitForSessionConnected(targetSession.id, 10_000)
     }
     handleWebInbound(msg, {
       messageLog,
@@ -3029,8 +3064,8 @@ respawnPAsAfterOnboarding = async () => {
     const pas = registry.listPAs()
     for (const pa of pas) {
       try {
-        if (pa.tmux_window_id) await killWindowById(pa.tmux_window_id).catch(() => {})
-        else await killSessionWindow({ session: TMUX_SESSION, window: pa.name }).catch(() => {})
+        const wid = await widOf(pa)
+        if (wid) await killWindowById(wid).catch(() => {})
         registry.unregister(pa.name)
         log.info("pa_respawn_killed", { name: pa.name })
       } catch (err: any) {
@@ -3259,6 +3294,7 @@ const modelRefreshInterval = setInterval(() => {
         for (const s of pushStore.all()) await pushSender.sendToDevice(s.device, payload)
         for (const r of deviceTokenStore.all()) if (r.routing_token) await nativeSender.sendToDevice(r.device, payload)
       },
+      reindex: () => { searchStore.rebuildKnowledge() },
   }
   curatorScheduler = new CuratorScheduler(() => runCurator(curatorDeps))
   curatorScheduler.reconfigure(settings.getCurator())
@@ -3313,7 +3349,6 @@ async function gracefulShutdown(signal: string) {
   } catch (err: any) { log.warn("curator_scheduler_stop_failed", { err: err?.message }) }
   try {
     clearInterval(gcInterval)
-    clearInterval(stallInterval)
     clearInterval(modelRefreshInterval)
   } catch (err: any) { log.warn("gc_interval_clear_failed", { err: err?.message ?? String(err) }) }
   try {

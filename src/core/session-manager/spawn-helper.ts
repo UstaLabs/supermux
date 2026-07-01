@@ -200,7 +200,10 @@ export async function spawnPA(opts: {
         workdir,
       }),
     })
-    if (tmuxWindow?.windowId) registry.sessions.setTmuxWindowId(id, tmuxWindow.windowId)
+    if (tmuxWindow?.windowId) {
+      registry.sessions.setTmuxWindowId(id, tmuxWindow.windowId)
+      void sendChannelConsentEnter(tmuxWindow.windowId)
+    }
     opts.onClaudeSessionId?.(id, claudeSessionId)
   } else if (agent === AgentKind.Codex) {
     const sessionHome = join(STATE_DIR, "agents", "codex", name)
@@ -371,10 +374,6 @@ export async function spawnPA(opts: {
   if (skipRegister) {
     registry.sessions.activate(id, finalPid)
   }
-  if (agent === AgentKind.Claude) {
-    void sendChannelConsentEnter(`${opts.tmuxSession}:${name}`)
-  }
-
   return { name, id }
 }
 
@@ -405,7 +404,7 @@ async function spawnClaudeSession(deps: SpawnDeps, args: SpawnArgs): Promise<Spa
       command: buildClaudeSpawnCommand({ name, model: args.model, effort: args.effort, sessionId: id, claudeSessionId, workdir: args.workdir, rpcMcpConfig: args.rpcMcpConfig }),
     })
     if (tmuxWindow?.windowId) deps.onTmuxWindowId?.(id, tmuxWindow.windowId)
-    await (deps.postSpawnReady ?? sendChannelConsentEnter)(`${deps.tmuxSession}:${name}`)
+    if (tmuxWindow?.windowId) await (deps.postSpawnReady ?? sendChannelConsentEnter)(tmuxWindow.windowId)
   } catch (err) {
     // Free the reserved name so a retry can reclaim it (see the function doc).
     deps.registry.releaseName(name)

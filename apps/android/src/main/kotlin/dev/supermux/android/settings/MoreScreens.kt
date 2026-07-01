@@ -17,6 +17,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -39,6 +41,7 @@ import dev.supermux.android.theme.LocalPanes
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
 import dev.supermux.net.ArchivedDto
+import dev.supermux.net.CodexResetResult
 import dev.supermux.net.CuratorSettingsResponse
 import dev.supermux.net.DeviceDto
 import dev.supermux.net.ForgeConnectionsResponse
@@ -50,6 +53,9 @@ import dev.supermux.net.OpenCodeProvider
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.UpdateStatus
 import dev.supermux.android.session.relTime
+import dev.supermux.session.archivedProjects
+import dev.supermux.session.filterArchivedByProject
+import dev.supermux.session.formatWorkdir
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
@@ -738,6 +744,7 @@ fun AppearanceSettingsPage(
 fun UsageScreen(
     onBack: () -> Unit,
     onLoad: suspend () -> String?,
+    onRedeem: suspend () -> CodexResetResult?,
 ) {
     val cs = MaterialTheme.colorScheme
     var usage by remember { mutableStateOf<UsageData?>(null) }
@@ -811,7 +818,7 @@ fun UsageScreen(
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
                         ClaudeUsageCard(u?.claude, u?.errors?.get("claude"))
-                        CodexUsageCard(u?.codex, u?.errors?.get("codex"))
+                        CodexUsageCard(u?.codex, u?.errors?.get("codex"), onRedeem = onRedeem, onRefresh = { reloadKey++ })
                         CursorUsageCard(u?.cursor, u?.errors?.get("cursor"))
                     }
                 }
@@ -838,6 +845,7 @@ private data class CodexUsageData(
     val secondaryWindow: UsageWindowData?,
     val credits: CodexCreditsData?,
     val limitReached: Boolean,
+    val resetCredits: Int,
 )
 private data class CursorUsageData(
     val totalPercentUsed: Double,
@@ -901,6 +909,7 @@ private fun parseUsage(raw: String): UsageData {
                 )
             },
             limitReached = o.optBoolean("limitReached", false),
+            resetCredits = o.optInt("resetCredits", 0),
         )
     }
 
@@ -1079,8 +1088,17 @@ private fun ClaudeUsageCard(claude: ClaudeUsageData?, error: String?) {
 }
 
 @Composable
-private fun CodexUsageCard(codex: CodexUsageData?, error: String?) {
+private fun CodexUsageCard(
+    codex: CodexUsageData?,
+    error: String?,
+    onRedeem: (suspend () -> CodexResetResult?)? = null,
+    onRefresh: () -> Unit = {},
+) {
     val cs = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
+    var redeeming by remember { mutableStateOf(false) }
+    var showDialog by remember { mutableStateOf(false) }
+    var note by remember { mutableStateOf<String?>(null) }
     UsageCard(
         title = "Codex",
         subtitle = codex?.plan ?: "unknown",
@@ -1106,7 +1124,59 @@ private fun CodexUsageCard(codex: CodexUsageData?, error: String?) {
             codex.credits?.takeIf { it.hasCredits }?.let { cr ->
                 UsageFooterRow("Credits balance", "$${cr.balance}")
             }
+            UsageFooterRow("🎟️ Resets banked", "${codex.resetCredits}")
+            if (codex.resetCredits > 0 && onRedeem != null) {
+                OutlinedButton(
+                    onClick = { showDialog = true },
+                    enabled = !redeeming,
+                    modifier = Modifier.padding(top = 8.dp),
+                    border = BorderStroke(1.dp, cs.outline),
+                ) {
+                    Text(if (redeeming) "Redeeming…" else "Use a reset", color = cs.onSurface, fontSize = 13.sp)
+                }
+            }
+            if (note != null) {
+                Text(
+                    note!!,
+                    color = cs.onSurfaceVariant,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
         }
+    }
+    if (showDialog && codex != null) {
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text("Use a banked reset?") },
+            text = { Text("Spends 1 of ${codex.resetCredits} to clear your rate-limit windows now.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDialog = false
+                    scope.launch {
+                        redeeming = true
+                        val r = onRedeem?.invoke()
+                        note = codexResetNote(r)
+                        onRefresh()
+                        redeeming = false
+                    }
+                }) { Text("Use reset", color = cs.primary) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+private fun codexResetNote(r: CodexResetResult?): String {
+    if (r == null) return "Reset failed"
+    return when (r.code) {
+        "reset" -> "✓ Reset — cleared ${r.windowsReset} window${if (r.windowsReset == 1) "" else "s"}"
+        "nothing_to_reset" -> "Nothing to reset right now"
+        "no_credit" -> "No banked resets left"
+        "already_redeemed" -> "That reset was already redeemed"
+        else -> "Reset request completed"
     }
 }
 
@@ -1235,6 +1305,7 @@ fun ArchivedScreen(
     onBack: () -> Unit,
     onLoad: suspend () -> List<ArchivedDto>,
     onResume: (String) -> Unit,
+    home: String,
     loadLogs: suspend (String) -> List<LogEntry> = { emptyList() },
 ) {
     val cs = MaterialTheme.colorScheme
@@ -1243,6 +1314,15 @@ fun ArchivedScreen(
     var resumedIds by remember { mutableStateOf(setOf<String>()) }
     // Internal nav: tapping a row opens a read-only chat view of that session.
     var openedId by remember { mutableStateOf<String?>(null) }
+    var selectedProject by remember { mutableStateOf<String?>(null) }
+    var filterOpen by remember { mutableStateOf(false) }
+    val projects = remember(sessions, home) { archivedProjects(sessions, home) }
+    // Clear the filter if the selected project no longer has any archived sessions.
+    LaunchedEffect(projects) {
+        if (selectedProject != null && projects.none { it.key == selectedProject }) {
+            selectedProject = null
+        }
+    }
 
     LaunchedEffect(Unit) {
         sessions = onLoad()
@@ -1278,6 +1358,37 @@ fun ArchivedScreen(
                         )
                     }
                 },
+                actions = {
+                    if (sessions.isNotEmpty()) {
+                        Box {
+                            IconButton(onClick = { filterOpen = true }) {
+                                Icon(
+                                    Icons.Default.FilterList,
+                                    contentDescription = "Filter by project",
+                                    tint = if (selectedProject != null) cs.primary else cs.onSurface,
+                                )
+                            }
+                            DropdownMenu(expanded = filterOpen, onDismissRequest = { filterOpen = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("All projects") },
+                                    onClick = { selectedProject = null; filterOpen = false },
+                                    trailingIcon = if (selectedProject == null) {
+                                        { Icon(Icons.Default.Check, contentDescription = null) }
+                                    } else null,
+                                )
+                                projects.forEach { p ->
+                                    DropdownMenuItem(
+                                        text = { Text("${p.label}  (${p.count})") },
+                                        onClick = { selectedProject = p.key; filterOpen = false },
+                                        trailingIcon = if (selectedProject == p.key) {
+                                            { Icon(Icons.Default.Check, contentDescription = null) }
+                                        } else null,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = cs.surfaceContainerHigh,
                 ),
@@ -1296,18 +1407,22 @@ fun ArchivedScreen(
                     color = cs.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.Center),
                 )
-                else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
-                    items(sessions, key = { it.id }) { session ->
-                        ArchivedRow(
-                            session = session,
-                            resumed = session.id in resumedIds,
-                            onOpen = { openedId = session.id },
-                            onResume = {
-                                onResume(session.id)
-                                resumedIds = resumedIds + session.id
-                            },
-                        )
-                        HorizontalDivider(color = cs.outlineVariant)
+                else -> {
+                    val visible = remember(sessions, selectedProject) { filterArchivedByProject(sessions, selectedProject) }
+                    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
+                        items(visible, key = { it.id }) { session ->
+                            ArchivedRow(
+                                session = session,
+                                home = home,
+                                resumed = session.id in resumedIds,
+                                onOpen = { openedId = session.id },
+                                onResume = {
+                                    onResume(session.id)
+                                    resumedIds = resumedIds + session.id
+                                },
+                            )
+                            HorizontalDivider(color = cs.outlineVariant)
+                        }
                     }
                 }
             }
@@ -1316,7 +1431,7 @@ fun ArchivedScreen(
 }
 
 @Composable
-private fun ArchivedRow(session: ArchivedDto, resumed: Boolean, onOpen: () -> Unit, onResume: () -> Unit) {
+private fun ArchivedRow(session: ArchivedDto, home: String, resumed: Boolean, onOpen: () -> Unit, onResume: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Row(
         Modifier
@@ -1328,7 +1443,7 @@ private fun ArchivedRow(session: ArchivedDto, resumed: Boolean, onOpen: () -> Un
         Column(Modifier.weight(1f)) {
             Text(session.name, color = cs.onSurface, fontWeight = FontWeight.Medium, fontSize = 14.sp)
             Text(
-                session.workdir,
+                formatWorkdir(session.repo_root ?: session.workdir, home),
                 color = cs.onSurfaceVariant,
                 fontSize = 11.sp,
                 fontFamily = FontFamily.Monospace,

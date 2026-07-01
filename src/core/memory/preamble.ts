@@ -41,10 +41,12 @@ export function buildMemoryPreamble(role: AgentRole, name?: string, workdir?: st
   lines.push(agentsIndex)
   lines.push("")
   lines.push(
-    `Read the specific \`${home}/domains/<topic>.md\` file when a domain is ` +
-      `relevant to your task. Write durable findings back per the rules in your ` +
-      `environment instructions (append under a \`## Title (YYYY-MM-DD)\` heading; ` +
-      `use \`domains/_inbox.md\` if unsure where it belongs).`
+    `Read \`${home}/domains/<topic>.digest.md\` first for a domain's current ` +
+      `truth (\`<topic>.md\` holds the dated history). Use the \`memory_search\`, ` +
+      `\`find_sessions\`, and \`read_session\` tools to search knowledge and past ` +
+      `sessions. Write durable findings by appending under a ` +
+      `\`## Title (YYYY-MM-DD)\` heading in \`domains/<topic>.md\` (or ` +
+      `\`domains/_inbox.md\` if unsure). Never edit \`*.digest.md\`.`
   )
 
   if (role === "main") {

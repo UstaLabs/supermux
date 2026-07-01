@@ -32,12 +32,22 @@ fun WebCodeEditor(
     filename: String,
     fontSize: Int,
     scrollTop: Int = 0,
+    revealLine: Pair<Int, Int?>? = null,
     onChange: (String) -> Unit,
     onSave: () -> Unit,
+    onRevealConsumed: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     LaunchedEffect(content, filename, scrollTop) {
         engine.setDocument(content, filename, scrollTop)
+    }
+    // Reveal-line in its OWN effect: consuming it (revealLine→null) must NOT re-key the document
+    // push above, or the trailing cmSetScrollTop would race/override cmRevealLine on a cold open.
+    LaunchedEffect(revealLine) {
+        revealLine?.let {
+            engine.revealLine(it.first, it.second)
+            onRevealConsumed()   // one-shot so returning to this tab restores scroll instead of re-jumping
+        }
     }
 
     LaunchedEffect(engine) {
