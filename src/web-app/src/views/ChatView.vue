@@ -427,7 +427,10 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
 </script>
 
 <template>
-  <div class="h-dvh flex flex-col bg-[var(--cmux-chat)] text-foreground">
+  <!-- Height tracks the VISUAL viewport (--vvh), not 100dvh, so the shell shrinks
+       above the on-screen keyboard instead of letting the terminal / composer slide
+       under it. Falls back to 100dvh before --vvh is set / on old browsers. -->
+  <div class="flex flex-col bg-[var(--cmux-chat)] text-foreground" style="height: var(--vvh, 100dvh)">
     <header
       class="flex items-center gap-3 px-3 py-1.5 min-h-[3.5rem] border-b border-border sticky top-0 bg-[var(--cmux-header)]/95 backdrop-blur z-10"
       style="padding-top: calc(env(safe-area-inset-top, 0px) + 0.5rem)"
