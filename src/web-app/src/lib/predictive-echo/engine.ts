@@ -141,12 +141,16 @@ export class PredictionEngine {
       }
     }
 
+    // Divergence: erase every originally-drawn prediction (reverse order, so stacked
+    // predictions at one cell restore the earliest/true original), replay the whole
+    // chunk from the chunk-start physical (repaints confirmed echoes solid + the
+    // divergent content), reset + cooldown.
     if (diverged) {
-      // Erase every originally-drawn prediction, replay the whole chunk from the
-      // start-of-chunk physical (repaints confirmed echoes solid + divergent
-      // content), reset the epoch, cooldown. No tentative reposition.
       const ops: DisplayOp[] = [{ op: "hideCaret" }]
-      for (const c of drawnCells) ops.push({ op: "restoreCell", id: c.id, row: c.row, col: c.col })
+      for (let k = drawnCells.length - 1; k >= 0; k--) {
+        const c = drawnCells[k]!
+        ops.push({ op: "restoreCell", id: c.id, row: c.row, col: c.col })
+      }
       ops.push({ op: "moveCaret", row: origPhysical.row, col: origPhysical.col })
       ops.push({ op: "passthrough", bytes })
       ops.push({ op: "showCaret" })
@@ -155,19 +159,39 @@ export class PredictionEngine {
       return ops
     }
 
-    // No divergence: pass the chunk through (echoes confirm in place over the dim
-    // cells), draw any newly-confirmed backlog, then re-place the caret.
-    const ops: DisplayOp[] = [
-      { op: "hideCaret" },
-      { op: "moveCaret", row: origPhysical.row, col: origPhysical.col },
-      { op: "passthrough", bytes },
-      ...backlog,
-    ]
+    // Resync: a cursor-moving control (destructive backspace "\b \b", CR, …) can move
+    // the real caret by something other than +1 per matched printable, drifting our
+    // physical.col. If predictions SURVIVE this chunk we can no longer trust physical
+    // for them → erase the surviving dim tail, replay the chunk, and reset so the next
+    // input re-seeds from the real caret. No cooldown: the epoch reset alone quiets a
+    // redraw-heavy app, while a lone backspace stays responsive. (A chunk that fully
+    // drains is safe — physical is nulled below and never reused.)
+    if (sawComplex && this.pending.length > 0) {
+      const stillPending = new Set(this.pending.map((p) => p.id))
+      const ops: DisplayOp[] = [{ op: "hideCaret" }]
+      for (let k = drawnCells.length - 1; k >= 0; k--) {
+        const c = drawnCells[k]!
+        if (stillPending.has(c.id)) ops.push({ op: "restoreCell", id: c.id, row: c.row, col: c.col })
+      }
+      ops.push({ op: "moveCaret", row: origPhysical.row, col: origPhysical.col })
+      ops.push({ op: "passthrough", bytes })
+      ops.push({ op: "showCaret" })
+      this.clear()
+      return ops
+    }
+
+    // No divergence: draw any newly-confirmed backlog BEFORE the passthrough (so an
+    // echo that also confirms a backlog char in the same chunk paints it solid over
+    // the dim, not the reverse), pass the chunk through (echoes confirm in place over
+    // the dim cells), then re-place the caret after the still-dim tail.
+    const ops: DisplayOp[] = [{ op: "hideCaret" }, ...backlog]
+    ops.push({ op: "moveCaret", row: origPhysical.row, col: origPhysical.col })
+    ops.push({ op: "passthrough", bytes })
     if (this.pending.length === 0) {
       this.physical = null
       this.tentative = null
-    } else if (!sawComplex) {
-      ops.push(this.caret())
+    } else {
+      ops.push(this.caret()) // sawComplex + surviving pending returned above, so this is safe
     }
     ops.push({ op: "showCaret" })
     return ops

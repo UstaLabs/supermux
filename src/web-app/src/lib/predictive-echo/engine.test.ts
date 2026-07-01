@@ -27,9 +27,9 @@ describe("PredictionEngine — gate + epoch (Step 2)", () => {
     eng.onInput({ kind: "char", text: "b" }, { row: 0, col: 5 }) // tentative id2 @6, tentative→7
     expect(eng.onServerData(enc("a"))).toEqual([
       { op: "hideCaret" },
+      { op: "drawDim", id: 2, row: 0, col: 6, char: "b" }, // backlog drawn BEFORE passthrough
       { op: "moveCaret", row: 0, col: 5 },
       { op: "passthrough", bytes: enc("a") },
-      { op: "drawDim", id: 2, row: 0, col: 6, char: "b" },
       { op: "moveCaret", row: 0, col: 7 },
       { op: "showCaret" },
     ])
@@ -102,18 +102,21 @@ describe("PredictionEngine — caret + reconciliation (Step 2)", () => {
       { op: "showCaret" },
     ])
   })
-  it("suppresses the tentative caret reposition when the chunk contains an escape/control byte", () => {
+  it("resyncs when a surviving prediction shares a chunk with an escape/control byte", () => {
     const { eng } = mkEngine()
     eng.setLatencyEstimate(120)
     eng.onInput({ kind: "char", text: "x" }, { row: 0, col: 0 })
     eng.onServerData(enc("x")) // warm
     eng.onInput({ kind: "char", text: "a" }, { row: 0, col: 1 }) // drawn id2 @1
     eng.onInput({ kind: "char", text: "b" }, { row: 0, col: 1 }) // drawn id3 @2
+    // Echo "a" + clear-to-EOL: 'a' confirms, 'b' survives alongside an escape → resync
+    // (we can't trust physical.col past a cursor-moving control while a prediction lives).
     expect(eng.onServerData(enc("a\x1b[K"))).toEqual([
       { op: "hideCaret" },
+      { op: "restoreCell", id: 3, row: 0, col: 2 }, // erase the surviving dim 'b'
       { op: "moveCaret", row: 0, col: 1 },
       { op: "passthrough", bytes: enc("a\x1b[K") },
-      { op: "showCaret" }, // no tentative reposition — the chunk had an escape
+      { op: "showCaret" },
     ])
   })
   it("passes server bytes straight through when there are no predictions", () => {
@@ -130,8 +133,8 @@ describe("PredictionEngine — caret + reconciliation (Step 2)", () => {
     eng.onInput({ kind: "char", text: "b" }, { row: 0, col: 1 }) // drawn id3 @2
     expect(eng.onServerData(enc("aY"))).toEqual([ // 'a' confirms, 'Y' diverges from 'b'
       { op: "hideCaret" },
+      { op: "restoreCell", id: 3, row: 0, col: 2 }, // reverse order (stacked-cell safe)
       { op: "restoreCell", id: 2, row: 0, col: 1 },
-      { op: "restoreCell", id: 3, row: 0, col: 2 },
       { op: "moveCaret", row: 0, col: 1 },
       { op: "passthrough", bytes: enc("aY") },
       { op: "showCaret" },
@@ -149,6 +152,46 @@ describe("PredictionEngine — caret + reconciliation (Step 2)", () => {
       { op: "passthrough", bytes: enc("X") },
       { op: "showCaret" },
     ])
+  })
+  it("physical persists across chunks: two partial echoes keep landing the caret correctly", () => {
+    const { eng } = mkEngine()
+    eng.setLatencyEstimate(120)
+    eng.onInput({ kind: "char", text: "x" }, { row: 0, col: 0 })
+    eng.onServerData(enc("x")) // warm
+    eng.onInput({ kind: "char", text: "a" }, { row: 0, col: 1 }) // drawn id2 @1, physical=1, tentative→2
+    eng.onInput({ kind: "char", text: "b" }, { row: 0, col: 1 }) // drawn id3 @2, tentative→3
+    expect(eng.onServerData(enc("a"))).toEqual([
+      { op: "hideCaret" },
+      { op: "moveCaret", row: 0, col: 1 },
+      { op: "passthrough", bytes: enc("a") },
+      { op: "moveCaret", row: 0, col: 3 },
+      { op: "showCaret" },
+    ])
+    // Second partial echo: origPhysical must be the ADVANCED physical (col 2), not stale col 1.
+    expect(eng.onServerData(enc("b"))).toEqual([
+      { op: "hideCaret" },
+      { op: "moveCaret", row: 0, col: 2 },
+      { op: "passthrough", bytes: enc("b") },
+      { op: "showCaret" },
+    ])
+  })
+  it("resyncs on a destructive-backspace echo that leaves a prediction pending (B1: no physical drift)", () => {
+    const { eng } = mkEngine()
+    eng.setLatencyEstimate(120)
+    eng.onInput({ kind: "char", text: "s" }, { row: 0, col: 2 })
+    eng.onServerData(enc("s")) // warm at col 2, drain
+    eng.onInput({ kind: "backspace" }, { row: 0, col: 3 }) // predict ' '@2 (id2), physical=3, tentative→2
+    eng.onInput({ kind: "char", text: "t" }, { row: 0, col: 3 }) // predict 't'@2 (id3), tentative→3
+    // Destructive backspace echo: the ' ' matches, 't' survives → resync (not a drift).
+    expect(eng.onServerData(enc("\b \b"))).toEqual([
+      { op: "hideCaret" },
+      { op: "restoreCell", id: 3, row: 0, col: 2 }, // erase the surviving dim 't'
+      { op: "moveCaret", row: 0, col: 3 }, // origPhysical, BEFORE any drift
+      { op: "passthrough", bytes: enc("\b \b") },
+      { op: "showCaret" },
+    ])
+    // State reset → the retyped char's echo lands at the real caret, not a drifted column.
+    expect(eng.onServerData(enc("t"))).toEqual([{ op: "passthrough", bytes: enc("t") }])
   })
 })
 
