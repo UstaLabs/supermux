@@ -3,7 +3,6 @@ import type { RecentInboundIds } from "./recent-inbound-ids"
 export type InboundDeliveryDeps = {
   getAdapter: (sessionId: string) => { kind: string; send: (text: string, meta?: any) => Promise<void> } | undefined
   isClaude: (sessionId: string) => boolean
-  applyDeliver: (sessionId: string) => void
   sendInboundSocket: (sessionId: string, payload: { content: string; meta: any }) => Promise<void>
   seen: RecentInboundIds
 }
@@ -17,8 +16,9 @@ export type InboundDeliveryResult =
 //   - if an adapter exists, hand the turn to adapter.send();
 //   - else, for Claude only, fall back to the shim socket (which queues if the
 //     shim isn't connected yet) — preserving today's behavior;
-//   - else (adapter-driven agent with no adapter object) report not-ready WITHOUT
-//     flipping the live "sending" state (the caller surfaces this its own way).
+//   - else (adapter-driven agent with no adapter object) report not-ready
+//     (the caller surfaces this its own way). Delivery never touches agent state —
+//     the agent flips to "working" only on a real UserPromptSubmit hook.
 export async function deliverInbound(
   deps: InboundDeliveryDeps,
   sessionId: string,
@@ -31,7 +31,6 @@ export async function deliverInbound(
   const adapter = deps.getAdapter(sessionId)
   if (!adapter && !deps.isClaude(sessionId)) return { ok: false, reason: "adapter_not_ready" }
 
-  deps.applyDeliver(sessionId)
   if (adapter) await adapter.send(text, meta)
   else await deps.sendInboundSocket(sessionId, { content: text, meta })
 

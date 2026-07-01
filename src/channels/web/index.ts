@@ -76,7 +76,21 @@ export type StoredClientLogEntry = {
 }
 const MUTATING_METHODS = new Set(["POST", "PUT", "DELETE", "PATCH"])
 
-type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalAgentTarget?: string; display?: true; scrcpy?: true; displayStreamId?: string }
+// Pause feeding a terminal viewer's output once this many bytes are queued on
+// its socket; resume on the websocket `drain`. Bounds the broker's per-viewer
+// send-buffer memory and how far a slow client falls behind. NB: getBufferedAmount
+// reports POST-compression (permessage-deflate) wire bytes — terminal streams
+// deflate ~5-10x, so 256KB here is several MB of logical redraws: a generous bound
+// that won't trip on burst repaints. Tune via the perf measurement.
+const TERMINAL_BP_HIGH_WATER = 256 * 1024
+
+function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void
+  const promise = new Promise<void>((r) => { resolve = r })
+  return { promise, resolve }
+}
+
+type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalAgentTarget?: string; display?: true; scrcpy?: true; displayStreamId?: string; _termDrain?: { promise: Promise<void>; resolve: () => void } }
 
 export interface SessionSnapshot {
   id?: string
@@ -297,6 +311,14 @@ export class WebChannel implements Channel {
       port: this.opts.port,
       fetch: (req, server) => this.routeRequestOrUpgrade(req, server),
       websocket: {
+        // Negotiated per-connection (clients that don't support it are unaffected).
+        // Terminal + control-channel JSON are highly compressible; the heavy win
+        // is on slow links. NOTE: this is server-wide, so it also applies to the
+        // /ws/display + /ws/scrcpy binary streams, whose payloads are already
+        // compressed — deflate achieves a near-1.0 ratio on them (small header
+        // overhead) but still costs CPU. If that CPU shows up on this shared box,
+        // the fallback is terminal-only app-level deflate (see the perf plan).
+        perMessageDeflate: true,
         open: (ws) => {
           if ((ws.data as any)?.proxyUpstream) {
             const { proxyUpstream, proxyPath, proxyWsProtocol } = ws.data as any
@@ -352,6 +374,11 @@ export class WebChannel implements Channel {
             return
           }
           this.onWsClose(ws)
+        },
+        drain: (ws) => {
+          // Socket buffer emptied — release any terminal viewer we paused.
+          const d = ws.data._termDrain
+          if (d) { ws.data._termDrain = undefined; d.resolve() }
         },
       },
     })
@@ -537,7 +564,17 @@ export class WebChannel implements Channel {
       rows: 24,
       kind: ws.data.terminalKind ?? "scratch",
       agentTarget: ws.data.terminalAgentTarget,
-      onData: (data) => { try { ws.sendBinary(data) } catch {} },
+      onData: (data) => {
+        try { ws.sendBinary(data) } catch {}
+        // Past the high-water mark: hand pumpOutput a promise that resolves on
+        // the socket's `drain`, so we stop pulling pty-helper output (→ tmux
+        // sees a slow client and redraws current state instead of replaying).
+        if (ws.getBufferedAmount() > TERMINAL_BP_HIGH_WATER) {
+          const d = ws.data._termDrain ?? makeDeferred()
+          ws.data._termDrain = d
+          return d.promise
+        }
+      },
       onExit: (code) => { try { ws.send(JSON.stringify({ type: "exit", code })); ws.close() } catch {} },
     })
     if (!result.ok) {
@@ -569,6 +606,10 @@ export class WebChannel implements Channel {
   }
 
   private onTerminalWsClose(ws: import("bun").ServerWebSocket<WSData>): void {
+    // Wake a paused pumpOutput so it can observe the (about-to-be-killed) stream
+    // ending — otherwise it would await a drain that never comes.
+    const d = ws.data._termDrain
+    if (d) { ws.data._termDrain = undefined; d.resolve() }
     // Socket dropped (reload / nav / network): DETACH — the tmux session lives on.
     this.opts.terminalManager?.detach(ws.data.deviceName, ws.data.terminalSession!, ws.data.terminalId!)
   }

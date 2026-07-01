@@ -41,6 +41,9 @@ function block(b: any, ts: string): ActivityEvent | null {
   if (b.type === "thinking") {
     return null  // content is redacted; duration-aware "Thought for Ns" markers come from agentStateStore
   }
+  if (b.type === "text" && typeof b.text === "string" && b.text.startsWith("[Request interrupted by user")) {
+    return { ts, kind: "interrupt", title: "Interrupted" }
+  }
   if (b.type === "tool_use" && typeof b.name === "string") {
     const arg = shortInput(b.name, b.input)
     const title = clip(arg ? `${b.name}: ${arg}` : b.name, TITLE_MAX)

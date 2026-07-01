@@ -58,7 +58,7 @@ export interface TerminalInstance {
   intentional: boolean
   createdAt: number
   lastInputAt: number
-  onData: (data: Uint8Array) => void
+  onData: (data: Uint8Array) => void | Promise<void>
   onExit: (code: number) => void
 }
 
@@ -98,7 +98,7 @@ export class TerminalManager {
     workdir: string
     cols: number
     rows: number
-    onData: (data: Uint8Array) => void
+    onData: (data: Uint8Array) => void | Promise<void>
     onExit: (code: number) => void
     kind?: "scratch" | "agent"
     agentTarget?: string
@@ -181,7 +181,7 @@ export class TerminalManager {
         const { done, value } = await reader.read()
         if (done) break
         try {
-          inst.onData(value)
+          await inst.onData(value)
         } catch {}
       }
     } catch (err: any) {

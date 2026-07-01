@@ -12,8 +12,10 @@ final class TerminalSession {
     private let client: TerminalClient
     private(set) var status: Status = .disconnected
 
-    /// Set by the view: called on the main actor with each pty chunk.
-    var onBytes: (([UInt8]) -> Void)?
+    /// Set by the view: called on the main actor with each pty chunk, as the raw
+    /// KotlinByteArray — no per-element bridge here. The predictive-echo consumer passes it
+    /// straight to the engine (zero conversions); the teardown fallback converts once if needed.
+    var onBytes: ((KotlinByteArray) -> Void)?
     /// Set by the view: shell/agent process exited or errored.
     var onExit: (() -> Void)?
 
@@ -39,7 +41,7 @@ final class TerminalSession {
         tasks.append(Task { [weak self] in
             guard let self else { return }
             for await arr in self.client.output {
-                self.onBytes?(arr.toUInt8())
+                self.onBytes?(arr)
             }
         })
         tasks.append(Task { [weak self] in

@@ -36,7 +36,7 @@ const agentState = useAgentState()
 // actively working (thinking/running). Reads the same agent_state — and uses
 // the same condition — as the chat view's "Working…" indicator, so the two
 // never disagree.
-const working = computed(() => isAgentWorking(agentState.get(props.id).phase))
+const working = computed(() => isAgentWorking(agentState.get(props.id)))
 
 const gitStatus = useGitStatus()
 const badge = computed(() => gitBadge(gitStatus.get(props.id)))

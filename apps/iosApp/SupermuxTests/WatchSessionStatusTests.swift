@@ -16,8 +16,8 @@ final class WatchSessionStatusTests: XCTestCase {
     }
     func testNilGit() { XCTAssertNil(sessionStatus(nil)) }
     func testWorkingSet() {
-        for p in ["working", "thinking", "running", "tool", "busy", "sending"] { XCTAssertTrue(isWorking(p)) }
-        for p in ["idle", "stalled"] { XCTAssertFalse(isWorking(p)) }
+        for p in ["thinking", "running"] { XCTAssertTrue(isWorking(p)) }
+        for p in ["idle", "stalled", "working", "tool", "busy", "sending"] { XCTAssertFalse(isWorking(p)) }
         XCTAssertFalse(isWorking(nil))
     }
     func testAttentionBucket() {

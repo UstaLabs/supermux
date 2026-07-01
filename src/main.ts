@@ -120,6 +120,7 @@ import { FsWatcher } from "./core/editor/fs-watcher"
 import { scanRepos } from "./core/editor/repo-scanner"
 import { ActivityStore } from "./core/session-manager/activity-store"
 import { AgentStateStore } from "./core/session-manager/agent-state-store"
+import { toAgentStateFrame } from "./core/session-manager/agent-state-frame"
 import { TranscriptTailer } from "./core/agents/claude/transcript-tailer"
 import { claudeTranscriptPath } from "./core/agents/claude/transcript-path"
 import { renderTranscript } from "./core/search/transcript-render"
@@ -377,12 +378,10 @@ function ensureClaudeTailer(sessionUuid: string, _name: string, workdir: string,
   const tailer = new TranscriptTailer({
     path: claudeTranscriptPath(workdir, claudeSid),
     onEvent: (event) => {
+      // The transcript interrupt marker is the SOLE interrupt signal (no hook fires
+      // on ESC) — and it catches terminal-direct ESC too. It is state, not activity.
+      if (event.kind === "interrupt") { agentStateStore.applyEvent(sessionUuid, "interrupt"); return }
       activityStore.append(sessionUuid, event)
-      // Belt-and-braces: if Claude hooks can't reach the broker (stale hooks file,
-      // auth mismatch), flip sending→thinking on first transcript tool activity.
-      if (agentStateStore.get(sessionUuid).phase === "sending" && event.kind === "tool") {
-        agentStateStore.applyEvent(sessionUuid, "UserPromptSubmit")
-      }
     },
     seekToEnd,
   })
@@ -443,7 +442,6 @@ async function maybeAutoSendSoulSetup(sessionId: string): Promise<void> {
   const deliver = async (id: string, text: string, meta: Record<string, string>) => {
     const current = registry.get(id)
     const adapter = current ? adapters.get(current.id) : undefined
-    agentStateStore.applyEvent(id, "deliver")
     if (adapter) {
       await adapter.send(text, meta)
     } else {
@@ -637,6 +635,7 @@ function unregisterSession(id: string): void {
   registry.unregister(id)  // archives the session (resumable via resumeFromArchive)
   if (s) deleteRuntime(s.id)
   commandRegistry.remove(id)
+  agentStateStore.clear(id)  // drop any lingering working/dead state for the now-archived session
   // NOTE: do NOT delete agent_home here — archived sessions are resumable, so
   // their home (cursor runtime symlink + per-session state/history) must
   // survive. Truly orphaned dirs (no registry entry) are reclaimed by the
@@ -776,14 +775,11 @@ async function interruptClaudePane(sessionId: string): Promise<void> {
 }
 
 // The one funnel every Stop surface (web button, /stop command) routes through:
-// dispatch to the agent's own interrupt(), then optimistically flip the live
-// status to idle so the UI clears "Working…" at once. The agent's own turn-end
-// (Claude's Esc, codex turn/completed, cursor child exit) reconverges on idle.
+// dispatch to the agent's own interrupt(). The broker does NOT flip the live
+// status itself — idle is reflected from the session: Claude's interrupt marker
+// in the transcript, or codex/cursor turn-complete.
 async function interruptSessionById(sessionId: string): Promise<{ ok: boolean; reason?: string }> {
-  return runInterrupt({
-    adapter: adapters.get(sessionId),
-    onClear: () => agentStateStore.applyEvent(sessionId, "Stop"),
-  })
+  return runInterrupt({ adapter: adapters.get(sessionId) })
 }
 
 type FinishRequest = { action: FinishAction; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }
@@ -1070,7 +1066,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
     getSessionAgentState: (id) => {
       const s = registry.get(id)
-      return s ? agentStateStore.get(s.id) : { phase: "idle", since: 0 }
+      const st = s ? agentStateStore.get(s.id) : { phase: "idle" as const, since: 0 }
+      const { type: _type, session: _session, ...payload } = toAgentStateFrame(s?.id ?? id, st)
+      return payload
     },
     getSessionCommands: (id) => {
       const s = registry.get(id)
@@ -1890,10 +1888,18 @@ function optionalProviderArg(args: Record<string, unknown>, key: string): Provid
 const server = await startSocketServer({
   socketsDir: SOCKETS_DIR,
   onStatusChange: (session_id, connected, last_pong_at) => {
-    // session_id is now UUID from the socket
+    // session_id is the UUID from the socket. NOTE: liveness can fire slightly
+    // ahead of registration (markAlive runs before onRegister completes) — that's
+    // safe here: "connected" is a no-op unless the session was "dead", and "dead"
+    // only applies to a registered, non-suspended session.
     registry.sessions.setConnectionStatus(session_id, connected, last_pong_at)
     const s = registry.get(session_id)
     webChannel?.broadcastToAll({ type: "session_state", session: session_id, connected, model: s?.model })
+    if (connected) {
+      agentStateStore.applyEvent(session_id, "connected")          // revives a dead session; no-op otherwise
+    } else if (s && s.status !== "suspended") {
+      agentStateStore.applyEvent(session_id, "dead")               // crash/shim-gone — but NOT an intentional suspend
+    }
   },
   // Safety net: a queued inbound that can't reach a live channel shim within the
   // grace window means the session crashed / never came up. Tell the user in the
@@ -2351,7 +2357,6 @@ function deliverInbound(sessionId: string, text: string, meta: any): Promise<Inb
   return deliverInboundCore({
     getAdapter: (id) => adapters.get(id),
     isClaude: (id) => (registry.get(id)?.agent ?? "claude") === "claude",
-    applyDeliver: (id) => agentStateStore.applyEvent(id, "deliver"),
     sendInboundSocket: (id, payload) => server.sendInbound(id, payload),
     seen: recentInboundIds,
   }, sessionId, text, meta)
@@ -2860,8 +2865,6 @@ ch.on("inbound", async (msg: InboundMessage) => {
       await ch.send({ op: "reply", chat_id: msg.chat_id, text: `Failed to resume suspended session "${session.name}". Try /kill and re-spawn.`, disable_notification: false })
       return
     }
-  } else if ((session.agent ?? "claude") === "claude" && !registry.get(session.id)?.connected) {
-    await waitForSessionConnected(session.id, 10_000)
   }
 
   log.debug("send_inbound.before", { session: session.name, text: decision.text.slice(0, 80) })
@@ -2927,7 +2930,7 @@ activityStore.on("append", (sessionId: string, event) => {
   webChannel?.broadcastToAll({ type: "activity_append", session: sessionId, event })
 })
 agentStateStore.on("change", (sessionId: string, state) => {
-  webChannel?.broadcastToAll({ type: "agent_state", session: sessionId, phase: state.phase, tool: state.tool, since: state.since, workingSince: state.workingSince })
+  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, state))
   if (state.phase === "idle" && pendingReapply.has(sessionId)) {
     const olds = pendingReapply.take(sessionId)!
     void reapplySessionAgentConfig(sessionId).then((r) => {
@@ -2948,16 +2951,6 @@ agentStateStore.on("thoughtComplete", (sessionId: string, durationMs: number, no
   const sec = Math.max(1, Math.round(durationMs / 1000))
   activityStore.append(sessionId, { ts: new Date(now).toISOString(), kind: "thinking", title: `Thought for ${sec}s` })
 })
-// Watchdog: a turn that sits in "sending" with no progress signal past this
-// deadline becomes "stalled" (UI shows Retry/Stop) instead of hanging forever.
-// Conservative for M1 to avoid false stalls on slow cold-starts; tightened in M2
-// once richer per-phase signals exist.
-const STALL_SENDING_MS = 30_000
-const stallInterval = setInterval(() => {
-  const stalled = agentStateStore.sweepStalled(Date.now(), STALL_SENDING_MS)
-  for (const sid of stalled) log.warn("turn_stalled", { sessionId: sid })
-}, 1_000)
-
 messageLog.on("update", (sessionId, entry_id, patch) => {
   webChannel?.broadcastToAll({ type: "message_update", session: sessionId, entry_id, text: patch.text, edited_at: patch.edited_at })
 })
@@ -2984,12 +2977,6 @@ if (webChannel) {
         webChannel!.send({ op: "reply", chat_id: msg.chat_id, text: `Failed to resume session "${targetSession.name}".` })
         return
       }
-    } else if (
-      targetSession
-      && (targetSession.agent ?? "claude") === "claude"
-      && !registry.get(targetSession.id)?.connected
-    ) {
-      await waitForSessionConnected(targetSession.id, 10_000)
     }
     handleWebInbound(msg, {
       messageLog,
@@ -3362,7 +3349,6 @@ async function gracefulShutdown(signal: string) {
   } catch (err: any) { log.warn("curator_scheduler_stop_failed", { err: err?.message }) }
   try {
     clearInterval(gcInterval)
-    clearInterval(stallInterval)
     clearInterval(modelRefreshInterval)
   } catch (err: any) { log.warn("gc_interval_clear_failed", { err: err?.message ?? String(err) }) }
   try {

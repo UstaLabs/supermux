@@ -146,12 +146,18 @@ export class SearchStore {
 
 /** Build an FTS5 match expression that neutralizes operators and uses prefix
  * queries so partial stems (e.g. "deploy" → "Deploys") are found. Each word
- * becomes a quoted prefix term `"word"*`; multi-word input ANDs them together. */
+ * becomes a quoted prefix term `"word"*`; multi-word input is OR-ed so a natural
+ * keyword-bag matches any section/message containing ANY term, and the BM25 `rank`
+ * already in the ORDER BY floats the best-overlap row to the top.
+ *
+ * NB: the old " " join meant implicit-AND — every word had to co-occur in one
+ * section — so real 5+ word queries almost always returned `[]` (transcript audit
+ * 2026-07-01 found ~87% of memory_search calls came back empty for this reason). */
 function toMatch(query: string): string {
   const cleaned = query.replace(/["*+\-()^~]/g, " ").trim()
   if (!cleaned) return '""'
   return cleaned
     .split(/\s+/)
     .map((w) => `"${w}"*`)
-    .join(" ")
+    .join(" OR ")
 }

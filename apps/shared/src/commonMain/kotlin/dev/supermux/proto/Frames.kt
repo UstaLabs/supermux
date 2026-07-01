@@ -88,7 +88,15 @@ data class ActivityEvent(
 )
 
 @Serializable
-data class AgentStatus(val phase: String, val since: Long? = null)
+data class AgentStatus(
+    val phase: String,               // legacy alias (idle|thinking|running|stalled)
+    val state: String = "idle",      // idle | working | dead
+    val working: Boolean = false,
+    val detail: String? = null,      // thinking | running (when working)
+    val tool: String? = null,
+    val since: Long? = null,
+    val workingSince: Long? = null,
+)
 
 @Serializable
 data class SendArgs(val text: String = "", val attachments: List<String>? = null)
@@ -128,7 +136,10 @@ sealed interface ServerFrame {
     @Serializable @SerialName("agent_state")
     data class AgentState(
         val session: String,
-        val phase: String,
+        val phase: String,                 // legacy alias (idle|thinking|running|stalled)
+        val state: String = "idle",        // idle | working | dead
+        val working: Boolean = false,
+        val detail: String? = null,        // thinking | running (when working)
         val tool: String? = null,
         val since: Long? = null,
         val workingSince: Long? = null,
