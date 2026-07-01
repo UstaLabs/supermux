@@ -9,29 +9,34 @@ interface Pending {
   drawn: boolean
 }
 
+/**
+ * Predictive local echo engine (Step 2: caret rewrite). Pure logic — no terminal
+ * dependency — so it is exhaustively unit-testable and shareable across platforms.
+ *
+ * It ORCHESTRATES what the terminal writes via abstract DisplayOps (the adapter
+ * maps them to xterm/SwiftTerm/termlib). Two tracked cursors, VS Code style:
+ *   - physical:  where the server's authoritative caret is (advances on confirms)
+ *   - tentative: physical + still-pending predictions = where the visible caret
+ *                should sit so it rides the user's typing
+ * Confirms are implicit: the server's echo bytes, passed through over the dim
+ * cells, ARE the confirm. Divergence erases all dim + replays the chunk + resyncs.
+ * The Step-1 epoch gate (wait-for-first-confirmation) and prompt boundary carry over.
+ */
 export class PredictionEngine {
   private cfg: PredictionConfig
   private now: () => number
   private nextId = 1
   private pending: Pending[] = []
   private latencyMs = 0
-  private cursor: CursorPos | null = null
+  private physical: CursorPos | null = null
+  private tentative: CursorPos | null = null
   private cooldownUntil = 0
-  // Whether the current epoch has had a server-confirmed prediction. Until it
-  // does, predictions are tracked but NOT drawn ("wait for first confirmation"):
-  // this hides post-Enter / into-prompt mispredicts, and means a no-echo context
-  // (a password prompt) never draws anything. Reset on opaque input / divergence.
+  // Wait-for-first-confirmation: predictions stay tracked-but-undrawn until the
+  // server confirms one. Persists across a natural pending-drain; resets only on
+  // opaque input / divergence. (See the v1 password-ghost note in onServerData.)
   private epochConfirmed = false
-  // Leftmost column the current line's editing may touch (= the authoritative
-  // cursor column when this prediction run began, right after the prompt).
-  // Backspace/cursor-left predictions are refused at or left of it so we never
-  // predict-delete the prompt. null = unseeded; set on the first prediction of a
-  // line, reset when the line context changes. Invariant: non-null whenever
-  // pending > 0 (seeded on the 0→1 transition; resets always co-clear pending).
-  // Limitation: for a recalled line (history up-arrow redraws existing text with
-  // the cursor at its END), this seeds at that end column, so predictive
-  // backspace is over-refused for that line — safe (never eats the prompt), but
-  // no predictive backspace there; proper boundary tracking is a Step 2 item.
+  // Leftmost column the line's editing may touch (prompt boundary). Set once on
+  // the pending 0->1 transition; reset on opaque/divergence/reset. See onInput.
   private epochStartCol: number | null = null
 
   constructor(cfg: PredictionConfig, now: () => number) {
@@ -50,62 +55,61 @@ export class PredictionEngine {
   onInput(ev: InputEvent, serverCursor: CursorPos): DisplayOp[] {
     if (!this.active()) return []
     // Opaque input (Enter, Tab, Ctrl-keys, escapes, paste) changes the line
-    // unpredictably → roll back drawn predictions and reset the epoch.
+    // unpredictably → erase drawn predictions, snap the caret back, reset.
     if (ev.kind === "opaque") return this.resetEpoch()
     if (this.pending.length === 0) {
-      this.cursor = { ...serverCursor }
+      this.physical = { ...serverCursor }
+      this.tentative = { ...serverCursor }
       if (this.epochStartCol === null) this.epochStartCol = serverCursor.col
     }
     if (this.pending.length >= this.cfg.maxPending) return []
-    // invariant: cursor is non-null here — seeded above when pending was empty,
-    // and retained (never cleared without also clearing pending) while pending > 0.
-    const cursor = this.cursor!
+    // invariant: tentative/physical are non-null here (seeded above when pending
+    // was empty, and never cleared without also clearing pending).
+    const t = this.tentative!
 
     if (ev.kind === "char") {
-      const p: Pending = {
-        id: this.nextId++, row: cursor.row, col: cursor.col,
-        char: ev.text, predictedAt: this.now(), drawn: this.epochConfirmed,
-      }
-      this.pending.push(p)
-      cursor.col += 1
-      // Tentative (epoch not yet confirmed) → tracked for matching but not drawn.
-      return p.drawn ? [{ op: "predict", id: p.id, row: p.row, col: p.col, char: p.char }] : []
+      const p = this.push(t.row, t.col, ev.text)
+      t.col += 1
+      return p.drawn ? [{ op: "drawDim", id: p.id, row: p.row, col: p.col, char: p.char }, this.caret()] : []
     }
     if (ev.kind === "backspace") {
       // Never predict-delete past the line's start column (into the prompt).
-      // `?? 0` is defensive only — epochStartCol is non-null whenever pending > 0
-      // (it's seeded just above on the 0→1 transition), so the fallback is unreached.
-      if (cursor.col <= (this.epochStartCol ?? 0)) return []
-      cursor.col -= 1
-      const p: Pending = {
-        id: this.nextId++, row: cursor.row, col: cursor.col,
-        char: " ", predictedAt: this.now(), drawn: this.epochConfirmed,
-      }
-      this.pending.push(p)
-      return p.drawn ? [{ op: "predict", id: p.id, row: p.row, col: p.col, char: " " }] : []
+      // `?? 0` is defensive only — epochStartCol is non-null whenever pending > 0.
+      if (t.col <= (this.epochStartCol ?? 0)) return []
+      t.col -= 1
+      const p = this.push(t.row, t.col, " ")
+      return p.drawn ? [{ op: "drawDim", id: p.id, row: p.row, col: p.col, char: " " }, this.caret()] : []
     }
-    if (ev.kind === "cursorLeft") { if (cursor.col > (this.epochStartCol ?? 0)) cursor.col -= 1; return [] }
-    if (ev.kind === "cursorRight") { cursor.col += 1; return [] }
+    // Arrows move the predicted cursor for positioning the next char, but (v1)
+    // do not move the visible caret predictively — that waits for the server.
+    if (ev.kind === "cursorLeft") { if (t.col > (this.epochStartCol ?? 0)) t.col -= 1; return [] }
+    if (ev.kind === "cursorRight") { t.col += 1; return [] }
     return []
   }
 
-  // v1 reconciliation limitations (all self-heal via rollback + cooldown):
-  // - a CSI sequence split across two onServerData calls misreads the leading '[' (spurious rollback);
-  // - only ESC[ (CSI) is fully skipped, so a mid-stream OSC (ESC]) can leak content bytes to the matcher;
+  // v1 reconciliation limitations (self-heal via divergence-erase + cooldown/resync):
+  // - a CSI sequence split across two onServerData calls misreads the leading '[' (spurious divergence);
+  // - only ESC[ (CSI) is skipped for matching, so a mid-stream OSC (ESC]) can leak bytes to the matcher;
   // - wide chars (CJK/emoji) advance col by 1 not 2, so predictions after one are a column early;
-  // - no-echo input (password prompts, `read -s`) never confirms the epoch, so nothing is ever DRAWN
-  //   (predictions stay tentative) — the v1 password-ghost is gone. A line whose app stops echoing
-  //   mid-way, AFTER the epoch already confirmed, can still leave drawn predictions lingering until the
-  //   next divergence; bounded timeout expiry for that residual case is deferred to a later version.
-  // Cross-call escape buffering + wcwidth are deferred to a later version.
+  // - no-echo input (password prompts) never confirms the epoch, so nothing is ever drawn (ghost-free);
+  // - any chunk containing an escape/control byte suppresses the tentative caret reposition (conservative:
+  //   the caret then sits where the authoritative bytes left it), and anything the cursor model can't
+  //   track resyncs on the next drain. Cross-call escape buffering + wcwidth are deferred.
   onServerData(bytes: Uint8Array): DisplayOp[] {
-    if (this.pending.length === 0) return []
-    const ops: DisplayOp[] = []
+    if (this.pending.length === 0) return bytes.length ? [{ op: "passthrough", bytes }] : []
+    const origPhysical = { ...this.physical! }
+    // Cells of every currently-drawn prediction, captured BEFORE the walk mutates
+    // pending — needed to erase them all on divergence.
+    const drawnCells = this.pending.filter((p) => p.drawn).map((p) => ({ id: p.id, row: p.row, col: p.col }))
     const chars = [...new TextDecoder().decode(bytes)]
+    const backlog: DisplayOp[] = []
+    let diverged = false
+    let sawComplex = false // any escape/control byte → suppress tentative reposition
     for (let i = 0; i < chars.length; i++) {
       const ch = chars[i]!
       const cp = ch.codePointAt(0)!
-      if (cp === 0x1b) { // skip a whole escape sequence (CSI: ESC [ ... final byte 0x40-0x7e)
+      if (cp === 0x1b) { // skip a CSI escape for MATCHING (still passed through in `bytes`)
+        sawComplex = true
         i++
         if (chars[i] === "[") {
           i++
@@ -113,51 +117,97 @@ export class PredictionEngine {
         }
         continue
       }
-      if (cp < 0x20 || cp === 0x7f) continue // CR/LF / other lone control bytes
-      const head = this.pending[0]!
+      if (cp < 0x20 || cp === 0x7f) { sawComplex = true; continue } // CR/LF / control
+      const head = this.pending[0]
+      if (!head) break // pending drained; the rest of `bytes` is trailing content
       if (ch === head.char) {
         this.sampleLatency(this.now() - head.predictedAt)
-        if (head.drawn) ops.push({ op: "confirm", id: head.id })
         this.pending.shift()
-        // First confirmation in this epoch → the app echoes, so trust it: confirm
-        // the epoch and draw the backlog of tentative predictions queued behind it.
+        this.physical!.col += 1
         if (!this.epochConfirmed) {
+          // First confirmation → trust the echo: draw the backlog of tentative
+          // predictions queued behind the head (they become visible now).
           this.epochConfirmed = true
           for (const p of this.pending) {
             if (!p.drawn) {
               p.drawn = true
-              ops.push({ op: "predict", id: p.id, row: p.row, col: p.col, char: p.char })
+              backlog.push({ op: "drawDim", id: p.id, row: p.row, col: p.col, char: p.char })
             }
           }
         }
-        if (this.pending.length === 0) break
       } else {
-        // Divergence → roll back what we drew, reset the epoch, enter cooldown.
-        const ids = this.pending.filter((p) => p.drawn).map((p) => p.id)
-        this.pending = []
-        this.cursor = null
-        this.epochConfirmed = false
-        this.epochStartCol = null
-        this.cooldownUntil = this.now() + this.cfg.cooldownMs
-        return ids.length ? [...ops, { op: "rollback", ids }] : ops
+        diverged = true
+        break
       }
     }
+
+    if (diverged) {
+      // Erase every originally-drawn prediction, replay the whole chunk from the
+      // start-of-chunk physical (repaints confirmed echoes solid + divergent
+      // content), reset the epoch, cooldown. No tentative reposition.
+      const ops: DisplayOp[] = [{ op: "hideCaret" }]
+      for (const c of drawnCells) ops.push({ op: "restoreCell", id: c.id, row: c.row, col: c.col })
+      ops.push({ op: "moveCaret", row: origPhysical.row, col: origPhysical.col })
+      ops.push({ op: "passthrough", bytes })
+      ops.push({ op: "showCaret" })
+      this.clear()
+      this.cooldownUntil = this.now() + this.cfg.cooldownMs
+      return ops
+    }
+
+    // No divergence: pass the chunk through (echoes confirm in place over the dim
+    // cells), draw any newly-confirmed backlog, then re-place the caret.
+    const ops: DisplayOp[] = [
+      { op: "hideCaret" },
+      { op: "moveCaret", row: origPhysical.row, col: origPhysical.col },
+      { op: "passthrough", bytes },
+      ...backlog,
+    ]
+    if (this.pending.length === 0) {
+      this.physical = null
+      this.tentative = null
+    } else if (!sawComplex) {
+      ops.push(this.caret())
+    }
+    ops.push({ op: "showCaret" })
     return ops
+  }
+
+  private push(row: number, col: number, char: string): Pending {
+    const p: Pending = { id: this.nextId++, row, col, char, predictedAt: this.now(), drawn: this.epochConfirmed }
+    this.pending.push(p)
+    return p
+  }
+
+  /** moveCaret op to the current tentative position. */
+  private caret(): DisplayOp {
+    return { op: "moveCaret", row: this.tentative!.row, col: this.tentative!.col }
   }
 
   private sampleLatency(ms: number): void {
     this.latencyMs = this.latencyMs === 0 ? ms : Math.round(this.latencyMs * 0.7 + ms * 0.3)
   }
 
-  /** Roll back any drawn predictions and clear all epoch state. Used on opaque
-   *  input (Enter/Tab/Ctrl/paste) and on reconnect via reset(). */
-  private resetEpoch(): DisplayOp[] {
-    const ids = this.pending.filter((p) => p.drawn).map((p) => p.id)
+  private clear(): void {
     this.pending = []
-    this.cursor = null
+    this.physical = null
+    this.tentative = null
     this.epochConfirmed = false
     this.epochStartCol = null
-    return ids.length ? [{ op: "rollback", ids }] : []
+  }
+
+  /** Erase drawn predictions, snap the caret back to physical, and clear state.
+   *  Used on opaque input (Enter/Tab/Ctrl/paste) and on reconnect via reset(). */
+  private resetEpoch(): DisplayOp[] {
+    const drawn = this.pending.filter((p) => p.drawn)
+    const phys = this.physical
+    this.clear()
+    if (!drawn.length) return []
+    const ops: DisplayOp[] = [{ op: "hideCaret" }]
+    for (const p of drawn) ops.push({ op: "restoreCell", id: p.id, row: p.row, col: p.col })
+    if (phys) ops.push({ op: "moveCaret", row: phys.row, col: phys.col })
+    ops.push({ op: "showCaret" })
+    return ops
   }
 
   reset(): DisplayOp[] {
