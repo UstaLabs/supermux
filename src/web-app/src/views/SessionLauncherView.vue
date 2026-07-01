@@ -7,6 +7,7 @@ import { api } from "@/api/client"
 import { useWS } from "@/api/ws"
 import { useSessions } from "@/stores/sessions"
 import { usePendingFirstMessage } from "@/stores/pendingFirstMessage"
+import { useLauncherDraft } from "@/stores/launcherDraft"
 import { useUploads } from "@/stores/uploads"
 import { useIsDesktop } from "@/composables/useIsDesktop"
 import { useSortedSessions } from "@/composables/useSortedSessions"
@@ -37,6 +38,7 @@ import {
 import PromptInputActionAddCamera from "@/components/ai-elements/prompt-input/PromptInputActionAddCamera.vue"
 import SlashCommandMenu from "@/components/SlashCommandMenu.vue"
 import LauncherComposeLock from "@/components/LauncherComposeLock.vue"
+import LauncherDraftSync from "@/components/LauncherDraftSync.vue"
 import { useLauncherCommands } from "@/composables/useLauncherCommands"
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input"
 
@@ -62,12 +64,30 @@ const repoInfo = ref<{ isGitRepo: boolean; eligible: boolean; repoRoot?: string;
 const useWorktree = ref(true)
 const baseBranch = ref("")
 
+const launcherDraft = useLauncherDraft()
+if (launcherDraft.state.workdir) {
+  workdir.value = launcherDraft.state.workdir
+  workdirTouched.value = true
+}
+useWorktree.value = launcherDraft.state.useWorktree
+baseBranch.value = launcherDraft.state.baseBranch
+
+// True once refreshRepoInfo has resolved at least once. Gates the "default to the
+// repo's current branch" reset so a restored draft's baseBranch survives the first,
+// restore-triggered call — later calls (the user picking a different project) still
+// reset it, matching today's behavior for a fresh pick.
+let repoInfoInitialized = false
 async function refreshRepoInfo(p: string) {
   try {
     const validation = await api.validatePath(p)
     if (!validation.ok || !validation.path) { repoInfo.value = null; return }
     repoInfo.value = await api.getRepoInfo(validation.path)
-    baseBranch.value = repoInfo.value?.currentBranch ?? ""
+    if (repoInfoInitialized) {
+      baseBranch.value = repoInfo.value?.currentBranch ?? ""
+    } else {
+      repoInfoInitialized = true
+      if (!baseBranch.value) baseBranch.value = repoInfo.value?.currentBranch ?? ""
+    }
   } catch { repoInfo.value = null }
 }
 watch(workdir, (p) => { if (p?.trim()) void refreshRepoInfo(p) }, { immediate: true })
@@ -129,6 +149,12 @@ if (prefs) {
 
 watch([agent, model], () => {
   savePrefs()
+})
+
+watch([workdir, workdirTouched, useWorktree, baseBranch], () => {
+  if (workdirTouched.value) launcherDraft.setWorkdir(workdir.value)
+  launcherDraft.setWorktree(useWorktree.value)
+  launcherDraft.setBaseBranch(baseBranch.value)
 })
 
 const submitting = ref(false)
@@ -240,6 +266,7 @@ async function onPromptSubmit(payload: PromptInputMessage) {
       model: result.model,
       reasoningLevel: result.reasoningLevel,
     })
+    launcherDraft.clear()
     pending.set(result.id, payload)
     await router.push(`/s/${result.id}`)
   } catch (err: unknown) {
@@ -305,9 +332,11 @@ function goBack() {
           :max-files="10"
           :max-file-size="25 * 1024 * 1024"
           :global-drop="isDesktop"
+          :initial-input="launcherDraft.state.text"
           @submit="onPromptSubmit"
         >
           <LauncherComposeLock @engaged="composeStarted = true" />
+          <LauncherDraftSync />
           <SlashCommandMenu
             :commands="launcherCommands"
             :loading="launcherCommandsLoading"
