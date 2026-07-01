@@ -73,11 +73,16 @@ final class PredictionAdapter {
     /// Feed an escape/text string to SwiftTerm (parsed exactly like xterm's `term.write`).
     private func feed(_ s: String) { tv.feed(text: s) }
 
-    /// Read the character in a (viewport-relative) cell for the snapshot. SwiftTerm's
-    /// `getCharacter(col:row:)` is zero-based, viewport-relative — the same space as
-    /// `DrawDim`'s row/col (both seeded from `getCursorLocation`). An empty/unwritten cell
-    /// reads back as NUL; treat NUL (and an out-of-bounds nil) as a space, mirroring the web
-    /// adapter's `|| " "` fallback for xterm's empty `getChars()`.
+    /// Read the character in a cell for the snapshot. SwiftTerm's `getCharacter(col:row:)`
+    /// is zero-based but resolves relative to the SCROLLED display (`yDisp`), whereas our
+    /// `DrawDim`/CUP paint the active screen (`yBase`). These coincide whenever the view sits
+    /// at the bottom (`yDisp == yBase`) — which is ALWAYS the case under tmux's mouse-on
+    /// alternate buffer (no local scrollback), the default for both terminal kinds. The only
+    /// gap: a PLAIN-shell session scrolled up into local history *mid-prediction* would snapshot
+    /// a wrong (visible-but-not-cursor) cell, so a rollback may repaint a stale glyph until the
+    /// next server redraw — the iOS analogue of the web adapter's accepted "viewport scroll
+    /// between predict and restore" caveat; self-heals. An empty/unwritten cell reads back as
+    /// NUL; treat NUL (and out-of-bounds nil) as a space, mirroring the web's `|| " "`.
     private func readCell(_ row: Int32, _ col: Int32) -> String {
         guard let ch = tv.getTerminal().getCharacter(col: Int(col), row: Int(row)), ch != "\0" else {
             return " "
