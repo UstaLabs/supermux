@@ -88,7 +88,7 @@ struct RootView: View {
                 try? await Task.sleep(nanoseconds: 250_000_000)
             }
         }
-        .fullScreenCover(item: $debugArchived) { item in
+        .smFullScreenCover(item: $debugArchived) { item in
             NavigationStack { ArchivedChatView(broker: broker, archived: item.dto) }
         }
         .onReceive(PushRouter.shared.$pendingSessionId) { id in
@@ -109,7 +109,7 @@ struct RootView: View {
                              onArchived: { route = .archived })
                 .navigationDestination(item: $route) { page($0) }
                 .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarItem(placement: .smTopTrailing) {
                         Menu {
                             Button { route = .personalAssistants } label: { Label("Assistants", systemImage: "person.2") }
                             Button { route = .usage } label: { Label("Usage", systemImage: "chart.bar") }

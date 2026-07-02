@@ -213,7 +213,7 @@ struct ChatPane: View {
         }
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .images)
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { composer.handleFiles($0) }
-        .fullScreenCover(isPresented: $showCamera) { CameraPicker { composer.addCameraImage($0) } }
+        .smFullScreenCover(isPresented: $showCamera) { CameraPicker { composer.addCameraImage($0) } }
     }
 
     // ONE glass card with an always-present TextField: tapping it focuses natively, so
@@ -518,7 +518,7 @@ struct SessionTranscript: View, Equatable {
                 Button { broker.send(session.id, p) } label: {
                     Text(p).font(.subheadline).frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 14).padding(.vertical, 11)
-                        .background(Color(.secondarySystemBackground),
+                        .background(Color.smSecondaryBackground,
                                     in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .buttonStyle(.plain).foregroundStyle(.primary)

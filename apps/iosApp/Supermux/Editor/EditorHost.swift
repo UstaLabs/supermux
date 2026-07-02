@@ -15,7 +15,7 @@ final class EditorHost {
 
     /// CodeMirror's one-dark canvas color (#282c34). Painted on the web view and its
     /// scroll view so the file:// page doesn't flash white before first paint.
-    private static let editorBackground = UIColor(
+    private static let editorBackground = PlatformColor(
         red: 0x28 / 255.0, green: 0x2c / 255.0, blue: 0x34 / 255.0, alpha: 1
     )
 

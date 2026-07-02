@@ -33,10 +33,10 @@ struct GitHostingSettingsView: View {
             }
         }
         .navigationTitle("Git hosting")
-        .navigationBarTitleDisplayMode(.inline)
+        .smInlineNavigationTitle()
         .tint(Theme.teal)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .smTopTrailing) {
                 Button { addKindPreset = nil; addSheetOpen = true }
                     label: { Label("Add account", systemImage: "plus") }
                     .disabled(working)
@@ -107,7 +107,7 @@ struct GitHostingSettingsView: View {
                 .font(.system(size: 18))
                 .foregroundStyle(c.kind == "gitlab" ? .orange : .primary)
                 .frame(width: 34, height: 34)
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9))
+                .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 9))
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -162,7 +162,7 @@ struct GitHostingSettingsView: View {
                         .font(.system(size: 32))
                         .foregroundStyle(Theme.teal)
                         .frame(width: 56, height: 56)
-                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+                        .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 16))
 
                     VStack(spacing: 6) {
                         Text("Connect a Git host").font(.title3.weight(.semibold))
@@ -186,10 +186,10 @@ struct GitHostingSettingsView: View {
 
                 // Divider before manual connect
                 HStack(spacing: 8) {
-                    Rectangle().frame(height: 1).foregroundStyle(Color(.separator))
+                    Rectangle().frame(height: 1).foregroundStyle(Color.smSeparator)
                     Text(importable.isEmpty ? "Connect manually" : "or connect manually")
                         .font(.caption).foregroundStyle(.secondary)
-                    Rectangle().frame(height: 1).foregroundStyle(Color(.separator))
+                    Rectangle().frame(height: 1).foregroundStyle(Color.smSeparator)
                 }
                 .padding(.top, 20).padding(.horizontal, 24)
 
@@ -205,7 +205,7 @@ struct GitHostingSettingsView: View {
                                 Text(kind.capitalized).font(.subheadline.weight(.medium))
                             }
                             .frame(maxWidth: .infinity).padding(.vertical, 12)
-                            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+                            .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 12))
                         }
                         .buttonStyle(.plain)
                     }
@@ -362,7 +362,7 @@ private struct AddForgeSheet: View {
                 Section {
                     SecureField(kind == "github" ? "github_pat_…" : "glpat-…", text: $token)
                         .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
+                        .smNoAutocapitalization()
                         .font(.system(.subheadline, design: .monospaced))
                 } header: {
                     Text("Personal access token")
@@ -379,7 +379,7 @@ private struct AddForgeSheet: View {
                     DisclosureGroup("Self-hosted & transport", isExpanded: $showAdvanced) {
                         TextField("API base URL — e.g. github.acme.com/api/v3", text: $hostUrl)
                             .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
+                            .smNoAutocapitalization()
                             .font(.system(.subheadline, design: .monospaced))
 
                         Picker("Transport", selection: $transport) {
@@ -416,15 +416,15 @@ private struct AddForgeSheet: View {
                 }
             }
             .navigationTitle("Add a Git account")
-            .navigationBarTitleDisplayMode(.inline)
+            .smInlineNavigationTitle()
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .smTopLeading) {
                     Button("Cancel") { dismiss() }.disabled(submitting)
                 }
             }
         }
         .tint(Theme.teal)
-        .presentationDetents([.medium, .large])
+        .smPresentationDetents([.medium, .large])
         .onAppear {
             if let preset = presetKind, kinds.contains(preset) { kind = preset }
             Task { cliStatus = try? await broker.api.listForges().cli }

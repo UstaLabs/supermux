@@ -1,6 +1,5 @@
 import SwiftUI
 import Shared
-import UIKit
 
 /// Owns ONE persistent display stream — the live transport session (VNC or scrcpy WS) plus
 /// the native surface (`MTLTexture` framebuffer / `AVSampleBufferDisplayLayer` decoder) that

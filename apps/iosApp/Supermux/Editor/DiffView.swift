@@ -1,6 +1,5 @@
 import SwiftUI
 import Shared
-import UIKit
 
 /// Native git-diff viewer + lightweight code-review tool — 1:1 parity with the PWA
 /// `DiffView.vue`. Renders unified diffs as monospaced rows (add/del/ctx/hunk), groups
@@ -55,7 +54,7 @@ struct DiffView: View {
                 submitBar
             }
         }
-        .background(Color(.systemBackground))
+        .background(Color.smBackground)
         // Seed expansion once, and re-seed when the repo set itself changes (parity with
         // the Vue `watch(immediate:true)` that expands every repo by default).
         .onAppear { seedRepos() }
@@ -76,7 +75,7 @@ struct DiffView: View {
                 .font(.subheadline.weight(.medium))
             Spacer(minLength: 8)
             Button {
-                UISelectionFeedbackGenerator().selectionChanged()
+                SMHaptics.selection()
                 wrap.toggle()
             } label: {
                 Text("Wrap")
@@ -143,7 +142,7 @@ struct DiffView: View {
         let expanded = expandedRepos.contains(repo.repo)
         let label = repo.repo.isEmpty ? "workdir" : repo.repo
         return Button {
-            UISelectionFeedbackGenerator().selectionChanged()
+            SMHaptics.selection()
             toggle(&expandedRepos, repo.repo)
         } label: {
             HStack(spacing: 8) {
@@ -166,7 +165,7 @@ struct DiffView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(Color(.secondarySystemBackground))
+        .background(Color.smSecondaryBackground)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(label), \(repo.files.count) files")
         .accessibilityAddTraits(.isButton)
@@ -192,7 +191,7 @@ struct DiffView: View {
     private func fileHeader(repo: String, file: DiffFile, key: String, expanded: Bool,
                             stats: (added: Int, deleted: Int)) -> some View {
         Button {
-            UISelectionFeedbackGenerator().selectionChanged()
+            SMHaptics.selection()
             toggle(&expandedFiles, key)
         } label: {
             HStack(spacing: 8) {
@@ -289,7 +288,7 @@ struct DiffView: View {
                 }
             }
         }
-        .background(Color(.secondarySystemBackground).opacity(0.4))
+        .background(Color.smSecondaryBackground.opacity(0.4))
     }
 
     /// One diff line: a gutter sigil (− / @@ / a tappable ⊕ on add+ctx) + the line text.
@@ -320,7 +319,7 @@ struct DiffView: View {
                 let key = composerKey(repo, path, newLine)
                 let open = composerFor == key
                 Button {
-                    UISelectionFeedbackGenerator().selectionChanged()
+                    SMHaptics.selection()
                     toggleComposer(key)
                 } label: {
                     Image(systemName: open ? "plus.circle.fill" : "plus.circle")
@@ -353,7 +352,7 @@ struct DiffView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .background(Color(.secondarySystemBackground).opacity(0.4))
+            .background(Color.smSecondaryBackground.opacity(0.4))
     }
 
     // MARK: - Inline comment composer

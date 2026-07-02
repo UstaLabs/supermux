@@ -252,7 +252,7 @@ private struct VncStreamView: View {
                 }
             }
             .navigationTitle("Password required")
-            .navigationBarTitleDisplayMode(.inline)
+            .smInlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { passwordSheet = false }
@@ -267,7 +267,7 @@ private struct VncStreamView: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .smPresentationDetents([.medium])
     }
 }
 

@@ -50,7 +50,7 @@ struct IPadWorkspace: View {
         .workspaceShortcuts(layout: layout, session: selected) { route = .newSession }
         // The session header lives in the detail column (see `WorkspaceDetail`), so the stack's
         // own nav bar is hidden — it would otherwise span both columns and double the chrome.
-        .toolbar(.hidden, for: .navigationBar)
+        .smHideNavigationBar()
         .alert("Rename session", isPresented: $showRename) {
             TextField("Name", text: $renameText)
             Button("Cancel", role: .cancel) {}
@@ -116,7 +116,7 @@ struct IPadWorkspace: View {
         Rectangle()
             .fill(Color.secondary.opacity(0.25))
             .frame(width: 1)
-            .hoverEffect(.highlight)
+            .smHoverHighlight()
             .overlay {
                 Color.clear
                     .frame(width: 24)
@@ -250,7 +250,7 @@ private struct WorkspaceDetail: View {
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.teal)
                 .controlSize(.small)
-                .hoverEffect(.highlight)
+                .smHoverHighlight()
             }
             overflowMenu
         }
@@ -282,7 +282,7 @@ private struct WorkspaceDetail: View {
             } label: {
                 Image(systemName: "link").font(.body)
             }
-            .hoverEffect(.highlight)
+            .smHoverHighlight()
         }
     }
 
@@ -311,7 +311,7 @@ private struct WorkspaceDetail: View {
         } label: {
             Image(systemName: "ellipsis.circle").font(.body)
         }
-        .hoverEffect(.highlight)
+        .smHoverHighlight()
     }
 
     // MARK: - Multi-pane content

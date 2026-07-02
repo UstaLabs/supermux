@@ -65,7 +65,7 @@ struct AttachmentView: View {
                     previewURL = tmpURL(data, name: imageFileName)
                 }
             } label: {
-                Image(uiImage: image).resizable().scaledToFit()
+                Image(platform: image).resizable().scaledToFit()
                     .frame(maxWidth: .infinity, maxHeight: 240, alignment: .leading)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
@@ -73,7 +73,7 @@ struct AttachmentView: View {
             .quickLookPreview($previewURL)
         } else {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(.secondarySystemBackground)).frame(height: 140).overlay(ProgressView())
+                .fill(Color.smSecondaryBackground).frame(height: 140).overlay(ProgressView())
         }
     }
 
@@ -113,7 +113,7 @@ struct AttachmentView: View {
                 }
             }
             .padding(10)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+            .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
         .quickLookPreview($previewURL)

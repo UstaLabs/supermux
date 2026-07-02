@@ -70,7 +70,7 @@ struct SessionsListView: View {
         .navigationTitle("supermux")
         // Inline title: a persistent top reveal bar can't coexist with a large title (the
         // safeAreaInset eats the large title's space and squashes it).
-        .navigationBarTitleDisplayMode(.inline)
+        .smInlineNavigationTitle()
         .overlay {
             if !broker.synced && broker.sessions.isEmpty {
                 ProgressView("Connecting…").tint(Theme.teal)

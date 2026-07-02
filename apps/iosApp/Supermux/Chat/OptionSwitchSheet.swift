@@ -39,12 +39,12 @@ struct OptionSwitchSheet: View {
                     }
                 }
             }
-            .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .navigationTitle(title).smInlineNavigationTitle()
+            .toolbar { ToolbarItem(placement: .smTopTrailing) { Button("Done") { dismiss() } } }
             .task { await load() }
         }
         .tint(Theme.teal)
-        .presentationDetents([.medium, .large])
+        .smPresentationDetents([.medium, .large])
     }
 
     private func load() async {

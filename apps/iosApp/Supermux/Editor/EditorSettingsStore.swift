@@ -76,14 +76,14 @@ struct EditorSettingsView: View {
                 }
             }
             .navigationTitle("Editor")
-            .navigationBarTitleDisplayMode(.inline)
+            .smInlineNavigationTitle()
             .tint(Theme.teal)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .smTopTrailing) {
                     Button("Done") { dismiss() }
                 }
             }
         }
-        .presentationDetents([.medium])
+        .smPresentationDetents([.medium])
     }
 }

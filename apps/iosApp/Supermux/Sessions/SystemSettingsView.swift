@@ -29,7 +29,7 @@ struct SystemSettingsView: View {
             }
         }
         .navigationTitle("System")
-        .navigationBarTitleDisplayMode(.inline)
+        .smInlineNavigationTitle()
         .tint(Theme.teal)
         .task { await load() }
     }

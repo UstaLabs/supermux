@@ -48,7 +48,7 @@ struct AgentViewToggle: View {
                     .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .hoverEffect(.highlight)
+                .smHoverHighlight()
                 .accessibilityLabel("\(seg.label) view")
                 .accessibilityAddTraits(on ? [.isSelected] : [])
             }

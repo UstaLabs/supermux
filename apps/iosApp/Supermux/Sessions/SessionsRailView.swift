@@ -48,7 +48,7 @@ struct SessionsRailView: View {
                 .overlay(alignment: .topTrailing) {
                     if working(s) {
                         Circle().fill(Theme.teal).frame(width: 9, height: 9)
-                            .overlay(Circle().strokeBorder(Color(.systemBackground), lineWidth: 1.5))
+                            .overlay(Circle().strokeBorder(Color.smBackground, lineWidth: 1.5))
                             .offset(x: 3, y: -3)
                     }
                 }

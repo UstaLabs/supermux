@@ -98,7 +98,7 @@ struct NewSessionView: View {
             }
             .padding(20).frame(maxWidth: .infinity)
         }
-        .navigationTitle("New session").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("New session").smInlineNavigationTitle()
         .tint(Theme.teal)
         .task {
             // No session yet (pre-spawn launcher): the broker's id-less /transcribe cleans the
@@ -172,7 +172,7 @@ struct NewSessionView: View {
                 branches: repoInfo?.branches, currentBranch: repoInfo?.currentBranch,
                 loading: worktreeFetching, onAppearRefresh: onWorktreeRefresh
             )
-            .presentationDetents([.medium, .large])
+            .smPresentationDetents([.medium, .large])
         }
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
@@ -180,7 +180,7 @@ struct NewSessionView: View {
         }
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .images)
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { composer.handleFiles($0) }
-        .fullScreenCover(isPresented: $showCamera) { CameraPicker { composer.addCameraImage($0) } }
+        .smFullScreenCover(isPresented: $showCamera) { CameraPicker { composer.addCameraImage($0) } }
         .onChange(of: composer.refocusToken) { _, _ in composing = true }
         .onChange(of: workdir) { _, new in
             launcherState.draft.workdir = new.isEmpty ? nil : new
@@ -237,7 +237,7 @@ struct NewSessionView: View {
             }
             .foregroundStyle(useWorktree ? AnyShapeStyle(Theme.teal) : AnyShapeStyle(.secondary))
             .padding(.horizontal, 11).padding(.vertical, 5)
-            .background(Color(.secondarySystemBackground), in: Capsule())
+            .background(Color.smSecondaryBackground, in: Capsule())
         }
     }
 
@@ -339,7 +339,7 @@ struct NewSessionView: View {
             }
         }
         .padding(16)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     private var canSpawn: Bool { !workdir.isEmpty }
@@ -484,10 +484,10 @@ private struct ProjectPickerSheet: View {
                     }
                 }
             }
-            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always),
+            .searchable(text: $search, placement: .smNavDrawerAlways,
                         prompt: "Search projects, repos, or type a path")
-            .navigationTitle("Project").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() } } }
+            .navigationTitle("Project").smInlineNavigationTitle()
+            .toolbar { ToolbarItem(placement: .smTopTrailing) { Button("Cancel") { dismiss() } } }
             .overlay {
                 if resolving {
                     ZStack {
@@ -611,9 +611,9 @@ private struct WorktreeSheet: View {
                     }
                 }
             }
-            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search branches")
-            .navigationTitle("Worktree").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .searchable(text: $search, placement: .smNavDrawerAlways, prompt: "Search branches")
+            .navigationTitle("Worktree").smInlineNavigationTitle()
+            .toolbar { ToolbarItem(placement: .smTopTrailing) { Button("Done") { dismiss() } } }
         }
         .tint(Theme.teal)
         .task { await onAppearRefresh() }

@@ -106,7 +106,7 @@ struct ToolRowView: View {
                 .padding(.horizontal, 10).padding(.bottom, 8)
             }
         }
-        .background(Color(.secondarySystemBackground).opacity(0.4),
+        .background(Color.smSecondaryBackground.opacity(0.4),
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 0.5))
     }

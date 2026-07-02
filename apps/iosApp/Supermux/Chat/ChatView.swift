@@ -50,7 +50,7 @@ struct ChatView: View {
         let rendered = UIGraphicsImageRenderer(size: canvas).image { _ in
             ui.draw(in: CGRect(x: inset, y: inset, width: canvas.width - 2 * inset, height: canvas.height - 2 * inset))
         }
-        let image = Image(uiImage: rendered.withRenderingMode(.alwaysOriginal))
+        let image = Image(platform: rendered.withRenderingMode(.alwaysOriginal))
         Self.tabIconCache[asset] = image
         return image
     }
@@ -103,10 +103,10 @@ struct ChatView: View {
         .navigationTitle(session.name)
         .navigationSubtitle(navSubtitle)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
+            ToolbarItem(placement: .smTopLeading) {
                 AgentLogo(agent: session.agent, size: 20)
             }
-            ToolbarItemGroup(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .smTopTrailing) {
                 if session.session_branch != nil {
                     Button { finishSheet = true } label: {
                         Label("Finish", systemImage: "arrow.triangle.merge")

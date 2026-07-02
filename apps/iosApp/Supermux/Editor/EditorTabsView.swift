@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 /// Horizontal, unlimited tab strip for the editor pane. Parity with the PWA `EditorTabs.vue`
 /// and Android `EditorTabs`, but per the user's overrides: NO tab cap, the ACTIVE tab reads by
@@ -64,7 +63,7 @@ struct EditorTabsView: View {
             .frame(height: 34)
             .contentShape(Rectangle())
             .onTapGesture {
-                UISelectionFeedbackGenerator().selectionChanged()
+                SMHaptics.selection()
                 onSelect(tab.path)
             }
             .accessibilityElement(children: .combine)
@@ -74,7 +73,7 @@ struct EditorTabsView: View {
 
             // Close stays its own VoiceOver element / 44pt target.
             Button {
-                UISelectionFeedbackGenerator().selectionChanged()
+                SMHaptics.selection()
                 onClose(tab.path)
             } label: {
                 Image(systemName: "xmark")
@@ -88,7 +87,7 @@ struct EditorTabsView: View {
         }
         .foregroundStyle(active ? .primary : .secondary)
         .background(
-            active ? Color(.secondarySystemBackground) : .clear,
+            active ? Color.smSecondaryBackground : .clear,
             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
     }

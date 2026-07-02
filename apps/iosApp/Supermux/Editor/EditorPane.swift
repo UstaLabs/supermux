@@ -57,7 +57,7 @@ struct EditorPane: View {
                 bodyContent
             }
         }
-        .background(Color(.systemBackground))
+        .background(Color.smBackground)
         .onAppear { broker.editorOpen(session.id) }
         .onDisappear { broker.editorClose(session.id) }
         .onChange(of: session.id) { old, new in
@@ -195,7 +195,7 @@ struct EditorPane: View {
                 if state.treeVisible {
                     fileTree
                         .frame(width: 260)
-                        .background(Color(.secondarySystemBackground))
+                        .background(Color.smSecondaryBackground)
                     Divider()
                 }
                 editorOrEmpty.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -205,7 +205,7 @@ struct EditorPane: View {
                 editorOrEmpty
                 if state.treeVisible {
                     fileTree
-                        .background(Color(.systemBackground))
+                        .background(Color.smBackground)
                         .transition(.move(edge: .leading).combined(with: .opacity))
                 }
             }

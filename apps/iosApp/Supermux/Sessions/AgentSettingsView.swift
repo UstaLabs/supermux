@@ -173,7 +173,7 @@ private struct AgentRow: View {
                 SecureField(status.kind == "claude" ? "oauth_token_…" : "sk-…", text: $keyValue)
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
+                    .smNoAutocapitalization()
                     .font(.callout.monospaced())
                 Button {
                     saveKey()
@@ -275,7 +275,7 @@ private struct AgentRow: View {
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.teal)
                     Button {
-                        UIPasteboard.general.string = urlString
+                        SMPasteboard.set(urlString)
                     } label: {
                         Image(systemName: "doc.on.doc")
                     }
@@ -298,7 +298,7 @@ private struct AgentRow: View {
                         TextField("paste code", text: $codeValue)
                             .textFieldStyle(.roundedBorder)
                             .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
+                            .smNoAutocapitalization()
                             .font(.callout.monospaced())
                         Button("Submit") { submitCode() }
                             .buttonStyle(.borderedProminent)
@@ -462,7 +462,7 @@ private struct OpenCodeZenKeyRow: View {
                 SecureField("OpenCode key (Zen + Go)", text: $keyValue)
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
+                    .smNoAutocapitalization()
                     .font(.callout.monospaced())
                 Button(saving ? "…" : "Save") { saveKey() }
                     .buttonStyle(.borderedProminent)
@@ -471,7 +471,7 @@ private struct OpenCodeZenKeyRow: View {
             }
         }
         .padding(10)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+        .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 10))
     }
 
     private func saveKey() {
@@ -526,7 +526,7 @@ private struct OpenCodeProviderRow: View {
                     TextField("paste code", text: $oauthCode)
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
+                        .smNoAutocapitalization()
                         .font(.callout.monospaced())
                     Button(finishing ? "…" : "Finish") { finishOAuth() }
                         .buttonStyle(.borderedProminent)
@@ -546,7 +546,7 @@ private struct OpenCodeProviderRow: View {
                         SecureField(apiMethod.label.isEmpty ? "API key" : apiMethod.label, text: $keyValue)
                             .textFieldStyle(.roundedBorder)
                             .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
+                            .smNoAutocapitalization()
                             .font(.callout.monospaced())
                         Button(saving ? "…" : "Save") { saveKey() }
                             .buttonStyle(.borderedProminent)
@@ -557,7 +557,7 @@ private struct OpenCodeProviderRow: View {
             }
         }
         .padding(10)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+        .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 10))
     }
 
     private var prettyName: String {
@@ -627,9 +627,9 @@ private struct CopyableCommand: View {
                 .font(.caption.monospaced())
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+                .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 8))
             Button {
-                UIPasteboard.general.string = command
+                SMPasteboard.set(command)
                 copied = true
             } label: {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")

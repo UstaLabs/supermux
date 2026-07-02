@@ -25,7 +25,7 @@ struct AssistantSettingsView: View {
             }
         }
         .navigationTitle("Assistant")
-        .navigationBarTitleDisplayMode(.inline)
+        .smInlineNavigationTitle()
         .tint(Theme.teal)
         .task { await load() }
     }

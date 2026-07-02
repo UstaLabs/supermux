@@ -90,7 +90,7 @@ struct DevicesView: View {
                         HStack(spacing: 12) {
                             Image(systemName: "iphone").foregroundStyle(.secondary)
                                 .frame(width: 34, height: 34)
-                                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9))
+                                .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 9))
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(d.name).font(.subheadline.weight(.medium))
                                 Text(subtitle(d)).font(.caption2).foregroundStyle(.secondary)
@@ -106,9 +106,9 @@ struct DevicesView: View {
                 }
             }
         }
-        .navigationTitle("Devices").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("Devices").smInlineNavigationTitle()
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .smTopTrailing) {
                 Button { adding = true } label: { Label("Add device", systemImage: "plus") }
             }
         }
@@ -147,11 +147,11 @@ private struct AddDeviceSheet: View {
                 if let url { minted(url) } else { entry }
             }
             .padding(20)
-            .navigationTitle("Add device").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .navigationTitle("Add device").smInlineNavigationTitle()
+            .toolbar { ToolbarItem(placement: .smTopTrailing) { Button("Done") { dismiss() } } }
         }
         .tint(Theme.teal)
-        .presentationDetents([.medium, .large])
+        .smPresentationDetents([.medium, .large])
     }
 
     private var entry: some View {
@@ -159,7 +159,7 @@ private struct AddDeviceSheet: View {
             Text("Give the new device a name. You'll get a one-time link to open on it.")
                 .font(.subheadline).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
             TextField("e.g. laptop, ipad, kitchen", text: $name)
-                .textFieldStyle(.roundedBorder).autocorrectionDisabled().textInputAutocapitalization(.never)
+                .textFieldStyle(.roundedBorder).autocorrectionDisabled().smNoAutocapitalization()
             Button {
                 minting = true
                 Task {
@@ -182,15 +182,15 @@ private struct AddDeviceSheet: View {
             Text("Open this link on the new device, or scan it:")
                 .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
             if let img = qrImage(url) {
-                Image(uiImage: img).interpolation(.none).resizable().scaledToFit()
+                Image(platform: img).interpolation(.none).resizable().scaledToFit()
                     .frame(width: 190, height: 190).padding(8)
                     .background(.white, in: RoundedRectangle(cornerRadius: 12))
             }
             Text(url).font(.caption.monospaced()).foregroundStyle(.secondary)
                 .lineLimit(3).truncationMode(.middle).padding(10).frame(maxWidth: .infinity)
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 10))
             Button {
-                UIPasteboard.general.string = url; copied = true
+                SMPasteboard.set(url); copied = true
             } label: { Label(copied ? "Copied" : "Copy link", systemImage: copied ? "checkmark" : "doc.on.doc") }
                 .buttonStyle(.bordered).tint(Theme.teal)
             Text("Treat this link like a password — anyone who opens it gets access until you revoke the device.")
@@ -230,7 +230,7 @@ struct ProxiesView: View {
                         HStack(spacing: 12) {
                             Image(systemName: "network").foregroundStyle(.secondary)
                                 .frame(width: 34, height: 34)
-                                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9))
+                                .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 9))
                             VStack(alignment: .leading, spacing: 2) {
                                 if let u = URL(string: proxyUrl(proxy: p)) {
                                     Link(destination: u) {
@@ -261,7 +261,7 @@ struct ProxiesView: View {
                 }
             }
         }
-        .navigationTitle("Proxies").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("Proxies").smInlineNavigationTitle()
         .alert("Make proxy public?",
             isPresented: Binding(get: { confirmPublic != nil }, set: { if !$0 { confirmPublic = nil } })) {
             Button("Cancel", role: .cancel) {}
@@ -292,7 +292,7 @@ struct DisplaysView: View {
     @State private var viewing: DisplayStreamItem?
     @State private var banner: String?
 
-    /// Identifiable wrapper so `.fullScreenCover(item:)` can present a `DisplayStream`
+    /// Identifiable wrapper so `.smFullScreenCover(item:)` can present a `DisplayStream`
     /// (the SKIE-bridged Kotlin type isn't `Identifiable` on the Swift side).
     private struct DisplayStreamItem: Identifiable { let stream: DisplayStream; var id: String { stream.id } }
 
@@ -318,9 +318,9 @@ struct DisplaysView: View {
                 }
             }
         }
-        .navigationBarTitleDisplayMode(.inline)
+        .smInlineNavigationTitle()
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .smTopTrailing) {
                 Button { start() } label: { Label("Start display", systemImage: "plus") }
             }
         }
@@ -332,7 +332,7 @@ struct DisplaysView: View {
                     .padding(.bottom, 16)
             }
         }
-        .fullScreenCover(item: $viewing) { item in
+        .smFullScreenCover(item: $viewing) { item in
             DisplayViewerSheet(broker: broker, stream: item.stream)
         }
         .task { await broker.refreshDisplays(); loading = false }
@@ -419,9 +419,9 @@ struct UsageView: View {
             }
             .padding(16)
         }
-        .navigationTitle("Usage").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("Usage").smInlineNavigationTitle()
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .smTopTrailing) {
                 Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
                     .disabled(loading)
             }
@@ -610,7 +610,7 @@ private struct UsageCard<Content: View>: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .opacity(dimmed ? 0.55 : 1)
     }
 }
@@ -661,9 +661,9 @@ struct ArchivedView: View {
                 }
             }
         }
-        .navigationTitle("Archived").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("Archived").smInlineNavigationTitle()
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .smTopTrailing) {
                 if !items.isEmpty {
                     Menu {
                         Picker("Filter by project", selection: $projectFilter) {
@@ -716,9 +716,9 @@ struct ArchivedChatView: View {
                 .scrollContentBackground(.hidden)
             }
         }
-        .navigationTitle(archived.name).navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(archived.name).smInlineNavigationTitle()
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .smTopTrailing) {
                 Button("Resume") { broker.resume(archived.id); dismiss() }.tint(Theme.teal)
             }
         }
@@ -770,9 +770,9 @@ struct PersonalAssistantsView: View {
                 }
             }
         }
-        .navigationTitle("Assistants").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("Assistants").smInlineNavigationTitle()
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .smTopTrailing) {
                 Button { creating = true } label: { Label("New", systemImage: "plus") }
             }
         }
@@ -819,7 +819,7 @@ private struct CreatePASheet: View {
             Form {
                 Section("Name") {
                     TextField("e.g. coder, researcher", text: $name)
-                        .autocorrectionDisabled().textInputAutocapitalization(.never)
+                        .autocorrectionDisabled().smNoAutocapitalization()
                 }
                 Section("Agent") {
                     Picker("Agent", selection: $agent) {
@@ -841,8 +841,8 @@ private struct CreatePASheet: View {
                     .disabled(!canCreate || creating)
                 }
             }
-            .navigationTitle("New assistant").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } } }
+            .navigationTitle("New assistant").smInlineNavigationTitle()
+            .toolbar { ToolbarItem(placement: .smTopLeading) { Button("Cancel") { dismiss() } } }
         }
         .tint(Theme.teal)
     }

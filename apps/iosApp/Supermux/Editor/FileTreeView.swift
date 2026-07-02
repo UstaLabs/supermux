@@ -1,6 +1,5 @@
 import SwiftUI
 import Shared
-import UIKit
 
 /// Lazy file tree for the editor pane. Mirrors the Android `FileTree` / PWA `FileTree.vue`:
 /// the root loads from `loadDir(".")`, directories expand on tap (loaded once, tracked in
@@ -103,7 +102,7 @@ struct FileTreeView: View {
     }
 
     private func onTap(_ node: TreeNode) {
-        UISelectionFeedbackGenerator().selectionChanged()
+        SMHaptics.selection()
         if node.isDir { toggleDir(node) } else { onOpenFile(node.path) }
     }
 

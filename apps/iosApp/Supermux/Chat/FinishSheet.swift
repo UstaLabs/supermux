@@ -43,11 +43,11 @@ struct FinishSheet: View {
                 }
             }
             .navigationTitle(navTitle)
-            .navigationBarTitleDisplayMode(.inline)
+            .smInlineNavigationTitle()
             .toolbar {
                 // No Done while running — mirror web hiding the close button mid-job.
                 if view != .running {
-                    ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+                    ToolbarItem(placement: .smTopTrailing) { Button("Done") { dismiss() } }
                 }
             }
             .task {
@@ -59,7 +59,7 @@ struct FinishSheet: View {
             }
         }
         .tint(Theme.teal)
-        .presentationDetents([.medium, .large])
+        .smPresentationDetents([.medium, .large])
     }
 
     private var navTitle: String {

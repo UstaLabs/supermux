@@ -63,7 +63,7 @@ struct PaneToggleCluster: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(pane.id == "chat" && chatToggleDisabled)
-                .hoverEffect(.highlight)
+                .smHoverHighlight()
                 .accessibilityLabel(pane.id == "chat" ? "Toggle chat" : "Toggle \(pane.label.lowercased())")
                 .accessibilityValue(open ? "Shown" : "Hidden")
             }

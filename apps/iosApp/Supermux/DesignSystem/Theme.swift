@@ -36,7 +36,7 @@ extension View {
         let shape = RoundedRectangle(cornerRadius: Theme.cardCorner, style: .continuous)
         return padding(.horizontal, 12)
             .padding(.vertical, 9)
-            .background(Color(.secondarySystemBackground), in: shape)
+            .background(Color.smSecondaryBackground, in: shape)
             .overlay(shape.strokeBorder(Theme.hairline, lineWidth: 1))
     }
 }
