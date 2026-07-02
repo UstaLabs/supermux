@@ -359,6 +359,8 @@ struct NewSessionView: View {
                 // Attachments need a session id, so upload after spawn (like the first message).
                 var ids: [String] = []
                 for p in toUpload {
+                    // Audio clips → "voice"; images and videos stay nil so the broker infers the kind
+                    // from the MIME (video/* → "video" server-side). Never mislabel a video as audio.
                     let kind = p.mime.hasPrefix("audio") ? "voice" : nil
                     if let fid = await broker.upload(id, data: p.data, filename: p.filename, mime: p.mime, kind: kind) {
                         ids.append(fid)

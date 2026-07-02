@@ -336,6 +336,8 @@ struct ChatPane: View {
         Task {
             var ids: [String] = []
             for p in toUpload {
+                // Audio clips → "voice"; images and videos stay nil so the broker infers the kind
+                // from the MIME (video/* → "video" server-side). Never mislabel a video as audio.
                 let kind = p.mime.hasPrefix("audio") ? "voice" : nil
                 if let id = await broker.upload(session.id, data: p.data, filename: p.filename, mime: p.mime, kind: kind) {
                     ids.append(id)
