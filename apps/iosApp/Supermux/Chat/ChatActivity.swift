@@ -147,7 +147,7 @@ struct ToolRowView: View {
             }
             .frame(maxHeight: 200)
             .padding(8)
-            .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))
+            .background(Color.smTertiaryFill, in: RoundedRectangle(cornerRadius: 6))
         }
     }
 }

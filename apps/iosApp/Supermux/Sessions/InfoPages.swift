@@ -537,7 +537,7 @@ struct UsageView: View {
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color(.tertiarySystemFill))
+                    Capsule().fill(Color.smTertiaryFill)
                     Capsule().fill(barColor(used)).frame(width: geo.size.width * min(max(used, 0), 100) / 100)
                 }
             }.frame(height: 7)

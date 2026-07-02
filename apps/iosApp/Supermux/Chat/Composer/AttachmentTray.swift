@@ -22,7 +22,7 @@ struct AttachmentTray: View {
             }
         }
         .padding(.horizontal, 8).padding(.vertical, 5)
-        .background(Color(.tertiarySystemFill), in: Capsule())
+        .background(Color.smTertiaryFill, in: Capsule())
         .foregroundStyle(.secondary)
     }
 }

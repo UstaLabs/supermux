@@ -55,7 +55,7 @@ struct AgentViewToggle: View {
         }
         .padding(2)
         .background(
-            RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color(.tertiarySystemFill))
+            RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.smTertiaryFill)
         )
         .animation(.snappy(duration: 0.2), value: isNative)
         .accessibilityElement(children: .contain)

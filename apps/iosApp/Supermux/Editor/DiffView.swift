@@ -383,7 +383,7 @@ struct DiffView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.tertiarySystemBackground))
+        .background(Color.smTertiaryBackground)
     }
 
     // MARK: - Existing comment thread row
@@ -421,7 +421,7 @@ struct DiffView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.tertiarySystemBackground))
+        .background(Color.smTertiaryBackground)
         .accessibilityElement(children: .combine)
     }
 

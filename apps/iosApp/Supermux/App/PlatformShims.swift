@@ -109,6 +109,22 @@ extension Color {
         Color(nsColor: .separatorColor)
         #endif
     }
+    /// iOS `.tertiarySystemBackground`
+    static var smTertiaryBackground: Color {
+        #if canImport(UIKit)
+        Color(.tertiarySystemBackground)
+        #else
+        Color(nsColor: .textBackgroundColor)
+        #endif
+    }
+    /// iOS `.tertiarySystemFill`
+    static var smTertiaryFill: Color {
+        #if canImport(UIKit)
+        Color(.tertiarySystemFill)
+        #else
+        Color(nsColor: .quaternaryLabelColor.withAlphaComponent(0.18))
+        #endif
+    }
 }
 
 // MARK: - Images

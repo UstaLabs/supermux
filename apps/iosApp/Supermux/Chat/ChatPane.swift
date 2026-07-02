@@ -314,7 +314,7 @@ struct ChatPane: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(Color(.tertiarySystemFill), in: Capsule())
+        .background(Color.smTertiaryFill, in: Capsule())
     }
 
     /// Shown while the first-run on-device speech model is downloading/preparing — so the
@@ -326,7 +326,7 @@ struct ChatPane: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(Color(.tertiarySystemFill), in: Capsule())
+        .background(Color.smTertiaryFill, in: Capsule())
     }
 
     // MARK: - Send
@@ -354,7 +354,7 @@ struct ChatPane: View {
                 Text(text).font(.caption.weight(.medium)).lineLimit(1)
             }
             .padding(.horizontal, 9).padding(.vertical, 4)
-            .background(Color(.tertiarySystemFill), in: Capsule())
+            .background(Color.smTertiaryFill, in: Capsule())
             .foregroundStyle(.secondary)
         }
         .buttonStyle(.plain)

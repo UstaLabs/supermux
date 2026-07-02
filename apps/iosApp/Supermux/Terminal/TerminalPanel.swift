@@ -44,7 +44,7 @@ struct TerminalPanel: View {
                         }.buttonStyle(.plain).foregroundStyle(.secondary)
                     }
                     .padding(.horizontal, 10).padding(.vertical, 6)
-                    .background(activeId == id ? Theme.teal.opacity(0.18) : Color(.tertiarySystemFill),
+                    .background(activeId == id ? Theme.teal.opacity(0.18) : Color.smTertiaryFill,
                                 in: Capsule())
                     .foregroundStyle(activeId == id ? Theme.teal : .secondary)
                     .contentShape(Capsule())
