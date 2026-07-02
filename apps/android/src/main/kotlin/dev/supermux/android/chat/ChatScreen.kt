@@ -252,7 +252,7 @@ fun ChatScreen(
     fun clipboardHasImage(): Boolean {
         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return false
         val desc = cm.primaryClipDescription ?: return false
-        return (0 until desc.mimeTypeCount).any { desc.getMimeType(it).startsWith("image/") }
+        return (0 until desc.mimeTypeCount).any { isAttachableMediaMime(desc.getMimeType(it)) }
     }
 
     fun clipboardImageUris(): List<Uri> {
@@ -260,7 +260,7 @@ fun ChatScreen(
         val clip = cm.primaryClip ?: return emptyList()
         return (0 until clip.itemCount)
             .mapNotNull { clip.getItemAt(it).uri }
-            .filter { context.contentResolver.getType(it)?.startsWith("image/") == true }
+            .filter { isAttachableMediaMime(context.contentResolver.getType(it)) }
     }
 
     // Files: system document picker (any mime).
@@ -1026,7 +1026,7 @@ fun ChatScreen(
                                 transferable.consume { item ->
                                     val uri = item.uri
                                     if (uri != null &&
-                                        context.contentResolver.getType(uri)?.startsWith("image/") == true) {
+                                        isAttachableMediaMime(context.contentResolver.getType(uri))) {
                                         scope.launch { stageFromUri(uri) }
                                         true
                                     } else {
