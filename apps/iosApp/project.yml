@@ -245,6 +245,10 @@ targets:
         LD_RUNPATH_SEARCH_PATHS:
           - $(inherited)
           - "@executable_path/../Frameworks"
+      configs:
+        Release:
+          PROVISIONING_PROFILE_SPECIFIER: "Supermux Mac App Store"
+          CODE_SIGN_IDENTITY: "Apple Distribution"
     preBuildScripts:
       - name: Build Kotlin Shared.framework (embed and sign)
         basedOnDependencyAnalysis: false
@@ -281,6 +285,10 @@ targets:
         EXCLUDED_ARCHS: x86_64
         CODE_SIGN_ENTITLEMENTS: SupermuxPushNSE/SupermuxMacPushNSE.entitlements
         APPLICATION_EXTENSION_API_ONLY: "YES"
+      configs:
+        Release:
+          PROVISIONING_PROFILE_SPECIFIER: "Supermux Mac NSE App Store"
+          CODE_SIGN_IDENTITY: "Apple Distribution"
 
   SupermuxTests:
     type: bundle.unit-test

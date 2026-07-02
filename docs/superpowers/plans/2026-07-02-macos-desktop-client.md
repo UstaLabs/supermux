@@ -1188,18 +1188,7 @@ Carry-overs from Task 2's code review, owned by this task: (a) if the FIRST mac 
 
 - [ ] **Step 2: Both platforms green.** Run the iOS build check AND the Mac build check. Expected: both `BUILD SUCCEEDED`. **From this task on, every later task must keep BOTH green.**
 
-- [ ] **Step 3: First launch smoke.** Build ad-hoc-signed and launch on the Mac against the live broker (mint a token on this host: `cd /home/ahmet/projects/supermux && bun run pair mac-dev` → take the `?t=` value):
-
-```bash
-ssh mac 'source ~/ios-build-env.sh; cd ~/supermux-mac/apps/iosApp && \
-  xcodebuild -scheme SupermuxMac -destination "platform=macOS,arch=arm64" -derivedDataPath build/dd-mac \
-  CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=YES CODE_SIGNING_ALLOWED=YES build && \
-  ( SM_PAIR_TOKEN="<token>" SM_PAIR_BASE="http://100.84.92.82:9898" \
-    build/dd-mac/Build/Products/Debug/Supermux.app/Contents/MacOS/Supermux \
-    > ~/supermux-mac/app.log 2>&1 & ) && sleep 20 && pgrep -x Supermux'
-```
-
-Expected: a PID is printed (the app is running, not crashed at launch). APNs registration failing under ad-hoc signing is EXPECTED — ignore that log line in `app.log`.
+- [ ] **Step 3: First launch smoke.** Mint a token on this host (`cd /home/ahmet/projects/supermux && bun run pair mac-dev` → take the `?t=` value), then run `scripts/mac-app-run.sh <token>` — this supersedes the ad-hoc `CODE_SIGN_IDENTITY="-"` direct-exec recipe that used to be spelled out here, which FAILS AT SIGNING against the committed `aps-environment`/`keychain-access-groups` entitlements (see the Ad-hoc launch recipe / Task 17 note below Task 16). Expected: `OK` and a PID printed.
 
 **Chat-subsystem first-run checklist (from Task 8's quality review — run during Step 3's launch smoke):** expect and confirm-benign the "NSTextView switching to TextKit 1 compatibility mode" console line; drag-select a markdown message across paragraphs; click a file path (opens editor) vs an http link (opens browser), teal tint both modes; dark-mode composer must stay transparent over the glass (no opaque clip-view box); composer auto-grow → scroll at max lines, caret visible; Return sends / Shift+Return newlines; focus click-in/out round-trip without flicker; paste matrix — image-data copy (Preview), image FILE copy (Finder), **PDF copied in Finder (suspect: `availableType` may miss it — if Paste doesn't appear, sniff `public.file-url` + extension as the fix)**, multi-file copy must not stage unrelated files; agent tab icons render (brand assets present in the mac target's asset catalog — else `NSImage(named:)` nil → generic cube fallback).
 
