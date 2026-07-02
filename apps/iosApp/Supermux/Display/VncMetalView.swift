@@ -69,6 +69,18 @@ enum VncMetalView {
             super.viewDidMoveToWindow()
             updateDrawableSize()
         }
+        // Fires when the window's backing scale changes (e.g. dragged between a Retina and
+        // a non-Retina display) — without it contentsScale/drawableSize would go stale.
+        override func viewDidChangeBackingProperties() {
+            super.viewDidChangeBackingProperties()
+            updateDrawableSize()
+        }
+        // Live-resize insurance: guarantees the drawable tracks the frame even if a SwiftUI
+        // resize path ever skips `layout()`.
+        override func setFrameSize(_ newSize: NSSize) {
+            super.setFrameSize(newSize)
+            updateDrawableSize()
+        }
 
         private func updateDrawableSize() {
             // NSView has no `traitCollection`; the backing scale comes from the window (or the

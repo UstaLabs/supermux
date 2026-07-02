@@ -546,11 +546,17 @@ private struct DisplayKeyboardField: NSViewRepresentable {
         // current `session` (same reason the iOS coordinator refreshes them in updateUIView).
         v.onCharacter = onCharacter
         v.onSpecial = onSpecial
+        // Re-check first-responder state INSIDE the async block (the ComposerInput pattern):
+        // the window/responder can change between the update pass and the dispatch firing.
+        let want = isActive
         let isFirst = (v.window?.firstResponder === v)
-        if isActive, !isFirst {
-            DispatchQueue.main.async { v.window?.makeFirstResponder(v) }
-        } else if !isActive, isFirst {
-            DispatchQueue.main.async { v.window?.makeFirstResponder(nil) }
+        if want != isFirst {
+            DispatchQueue.main.async {
+                guard let window = v.window else { return }
+                let isFirstNow = (window.firstResponder === v)
+                if want, !isFirstNow { window.makeFirstResponder(v) }
+                else if !want, isFirstNow { window.makeFirstResponder(nil) }
+            }
         }
     }
 }
@@ -588,8 +594,11 @@ private final class KeyCaptureView: NSView {
     }
 
     override func resignFirstResponder() -> Bool {
-        onResign?()
-        return super.resignFirstResponder()
+        // Ask super first and report only a resignation that actually happened — a refused
+        // resign must not flip `isActive` off while the view keeps receiving keys.
+        let ok = super.resignFirstResponder()
+        if ok { onResign?() }
+        return ok
     }
 }
 #endif
