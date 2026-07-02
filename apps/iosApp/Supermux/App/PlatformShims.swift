@@ -314,6 +314,15 @@ extension View {
         self
         #endif
     }
+    /// iOS `.insetGrouped` list style → `.inset` on macOS (the closest inset analog;
+    /// `.insetGrouped` is UIKit-backed and unavailable on macOS).
+    @ViewBuilder func smInsetGroupedListStyle() -> some View {
+        #if os(iOS)
+        listStyle(.insetGrouped)
+        #else
+        listStyle(.inset)
+        #endif
+    }
     @ViewBuilder func smKeyboard(_ kind: SMKeyboardKind) -> some View {
         #if os(iOS)
         keyboardType(kind.uiKind)

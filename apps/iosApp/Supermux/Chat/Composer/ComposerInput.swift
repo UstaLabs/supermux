@@ -182,7 +182,10 @@ struct ComposerInput: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let tv = PasteTextView()
+        // `init(frame:)` (inherited convenience — PasteTextView overrides both of
+        // NSTextView's designated inits) builds the full text system; a bare `init()`
+        // doesn't exist on NSTextView.
+        let tv = PasteTextView(frame: .zero)
         tv.delegate = context.coordinator
         tv.onPasteAttachment = { context.coordinator.parent.onPasteAttachment() }
         tv.onFocusChange = { context.coordinator.focusChanged($0) }
@@ -298,14 +301,13 @@ final class PasteTextView: NSTextView {
         return l
     }()
 
-    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
-        super.init(frame: frameRect, textContainer: container)
-        addSubview(placeholderLabel)
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
     override func layout() {
         super.layout()
+        // Add the placeholder overlay once here (NOT in a custom designated init): declaring an
+        // `init(frame:textContainer:)` would drop NSTextView's inherited `init(frame:)` convenience,
+        // which is the one that builds the full TextKit stack. All stored props have defaults, so
+        // the view needs no custom init.
+        if placeholderLabel.superview == nil { addSubview(placeholderLabel) }
         let inset = textContainerInset
         let pad = textContainer?.lineFragmentPadding ?? 0
         let maxW = max(0, bounds.width - 2 * (inset.width + pad))

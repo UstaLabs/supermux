@@ -47,7 +47,7 @@ struct SessionsListView: View {
                 } header: { header(group) }
             }
         }
-        .listStyle(.insetGrouped)
+        .smInsetGroupedListStyle()
         // Continuous Mail-style reveal: the "Archived" bar lives in a top safeAreaInset (outside
         // the scroll content) and its height tracks the live overscroll 1:1. The offset signal
         // (contentOffset.y + contentInsets.top) is invariant to the inset's own height, so the
