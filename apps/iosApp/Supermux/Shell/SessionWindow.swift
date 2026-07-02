@@ -31,6 +31,9 @@ struct SessionWindow: View {
         }
         .tint(Theme.teal)
         .task { broker.start() }
+        // Window closed → genuinely tear down this window's WS + frame loop (see
+        // BrokerSession.stop(); without it the closed window's session leaks alive).
+        .onDisappear { broker.stop() }
         .frame(minWidth: 640, minHeight: 480)
     }
 }

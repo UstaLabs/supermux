@@ -40,6 +40,11 @@ struct RootView: View {
         }
         .tint(Theme.teal)
         .task { broker.start() }
+        // Cross-platform teardown (deliberately NOT mac-gated): RootView leaves the hierarchy
+        // on unpair and on re-pair recreation (`.id(base)` in SupermuxApp) — on iOS too —
+        // and without stop() the old broker's frame loop retains it forever, leaving a stale
+        // session endlessly reconnecting in the background (on macOS also on window close).
+        .onDisappear { broker.stop() }
         .task(id: broker.synced) {
             guard broker.synced, selected == nil else { return }
             let want = ProcessInfo.processInfo.environment["SM_OPEN_SESSION"]

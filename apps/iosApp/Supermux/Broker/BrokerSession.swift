@@ -14,9 +14,13 @@ final class BrokerSession {
     private let token: String
     let api: BrokerApi
     private let client: BrokerClient
-    /// The socket run-loop task (`client.run()`), retained so `wakeKick()` can cancel the
-    /// in-flight reconnect backoff and redial immediately on macOS wake.
+    /// The socket run-loop task (`client.run()`) and the frames collector, retained so
+    /// `stop()` can cancel them (and, on macOS, so `wakeKick()` can cancel the in-flight
+    /// reconnect backoff and redial immediately on wake). Without the explicit cancel the
+    /// run loop would keep the socket dialing/reconnecting for the whole process lifetime —
+    /// the frames collector iterates a hot SharedFlow that never completes on its own.
     @ObservationIgnored private var runTask: Task<Void, Never>?
+    @ObservationIgnored private var framesTask: Task<Void, Never>?
     #if os(macOS)
     @ObservationIgnored private var wakeObserver: (any NSObjectProtocol)?
     #endif
@@ -64,6 +68,9 @@ final class BrokerSession {
     }
 
     #if os(macOS)
+    // Belt to stop()'s suspenders: stop() already removes (and nils) the observer on the
+    // teardown paths; this covers a release without a prior stop(). Only reachable at all
+    // because stop() cancels the frames collector that otherwise retains self forever.
     deinit {
         if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
     }
@@ -93,15 +100,51 @@ final class BrokerSession {
     }
 
     func start() {
-        Task { [weak self] in
-            guard let self else { return }
-            for await frame in self.client.frames {
+        // Neither long-lived task may hold `self` strongly across a suspension point: even
+        // after stop() cancels them (verified: SKIE propagates the cancel and both bodies
+        // exit promptly), Kotlin/Native can keep a task's async frame reachable until its
+        // tracing GC next runs — so a strong `self` captured in the frame (e.g. an up-front
+        // `guard let self`) would tie the session's release to K/N GC timing (observed
+        // empirically via BrokerSessionTeardownTests). Capturing `client` (Kotlin, safe to
+        // linger) plus a per-frame weak rebind keeps teardown deterministic.
+        framesTask = Task { [weak self, client] in
+            for await frame in client.frames {
+                guard let self else { break }
                 self.reduce(frame)
             }
         }
-        runTask = Task { [weak self] in try? await self?.client.run() }
-        // Seed the display list (REST); the two frame cases below keep it live.
-        Task { [weak self] in await self?.refreshDisplays() }
+        runTask = Task { [client] in try? await client.run() }
+        // Seed the display list (REST); the two frame cases below keep it live. Same rule as
+        // above: fetch via the captured `api`, rebind self only after the await ends (an
+        // `await self?.refreshDisplays()` optional-chain would pin a strong temp across it).
+        Task { [weak self, api] in
+            let seeded = (try? await api.listDisplays()) ?? []
+            self?.displays = seeded
+        }
+    }
+
+    /// Tear down the connection. Cancels the run loop — SKIE propagates the cancellation
+    /// into the Kotlin coroutine, closing the WS (or unwinding the backoff `delay()`) — and
+    /// the frames collector, whose cancellation ends the `for await` (without this the
+    /// session's socket keeps dialing/reconnecting for the whole process lifetime). On macOS
+    /// also drops the wake observer so a stopped session can't be resurrected by a lid-open.
+    /// Idempotent; called when the owning view disappears (a closed SessionWindow on macOS;
+    /// RootView's unpair/re-pair recreation on both platforms). `start()` re-arms everything
+    /// except the wake observer (init-registered), which is fine: the stop/start pairs in
+    /// play recreate the whole session anyway. Deterministic release of the session object
+    /// itself is guaranteed by start()'s no-strong-self capture rule + this cancel — see
+    /// BrokerSessionTeardownTests.
+    func stop() {
+        framesTask?.cancel()
+        framesTask = nil
+        runTask?.cancel()
+        runTask = nil
+        #if os(macOS)
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+            self.wakeObserver = nil
+        }
+        #endif
     }
 
     #if os(macOS)
@@ -115,7 +158,7 @@ final class BrokerSession {
     func wakeKick() {
         guard !client.sync.synced else { return }
         runTask?.cancel()
-        runTask = Task { [weak self] in try? await self?.client.run() }
+        runTask = Task { [client] in try? await client.run() }   // no self (see start())
     }
     #endif
 
