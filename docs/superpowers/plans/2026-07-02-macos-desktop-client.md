@@ -1470,6 +1470,8 @@ git commit -m "feat(mac): menu-bar commands, ⌘N, open-in-new-window, wake-kick
 
 ### Task 15: Unit tests on the Mac (`SupermuxMacTests`)
 
+Notes from Task 12's review: `PasteTextView.pasteboard` (mac composer) is an injectable seam built for testing — use it if adding composer tests; also add a one-line TextKit-stack pin test `XCTAssertNotNil(PasteTextView(frame: .zero).textContainer)` (guards the init-inheritance invariant the green build depends on).
+
 **Files:**
 - Modify: `apps/iosApp/project.yml`
 
@@ -1618,6 +1620,8 @@ git commit -m "test(mac): XCUITest smoke — launch, env auto-pair, workspace re
 
 ---
 
+**Ad-hoc launch recipe (Task 12 finding — REQUIRED for Tasks 16 and 17):** the committed `SupermuxMac.entitlements` carries `aps-environment` + `keychain-access-groups`, which ad-hoc signatures cannot satisfy on macOS — a plain ad-hoc build FAILS AT SIGNING. Until the real provisioning exists (Task 18 prereqs), launch-testing builds must be **re-signed with minimal sandbox entitlements**: create a Mac-side plist containing ONLY `com.apple.security.app-sandbox`, `com.apple.security.network.client`, `com.apple.security.device.audio-input`, then `codesign --force --sign - --entitlements <minimal.plist> --deep <path>/Supermux.app`. And launch via `open --env` (direct exec mounts no UI). Bake both into the Task 17 script; Task 16's XCUITest runner may need the same treatment if signing blocks the test host.
+
 ### Task 17: Build-and-run helper for feel-tests
 
 **Files:**
@@ -1682,6 +1686,8 @@ git commit -m "chore(mac): build-and-run helper for remote-Mac feel tests"
 - Create: `apps/iosApp/ExportOptionsMac.plist`
 - Modify: `apps/iosApp/project.yml` (Release signing for the mac targets)
 - Modify: `apps/iosApp/Supermux/Assets.xcassets/AppIcon.appiconset/Contents.json` (mac icon slots)
+
+Carry-over from Task 12's review: `SupermuxMac.entitlements` uses the iOS-style `aps-environment` key — pure-macOS provisioning profiles typically carry `com.apple.developer.aps-environment` instead. When the mac profiles exist, verify which key the profile grants and align the entitlements file (a mismatch fails at Release signing, not before).
 
 Carry-over note from Task 2's review: `CURRENT_PROJECT_VERSION` ("52") is one project-wide counter shared by iOS and mac archives — confirm with the user whether mac TestFlight builds ride the same sequence (simplest; recommended) or need a per-platform scheme, BEFORE the first upload.
 
