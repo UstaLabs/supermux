@@ -583,6 +583,8 @@ git add apps/iosApp/Supermux/App/PlatformShims.swift
 git commit -m "feat(mac): PlatformShims — cross-platform typealiases, representable protocol, modifier shims"
 ```
 
+**Post-review revisions (supersede the Step 1 code block above; applied in a follow-up commit):** the quality review found the block incomplete/imperfect. Final state additionally has: `Color.smBackground/.smSecondaryBackground/.smSeparator` (SwiftUI-Color bridges for iOS `.systemBackground`/`.secondarySystemBackground`/`.separator` → macOS `.windowBackgroundColor`/`.controlBackgroundColor`/`.separatorColor`); `smTertiaryBackground` macOS side = `.textBackgroundColor` (not `.underPageBackgroundColor` — that one is recessed, wrong direction); `PlatformImage.sm(cgImage:)` macOS side sizes the NSImage from the CGImage pixels (a `.zero`-size NSImage breaks `scaledToFit`); the `where UIViewType == PlatformViewType` constraint lives on the `PlatformViewRepresentable` protocol declaration itself (both branches), not the extension; `Haptics` is named `SMHaptics`; `smTopTrailing` macOS side = `.primaryAction`; `SearchFieldPlacement.smNavDrawerAlways` exists for the `.navigationBarDrawer` searchable sites.
+
 ---
 
 ### Task 4: Mechanical sweep — replace iOS-only API calls with shims
@@ -608,8 +610,12 @@ This is a bulk find/replace across `apps/iosApp/Supermux/` guided by the table b
 | `.presentationDetents([` … `])` | `.smPresentationDetents([` … `])` — map `.medium`→`.medium`, `.large`→`.large`, `.fraction(x)`→`.fraction(x)`, `.height(x)`→`.height(x)` |
 | `.fullScreenCover(` | `.smFullScreenCover(` |
 | `.hoverEffect(.highlight)` | `.smHoverHighlight()` |
-| `UISelectionFeedbackGenerator().selectionChanged()` | `Haptics.selection()` |
+| `UISelectionFeedbackGenerator().selectionChanged()` | `SMHaptics.selection()` |
 | `UIPasteboard.general.string = X` | `SMPasteboard.set(X)` |
+| `Color(.systemBackground)` | `Color.smBackground` |
+| `Color(.secondarySystemBackground)` | `Color.smSecondaryBackground` |
+| `Color(.separator)` | `Color.smSeparator` |
+| `.searchable(… placement: .navigationBarDrawer(displayMode: .always))` | `.searchable(… placement: .smNavDrawerAlways)` (one shim static per displayMode variant actually present) |
 | `UIPasteboard.general.string` (read) | `SMPasteboard.string` |
 | `Image(uiImage:` | `Image(platform:` |
 | `UIColor.label` / `.secondaryLabel` / `.tertiarySystemBackground` / `.tertiarySystemFill` | `PlatformColor.smLabel` / `.smSecondaryLabel` / `.smTertiaryBackground` / `.smTertiaryFill` |
@@ -617,7 +623,7 @@ This is a bulk find/replace across `apps/iosApp/Supermux/` guided by the table b
 | `UIFont.` | `PlatformFont.` |
 | `UIScreen.main.bounds.width` | `SMScreen.mainWidth` |
 
-Stored haptic generators (e.g. `EditorSearchField.swift`'s `UISelectionFeedbackGenerator` property, and any `let … = UISelectionFeedbackGenerator()` in `EditorTabsView.swift` / `FileTreeView.swift` / `DiffView.swift`): delete the property and replace each `<prop>.selectionChanged()` call with `Haptics.selection()`.
+Stored haptic generators (e.g. `EditorSearchField.swift`'s `UISelectionFeedbackGenerator` property, and any `let … = UISelectionFeedbackGenerator()` in `EditorTabsView.swift` / `FileTreeView.swift` / `DiffView.swift`): delete the property and replace each `<prop>.selectionChanged()` call with `SMHaptics.selection()`.
 
 - [ ] **Step 2: Conditionalize the now-unneeded `import UIKit` lines.** For every non-`Watch/` file that still has `import UIKit`: if the file has NO remaining `UI*` symbol references after Step 1 (check with `grep -n 'UI[A-Z]' <file>`), delete the import. If iOS-only blocks remain (they will in the files owned by Tasks 5-11 — leave those files' imports alone for now), keep the import but the owning task will wrap it.
 
@@ -797,6 +803,8 @@ git commit -m "feat(mac): editor WKWebView representable goes cross-platform"
 - Modify: `apps/iosApp/Supermux/Chat/ChatPane.swift` (pasteboard swept in Task 4; import cleanup only)
 - Modify: `apps/iosApp/Supermux/Chat/ChatMessages.swift`
 
+Heads-up from Task 3's review (owned here): `PlatformFont` covers the class name but NOT divergent nested API — `UIFontDescriptor.SymbolicTraits.traitBold` (iOS) vs `NSFontDescriptor.SymbolicTraits.bold` (mac), and `withSymbolicTraits(_:)` returns `Optional` on UIKit but non-optional on AppKit — so MarkdownView's private `withTraits` helper (~line 273) needs a real `#if` split, not just the typealias substitution. Also noted (improvement, not blocker): `SMScreen.mainWidth` is a poor width cap for markdown tables on a resizable Mac window — if cheap, prefer a container-relative width via the pane; otherwise ship and revisit.
+
 - [ ] **Step 1: MarkdownView.swift.** Apply the Task 4 substitutions inside this file (it was deferred to here): `UIFont.`→`PlatformFont.`, `UIColor.label`→`PlatformColor.smLabel`, `.secondaryLabel`→`.smSecondaryLabel`, `.tertiarySystemBackground`→`.smTertiaryBackground`, `.tertiarySystemFill`→`.smTertiaryFill`, other `UIColor(`→`PlatformColor(`, `UIScreen.main.bounds.width`→`SMScreen.mainWidth` (lines 555-556). Then replace `SelectableText` (lines 524-575) with a cross-platform pair — keep the iOS `UITextView` implementation inside `#if canImport(UIKit)` verbatim, and add the mac twin:
 
 ```swift
@@ -955,6 +963,8 @@ git commit -m "feat(mac): chat — NSTextView markdown/composer twins, mac paste
 - Modify: `apps/iosApp/Supermux/Display/ScrcpyVideoView.swift`
 - Modify: `apps/iosApp/Supermux/Display/DisplayPane.swift` (3 representables + key capture)
 - Modify: `apps/iosApp/Supermux/Display/DisplayHost.swift` (backing view typealias)
+
+Heads-up from Task 3's review (owned here): the display viewer is presented via `.fullScreenCover(item:)` in `Sessions/InfoPages.swift:335`, which Task 4's sweep blanket-maps to a mac `.sheet`. A sheet is wrong for a display surface on macOS: ESC dismisses the sheet instead of reaching the remote session, and default sheet sizing is too small. Add a step in this task: on macOS present the display viewer properly — minimally a `#if os(macOS)` branch at that call site giving the sheet `.presentationSizing(.page)`-class sizing AND intercepting ESC (e.g. the key-capture view swallows it) so it reaches the remote; a dedicated `WindowGroup` is the nicer alternative if Task 14's session-window pattern is already in place.
 
 - [ ] **Step 1: DisplayHost.swift.** Replace `UIView` with `PlatformView` and conditionalize the UIKit import. (`PlatformView` from Task 3 = `UIView`/`NSView`.)
 
@@ -1153,6 +1163,8 @@ git commit -m "feat(mac): APNs registration + NSApplicationDelegate push path, m
 ### Task 12: GREEN MAC BUILD — burn down the residual audit list
 
 Tasks 3-11 covered every UIKit category the source audit found. Whatever still fails now is stragglers of the SAME categories (a missed modifier instance, an unconditioned import, a file the audit's grep missed).
+
+Also verify here (from Task 3's review): `ToolbarItemPlacement.navigation` (the macOS side of `.smTopLeading`) is believed-valid macOS API but has never been type-checked by a mac compile — if it errors, change the shim's macOS branch to `.automatic`.
 
 **Reality check from Task 2:** Xcode 26.5's explicit-modules SwiftDriver **fails fast on the first unresolvable module import** instead of listing every error — so the burn-down proceeds in walls, not a smooth count-down: clearing one file's `import UIKit` reveals the next wall on rebuild. The definitive inventory is the 17 UIKit-importing files captured in Task 2's report; the "error count strictly decreases" heuristic below applies per-wall, not globally.
 
