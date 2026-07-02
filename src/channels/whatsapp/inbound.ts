@@ -22,11 +22,12 @@ function pickMedia(p: any): { field: MediaField; raw: any } | null {
 }
 
 // WhatsApp lumps voice notes and audio under `audio`; a `.ogg` is a voice note
-// (parity with Telegram's `voice`). image→photo, document→document; video and
-// sticker fall back to document for v1 (tier B is text+image+document+voice).
+// (parity with Telegram's `voice`). image→photo, video→video, document→document;
+// sticker falls back to document.
 function mediaKind(field: MediaField, pathOrUrl: string): AttachmentKind {
   if (field === "image") return "photo"
   if (field === "audio") return pathOrUrl.toLowerCase().endsWith(".ogg") ? "voice" : "audio"
+  if (field === "video") return "video"
   return "document"
 }
 

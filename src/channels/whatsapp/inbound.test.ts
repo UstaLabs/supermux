@@ -38,6 +38,18 @@ describe("normalizeWhatsAppInbound", () => {
     expect(msg.attachments?.[0]).toMatchObject({ kind: "voice", mime: "audio/ogg" })
   })
 
+  test("video bare-string path → 'video' attachment (not document) with video/mp4 mime", async () => {
+    let kind = ""
+    let mime: string | undefined = "unset"
+    const msg = await normalizeWhatsAppInbound(
+      { id: "M7", chat_id: "c@s.whatsapp.net", from: "c@s.whatsapp.net", timestamp: "t", video: "statics/media/clip.mp4" },
+      deps({ putKindOut: (k) => (kind = k), putMimeOut: (m) => (mime = m) }),
+    )
+    expect(kind).toBe("video")
+    expect(mime).toBe("video/mp4")
+    expect(msg.attachments?.[0]).toMatchObject({ kind: "video", mime: "video/mp4" })
+  })
+
   test("document {url,filename} (auto-download off) → resolves via downloadMedia, kind document, carries name + pdf mime", async () => {
     const msg = await normalizeWhatsAppInbound({ id: "M4", chat_id: "c@s.whatsapp.net", from: "c@s.whatsapp.net", timestamp: "t", document: { url: "https://mmg.whatsapp.net/enc", filename: "report.pdf" } }, deps())
     expect(msg.attachments?.[0]).toMatchObject({ kind: "document", name: "report.pdf", mime: "application/pdf" })
