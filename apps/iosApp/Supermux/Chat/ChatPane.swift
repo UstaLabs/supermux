@@ -30,6 +30,7 @@ struct ChatPane: View {
     @State private var showPhotos = false
     @State private var showFiles = false
     @State private var showCamera = false
+    @State private var showVideoCamera = false
     @State private var composing = false
 
     // MARK: - Model / reasoning sheet state
@@ -213,7 +214,8 @@ struct ChatPane: View {
         }
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .any(of: [.images, .videos]))
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { composer.handleFiles($0) }
-        .fullScreenCover(isPresented: $showCamera) { CameraPicker { composer.addCameraImage($0) } }
+        .fullScreenCover(isPresented: $showCamera) { CameraPicker(mode: .photo, onImage: { composer.addCameraImage($0) }) }
+        .fullScreenCover(isPresented: $showVideoCamera) { CameraPicker(mode: .video, onVideo: { composer.addCameraVideo($0) }) }
     }
 
     // ONE glass card with an always-present TextField: tapping it focuses natively, so
@@ -250,6 +252,7 @@ struct ChatPane: View {
             HStack(alignment: .center, spacing: 10) {
                 if !composerExpanded {
                     AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera,
+                               showVideoCamera: $showVideoCamera,
                                showPaste: pasteboardHasAttachment,
                                onPaste: { Task { await composer.pasteClipboard() } })
                 }
@@ -274,6 +277,7 @@ struct ChatPane: View {
             if composerExpanded {
                 HStack(spacing: 12) {
                     AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera,
+                               showVideoCamera: $showVideoCamera,
                                showPaste: pasteboardHasAttachment,
                                onPaste: { Task { await composer.pasteClipboard() } })
                     MicButton(model: composer)

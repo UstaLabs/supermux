@@ -128,6 +128,18 @@ final class ComposerModel {
         }
     }
 
+    /// Stage a movie recorded by the camera (a temp file URL from `UIImagePickerController`).
+    /// Reads the clip into `Data` (Phase 1: the shared upload takes bytes; true streaming is a
+    /// separate KMP change) and labels it with the file's real video MIME + extension.
+    func addCameraVideo(_ url: URL) {
+        guard let data = try? Data(contentsOf: url) else { return }
+        let ext = url.pathExtension.isEmpty ? "mov" : url.pathExtension
+        let mime = UTType(filenameExtension: ext)?.preferredMIMEType ?? "video/quicktime"
+        pending.append(PendingAttachment(data: data,
+                                         filename: "video-\(pending.count + 1).\(ext)",
+                                         mime: mime))
+    }
+
     // MARK: - Paste
     /// Stage whatever is pasteable on the system clipboard as attachment(s), mirroring the web
     /// composer's paste handler (`PromptInputTextarea.handlePaste`): images first — the common

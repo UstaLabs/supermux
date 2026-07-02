@@ -49,6 +49,7 @@ struct NewSessionView: View {
     @State private var showPhotos = false
     @State private var showFiles = false
     @State private var showCamera = false
+    @State private var showVideoCamera = false
     @State private var photoItems: [PhotosPickerItem] = []
 
     private static let agents = ["claude", "codex", "cursor", "opencode"]
@@ -180,7 +181,8 @@ struct NewSessionView: View {
         }
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .any(of: [.images, .videos]))
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { composer.handleFiles($0) }
-        .fullScreenCover(isPresented: $showCamera) { CameraPicker { composer.addCameraImage($0) } }
+        .fullScreenCover(isPresented: $showCamera) { CameraPicker(mode: .photo, onImage: { composer.addCameraImage($0) }) }
+        .fullScreenCover(isPresented: $showVideoCamera) { CameraPicker(mode: .video, onVideo: { composer.addCameraVideo($0) }) }
         .onChange(of: composer.refocusToken) { _, _ in composing = true }
         .onChange(of: workdir) { _, new in
             launcherState.draft.workdir = new.isEmpty ? nil : new
@@ -319,7 +321,8 @@ struct NewSessionView: View {
             }
             // Action row — attach · mic · send.
             HStack(spacing: 16) {
-                AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera)
+                AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera,
+                           showVideoCamera: $showVideoCamera)
                 // Hidden while recording/dictating (the RecordingBar above owns stop/cancel) —
                 // parity with the original launcher + the chat composer.
                 if !composer.recorder.isRecording && !composer.dictation.isListening {

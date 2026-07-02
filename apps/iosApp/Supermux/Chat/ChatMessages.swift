@@ -2,6 +2,7 @@ import SwiftUI
 import Shared
 import UIKit
 import QuickLook
+import UniformTypeIdentifiers
 
 struct MessageRow: View {
     let entry: LogEntry
@@ -156,13 +157,26 @@ struct AttachmentView: View {
     }
 }
 
-/// Camera capture → UIImage (device only; needs NSCameraUsageDescription).
+/// Camera capture → still image or recorded movie (device only; needs NSCameraUsageDescription
+/// + NSMicrophoneUsageDescription for video, both already declared in project.yml). `mode`
+/// selects the media. The Simulator has no camera, so it falls back to the photo library
+/// filtered to the requested media type.
 struct CameraPicker: UIViewControllerRepresentable {
-    var onImage: (UIImage) -> Void
+    enum Mode { case photo, video }
+    var mode: Mode = .photo
+    var onImage: (UIImage) -> Void = { _ in }
+    var onVideo: (URL) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let p = UIImagePickerController()
-        p.sourceType = UIImagePickerController.isSourceTypeAvailable(.camera) ? .camera : .photoLibrary
+        let hasCamera = UIImagePickerController.isSourceTypeAvailable(.camera)
+        p.sourceType = hasCamera ? .camera : .photoLibrary
+        if mode == .video {
+            p.mediaTypes = [UTType.movie.identifier]
+            // cameraCaptureMode is only valid for the .camera source; setting it on the
+            // photo-library fallback (Simulator) would assert.
+            if hasCamera { p.cameraCaptureMode = .video }
+        }
         p.delegate = context.coordinator
         return p
     }
@@ -173,7 +187,11 @@ struct CameraPicker: UIViewControllerRepresentable {
         init(_ p: CameraPicker) { parent = p }
         func imagePickerController(_ picker: UIImagePickerController,
                                    didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
-            if let img = info[.originalImage] as? UIImage { parent.onImage(img) }
+            if let url = info[.mediaURL] as? URL {
+                parent.onVideo(url)
+            } else if let img = info[.originalImage] as? UIImage {
+                parent.onImage(img)
+            }
             parent.dismiss()
         }
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { parent.dismiss() }
