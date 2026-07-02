@@ -3,10 +3,14 @@ import Shared
 
 @main
 struct SupermuxApp: App {
-    // UIKit AppDelegate (push/APNs) adapted into the SwiftUI lifecycle. The delegate
+    // UIKit/AppKit AppDelegate (push/APNs) adapted into the SwiftUI lifecycle. The delegate
     // requests notification authorization + registers for remote notifications on
     // launch (if paired), and orchestrates relay/broker push registration.
+    #if os(iOS)
     @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
+    #else
+    @NSApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
+    #endif
     @State private var paired: Bool
     @AppStorage("appearance") private var appearance = "system"
 
@@ -24,9 +28,11 @@ struct SupermuxApp: App {
             BrokerConfig.pair(PairToken(baseURL: b, token: t))
         }
         _paired = State(initialValue: BrokerConfig.isPaired)
+        #if os(iOS)
         // Start the WatchConnectivity channel so a paired Apple Watch gets the broker
         // credentials (pushed on activation + whenever they change below).
         PhoneWatchProvisioner.shared.activate()
+        #endif
     }
 
     var body: some Scene {
@@ -41,7 +47,9 @@ struct SupermuxApp: App {
                 } else {
                     PairingView { _ in
                         paired = true
+                        #if os(iOS)
                         PhoneWatchProvisioner.shared.pushCurrent()
+                        #endif
                         PushManager.shared.registerIfPaired()
                     }
                 }
@@ -53,12 +61,17 @@ struct SupermuxApp: App {
                     ?? PairToken.parse(url.absoluteString, fallbackBaseURL: BrokerConfig.baseURL) {
                     BrokerConfig.pair(p)
                     paired = true
+                    #if os(iOS)
                     PhoneWatchProvisioner.shared.pushCurrent()
+                    #endif
                     PushManager.shared.registerIfPaired()
                 }
             }
             .preferredColorScheme(appearance == "light" ? .light : appearance == "dark" ? .dark : nil)
         }
+        #if os(macOS)
+        .defaultSize(width: 1440, height: 900)
+        #endif
     }
 }
 

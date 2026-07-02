@@ -1,6 +1,5 @@
 import SwiftUI
 import Shared
-import UIKit
 import CoreImage
 
 // Relative "last seen" + ISO parsing shared by the device/usage pages.
@@ -199,13 +198,13 @@ private struct AddDeviceSheet: View {
         }
     }
 
-    private func qrImage(_ s: String) -> UIImage? {
+    private func qrImage(_ s: String) -> PlatformImage? {
         guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
         filter.setValue(Data(s.utf8), forKey: "inputMessage")
         filter.setValue("M", forKey: "inputCorrectionLevel")
         guard let out = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 8, y: 8)),
               let cg = CIContext().createCGImage(out, from: out.extent) else { return nil }
-        return UIImage(cgImage: cg)
+        return PlatformImage.sm(cgImage: cg)
     }
 }
 

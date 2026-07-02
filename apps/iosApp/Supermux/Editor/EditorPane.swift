@@ -15,7 +15,12 @@ struct EditorPane: View {
     @State private var webView: WKWebView?
     @State private var keyboardHeight: CGFloat = 0
     @State private var previewMode = false
+    #if os(macOS)
+    private let isRegularWidth = true   // the Mac is always the wide multi-pane workspace
+    #else
     @Environment(\.horizontalSizeClass) private var hSize
+    private var isRegularWidth: Bool { hSize == .regular }
+    #endif
 
     /// Cached per-session — same instance every lookup, so returning to a session
     /// restores its open tabs/tree (the dictionary lives on the broker, app-lifetime).
@@ -24,7 +29,7 @@ struct EditorPane: View {
     /// loaded page + open document survive editor-pane toggles / remounts (no white flash).
     private var host: EditorHost { broker.editorHost(for: session.id) }
     /// iPad / wide → tree is a side column; iPhone → full-screen overlay.
-    private var isRegular: Bool { hSize == .regular }
+    private var isRegular: Bool { isRegularWidth }
 
     // ── Markdown preview (parity with the PWA's Eye/Pencil toggle) ──────────────
     private func isMarkdown(_ path: String) -> Bool {

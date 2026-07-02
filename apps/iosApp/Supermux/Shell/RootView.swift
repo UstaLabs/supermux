@@ -11,7 +11,12 @@ struct RootView: View {
     @State private var route: NavRoute?
     @State private var debugArchived: ArchivedItem?    // SM_OPEN_ARCHIVED headless repro
     @State private var layout = WorkspaceLayoutModel()
+    #if os(macOS)
+    private let isRegularWidth = true   // the Mac is always the wide multi-pane workspace
+    #else
     @Environment(\.horizontalSizeClass) private var hSize
+    private var isRegularWidth: Bool { hSize == .regular }
+    #endif
     var onUnpair: () -> Void
 
     /// Full-page destinations pushed from the sidebar (mirrors the web router).
@@ -31,7 +36,7 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if hSize == .regular { regularShell } else { compactShell }
+            if isRegularWidth { regularShell } else { compactShell }
         }
         .tint(Theme.teal)
         .task { broker.start() }
@@ -42,7 +47,7 @@ struct RootView: View {
                 selected = m.id; return
             }
             // iPad keeps a session in the detail column; iPhone opens to the list.
-            guard hSize == .regular else { return }
+            guard isRegularWidth else { return }
             selected = broker.sessions.first(where: { !(broker.messages[$0.id]?.isEmpty ?? true) })?.id
                 ?? broker.sessions.first?.id
         }
