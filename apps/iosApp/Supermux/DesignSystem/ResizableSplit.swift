@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit   // NSCursor resize affordance on the divider
+#endif
 
 /// Which way a `ResizableSplit` divides space.
 enum SplitAxis { case horizontal, vertical }
@@ -60,6 +63,17 @@ struct PaneDivider: View {
                 Color.clear
                     .frame(width: axis == .horizontal ? 24 : nil, height: axis == .vertical ? 24 : nil)
                     .contentShape(Rectangle())
+                    #if os(macOS)
+                    // Resize cursor over the draggable zone; push on enter / pop on exit so it
+                    // reverts to the arrow when the pointer leaves the divider.
+                    .onHover { inside in
+                        if inside {
+                            (axis == .horizontal ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
+                    #endif
                     .gesture(
                         DragGesture(minimumDistance: 1)
                             .onChanged { g in

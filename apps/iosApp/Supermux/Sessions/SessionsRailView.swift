@@ -12,6 +12,10 @@ struct SessionsRailView: View {
     var onExpand: () -> Void
     var onNewSession: () -> Void
 
+    #if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+    #endif
+
     var body: some View {
         VStack(spacing: 12) {
             Button(action: onExpand) {
@@ -60,6 +64,12 @@ struct SessionsRailView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(s.name)
         .contextMenu {
+            #if os(macOS)
+            Button { openWindow(id: "session", value: s.id) } label: {
+                Label("Open in New Window", systemImage: "macwindow.badge.plus")
+            }
+            Divider()
+            #endif
             Button { broker.toggleMute(s) } label: {
                 Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
             }

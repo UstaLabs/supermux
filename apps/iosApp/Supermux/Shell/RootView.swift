@@ -104,6 +104,12 @@ struct RootView: View {
             selected = id
             PushRouter.shared.pendingSessionId = nil
         }
+        #if os(macOS)
+        .onReceive(NotificationCenter.default.publisher(for: .smNewSession)) { _ in
+            // macOS File ▸ New Session (⌘N) → open the launcher (a sheet on the Mac).
+            route = .newSession
+        }
+        #endif
     }
 
     /// Compact width (iPhone / Slide-Over / narrow): the split view folds to a stack.
@@ -139,12 +145,32 @@ struct RootView: View {
         }
     }
 
-    /// Regular width (iPad): the PWA's wide multi-pane workspace.
+    /// Regular width (iPad): the PWA's wide multi-pane workspace. On macOS the management
+    /// pages present as sheets (modal over the workspace) rather than pushing over the whole
+    /// multi-pane layout: the Mac has no edge-swipe back, and a full-window push would bury the
+    /// panes behind a lone back-chevron. iOS keeps the push (with its interactive back-swipe).
     private var regularShell: some View {
         NavigationStack {
             IPadWorkspace(broker: broker, selected: $selected, route: $route, layout: layout)
+            #if os(iOS)
                 .navigationDestination(item: $route) { page($0) }
+            #endif
         }
+        #if os(macOS)
+        .sheet(item: $route) { r in
+            // The pages were designed to be pushed (they rely on the nav back-button and have
+            // no page-level dismiss), so the sheet wrapper supplies a single Done button.
+            NavigationStack {
+                page(r)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { route = nil }
+                        }
+                    }
+            }
+            .frame(minWidth: 760, minHeight: 560)
+        }
+        #endif
     }
 
     @ViewBuilder private func page(_ r: NavRoute) -> some View {
@@ -162,6 +188,14 @@ struct RootView: View {
 }
 
 private struct ArchivedItem: Identifiable { let id: String; let dto: ArchivedDto }
+
+#if os(macOS)
+// `.sheet(item:)` needs Identifiable (iOS uses `.navigationDestination(item:)`, which only
+// needs Hashable). The enum has no associated values, so it's its own stable identity.
+extension RootView.NavRoute: Identifiable {
+    var id: Self { self }
+}
+#endif
 
 private extension RootView.NavRoute {
     init?(debugName: String) {

@@ -10,6 +10,10 @@ struct SessionsListView: View {
     var onNewSession: () -> Void
     var onArchived: () -> Void
 
+    #if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+    #endif
+
     @State private var collapsed: Set<String> = SessionsListView.loadCollapsed()
     // Continuous pull-to-reveal: bar height tracks the live overscroll; latches open past a threshold.
     @State private var revealHeight: CGFloat = 0
@@ -148,6 +152,12 @@ struct SessionsListView: View {
                 }.tint(Theme.teal)
             }
             .contextMenu {
+                #if os(macOS)
+                Button { openWindow(id: "session", value: s.id) } label: {
+                    Label("Open in New Window", systemImage: "macwindow.badge.plus")
+                }
+                Divider()
+                #endif
                 Button { broker.toggleMute(s) } label: {
                     Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
                 }

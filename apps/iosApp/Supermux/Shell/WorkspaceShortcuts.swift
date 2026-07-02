@@ -90,10 +90,21 @@ private struct WorkspaceShortcutsModifier: ViewModifier {
     let session: () -> String?
     let onNewSession: () -> Void
 
+    /// The chords wired as hidden in-view buttons. On macOS the menu bar's File ▸ New Session
+    /// owns ⌘N, so it's excluded here to avoid registering the same chord twice (which is
+    /// ambiguous / can beep); iOS has no menu bar, so it keeps ⌘N as a hidden button.
+    private var shortcutCommands: [WorkspaceCommand] {
+        #if os(macOS)
+        WorkspaceCommand.allCases.filter { $0 != .newSession }
+        #else
+        WorkspaceCommand.allCases
+        #endif
+    }
+
     func body(content: Content) -> some View {
         content.background {
             ZStack {
-                ForEach(Array(WorkspaceCommand.allCases.enumerated()), id: \.offset) { _, cmd in
+                ForEach(Array(shortcutCommands.enumerated()), id: \.offset) { _, cmd in
                     Button(cmd.title) {
                         switch cmd {
                         case .newSession:

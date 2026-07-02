@@ -1,5 +1,8 @@
 import Foundation
 import Shared
+#if os(macOS)
+import AppKit   // NSWorkspace wake notification (sleep/wake reconnect)
+#endif
 
 /// Observable wrapper over the shared `BrokerClient` — mirrors the Android
 /// `AppViewModel`: collect `client.frames` into UI state, run the socket loop,
@@ -11,6 +14,12 @@ final class BrokerSession {
     private let token: String
     let api: BrokerApi
     private let client: BrokerClient
+    /// The socket run-loop task (`client.run()`), retained so `wakeKick()` can cancel the
+    /// in-flight reconnect backoff and redial immediately on macOS wake.
+    @ObservationIgnored private var runTask: Task<Void, Never>?
+    #if os(macOS)
+    @ObservationIgnored private var wakeObserver: (any NSObjectProtocol)?
+    #endif
 
     private(set) var sessions: [SessionInfo] = []
     private(set) var messages: [String: [LogEntry]] = [:]
@@ -41,7 +50,24 @@ final class BrokerSession {
         self.api = BrokerApi(baseUrl: baseURL, token: token, http: http)
         self.client = BrokerClient(baseUrl: baseURL, token: token, http: http,
                                    policy: ReconnectPolicy(baseMs: 500, maxMs: 8000))
+        #if os(macOS)
+        // Macs sleep with the lid: the WS drops and the run-loop enters its backoff delay.
+        // On wake, don't sit out that timer — kick the loop immediately so the workspace is
+        // live on lid-open. `queue: .main` guarantees the callback lands on the main thread,
+        // so `assumeIsolated` is sound (this class is @MainActor).
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.wakeKick() }
+        }
+        #endif
     }
+
+    #if os(macOS)
+    deinit {
+        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
+    }
+    #endif
 
     /// Build a terminal WS client for a session. Centralized here so the device
     /// token stays private (mirrors how `api`/`client` are constructed).
@@ -73,10 +99,25 @@ final class BrokerSession {
                 self.reduce(frame)
             }
         }
-        Task { [weak self] in try? await self?.client.run() }
+        runTask = Task { [weak self] in try? await self?.client.run() }
         // Seed the display list (REST); the two frame cases below keep it live.
         Task { [weak self] in await self?.refreshDisplays() }
     }
+
+    #if os(macOS)
+    /// macOS wake: skip the reconnect backoff. When the socket dropped during sleep the
+    /// run-loop is sitting in its Kotlin `delay()` backoff (so `client.sync.synced` is false);
+    /// cancel that task — SKIE propagates the cancellation into the coroutine, unwinding the
+    /// `delay()` — and start a fresh `run()` that redials at once. No-op while still connected,
+    /// so a healthy WS is never torn down (idempotent, safe to call on every wake). The frames
+    /// collector is a separate, durable subscriber on the same client, so it keeps delivering
+    /// across the restart.
+    func wakeKick() {
+        guard !client.sync.synced else { return }
+        runTask?.cancel()
+        runTask = Task { [weak self] in try? await self?.client.run() }
+    }
+    #endif
 
     // Not `private`: SupermuxTests drives this directly (no fake-server seam exists on
     // `client`/`BrokerClient`, so the unit tests for the `agent_state` reduction — see

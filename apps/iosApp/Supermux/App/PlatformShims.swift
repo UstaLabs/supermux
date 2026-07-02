@@ -341,7 +341,7 @@ extension View {
         #if os(iOS)
         hoverEffect(.highlight)
         #else
-        self
+        modifier(MacHoverHighlight())
         #endif
     }
     /// iOS full-screen cover; a regular sheet on the Mac (macOS has no full-screen cover).
@@ -376,4 +376,33 @@ extension PlatformImage {
         return rep.representation(using: .jpeg, properties: [.compressionFactor: quality])
         #endif
     }
+}
+
+// MARK: - Mac hover affordance
+
+#if os(macOS)
+/// The Mac analog of iOS `.hoverEffect(.highlight)`: a subtle background wash while the
+/// pointer is over the control. Used by `.smHoverHighlight()` at the `.plain`-style sites
+/// (pane toggles, dividers, header menus) that otherwise have no pointer feedback on macOS.
+private struct MacHoverHighlight: ViewModifier {
+    @State private var hovering = false
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(hovering ? 0.08 : 0))
+            )
+            .animation(.easeOut(duration: 0.12), value: hovering)
+            .onHover { hovering = $0 }
+    }
+}
+#endif
+
+// MARK: - Notifications
+
+extension Notification.Name {
+    /// Posted by the macOS menu bar's File ▸ New Session (⌘N); observed by `RootView` to
+    /// route to the new-session launcher. Menu commands live in the `App` scene, not the
+    /// view tree, so they reach `RootView` via NotificationCenter rather than a binding.
+    static let smNewSession = Notification.Name("sm.newSession")
 }
