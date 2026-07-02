@@ -1776,6 +1776,13 @@ git commit -m "chore(mac): Mac App Store release lane — signing, export option
 
 ---
 
+## Post-plan follow-ups discovered during execution (OUTSIDE this plan's scope)
+
+- **Shared Frames.kt:** add a `session_state` serializer (broker emits it; native clients skip it — per-session connected/model updates dropped on live iOS today).
+- **Web client:** `session_removed` never clears the web `agentState` store — the exact stale-dead-banner-after-resume bug fixed for iOS/mac in `a96fe46` exists on web (`ws.ts:113-119`).
+- **iOS/mac:** `pendingSend.remove(r.id)` in `.sessionRemoved` (cosmetic phantom-"Sending…" edge on resume); strengthen `testSessionRemovedClearsDeadFlag`'s three vacuous assertions by seeding `since`/`workingSince`/`detail` non-nil.
+- **mac post-v1:** NSTextInputClient adoption for display key-capture (IME/dead-keys); `SMHaptics` NSHapticFeedbackManager mac branch; per-site `.confirmationAction`/`.cancellationAction` sheet buttons (list in Task 14); web-parity Retry/Stop buttons on the dead-session banner.
+
 ## Completion criteria (map back to the spec)
 
 - [ ] Mac + iOS app targets and BOTH test lanes green on the remote Mac.
