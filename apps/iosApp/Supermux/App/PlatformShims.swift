@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 #if canImport(UIKit)
 import UIKit
 #else
@@ -187,6 +188,22 @@ enum SMPasteboard {
         NSImage(pasteboard: NSPasteboard.general)
         #endif
     }
+    /// True when the clipboard holds at least one image (type-presence check only).
+    static var hasImages: Bool {
+        #if canImport(UIKit)
+        UIPasteboard.general.hasImages
+        #else
+        NSPasteboard.general.canReadObject(forClasses: [NSImage.self], options: nil)
+        #endif
+    }
+    /// True when the clipboard advertises the given content type (e.g. `.pdf`).
+    static func contains(_ type: UTType) -> Bool {
+        #if canImport(UIKit)
+        UIPasteboard.general.contains(pasteboardTypes: [type.identifier])
+        #else
+        NSPasteboard.general.availableType(from: [NSPasteboard.PasteboardType(type.identifier)]) != nil
+        #endif
+    }
 }
 
 // MARK: - Haptics (no-op on the Mac)
@@ -335,6 +352,19 @@ extension View {
         fullScreenCover(item: item, onDismiss: onDismiss, content: content)
         #else
         sheet(item: item, onDismiss: onDismiss, content: content)
+        #endif
+    }
+}
+
+// MARK: - JPEG encoding (UIImage.jpegData has no NSImage counterpart)
+
+extension PlatformImage {
+    func smJpegData(quality: CGFloat) -> Data? {
+        #if canImport(UIKit)
+        jpegData(compressionQuality: quality)
+        #else
+        guard let tiff = tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return nil }
+        return rep.representation(using: .jpeg, properties: [.compressionFactor: quality])
         #endif
     }
 }

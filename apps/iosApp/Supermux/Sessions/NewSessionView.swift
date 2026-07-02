@@ -180,7 +180,9 @@ struct NewSessionView: View {
         }
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .images)
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { composer.handleFiles($0) }
+        #if os(iOS)
         .smFullScreenCover(isPresented: $showCamera) { CameraPicker { composer.addCameraImage($0) } }
+        #endif
         .onChange(of: composer.refocusToken) { _, _ in composing = true }
         .onChange(of: workdir) { _, new in
             launcherState.draft.workdir = new.isEmpty ? nil : new

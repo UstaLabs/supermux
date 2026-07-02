@@ -3,7 +3,11 @@ import SwiftUI
 import Shared
 import PhotosUI
 import UniformTypeIdentifiers
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 
 /// The composer's shared brain: draft + staged attachments + the mic/dictation pipeline +
 /// slash-command parsing. Lifted out of `ChatPane` so the new-session launcher shares the
@@ -107,8 +111,8 @@ final class ComposerModel {
             }
         }
     }
-    func addCameraImage(_ img: UIImage) {
-        if let data = img.jpegData(compressionQuality: 0.85) {
+    func addCameraImage(_ img: PlatformImage) {
+        if let data = img.smJpegData(quality: 0.85) {
             pending.append(PendingAttachment(data: data, filename: "photo-\(pending.count + 1).jpg", mime: "image/jpeg"))
         }
     }
@@ -119,6 +123,7 @@ final class ComposerModel {
     /// "copied a screenshot / photo" case — otherwise any copied file data (e.g. a PDF) via item
     /// providers. Plain text and URLs are skipped here so the text field keeps pasting those as
     /// text; they never reach this path. Reuses the same `pending` staging as the +-menu pickers.
+    #if canImport(UIKit)
     func pasteClipboard(_ pasteboard: UIPasteboard = .general) async {
         if let images = pasteboard.images, !images.isEmpty {
             for image in images { addPastedImage(image) }
@@ -128,11 +133,27 @@ final class ComposerModel {
             await addPastedFile(provider)
         }
     }
+    #else
+    /// Mac analog: NSPasteboard has no item-provider API — stage the pasteboard image if there
+    /// is one, otherwise read copied file URLs (Finder copies) and stage their data.
+    func pasteClipboard() async {
+        if let image = SMPasteboard.image {
+            addPastedImage(image)
+            return
+        }
+        guard let urls = NSPasteboard.general.readObjects(forClasses: [NSURL.self], options: nil) as? [URL] else { return }
+        for url in urls {
+            guard let data = try? Data(contentsOf: url) else { continue }
+            let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+            pending.append(PendingAttachment(data: data, filename: url.lastPathComponent, mime: mime))
+        }
+    }
+    #endif
 
     /// Stage a single pasted image as a JPEG attachment. Split out (and non-private) so the
     /// staging/filename logic is unit-testable without a live `UIPasteboard`.
-    func addPastedImage(_ image: UIImage) {
-        guard let data = image.jpegData(compressionQuality: 0.9) else { return }
+    func addPastedImage(_ image: PlatformImage) {
+        guard let data = image.smJpegData(quality: 0.9) else { return }
         pending.append(PendingAttachment(data: data,
                                          filename: "pasted-\(pending.count + 1).jpg",
                                          mime: "image/jpeg"))

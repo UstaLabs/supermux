@@ -1,5 +1,9 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import Shared
 
 /// Agent replies render here. We parse the markdown into blocks and render them
@@ -88,11 +92,11 @@ private enum MarkdownAttributed {
         return out
     }
 
-    private static var bodyFont: UIFont { .preferredFont(forTextStyle: .subheadline) }
+    private static var bodyFont: PlatformFont { .preferredFont(forTextStyle: .subheadline) }
 
-    private static func headingFont(_ level: Int) -> UIFont {
-        let style: UIFont.TextStyle = level == 1 ? .title3 : (level == 2 ? .headline : .subheadline)
-        return UIFont.preferredFont(forTextStyle: style).withTraits(.traitBold)
+    private static func headingFont(_ level: Int) -> PlatformFont {
+        let style: PlatformFont.TextStyle = level == 1 ? .title3 : (level == 2 ? .headline : .subheadline)
+        return PlatformFont.preferredFont(forTextStyle: style).withTraits(.traitBold)
     }
 
     /// Base paragraph style: word-wrap, a little spacing between blocks.
@@ -107,12 +111,12 @@ private enum MarkdownAttributed {
     private static func attributed(for b: MDBlock) -> NSAttributedString {
         switch b {
         case .paragraph(let s):
-            return styledInline(s, font: bodyFont, color: .label, paragraph: paragraph())
+            return styledInline(s, font: bodyFont, color: .smLabel, paragraph: paragraph())
         case .heading(let level, let s):
-            return styledInline(s, font: headingFont(level), color: .label, paragraph: paragraph())
+            return styledInline(s, font: headingFont(level), color: .smLabel, paragraph: paragraph())
         case .quote(let s):
             let p = paragraph(); p.firstLineHeadIndent = 12; p.headIndent = 12
-            return styledInline(s, font: bodyFont, color: .secondaryLabel, paragraph: p)
+            return styledInline(s, font: bodyFont, color: .smSecondaryLabel, paragraph: p)
         case .bullet(let s):
             return listItem(marker: "•", body: s)
         case .numbered(let n, let s):
@@ -130,8 +134,8 @@ private enum MarkdownAttributed {
         let indent: CGFloat = 22
         let line = NSMutableAttributedString(
             string: "\(marker)\t",
-            attributes: [.font: bodyFont, .foregroundColor: UIColor.secondaryLabel])
-        line.append(styledInline(body, font: bodyFont, color: .label, paragraph: nil))
+            attributes: [.font: bodyFont, .foregroundColor: PlatformColor.smSecondaryLabel])
+        line.append(styledInline(body, font: bodyFont, color: .smLabel, paragraph: nil))
         let p = paragraph()
         p.headIndent = indent
         p.firstLineHeadIndent = 0
@@ -149,18 +153,18 @@ private enum MarkdownAttributed {
         p.paragraphSpacing = 7
         p.firstLineHeadIndent = 8
         p.headIndent = 8
-        let f = UIFont.monospacedSystemFont(ofSize: max(11, bodyFont.pointSize - 1), weight: .regular)
+        let f = PlatformFont.monospacedSystemFont(ofSize: max(11, bodyFont.pointSize - 1), weight: .regular)
         return NSAttributedString(string: code, attributes: [
             .font: f,
-            .foregroundColor: UIColor.label,
-            .backgroundColor: UIColor.tertiarySystemBackground,
+            .foregroundColor: PlatformColor.smLabel,
+            .backgroundColor: PlatformColor.smTertiaryBackground,
             .paragraphStyle: p,
         ])
     }
 
     /// Parse inline markdown (bold/italic/code/strikethrough/links) and normalize
     /// every run onto our base font/color so the UITextView renders consistently.
-    private static func styledInline(_ s: String, font: UIFont, color: UIColor,
+    private static func styledInline(_ s: String, font: PlatformFont, color: PlatformColor,
                                      paragraph: NSParagraphStyle?) -> NSAttributedString {
         let m = NSMutableAttributedString(attributedString: MarkdownInline.nsAttributed(s))
         let whole = NSRange(location: 0, length: m.length)
@@ -182,7 +186,7 @@ private enum MarkdownAttributed {
             if intent.contains(.emphasized) { f = f.withTraits(.traitItalic) }
             if intent.contains(.code) {
                 f = .monospacedSystemFont(ofSize: max(11, font.pointSize - 0.5), weight: .regular)
-                m.addAttribute(.backgroundColor, value: UIColor.tertiarySystemFill, range: range)
+                m.addAttribute(.backgroundColor, value: PlatformColor.smTertiaryFill, range: range)
             }
             if intent.contains(.strikethrough) {
                 m.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range)
@@ -216,7 +220,7 @@ enum FilePathLinks {
             guard let url = url(for: m.ref) else { continue }
             s.addAttributes([
                 .link: url,
-                .foregroundColor: UIColor(Theme.teal),
+                .foregroundColor: PlatformColor(Theme.teal),
                 .underlineStyle: NSUnderlineStyle.single.rawValue,
             ], range: range)
         }
@@ -270,6 +274,7 @@ enum MarkdownInline {
     }
 }
 
+#if canImport(UIKit)
 private extension UIFont {
     func withTraits(_ traits: UIFontDescriptor.SymbolicTraits) -> UIFont {
         let merged = fontDescriptor.symbolicTraits.union(traits)
@@ -277,6 +282,22 @@ private extension UIFont {
         return UIFont(descriptor: d, size: 0)
     }
 }
+#else
+// AppKit spells the traits `.bold`/`.italic` (no `trait` prefix); alias them so the
+// shared call sites above (`withTraits(.traitBold)`) read identically on both platforms.
+private extension NSFontDescriptor.SymbolicTraits {
+    static var traitBold: NSFontDescriptor.SymbolicTraits { .bold }
+    static var traitItalic: NSFontDescriptor.SymbolicTraits { .italic }
+}
+private extension NSFont {
+    func withTraits(_ traits: NSFontDescriptor.SymbolicTraits) -> NSFont {
+        // Unlike UIKit, `withSymbolicTraits` is non-optional on AppKit; the font init is
+        // the failable step here.
+        let d = fontDescriptor.withSymbolicTraits(fontDescriptor.symbolicTraits.union(traits))
+        return NSFont(descriptor: d, size: 0) ?? self
+    }
+}
+#endif
 
 // MARK: - Table view (native, horizontally scrollable grid)
 
@@ -518,6 +539,7 @@ private func normalize(_ aligns: [MDColumnAlign], to n: Int) -> [MDColumnAlign] 
 
 // MARK: - Selectable, self-sizing text view
 
+#if canImport(UIKit)
 /// A non-editable UITextView that is fully selectable (any range, across the
 /// whole run) and sizes itself to its wrapped content for the width SwiftUI
 /// proposes. `isScrollEnabled = false` makes it lay out like a label.
@@ -552,8 +574,8 @@ struct SelectableText: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView tv: UITextView, context: Context) -> CGSize? {
-        let proposed = proposal.width ?? UIScreen.main.bounds.width
-        let width = (proposed.isFinite && proposed > 0) ? proposed : UIScreen.main.bounds.width
+        let proposed = proposal.width ?? SMScreen.mainWidth
+        let width = (proposed.isFinite && proposed > 0) ? proposed : SMScreen.mainWidth
         let fit = tv.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
         return CGSize(width: width, height: ceil(fit.height))
     }
@@ -576,3 +598,72 @@ struct SelectableText: UIViewRepresentable {
         }
     }
 }
+#else
+/// Mac twin: a non-editable, selectable NSTextView that hugs its wrapped content height for
+/// the width SwiftUI proposes (mirrors the iOS UITextView configuration — non-scrolling,
+/// zero insets, width-tracking container) and routes `supermux-file://` link clicks to the
+/// same `onOpenFile` closure the iOS coordinator calls.
+struct SelectableText: NSViewRepresentable {
+    let attributed: NSAttributedString
+    /// Tapped file-path link handler (nil → file links are inert but still intercepted).
+    var onOpenFile: ((FilePathRef) -> Void)? = nil
+
+    func makeCoordinator() -> Coordinator { Coordinator(onOpenFile: onOpenFile) }
+
+    func makeNSView(context: Context) -> NSTextView {
+        let tv = NSTextView()
+        tv.isEditable = false
+        tv.isSelectable = true
+        tv.drawsBackground = false
+        tv.textContainerInset = .zero
+        tv.textContainer?.lineFragmentPadding = 0
+        tv.textContainer?.widthTracksTextView = true
+        tv.isVerticallyResizable = false
+        tv.isHorizontallyResizable = false
+        // The attributed string already carries explicit teal + underline on file links;
+        // pin the default link styling to the same look so plain markdown links match the
+        // iOS tint (NSTextView would otherwise paint every .link range system-blue).
+        tv.linkTextAttributes = [
+            .foregroundColor: PlatformColor(Theme.teal),
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+            .cursor: NSCursor.pointingHand,
+        ]
+        tv.delegate = context.coordinator          // intercept supermux-file:// link clicks
+        tv.setContentHuggingPriority(.required, for: .vertical)
+        tv.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return tv
+    }
+
+    func updateNSView(_ tv: NSTextView, context: Context) {
+        context.coordinator.onOpenFile = onOpenFile
+        if tv.textStorage?.isEqual(attributed) != true { tv.textStorage?.setAttributedString(attributed) }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView tv: NSTextView, context: Context) -> CGSize? {
+        let proposed = proposal.width ?? SMScreen.mainWidth
+        let width = (proposed.isFinite && proposed > 0) ? proposed : SMScreen.mainWidth
+        guard let container = tv.textContainer, let lm = tv.layoutManager else { return nil }
+        container.size = NSSize(width: width, height: .greatestFiniteMagnitude)
+        lm.ensureLayout(for: container)
+        let fit = lm.usedRect(for: container)
+        return CGSize(width: width, height: ceil(fit.height))
+    }
+
+    /// Intercepts clicks on our `supermux-file://` links (→ open in the editor) while letting
+    /// every other link (http(s), etc.) fall through to the system's default handling.
+    /// Note the inverted contract vs UIKit: returning `true` here means "handled".
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var onOpenFile: ((FilePathRef) -> Void)?
+        init(onOpenFile: ((FilePathRef) -> Void)?) { self.onOpenFile = onOpenFile }
+
+        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+            let url = (link as? URL) ?? (link as? String).flatMap { URL(string: $0) }
+            if let url, let ref = FilePathLinks.ref(from: url) {
+                onOpenFile?(ref)
+                return true    // handled — don't let the system try to open the custom-scheme URL
+            }
+            return false       // non-file links keep their default behavior (NSWorkspace open)
+        }
+    }
+}
+#endif

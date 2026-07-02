@@ -1,6 +1,10 @@
 import SwiftUI
 import Shared
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import QuickLook
 
 struct MessageRow: View {
@@ -37,7 +41,7 @@ struct MessageRow: View {
 struct AttachmentView: View {
     let att: Attachment
     let broker: BrokerSession
-    @State private var image: UIImage?
+    @State private var image: PlatformImage?
     @State private var imageData: Data?
     @State private var previewURL: URL?
     @State private var fileURL: URL?
@@ -53,7 +57,7 @@ struct AttachmentView: View {
         .task {
             if isImage, image == nil, let data = await broker.loadFile(att.file_id) {
                 imageData = data
-                image = UIImage(data: data)
+                image = PlatformImage(data: data)
             }
         }
     }
@@ -156,6 +160,7 @@ struct AttachmentView: View {
     }
 }
 
+#if os(iOS)
 /// Camera capture → UIImage (device only; needs NSCameraUsageDescription).
 struct CameraPicker: UIViewControllerRepresentable {
     var onImage: (UIImage) -> Void
@@ -179,3 +184,4 @@ struct CameraPicker: UIViewControllerRepresentable {
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { parent.dismiss() }
     }
 }
+#endif

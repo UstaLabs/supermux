@@ -1,6 +1,10 @@
 import SwiftUI
 import Shared
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 
 /// The iPhone (compact) session screen: a 5-tab pane switcher (Chat / Native / Terminal /
 /// Editor / Display) with the toolbar, finish flow, and git actions. The Chat tab renders
@@ -44,6 +48,7 @@ struct ChatView: View {
     private var agentTabIcon: Image {
         guard let asset = agentAssetName else { return Image(systemName: "cube.transparent") }
         if let cached = Self.tabIconCache[asset] { return cached }
+        #if canImport(UIKit)
         guard let ui = UIImage(named: asset) else { return Image(systemName: "cube.transparent") }
         let canvas = CGSize(width: 26, height: 26)
         let inset: CGFloat = 4
@@ -51,6 +56,17 @@ struct ChatView: View {
             ui.draw(in: CGRect(x: inset, y: inset, width: canvas.width - 2 * inset, height: canvas.height - 2 * inset))
         }
         let image = Image(platform: rendered.withRenderingMode(.alwaysOriginal))
+        #else
+        guard let base = NSImage(named: asset) else { return Image(systemName: "cube.transparent") }
+        let canvas = CGSize(width: 26, height: 26)
+        let inset: CGFloat = 4
+        let rendered = NSImage(size: canvas, flipped: false) { _ in
+            base.draw(in: CGRect(x: inset, y: inset, width: canvas.width - 2 * inset, height: canvas.height - 2 * inset))
+            return true
+        }
+        rendered.isTemplate = false   // keep the brand colors (analog of .alwaysOriginal)
+        let image = Image(platform: rendered)
+        #endif
         Self.tabIconCache[asset] = image
         return image
     }

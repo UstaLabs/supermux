@@ -1,6 +1,5 @@
 import SwiftUI
 import Shared
-import UIKit
 import PhotosUI
 import UniformTypeIdentifiers
 
@@ -74,8 +73,7 @@ struct ChatPane: View {
     /// True when the clipboard holds something we can stage as an attachment (an image, or a PDF) —
     /// gates the composer's "+ → Paste" item. Type-presence check only (privacy-safe; no banner).
     private var pasteboardHasAttachment: Bool {
-        let pb = UIPasteboard.general
-        return pb.hasImages || pb.contains(pasteboardTypes: [UTType.pdf.identifier])
+        SMPasteboard.hasImages || SMPasteboard.contains(.pdf)
     }
 
     /// Composer is expanded (full controls) when focused, when there's a draft or a
@@ -213,7 +211,9 @@ struct ChatPane: View {
         }
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .images)
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { composer.handleFiles($0) }
+        #if os(iOS)
         .smFullScreenCover(isPresented: $showCamera) { CameraPicker { composer.addCameraImage($0) } }
+        #endif
     }
 
     // ONE glass card with an always-present TextField: tapping it focuses natively, so
@@ -261,8 +261,7 @@ struct ChatPane: View {
                     canSubmit: composer.canSubmit,
                     onSubmit: { sendMessage() },
                     onPasteAttachment: {
-                        let pb = UIPasteboard.general
-                        guard pb.hasImages || pb.contains(pasteboardTypes: [UTType.pdf.identifier]) else { return false }
+                        guard SMPasteboard.hasImages || SMPasteboard.contains(.pdf) else { return false }
                         Task { await composer.pasteClipboard() }
                         return true
                     }
