@@ -15,7 +15,7 @@ import WebKit
 /// `window.AndroidEditor.{onChange,onSave,onReady}`. SwiftUI re-creates the
 /// representable whenever a prop changes, so the props are plain `let`/closures and
 /// deltas are pushed in `updateUIView`.
-struct EditorWebView: UIViewRepresentable {
+struct EditorWebView: PlatformViewRepresentable {
     /// The persistent webview + coordinator, owned by `BrokerSession`'s editor cache.
     let host: EditorHost
     let content: String
@@ -42,19 +42,19 @@ struct EditorWebView: UIViewRepresentable {
     /// ready/lastPath/lastContent state), so remounts don't reset the handshake.
     func makeCoordinator() -> Coordinator { host.coordinator }
 
-    func makeUIView(context: Context) -> WKWebView {
+    func makePlatformView(context: Context) -> WKWebView {
         // Detach from any prior mount before SwiftUI re-parents this cached, reused
         // webview. Only one mount of a given editor exists at a time, so this is
         // normally a no-op; it guards the toggle transition (split ⇄ standalone) from
         // a "view already has a superview" assertion when the old container hasn't been
-        // torn down yet (mirrors `SwiftTermView.makeUIView`). NO construction here —
+        // torn down yet (mirrors `SwiftTermView.makePlatformView`). NO construction here —
         // the `EditorHost` built the webview + bridge + handlers + file:// load once.
         host.webView.removeFromSuperview()
         DispatchQueue.main.async { onMakeView(host.webView) }
         return host.webView
     }
 
-    func updateUIView(_ webView: WKWebView, context: Context) {
+    func updatePlatformView(_ webView: WKWebView, context: Context) {
         let coordinator = context.coordinator
         // Keep the live callbacks current — SwiftUI hands fresh closures on each
         // re-make; the long-lived coordinator must call the latest ones.
