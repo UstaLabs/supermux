@@ -214,6 +214,16 @@ private struct WorkspaceDetail: View {
                 Divider()
             }
             content
+                // "Not responding" treatment for a dead agent (broker agent_state == "dead") —
+                // the same shared DeadSessionBanner the compact ChatView attaches. Attached to
+                // `content` (not the outer VStack) so it spans the whole multi-pane area but sits
+                // BELOW the session header — Android parity: the dead banner lives above the
+                // panel switch, under the header.
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if broker.agentDead[session.id] == true {
+                        DeadSessionBanner()
+                    }
+                }
         }
         // The Finish bottom sheet (readiness → action → live job → recovery), shared chrome.
         .sheet(isPresented: $finishSheet) { FinishSheet(chrome: chrome) }

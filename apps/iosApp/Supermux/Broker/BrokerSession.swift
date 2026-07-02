@@ -121,6 +121,17 @@ final class BrokerSession {
             // Resolve the name BEFORE dropping the session — display hosts are keyed by it.
             let removedName = sessions.first { $0.id == r.id }?.name
             sessions.removeAll { $0.id == r.id }
+            // Clear the whole per-session agent-state family: an archived session RESUMES with
+            // the SAME id, and over a continuous WS the resume's session_added carries no agent
+            // state — so a stale entry (e.g. agentDead=true from the kill) would misreport the
+            // healthy resumed session ("Not responding") until its first real agent_state frame.
+            agentPhase.removeValue(forKey: r.id)
+            agentSince.removeValue(forKey: r.id)
+            agentWorking.removeValue(forKey: r.id)
+            agentDead.removeValue(forKey: r.id)
+            agentState.removeValue(forKey: r.id)
+            agentDetail.removeValue(forKey: r.id)
+            agentWorkingSince.removeValue(forKey: r.id)
             evictTerminalHosts(sessionId: r.id)   // session killed → tear down its live terminals
             dropEditorHost(sessionId: r.id)       // …its editor webview (stop() breaks the bridge cycle)
             if let removedName { evictDisplayHosts(sessionName: removedName) }  // …and its displays

@@ -49,6 +49,26 @@ final class AgentDeadStateTests: XCTestCase {
         XCTAssertEqual(broker.agentWorking["s1"], true)
     }
 
+    func testSessionRemovedClearsDeadFlag() {
+        let broker = makeBroker()
+        broker.reduce(ServerFrameAgentState(session: "s1", phase: "stalled", state: "dead",
+                                             working: false, detail: nil, tool: nil,
+                                             since: nil, workingSince: nil))
+        XCTAssertEqual(broker.agentDead["s1"], true)
+
+        // Kill/archive removes the session — but a resume REUSES the same id over a continuous
+        // WS with no corrective agent_state frame, so the dead flag (and the whole per-session
+        // agent-state family) must not survive removal to misreport the healthy resumed session.
+        broker.reduce(ServerFrameSessionRemoved(id: "s1"))
+        XCTAssertNil(broker.agentDead["s1"])
+        XCTAssertNil(broker.agentWorking["s1"])
+        XCTAssertNil(broker.agentState["s1"])
+        XCTAssertNil(broker.agentPhase["s1"])
+        XCTAssertNil(broker.agentDetail["s1"])
+        XCTAssertNil(broker.agentSince["s1"])
+        XCTAssertNil(broker.agentWorkingSince["s1"])
+    }
+
     // MARK: - Snapshot frame (BrokerSession.swift ~line 89 area)
 
     func testSnapshotMapsDeadState() {
