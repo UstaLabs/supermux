@@ -61,6 +61,7 @@ import {
   PromptInputAttachments,
 } from "@/components/ai-elements/prompt-input"
 import PromptInputActionAddCamera from "@/components/ai-elements/prompt-input/PromptInputActionAddCamera.vue"
+import PromptInputActionAddRecordVideo from "@/components/ai-elements/prompt-input/PromptInputActionAddRecordVideo.vue"
 import PromptInputDraftSync from "@/components/PromptInputDraftSync.vue"
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input"
 import { Suggestion } from "@/components/ai-elements/suggestion"
@@ -664,6 +665,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
                   <PromptInputActionMenuContent>
                     <PromptInputActionAddAttachments label="Files" />
                     <PromptInputActionAddCamera />
+                    <PromptInputActionAddRecordVideo />
                   </PromptInputActionMenuContent>
                 </PromptInputActionMenu>
                 <MicButton

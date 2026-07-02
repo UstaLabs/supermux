@@ -36,6 +36,7 @@ import {
   PromptInputAttachments,
 } from "@/components/ai-elements/prompt-input"
 import PromptInputActionAddCamera from "@/components/ai-elements/prompt-input/PromptInputActionAddCamera.vue"
+import PromptInputActionAddRecordVideo from "@/components/ai-elements/prompt-input/PromptInputActionAddRecordVideo.vue"
 import SlashCommandMenu from "@/components/SlashCommandMenu.vue"
 import LauncherComposeLock from "@/components/LauncherComposeLock.vue"
 import LauncherDraftSync from "@/components/LauncherDraftSync.vue"
@@ -363,6 +364,7 @@ function goBack() {
                 <PromptInputActionMenuContent>
                   <PromptInputActionAddAttachments label="Files" />
                   <PromptInputActionAddCamera />
+                  <PromptInputActionAddRecordVideo />
                 </PromptInputActionMenuContent>
               </PromptInputActionMenu>
               <MicButton
