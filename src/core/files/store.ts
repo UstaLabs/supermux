@@ -34,6 +34,19 @@ export interface FileMeta {
   size: number
 }
 
+/**
+ * Thrown by putStream when the incoming byte total exceeds the caller's
+ * maxBytes. Distinguishable (instanceof / .code) so the web channel can map it
+ * to HTTP 413 rather than a generic 500.
+ */
+export class PayloadTooLargeError extends Error {
+  readonly code = "PAYLOAD_TOO_LARGE" as const
+  constructor(message = "payload too large") {
+    super(message)
+    this.name = "PayloadTooLargeError"
+  }
+}
+
 export class FileStore {
   constructor(private readonly db: Db, private readonly rootDir: string) {
     mkdirSync(rootDir, { recursive: true, mode: 0o700 })
@@ -91,6 +104,85 @@ export class FileStore {
     }
 
     return { file_id, size: bytes.length }
+  }
+
+  /**
+   * Streaming variant of put(): consume `source` chunk-by-chunk into
+   * <file_id>.part while tracking a running byte total, so a large upload never
+   * buffers wholly in RAM. If the running total exceeds input.maxBytes, abort:
+   * unlink the partial file and throw PayloadTooLargeError. On success: fsync,
+   * rename to the final path, then INSERT the row with the OBSERVED byte total.
+   * Mirrors put()'s two cleanup blocks (unlink part on write failure; unlink
+   * final on INSERT failure).
+   */
+  async putStream(
+    input: Omit<FileStorePutInput, "bytes"> & { maxBytes: number },
+    source: ReadableStream<Uint8Array>,
+  ): Promise<{ file_id: string; size: number }> {
+    const file_id = randomBytes(16).toString("hex")
+    const ext = extFromMime(input.mime)
+    const shard = file_id.slice(0, 2)
+    const shardDir = join(this.rootDir, shard)
+    mkdirSync(shardDir, { recursive: true, mode: 0o700 })
+
+    const finalPath = join(shardDir, `${file_id}.${ext}`)
+    const partPath = `${finalPath}.part`
+
+    // Stream chunks to <file_id>.part, enforcing the cap as bytes arrive so a
+    // chunked/absent-length or lying client can't exceed maxBytes. fsync before
+    // rename for the same durability guarantee as put(). Unlink the part file on
+    // any write failure (including a cap abort).
+    let total = 0
+    try {
+      const fd = openSync(partPath, "w", 0o600)
+      try {
+        const reader = source.getReader()
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            if (!value || value.byteLength === 0) continue
+            total += value.byteLength
+            if (total > input.maxBytes) throw new PayloadTooLargeError()
+            const buf = Buffer.from(value.buffer, value.byteOffset, value.byteLength)
+            writeSync(fd, buf, 0, buf.length)
+          }
+          fsyncSync(fd)
+        } finally {
+          reader.releaseLock()
+        }
+      } finally {
+        closeSync(fd)
+      }
+      renameSync(partPath, finalPath)
+    } catch (err) {
+      try { unlinkSync(partPath) } catch { /* ignore — best-effort cleanup */ }
+      throw err
+    }
+
+    // Same INSERT as put(), but with the observed total as size. If it fails
+    // after rename, unlink the orphaned final file (no row → gc won't find it).
+    try {
+      this.db.prepare(`
+        INSERT INTO attachments (file_id, kind, mime, size, name, path, origin, session, device, created_at, ref_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), 0)
+      `).run(
+        file_id,
+        input.kind,
+        input.mime ?? null,
+        total,
+        input.name ?? null,
+        finalPath,
+        input.origin,
+        input.session ?? null,
+        input.device ?? null,
+      )
+    } catch (err) {
+      try { unlinkSync(finalPath) } catch { /* ignore — best-effort cleanup */ }
+      throw err
+    }
+
+    return { file_id, size: total }
   }
 
   async get(file_id: string): Promise<FileMeta | null> {
