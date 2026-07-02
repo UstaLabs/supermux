@@ -1620,6 +1620,13 @@ git commit -m "test(mac): XCUITest smoke — launch, env auto-pair, workspace re
 
 ---
 
+**Keychain recipe (Task 15 finding — REQUIRED before any differently-signed mac app/test launch):** stale supermux keychain items from a prior differently-signed run make `SecItemCopyMatching` hang forever on a headless ACL prompt. Delete OUR items first:
+```bash
+ssh mac 'security delete-generic-password -s "dev.supermux.app" ~/Library/Keychains/login.keychain-db; \
+         security delete-generic-password -s "dev.supermux.app.push" ~/Library/Keychains/login.keychain-db'
+```
+(Safe — the app regenerates both; a successful run re-mints items ACL'd to ITS signature, so repeat before each differently-signed launch, or use a stable identity: the on-box `supermux-ci.keychain-db` (password `supermux-ci`, already in the search list) holds importable identities — see `~/ow-headless.sh` on the Mac for the import pattern. The related `push_pubkey.txt` TCC hang is fixed in code (`aa84ac3`, simulator-gated).)
+
 **Ad-hoc launch recipe (Task 12 finding — REQUIRED for Tasks 16 and 17):** the committed `SupermuxMac.entitlements` carries `aps-environment` + `keychain-access-groups`, which ad-hoc signatures cannot satisfy on macOS — a plain ad-hoc build FAILS AT SIGNING. Until the real provisioning exists (Task 18 prereqs), launch-testing builds must be **re-signed with minimal sandbox entitlements**: create a Mac-side plist containing ONLY `com.apple.security.app-sandbox`, `com.apple.security.network.client`, `com.apple.security.device.audio-input`, then `codesign --force --sign - --entitlements <minimal.plist> --deep <path>/Supermux.app`. And launch via `open --env` (direct exec mounts no UI). Bake both into the Task 17 script; Task 16's XCUITest runner may need the same treatment if signing blocks the test host.
 
 ### Task 17: Build-and-run helper for feel-tests
