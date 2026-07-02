@@ -29,13 +29,20 @@
 import Combine
 import Foundation
 import Shared
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import UserNotifications
 
 /// App-side push manager: drives APNs registration and the broker register→bootstrap
 /// orchestration. A singleton (the `PushAppDelegate` forwards UIKit callbacks here).
 final class PushManager: NSObject {
     static let shared = PushManager()
+    // macOS also registers as "ios": same APNs topic (shared bundle id), and
+    // the relay only distinguishes APNs vs FCM. Introduce "macos" only when
+    // the broker learns to segment device platforms.
     private static let platform = "ios"
 
     private override init() { super.init() }
@@ -62,7 +69,11 @@ final class PushManager: NSObject {
             }
             // registerForRemoteNotifications must run on the main thread.
             DispatchQueue.main.async {
+                #if canImport(UIKit)
                 UIApplication.shared.registerForRemoteNotifications()
+                #else
+                NSApplication.shared.registerForRemoteNotifications()
+                #endif
             }
         }
     }
@@ -149,11 +160,84 @@ final class PushManager: NSObject {
     private init() {}
 }
 
+#if canImport(UIKit)
 /// UIKit application delegate, adapted into the SwiftUI lifecycle via
 /// `@UIApplicationDelegateAdaptor`. Forwards push callbacks to `PushManager`.
+/// Method bodies are hoisted into the shared `private extension` below (see
+/// `handleLaunch()`/`handleToken(_:)`/`handleFailure(_:)`) so this class and its
+/// `NSApplicationDelegate` twin (`#else`, below) stay thin shells around the same
+/// logic; `handleRemote(_:)` is the one exception — it can't be fully shared because
+/// its return type (`UIBackgroundFetchResult`) is UIKit-only, so each platform gets
+/// its own thin `handleRemote` that still funnels into `PushManager` identically.
 final class PushAppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        handleLaunch()
+        return true
+    }
+
+    func application(_ application: UIApplication,
+                     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        handleToken(deviceToken)
+    }
+
+    func application(_ application: UIApplication,
+                     didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        handleFailure(error)
+    }
+
+    func application(_ application: UIApplication,
+                     didReceiveRemoteNotification userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
+        await handleRemote(userInfo)
+    }
+
+    /// Shared body lives in `PushManager.shared.didReceiveRemoteNotification`; this
+    /// thin wrapper exists only because the return type is UIKit-only (see the type
+    /// doc comment above), so it can't move into the cross-platform extension below.
+    private func handleRemote(_ userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
+        await PushManager.shared.didReceiveRemoteNotification(userInfo)
+    }
+}
+#else
+/// AppKit application delegate, adapted into the SwiftUI lifecycle via
+/// `@NSApplicationDelegateAdaptor`. Mirrors `PushAppDelegate`'s UIKit branch
+/// method-for-method (see the type doc comment there); shared bodies live in the
+/// `private extension` below.
+final class PushAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        handleLaunch()
+    }
+
+    func application(_ application: NSApplication,
+                     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        handleToken(deviceToken)
+    }
+
+    func application(_ application: NSApplication,
+                     didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        handleFailure(error)
+    }
+
+    func application(_ application: NSApplication,
+                     didReceiveRemoteNotification userInfo: [String: Any]) {
+        handleRemote(userInfo)
+    }
+
+    /// Same underlying call as iOS's `handleRemote`, minus the `UIBackgroundFetchResult`
+    /// the OS-facing method has nowhere to return on macOS (no background-fetch
+    /// completion contract) — fire-and-forget the async broker registration instead.
+    private func handleRemote(_ userInfo: [String: Any]) {
+        Task { _ = await PushManager.shared.didReceiveRemoteNotification(userInfo) }
+    }
+}
+#endif
+
+/// Shared method bodies for both `PushAppDelegate` branches above — kept once here so
+/// neither `#if` branch duplicates logic (only the OS-facing method *signatures* differ).
+private extension PushAppDelegate {
+    /// Shared `application(_:didFinishLaunchingWithOptions:)` /
+    /// `applicationDidFinishLaunching(_:)` body.
+    func handleLaunch() {
         UNUserNotificationCenter.current().delegate = self
         // Warm the push keypair on launch so its public key is generated + persisted in
         // the shared Keychain group up front (the NSE reads the same key to decrypt, and
@@ -162,25 +246,23 @@ final class PushAppDelegate: NSObject, UIApplicationDelegate {
         // Register on launch if already paired (post-pairing registration is kicked
         // off from the pairing flow / `registerIfPaired()`).
         PushManager.shared.registerIfPaired()
-        return true
     }
 
-    func application(_ application: UIApplication,
-                     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+    /// Shared `didRegisterForRemoteNotificationsWithDeviceToken` body.
+    func handleToken(_ deviceToken: Data) {
         PushManager.shared.didRegister(deviceToken: deviceToken)
     }
 
-    func application(_ application: UIApplication,
-                     didFailToRegisterForRemoteNotificationsWithError error: Error) {
+    /// Shared `didFailToRegisterForRemoteNotificationsWithError` body.
+    func handleFailure(_ error: Error) {
         PushManager.shared.didFailToRegister(error: error)
-    }
-
-    func application(_ application: UIApplication,
-                     didReceiveRemoteNotification userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
-        await PushManager.shared.didReceiveRemoteNotification(userInfo)
     }
 }
 
+/// `UNUserNotificationCenterDelegate` is identical on iOS and macOS (the
+/// `UserNotifications` framework itself is cross-platform), and both `PushAppDelegate`
+/// branches above share the same type name, so this conformance is declared ONCE here
+/// — outside the `#if` — rather than duplicated into each branch.
 extension PushAppDelegate: UNUserNotificationCenterDelegate {
     /// Show banners/sounds even while the app is in the foreground (parity with the
     /// Android high-importance channel).

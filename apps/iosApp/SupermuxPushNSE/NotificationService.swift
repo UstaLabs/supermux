@@ -80,13 +80,19 @@ class NotificationService: UNNotificationServiceExtension {
 
     /// Persist the last decrypted notification to the shared App Group container as JSON.
     /// The host app shares this group; on the simulator the file is readable via
-    /// `simctl get_app_container <app> group.dev.supermux.app`.
+    /// `simctl get_app_container <app> group.dev.supermux.app`. iOS-only: the mac NSE
+    /// entitlements (Task 2) deliberately omit the app group, so `containerURL(...)`
+    /// would return nil there anyway — this whole hook only serves the iOS Simulator
+    /// `simctl` verification story, hence the explicit `#if` rather than relying on the
+    /// implicit nil-guard no-op.
     private static func recordLastDelivered(title: String, body: String) {
+        #if os(iOS)
         guard let dir = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup) else { return }
         let payload: [String: Any] = ["title": title, "body": body, "ts": ISO8601DateFormatter().string(from: Date())]
         if let data = try? JSONSerialization.data(withJSONObject: payload) {
             try? data.write(to: dir.appendingPathComponent("last_push.json"))
         }
+        #endif
     }
 
     // MARK: - Payload parsing (mirrors Android `PushRouter.parseNotification`)
