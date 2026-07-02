@@ -3,7 +3,7 @@ import { ref } from "vue"
 
 export interface AttachmentRef {
   file_id: string
-  kind: "photo" | "document" | "voice" | "audio" | "video_note"
+  kind: "photo" | "document" | "voice" | "audio" | "video" | "video_note"
   mime?: string
   size?: number
   name?: string
