@@ -1514,8 +1514,13 @@ Scheme — extend the `SupermuxMac` scheme (Task 2 Step 5) to:
 - [ ] **Step 3: Run the mac test suite.** Tar-sync, then:
 
 ```bash
+# First: apply the keychain recipe (delete the two stale supermux items — see the recipe
+# paragraph before Task 17). CODE_SIGNING_ALLOWED=NO is required until the portal profiles exist.
+# Until Developer Mode is enabled on the Mac, add -skip-testing:SupermuxMacUITests or the
+# aggregate verdict prints TEST FAILED from the UI-runner hang even with 104/104 unit tests green.
 ssh mac 'source ~/ios-build-env.sh; cd ~/supermux-mac/apps/iosApp && xcodegen generate && \
   nohup xcodebuild test -scheme SupermuxMac -destination "platform=macOS,arch=arm64" \
+  -skip-testing:SupermuxMacUITests CODE_SIGNING_ALLOWED=NO \
   -derivedDataPath build/dd-mac > ~/supermux-mac/mac-test.log 2>&1 &'
 # poll for "** TEST SUCCEEDED **"
 ssh mac 'grep -E "Test Suite|TEST" ~/supermux-mac/mac-test.log | tail -5'
