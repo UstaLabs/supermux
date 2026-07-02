@@ -4,6 +4,8 @@ import Shared
 #if canImport(UIKit)
 import GameController
 import UIKit
+#else
+import AppKit
 #endif
 
 /// Owns ONE persistent terminal — the `TerminalSession` (websocket) plus the SwiftTerm
@@ -72,6 +74,13 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate {
     private var scrollPan: UIPanGestureRecognizer?
     private var scrollAccumPx: Double = 0
     #endif
+    #if os(macOS)
+    // macOS wheel/trackpad → scrollback bridge (the AppKit analog of installTouchScroll): a
+    // local scroll-wheel monitor scoped to this TerminalView, plus the same carried sub-row
+    // accumulator the iOS pan uses. Removed in deinit.
+    private var scrollMonitor: Any?
+    private var scrollAccumPx: Double = 0
+    #endif
 
     // Predictive local echo: the shared Kotlin engine (via SKIE) + the SwiftTerm op
     // renderer + the keystroke→echo RTT stamp. Mirrors TerminalPane.vue's predictor /
@@ -99,7 +108,12 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate {
                        name: .GCKeyboardDidDisconnect, object: nil)
         #endif
     }
-    deinit { NotificationCenter.default.removeObserver(self) }
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        #if os(macOS)
+        if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
+        #endif
+    }
 
     /// Bind the SwiftTerm view and apply the current keyboard policy.
     func attach(_ terminal: TerminalView) {
@@ -119,6 +133,9 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate {
         #if os(iOS)
         applyKeyboardPolicy()
         installTouchScroll(terminal)
+        #endif
+        #if os(macOS)
+        installWheelScroll(terminal)
         #endif
     }
 
@@ -192,6 +209,55 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate {
             return
         }
         if tv.isFirstResponder { tv.reloadInputViews() }
+    }
+    #endif
+
+    #if os(macOS)
+    /// SwiftTerm's AppKit `scrollWheel` only nudges its LOCAL scrollback, which is empty in the
+    /// tmux alt-screen + `mouse on` config both terminal kinds use — so a trackpad/wheel scroll
+    /// over the pane does nothing. This is the macOS analog of iOS's `installTouchScroll`: a local
+    /// scroll-wheel monitor, SCOPED to this TerminalView, that turns vertical wheel deltas into
+    /// SGR mouse-wheel bytes sent to the pty (tmux then scrolls its own history). Shares the SAME
+    /// shared `TerminalScrollKt` math and the SAME `scrollAccumPx` accumulation + remainder carry
+    /// as the iOS pan, so both native platforms drive identical, tested scroll logic.
+    private func installWheelScroll(_ terminal: TerminalView) {
+        guard scrollMonitor == nil else { return }
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self, weak terminal] event in
+            guard let self, let terminal, let window = terminal.window,
+                  event.window === window else { return event }
+            // Only OUR view: the pointer must be inside the terminal's bounds.
+            let p = terminal.convert(event.locationInWindow, from: nil)
+            guard terminal.bounds.contains(p) else { return event }
+            self.handleScrollWheel(event, terminal)
+            return nil   // consume — SwiftTerm's own (inert) scrollWheel must not also fire
+        }
+    }
+
+    private func handleScrollWheel(_ event: NSEvent, _ terminal: TerminalView) {
+        let core = terminal.getTerminal()
+        let rows = core.rows
+        let cell = rows > 0 ? Double(terminal.bounds.height) / Double(rows) : 0
+        guard cell > 0 else { return }
+        // Per-event vertical delta in points. Precise deltas (trackpad / Magic Mouse) are already
+        // in points; a classic wheel notch is line-based, so scale it to points by the cell height.
+        // `scrollingDeltaY` already carries the user's natural-scroll direction preference in its
+        // sign, so we forward it faithfully.
+        let dy = event.hasPreciseScrollingDeltas
+            ? Double(event.scrollingDeltaY)
+            : Double(event.scrollingDeltaY) * cell
+        guard dy != 0 else { return }
+        // Mirror iOS installTouchScroll EXACTLY (`+= -dy`): a content-down gesture (positive delta)
+        // scrolls back into history, a content-up gesture scrolls toward newer output. If interactive
+        // testing shows the direction inverted, flip this single sign to `+= dy`.
+        scrollAccumPx += -dy
+        let step = TerminalScrollKt.linesFromPixels(accumPx: scrollAccumPx, cellHeightPx: cell)
+        scrollAccumPx = step.remainderPx
+        guard step.lines != 0 else { return }
+        let cols = core.cols
+        let col = Int32(cols > 1 ? cols / 2 : 1)
+        let row = Int32(rows > 1 ? rows / 2 : 1)
+        let bytes = TerminalScrollKt.wheelEventsFromLines(lines: step.lines, col: col, row: row)
+        MainActor.assumeIsolated { session.sendInput(bytes.toUInt8()) }
     }
     #endif
 
