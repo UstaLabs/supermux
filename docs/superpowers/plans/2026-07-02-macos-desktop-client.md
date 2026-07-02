@@ -1129,6 +1129,8 @@ Move the shared method bodies rather than duplicating logic where possible (e.g.
             // the broker learns to segment device platforms.
 ```
 
+- [ ] **Step 2b (added by Task 2's code review): guard the NSE's app-group write on macOS.** `apps/iosApp/SupermuxPushNSE/NotificationService.swift:79,85` (`recordLastDelivered()`) calls `FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.dev.supermux.app")`. The mac NSE entitlements deliberately omit the app-group, so under the sandbox this returns `nil` and the debug hook silently no-ops. Wrap the helper (or its body) in `#if os(iOS)` — the `simctl get_app_container` verification story it serves is iOS-Simulator-only anyway. Compile stays green on both platforms.
+
 - [ ] **Step 3: Verify NSE sources are UIKit-free** (they must compile in the mac NSE target from Task 2):
 
 ```bash
@@ -1160,6 +1162,8 @@ Tasks 3-11 covered every UIKit category the source audit found. Whatever still f
   3. Rebuild. Repeat until `BUILD SUCCEEDED`.
 
 Track progress against the baseline: `grep -cE 'error:' ~/supermux-mac/mac-build.log` must strictly decrease each iteration; if it doesn't, stop and re-read the error — you're fixing the wrong thing.
+
+Carry-overs from Task 2's code review, owned by this task: (a) if the FIRST mac Debug build fails at signing resolution rather than compiling, the `dev.supermux.app` App ID may not have the macOS platform enabled yet — that's a portal prereq listed under Task 18; surface it to the user immediately instead of debugging; (b) restore the two explanatory comments the mac target copy dropped from the iOS block in `project.yml` (the `--no-daemon`/errSecInternalComponent rationale on the preBuildScript, and the entitlements-purpose comment on `CODE_SIGN_ENTITLEMENTS`); (c) 30-second check on the built app: `plutil -p .../Supermux.app/Contents/Info.plist | grep -i minimum` — confirm the OS gate comes from `LC_BUILD_VERSION` (deployment target) and decide if `LSMinimumSystemVersion` is worth adding.
 
 - [ ] **Step 2: Both platforms green.** Run the iOS build check AND the Mac build check. Expected: both `BUILD SUCCEEDED`. **From this task on, every later task must keep BOTH green.**
 
@@ -1633,6 +1637,8 @@ git commit -m "chore(mac): build-and-run helper for remote-Mac feel tests"
 - Create: `apps/iosApp/ExportOptionsMac.plist`
 - Modify: `apps/iosApp/project.yml` (Release signing for the mac targets)
 - Modify: `apps/iosApp/Supermux/Assets.xcassets/AppIcon.appiconset/Contents.json` (mac icon slots)
+
+Carry-over note from Task 2's review: `CURRENT_PROJECT_VERSION` ("52") is one project-wide counter shared by iOS and mac archives — confirm with the user whether mac TestFlight builds ride the same sequence (simplest; recommended) or need a per-platform scheme, BEFORE the first upload.
 
 **Prereqs the user must do once in App Store Connect / the developer portal (STOP and ask if any is missing — do not improvise):**
 1. Enable the **macOS platform on the existing `dev.supermux.app` App ID** (universal purchase) + APNs capability for mac.
