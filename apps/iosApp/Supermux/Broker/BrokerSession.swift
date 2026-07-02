@@ -67,14 +67,17 @@ final class BrokerSession {
         #endif
     }
 
-    #if os(macOS)
-    // Belt to stop()'s suspenders: stop() already removes (and nils) the observer on the
-    // teardown paths; this covers a release without a prior stop(). Only reachable at all
-    // because stop() cancels the frames collector that otherwise retains self forever.
+    // Belt to stop()'s suspenders, for a release WITHOUT a prior stop() (any SwiftUI path
+    // where onDisappear doesn't fire). Dropping a Task handle does NOT cancel it — the run
+    // loop holds the captured Kotlin client, not self, so it would keep reconnecting forever
+    // after this object died. Task.cancel() is Sendable, so it's legal in deinit.
     deinit {
+        framesTask?.cancel()
+        runTask?.cancel()
+        #if os(macOS)
         if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
+        #endif
     }
-    #endif
 
     /// Build a terminal WS client for a session. Centralized here so the device
     /// token stays private (mirrors how `api`/`client` are constructed).
@@ -100,6 +103,9 @@ final class BrokerSession {
     }
 
     func start() {
+        // Already armed → no-op (symmetry with idempotent stop(): a double-start would
+        // orphan the previous task pair with no handle left to cancel them by).
+        guard framesTask == nil else { return }
         // Neither long-lived task may hold `self` strongly across a suspension point: even
         // after stop() cancels them (verified: SKIE propagates the cancel and both bodies
         // exit promptly), Kotlin/Native can keep a task's async frame reachable until its

@@ -81,13 +81,15 @@ struct SupermuxApp: App {
         .commands {
             // File ▸ New Session (⌘N). Replaces the default "New" item; posts a notification
             // that RootView routes to the launcher (menu commands can't reach a view binding).
+            // No SidebarCommands(): the mac shell is a NavigationStack with a CUSTOM sidebar
+            // toggled by ⌘B (WorkspaceShortcuts), so the standard Toggle Sidebar item —
+            // which needs a NavigationSplitView to act on — would be a dead menu entry.
             CommandGroup(replacing: .newItem) {
                 Button("New Session") {
                     NotificationCenter.default.post(name: .smNewSession, object: nil)
                 }
                 .keyboardShortcut("n", modifiers: .command)
             }
-            SidebarCommands()
             TextEditingCommands()
         }
         .defaultSize(width: 1440, height: 900)
