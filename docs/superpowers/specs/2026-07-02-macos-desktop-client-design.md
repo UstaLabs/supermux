@@ -46,7 +46,7 @@ apps/iosApp/project.yml
 ## Components (iOS → macOS deltas)
 
 - **Sessions + Chat:** SwiftUI views and `MarkdownView.swift` (incl. GFM tables) carry over; shared-KMP path detector keeps powering tappable file paths → `cmRevealLine` in the editor. Add pointer hover/context-menu affordances.
-- **Terminal:** SwiftTerm AppKit `TerminalView`; the predictive-echo SwiftTerm adapter (renders engine ops via `tv.feed` ANSI) and scroll logic are view-independent and carry over; trackpad/scroll-wheel is native AppKit behavior (the touch-drag→wheel-bytes bridge becomes iOS-only).
+- **Terminal:** SwiftTerm AppKit `TerminalView`; the predictive-echo SwiftTerm adapter (renders engine ops via `tv.feed` ANSI) carries over. **[Corrected during implementation]** trackpad/scroll-wheel is NOT native AppKit behavior for our use: SwiftTerm v1.13's `MacTerminalView.scrollWheel` only moves local scrollback, which is inert under the alt-screen+mouse-on tmux config both terminal kinds use — macOS gets its own wheel→SGR-report bridge, a port of the iOS touch-scroll pattern over the same shared `TerminalScroll` KMP math.
 - **Editor:** WKWebView + bundled CodeMirror (`EditorWeb` folder resource, same folder-reference build phase) unchanged; file tree as a persistent sidebar column (iPad pattern). Sandbox note: WKWebView loads only bundled assets + broker content — no entitlement surprises.
 - **Launcher:** same launcher + draft persistence (`UserDefaults`, `cmux:launcher-prefs` / `cmux:launcher-draft`, per the 2026-07-01 spec) — UserDefaults semantics identical on macOS.
 - **Dictation:** `SpeechDictation.swift` (SFSpeechRecognizer + AVAudioEngine) works on macOS; needs the mic + speech-recognition usage descriptions and the sandbox **audio-input entitlement**; then the same `POST /transcribe` cleanup flow.
@@ -85,7 +85,7 @@ Mac App Store + TestFlight on team `57L7J9XA89`, sandboxed, with entitlements: o
 ## Risks
 
 - **UIKit bleed-through is the main unknown.** Mitigation: the compile audit is implementation task #1, and its diagnostic list re-scopes the porting estimate before deep work starts.
-- **SwiftTerm's AppKit view is less exercised in this codebase than its UIKit twin** (selection, key handling, IME). Mitigation: the predictive-echo adapter is view-independent; budget a hardening pass on mac-specific terminal input.
+- **SwiftTerm's AppKit view is less exercised in this codebase than its UIKit twin** (selection, key handling, IME, and — confirmed, not speculative — scroll-wheel forwarding, which SwiftTerm's mac view lacks entirely under mouse-mode apps). Mitigation: the predictive-echo adapter is view-independent; the wheel bridge is explicit implementation work; budget a hardening pass on mac-specific terminal input.
 - **macOS 26 minimum** excludes older-OS Macs. Accepted: it buys design-language parity (Liquid Glass) and matches the arm64-only call; revisit only if real users are stuck on macOS 15.
 - **Sandbox + App Review** for a "remote agent control" app: the app is a pure client (no local execution), which is the safe side of review; the DMG path exists as the escape hatch.
 

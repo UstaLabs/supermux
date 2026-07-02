@@ -761,7 +761,7 @@ extension TerminalHost: UIGestureRecognizerDelegate {
 #endif
 ```
 
-  On macOS nothing replaces any of it: hardware keyboards are always present (no accessory/input views), and SwiftTerm's AppKit view converts `scrollWheel` events into SGR mouse-wheel reports itself when the app (tmux `mouse on`) requests mouse mode — the drag→wheel-bytes bridge is an iOS-touch workaround, not a feature to port.
+  On macOS nothing replaces the soft-keyboard machinery (hardware keyboards are always present). **CORRECTION (Task 6 review, verified against SwiftTerm v1.13.0 source):** the original claim here — that SwiftTerm's AppKit view converts `scrollWheel` into SGR mouse reports under tmux `mouse on` — is FALSE. `MacTerminalView.scrollWheel` only moves SwiftTerm's local scrollback (`scrollUp/scrollDown` → `scrollTo(row:)`), which is inert in the alt-screen+mouse-on configuration both supermux terminal kinds use. macOS DOES need a wheel bridge; it's implemented as Task 12 Step 3b (a port of the proven iOS `installTouchScroll` pattern using the same shared `TerminalScrollKt` math).
   4. `PredictionAdapter.swift` needs NO change (SwiftTerm-API only, no UIKit import).
 
 - [ ] **Step 3: TerminalPane.swift — keyboard insets.** Wrap the `UIResponder.keyboardWillShow/HideNotification` inset logic (lines 39-42) and the `resignFirstResponder` call (line 65) in `#if os(iOS)`; change `import UIKit` to the `canImport` form (or delete if nothing UIKit-flavored remains outside the wrapped block).
@@ -1197,11 +1197,13 @@ ssh mac 'source ~/ios-build-env.sh; cd ~/supermux-mac/apps/iosApp && \
 
 Expected: a PID is printed (the app is running, not crashed at launch). APNs registration failing under ad-hoc signing is EXPECTED — ignore that log line in `app.log`.
 
+- [ ] **Step 3b: Restore terminal wheel-scroll on macOS** (from Task 6's review — SwiftTerm's AppKit `scrollWheel` does NOT forward mouse reports; without this, trackpad/wheel scroll over a terminal pane does nothing in the alt-screen+mouse-on config both terminal kinds use). Port the proven iOS pattern: in `TerminalHost.swift`, add an `#if os(macOS)` region to `TerminalCoordinator` that intercepts scroll events on the wrapped `TerminalView` (an `NSEvent.addLocalMonitorForEvents(matching: .scrollWheel)` scoped to the view — check `event.window` and hit-test the view — or a light `TerminalView` subclass overriding `scrollWheel(with:)`) and converts deltas via the SAME shared-KMP math `installTouchScroll` uses on iOS (`TerminalScrollKt.linesFromPixels` / `wheelEventsFromLines` → `send` bytes). Mirror the iOS accumulation logic (`scrollAccumPx`). Verify: on the running mac app attached to a live tmux session, trackpad scroll moves pane history in both directions. Also retrofit `TerminalPane.swift`'s `keyboardDismissOverlay` (overlay call site + `keyboardHeight`/`effectiveKbHeight`) to the same whole-subsystem `#if os(iOS)` wrap this task applies to `EditorPane.swift` — removes the SM_KBD dead-button edge on mac and keeps the two identical constructs consistent.
+
 - [ ] **Step 4: Commit** whatever stragglers Step 1 touched:
 
 ```bash
 git add -A apps/iosApp
-git commit -m "feat(mac): green macOS build — residual UIKit stragglers conditioned"
+git commit -m "feat(mac): green macOS build — residual UIKit stragglers conditioned + mac terminal wheel bridge"
 ```
 
 ---
@@ -1755,7 +1757,7 @@ git commit -m "chore(mac): Mac App Store release lane — signing, export option
 ## Completion criteria (map back to the spec)
 
 - [ ] Mac + iOS app targets and BOTH test lanes green on the remote Mac.
-- [ ] Feature parity verified by hand via `scripts/mac-app-run.sh` or TestFlight: sessions list, chat (markdown incl. tables, tappable file paths → editor), terminal (typing + scrollback + predictive echo on a slow link), editor + file tree, launcher (+ draft persistence), Finish flow, archived sessions + filter, usage panel, dictation, display/VNC pane, notifications (banner on a real APNs push from TestFlight build), pairing + unpair/re-pair.
+- [ ] Feature parity verified by hand via `scripts/mac-app-run.sh` or TestFlight: sessions list, chat (markdown incl. tables, tappable file paths → editor), terminal (typing + **trackpad/wheel scroll over a live tmux pane — explicitly, both directions** + predictive echo on a slow link), editor + file tree, launcher (+ draft persistence), Finish flow, archived sessions + filter, usage panel, dictation, display/VNC pane, notifications (banner on a real APNs push from TestFlight build), pairing + unpair/re-pair.
 - [ ] Mac-specific: ⌘N opens launcher, session context-menu → new window works, window restore/resize behaves, sleep/wake reconnects (close lid or `pmset sleepnow` on the Mac, wake, confirm WS resumes).
 - [ ] Dead-session banner renders on BOTH platforms when a session's agent dies (kill a test session's process via the broker to verify).
 - [ ] TestFlight macOS build uploaded (after explicit user OK).
