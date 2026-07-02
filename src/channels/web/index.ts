@@ -7,7 +7,7 @@ import { home } from "../../shared/home"
 import { existsSync, writeFileSync, mkdirSync } from "fs"
 import { join, sep } from "path"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
-import { PayloadTooLargeError } from "../../core/files/store"
+import { PayloadTooLargeError, EmptyUploadError } from "../../core/files/store"
 import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
 import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOriginOk } from "./cookies"
 import { FsService } from "../../core/editor/fs-service"
@@ -1118,7 +1118,8 @@ export class WebChannel implements Channel {
       const contentType = req.headers.get("content-type") ?? ""
 
       // ── Legacy buffered path: multipart/form-data (old app-store builds) ──
-      if (contentType.includes("multipart/form-data")) {
+      // RFC media types are case-insensitive, so normalize before matching.
+      if (contentType.toLowerCase().includes("multipart/form-data")) {
         const contentLength = Number(req.headers.get("content-length") ?? 0)
         if (contentLength > MAX_MULTIPART_BYTES) {
           log.warn("upload.too_large_header", { contentLength, cap: MAX_MULTIPART_BYTES, device: authResult.device.name })
@@ -1211,6 +1212,10 @@ export class WebChannel implements Channel {
         if (err instanceof PayloadTooLargeError) {
           log.warn("upload.too_large_stream", { device: authResult.device.name, cap: MAX_UPLOAD_BYTES })
           return new Response("payload too large", { status: 413 })
+        }
+        if (err instanceof EmptyUploadError) {
+          log.warn("upload.empty_body", { device: authResult.device.name })
+          return new Response("empty body", { status: 400 })
         }
         log.error("upload.store_failed", { err: err?.message ?? String(err), device: authResult.device.name, session, mime, via: "stream" })
         return new Response("file store error", { status: 500 })

@@ -162,6 +162,26 @@ describe("POST /upload — streaming path", () => {
     expect(allFiles(made.filesRoot)).toEqual([])
   })
 
+  test("empty streamed body → 400 and leaves no stored file (parity with multipart)", async () => {
+    const made = makeChannel()
+    channel = made.channel
+    await channel.start()
+    const token = mintToken(made.devicesFile)
+
+    // A chunked (no Content-Length) body that closes with zero bytes reaches
+    // putStream, which rejects it as EmptyUploadError → 400 — matching the
+    // multipart path's file.size===0 guard. Nothing is stored.
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.close() } })
+    const res = await fetch(`${base()}/upload`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/octet-stream", "x-mux-session": "sess-1", "x-mux-mime": "video/mp4" },
+      body: stream,
+      duplex: "half",
+    } as any)
+    expect(res.status).toBe(400)
+    expect(allFiles(made.filesRoot)).toEqual([])
+  })
+
   test("no auth → 401", async () => {
     const made = makeChannel()
     channel = made.channel

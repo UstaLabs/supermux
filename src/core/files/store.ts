@@ -47,6 +47,20 @@ export class PayloadTooLargeError extends Error {
   }
 }
 
+/**
+ * Thrown by putStream when the stream yields zero bytes. Distinguishable
+ * (instanceof / .code) so the web channel can map it to HTTP 400 — parity with
+ * the multipart path's `file.size === 0` guard — rather than storing an empty
+ * file.
+ */
+export class EmptyUploadError extends Error {
+  readonly code = "EMPTY_UPLOAD" as const
+  constructor(message = "empty upload") {
+    super(message)
+    this.name = "EmptyUploadError"
+  }
+}
+
 export class FileStore {
   constructor(private readonly db: Db, private readonly rootDir: string) {
     mkdirSync(rootDir, { recursive: true, mode: 0o700 })
@@ -138,18 +152,27 @@ export class FileStore {
       try {
         const reader = source.getReader()
         try {
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            if (!value || value.byteLength === 0) continue
-            total += value.byteLength
-            if (total > input.maxBytes) throw new PayloadTooLargeError()
-            const buf = Buffer.from(value.buffer, value.byteOffset, value.byteLength)
-            writeSync(fd, buf, 0, buf.length)
+          try {
+            while (true) {
+              const { done, value } = await reader.read()
+              if (done) break
+              if (!value || value.byteLength === 0) continue
+              total += value.byteLength
+              if (total > input.maxBytes) throw new PayloadTooLargeError()
+              const buf = Buffer.from(value.buffer, value.byteOffset, value.byteLength)
+              writeSync(fd, buf, 0, buf.length)
+            }
+            // Parity with the multipart path: never store a zero-byte upload.
+            if (total === 0) throw new EmptyUploadError()
+            fsyncSync(fd)
+          } catch (err) {
+            // On a cap/write/empty abort, explicitly cancel the inbound stream so
+            // the client-side body is torn down rather than left dangling.
+            try { await reader.cancel() } catch { /* ignore — best-effort */ }
+            throw err
           }
-          fsyncSync(fd)
         } finally {
-          reader.releaseLock()
+          try { reader.releaseLock() } catch { /* ignore — best-effort (cancel may already have released) */ }
         }
       } finally {
         closeSync(fd)

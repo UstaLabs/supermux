@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, existsSync, readdirSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
-import { FileStore, PayloadTooLargeError } from "./store"
+import { FileStore, PayloadTooLargeError, EmptyUploadError } from "./store"
 import { openDb, runMigrations } from "../storage/db"
 import { MIGRATIONS } from "../storage/migrations"
 
@@ -63,6 +63,19 @@ describe("FileStore.putStream", () => {
     }
     expect(thrown).toBeInstanceOf(PayloadTooLargeError)
     expect(thrown.code).toBe("PAYLOAD_TOO_LARGE")
+    expect(allFiles(root)).toEqual([])
+  })
+
+  test("empty stream: zero bytes throws EmptyUploadError and leaves no file", async () => {
+    const { store, root } = makeStore()
+    let thrown: any
+    try {
+      await store.putStream({ kind: "video", mime: "video/mp4", origin: "web-upload", maxBytes: 1024 }, streamOf([]))
+    } catch (e) {
+      thrown = e
+    }
+    expect(thrown).toBeInstanceOf(EmptyUploadError)
+    expect(thrown.code).toBe("EMPTY_UPLOAD")
     expect(allFiles(root)).toEqual([])
   })
 
