@@ -1224,6 +1224,8 @@ git commit -m "feat(mac): green macOS build — residual UIKit stragglers condit
 
 The broker ships `state: "idle" | "working" | "dead"` in `agent_state` frames (`apps/shared/src/commonMain/kotlin/dev/supermux/proto/Frames.kt:140`). Web + Android render a dead-state treatment; iOS/macOS don't. Build it once in the shared SwiftUI.
 
+Awareness note from Task 12's smoke: the broker ALSO emits `session_state` frames (`connected`/`model` per session) that the shared `ServerFrame` hierarchy has NO serializer for — native clients skip them with a log line. That is a SEPARATE, pre-existing gap (affects live iOS too), NOT this task's `agent_state` work; do not conflate the two frames. A shared-Frames.kt follow-up outside this plan should add it.
+
 **Files:**
 - Modify: `apps/iosApp/Supermux/Broker/BrokerSession.swift:88,131-135`
 - Create: `apps/iosApp/Supermux/Sessions/DeadSessionBanner.swift`
@@ -1641,10 +1643,12 @@ ssh mac "source ~/ios-build-env.sh; cd ~/supermux-mac/apps/iosApp && xcodegen ge
   xcodebuild -scheme SupermuxMac -destination 'platform=macOS,arch=arm64' -derivedDataPath build/dd-mac \
   CODE_SIGN_IDENTITY='-' CODE_SIGNING_REQUIRED=YES CODE_SIGNING_ALLOWED=YES build"
 
+# CRITICAL (Task 12 finding): a plain-ssh DIRECT exec launches the process but the SwiftUI
+# scene never mounts (no Aqua session) — no UI, no WS. Launch via `open --env` instead:
 ssh mac "pkill -x Supermux 2>/dev/null || true; \
-  SM_PAIR_TOKEN='$TOKEN' SM_PAIR_BASE='$BASE' \
-  ~/supermux-mac/apps/iosApp/build/dd-mac/Build/Products/Debug/Supermux.app/Contents/MacOS/Supermux \
-  > ~/supermux-mac/app.log 2>&1 & sleep 12; pgrep -x Supermux"
+  open --env SM_PAIR_TOKEN='$TOKEN' --env SM_PAIR_BASE='$BASE' \
+  ~/supermux-mac/apps/iosApp/build/dd-mac/Build/Products/Debug/Supermux.app; \
+  sleep 12; pgrep -x Supermux"
 
 ssh mac 'screencapture -x /tmp/supermux-mac.png 2>/dev/null || true'
 scp -q mac:/tmp/supermux-mac.png /home/ahmet/.cache/supermux-mac.png 2>/dev/null || \
