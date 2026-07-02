@@ -286,6 +286,17 @@ fun ChatScreen(
         if (ok && uri != null) scope.launch { stageFromUri(uri) }
     }
 
+    // Camera video: system camera records into our FileProvider URI; CaptureVideo() returns
+    // true on a successful capture, mirroring TakePicture() above. A separate URI state so a
+    // photo capture in flight can't clobber a video capture's output target.
+    var videoCaptureUri by remember { mutableStateOf<Uri?>(null) }
+    val captureVideo = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CaptureVideo(),
+    ) { ok: Boolean ->
+        val uri = videoCaptureUri
+        if (ok && uri != null) scope.launch { stageFromUri(uri) }
+    }
+
     // Composer draft text. Hoisted here (not inside the composer Column) so the shared dictation
     // controller (below) can append cleaned/raw transcripts into the same state the BasicTextField
     // edits, via its `onAppend` sink (risk §5).
@@ -1148,6 +1159,19 @@ fun ChatScreen(
                                     takePicture.launch(uri)
                                 },
                             )
+                            DropdownMenuItem(
+                                text = { Text("Record video") },
+                                leadingIcon = {
+                                    Icon(painterResource(R.drawable.ic_play), null, modifier = Modifier.size(18.dp))
+                                },
+                                modifier = Modifier.testTag("attach_menu_record_video"),
+                                onClick = {
+                                    attachMenu = false
+                                    val uri = createVideoUri(context)
+                                    videoCaptureUri = uri
+                                    captureVideo.launch(uri)
+                                },
+                            )
                         }
                     }
 
@@ -1462,5 +1486,18 @@ private fun SendingIndicator(onStop: () -> Unit) {
 private fun createImageUri(context: android.content.Context): Uri {
     val dir = File(context.cacheDir, "attachments").apply { mkdirs() }
     val file = File(dir, "camera_${System.currentTimeMillis()}.jpg")
+    return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+}
+
+/**
+ * Create a FileProvider URI for a fresh camera video capture in cacheDir/attachments (the same
+ * path createImageUri + openAttachment already use, so no file_paths.xml change is needed). The
+ * system camera app writes the MP4 here; stageFromUri then reads it back — contentResolver
+ * .getType() maps the .mp4 extension to video/mp4 — and uploads it with kind=null so the broker
+ * infers "video".
+ */
+private fun createVideoUri(context: android.content.Context): Uri {
+    val dir = File(context.cacheDir, "attachments").apply { mkdirs() }
+    val file = File(dir, "camera_${System.currentTimeMillis()}.mp4")
     return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
 }
