@@ -211,7 +211,7 @@ struct ChatPane: View {
             guard !items.isEmpty else { return }
             Task { await composer.loadPhotos(items); photoItems = [] }
         }
-        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .images)
+        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .any(of: [.images, .videos]))
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { composer.handleFiles($0) }
         .fullScreenCover(isPresented: $showCamera) { CameraPicker { composer.addCameraImage($0) } }
     }
