@@ -1120,7 +1120,7 @@ fun ChatScreen(
                                 onClick = {
                                     attachMenu = false
                                     photoPicker.launch(
-                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
                                     )
                                 },
                             )
