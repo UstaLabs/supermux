@@ -11,10 +11,10 @@ kotlin {
 
     jvm()
     androidTarget()
-    // Apple targets are declared so the appleMain/iosMain/watchosMain source sets +
+    // Apple targets are declared so the appleMain/iosMain/watchosMain/macosMain source sets +
     // Apple actuals exist; their compile/link tasks run on a Mac (Spec 2). On this
     // Linux host they are disabled (see kotlin.native.ignoreDisabledTargets in
-    // gradle.properties). iOS + watchOS share Darwin code via the default hierarchy's
+    // gradle.properties). iOS + watchOS + macOS share Darwin code via the default hierarchy's
     // intermediate `appleMain` source set.
     listOf(
         iosArm64(), iosSimulatorArm64(),
