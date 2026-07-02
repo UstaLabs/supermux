@@ -10,6 +10,7 @@ options:
   deploymentTarget:
     iOS: "26.0"
     watchOS: "10.0"
+    macOS: "26.0"
   createIntermediateGroups: true
 
 settings:
@@ -193,6 +194,94 @@ targets:
           CODE_SIGN_IDENTITY: "Apple Distribution"
           "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
 
+  SupermuxMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: Supermux
+        excludes:
+          - "EditorWeb/**"
+          - "Watch/**"            # WatchConnectivity does not exist on macOS
+      - path: Supermux/EditorWeb
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - package: SwiftTerm
+      - target: SupermuxMacPushNSE
+        embed: true
+    info:
+      path: Supermux/InfoMac.plist
+      properties:
+        CFBundleDisplayName: supermux
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        LSApplicationCategoryType: public.app-category.developer-tools
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.supermux.connect
+            CFBundleURLSchemes:
+              - supermux
+        NSMicrophoneUsageDescription: supermux records voice messages you send to your agents.
+        NSSpeechRecognitionUsageDescription: supermux uses on-device speech recognition to turn your voice into editable text.
+        NSLocalNetworkUsageDescription: Supermux connects to the broker server running on your own computer when you reach it by its LAN address (for example 192.168.1.50). It does not scan or collect information about other devices on your network.
+        ITSAppUsesNonExemptEncryption: false
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app
+        PRODUCT_NAME: Supermux
+        PRODUCT_MODULE_NAME: Supermux
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        ARCHS: arm64
+        EXCLUDED_ARCHS: x86_64
+        CODE_SIGN_ENTITLEMENTS: Supermux/SupermuxMac.entitlements
+        FRAMEWORK_SEARCH_PATHS:
+          - $(inherited)
+          - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
+        OTHER_LDFLAGS:
+          - $(inherited)
+          - -framework
+          - Shared
+        LD_RUNPATH_SEARCH_PATHS:
+          - $(inherited)
+          - "@executable_path/../Frameworks"
+    preBuildScripts:
+      - name: Build Kotlin Shared.framework (embed and sign)
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          source ~/ios-build-env.sh 2>/dev/null || true
+          export JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home -v 17 2>/dev/null || /usr/libexec/java_home)}"
+          cd "$SRCROOT/.."
+          ./gradlew --no-daemon :shared:embedAndSignAppleFrameworkForXcode
+
+  SupermuxMacPushNSE:
+    # macOS twin of SupermuxPushNSE: same principal class, same shared crypto
+    # sources (CryptoKit is cross-platform), its own platform + entitlements.
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: SupermuxPushNSE/NotificationService.swift
+      - path: Supermux/Push/PushCrypto.swift
+      - path: Supermux/Push/PushKeypair.swift
+    info:
+      path: SupermuxPushNSE/InfoMac.plist
+      properties:
+        CFBundleDisplayName: SupermuxMacPushNSE
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app.mac-push-nse
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        ARCHS: arm64
+        EXCLUDED_ARCHS: x86_64
+        CODE_SIGN_ENTITLEMENTS: SupermuxPushNSE/SupermuxMacPushNSE.entitlements
+        APPLICATION_EXTENSION_API_ONLY: "YES"
+
   SupermuxTests:
     type: bundle.unit-test
     platform: iOS
@@ -223,6 +312,14 @@ schemes:
       config: Debug
       targets:
         - SupermuxTests
+    run:
+      config: Debug
+    archive:
+      config: Release
+  SupermuxMac:
+    build:
+      targets:
+        SupermuxMac: all
     run:
       config: Debug
     archive:

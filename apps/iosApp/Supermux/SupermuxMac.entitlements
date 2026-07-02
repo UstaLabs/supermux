@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Mac App Store requires the App Sandbox. The app is a pure client:
+	     outbound network + mic (dictation/voice) are its only capabilities. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<key>aps-environment</key>
+	<string>development</string>
+	<!-- Same push-keypair sharing scheme as iOS: the NSE reads the P-256 key
+	     the app generates (PushKeypair.swift uses this exact group). -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>57L7J9XA89.dev.supermux.app.push</string>
+	</array>
+</dict>
+</plist>
