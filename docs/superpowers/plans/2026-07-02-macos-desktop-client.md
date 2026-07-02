@@ -583,7 +583,7 @@ git add apps/iosApp/Supermux/App/PlatformShims.swift
 git commit -m "feat(mac): PlatformShims — cross-platform typealiases, representable protocol, modifier shims"
 ```
 
-**Post-review revisions (supersede the Step 1 code block above; applied in a follow-up commit):** the quality review found the block incomplete/imperfect. Final state additionally has: `Color.smBackground/.smSecondaryBackground/.smSeparator` (SwiftUI-Color bridges for iOS `.systemBackground`/`.secondarySystemBackground`/`.separator` → macOS `.windowBackgroundColor`/`.controlBackgroundColor`/`.separatorColor`); `smTertiaryBackground` macOS side = `.textBackgroundColor` (not `.underPageBackgroundColor` — that one is recessed, wrong direction); `PlatformImage.sm(cgImage:)` macOS side sizes the NSImage from the CGImage pixels (a `.zero`-size NSImage breaks `scaledToFit`); the `where UIViewType == PlatformViewType` constraint lives on the `PlatformViewRepresentable` protocol declaration itself (both branches), not the extension; `Haptics` is named `SMHaptics`; `smTopTrailing` macOS side = `.primaryAction`; `SearchFieldPlacement.smNavDrawerAlways` exists for the `.navigationBarDrawer` searchable sites.
+**Post-review revisions (supersede the Step 1 code block above; applied in a follow-up commit):** the quality review found the block incomplete/imperfect. Final state additionally has: `Color.smBackground/.smSecondaryBackground/.smSeparator` (SwiftUI-Color bridges for iOS `.systemBackground`/`.secondarySystemBackground`/`.separator` → macOS `.windowBackgroundColor`/`.controlBackgroundColor`/`.separatorColor`); `smTertiaryBackground` macOS side = `.textBackgroundColor` (not `.underPageBackgroundColor` — that one is recessed, wrong direction); `PlatformImage.sm(cgImage:)` macOS side sizes the NSImage from the CGImage pixels (a `.zero`-size NSImage breaks `scaledToFit`); the `where UIViewType == PlatformViewType` constraint lives on the `PlatformViewRepresentable` protocol declaration itself (both branches), not the extension; `Haptics` is named `SMHaptics`; `smTopTrailing` macOS side = `.primaryAction`; `SearchFieldPlacement.smNavDrawerAlways` exists for the `.navigationBarDrawer` searchable sites; `Color.smTertiaryBackground`/`Color.smTertiaryFill` exist for the SwiftUI-sugar tertiary color sites (same macOS choices as the `PlatformColor` variants).
 
 ---
 
@@ -615,6 +615,8 @@ This is a bulk find/replace across `apps/iosApp/Supermux/` guided by the table b
 | `Color(.systemBackground)` | `Color.smBackground` |
 | `Color(.secondarySystemBackground)` | `Color.smSecondaryBackground` |
 | `Color(.separator)` | `Color.smSeparator` |
+| `Color(.tertiarySystemBackground)` | `Color.smTertiaryBackground` |
+| `Color(.tertiarySystemFill)` | `Color.smTertiaryFill` |
 | `.searchable(… placement: .navigationBarDrawer(displayMode: .always))` | `.searchable(… placement: .smNavDrawerAlways)` (one shim static per displayMode variant actually present) |
 | `UIPasteboard.general.string` (read) | `SMPasteboard.string` |
 | `Image(uiImage:` | `Image(platform:` |
