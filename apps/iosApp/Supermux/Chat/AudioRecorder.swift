@@ -18,11 +18,14 @@ final class AudioRecorder {
 
     func start() async -> StartResult {
         guard await requestPermission() else { return .denied }
+        #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playAndRecord, mode: .default)
             try session.setActive(true)
         } catch { return .failed }
+        #endif
+        // macOS: no audio session — AVAudioEngine drives the mic directly.
 
         let file = FileManager.default.temporaryDirectory
             .appendingPathComponent("voice-\(UUID().uuidString).m4a")
@@ -64,7 +67,10 @@ final class AudioRecorder {
         if let url { try? FileManager.default.removeItem(at: url) }
         recorder = nil; url = nil
         isRecording = false; elapsed = 0
+        #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
+        // macOS: no audio session — AVAudioEngine drives the mic directly.
     }
 
     private func startTicker() {
