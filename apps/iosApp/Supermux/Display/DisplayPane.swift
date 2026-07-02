@@ -1,6 +1,10 @@
 import SwiftUI
 import Shared
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 
 /// The Display tab for a chat session: resolves the session's newest running display and
 /// streams it live (VNC framebuffer or scrcpy H.264), with a status chip + an input
@@ -89,31 +93,31 @@ struct DisplayStreamView: View {
 /// this representable only re-parents that one instance into the current mount — it creates
 /// nothing and tears nothing down. Keeping the same `MetalLayerView` alive is what preserves
 /// the rendered framebuffer across remounts. Mirrors `SwiftTermView`.
-private struct VncSurfaceView: UIViewRepresentable {
+private struct VncSurfaceView: PlatformViewRepresentable {
     let view: VncMetalView.MetalLayerView
 
-    func makeUIView(context: Context) -> VncMetalView.MetalLayerView {
+    func makePlatformView(context: Context) -> VncMetalView.MetalLayerView {
         // Detach from any prior mount before SwiftUI re-parents this cached, reused view —
         // guards the toggle / split transition from a "view already has a superview" assertion.
         view.removeFromSuperview()
         return view
     }
 
-    func updateUIView(_ uiView: VncMetalView.MetalLayerView, context: Context) {}
+    func updatePlatformView(_ view: VncMetalView.MetalLayerView, context: Context) {}
 }
 
 /// Thin SwiftUI host for a PERSISTENT scrcpy video surface. The view (its
 /// `AVSampleBufferDisplayLayer` + decoder state) is owned by a `ScrcpyHost` cached in
 /// `BrokerSession`; this representable only re-parents that one instance. Mirrors `SwiftTermView`.
-private struct ScrcpySurfaceView: UIViewRepresentable {
+private struct ScrcpySurfaceView: PlatformViewRepresentable {
     let view: ScrcpyVideoView.SampleBufferView
 
-    func makeUIView(context: Context) -> ScrcpyVideoView.SampleBufferView {
+    func makePlatformView(context: Context) -> ScrcpyVideoView.SampleBufferView {
         view.removeFromSuperview()
         return view
     }
 
-    func updateUIView(_ uiView: ScrcpyVideoView.SampleBufferView, context: Context) {}
+    func updatePlatformView(_ view: ScrcpyVideoView.SampleBufferView, context: Context) {}
 }
 
 // MARK: - VNC surface
@@ -410,6 +414,7 @@ private struct DisplayControlBar<Leading: View>: View {
 
 // MARK: - Hidden keyboard first responder
 
+#if canImport(UIKit)
 /// A zero-size `UITextField` that becomes/resigns first responder with `isActive`, used to
 /// raise the iOS keyboard over a Display surface and forward keystrokes. Printable input is
 /// delivered character-by-character via `onCharacter`; Return/Backspace/Tab/Esc/arrows via
@@ -511,3 +516,80 @@ private struct DisplayKeyboardField: UIViewRepresentable {
         @objc private func escape() { coordinator?.onSpecial(.escape) }
     }
 }
+#else
+/// Invisible key-capture surface for the Mac — the AppKit twin of the iOS
+/// `DisplayKeyboardField`, with the EXACT same interface (`isActive` focus binding,
+/// `onCharacter` for printables, `onSpecial` for Return/Backspace/Esc/arrows). It becomes the
+/// window's first responder while `isActive`; the iOS `becomeFirstResponder`/`resignFirstResponder`
+/// dance maps onto `window?.makeFirstResponder(_:)`.
+private struct DisplayKeyboardField: NSViewRepresentable {
+    @Binding var isActive: Bool
+    var onCharacter: (Character) -> Void
+    var onSpecial: (DisplayInput.SpecialKey) -> Void
+
+    func makeNSView(context: Context) -> KeyCaptureView {
+        let v = KeyCaptureView()
+        // Mirror the iOS `textFieldDidEndEditing`: losing focus clears `isActive` so the
+        // keyboard-toggle button reflects reality. Deferred to avoid mutating SwiftUI state
+        // during a view-update pass (a programmatic resign can originate from updateNSView).
+        let active = $isActive
+        v.onResign = {
+            DispatchQueue.main.async {
+                if active.wrappedValue { active.wrappedValue = false }
+            }
+        }
+        return v
+    }
+
+    func updateNSView(_ v: KeyCaptureView, context: Context) {
+        // Refresh the callbacks every update — the stream views rebuild them capturing the
+        // current `session` (same reason the iOS coordinator refreshes them in updateUIView).
+        v.onCharacter = onCharacter
+        v.onSpecial = onSpecial
+        let isFirst = (v.window?.firstResponder === v)
+        if isActive, !isFirst {
+            DispatchQueue.main.async { v.window?.makeFirstResponder(v) }
+        } else if !isActive, isFirst {
+            DispatchQueue.main.async { v.window?.makeFirstResponder(nil) }
+        }
+    }
+}
+
+/// `NSView` that captures `keyDown` while it is first responder, forwarding printable
+/// characters via `onCharacter` and Return/Backspace/Escape/arrows via `onSpecial` — the
+/// AppKit analog of the iOS `KeyCaptureField`. Everything is consumed (never forwarded to
+/// `super`) so keystrokes reach the remote instead of the app; crucially that includes
+/// Escape (keyCode 53), which would otherwise dismiss the enclosing sheet — here it is
+/// routed to the remote as `.escape` (Cmd-based menu shortcuts still work: those are key
+/// equivalents dispatched before `keyDown`).
+private final class KeyCaptureView: NSView {
+    var onCharacter: ((Character) -> Void)?
+    var onSpecial: ((DisplayInput.SpecialKey) -> Void)?
+    var onResign: (() -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 51: onSpecial?(.backspace)          // delete / backspace
+        case 36, 76: onSpecial?(.enter)          // return / keypad enter
+        case 53: onSpecial?(.escape)             // escape → remote (NOT sheet dismissal)
+        case 123: onSpecial?(.arrowLeft)
+        case 124: onSpecial?(.arrowRight)
+        case 125: onSpecial?(.arrowDown)
+        case 126: onSpecial?(.arrowUp)
+        default:
+            // Everything else (incl. Tab as "\t") flows as characters, exactly as the iOS
+            // field delivers them — `DisplayInput` maps "\t" onto the Tab keysym/name.
+            if let s = event.characters, !s.isEmpty {
+                for ch in s { onCharacter?(ch) }
+            }
+        }
+    }
+
+    override func resignFirstResponder() -> Bool {
+        onResign?()
+        return super.resignFirstResponder()
+    }
+}
+#endif

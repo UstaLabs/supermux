@@ -1,4 +1,8 @@
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import AVFoundation
 import CoreMedia
 import VideoToolbox
@@ -14,16 +18,39 @@ import VideoToolbox
 /// `ScrcpySurfaceView`.
 enum ScrcpyVideoView {
 
-    // MARK: - Backing UIView (its layer IS an AVSampleBufferDisplayLayer)
+    // MARK: - Backing view (its layer IS an AVSampleBufferDisplayLayer)
 
-    final class SampleBufferView: UIView {
+    final class SampleBufferView: PlatformView {
+        #if canImport(UIKit)
         override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
+        #endif
+        // On UIKit `layer` is non-optional; on AppKit the layer-hosting init below installs
+        // the display layer before this is read, so the force-cast is safe on both.
         var displayLayer: AVSampleBufferDisplayLayer { layer as! AVSampleBufferDisplayLayer }
 
+        #if canImport(UIKit)
         override func layoutSubviews() {
             super.layoutSubviews()
             displayLayer.videoGravity = .resizeAspect
         }
+        #else
+        // AppKit has no `layerClass`: host the AVSampleBufferDisplayLayer directly. The layer
+        // (a CALayer subclass) tracks the view's bounds and `.resizeAspect` centers + fits the
+        // video, so no drawableSize/scale bookkeeping is needed (unlike the Metal view). The
+        // decoded frame resolution — not `contentsScale` — drives sharpness here.
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            layer = AVSampleBufferDisplayLayer()
+            wantsLayer = true
+            displayLayer.videoGravity = .resizeAspect
+        }
+        required init?(coder: NSCoder) {
+            super.init(coder: coder)
+            layer = AVSampleBufferDisplayLayer()
+            wantsLayer = true
+            displayLayer.videoGravity = .resizeAspect
+        }
+        #endif
     }
 
     // MARK: - Decoder feed
