@@ -26,22 +26,22 @@ typealias PlatformImage = NSImage
 // maps it onto UIViewRepresentable or NSViewRepresentable.
 
 #if canImport(UIKit)
-protocol PlatformViewRepresentable: UIViewRepresentable {
+protocol PlatformViewRepresentable: UIViewRepresentable where UIViewType == PlatformViewType {
     associatedtype PlatformViewType: UIView
     func makePlatformView(context: Context) -> PlatformViewType
     func updatePlatformView(_ view: PlatformViewType, context: Context)
 }
-extension PlatformViewRepresentable where UIViewType == PlatformViewType {
+extension PlatformViewRepresentable {
     func makeUIView(context: Context) -> PlatformViewType { makePlatformView(context: context) }
     func updateUIView(_ view: PlatformViewType, context: Context) { updatePlatformView(view, context: context) }
 }
 #else
-protocol PlatformViewRepresentable: NSViewRepresentable {
+protocol PlatformViewRepresentable: NSViewRepresentable where NSViewType == PlatformViewType {
     associatedtype PlatformViewType: NSView
     func makePlatformView(context: Context) -> PlatformViewType
     func updatePlatformView(_ view: PlatformViewType, context: Context)
 }
-extension PlatformViewRepresentable where NSViewType == PlatformViewType {
+extension PlatformViewRepresentable {
     func makeNSView(context: Context) -> PlatformViewType { makePlatformView(context: context) }
     func updateNSView(_ view: PlatformViewType, context: Context) { updatePlatformView(view, context: context) }
 }
@@ -69,7 +69,7 @@ extension PlatformColor {
         #if canImport(UIKit)
         .tertiarySystemBackground
         #else
-        .underPageBackgroundColor
+        .textBackgroundColor
         #endif
     }
     /// iOS `.tertiarySystemFill` — subtle fill for pills/chips.
@@ -82,6 +82,35 @@ extension PlatformColor {
     }
 }
 
+// MARK: - Semantic SwiftUI colors
+
+extension Color {
+    /// iOS `.systemBackground`
+    static var smBackground: Color {
+        #if canImport(UIKit)
+        Color(.systemBackground)
+        #else
+        Color(nsColor: .windowBackgroundColor)
+        #endif
+    }
+    /// iOS `.secondarySystemBackground`
+    static var smSecondaryBackground: Color {
+        #if canImport(UIKit)
+        Color(.secondarySystemBackground)
+        #else
+        Color(nsColor: .controlBackgroundColor)
+        #endif
+    }
+    /// iOS `.separator`
+    static var smSeparator: Color {
+        #if canImport(UIKit)
+        Color(.separator)
+        #else
+        Color(nsColor: .separatorColor)
+        #endif
+    }
+}
+
 // MARK: - Images
 
 extension PlatformImage {
@@ -89,7 +118,7 @@ extension PlatformImage {
         #if canImport(UIKit)
         UIImage(cgImage: cgImage)
         #else
-        NSImage(cgImage: cgImage, size: .zero)
+        NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
         #endif
     }
 }
@@ -146,7 +175,7 @@ enum SMPasteboard {
 
 // MARK: - Haptics (no-op on the Mac)
 
-enum Haptics {
+enum SMHaptics {
     static func selection() {
         #if canImport(UIKit)
         UISelectionFeedbackGenerator().selectionChanged()
@@ -196,7 +225,7 @@ extension ToolbarItemPlacement {
         #if os(iOS)
         .topBarTrailing
         #else
-        .automatic
+        .primaryAction
         #endif
     }
     static var smTopLeading: ToolbarItemPlacement {
@@ -204,6 +233,19 @@ extension ToolbarItemPlacement {
         .topBarLeading
         #else
         .navigation
+        #endif
+    }
+}
+
+// MARK: - Search field placement
+
+extension SearchFieldPlacement {
+    /// iOS `.navigationBarDrawer(displayMode: .always)`; `.automatic` on macOS.
+    static var smNavDrawerAlways: SearchFieldPlacement {
+        #if os(iOS)
+        .navigationBarDrawer(displayMode: .always)
+        #else
+        .automatic
         #endif
     }
 }
