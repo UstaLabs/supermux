@@ -929,6 +929,35 @@ class BrokerApi(
         .replace("+", "%2B")
         .replace(" ", "%20")
 
+    /** Uppercase hex alphabet for [percentEncode] (RFC 3986 §2.1). */
+    private val hexDigits = "0123456789ABCDEF"
+
+    /**
+     * RFC 3986 percent-encode [s] over its UTF-8 bytes so the broker can recover
+     * the original name via `decodeURIComponent()`. Keeps the unreserved set
+     * `A–Z a–z 0–9 - _ . ~` and encodes every other byte as `%XX`.
+     *
+     * Unlike [urlEncode] (a small ASCII-only replace chain for path segments) this
+     * handles spaces and non-ASCII, so an arbitrary filename is safe to carry in
+     * the `X-Mux-Filename` request header — a raw non-ASCII value would be a
+     * malformed HTTP header.
+     */
+    private fun percentEncode(s: String): String {
+        val unreserved = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
+        val out = StringBuilder(s.length)
+        for (byte in s.encodeToByteArray()) {
+            val c = byte.toInt() and 0xFF
+            if (c < 0x80 && c.toChar() in unreserved) {
+                out.append(c.toChar())
+            } else {
+                out.append('%')
+                out.append(hexDigits[c shr 4])
+                out.append(hexDigits[c and 0x0F])
+            }
+        }
+        return out.toString()
+    }
+
     // ── public API ───────────────────────────────────────────────────────────
 
     /**
@@ -1303,7 +1332,20 @@ class BrokerApi(
         }
     }
 
-    /** POST /upload — multipart {file, session, kind?} */
+    /**
+     * POST /upload — raw-body streaming upload.
+     *
+     * Sends the file bytes verbatim as an `application/octet-stream` body with the
+     * metadata in headers, so the broker can stream the body straight to disk
+     * without buffering it (the streaming `/upload` contract). The signature is
+     * unchanged from the old multipart form, so the iOS/Android call sites are
+     * untouched.
+     *
+     *  - `X-Mux-Session`  — required; the owning session id.
+     *  - `X-Mux-Mime`     — the real MIME (the octet-stream body type hides it).
+     *  - `X-Mux-Filename` — RFC3986 percent-encoded (header-safe) original name.
+     *  - `X-Mux-Kind`     — sent ONLY when [kind] is non-null; else the broker infers it.
+     */
     suspend fun upload(
         session: String,
         bytes: ByteArray,
@@ -1313,14 +1355,12 @@ class BrokerApi(
     ): UploadResponse {
         val resp = http.post("$httpBase/upload") {
             header(HttpHeaders.Authorization, "Bearer $token")
-            setBody(MultiPartFormDataContent(formData {
-                append("session", session)
-                if (kind != null) append("kind", kind)
-                append("file", bytes, Headers.build {
-                    append(HttpHeaders.ContentType, mime)
-                    append(HttpHeaders.ContentDisposition, "filename=\"$filename\"")
-                })
-            }))
+            header("X-Mux-Session", session)
+            header("X-Mux-Mime", mime)
+            header("X-Mux-Filename", percentEncode(filename))
+            if (kind != null) header("X-Mux-Kind", kind)
+            contentType(ContentType.Application.OctetStream)
+            setBody(bytes)
         }
         return decode(resp)
     }
