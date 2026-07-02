@@ -1634,38 +1634,7 @@ ssh mac 'security delete-generic-password -s "dev.supermux.app" ~/Library/Keycha
 **Files:**
 - Create: `scripts/mac-app-run.sh`
 
-- [ ] **Step 1: The helper.** Create `scripts/mac-app-run.sh` (mirrors the watch plan's helper; sync → build → relaunch on the Mac → screenshot best-effort):
-
-```bash
-#!/usr/bin/env bash
-# Build + relaunch the macOS app on the remote Mac, paired to the live broker.
-# Usage: scripts/mac-app-run.sh <pair-token> [broker-base]
-# Screenshot lands in ~/.cache/supermux-mac.png on THIS host (best-effort — needs
-# the Mac's Screen Recording permission for sshd-spawned processes).
-set -euo pipefail
-TOKEN="${1:?usage: mac-app-run.sh <pair-token> [broker-base]}"
-BASE="${2:-http://100.84.92.82:9898}"
-cd "$(git rev-parse --show-toplevel)"
-
-tar --exclude .git --exclude 'apps/shared/build' --exclude node_modules --exclude 'apps/iosApp/build' -czf - . \
-  | ssh mac 'rm -rf ~/supermux-mac && mkdir -p ~/supermux-mac && tar -xzf - -C ~/supermux-mac'
-
-ssh mac "source ~/ios-build-env.sh; cd ~/supermux-mac/apps/iosApp && xcodegen generate && \
-  xcodebuild -scheme SupermuxMac -destination 'platform=macOS,arch=arm64' -derivedDataPath build/dd-mac \
-  CODE_SIGN_IDENTITY='-' CODE_SIGNING_REQUIRED=YES CODE_SIGNING_ALLOWED=YES build"
-
-# CRITICAL (Task 12 finding): a plain-ssh DIRECT exec launches the process but the SwiftUI
-# scene never mounts (no Aqua session) — no UI, no WS. Launch via `open --env` instead:
-ssh mac "pkill -x Supermux 2>/dev/null || true; \
-  open --env SM_PAIR_TOKEN='$TOKEN' --env SM_PAIR_BASE='$BASE' \
-  ~/supermux-mac/apps/iosApp/build/dd-mac/Build/Products/Debug/Supermux.app; \
-  sleep 12; pgrep -x Supermux"
-
-ssh mac 'screencapture -x /tmp/supermux-mac.png 2>/dev/null || true'
-scp -q mac:/tmp/supermux-mac.png /home/ahmet/.cache/supermux-mac.png 2>/dev/null || \
-  echo "screenshot unavailable (Screen Recording permission not granted to SSH context)"
-echo OK
-```
+- [ ] **Step 1: The helper.** Create `scripts/mac-app-run.sh` (mirrors the watch plan's helper; sync → build → relaunch on the Mac → screenshot best-effort). The draft that was here predates the keychain/ad-hoc-launch recipes above (its `CODE_SIGN_IDENTITY="-"` build variant fails at signing on this entitlements set) — superseded by the committed `scripts/mac-app-run.sh` (incorporates the Task 12/15 launch recipes).
 
 - [ ] **Step 2: Make it executable + trial run.**
 
