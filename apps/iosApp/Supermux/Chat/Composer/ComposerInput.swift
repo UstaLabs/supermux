@@ -204,6 +204,7 @@ struct ComposerInput: NSViewRepresentable {
         scroll.documentView = tv
         scroll.borderType = .noBorder
         scroll.drawsBackground = false
+        scroll.contentView.drawsBackground = false   // the clip view too, or it paints over the glass
         scroll.hasVerticalScroller = false
         scroll.hasHorizontalScroller = false
         scroll.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -308,9 +309,10 @@ final class PasteTextView: NSTextView {
         let inset = textContainerInset
         let pad = textContainer?.lineFragmentPadding ?? 0
         let maxW = max(0, bounds.width - 2 * (inset.width + pad))
-        let fit = placeholderLabel.sizeThatFits(NSSize(width: maxW, height: CGFloat.greatestFiniteMagnitude))
+        // Single-line label → intrinsic height is exact (the AppKit-idiomatic measurement).
+        let fitH = placeholderLabel.intrinsicContentSize.height
         placeholderLabel.frame = NSRect(x: inset.width + pad, y: inset.height,
-                                        width: maxW, height: fit.height)
+                                        width: maxW, height: fitH)
     }
 
     /// True when the clipboard holds something we stage as an attachment rather than inserting.

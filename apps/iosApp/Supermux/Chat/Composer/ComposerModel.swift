@@ -141,8 +141,11 @@ final class ComposerModel {
             addPastedImage(image)
             return
         }
-        guard let urls = NSPasteboard.general.readObjects(forClasses: [NSURL.self], options: nil) as? [URL] else { return }
-        for url in urls {
+        // File URLs ONLY (both belts): a plain web URL here would turn `Data(contentsOf:)`
+        // into a synchronous network fetch on the main actor.
+        guard let urls = NSPasteboard.general.readObjects(
+            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] else { return }
+        for url in urls where url.isFileURL {
             guard let data = try? Data(contentsOf: url) else { continue }
             let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
             pending.append(PendingAttachment(data: data, filename: url.lastPathComponent, mime: mime))
