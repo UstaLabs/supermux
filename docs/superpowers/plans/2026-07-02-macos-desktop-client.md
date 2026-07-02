@@ -27,8 +27,11 @@ tar --exclude .git --exclude 'apps/shared/build' --exclude node_modules --exclud
 - **iOS-green check** (used by many tasks; referred to as "the iOS build check"):
 
 ```bash
+# NOTE (learned in Task 2): do NOT pass `-sdk iphonesimulator26.5` — on Xcode 26.5 with a
+# clean derived-data dir, `-sdk` overrides the SDK for EVERY target in the multi-platform
+# scheme and breaks the embedded watchOS app. Destination-only is the sound invocation.
 ssh mac 'source ~/ios-build-env.sh; cd ~/supermux-mac/apps/iosApp && xcodegen generate && \
-  nohup xcodebuild -scheme Supermux -sdk iphonesimulator26.5 \
+  nohup xcodebuild -scheme Supermux \
     -destination "generic/platform=iOS Simulator" -derivedDataPath build/dd-ios \
     ARCHS=arm64 EXCLUDED_ARCHS=x86_64 CODE_SIGNING_ALLOWED=NO build > ~/supermux-mac/ios-build.log 2>&1 &'
 # poll until done:
@@ -1149,6 +1152,8 @@ git commit -m "feat(mac): APNs registration + NSApplicationDelegate push path, m
 
 Tasks 3-11 covered every UIKit category the source audit found. Whatever still fails now is stragglers of the SAME categories (a missed modifier instance, an unconditioned import, a file the audit's grep missed).
 
+**Reality check from Task 2:** Xcode 26.5's explicit-modules SwiftDriver **fails fast on the first unresolvable module import** instead of listing every error — so the burn-down proceeds in walls, not a smooth count-down: clearing one file's `import UIKit` reveals the next wall on rebuild. The definitive inventory is the 17 UIKit-importing files captured in Task 2's report; the "error count strictly decreases" heuristic below applies per-wall, not globally.
+
 - [ ] **Step 1: Build loop.** Tar-sync, run the Mac build check, and iterate:
   1. Take the FIRST `error:` line in `mac-build.log`.
   2. Classify it against the Task 4 table / Task 5-11 patterns and apply the matching fix (same shim, same `#if` wrap — no new inventions; if something genuinely novel appears, e.g. an API with no mac analog, wrap it `#if os(iOS)` and file its mac behavior as a follow-up noted in the commit message).
@@ -1218,10 +1223,10 @@ In the live-frame handler (lines 131-135 area) add:
 
 ```bash
 ssh mac 'source ~/ios-build-env.sh; cd ~/supermux-mac/apps/iosApp && \
-  nohup xcodebuild test -scheme Supermux -sdk iphonesimulator26.5 \
+  nohup xcodebuild test -scheme Supermux \
   -destination "platform=iOS Simulator,name=iPhone 17 Pro" -derivedDataPath build/dd-ios \
   > ~/supermux-mac/ios-test.log 2>&1 &'
-# poll for "** TEST SUCCEEDED **"
+# poll for "** TEST SUCCEEDED **"  (no -sdk flag — see the Ground rules note)
 ```
 
 Expected: the new test passes, all 104+ existing tests stay green.
