@@ -1470,7 +1470,7 @@ git commit -m "feat(mac): menu-bar commands, ⌘N, open-in-new-window, wake-kick
 
 ### Task 15: Unit tests on the Mac (`SupermuxMacTests`)
 
-Notes from Task 12's review: `PasteTextView.pasteboard` (mac composer) is an injectable seam built for testing — use it if adding composer tests; also add a one-line TextKit-stack pin test `XCTAssertNotNil(PasteTextView(frame: .zero).textContainer)` (guards the init-inheritance invariant the green build depends on).
+Notes from Task 12's review: `PasteTextView.pasteboard` (mac composer) is an injectable seam built for testing — use it if adding composer tests; also add a one-line TextKit-stack pin test `XCTAssertNotNil(PasteTextView(frame: .zero).textContainer)` (guards the init-inheritance invariant the green build depends on). From Task 14's review: ensure `BrokerSessionTeardownTests` (the deterministic-dealloc regression test) runs on the MAC lane too — it currently exercises only the iOS simulator, and the `#if os(macOS)` stop()/observer paths are otherwise untested.
 
 **Files:**
 - Modify: `apps/iosApp/project.yml`
@@ -1787,7 +1787,7 @@ git commit -m "chore(mac): Mac App Store release lane — signing, export option
 
 - [ ] Mac + iOS app targets and BOTH test lanes green on the remote Mac.
 - [ ] Feature parity verified by hand via `scripts/mac-app-run.sh` or TestFlight: sessions list, chat (markdown incl. tables, tappable file paths → editor), terminal (typing + **trackpad/wheel scroll over a live tmux pane — explicitly, both directions** + predictive echo on a slow link), editor + file tree, launcher (+ draft persistence), Finish flow, archived sessions + filter, usage panel, dictation, display/VNC pane, notifications (banner on a real APNs push from TestFlight build), pairing + unpair/re-pair.
-- [ ] Mac-specific: ⌘N opens launcher, session context-menu → new window works, window restore/resize behaves, sleep/wake reconnects (close lid or `pmset sleepnow` on the Mac, wake, confirm WS resumes).
+- [ ] Mac-specific: ⌘N opens launcher, session context-menu → new window works, window restore/resize behaves, sleep/wake reconnects (close lid or `pmset sleepnow` on the Mac, wake, confirm WS resumes). From Task 14's reviews: close a detached session window → its WS actually drops (socket count via `lsof -iTCP:9898`), main workspace unaffected; main-window close→reopen→wake — does reconnect fire immediately (observer alive) or wait out the ≤8s backoff (observer lost on same-instance restart; decide if re-arm needed); detached window behavior after Unpair (keeps reconnecting with a revoked token — acceptable, or add an unpair broadcast?); restored-at-relaunch session windows for dead sessions spin ProgressView (accepted v1); divider cursor after closing a window mid-hover; note: dev builds re-signed with a different identity hit a keychain ACL prompt at launch (`PushKeypair.loadOrCreate`) — Task 17's helper needs a stable signing identity or a pre-authorized keychain item.
 - [ ] Dead-session banner renders on BOTH platforms when a session's agent dies (kill a test session's process via the broker to verify).
 - [ ] TestFlight macOS build uploaded (after explicit user OK).
 ```
