@@ -804,6 +804,7 @@ git commit -m "feat(mac): editor WKWebView representable goes cross-platform"
 - Modify: `apps/iosApp/Supermux/Chat/ChatView.swift:47-50`
 - Modify: `apps/iosApp/Supermux/Chat/ChatPane.swift` (pasteboard swept in Task 4; import cleanup only)
 - Modify: `apps/iosApp/Supermux/Chat/ChatMessages.swift`
+- Modify: `apps/iosApp/Supermux/Sessions/NewSessionView.swift` (found by Task 4's review: line ~183 presents `CameraPicker` via `.smFullScreenCover(isPresented: $showCamera)` — pure UIKit, won't compile on mac; wrap the presentation in `#if os(iOS)` exactly like ChatPane's in Step 5)
 
 Heads-up from Task 3's review (owned here): `PlatformFont` covers the class name but NOT divergent nested API — `UIFontDescriptor.SymbolicTraits.traitBold` (iOS) vs `NSFontDescriptor.SymbolicTraits.bold` (mac), and `withSymbolicTraits(_:)` returns `Optional` on UIKit but non-optional on AppKit — so MarkdownView's private `withTraits` helper (~line 273) needs a real `#if` split, not just the typealias substitution. Also noted (improvement, not blocker): `SMScreen.mainWidth` is a poor width cap for markdown tables on a resizable Mac window — if cheap, prefer a container-relative width via the pane; otherwise ship and revisit.
 
@@ -937,7 +938,7 @@ and change call sites `X.jpegData(compressionQuality: q)` → `X.smJpegData(qual
 
 Use the actual asset name / target-size variable already present in the code; only the rendering API changes.
 
-- [ ] **Step 5: ChatMessages.swift.** `UIImage` (lines 40-56) → `PlatformImage`. Wrap `CameraPicker` (lines 159-181) and every view that presents it in `#if os(iOS)` — the Mac simply doesn't offer camera capture (the photo-library `PhotosPicker` is cross-platform and stays). For the QuickLook preview: if it uses a `QLPreviewController` representable, wrap that in `#if os(iOS)` and on macOS use the SwiftUI modifier instead at the same call site:
+- [ ] **Step 5: ChatMessages.swift (+ NewSessionView.swift).** `UIImage` (lines 40-56) → `PlatformImage`. Wrap `CameraPicker` (lines 159-181) and EVERY view that presents it in `#if os(iOS)` — the presenting sites are `ChatPane.swift:216` AND `Sessions/NewSessionView.swift:183` (both `.smFullScreenCover(isPresented: $showCamera)`; wrap the modifier + the camera button that sets `showCamera`). The Mac simply doesn't offer camera capture (the photo-library `PhotosPicker` is cross-platform and stays). For the QuickLook preview: if it uses a `QLPreviewController` representable, wrap that in `#if os(iOS)` and on macOS use the SwiftUI modifier instead at the same call site:
 
 ```swift
         #if os(macOS)
@@ -1166,7 +1167,7 @@ git commit -m "feat(mac): APNs registration + NSApplicationDelegate push path, m
 
 Tasks 3-11 covered every UIKit category the source audit found. Whatever still fails now is stragglers of the SAME categories (a missed modifier instance, an unconditioned import, a file the audit's grep missed).
 
-Also verify here (from Task 3's review): `ToolbarItemPlacement.navigation` (the macOS side of `.smTopLeading`) is believed-valid macOS API but has never been type-checked by a mac compile — if it errors, change the shim's macOS branch to `.automatic`.
+Also verify here (from Task 3's review): `ToolbarItemPlacement.navigation` (the macOS side of `.smTopLeading`) is believed-valid macOS API but has never been type-checked by a mac compile — if it errors, change the shim's macOS branch to `.automatic`. And from Task 4's review: `Editor/EditorHost.swift` has no explicit UIKit/AppKit import and relies on `import WebKit` re-exporting the platform UI framework — if `PlatformColor` fails to resolve there on mac, add `#if canImport(AppKit)\nimport AppKit\n#endif` alongside the existing imports.
 
 **Reality check from Task 2:** Xcode 26.5's explicit-modules SwiftDriver **fails fast on the first unresolvable module import** instead of listing every error — so the burn-down proceeds in walls, not a smooth count-down: clearing one file's `import UIKit` reveals the next wall on rebuild. The definitive inventory is the 17 UIKit-importing files captured in Task 2's report; the "error count strictly decreases" heuristic below applies per-wall, not globally.
 
@@ -1307,6 +1308,11 @@ git commit -m "feat: Not-responding banner for dead sessions (iOS + macOS, close
 - Modify: `apps/iosApp/Supermux/App/SupermuxApp.swift`
 - Create: `apps/iosApp/Supermux/Shell/SessionWindow.swift`
 - Modify: `apps/iosApp/Supermux/Sessions/SessionsListView.swift` (context menu on rows)
+- Modify: `apps/iosApp/Supermux/App/PlatformShims.swift` + hover sites (see the added hover step)
+
+Carry-overs from Task 4's review, owned here:
+- **Mac hover affordance:** `.smHoverHighlight()` is a hard no-op on macOS at 7 sites that are custom `.plain`-style controls with no other affordance (`DesignSystem/ResizableSplit.swift:58`, `Shell/AgentViewToggle.swift:51`, `Shell/PaneToggleCluster.swift:66`, `Shell/IPadWorkspace.swift:119,253,285,314`). Add a real macOS branch to the shim (`.onHover` toggling a subtle `Color.primary.opacity(0.08)` background via a small ViewModifier) so all 7 get feedback for free; additionally give `ResizableSplit`'s divider a `NSCursor.resizeLeftRight`/`resizeUpDown` push on hover (macOS-gated, in that file).
+- **Optional polish (do if cheap, skip if it destabilizes iOS):** HIG-correct sheet button placements — Done → `.confirmationAction` at `Chat/OptionSwitchSheet.swift:43`, `Chat/FinishSheet.swift:50`, `Chat/GlossaryView.swift:34`, `Editor/EditorSettingsStore.swift:82`, `Sessions/InfoPages.swift:151`, `Sessions/NewSessionView.swift:616`; Cancel → `.cancellationAction` at `Sessions/NewSessionView.swift:490`, `Sessions/GitHostingSettingsView.swift:421`, `Sessions/InfoPages.swift:845`. These placements are cross-platform and HIG-correct on iOS too, but eyeball the iOS render before keeping.
 
 - [ ] **Step 1: Menu commands + secondary window scene.** In `SupermuxApp.body`, after the main `WindowGroup`'s `.defaultSize` (Task 5), add the mac-only scenes/commands:
 
