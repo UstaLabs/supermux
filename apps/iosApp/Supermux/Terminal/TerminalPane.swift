@@ -1,7 +1,9 @@
 import SwiftUI
 import Shared
 import SwiftTerm
+#if canImport(UIKit)
 import UIKit
+#endif
 
 /// One terminal: a SwiftTerm view + a connection status chip. The live state (websocket
 /// + emulator scrollback) lives in a `TerminalHost` cached in `BrokerSession`, so toggling
@@ -36,10 +38,12 @@ struct TerminalPane: View {
             }
         }
         .overlay(alignment: .bottom) { keyboardDismissOverlay }
+        #if os(iOS)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
             if let f = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect { keyboardHeight = f.height }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardHeight = 0 }
+        #endif
         .onAppear {
             // The cache owns the connection lifecycle (created + started on first access).
             // We only (re)point onExit at THIS mount's callback — the host outlives remounts.
@@ -62,7 +66,11 @@ struct TerminalPane: View {
     @ViewBuilder private var keyboardDismissOverlay: some View {
         if effectiveKbHeight > 0 && !ended {
             GeometryReader { geo in
-                Button { host.view.resignFirstResponder() } label: {
+                Button {
+                    #if os(iOS)
+                    host.view.resignFirstResponder()
+                    #endif
+                } label: {
                     Image(systemName: "keyboard.chevron.compact.down")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Theme.teal)

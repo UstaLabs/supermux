@@ -1,8 +1,10 @@
 import SwiftUI
 import SwiftTerm
 import Shared
+#if canImport(UIKit)
 import GameController
 import UIKit
+#endif
 
 /// Owns ONE persistent terminal — the `TerminalSession` (websocket) plus the SwiftTerm
 /// `TerminalView` that holds the emulator buffer. Cached per (session, kind, terminalId)
@@ -20,9 +22,9 @@ final class TerminalHost {
         // Build the persistent emulator view (the setup that used to live in
         // SwiftTermView.makeUIView). This instance must outlive any single mount.
         let tv = TerminalView(frame: .zero)
-        tv.font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-        tv.nativeBackgroundColor = UIColor(Theme.terminalBackground)
-        tv.nativeForegroundColor = UIColor(Theme.terminalForeground)
+        tv.font = PlatformFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        tv.nativeBackgroundColor = PlatformColor(Theme.terminalBackground)
+        tv.nativeForegroundColor = PlatformColor(Theme.terminalForeground)
         self.view = tv
 
         let session = TerminalSession(broker: broker, sessionId: sessionId,
@@ -58,9 +60,10 @@ final class TerminalHost {
 /// the policy and the FIFO input wiring survive remounts. Plain `NSObject` (not @MainActor)
 /// so it satisfies SwiftTerm's nonisolated `TerminalViewDelegate` — the @MainActor session
 /// is reached via `assumeIsolated` (we ARE on the main thread when SwiftTerm calls us).
-final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIGestureRecognizerDelegate {
+final class TerminalCoordinator: NSObject, TerminalViewDelegate {
     let session: TerminalSession
     private weak var tv: TerminalView?
+    #if os(iOS)
     private var savedAccessory: UIView?
     private var suppressed = false
     private lazy var emptyInputView = UIView(frame: .zero)
@@ -68,6 +71,7 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIGestureRecogn
     // delegate can identify it, and to carry accumulated sub-row drag pixels across callbacks.
     private var scrollPan: UIPanGestureRecognizer?
     private var scrollAccumPx: Double = 0
+    #endif
 
     // Predictive local echo: the shared Kotlin engine (via SKIE) + the SwiftTerm op
     // renderer + the keystroke→echo RTT stamp. Mirrors TerminalPane.vue's predictor /
@@ -84,6 +88,7 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIGestureRecogn
     init(session: TerminalSession) {
         self.session = session
         super.init()
+        #if os(iOS)
         // A connected hardware keyboard means the on-screen keyboard (soft keys + the
         // terminal accessory toolbar) shouldn't eat the screen — but the terminal stays
         // first responder so HARDWARE keystrokes still reach it. Re-apply on plug/unplug.
@@ -92,13 +97,16 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIGestureRecogn
                        name: .GCKeyboardDidConnect, object: nil)
         nc.addObserver(self, selector: #selector(hardwareKeyboardChanged),
                        name: .GCKeyboardDidDisconnect, object: nil)
+        #endif
     }
     deinit { NotificationCenter.default.removeObserver(self) }
 
     /// Bind the SwiftTerm view and apply the current keyboard policy.
     func attach(_ terminal: TerminalView) {
         tv = terminal
+        #if os(iOS)
         savedAccessory = terminal.inputAccessoryView   // SwiftTerm's TerminalAccessory (set in its setup)
+        #endif
         // Predictive local echo (mirror TerminalPane.vue onMounted): pure-logic shared engine
         // + SwiftTerm dim-render adapter. The engine owns all reconcile/cursor math; the
         // adapter just translates its ops to SwiftTerm feeds.
@@ -108,10 +116,13 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIGestureRecogn
         // closure return needs this.)
         engine = PredictionEngine(cfg: PredictiveEchoKt.DEFAULT_CONFIG,
                                   now: { KotlinLong(value: TerminalCoordinator.nowMs()) })
+        #if os(iOS)
         applyKeyboardPolicy()
         installTouchScroll(terminal)
+        #endif
     }
 
+    #if os(iOS)
     /// SwiftTerm forwards a one-finger drag to the app as a pressed-button drag (tmux reads it as a
     /// selection, not a scroll), so swiping never scrolls. We add our own one-finger pan that turns
     /// a vertical drag into SGR mouse-wheel bytes sent to the pty — tmux then scrolls its history.
@@ -160,18 +171,6 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIGestureRecogn
         }
     }
 
-    /// Make SwiftTerm's own pan recognizers (mouse-drag / selection) yield to ours: they are
-    /// required to fail when our scroll pan recognizes, so a vertical drag scrolls instead of
-    /// selecting. Only gates other PAN recognizers — taps and pinch are untouched.
-    func gestureRecognizer(
-        _ gestureRecognizer: UIGestureRecognizer,
-        shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
-    ) -> Bool {
-        gestureRecognizer == scrollPan
-            && otherGestureRecognizer !== scrollPan
-            && otherGestureRecognizer is UIPanGestureRecognizer
-    }
-
     @objc private func hardwareKeyboardChanged() { applyKeyboardPolicy() }
 
     /// Hardware keyboard present → suppress the soft keyboard (empty inputView) and the
@@ -194,6 +193,7 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIGestureRecogn
         }
         if tv.isFirstResponder { tv.reloadInputViews() }
     }
+    #endif
 
     // SwiftTerm invokes these delegate methods on the main thread, but the protocol
     // is nonisolated while `TerminalSession` is @MainActor. Use assumeIsolated (we ARE
@@ -273,3 +273,19 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIGestureRecogn
     func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
 }
+
+#if os(iOS)
+extension TerminalCoordinator: UIGestureRecognizerDelegate {
+    /// Make SwiftTerm's own pan recognizers (mouse-drag / selection) yield to ours: they are
+    /// required to fail when our scroll pan recognizes, so a vertical drag scrolls instead of
+    /// selecting. Only gates other PAN recognizers — taps and pinch are untouched.
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        gestureRecognizer == scrollPan
+            && otherGestureRecognizer !== scrollPan
+            && otherGestureRecognizer is UIPanGestureRecognizer
+    }
+}
+#endif
