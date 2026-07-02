@@ -41,6 +41,9 @@ struct SessionsListView: View {
                     .padding(.vertical, 3)
                 }
                 .buttonStyle(.plain)
+                // Composite icon+text button — give UI tests a stable handle that
+                // doesn't depend on concatenated Text-derived accessibility labels.
+                .accessibilityIdentifier("new-session")
             }
 
             ForEach(broker.groups(), id: \.workdir) { group in

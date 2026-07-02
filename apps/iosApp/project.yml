@@ -334,6 +334,28 @@ targets:
           - $(inherited)
           - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
 
+  SupermuxMacUITests:
+    # XCUITest smoke: drives the built SupermuxMac.app as a separate host process
+    # (not injected like SupermuxMacTests) — TEST_TARGET_NAME identifies the app
+    # target to launch. Verified empirically (Task 16): this is the XcodeGen TARGET
+    # name ("SupermuxMac", the key below/above), NOT the PRODUCT_NAME override
+    # ("Supermux") that SupermuxMacTests' TEST_HOST override exists to work around —
+    # XcodeGen resolves TEST_TARGET_NAME against the project's target list and wires
+    # the pbxproj TestTargetID reference itself, so no analogous override is needed here.
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: SupermuxMacUITests
+    dependencies:
+      - target: SupermuxMac
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        ARCHS: arm64
+        EXCLUDED_ARCHS: x86_64
+        TEST_TARGET_NAME: SupermuxMac
+
 schemes:
   SupermuxWatch:
     build:
@@ -359,10 +381,12 @@ schemes:
       targets:
         SupermuxMac: all
         SupermuxMacTests: [test]
+        SupermuxMacUITests: [test]
     test:
       config: Debug
       targets:
         - SupermuxMacTests
+        - SupermuxMacUITests
     run:
       config: Debug
     archive:

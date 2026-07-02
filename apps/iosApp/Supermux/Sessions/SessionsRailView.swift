@@ -29,6 +29,8 @@ struct SessionsRailView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Start a new session")
+            // SF-symbol-only button — no stable text to match on in UI tests.
+            .accessibilityIdentifier("new-session")
 
             ScrollView {
                 VStack(spacing: 10) {
