@@ -22,8 +22,8 @@ final class EditorHost {
     init() {
         // Coordinator is the bridge target + nav delegate; it outlives every mount so the
         // ready handshake and the live `editor`/`lsp` message handlers survive remounts.
-        // The closures are placeholders here — `EditorWebView.updateUIView` refreshes them
-        // to the current SwiftUI props on every (re)make.
+        // The closures are placeholders here — `EditorWebView.updatePlatformView` refreshes
+        // them to the current SwiftUI props on every (re)make.
         let coordinator = EditorWebView.Coordinator(
             onChange: { _ in }, onSave: {}, onLspOut: { _, _ in }
         )
@@ -52,12 +52,20 @@ final class EditorHost {
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = coordinator
+        #if os(iOS)
         webView.isOpaque = false
         webView.backgroundColor = Self.editorBackground
         webView.scrollView.backgroundColor = Self.editorBackground
         webView.scrollView.contentInsetAdjustmentBehavior = .never
+        #else
+        // macOS: WKWebView is an NSView — no `isOpaque`/`backgroundColor`/`scrollView`.
+        // The public `underPageBackgroundColor` paints the same one-dark canvas
+        // around the page, and EditorPane's SwiftUI `.background(#282c34)` sits behind
+        // the view so there's no white flash before CodeMirror first paints.
+        webView.underPageBackgroundColor = Self.editorBackground
+        #endif
         #if DEBUG
-        if #available(iOS 16.4, *) { webView.isInspectable = true }
+        if #available(iOS 16.4, macOS 13.3, *) { webView.isInspectable = true }
         #endif
         self.webView = webView
         coordinator.webView = webView

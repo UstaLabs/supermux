@@ -36,6 +36,13 @@ import AppKit
 #endif
 import UserNotifications
 
+/// Platform-neutral background-push outcome — the same three cases as
+/// `UIBackgroundFetchResult`, but without importing UIKit so `PushManager` stays
+/// cross-platform. The iOS delegate maps this back to `UIBackgroundFetchResult`.
+enum PushFetchResult {
+    case newData, noData, failed
+}
+
 /// App-side push manager: drives APNs registration and the broker register→bootstrap
 /// orchestration. A singleton (the `PushAppDelegate` forwards UIKit callbacks here).
 final class PushManager: NSObject {
@@ -111,11 +118,15 @@ final class PushManager: NSObject {
 
     // MARK: - Step 3: bootstrap push → register device with broker
 
-    /// Handle a background remote notification. Returns the UIKit background-fetch result.
+    /// Handle a background remote notification. Returns a platform-neutral fetch result
+    /// (`PushFetchResult`) — the iOS delegate maps it back to the real
+    /// `UIBackgroundFetchResult` the OS contract wants, while macOS (no background-fetch
+    /// completion contract) simply discards it. Keeping this method UIKit-free is what
+    /// lets `PushManager` compile on macOS.
     /// A BOOTSTRAP payload (plaintext `{"kind":"bootstrap","routingToken":...}` in `data`)
     /// registers this device (pubkey + routingToken) with the broker. SEALED alerts are
     /// handled by the NSE, not here.
-    func didReceiveRemoteNotification(_ userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
+    func didReceiveRemoteNotification(_ userInfo: [AnyHashable: Any]) async -> PushFetchResult {
         guard let blob = userInfo["data"] as? String,
               let routingToken = Self.parseBootstrapRoutingToken(blob) else {
             return .noData
@@ -191,11 +202,16 @@ final class PushAppDelegate: NSObject, UIApplicationDelegate {
         await handleRemote(userInfo)
     }
 
-    /// Shared body lives in `PushManager.shared.didReceiveRemoteNotification`; this
-    /// thin wrapper exists only because the return type is UIKit-only (see the type
-    /// doc comment above), so it can't move into the cross-platform extension below.
+    /// Shared body lives in `PushManager.shared.didReceiveRemoteNotification` (which
+    /// returns a platform-neutral `PushFetchResult`); this thin wrapper exists only to
+    /// map that back to the UIKit-only `UIBackgroundFetchResult` the OS method requires,
+    /// which is why it can't move into the cross-platform extension below.
     private func handleRemote(_ userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
-        await PushManager.shared.didReceiveRemoteNotification(userInfo)
+        switch await PushManager.shared.didReceiveRemoteNotification(userInfo) {
+        case .newData: return .newData
+        case .noData: return .noData
+        case .failed: return .failed
+        }
     }
 }
 #else

@@ -109,6 +109,14 @@ struct EditorWebView: PlatformViewRepresentable {
         // retain cycle) are removed by `EditorHost.stop()` when the SESSION is removed.
     }
 
+    #if os(macOS)
+    static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
+        // No-op (macOS twin of dismantleUIView): the webview + coordinator are owned by the
+        // `EditorHost` cached in `BrokerSession` and MUST outlive this mount, so toggling the
+        // editor pane off doesn't reload the page. Kept greppable on both platforms.
+    }
+    #endif
+
     /// `cm6.js` keys the language off the file's basename (extension), so we only
     /// ever hand it the last path component.
     private func filename(from path: String) -> String {
@@ -251,11 +259,14 @@ struct EditorWebView: PlatformViewRepresentable {
             }
         }
 
+        #if os(iOS)
         /// Resign the web content's keyboard. The parent calls this from its own
         /// dismiss affordance (mirrors `TerminalPane` resigning the TerminalView).
+        /// iOS-only: a Mac always has a hardware keyboard, so there is nothing to dismiss.
         func dismissKeyboard() {
             webView?.endEditing(true)
         }
+        #endif
 
         private func evaluate(_ js: String) {
             webView?.evaluateJavaScript(js, completionHandler: nil)

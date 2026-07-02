@@ -13,7 +13,9 @@ struct EditorPane: View {
     @State private var settings = EditorSettingsStore()
     @State private var showSettings = false
     @State private var webView: WKWebView?
+    #if os(iOS)
     @State private var keyboardHeight: CGFloat = 0
+    #endif
     @State private var previewMode = false
     #if os(macOS)
     private let isRegularWidth = true   // the Mac is always the wide multi-pane workspace
@@ -69,11 +71,15 @@ struct EditorPane: View {
             broker.editorClose(old)
             broker.editorOpen(new)
         }
+        #if os(iOS)
+        // Software-keyboard dismiss affordance — meaningless on a hardware-keyboard Mac
+        // (the whole subsystem: state + notifications + overlay + endEditing is iOS-only).
         .overlay(alignment: .bottom) { keyboardDismissOverlay }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
             if let f = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect { keyboardHeight = f.height }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardHeight = 0 }
+        #endif
         .sheet(isPresented: $showSettings) { EditorSettingsView(settings: settings) }
         .task(id: session.id) {
             // Headless test hook: open a file by workdir-relative path on launch.
@@ -297,6 +303,8 @@ struct EditorPane: View {
     // The WKWebView owns a UIKit keyboard SwiftUI's tap/scroll dismissal can't reach,
     // so we hold the view and `endEditing` it via a floating glass button just above the
     // keyboard (mirrors TerminalPane). SM_KBD=1 fakes a height for headless screenshots.
+    // iOS-only: a Mac always has a hardware keyboard, so there is nothing to dismiss.
+    #if os(iOS)
     private var effectiveKbHeight: CGFloat {
         keyboardHeight > 0 ? keyboardHeight : (ProcessInfo.processInfo.environment["SM_KBD"] == "1" ? 320 : 0)
     }
@@ -318,4 +326,5 @@ struct EditorPane: View {
             .ignoresSafeArea(.keyboard)
         }
     }
+    #endif
 }
