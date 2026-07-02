@@ -85,15 +85,30 @@ final class ComposerModel {
     // MARK: - Attachments
     func removeAttachment(_ p: PendingAttachment) { pending.removeAll { $0.id == p.id } }
 
+    /// Derive the upload MIME + filename for a picked photo-library item from the content types
+    /// it advertises. A movie item (any `UTType` conforming to `.movie` — e.g. `public.movie`,
+    /// `com.apple.quicktime-movie`, `public.mpeg-4`) keeps its real video type + extension, so a
+    /// picked video uploads as `video/*` instead of the old hardcoded `image/jpeg`. Everything
+    /// else is staged as a JPEG still (Photos hands JPEG `Data` back for images — the design
+    /// keeps images as image/jpeg). Pure + `static` (takes the item's `supportedContentTypes`, no
+    /// `PhotosPickerItem`) so it's unit-testable without a live photo library — the same split as
+    /// `addPastedImage`.
+    static func attachmentMeta(for contentTypes: [UTType], number: Int) -> (filename: String, mime: String) {
+        if let movie = contentTypes.first(where: { $0.conforms(to: .movie) }) {
+            let ext = movie.preferredFilenameExtension ?? "mov"
+            let mime = movie.preferredMIMEType ?? "video/quicktime"
+            return (filename: "video-\(number).\(ext)", mime: mime)
+        }
+        return (filename: "image-\(number).jpg", mime: "image/jpeg")
+    }
+
     /// Load picked photos into `pending`. The screen clears its `PhotosPickerItem` selection
     /// after awaiting this.
     func loadPhotos(_ items: [PhotosPickerItem]) async {
-        for (i, item) in items.enumerated() {
-            if let data = try? await item.loadTransferable(type: Data.self) {
-                pending.append(PendingAttachment(data: data,
-                                                 filename: "image-\(pending.count + i + 1).jpg",
-                                                 mime: "image/jpeg"))
-            }
+        for item in items {
+            guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
+            let meta = Self.attachmentMeta(for: item.supportedContentTypes, number: pending.count + 1)
+            pending.append(PendingAttachment(data: data, filename: meta.filename, mime: meta.mime))
         }
     }
     func handleFiles(_ result: Result<[URL], Error>) {
