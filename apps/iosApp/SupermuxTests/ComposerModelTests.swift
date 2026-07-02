@@ -1,7 +1,11 @@
 // apps/iosApp/SupermuxTests/ComposerModelTests.swift
 import XCTest
 import Shared
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 @testable import Supermux
 
 /// Unit tests for `ComposerModel`'s pure logic (draft, slash parsing, consume). The mic /
@@ -86,12 +90,20 @@ final class ComposerModelTests: XCTestCase {
 
     // MARK: - Paste staging
 
-    /// A real 2×2 raster so `jpegData(...)` returns non-nil (SF Symbols can't encode to JPEG).
-    private func tinyImage() -> UIImage {
+    /// A real 2×2 raster so `smJpegData(...)` returns non-nil (SF Symbols can't encode to JPEG).
+    private func tinyImage() -> PlatformImage {
+        #if canImport(UIKit)
         UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).image { ctx in
             UIColor.red.setFill()
             ctx.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
         }
+        #else
+        NSImage(size: NSSize(width: 2, height: 2), flipped: false) { rect in
+            NSColor.red.setFill()
+            rect.fill()
+            return true
+        }
+        #endif
     }
 
     func testAddPastedImageStagesJpeg() {
@@ -127,6 +139,13 @@ final class ComposerModelTests: XCTestCase {
     }
 
     // MARK: - Paste interception (PasteTextView — the WhatsApp-style in-box paste)
+    // UIKit-only below: these drive the iOS `PasteTextView` (a `UITextView` subclass) through
+    // its literal UIKit surface — `UIPasteboard`, `canPerformAction`/`UIResponder.paste(_:)`,
+    // `.text`. The AppKit twin (ComposerInput.swift's `#else` branch) implements the identical
+    // paste-interception behavior but through `NSPasteboard`/`validateUserInterfaceItem(_:)`/
+    // `.string` instead, so it isn't a drop-in retest here; its TextKit-stack init invariant is
+    // pinned separately in MacOnlyTests.swift.
+    #if canImport(UIKit)
 
     func testPasteTextViewStagesImageInsteadOfInserting() {
         let pb = UIPasteboard.withUniqueName()
@@ -155,4 +174,6 @@ final class ComposerModelTests: XCTestCase {
         XCTAssertFalse(staged)
         UIPasteboard.remove(withName: pb.name)
     }
+
+    #endif
 }

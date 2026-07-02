@@ -296,6 +296,44 @@ targets:
           - $(inherited)
           - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
 
+  SupermuxMacTests:
+    # Mac twin of SupermuxTests: same suite, same @testable import Supermux (SupermuxMac's
+    # module name is also "Supermux" — see its PRODUCT_MODULE_NAME), minus the files below.
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: SupermuxTests
+        excludes:
+          # Depend on Watch-only wire types (RelayEnvelope, BrokerTransport/BrokerRoute,
+          # WatchSessionStatus's sessionStatus/isWorking/GitLite) or the phone-side relay
+          # handler (BrokerRelay) built from them. All of these are compiled into the iOS
+          # `Supermux` target only via its three standalone SupermuxWatch/Watch/*.swift
+          # source entries — SupermuxMac's sources never add them (and separately excludes
+          # `Watch/**` from Supermux/ — WatchConnectivity doesn't exist on macOS), so these
+          # symbols don't exist in the SupermuxMac module for the tests to link against.
+          - "WatchSessionStatusTests.swift"
+          - "RelayEnvelopeTests.swift"
+          - "BrokerRelayTests.swift"
+          - "RoutingTransportTests.swift"
+    dependencies:
+      - target: SupermuxMac
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        ARCHS: arm64
+        EXCLUDED_ARCHS: x86_64
+        # XcodeGen guesses TEST_HOST from the dependency's TARGET name ("SupermuxMac"), but that
+        # target overrides PRODUCT_NAME to "Supermux" (so @testable import Supermux / the shared
+        # module name work) — the real built app is Supermux.app, not SupermuxMac.app. Without
+        # this override xcodebuild fails immediately with "Could not find test host" because the
+        # guessed path can never exist.
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Supermux.app/Contents/MacOS/Supermux"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        FRAMEWORK_SEARCH_PATHS:
+          - $(inherited)
+          - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
+
 schemes:
   SupermuxWatch:
     build:
@@ -320,6 +358,11 @@ schemes:
     build:
       targets:
         SupermuxMac: all
+        SupermuxMacTests: [test]
+    test:
+      config: Debug
+      targets:
+        - SupermuxMacTests
     run:
       config: Debug
     archive:
