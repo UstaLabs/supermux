@@ -1169,6 +1169,8 @@ Tasks 3-11 covered every UIKit category the source audit found. Whatever still f
 
 Also verify here (from Task 3's review): `ToolbarItemPlacement.navigation` (the macOS side of `.smTopLeading`) is believed-valid macOS API but has never been type-checked by a mac compile — if it errors, change the shim's macOS branch to `.automatic`. And from Task 4's review: `Editor/EditorHost.swift` has no explicit UIKit/AppKit import and relies on `import WebKit` re-exporting the platform UI framework — if `PlatformColor` fails to resolve there on mac, add `#if canImport(AppKit)\nimport AppKit\n#endif` alongside the existing imports.
 
+Known wall (from Task 5's review): `Editor/EditorPane.swift` has an unclaimed UIKit subsystem — the software-keyboard dismiss feature (`UIResponder.keyboardWillShow/Hide` notifications ~lines 73-76, the `keyboardDismissOverlay` ~lines 297-320, and `webView?.endEditing(true)`). No earlier task owns it. When it surfaces here, wrap the ENTIRE subsystem (state + notifications + overlay + endEditing) in `#if os(iOS)` — it's meaningless on a hardware-keyboard Mac — rather than patching individual error lines.
+
 **Reality check from Task 2:** Xcode 26.5's explicit-modules SwiftDriver **fails fast on the first unresolvable module import** instead of listing every error — so the burn-down proceeds in walls, not a smooth count-down: clearing one file's `import UIKit` reveals the next wall on rebuild. The definitive inventory is the 17 UIKit-importing files captured in Task 2's report; the "error count strictly decreases" heuristic below applies per-wall, not globally.
 
 - [ ] **Step 1: Build loop.** Tar-sync, run the Mac build check, and iterate:
@@ -1309,6 +1311,11 @@ git commit -m "feat: Not-responding banner for dead sessions (iOS + macOS, close
 - Create: `apps/iosApp/Supermux/Shell/SessionWindow.swift`
 - Modify: `apps/iosApp/Supermux/Sessions/SessionsListView.swift` (context menu on rows)
 - Modify: `apps/iosApp/Supermux/App/PlatformShims.swift` + hover sites (see the added hover step)
+
+Carry-overs from Task 5's review, owned here:
+- **Resolve the SessionWindow state model** (spec-vs-draft inconsistency): the design spec says "windows on one session share the same store/stream — no duplicate fetching", but the Step 2 snippet below gives `SessionWindow` its OWN `BrokerSession` (own WS — the web-tab model). Pick one: (a) hoist a single app-level `BrokerSession` into `SupermuxApp` and inject it into both scenes (true sharing; medium refactor since RootView constructs/recreates it on unpair), or (b) keep per-window connections and AMEND the spec doc's error-handling bullet to say the mac uses the web-tab model (one WS per window; broker handles N clients fine). (b) is acceptable and simpler; whichever you pick, make code + spec agree in the same commit.
+- **NavRoute pages take over the whole workspace on mac** (Settings/Usage/Devices/… push replaces the multi-pane layout entirely, and there's no edge-swipe back). Convert the NavRoute presentations to `.sheet`s on macOS (keep push on iOS) OR justify keeping push after eyeballing it — decide during this task's feel check.
+- **Minimum window size:** add `.frame(minWidth: 1100, minHeight: 700)`-class floor to the main WindowGroup content on macOS (`isRegularWidth` is a constant, so there's no compact fallback when the user drags the window narrow).
 
 Carry-overs from Task 4's review, owned here:
 - **Mac hover affordance:** `.smHoverHighlight()` is a hard no-op on macOS at 7 sites that are custom `.plain`-style controls with no other affordance (`DesignSystem/ResizableSplit.swift:58`, `Shell/AgentViewToggle.swift:51`, `Shell/PaneToggleCluster.swift:66`, `Shell/IPadWorkspace.swift:119,253,285,314`). Add a real macOS branch to the shim (`.onHover` toggling a subtle `Color.primary.opacity(0.08)` background via a small ViewModifier) so all 7 get feedback for free; additionally give `ResizableSplit`'s divider a `NSCursor.resizeLeftRight`/`resizeUpDown` push on hover (macOS-gated, in that file).
