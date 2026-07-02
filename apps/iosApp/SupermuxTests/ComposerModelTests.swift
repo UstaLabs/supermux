@@ -2,6 +2,7 @@
 import XCTest
 import Shared
 import UIKit
+import UniformTypeIdentifiers
 @testable import Supermux
 
 /// Unit tests for `ComposerModel`'s pure logic (draft, slash parsing, consume). The mic /
@@ -154,5 +155,45 @@ final class ComposerModelTests: XCTestCase {
         tv.paste(nil)                 // no image/PDF → must NOT stage; falls through to text paste
         XCTAssertFalse(staged)
         UIPasteboard.remove(withName: pb.name)
+    }
+
+    // MARK: - Photo-library item typing (the mislabel-bug fix)
+
+    /// A picked QuickTime movie must upload as `video/quicktime` + `.mov`, NOT the old
+    /// hardcoded `image/jpeg` / `image-N.jpg`.
+    func testAttachmentMetaQuickTimeMovieYieldsVideoMov() {
+        let meta = ComposerModel.attachmentMeta(for: [.quickTimeMovie], number: 1)
+        XCTAssertTrue(meta.mime.hasPrefix("video/"))
+        XCTAssertEqual(meta.mime, "video/quicktime")
+        XCTAssertEqual(meta.filename, "video-1.mov")
+    }
+
+    /// An MPEG-4 movie keeps its real `video/mp4` + `.mp4`.
+    func testAttachmentMetaMpeg4MovieYieldsVideoMp4() {
+        let meta = ComposerModel.attachmentMeta(for: [.mpeg4Movie], number: 2)
+        XCTAssertEqual(meta.mime, "video/mp4")
+        XCTAssertEqual(meta.filename, "video-2.mp4")
+    }
+
+    /// A still image stays `image/jpeg` + `.jpg` (the design keeps picked images as JPEG).
+    func testAttachmentMetaImageYieldsJpeg() {
+        let meta = ComposerModel.attachmentMeta(for: [.jpeg], number: 1)
+        XCTAssertEqual(meta.mime, "image/jpeg")
+        XCTAssertEqual(meta.filename, "image-1.jpg")
+    }
+
+    /// An abstract movie type with no concrete MIME/extension falls back to a video/* type
+    /// and a video filename — never image/jpeg.
+    func testAttachmentMetaAbstractMovieFallsBackToVideo() {
+        let meta = ComposerModel.attachmentMeta(for: [.movie], number: 3)
+        XCTAssertTrue(meta.mime.hasPrefix("video/"))
+        XCTAssertTrue(meta.filename.hasPrefix("video-3."))
+    }
+
+    /// A picked video can advertise a still-frame image type too; the movie type must win.
+    func testAttachmentMetaPrefersMovieWhenBothPresent() {
+        let meta = ComposerModel.attachmentMeta(for: [.jpeg, .quickTimeMovie], number: 1)
+        XCTAssertTrue(meta.mime.hasPrefix("video/"))
+        XCTAssertEqual(meta.filename, "video-1.mov")
     }
 }

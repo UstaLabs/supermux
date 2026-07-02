@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { firePushForReply } from "./hook"
+import { firePushForReply, extractPreview } from "./hook"
 
 function baseArgs(over: any = {}) {
   const nativeCalls: string[] = []
@@ -33,4 +33,8 @@ test("does NOT fire native when the user is present on any device", async () => 
   const { args, nativeCalls } = baseArgs({ anyPresent: () => true })
   await firePushForReply(args as any)
   expect(nativeCalls).toEqual([])
+})
+
+test("extractPreview labels a video attachment", () => {
+  expect(extractPreview({ op: "reply", chat_id: "web", text: "", attachments: [{ kind: "video", file_id: "f1" }] } as any)).toBe("🎥 Video")
 })

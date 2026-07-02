@@ -16,6 +16,10 @@ function isAudio(file: { mediaType?: string }): boolean {
   return !!file.mediaType?.startsWith("audio/")
 }
 
+function isVideo(file: { mediaType?: string }): boolean {
+  return !!file.mediaType?.startsWith("video/")
+}
+
 const items = computed(() => files.value)
 </script>
 
@@ -43,6 +47,14 @@ const items = computed(() => files.value)
             :src="f.url"
             :alt="f.filename ?? 'attachment'"
             class="size-10 object-cover"
+          />
+          <video
+            v-else-if="isVideo(f) && f.url"
+            :src="f.url"
+            class="size-10 object-cover bg-black"
+            muted
+            playsinline
+            preload="metadata"
           />
           <FileIcon v-else class="size-5 text-muted-foreground" />
         </div>

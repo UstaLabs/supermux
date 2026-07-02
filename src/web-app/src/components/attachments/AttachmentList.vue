@@ -10,7 +10,7 @@ defineProps<{ attachments: AttachmentRef[] | undefined }>()
 function rendererFor(kind: AttachmentRef["kind"]) {
   if (kind === "photo") return AttachmentImage
   if (kind === "audio" || kind === "voice") return AttachmentAudio
-  if (kind === "video_note") return AttachmentVideo
+  if (kind === "video" || kind === "video_note") return AttachmentVideo
   return AttachmentFile
 }
 </script>

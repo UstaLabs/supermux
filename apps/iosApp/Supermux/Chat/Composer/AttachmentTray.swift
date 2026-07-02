@@ -13,9 +13,16 @@ struct AttachmentTray: View {
         }
     }
 
+    /// SF Symbol for a staged-attachment chip: waveform for audio, video for movies, else photo.
+    private func chipIcon(_ mime: String) -> String {
+        if mime.hasPrefix("audio") { return "waveform" }
+        if mime.hasPrefix("video") { return "video" }
+        return "photo"
+    }
+
     private func chip(_ p: PendingAttachment) -> some View {
         HStack(spacing: 5) {
-            Image(systemName: p.mime.hasPrefix("audio") ? "waveform" : "photo").font(.caption2)
+            Image(systemName: chipIcon(p.mime)).font(.caption2)
             Text(p.filename).font(.caption2).lineLimit(1)
             Button { onRemove(p) } label: {
                 Image(systemName: "xmark.circle.fill").font(.caption2)

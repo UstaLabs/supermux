@@ -9,7 +9,7 @@ export interface PushPayload {
   session: string
   sessionId?: string
   text?: string
-  kind?: "photo" | "voice" | "audio" | "video_note" | "document"
+  kind?: "photo" | "voice" | "audio" | "video" | "video_note" | "document"
   ts: string
 }
 
