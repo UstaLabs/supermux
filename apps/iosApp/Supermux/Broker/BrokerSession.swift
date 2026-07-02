@@ -18,6 +18,7 @@ final class BrokerSession {
     private(set) var agentPhase: [String: String] = [:]
     private(set) var agentSince: [String: Int64] = [:]
     private(set) var agentWorking: [String: Bool] = [:]
+    private(set) var agentDead: [String: Bool] = [:]           // derived: state == "dead"
     private(set) var agentState: [String: String] = [:]       // idle | working | dead
     private(set) var agentDetail: [String: String] = [:]      // thinking | running
     private(set) var agentWorkingSince: [String: Int64] = [:]
@@ -77,7 +78,10 @@ final class BrokerSession {
         Task { [weak self] in await self?.refreshDisplays() }
     }
 
-    private func reduce(_ frame: ServerFrame) {
+    // Not `private`: SupermuxTests drives this directly (no fake-server seam exists on
+    // `client`/`BrokerClient`, so the unit tests for the `agent_state` reduction — see
+    // `AgentDeadStateTests` — call this the same way the `start()` frame loop does).
+    func reduce(_ frame: ServerFrame) {
         switch onEnum(of: frame) {
         case .snapshot(let s):
             sessions = s.sessions
@@ -86,6 +90,7 @@ final class BrokerSession {
             agentPhase = s.agentState.mapValues { $0.phase }
             agentSince = s.agentState.compactMapValues { $0.since?.int64Value }
             agentWorking = s.agentState.mapValues { $0.working }
+            agentDead = s.agentState.mapValues { $0.state == "dead" }
             agentState = s.agentState.mapValues { $0.state }
             agentDetail = s.agentState.compactMapValues { $0.detail }
             agentWorkingSince = s.agentState.compactMapValues { $0.workingSince?.int64Value }
@@ -130,6 +135,7 @@ final class BrokerSession {
             agentPhase[st.session] = st.phase
             agentSince[st.session] = (st.since ?? st.workingSince)?.int64Value
             agentWorking[st.session] = st.working
+            agentDead[st.session] = st.state == "dead"
             agentState[st.session] = st.state
             if let d = st.detail { agentDetail[st.session] = d } else { agentDetail[st.session] = nil }
             agentWorkingSince[st.session] = st.workingSince?.int64Value

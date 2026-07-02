@@ -116,6 +116,13 @@ struct ChatView: View {
                 DisplayPane(broker: broker, session: session)
             }
         }
+        // "Not responding" treatment for a dead agent (broker agent_state == "dead") — parity
+        // with the web + Android dead-session banners (closes a previously iOS-only gap).
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if broker.agentDead[session.id] == true {
+                DeadSessionBanner()
+            }
+        }
         .navigationTitle(session.name)
         .navigationSubtitle(navSubtitle)
         .toolbar {
