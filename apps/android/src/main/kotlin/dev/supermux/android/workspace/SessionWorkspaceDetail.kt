@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -35,7 +36,9 @@ import dev.supermux.android.editor.EditorPanel
 import dev.supermux.android.editor.PendingEditorOpen
 import dev.supermux.android.session.SessionAvatar
 import dev.supermux.android.terminal.TerminalPanel
+import dev.supermux.android.theme.HapticKind
 import dev.supermux.android.theme.Space
+import dev.supermux.android.theme.rememberHaptics
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.proto.ActivityEvent
@@ -117,9 +120,11 @@ fun SessionWorkspaceDetail(
 ) {
     val context = LocalContext.current
     val cs = MaterialTheme.colorScheme
+    val haptic = rememberHaptics()
 
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf(session.name) }
+    var showKillDialog by remember { mutableStateOf(false) }
 
     // Deep-linking a file into the editor pane (from a transcript ref). Opens the editor pane and
     // hands EditorPanel a pending target — mirrors ChatScreen's onOpenFile, but flips the pane bit
@@ -247,7 +252,7 @@ fun SessionWorkspaceDetail(
                     showRenameDialog = true
                 },
                 onRequestMute = { onMute(!(session.mute ?: false)) },
-                onRequestKill = onKill,
+                onRequestKill = { showKillDialog = true },
                 modifier = Modifier.fillMaxSize().testTag("pane_chat"),
             )
         }
@@ -288,8 +293,13 @@ fun SessionWorkspaceDetail(
         }
     }
 
-    Column(modifier.fillMaxSize()) {
-        // Minimal header (full chrome comes in a later task).
+    Column(
+        modifier
+            .fillMaxSize()
+            .background(cs.surfaceContainerLow)
+            .statusBarsPadding(),
+    ) {
+        // Header: identity + status, Chat/Native + Finish, and the pane toggles.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -370,6 +380,27 @@ fun SessionWorkspaceDetail(
             },
             dismissButton = {
                 TextButton(onClick = { showRenameDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    // ── kill confirm dialog (copies ChatScreen's) ────────────────────────────
+    if (showKillDialog) {
+        AlertDialog(
+            onDismissRequest = { showKillDialog = false },
+            title = { Text("Kill session?") },
+            text = { Text("This will terminate \"${session.name}\" immediately.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        haptic(HapticKind.Heavy)
+                        showKillDialog = false
+                        onKill()
+                    },
+                ) { Text("Kill") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showKillDialog = false }) { Text("Cancel") }
             },
         )
     }
