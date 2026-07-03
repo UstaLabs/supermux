@@ -14,7 +14,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -32,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -49,6 +53,7 @@ import dev.supermux.android.terminal.TerminalPanel
 import dev.supermux.android.theme.HapticKind
 import dev.supermux.android.theme.Space
 import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.android.ui.keepAlivePanel
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.proto.ActivityEvent
@@ -72,7 +77,9 @@ import dev.supermux.ui.toWorkdirRelativePath
  *   RightArea:  display + work → [ WorkColumn | Display ]   (horizontal, workDisplayFraction)
  *   WorkColumn: editor + terminal → [ Editor / Terminal ]   (vertical, editorTermFraction)
  * ```
- * Panes are laid out in splits (all visible at once) so they are NOT wrapped in `keepAlivePanel`.
+ * The split panes (editor/terminal/display) are all visible at once, so they are NOT wrapped in
+ * `keepAlivePanel`. The Chat⇄Native pair is the exception: Chat stays kept-alive under the Native
+ * overlay so its staged attachments + unsaved draft survive the flip.
  */
 @Composable
 fun SessionWorkspaceDetail(
@@ -101,6 +108,9 @@ fun SessionWorkspaceDetail(
     onRename: (String) -> Unit,
     onMute: (Boolean) -> Unit,
     onKill: () -> Unit,
+    // Management-screen navigation (Settings/Usage/…) via the shared route strings MainActivity's
+    // navTo handles — surfaced through the header overflow (iOS parity; sidebar-only otherwise).
+    onNavigate: (String) -> Unit,
     // Finish flow — threaded from SessionChatLayer exactly like ChatScreen (same VM-backed lambdas).
     finishJob: dev.supermux.proto.FinishJobDto? = null,
     onFinishReadiness: suspend () -> dev.supermux.net.FinishReadiness? = { null },
@@ -143,6 +153,7 @@ fun SessionWorkspaceDetail(
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf(session.name) }
     var showKillDialog by remember { mutableStateOf(false) }
+    var showOverflow by remember { mutableStateOf(false) }
 
     // Deep-linking a file into the editor pane (from a transcript ref). Opens the editor pane and
     // hands EditorPanel a pending target — mirrors ChatScreen's onOpenFile, but flips the pane bit
@@ -244,24 +255,13 @@ fun SessionWorkspaceDetail(
         }
     }
     // Chat column, or the raw agent-PTY ("Native") when toggled on for a claude session (iOS parity).
+    // Native is an OVERLAY, not a replacement: ChatPanel stays composed underneath via keepAlivePanel
+    // so its staged attachments + unsaved draft survive the Chat⇄Native flip (web-style v-show). Chat
+    // is the default state, so ChatPanel mounts on first composition; the agent PTY is only mounted
+    // once the user actually flips to Native.
     val chatOrNative: @Composable () -> Unit = {
-        if (layout.nativeView(session.id) && session.agent == "claude") {
-            val cat = connectAgentTerminal
-            Box(Modifier.fillMaxSize().testTag("pane_native")) {
-                if (cat != null) {
-                    TerminalPanel(
-                        connect = cat,
-                        modifier = Modifier.fillMaxSize(),
-                        // Agent PTY exited → drop back to the chat column (iOS onExit parity).
-                        onExit = { layout.setNativeView(session.id, false) },
-                    )
-                } else {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("Native terminal unavailable", color = cs.onSurfaceVariant, fontSize = 13.sp)
-                    }
-                }
-            }
-        } else {
+        val native = layout.nativeView(session.id) && session.agent == "claude"
+        Box(Modifier.fillMaxSize()) {
             ChatPanel(
                 session = session,
                 messages = messages,
@@ -292,8 +292,25 @@ fun SessionWorkspaceDetail(
                 },
                 onRequestMute = { onMute(!(session.mute ?: false)) },
                 onRequestKill = { showKillDialog = true },
-                modifier = Modifier.fillMaxSize().testTag("pane_chat"),
+                modifier = Modifier.keepAlivePanel(visible = !native).testTag("pane_chat"),
             )
+            if (native) {
+                val cat = connectAgentTerminal
+                Box(Modifier.keepAlivePanel(visible = true).testTag("pane_native")) {
+                    if (cat != null) {
+                        TerminalPanel(
+                            connect = cat,
+                            modifier = Modifier.fillMaxSize(),
+                            // Agent PTY exited → drop back to the chat column (iOS onExit parity).
+                            onExit = { layout.setNativeView(session.id, false) },
+                        )
+                    } else {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("Native terminal unavailable", color = cs.onSurfaceVariant, fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -362,6 +379,7 @@ fun SessionWorkspaceDetail(
                 style = MaterialTheme.typography.titleLarge,
                 color = cs.onSurface,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(Space.sm))
@@ -418,6 +436,100 @@ fun SessionWorkspaceDetail(
                 layout = layout,
                 sessionId = session.id,
             )
+
+            // Overflow (⋮): management screens (Settings/Usage/…). These otherwise live only on the
+            // sidebar; surfacing them here matches the iOS workspace header. Each item routes via the
+            // same string dests MainActivity's navTo(when(dest)) handles.
+            Box {
+                IconButton(
+                    onClick = { showOverflow = true },
+                    modifier = Modifier.testTag("workspace_overflow"),
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_more_vert),
+                        contentDescription = "More",
+                        tint = cs.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                DropdownMenu(
+                    expanded = showOverflow,
+                    onDismissRequest = { showOverflow = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Settings") },
+                        leadingIcon = {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_settings),
+                                contentDescription = null,
+                                tint = cs.onSurface,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        },
+                        onClick = { showOverflow = false; onNavigate("settings") },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Usage") },
+                        leadingIcon = {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_bar_chart),
+                                contentDescription = null,
+                                tint = cs.onSurface,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        },
+                        onClick = { showOverflow = false; onNavigate("usage") },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Devices") },
+                        leadingIcon = {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_smartphone),
+                                contentDescription = null,
+                                tint = cs.onSurface,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        },
+                        onClick = { showOverflow = false; onNavigate("devices") },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Proxies") },
+                        leadingIcon = {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_network),
+                                contentDescription = null,
+                                tint = cs.onSurface,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        },
+                        onClick = { showOverflow = false; onNavigate("proxies") },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Appearance") },
+                        leadingIcon = {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_sun),
+                                contentDescription = null,
+                                tint = cs.onSurface,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        },
+                        onClick = { showOverflow = false; onNavigate("appearance") },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Archived") },
+                        leadingIcon = {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_archive),
+                                contentDescription = null,
+                                tint = cs.onSurface,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        },
+                        onClick = { showOverflow = false; onNavigate("archived") },
+                    )
+                }
+            }
         }
         Box(
             Modifier

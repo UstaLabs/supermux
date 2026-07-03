@@ -170,6 +170,7 @@ fun SessionKeepAliveTabletHost(
     vm: AppViewModel,
     wide: Boolean,
     layout: WorkspaceLayout,
+    onNavigate: (String) -> Unit,
     onOpenDisplays: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -193,6 +194,7 @@ fun SessionKeepAliveTabletHost(
                     vm = vm,
                     wide = wide,
                     layout = layout,
+                    onNavigate = onNavigate,
                     onBack = {},
                     onKill = {
                         vm.kill(sessionId) {
@@ -224,6 +226,9 @@ private fun SessionChatLayer(
     // Phone hosts leave these defaulted, keeping the single-pane chat path unchanged.
     wide: Boolean = false,
     layout: WorkspaceLayout? = null,
+    // Management-screen nav from the wide workspace header overflow. Phone/ChatScreen path defaults
+    // to a no-op (it has its own overflow), keeping the single-pane chat path unchanged.
+    onNavigate: (String) -> Unit = {},
     onBack: () -> Unit,
     onKill: () -> Unit,
     onOpenDisplays: () -> Unit,
@@ -296,6 +301,7 @@ private fun SessionChatLayer(
                 onRename = { vm.rename(session.id, it) },
                 onMute = { vm.setMute(session.id, it) },
                 onKill = onKill,
+                onNavigate = onNavigate,
                 // Finish flow — same VM-backed lambdas ChatScreen receives (see below).
                 finishJob = finishJob,
                 onFinishReadiness = { vm.finishReadiness(session.id) },

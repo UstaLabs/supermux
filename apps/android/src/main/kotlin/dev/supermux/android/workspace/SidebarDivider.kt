@@ -71,27 +71,35 @@ fun SidebarDivider(
                 }
                 .testTag("sidebar_divider"),
         )
-        // Collapse chevron, tucked just below the sidebar's app bar (clears its overflow menu).
+        // Collapse chevron, tucked just below the sidebar's app bar (clears its overflow menu). The
+        // 48dp touch target (a11y minimum) grows DOWNward from the same top offset so it never rises
+        // into the app-bar overflow button; the visible chip stays ~24dp.
         Box(
             Modifier
                 .align(Alignment.TopCenter)
                 .statusBarsPadding()
                 .padding(top = 58.dp)
-                .size(24.dp)
-                .clip(CircleShape)
-                .background(cs.surfaceContainerHighest)
+                .size(48.dp)
                 .clickable(onClick = onCollapse)
                 .testTag("sidebar_collapse"),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                painter = painterResource(R.drawable.ic_chevron_right),
-                contentDescription = "Collapse sidebar",
-                tint = cs.onSurfaceVariant,
-                modifier = Modifier
-                    .size(16.dp)
-                    .rotate(180f),
-            )
+            Box(
+                Modifier
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .background(cs.surfaceContainerHighest),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_chevron_right),
+                    contentDescription = "Collapse sidebar",
+                    tint = cs.onSurfaceVariant,
+                    modifier = Modifier
+                        .size(16.dp)
+                        .rotate(180f),
+                )
+            }
         }
     }
 }

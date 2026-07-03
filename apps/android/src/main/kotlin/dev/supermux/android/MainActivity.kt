@@ -314,6 +314,7 @@ class MainActivity : ComponentActivity() {
                                         vm = vm,
                                         wide = true,
                                         layout = workspaceLayout,
+                                        onNavigate = navTo,
                                         onOpenDisplays = { navController.navigate(Displays) },
                                         modifier = Modifier.fillMaxSize(),
                                     )
