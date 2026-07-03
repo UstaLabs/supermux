@@ -12,6 +12,8 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -23,6 +25,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -34,6 +37,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.graphics.graphicsLayer
@@ -60,6 +64,8 @@ import dev.supermux.android.session.SessionKeepAliveTabletHost
 import dev.supermux.android.session.rememberVisitedSessions
 import dev.supermux.android.session.SessionLauncherScreen
 import dev.supermux.android.session.SessionListScreen
+import dev.supermux.android.workspace.SessionsRail
+import dev.supermux.android.workspace.SidebarDivider
 import dev.supermux.android.workspace.WorkspaceLayout
 import dev.supermux.android.display.DisplaysScreen
 import dev.supermux.android.settings.AppearanceSettingsPage
@@ -200,27 +206,71 @@ class MainActivity : ComponentActivity() {
                     //    code lives inside the hosts below and is unchanged. ──
                     composable<Home> {
                         if (wide) {
+                            // Suppress the collapse/expand width spring while the divider is being
+                            // dragged (otherwise the spring chases the finger and feels laggy).
+                            var resizing by remember { mutableStateOf(false) }
+                            val collapsed = workspaceLayout.sidebarCollapsed
+                            val sidebarWidth by animateDpAsState(
+                                targetValue = if (collapsed) 64.dp else workspaceLayout.sidebarWidth,
+                                animationSpec = if (resizing) snap() else spring(stiffness = Spring.StiffnessMediumLow),
+                                label = "sidebarWidth",
+                            )
                             Row(Modifier.fillMaxSize()) {
-                                Box(Modifier.width(320.dp)) {
-                                    SessionListScreen(
-                                        sessions = sessions,
-                                        home = DevConfig.HOME,
-                                        activeId = selected,
-                                        onOpen = { selected = it },
-                                        lastBySession = lastBySession,
-                                        agentState = agentState,
-                                        onNewSession = { navController.navigate(NewSession) },
-                                        loadProjects = { vm.listProjects() },
-                                        validatePath = { vm.validatePath(it) },
-                                        onNavigate = navTo,
-                                    )
-                                }
+                                // Sidebar: collapsed avatar rail OR the full list; the animating
+                                // parent Box clips (surfaceContainerHigh backs the reveal gap).
                                 Box(
                                     Modifier
-                                        .width(1.dp)
+                                        .width(sidebarWidth)
                                         .fillMaxHeight()
-                                        .background(cs.outlineVariant)
-                                )
+                                        .background(cs.surfaceContainerHigh)
+                                        .clipToBounds(),
+                                ) {
+                                    if (collapsed) {
+                                        SessionsRail(
+                                            sessions = sessions,
+                                            selectedId = selected,
+                                            agentState = agentState,
+                                            onSelect = { selected = it },
+                                            onExpand = { workspaceLayout.sidebarCollapsed = false },
+                                            onNewSession = { navController.navigate(NewSession) },
+                                        )
+                                    } else {
+                                        // requiredWidth keeps the list at its full width while the
+                                        // narrower animating parent clips it during the reveal.
+                                        Box(Modifier.requiredWidth(workspaceLayout.sidebarWidth).fillMaxHeight()) {
+                                            SessionListScreen(
+                                                sessions = sessions,
+                                                home = DevConfig.HOME,
+                                                activeId = selected,
+                                                onOpen = { selected = it },
+                                                lastBySession = lastBySession,
+                                                agentState = agentState,
+                                                onNewSession = { navController.navigate(NewSession) },
+                                                loadProjects = { vm.listProjects() },
+                                                validatePath = { vm.validatePath(it) },
+                                                onNavigate = navTo,
+                                            )
+                                        }
+                                    }
+                                }
+                                // Divider: drag-resize + collapse when expanded; hairline when collapsed.
+                                if (collapsed) {
+                                    Box(
+                                        Modifier
+                                            .width(1.dp)
+                                            .fillMaxHeight()
+                                            .background(cs.outlineVariant),
+                                    )
+                                } else {
+                                    SidebarDivider(
+                                        onDragDelta = { d ->
+                                            workspaceLayout.setSidebarWidth(workspaceLayout.sidebarWidth + d)
+                                        },
+                                        onCollapse = { workspaceLayout.sidebarCollapsed = true },
+                                        onStartDrag = { resizing = true },
+                                        onEndDrag = { resizing = false },
+                                    )
+                                }
                                 Box(Modifier.weight(1f)) {
                                     if (selected == null) {
                                         Box(
