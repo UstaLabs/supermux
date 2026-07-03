@@ -293,6 +293,16 @@ private fun SessionChatLayer(
                 onRename = { vm.rename(session.id, it) },
                 onMute = { vm.setMute(session.id, it) },
                 onKill = onKill,
+                // Finish flow — same VM-backed lambdas ChatScreen receives (see below).
+                finishJob = finishJob,
+                onFinishReadiness = { vm.finishReadiness(session.id) },
+                onFinish = { action, skipVerify, commitFirst, commitMessage, onKickoff ->
+                    vm.finish(session.id, action, skipVerify, commitFirst, commitMessage, onKickoff = onKickoff)
+                },
+                onClearFinishJob = { vm.clearFinishJob(session.id) },
+                onVerifySuggest = { vm.verifySuggest(session.id) },
+                onVerifySave = { vm.verifySave(session.id, it) },
+                onSendToAgent = { vm.sendMessage(session.id, it) },
                 fsList = { vm.fsList(session.id, it) },
                 fsRead = { vm.fsRead(session.id, it) },
                 fsWrite = { p, ct -> vm.fsWrite(session.id, p, ct) },

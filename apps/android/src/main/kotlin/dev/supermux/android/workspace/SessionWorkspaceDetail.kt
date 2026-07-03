@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -22,19 +24,25 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.android.R
 import dev.supermux.android.chat.ChatPanel
+import dev.supermux.android.chat.FinishButton
+import dev.supermux.android.chat.FinishSheet
 import dev.supermux.android.chat.SessionPanel
 import dev.supermux.android.display.DisplayPanel
 import dev.supermux.android.editor.EditorPanel
 import dev.supermux.android.editor.PendingEditorOpen
 import dev.supermux.android.session.SessionAvatar
+import dev.supermux.android.session.SessionStatusRail
 import dev.supermux.android.terminal.TerminalPanel
 import dev.supermux.android.theme.HapticKind
 import dev.supermux.android.theme.Space
@@ -91,6 +99,14 @@ fun SessionWorkspaceDetail(
     onRename: (String) -> Unit,
     onMute: (Boolean) -> Unit,
     onKill: () -> Unit,
+    // Finish flow — threaded from SessionChatLayer exactly like ChatScreen (same VM-backed lambdas).
+    finishJob: dev.supermux.proto.FinishJobDto? = null,
+    onFinishReadiness: suspend () -> dev.supermux.net.FinishReadiness? = { null },
+    onFinish: (action: String, skipVerify: Boolean?, commitFirst: Boolean?, commitMessage: String?, onKickoff: (Boolean) -> Unit) -> Unit = { _, _, _, _, cb -> cb(false) },
+    onClearFinishJob: () -> Unit = {},
+    onVerifySuggest: suspend () -> dev.supermux.net.VerifySuggestResult? = { null },
+    onVerifySave: suspend (String) -> dev.supermux.net.VerifySaveResult? = { null },
+    onSendToAgent: (String) -> Unit = {},
     fsList: suspend (String) -> List<dev.supermux.net.FsEntry>,
     fsRead: suspend (String) -> Result<String>,
     fsWrite: suspend (String, String) -> Boolean,
@@ -315,6 +331,9 @@ fun SessionWorkspaceDetail(
                 sessionId = session.id,
             )
             Spacer(Modifier.width(Space.sm))
+            // git/sync status + working spinner (mirrors ChatScreen; git comes off SessionInfo).
+            SessionStatusRail(git = session.git, working = agent?.working == true)
+            Spacer(Modifier.width(Space.xs))
             Text(
                 text = session.name,
                 style = MaterialTheme.typography.titleLarge,
@@ -323,6 +342,55 @@ fun SessionWorkspaceDetail(
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(Space.sm))
+
+            // Chat ⇄ Native (raw agent PTY) toggle — claude only, and only while the Chat pane is
+            // visible (it flips ChatPanel ⇄ agent-PTY inside that pane; see chatOrNative above).
+            if (session.agent == "claude" && layout.panesFor(session.id).chat) {
+                IconToggleButton(
+                    checked = layout.nativeView(session.id),
+                    onCheckedChange = { layout.setNativeView(session.id, it) },
+                    modifier = Modifier.testTag("toggle_native"),
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_terminal),
+                        contentDescription = "Toggle native agent terminal",
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+
+            // Finish — worktree-backed sessions only (same gate/badge as ChatScreen's header).
+            if (session.session_branch != null) {
+                var showFinishSheet by remember(session.id) { mutableStateOf(false) }
+                // Acked startedAt survives rotation/process-death so a result stays "seen".
+                var ackedStartedAt by rememberSaveable(session.id) { mutableStateOf(0.0) }
+                val isUnacked = finishJob != null &&
+                    finishJob.status != "running" &&
+                    finishJob.startedAt != ackedStartedAt
+                FinishButton(
+                    finishJob = finishJob,
+                    isUnacked = isUnacked,
+                    onClick = {
+                        ackedStartedAt = finishJob?.startedAt ?: ackedStartedAt
+                        showFinishSheet = true
+                    },
+                )
+                if (showFinishSheet) {
+                    FinishSheet(
+                        session = session,
+                        finishJob = finishJob,
+                        onReadiness = onFinishReadiness,
+                        onFinish = onFinish,
+                        onClearJob = onClearFinishJob,
+                        onVerifySuggest = onVerifySuggest,
+                        onVerifySave = onVerifySave,
+                        onSendToAgent = onSendToAgent,
+                        onAck = { ackedStartedAt = finishJob?.startedAt ?: ackedStartedAt },
+                        onDismiss = { showFinishSheet = false },
+                    )
+                }
+            }
+
             PaneToggleCluster(
                 layout = layout,
                 sessionId = session.id,
