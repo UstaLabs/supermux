@@ -30,14 +30,12 @@ import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
-import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
-import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -70,6 +68,7 @@ import dev.supermux.android.session.SessionListScreen
 import dev.supermux.android.workspace.SessionsRail
 import dev.supermux.android.workspace.SidebarDivider
 import dev.supermux.android.workspace.WorkspaceLayout
+import dev.supermux.android.workspace.isWorkspaceWidth
 import dev.supermux.android.workspace.workspaceShortcuts
 import dev.supermux.android.display.DisplaysScreen
 import dev.supermux.android.settings.AppearanceSettingsPage
@@ -104,7 +103,7 @@ class MainActivity : ComponentActivity() {
         intentState.value = intent
     }
 
-    @OptIn(ExperimentalMaterial3WindowSizeClassApi::class, ExperimentalSharedTransitionApi::class, ExperimentalComposeUiApi::class)
+    @OptIn(ExperimentalSharedTransitionApi::class, ExperimentalComposeUiApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
@@ -178,11 +177,10 @@ class MainActivity : ComponentActivity() {
                 // ChatPane.loadPane → BrokerSession.ensureMessagesLoaded.)
                 LaunchedEffect(selected) { selected?.let { vm.ensureMessagesLoaded(it) } }
 
-                val windowSizeClass = calculateWindowSizeClass(this)
-                // Wide = Medium or Expanded width class (≥600dp) → multi-pane workspace. Using
-                // "not Compact" (rather than only Expanded) means the unfolded Galaxy Z Fold 7
-                // qualifies; Compact (phones / folded) keeps the single-pane chat path.
-                val wide = windowSizeClass.widthSizeClass != WindowWidthSizeClass.Compact
+                // Wide = available width ≥600dp (the shared isWorkspaceWidth predicate /
+                // WORKSPACE_MIN_WIDTH_DP). ">=600" (not only Expanded ≥840) means the unfolded
+                // Galaxy Z Fold 7 qualifies; narrower (phones / folded cover) keeps single-pane chat.
+                val wide = isWorkspaceWidth(LocalConfiguration.current.screenWidthDp)
                 val cs = MaterialTheme.colorScheme
 
                 val navController = rememberNavController()

@@ -6,7 +6,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 
 /** Hardware-keyboard actions for the wide workspace (all gated behind Ctrl or Cmd/Meta). */
@@ -60,19 +60,20 @@ private fun Key.shortcutLetter(): Char? = when (this) {
 
 /**
  * Intercepts Ctrl/Cmd + {B,N,L,E,T,D} on key-down and drives the workspace [layout]. Uses
- * `onPreviewKeyEvent` so it sees events before focused descendants (text fields, terminal), and
- * returns true ONLY for a handled combo — every other key propagates so normal typing is untouched.
+ * `onKeyEvent` (bubble phase) so focused descendants — the chat composer, the terminal — consume
+ * their keys FIRST; only chords they leave unhandled reach the workspace, so terminal control keys
+ * (Ctrl+D/L/E/T) aren't stolen. Returns true ONLY for a handled combo.
  */
 fun Modifier.workspaceShortcuts(
     layout: WorkspaceLayout,
     selectedId: String?,
     onNewSession: () -> Unit,
-): Modifier = onPreviewKeyEvent { event ->
-    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-    if (!event.isCtrlPressed && !event.isMetaPressed) return@onPreviewKeyEvent false
-    val letter = event.key.shortcutLetter() ?: return@onPreviewKeyEvent false
+): Modifier = onKeyEvent { event ->
+    if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+    if (!event.isCtrlPressed && !event.isMetaPressed) return@onKeyEvent false
+    val letter = event.key.shortcutLetter() ?: return@onKeyEvent false
     val shortcut = mapWorkspaceShortcut(letter, hasSelection = selectedId != null)
-        ?: return@onPreviewKeyEvent false
+        ?: return@onKeyEvent false
     applyWorkspaceShortcut(shortcut, layout, selectedId, onNewSession)
     true
 }

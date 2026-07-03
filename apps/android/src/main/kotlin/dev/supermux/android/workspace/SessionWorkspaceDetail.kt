@@ -417,7 +417,6 @@ fun SessionWorkspaceDetail(
             PaneToggleCluster(
                 layout = layout,
                 sessionId = session.id,
-                agentIsClaude = session.agent == "claude",
             )
         }
         Box(

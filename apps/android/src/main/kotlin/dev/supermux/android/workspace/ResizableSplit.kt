@@ -15,6 +15,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,6 +49,9 @@ fun ResizableSplit(
     var totalPx by remember { mutableStateOf(0) }
     val horizontal = axis == SplitAxis.Horizontal
     val handle = 24.dp
+    // Read `fraction` fresh each frame: pointerInput isn't keyed on it, so the drag callback would
+    // otherwise capture a stale value and the divider wouldn't accumulate/track the finger.
+    val currentFraction by rememberUpdatedState(fraction)
 
     val divider: @Composable () -> Unit = {
         Box(
@@ -56,7 +60,7 @@ fun ResizableSplit(
                     detectDragGestures { _, drag ->
                         if (totalPx <= 0) return@detectDragGestures
                         val delta = (if (horizontal) drag.x else drag.y) / totalPx
-                        onFractionChange((fraction + delta).coerceIn(range.start, range.endInclusive))
+                        onFractionChange((currentFraction + delta).coerceIn(range.start, range.endInclusive))
                     }
                 }
                 .testTag(testTag),

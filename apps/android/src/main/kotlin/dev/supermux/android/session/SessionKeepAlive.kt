@@ -239,8 +239,11 @@ private fun SessionChatLayer(
     val finishJob = finishJobs[session.id]
 
     if (visible) {
-        BackHandler(enabled = !editorConsumesBack) { onBack() }
-        PredictiveBackHandler(enabled = !editorConsumesBack) { backEvents ->
+        // Phone: Back returns to the session list (onBack). On the wide/tablet path onBack is a
+        // no-op (the list is always on-screen), so DON'T consume Back there — let it background the
+        // app. The editor pane keeps its own Back-consume via its own BackHandler + editorConsumesBack.
+        BackHandler(enabled = !editorConsumesBack && !wide) { onBack() }
+        PredictiveBackHandler(enabled = !editorConsumesBack && !wide) { backEvents ->
             try {
                 backEvents.collect { event -> gestureProgress = event.progress }
                 onBack()

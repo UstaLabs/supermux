@@ -19,15 +19,11 @@ import dev.supermux.android.theme.Space
  * drive [WorkspaceLayout.panesFor] for [sessionId] on the wide (tablet) workspace. Each button's
  * `checked` reflects the matching pane's visibility; tapping flips it via the matching
  * `layout.toggleX`. The [WorkspaceLayout] invariant auto-reopens Chat when the last work pane closes.
- *
- * [agentIsClaude] is accepted for parity with the pane set (the Native / agent-PTY view is
- * claude-only) and is reserved for a future toggle; the four panes here exist for every agent.
  */
 @Composable
 fun PaneToggleCluster(
     layout: WorkspaceLayout,
     sessionId: String,
-    agentIsClaude: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val panes = layout.panesFor(sessionId)
