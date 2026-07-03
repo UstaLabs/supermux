@@ -2,6 +2,8 @@ import SwiftUI
 import Shared
 import UIKit
 import QuickLook
+import UniformTypeIdentifiers
+import AVKit
 
 struct MessageRow: View {
     let entry: LogEntry
@@ -41,20 +43,63 @@ struct AttachmentView: View {
     @State private var imageData: Data?
     @State private var previewURL: URL?
     @State private var fileURL: URL?
+    @State private var player: AVPlayer?
     @State private var downloading = false
     @State private var progress: Double = 0
     @State private var failed = false
     private var isImage: Bool { (att.mime ?? "").hasPrefix("image") || (att.kind ?? "") == "photo" }
+    private var isVideo: Bool { (att.mime ?? "").hasPrefix("video") || att.kind == "video" || att.kind == "video_note" }
 
     var body: some View {
         Group {
-            if isImage { imageView } else { fileRow }
+            if isImage { imageView }
+            else if isVideo { videoView }
+            else { fileRow }
         }
         .task {
             if isImage, image == nil, let data = await broker.loadFile(att.file_id) {
                 imageData = data
                 image = UIImage(data: data)
             }
+        }
+    }
+
+    /// Inline movie playback. The clip is downloaded to a local temp file (Bearer-authed, via the
+    /// same `broker.downloadFile` the file row uses) and then played with `AVKit.VideoPlayer`.
+    /// The `AVPlayer` is held in `@State` so `videoView` re-renders don't recreate it (which would
+    /// restart playback). Until downloaded, a tappable poster shows a play glyph / progress / retry.
+    @ViewBuilder private var videoView: some View {
+        if let player {
+            VideoPlayer(player: player)
+                .frame(maxWidth: .infinity, minHeight: 200, maxHeight: 260)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        } else {
+            Button {
+                if !downloading { startDownload(autoPreview: false) }
+            } label: {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color(.secondarySystemBackground)).frame(height: 200)
+                    if downloading {
+                        VStack(spacing: 8) {
+                            ProgressView(value: progress).progressViewStyle(.linear).frame(width: 120)
+                            Text("\(Int(progress * 100))%").font(.caption2.monospaced())
+                                .foregroundStyle(.secondary).monospacedDigit()
+                        }
+                    } else if failed {
+                        VStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle").font(.title2).foregroundStyle(.red)
+                            Text("Download failed — tap to retry").font(.caption2).foregroundStyle(.red)
+                        }
+                    } else {
+                        VStack(spacing: 6) {
+                            Image(systemName: "play.circle.fill").font(.system(size: 44)).foregroundStyle(.white)
+                            Text(att.name ?? "video").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+                }
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -119,7 +164,9 @@ struct AttachmentView: View {
         .quickLookPreview($previewURL)
     }
 
-    private func startDownload() {
+    /// Download the attachment to a local temp file. `autoPreview` (file row) also opens Quick
+    /// Look; the video row passes `false` and instead builds an `AVPlayer` for inline playback.
+    private func startDownload(autoPreview: Bool = true) {
         failed = false; downloading = true; progress = 0
         Task {
             do {
@@ -128,8 +175,15 @@ struct AttachmentView: View {
                 ) { p in
                     Task { @MainActor in progress = p }
                 }
-                // Download finished → present Quick Look immediately (setting previewURL auto-opens it).
-                await MainActor.run { downloading = false; fileURL = u; previewURL = u }
+                await MainActor.run {
+                    downloading = false
+                    fileURL = u
+                    if isVideo {
+                        player = AVPlayer(url: u)          // inline playback (no Quick Look)
+                    } else if autoPreview {
+                        previewURL = u                     // file row → Quick Look auto-opens
+                    }
+                }
             } catch {
                 await MainActor.run { downloading = false; failed = true }
             }
@@ -139,7 +193,7 @@ struct AttachmentView: View {
     private var fileIcon: String {
         let m = att.mime ?? ""
         if m.hasPrefix("audio") || att.kind == "voice" || att.kind == "audio" { return "waveform" }
-        if m.hasPrefix("video") || att.kind == "video_note" { return "video" }
+        if m.hasPrefix("video") || att.kind == "video" || att.kind == "video_note" { return "video" }
         return "doc"
     }
     private func fmtSize(_ n: Int64) -> String {
@@ -156,13 +210,26 @@ struct AttachmentView: View {
     }
 }
 
-/// Camera capture → UIImage (device only; needs NSCameraUsageDescription).
+/// Camera capture → still image or recorded movie (device only; needs NSCameraUsageDescription
+/// + NSMicrophoneUsageDescription for video, both already declared in project.yml). `mode`
+/// selects the media. The Simulator has no camera, so it falls back to the photo library
+/// filtered to the requested media type.
 struct CameraPicker: UIViewControllerRepresentable {
-    var onImage: (UIImage) -> Void
+    enum Mode { case photo, video }
+    var mode: Mode = .photo
+    var onImage: (UIImage) -> Void = { _ in }
+    var onVideo: (URL) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let p = UIImagePickerController()
-        p.sourceType = UIImagePickerController.isSourceTypeAvailable(.camera) ? .camera : .photoLibrary
+        let hasCamera = UIImagePickerController.isSourceTypeAvailable(.camera)
+        p.sourceType = hasCamera ? .camera : .photoLibrary
+        if mode == .video {
+            p.mediaTypes = [UTType.movie.identifier]
+            // cameraCaptureMode is only valid for the .camera source; setting it on the
+            // photo-library fallback (Simulator) would assert.
+            if hasCamera { p.cameraCaptureMode = .video }
+        }
         p.delegate = context.coordinator
         return p
     }
@@ -173,7 +240,11 @@ struct CameraPicker: UIViewControllerRepresentable {
         init(_ p: CameraPicker) { parent = p }
         func imagePickerController(_ picker: UIImagePickerController,
                                    didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
-            if let img = info[.originalImage] as? UIImage { parent.onImage(img) }
+            if let url = info[.mediaURL] as? URL {
+                parent.onVideo(url)
+            } else if let img = info[.originalImage] as? UIImage {
+                parent.onImage(img)
+            }
             parent.dismiss()
         }
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { parent.dismiss() }

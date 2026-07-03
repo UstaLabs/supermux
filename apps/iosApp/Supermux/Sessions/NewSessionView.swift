@@ -11,8 +11,8 @@ struct NewSessionView: View {
     var onSpawned: (String) -> Void
 
     @State private var projects: [String] = []
-    @State private var workdir = ""
-    @State private var agent = "claude"
+    @State private var workdir: String
+    @State private var agent: String
     @State private var model: String?
     @State private var models: [ModelInfo] = []
     @State private var projectSearch = false
@@ -21,25 +21,67 @@ struct NewSessionView: View {
     // Worktree / base-branch (web LauncherWorktreePicker parity) — shown only when
     // the selected project is an eligible git repo.
     @State private var repoInfo: RepoInfo?
-    @State private var useWorktree = true
-    @State private var baseBranch = ""
+    @State private var useWorktree: Bool
+    @State private var baseBranch: String
     @State private var worktreeSheet = false
     @State private var worktreeFetching = false
     @State private var fetchedRepos: Set<String> = []
+    // New Session draft persistence (survives navigation + relaunch). `agent`/`workdir`/
+    // `useWorktree`/`baseBranch`/the composer's draft are seeded synchronously in `init` below,
+    // not in a later `.task { }` — an on-device repro (see git history for this file) proved that
+    // restoring inside an async `.task` leaves a real window where a plain default value is
+    // visible to other effects before the restore lands, and no runtime flag reliably closed it:
+    // `.task(id:)` was observed to spin up a *second* instance for the exact same settled id
+    // milliseconds after the first (not just an intermediate different id), which a one-shot
+    // "have I run once" flag can't tell apart from a genuine later change. Seeding in `init`
+    // removes the default-value window entirely — there is no render at which `agent`/`workdir`
+    // ever hold anything but the already-resolved value. `lastSeenAgent`/`lastSeenWorkdir` then
+    // only need to answer "did this actually change to something *different*", which is safe
+    // under a duplicate same-id re-invocation regardless of ordering (see the two guarded
+    // `.task(id:)` blocks below).
+    @State private var launcherState: LauncherStateStore
+    @State private var lastSeenAgent: String?
+    @State private var lastSeenWorkdir: String?
     @FocusState private var composing: Bool
-    // All three closures need `broker`, which isn't available in a property initializer, so they
-    // start as no-ops/nil here and are wired in `.task` (below) once `broker` is in scope.
-    @State private var composer = ComposerModel(context: ComposerContext(
-        glossary: { [] },
-        cleanupTranscript: nil,
-        audioFallbackTranscribe: nil
-    ))
+    // Wired in `.task` (below) once `broker` is in scope — the real glossary/transcribe closures
+    // need it, which isn't available yet here in `init`.
+    @State private var composer: ComposerModel
     @State private var showPhotos = false
     @State private var showFiles = false
     @State private var showCamera = false
+    @State private var showVideoCamera = false
     @State private var photoItems: [PhotosPickerItem] = []
 
-    private let agents = ["claude", "codex", "cursor", "opencode"]
+    private static let agents = ["claude", "codex", "cursor", "opencode"]
+    private var agents: [String] { Self.agents }
+
+    init(broker: BrokerSession, onSpawned: @escaping (String) -> Void) {
+        self.broker = broker
+        self.onSpawned = onSpawned
+        // Seed every persisted field synchronously, at construction — before the very first
+        // render — so there is never a moment where `agent`/`workdir`/etc hold a plain default
+        // that a guarded `.task(id:)` effect downstream could see and act on. See the note above
+        // the @State declarations for why an async restore inside `.task { }` couldn't guarantee
+        // that on its own.
+        let store = LauncherStateStore()
+        let restoredAgent = store.prefs.agent
+        // Validate against the known agent list — web's loadPrefs() does the same
+        // (SessionLauncherView.vue:126) — so a future agent type added after this prefs blob was
+        // written can't leave `agent` holding a value the Menu below has no matching row for.
+        let resolvedAgent = Self.agents.contains(restoredAgent) ? restoredAgent : "claude"
+        _launcherState = State(initialValue: store)
+        _agent = State(initialValue: resolvedAgent)
+        _model = State(initialValue: store.prefs.models[resolvedAgent])
+        _workdir = State(initialValue: store.draft.workdir ?? "")
+        _useWorktree = State(initialValue: store.draft.useWorktree)
+        _baseBranch = State(initialValue: store.draft.baseBranch)
+        // The real glossary/transcribe closures need `broker`, wired in `.task` once the view
+        // has appeared; this placeholder context only needs to seed the restored draft text.
+        _composer = State(initialValue: ComposerModel(
+            context: ComposerContext(glossary: { [] }, cleanupTranscript: nil, audioFallbackTranscribe: nil),
+            initialDraft: store.draft.text
+        ))
+    }
 
     var body: some View {
         ScrollView {
@@ -89,7 +131,18 @@ struct NewSessionView: View {
         }
         .task(id: agent) {
             models = await broker.listModels(agent)
-            model = nil
+            // Reset only on a genuine switch to a *different* agent than the last one this task
+            // actually observed — never on the very first run (whatever agent `init` seeded), and
+            // never on a same-agent re-invocation. `.task(id:)` was observed on-device spinning up
+            // a second instance for the same settled id shortly after the first (see the note by
+            // the @State declarations above) — comparing against the last *value* rather than a
+            // one-shot "have I run" flag is safe under that regardless of which instance's write
+            // lands first, because it never fires unless `agent` truly differs from what was last
+            // recorded.
+            if let last = lastSeenAgent, last != agent {
+                model = nil
+            }
+            lastSeenAgent = agent
         }
         // Agent slash commands depend on both the agent and the chosen project.
         .task(id: "\(agent)|\(workdir)") {
@@ -100,7 +153,16 @@ struct NewSessionView: View {
             guard !workdir.isEmpty else { repoInfo = nil; return }
             let info = await broker.repoInfo(workdir)
             repoInfo = info
-            baseBranch = info?.currentBranch ?? ""
+            // Same last-observed-value comparison as the agent/model task above. A genuine switch
+            // to a different workdir always follows its current branch; the first run (or a
+            // same-workdir re-invocation) only fills in a currently-empty baseBranch, preserving
+            // whatever `init` seeded from the draft.
+            if let last = lastSeenWorkdir, last != workdir {
+                baseBranch = info?.currentBranch ?? ""
+            } else if baseBranch.isEmpty {
+                baseBranch = info?.currentBranch ?? ""
+            }
+            lastSeenWorkdir = workdir
         }
         .sheet(isPresented: $projectSearch) {
             ProjectPickerSheet(broker: broker, projects: projects, current: workdir) { workdir = $0 }
@@ -117,10 +179,23 @@ struct NewSessionView: View {
             guard !items.isEmpty else { return }
             Task { await composer.loadPhotos(items); photoItems = [] }
         }
-        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .images)
+        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .any(of: [.images, .videos]))
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { composer.handleFiles($0) }
-        .fullScreenCover(isPresented: $showCamera) { CameraPicker { composer.addCameraImage($0) } }
+        .fullScreenCover(isPresented: $showCamera) { CameraPicker(mode: .photo, onImage: { composer.addCameraImage($0) }) }
+        .fullScreenCover(isPresented: $showVideoCamera) { CameraPicker(mode: .video, onVideo: { composer.addCameraVideo($0) }) }
         .onChange(of: composer.refocusToken) { _, _ in composing = true }
+        .onChange(of: workdir) { _, new in
+            launcherState.draft.workdir = new.isEmpty ? nil : new
+        }
+        .onChange(of: useWorktree) { _, new in
+            launcherState.draft.useWorktree = new
+        }
+        .onChange(of: baseBranch) { _, new in
+            launcherState.draft.baseBranch = new
+        }
+        .onChange(of: composer.draft) { _, new in
+            launcherState.draft.text = new
+        }
         .alert("Microphone access needed", isPresented: $composer.micDenied) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -212,7 +287,9 @@ struct NewSessionView: View {
             // overflow it on a narrow iPhone).
             HStack(spacing: 12) {
                 Menu {
-                    ForEach(agents, id: \.self) { a in Button(a.capitalized) { agent = a } }
+                    ForEach(agents, id: \.self) { a in
+                        Button(a.capitalized) { agent = a; launcherState.prefs.agent = a }
+                    }
                 } label: {
                     HStack(spacing: 5) {
                         AgentLogo(agent: agent, size: 18)
@@ -224,8 +301,16 @@ struct NewSessionView: View {
                 // when the list is empty made cursor/opencode look model-less after a
                 // transient /models miss or before the cache warmed.
                 Menu {
-                    Button("Default") { model = nil }
-                    ForEach(models, id: \.id) { m in Button(m.displayName) { model = m.id } }
+                    Button("Default") {
+                        model = nil
+                        launcherState.prefs.models.removeValue(forKey: agent)
+                    }
+                    ForEach(models, id: \.id) { m in
+                        Button(m.displayName) {
+                            model = m.id
+                            launcherState.prefs.models[agent] = m.id
+                        }
+                    }
                 } label: {
                     HStack(spacing: 4) {
                         Text(modelLabel).font(.subheadline.weight(.medium)).lineLimit(1)
@@ -236,7 +321,8 @@ struct NewSessionView: View {
             }
             // Action row — attach · mic · send.
             HStack(spacing: 16) {
-                AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera)
+                AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera,
+                           showVideoCamera: $showVideoCamera)
                 // Hidden while recording/dictating (the RecordingBar above owns stop/cancel) —
                 // parity with the original launcher + the chat composer.
                 if !composer.recorder.isRecording && !composer.dictation.isListening {
@@ -263,6 +349,7 @@ struct NewSessionView: View {
 
     private func spawn() {
         spawning = true
+        launcherState.clearDraft()
         let (raw, toUpload) = composer.consume()
         let firstMsg = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let eligible = repoInfo?.eligible == true
@@ -275,6 +362,8 @@ struct NewSessionView: View {
                 // Attachments need a session id, so upload after spawn (like the first message).
                 var ids: [String] = []
                 for p in toUpload {
+                    // Audio clips → "voice"; images and videos stay nil so the broker infers the kind
+                    // from the MIME (video/* → "video" server-side). Never mislabel a video as audio.
                     let kind = p.mime.hasPrefix("audio") ? "voice" : nil
                     if let fid = await broker.upload(id, data: p.data, filename: p.filename, mime: p.mime, kind: kind) {
                         ids.append(fid)

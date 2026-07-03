@@ -49,6 +49,8 @@ import dev.supermux.net.UpdateStatus
 import dev.supermux.net.VerifySaveResult
 import dev.supermux.net.VerifySuggestResult
 import dev.supermux.net.VncClient
+import dev.supermux.android.session.LauncherDraft
+import dev.supermux.android.session.LauncherPrefs
 import dev.supermux.android.settings.AddCustomLspArgs
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
@@ -70,10 +72,16 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 /** App-scoped DataStore backing per-session composer drafts (process-death-durable; mirrors
  *  iOS UserDefaults "cmux:draft:<id>"). One store for the whole app, keyed per session. */
 private val Context.draftDataStore by preferencesDataStore(name = "chat_drafts")
+
+/** App-scoped DataStore backing the New Session launcher's persisted state — separate from
+ *  chat_drafts (a different concept/lifecycle: pre-session, not per-session). */
+private val Context.launcherDataStore by preferencesDataStore(name = "launcher_state")
 
 class AppViewModel(
     application: Application,
@@ -330,6 +338,40 @@ class AppViewModel(
     fun saveDraft(sessionId: String, text: String) {
         viewModelScope.launch {
             runCatching { appContext.draftDataStore.edit { it[draftKey(sessionId)] = text } }
+        }
+    }
+
+    // ── New Session launcher state persistence (DataStore) ─────────────────────────
+    // Two lifecycles: prefs persist forever; draft persists until a session is created.
+    private val launcherJson = Json { ignoreUnknownKeys = true }
+    private val launcherPrefsKey = stringPreferencesKey("launcher_prefs")
+    private val launcherDraftKey = stringPreferencesKey("launcher_draft")
+
+    suspend fun loadLauncherPrefs(): LauncherPrefs =
+        runCatching {
+            appContext.launcherDataStore.data.first()[launcherPrefsKey]
+                ?.let { launcherJson.decodeFromString<LauncherPrefs>(it) }
+        }.getOrNull() ?: LauncherPrefs()
+
+    fun saveLauncherPrefs(prefs: LauncherPrefs) {
+        viewModelScope.launch {
+            runCatching {
+                appContext.launcherDataStore.edit { it[launcherPrefsKey] = launcherJson.encodeToString(prefs) }
+            }
+        }
+    }
+
+    suspend fun loadLauncherDraft(): LauncherDraft =
+        runCatching {
+            appContext.launcherDataStore.data.first()[launcherDraftKey]
+                ?.let { launcherJson.decodeFromString<LauncherDraft>(it) }
+        }.getOrNull() ?: LauncherDraft()
+
+    fun saveLauncherDraft(draft: LauncherDraft) {
+        viewModelScope.launch {
+            runCatching {
+                appContext.launcherDataStore.edit { it[launcherDraftKey] = launcherJson.encodeToString(draft) }
+            }
         }
     }
 

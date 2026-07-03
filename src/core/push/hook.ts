@@ -12,6 +12,7 @@ export function extractPreview(action: OutboundAction & { op: "reply" }): string
       case "photo":      return "📷 Photo"
       case "voice":      return "🎙 Voice message"
       case "audio":      return "🎵 Audio"
+      case "video":
       case "video_note": return "🎥 Video"
       case "document":   return `📎 ${first.name ?? "File"}`
     }

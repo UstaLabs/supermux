@@ -88,6 +88,8 @@ dependencies {
     implementation(libs.ktor.client.websockets)
     implementation(libs.termlib)
     implementation(libs.zxing.android.embedded)
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.ui)
     debugImplementation(libs.compose.ui.tooling)
     implementation(libs.compose.ui.tooling.preview)
     testImplementation(kotlin("test"))

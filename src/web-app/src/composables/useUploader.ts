@@ -8,14 +8,23 @@ export interface UploadResult {
 }
 
 export function useUploader() {
+  // Streaming upload: the raw file bytes ARE the request body, with metadata in
+  // headers. Content-Type: application/octet-stream selects the broker's streaming
+  // ingest path (see the broker plan); the browser sets Content-Length from the
+  // File size for the server's fast up-front 413. The legacy multipart path is
+  // retained server-side only for old app-store builds.
   async function upload(session: string, file: File, kindHint?: AttachmentRef["kind"]): Promise<UploadResult> {
-    const fd = new FormData()
-    fd.append("session", session)
-    fd.append("file", file)
-    if (kindHint) fd.append("kind", kindHint)
+    const headers: Record<string, string> = {
+      "Content-Type": "application/octet-stream",
+      "X-Mux-Session": session,
+      "X-Mux-Mime": file.type,
+      "X-Mux-Filename": encodeURIComponent(file.name),
+    }
+    if (kindHint) headers["X-Mux-Kind"] = kindHint
     const res = await fetch("/upload", {
       method: "POST",
-      body: fd,
+      headers,
+      body: file,
     })
     if (!res.ok) {
       const text = await res.text().catch(() => "")

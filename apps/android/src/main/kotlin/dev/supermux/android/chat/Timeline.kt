@@ -47,11 +47,19 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -64,6 +72,8 @@ import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.view.ViewGroup
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import java.io.File
@@ -688,7 +698,7 @@ private fun AttachmentItem(att: Attachment, loadBytes: suspend (String) -> ByteA
     val cs = MaterialTheme.colorScheme
     val mime = att.mime ?: ""
     val isImage = att.kind == "image" || mime.startsWith("image/")
-    val isVideo = att.kind == "video" || mime.startsWith("video/")
+    val isVideo = att.kind == "video" || att.kind == "video_note" || mime.startsWith("video/")
     val isAudio = att.kind == "voice" || att.kind == "audio" || mime.startsWith("audio/")
     when {
         isImage -> {
@@ -733,9 +743,114 @@ private fun AttachmentItem(att: Attachment, loadBytes: suspend (String) -> ByteA
                 }
             }
         }
-        isVideo -> AttachmentChip(R.drawable.ic_play, att.name ?: "video", att, loadBytes)
+        isVideo -> InlineVideo(att, loadBytes)
         isAudio -> AttachmentChip(R.drawable.ic_volume_2, att.name ?: "voice message", att, loadBytes)
         else -> AttachmentChip(R.drawable.ic_file, att.name ?: att.file_id, att, loadBytes)
+    }
+}
+
+/**
+ * Inline video playback (design 2026-07-02 Phase 1). Renders `video`/`video_note` attachments
+ * with a tap-to-play poster so the transcript never eagerly downloads every clip (a video can be
+ * up to 500 MB). On tap we fetch the bytes via loadBytes, cache them to a file (same
+ * cacheDir/attachments dir openAttachment uses), and mount a media3 ExoPlayer inside an
+ * AndroidView (PlayerView + default controls, autoplay once the user opted in). A missing
+ * download or a decode error falls back to the pre-Phase-1 system-viewer AttachmentChip.
+ */
+@androidx.annotation.OptIn(UnstableApi::class)
+@Composable
+private fun InlineVideo(att: Attachment, loadBytes: suspend (String) -> ByteArray?) {
+    val cs = MaterialTheme.colorScheme
+    val context = LocalContext.current
+    var playing by remember(att.file_id) { mutableStateOf(false) }
+    var file by remember(att.file_id) { mutableStateOf<File?>(null) }
+    var failed by remember(att.file_id) { mutableStateOf(false) }
+
+    // Fetch + cache the bytes only once the user opts into playback.
+    LaunchedEffect(playing) {
+        if (!playing || file != null || failed) return@LaunchedEffect
+        val bytes = loadBytes(att.file_id)
+        if (bytes == null) {
+            failed = true
+            return@LaunchedEffect
+        }
+        val cached = withContext(Dispatchers.IO) {
+            runCatching {
+                val dir = File(context.cacheDir, "attachments").apply { mkdirs() }
+                // Name by the unique file_id so two clips never collide in the cache dir; keep the
+                // original extension as a container hint for ExoPlayer, defaulting to mp4.
+                val safeId = att.file_id.substringAfterLast('/')
+                val ext = (att.name ?: "").substringAfterLast('.', "").ifBlank { "mp4" }
+                File(dir, "video_$safeId.$ext").apply { writeBytes(bytes) }
+            }.getOrNull()
+        }
+        if (cached != null) file = cached else failed = true
+    }
+
+    val f = file
+    when {
+        failed -> AttachmentChip(R.drawable.ic_play, att.name ?: "video", att, loadBytes)
+        !playing -> Box(
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+                .height(200.dp)
+                .clip(RoundedCornerShape(Radii.md))
+                .background(cs.surfaceContainer)
+                .clickable { playing = true }
+                .testTag("attachment_video_poster"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_play),
+                contentDescription = att.name ?: "Play video",
+                tint = cs.onSurface,
+                modifier = Modifier.size(40.dp),
+            )
+        }
+        f == null -> Box(
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+                .height(200.dp)
+                .clip(RoundedCornerShape(Radii.md))
+                .background(cs.surfaceContainer),
+            contentAlignment = Alignment.Center,
+        ) {
+            CircularProgressIndicator(Modifier.size(20.dp), color = cs.onSurfaceVariant, strokeWidth = 1.5.dp)
+        }
+        else -> {
+            val exo = remember(f) {
+                ExoPlayer.Builder(context).build().apply {
+                    setMediaItem(MediaItem.fromUri(Uri.fromFile(f)))
+                    prepare()
+                    playWhenReady = true
+                    addListener(object : Player.Listener {
+                        override fun onPlayerError(error: PlaybackException) {
+                            failed = true
+                        }
+                    })
+                }
+            }
+            DisposableEffect(exo) {
+                onDispose { exo.release() }
+            }
+            AndroidView(
+                factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        player = exo
+                        useController = true
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                        )
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(220.dp)
+                    .clip(RoundedCornerShape(Radii.md))
+                    .testTag("attachment_video_player"),
+            )
+        }
     }
 }
 
