@@ -21,6 +21,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -38,6 +39,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.graphics.graphicsLayer
@@ -67,6 +70,7 @@ import dev.supermux.android.session.SessionListScreen
 import dev.supermux.android.workspace.SessionsRail
 import dev.supermux.android.workspace.SidebarDivider
 import dev.supermux.android.workspace.WorkspaceLayout
+import dev.supermux.android.workspace.workspaceShortcuts
 import dev.supermux.android.display.DisplaysScreen
 import dev.supermux.android.settings.AppearanceSettingsPage
 import dev.supermux.android.settings.ArchivedScreen
@@ -206,6 +210,12 @@ class MainActivity : ComponentActivity() {
                     //    code lives inside the hosts below and is unchanged. ──
                     composable<Home> {
                         if (wide) {
+                            // Container focus so hardware-keyboard shortcuts (Ctrl/Cmd + …) are
+                            // received; onPreviewKeyEvent still sees events when a descendant (chat
+                            // input / terminal) holds focus, so it intercepts combos yet lets typing
+                            // pass. Requesting focus once on first composition seeds the focus owner.
+                            val focusRequester = remember { FocusRequester() }
+                            LaunchedEffect(Unit) { focusRequester.requestFocus() }
                             // Suppress the collapse/expand width spring while the divider is being
                             // dragged (otherwise the spring chases the finger and feels laggy).
                             var resizing by remember { mutableStateOf(false) }
@@ -215,7 +225,17 @@ class MainActivity : ComponentActivity() {
                                 animationSpec = if (resizing) snap() else spring(stiffness = Spring.StiffnessMediumLow),
                                 label = "sidebarWidth",
                             )
-                            Row(Modifier.fillMaxSize()) {
+                            Row(
+                                Modifier
+                                    .fillMaxSize()
+                                    .focusRequester(focusRequester)
+                                    .workspaceShortcuts(
+                                        layout = workspaceLayout,
+                                        selectedId = selected,
+                                        onNewSession = { navController.navigate(NewSession) },
+                                    )
+                                    .focusable(),
+                            ) {
                                 // Sidebar: collapsed avatar rail OR the full list; the animating
                                 // parent Box clips (surfaceContainerHigh backs the reveal gap).
                                 Box(

@@ -21,6 +21,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -33,6 +34,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.supermux.android.R
 import dev.supermux.android.chat.ChatPanel
 import dev.supermux.android.chat.FinishButton
@@ -155,6 +157,27 @@ fun SessionWorkspaceDetail(
                 pendingEditorOpen = PendingEditorOpen(rel, ref.line, ref.endLine)
                 layout.setPanes(session.id, layout.panesFor(session.id).copy(editor = true))
             }
+        }
+    }
+
+    // Auto-open the Display pane the moment a stream for this session goes live. Mirrors
+    // DisplayPanel's resolution (newest "running" stream for session.name). We track the previously
+    // seen stream id and fire only on the nil→non-nil edge, so a display the user manually closed
+    // is NOT re-opened by the same still-running stream (its id is unchanged → effect won't re-run).
+    val liveDisplays by displays.collectAsStateWithLifecycle()
+    val runningDisplayId = remember(liveDisplays, session.name) {
+        liveDisplays.filter { it.sessionName == session.name && it.status == "running" }
+            .maxByOrNull { it.createdAt ?: "" }
+            ?.id
+    }
+    // Seed with the current id so an already-live display at open isn't force-opened — only a stream
+    // that *becomes* live while the session is open trips the pane.
+    var lastRunningDisplayId by remember(session.id) { mutableStateOf(runningDisplayId) }
+    LaunchedEffect(runningDisplayId) {
+        val prev = lastRunningDisplayId
+        lastRunningDisplayId = runningDisplayId
+        if (prev == null && runningDisplayId != null) {
+            layout.setPanes(session.id, layout.panesFor(session.id).copy(display = true))
         }
     }
 
