@@ -60,6 +60,7 @@ import dev.supermux.android.session.SessionKeepAliveTabletHost
 import dev.supermux.android.session.rememberVisitedSessions
 import dev.supermux.android.session.SessionLauncherScreen
 import dev.supermux.android.session.SessionListScreen
+import dev.supermux.android.workspace.WorkspaceLayout
 import dev.supermux.android.display.DisplaysScreen
 import dev.supermux.android.settings.AppearanceSettingsPage
 import dev.supermux.android.settings.ArchivedScreen
@@ -157,6 +158,10 @@ class MainActivity : ComponentActivity() {
                 var selected by rememberSaveable { mutableStateOf<String?>(null) }
                 val liveSessionIds = remember(sessions) { sessions.map { it.id }.toSet() }
                 val (visitedSessions, removeVisited) = rememberVisitedSessions(selected, liveSessionIds)
+                // Shared multi-pane layout for wide screens — one instance across all sessions,
+                // saved across config-change/process-death, pruned when the broker drops a session.
+                val workspaceLayout = rememberSaveable(saver = WorkspaceLayout.Saver) { WorkspaceLayout() }
+                LaunchedEffect(liveSessionIds) { workspaceLayout.prune(liveSessionIds) }
                 // A session resumed from archive arrives via `session_added` (no history), so its
                 // transcript would be empty until the next snapshot/restart. Seed it whenever a chat
                 // is opened — a no-op for sessions the snapshot already populated. (iOS parity:
@@ -164,7 +169,10 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(selected) { selected?.let { vm.ensureMessagesLoaded(it) } }
 
                 val windowSizeClass = calculateWindowSizeClass(this)
-                val expanded = windowSizeClass.widthSizeClass == WindowWidthSizeClass.Expanded
+                // Wide = Medium or Expanded width class (≥600dp) → multi-pane workspace. Using
+                // "not Compact" (rather than only Expanded) means the unfolded Galaxy Z Fold 7
+                // qualifies; Compact (phones / folded) keeps the single-pane chat path.
+                val wide = windowSizeClass.widthSizeClass != WindowWidthSizeClass.Compact
                 val cs = MaterialTheme.colorScheme
 
                 val navController = rememberNavController()
@@ -191,7 +199,7 @@ class MainActivity : ComponentActivity() {
                     //    with `route = …` swapped for nav. The keep-alive / shared-element / predictive-back
                     //    code lives inside the hosts below and is unchanged. ──
                     composable<Home> {
-                        if (expanded) {
+                        if (wide) {
                             Row(Modifier.fillMaxSize()) {
                                 Box(Modifier.width(320.dp)) {
                                     SessionListScreen(
@@ -236,6 +244,8 @@ class MainActivity : ComponentActivity() {
                                         commands = commands,
                                         commandsResolved = commandsResolved,
                                         vm = vm,
+                                        wide = true,
+                                        layout = workspaceLayout,
                                         onOpenDisplays = { navController.navigate(Displays) },
                                         modifier = Modifier.fillMaxSize(),
                                     )
@@ -264,7 +274,7 @@ class MainActivity : ComponentActivity() {
                     }
                     // ── New-session launcher (old "new" branch, verbatim, route→nav) ──
                     composable<NewSession> {
-                        if (expanded) {
+                        if (wide) {
                             Row(Modifier.fillMaxSize()) {
                                 Box(Modifier.width(320.dp)) {
                                     SessionListScreen(
