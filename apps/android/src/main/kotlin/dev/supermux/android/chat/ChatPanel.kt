@@ -387,8 +387,8 @@ fun ChatPanel(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(horizontal = Space.lg, vertical = Space.md),
-                verticalArrangement = Arrangement.spacedBy(Space.lg),
+                    .padding(start = Space.sm, end = Space.md, top = Space.md, bottom = Space.md),
+                verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 items(timelineItems, key = { timelineItemKey(it) }) { item ->
                     TimelineItemRow(item, loadBytes, onOpenFile)
