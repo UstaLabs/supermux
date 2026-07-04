@@ -13,8 +13,15 @@ package dev.supermux.ui
  * and is unit-testable without the Android framework.
  */
 object ThemeDefaults {
-    /** Brand-first: dynamic color (Material You) is off until the user opts in. */
-    const val DYNAMIC_COLOR_ENABLED = false
+    /**
+     * Brand-first: dynamic color (Material You) is off until the user opts in.
+     *
+     * Deliberately a plain `val`, NOT `const`: a `const` is inlined into every call site, and a
+     * Kotlin incremental compile can leave a stale inlined copy in consumers when this flips — so a
+     * normal `assembleDebug` could ship the old default while the source reads the new one. A `val`
+     * is always read live, so the default can never silently fail to propagate.
+     */
+    val DYNAMIC_COLOR_ENABLED = false
 
     /**
      * Effective dynamic-color setting.

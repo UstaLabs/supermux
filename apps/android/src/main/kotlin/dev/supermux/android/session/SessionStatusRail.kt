@@ -21,6 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
+import dev.supermux.android.theme.LocalSemantics
 import dev.supermux.android.theme.MonoFontFamily
 import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.SessionStatusKind
@@ -28,15 +29,13 @@ import dev.supermux.proto.SessionStatusLevel
 import dev.supermux.proto.gitBadge
 import dev.supermux.proto.sessionStatus
 
-private val DoneGreen = Color(0xFF16A34A)
-private val NotDoneAmber = Color(0xFFF59E0B)
-
 /**
  * Leading per-session state: working spinner (top priority), else the git/cloud status icon.
  * Worktree: ✓ done / ⎇ not-done / neutral pristine. Remote: cloud-done / cloud-off + ↑N ↓N counts.
  */
 @Composable
 fun SessionStatusRail(git: GitLiteStatusDto?, working: Boolean, modifier: Modifier = Modifier) {
+    val sem = LocalSemantics.current
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         if (working) {
             CircularProgressIndicator(
@@ -51,17 +50,17 @@ fun SessionStatusRail(git: GitLiteStatusDto?, working: Boolean, modifier: Modifi
             st == null || (st.kind == SessionStatusKind.WORKTREE && st.level == SessionStatusLevel.PRISTINE) ->
                 NeutralDot()
             st.kind == SessionStatusKind.WORKTREE && st.level == SessionStatusLevel.DONE ->
-                StatusIcon(R.drawable.ic_check, DoneGreen)
+                StatusIcon(R.drawable.ic_check, sem.success)
             st.kind == SessionStatusKind.WORKTREE ->
-                StatusIcon(R.drawable.ic_git_branch, NotDoneAmber)
+                StatusIcon(R.drawable.ic_git_branch, sem.warning)
             st.kind == SessionStatusKind.REMOTE && st.level == SessionStatusLevel.DONE ->
-                StatusIcon(R.drawable.ic_cloud_done, DoneGreen)
+                StatusIcon(R.drawable.ic_cloud_done, sem.success)
             else -> {
-                StatusIcon(R.drawable.ic_cloud_off, NotDoneAmber)
+                StatusIcon(R.drawable.ic_cloud_off, sem.warning)
                 val text = gitBadge(git)?.text
                 if (!text.isNullOrEmpty()) {
                     Spacer(Modifier.width(4.dp))
-                    Text(text, color = NotDoneAmber, fontFamily = MonoFontFamily, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                    Text(text, color = sem.warning, fontFamily = MonoFontFamily, fontSize = 10.sp, fontWeight = FontWeight.Medium)
                 }
             }
         }
