@@ -3,6 +3,11 @@ package dev.supermux.android.chat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -94,6 +99,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
@@ -457,7 +463,9 @@ fun ToolCard(event: ActivityEvent, status: ToolStatus, output: String? = null) {
     val input = event.detail
     val hasContent = !input.isNullOrBlank() || !output.isNullOrBlank()
     val verb = toolLabel(event.tool ?: "tool").lowercase()
-    val arg = event.title
+    // Strip a leading "<Tool>: " label — Claude puts it in the title; other agents
+    // (codex/cursor/opencode) emit the bare command/path, so this is a no-op for them.
+    val arg = event.title?.let { t -> event.tool?.let { t.removePrefix("$it: ") } ?: t }
 
     Column(Modifier.fillMaxWidth().testTag("tool_card")) {
         // Terminal-style operation line: ▸ verb · arg … status. A sunken surface, mono
@@ -687,6 +695,19 @@ private fun NodeDot(node: StreamNode, modifier: Modifier) {
         StreamNode.ERROR -> Box(modifier.size(7.dp).clip(CircleShape).background(cs.error))
         StreamNode.RUNNING -> Box(modifier.size(7.dp).clip(CircleShape).background(cs.surface).border(1.5.dp, cs.primary, CircleShape))
     }
+}
+
+/** A softly breathing dot — the live pulse of a running/thinking agent. Respects the theme accent. */
+@Composable
+fun BreathingDot(color: Color, modifier: Modifier = Modifier, size: Dp = 7.dp) {
+    val transition = rememberInfiniteTransition(label = "breathe")
+    val alpha by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.32f,
+        animationSpec = infiniteRepeatable(tween(1100), RepeatMode.Reverse),
+        label = "alpha",
+    )
+    Box(modifier.size(size).clip(CircleShape).background(color.copy(alpha = alpha)))
 }
 
 /**

@@ -101,6 +101,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.core.content.FileProvider
 import java.io.File
 import dev.supermux.android.R
+import dev.supermux.android.theme.MonoFontFamily
 import dev.supermux.android.theme.Radii
 import dev.supermux.util.formatDuration
 import dev.supermux.android.display.DisplayPanel
@@ -317,27 +318,27 @@ fun ChatScreen(
                     val pillColor = if (isDead) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                     Row(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(pillColor.copy(alpha = 0.16f))
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                            .clip(RoundedCornerShape(50))
+                            .background(pillColor.copy(alpha = 0.14f))
+                            .border(1.dp, pillColor.copy(alpha = 0.35f), RoundedCornerShape(50))
+                            .padding(horizontal = 9.dp, vertical = 3.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        if (!isDead) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(12.dp),
-                                color = MaterialTheme.colorScheme.primary,
-                                strokeWidth = 2.dp,
-                            )
+                        if (isDead) {
+                            Box(Modifier.size(6.dp).clip(CircleShape).background(pillColor))
+                        } else {
+                            BreathingDot(MaterialTheme.colorScheme.primary, size = 6.dp)
                         }
                         Text(
                             text = when {
-                                isDead -> "Not responding"
-                                agent.detail == "running" -> "Running"
-                                else -> "Thinking"
+                                isDead -> "not responding"
+                                agent.detail == "running" -> "running"
+                                else -> "thinking"
                             },
                             color = pillColor,
-                            fontSize = 12.sp,
+                            fontFamily = MonoFontFamily,
+                            fontSize = 11.sp,
                         )
                     }
                 }
