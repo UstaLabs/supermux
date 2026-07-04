@@ -169,47 +169,47 @@ fun SessionRow(
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
 ) {
-    val c = LocalPanes.current
     val cs = MaterialTheme.colorScheme
     val haptic = rememberHaptics()
 
     // Unread indicator: inbound message that is the latest entry
     val hasUnread = !active && preview?.direction == "inbound"
 
-    val rowModifier = if (active) {
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .softElevation(radius = Radii.md)
-            .clip(RoundedCornerShape(6.dp))
-            .background(cs.surfaceContainer)
-            .clickable { haptic(HapticKind.Tick); onClick() }
-    } else {
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(Color.Transparent)
-            .clickable { haptic(HapticKind.Tick); onClick() }
-    }
-
     Row(
-        rowModifier
+        Modifier
+            .fillMaxWidth()
+            .background(if (active) cs.surfaceContainer else Color.Transparent)
+            .clickable { haptic(HapticKind.Tick); onClick() }
             .testTag("session_row_${s.id}")
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.Top,
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        SessionStatusRail(git = s.git, working = working, modifier = Modifier.align(Alignment.CenterVertically))
+        // Agent-identity avatar (claude/codex/cursor logo, else initials) with a status-dot
+        // overlay — surfaces "which agent, in what state" at a glance across the fleet.
+        Box {
+            SessionAvatar(
+                name = s.name,
+                agent = s.agent,
+                sessionId = s.id,
+                sharedScope = sharedScope,
+                animScope = animScope,
+            )
+            StatusDot(
+                git = s.git,
+                working = working,
+                ring = if (active) cs.surfaceContainer else cs.surfaceContainerHigh,
+                modifier = Modifier.align(Alignment.BottomEnd).offset(x = 3.dp, y = 3.dp),
+            )
+        }
         Spacer(Modifier.width(12.dp))
 
         Column(Modifier.weight(1f)) {
-            // Name row: session name + relative time aligned to end
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     s.name,
                     color = cs.onSurface,
                     fontSize = 15.sp,
-                    fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.Medium,
+                    fontWeight = if (hasUnread) FontWeight.SemiBold else FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
@@ -219,36 +219,19 @@ fun SessionRow(
                     Spacer(Modifier.width(Space.sm))
                     Text(
                         timeStr,
-                        color = cs.onSurfaceVariant,
+                        color = cs.onSurfaceVariant.copy(alpha = 0.7f),
                         fontFamily = MonoFontFamily,
-                        fontSize = 11.sp,
+                        fontSize = 10.5.sp,
                     )
                 }
             }
-
-            // Fix 2: status badge — show when status is non-null and not "active"
-            val status = s.status
-            if (status != null && status != "active") {
-                val badgeColor = if (status == "suspended") Color(c.warning)
-                                 else cs.onSurfaceVariant.copy(alpha = 0.6f)
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    status,
-                    color = badgeColor,
-                    fontFamily = MonoFontFamily,
-                    fontSize = 10.sp,
-                )
-            } else {
-                Spacer(Modifier.height(Space.xs))
-            }
-
-            // Preview: last message or workdir fallback
-            val previewText = preview?.text?.replace("\n", " ")?.take(80)
+            Spacer(Modifier.height(2.dp))
+            val previewText = preview?.text?.replace("\n", " ")?.take(90)
             if (previewText != null) {
                 Text(
                     previewText,
                     color = cs.onSurfaceVariant,
-                    fontSize = 11.sp,
+                    fontSize = 12.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )

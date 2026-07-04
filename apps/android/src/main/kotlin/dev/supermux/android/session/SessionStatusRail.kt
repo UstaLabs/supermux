@@ -21,6 +21,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
+import androidx.compose.ui.unit.Dp
+import dev.supermux.android.chat.BreathingDot
 import dev.supermux.android.theme.LocalSemantics
 import dev.supermux.android.theme.MonoFontFamily
 import dev.supermux.proto.GitLiteStatusDto
@@ -73,4 +75,28 @@ fun SessionStatusRail(git: GitLiteStatusDto?, working: Boolean, modifier: Modifi
 
 @Composable private fun NeutralDot() {
     Box(Modifier.size(6.dp).clip(CircleShape).background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)))
+}
+
+/**
+ * Compact status dot for list rows — a framed dot meant to overlay a session avatar's corner.
+ * Breathing teal while working; else the git state: green (done), amber (dirty), grey (pristine).
+ * The frame ([ring]) separates it from the avatar; pass the list background so it reads cleanly.
+ */
+@Composable
+fun StatusDot(git: GitLiteStatusDto?, working: Boolean, ring: Color, modifier: Modifier = Modifier, size: Dp = 12.dp) {
+    val cs = MaterialTheme.colorScheme
+    val sem = LocalSemantics.current
+    Box(modifier.size(size).clip(CircleShape).background(ring), contentAlignment = Alignment.Center) {
+        if (working) {
+            BreathingDot(cs.primary, size = size - 4.dp)
+        } else {
+            val st = sessionStatus(git)
+            val color = when {
+                st == null || st.level == SessionStatusLevel.PRISTINE -> cs.onSurfaceVariant.copy(alpha = 0.5f)
+                st.level == SessionStatusLevel.DONE -> sem.success
+                else -> sem.warning
+            }
+            Box(Modifier.size(size - 4.dp).clip(CircleShape).background(color))
+        }
+    }
 }
