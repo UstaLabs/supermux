@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import dev.supermux.ui.SupermuxColors
+import dev.supermux.ui.ThemeDefaults
 import dev.supermux.ui.supermuxDark
 import dev.supermux.ui.supermuxLight
 
@@ -131,7 +132,7 @@ private fun buildSupermuxScheme(c: SupermuxColors, other: SupermuxColors, dark: 
 @Composable
 fun SupermuxTheme(
     appearance: AppearanceMode = AppearanceMode.SYSTEM,
-    dynamicEnabled: Boolean = true,
+    dynamicEnabled: Boolean = ThemeDefaults.DYNAMIC_COLOR_ENABLED,
     content: @Composable () -> Unit,
 ) {
     val dark = when (appearance) {
@@ -156,7 +157,11 @@ fun SupermuxTheme(
         dark -> buildSupermuxScheme(supermuxDark(), supermuxLight(), dark = true)
         else -> buildSupermuxScheme(supermuxLight(), supermuxDark(), dark = false)
     }
-    CompositionLocalProvider(LocalPanes provides paneTones) {
+    val semantics = if (dark) supermuxSemanticsDark() else supermuxSemanticsLight()
+    CompositionLocalProvider(
+        LocalPanes provides paneTones,
+        LocalSemantics provides semantics,
+    ) {
         MaterialTheme(
             colorScheme = scheme,
             typography = supermuxTypography(),

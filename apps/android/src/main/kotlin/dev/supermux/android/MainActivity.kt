@@ -79,6 +79,7 @@ import dev.supermux.android.settings.SettingsScreen
 import dev.supermux.android.settings.UsageScreen
 import dev.supermux.android.theme.AppearanceMode
 import dev.supermux.android.theme.SupermuxTheme
+import dev.supermux.ui.ThemeDefaults
 import dev.supermux.android.DevConfig
 import dev.supermux.android.pairing.OnboardingScreen
 import dev.supermux.android.push.PushPermission
@@ -126,7 +127,7 @@ class MainActivity : ComponentActivity() {
                     }.getOrDefault(AppearanceMode.SYSTEM)
                 )
             }
-            var dynamicColor by remember { mutableStateOf(prefs.getBoolean("dynamicColor", true)) }
+            var dynamicColor by remember { mutableStateOf(prefs.getBoolean("dynamicColor", ThemeDefaults.DYNAMIC_COLOR_ENABLED)) }
             SupermuxTheme(appearance = appearance, dynamicEnabled = dynamicColor) {
                 val store = remember { SecureTokenStore() }
                 // Debug-only: seed token+baseUrl on debuggable builds so the already-paired
