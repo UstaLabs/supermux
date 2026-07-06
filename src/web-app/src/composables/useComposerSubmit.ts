@@ -85,7 +85,9 @@ export function useComposerSubmit(sessionId: MaybeRefOrGetter<string>) {
       const fileName = f.file?.name ?? "file"
       const uploadingToastId = toast.loading(`Uploading ${fileName}…`)
       try {
-        const result = await uploader.upload(id, f.file, kindHint)
+        const result = await uploader.upload(id, f.file, kindHint, (sent, total) => {
+          uploads.setProgress(f.id, total > 0 ? sent / total : 0)
+        })
         toast.dismiss(uploadingToastId)
         uploads.succeed(f.id, result)
         attachments.push({
