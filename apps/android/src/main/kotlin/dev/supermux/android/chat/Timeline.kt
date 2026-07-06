@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -218,11 +219,32 @@ fun mdAnnotated(
                             ) { onOpenFile(ref) }
                         ) { append(s.text) }
                     }
-                    SpanStyleKind.PLAIN -> append(s.text)
+                    SpanStyleKind.PLAIN -> appendLinkified(s.text, linkColor)
                 }
             }
         }
     }
+}
+
+private val urlRegex = Regex("""https?://[^\s<>"'\])]+""")
+
+/** Append [text], turning bare http(s) URLs into tappable, underlined links (opens the browser). */
+private fun AnnotatedString.Builder.appendLinkified(text: String, linkColor: Color) {
+    var last = 0
+    for (m in urlRegex.findAll(text)) {
+        var url = m.value
+        var trail = ""
+        // A URL at the end of a sentence often swallows trailing punctuation — hand it back as plain text.
+        while (url.isNotEmpty() && url.last() in ".,);:!?") { trail = url.last() + trail; url = url.dropLast(1) }
+        if (url.isEmpty()) continue
+        if (m.range.first > last) append(text.substring(last, m.range.first))
+        withLink(
+            LinkAnnotation.Url(url, TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))),
+        ) { append(url) }
+        if (trail.isNotEmpty()) append(trail)
+        last = m.range.last + 1
+    }
+    if (last < text.length) append(text.substring(last))
 }
 
 /**
@@ -299,12 +321,15 @@ fun FencedCodeBlock(code: String) {
  */
 @Composable
 fun AssistantMessage(text: String, onOpenFile: (FilePathRef) -> Unit = {}) {
-    MarkdownBody(
-        text = text,
-        modifier = Modifier.fillMaxWidth(),
-        onOpenFile = onOpenFile,
-        linkify = true,
-    )
+    // SelectionContainer makes the prose selectable/copyable; links inside stay tappable.
+    SelectionContainer {
+        MarkdownBody(
+            text = text,
+            modifier = Modifier.fillMaxWidth(),
+            onOpenFile = onOpenFile,
+            linkify = true,
+        )
+    }
 }
 
 /**
@@ -424,11 +449,13 @@ fun UserMessage(text: String) {
             letterSpacing = 1.2.sp,
             modifier = Modifier.padding(bottom = 2.dp),
         )
-        Text(
-            text = mdAnnotated(text),
-            color = cs.onSurface,
-            style = MaterialTheme.typography.bodyMedium,
-        )
+        SelectionContainer {
+            Text(
+                text = mdAnnotated(text),
+                color = cs.onSurface,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
     }
 }
 
