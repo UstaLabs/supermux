@@ -3,6 +3,7 @@ package dev.supermux.net
 import io.ktor.client.HttpClient
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
+import io.ktor.client.request.head
 import io.ktor.client.request.header
 import io.ktor.client.request.patch
 import io.ktor.client.request.post
@@ -135,6 +136,27 @@ data class UploadResponse(
     val size: Long = 0,
     val mime: String = "",
     val name: String = "",
+)
+
+/** POST /upload/init → a new resumable upload handle + the server-dictated chunk size. */
+@Serializable
+data class InitResponse(val upload_id: String, val offset: Long = 0, val chunk_size: Long = 0)
+
+/** PATCH /upload/<id> → either the new byte offset, or (on the final chunk) the
+ *  finalized attachment. `file_id != null` means the upload is complete. */
+@Serializable
+data class PatchResponse(
+    val offset: Long? = null,
+    val file_id: String? = null,
+    val size: Long = 0,
+    val mime: String = "",
+    val name: String = "",
+)
+
+@Serializable
+private data class InitRequest(
+    val session: String, val mime: String, val name: String,
+    val kind: String? = null, val total_size: Long,
 )
 
 /** POST /sessions/<id>/transcribe → cleaned composer text. `degraded`=true means cleanup
@@ -1371,6 +1393,99 @@ class BrokerApi(
         session: String, base64: String, filename: String, mime: String, kind: String? = null,
     ): UploadResponse =
         upload(session, kotlin.io.encoding.Base64.decode(base64), filename, mime, kind)
+
+    // ── Resumable / chunked upload ───────────────────────────────────────────
+
+    /** Threshold below which a file uploads in a single POST (no init round-trip).
+     *  Only decides single-POST vs chunked entry; both handle any size ≤ server cap.
+     *  `internal var` so commonTest can force the chunked path with tiny bodies. */
+    internal var resumableThresholdBytes = 5L * 1024 * 1024
+
+    /**
+     * Upload [source] via the chunked/resumable protocol, reporting absolute
+     * progress `(bytesAcked, total)` after each step. Small files take a single
+     * POST /upload; large files init → PATCH loop → finalize, resuming from the
+     * server offset (HEAD) if a chunk throws. Returns the finalized attachment.
+     */
+    suspend fun uploadResumable(
+        session: String,
+        source: ChunkSource,
+        filename: String,
+        mime: String,
+        kind: String? = null,
+        onProgress: (sent: Long, total: Long) -> Unit = { _, _ -> },
+    ): UploadResponse {
+        val total = source.size
+        if (total <= resumableThresholdBytes) {
+            onProgress(0, total)
+            val res = upload(session, source.read(0, total.toInt()), filename, mime, kind)
+            onProgress(total, total)
+            return res
+        }
+        return uploadChunked(session, source, filename, mime, kind, total, onProgress)
+    }
+
+    private suspend fun uploadChunked(
+        session: String, source: ChunkSource, filename: String, mime: String,
+        kind: String?, total: Long, onProgress: (Long, Long) -> Unit,
+    ): UploadResponse {
+        // 1) init
+        val init: InitResponse = decode(http.post("$httpBase/upload/init") {
+            header(HttpHeaders.Authorization, bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(InitRequest(session, mime, filename, kind, total)))
+        })
+        val uploadId = init.upload_id
+        val chunkSize = if (init.chunk_size > 0) init.chunk_size else resumableThresholdBytes
+
+        // 2) PATCH loop, resuming from the server offset on a network throw.
+        var offset = init.offset
+        var attempts = 0
+        val maxAttempts = 5
+        while (true) {
+            val len = minOf(chunkSize, total - offset).toInt()
+            val chunk = source.read(offset, len)
+            try {
+                val resp = http.patch("$httpBase/upload/$uploadId") {
+                    header(HttpHeaders.Authorization, bearerHeader())
+                    header("Upload-Offset", offset.toString())
+                    contentType(ContentType.Application.OctetStream)
+                    setBody(chunk)
+                }
+                when (resp.status.value) {
+                    200 -> {
+                        val pr: PatchResponse = decode(resp)
+                        if (pr.file_id != null) {
+                            onProgress(total, total)
+                            return UploadResponse(pr.file_id, pr.size, pr.mime, pr.name)
+                        }
+                        offset = pr.offset ?: (offset + len)
+                        attempts = 0
+                        onProgress(offset, total)
+                    }
+                    409 -> offset = resp.headers["Upload-Offset"]?.toLongOrNull() ?: offset // resync
+                    else -> throw IllegalStateException("resumable upload failed: HTTP ${resp.status.value}")
+                }
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Throwable) {
+                // Network drop: resync from the server offset and retry (capped).
+                if (++attempts > maxAttempts) throw e
+                val serverOffset = headUpload(uploadId)
+                    ?: throw IllegalStateException("resumable upload lost (HEAD 404 after ${e.message})")
+                offset = serverOffset
+            }
+        }
+    }
+
+    /** HEAD /upload/<id> → the server's current stored offset, or null if the
+     *  upload is unknown (never created, or already finalized/GC'd). */
+    private suspend fun headUpload(uploadId: String): Long? {
+        val resp = http.head("$httpBase/upload/$uploadId") {
+            header(HttpHeaders.Authorization, bearerHeader())
+        }
+        return if (resp.status.value == 200) resp.headers["Upload-Offset"]?.toLongOrNull() else null
+    }
 
     /** GET /files/<urlencoded file_id> — raw bytes of a stored attachment. */
     suspend fun fileBytes(fileId: String): ByteArray? {
