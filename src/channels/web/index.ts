@@ -7,7 +7,7 @@ import { home } from "../../shared/home"
 import { existsSync, writeFileSync, mkdirSync } from "fs"
 import { join, sep } from "path"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
-import { PayloadTooLargeError, EmptyUploadError } from "../../core/files/store"
+import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
 import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
 import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOriginOk } from "./cookies"
 import { FsService } from "../../core/editor/fs-service"
@@ -1220,6 +1220,78 @@ export class WebChannel implements Channel {
         log.error("upload.store_failed", { err: err?.message ?? String(err), device: authResult.device.name, session, mime, via: "stream" })
         return new Response("file store error", { status: 500 })
       }
+    }
+
+    // ── Resumable/chunked upload: init → PATCH chunks → HEAD probe ────────
+    if (method === "POST" && path === "/upload/init") {
+      const authResult = this.requireAuth(req)
+      if (!authResult.ok) return new Response("unauthorized", { status: 401 })
+      if (!this.fileStore) return new Response("file store not mounted", { status: 500 })
+      const MAX_UPLOAD_BYTES = Number(process.env.MUX_WEB_UPLOAD_MAX_MB ?? 500) * 1024 * 1024
+
+      let body: any
+      try { body = await req.json() } catch { return new Response("bad json", { status: 400 }) }
+      const session = typeof body?.session === "string" ? body.session : ""
+      if (session.length === 0) return new Response("session required", { status: 400 })
+      const totalSize = Number(body?.total_size)
+      if (!Number.isFinite(totalSize) || totalSize <= 0) return new Response("total_size required", { status: 400 })
+      if (totalSize > MAX_UPLOAD_BYTES) return new Response("payload too large", { status: 413 })
+
+      const mime = typeof body?.mime === "string" ? body.mime : undefined
+      const name = typeof body?.name === "string" ? body.name : undefined
+      const kindHint = typeof body?.kind === "string" ? body.kind : undefined
+      const kind: AttachmentKind = (kindHint && VALID_KINDS.includes(kindHint as AttachmentKind))
+        ? (kindHint as AttachmentKind)
+        : kindFromMime(mime)
+
+      try {
+        const { upload_id, chunk_size } = await this.fileStore.createPending({
+          session, kind, mime, name, totalSize, device: authResult.device.name, origin: "web-upload",
+        })
+        log.info("upload.init", { upload_id, kind, mime, name, session, totalSize, device: authResult.device.name })
+        return this.json({ upload_id, offset: 0, chunk_size })
+      } catch (err: any) {
+        log.error("upload.init_failed", { err: err?.message ?? String(err), device: authResult.device.name, session })
+        return new Response("file store error", { status: 500 })
+      }
+    }
+
+    if (method === "PATCH" && path.startsWith("/upload/")) {
+      const authResult = this.requireAuth(req)
+      if (!authResult.ok) return new Response("unauthorized", { status: 401 })
+      if (!this.fileStore) return new Response("file store not mounted", { status: 500 })
+      const upload_id = decodeURIComponent(path.slice("/upload/".length))
+
+      const offset = Number(req.headers.get("upload-offset"))
+      if (!Number.isInteger(offset) || offset < 0) return new Response("Upload-Offset required", { status: 400 })
+      if (!req.body) return new Response("empty body", { status: 400 })
+
+      const chunk = new Uint8Array(await req.arrayBuffer())
+      try {
+        const { received, done } = await this.fileStore.appendChunk(upload_id, offset, chunk)
+        if (!done) return this.json({ offset: received })
+        const fin = await this.fileStore.finalizePending(upload_id)
+        log.info("upload.finalized", { upload_id, size: fin.size, device: authResult.device.name })
+        return this.json({ file_id: fin.file_id, size: fin.size, mime: fin.mime, name: fin.name })
+      } catch (err: any) {
+        if (err instanceof UploadNotFoundError) return new Response("upload not found", { status: 404 })
+        if (err instanceof OffsetConflictError) {
+          return new Response("offset conflict", { status: 409, headers: { "upload-offset": String(err.offset) } })
+        }
+        if (err instanceof UploadOverflowError) return new Response("chunk exceeds total size", { status: 400 })
+        log.error("upload.patch_failed", { err: err?.message ?? String(err), upload_id, device: authResult.device.name })
+        return new Response("file store error", { status: 500 })
+      }
+    }
+
+    if (method === "HEAD" && path.startsWith("/upload/")) {
+      const authResult = this.requireAuth(req)
+      if (!authResult.ok) return new Response(null, { status: 401 })
+      if (!this.fileStore) return new Response(null, { status: 500 })
+      const upload_id = decodeURIComponent(path.slice("/upload/".length))
+      const offset = await this.fileStore.pendingOffset(upload_id)
+      if (offset === null) return new Response(null, { status: 404 })
+      return new Response(null, { status: 200, headers: { "upload-offset": String(offset) } })
     }
 
     if (method === "GET" && path === "/push/vapid-public-key") {

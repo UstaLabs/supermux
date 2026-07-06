@@ -240,3 +240,151 @@ describe("POST /upload — legacy multipart path", () => {
     expect(res.status).toBe(413)
   })
 })
+
+describe("POST /upload/init", () => {
+  test("returns {upload_id, offset:0, chunk_size} and creates a pending upload", async () => {
+    const made = makeChannel()
+    channel = made.channel
+    await channel.start()
+    const token = mintToken(made.devicesFile)
+
+    const res = await fetch(`${base()}/upload/init`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ session: "s1", mime: "video/mp4", name: "clip.mp4", total_size: 12345 }),
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body.upload_id as string).toMatch(/^[0-9a-f]{32}$/)
+    expect(body.offset).toBe(0)
+    expect(body.chunk_size).toBe(5 * 1024 * 1024)
+    expect(await made.store.pendingOffset(body.upload_id as string)).toBe(0)
+  })
+
+  test("total_size over cap → 413", async () => {
+    setEnv("MUX_WEB_UPLOAD_MAX_MB", "0.0001") // ~104 bytes
+    const made = makeChannel()
+    channel = made.channel
+    await channel.start()
+    const token = mintToken(made.devicesFile)
+    const res = await fetch(`${base()}/upload/init`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ session: "s1", mime: "video/mp4", total_size: 500 }),
+    })
+    expect(res.status).toBe(413)
+  })
+
+  test("missing session → 400; no auth → 401", async () => {
+    const made = makeChannel()
+    channel = made.channel
+    await channel.start()
+    const token = mintToken(made.devicesFile)
+    const bad = await fetch(`${base()}/upload/init`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ mime: "video/mp4", total_size: 10 }),
+    })
+    expect(bad.status).toBe(400)
+    const noauth = await fetch(`${base()}/upload/init`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ session: "s1", total_size: 10 }),
+    })
+    expect(noauth.status).toBe(401)
+  })
+})
+
+describe("PATCH /upload/<id>", () => {
+  async function init(made: ReturnType<typeof makeChannel>, token: string, total: number, mime = "video/mp4") {
+    const res = await fetch(`${base()}/upload/init`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ session: "s1", mime, name: "clip.mp4", total_size: total }),
+    })
+    return (await res.json()).upload_id as string
+  }
+  function patch(token: string, id: string, offset: number, chunk: Uint8Array) {
+    return fetch(`${base()}/upload/${id}`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/offset+octet-stream", "upload-offset": String(offset) },
+      body: chunk,
+    })
+  }
+
+  test("two chunks: first → {offset}, last → finalized {file_id,size,mime,name}", async () => {
+    const made = makeChannel(); channel = made.channel; await channel.start()
+    const token = mintToken(made.devicesFile)
+    const id = await init(made, token, 6)
+
+    const r1 = await patch(token, id, 0, new Uint8Array([1, 2, 3]))
+    expect(r1.status).toBe(200)
+    expect((await r1.json()).offset).toBe(3)
+
+    const r2 = await patch(token, id, 3, new Uint8Array([4, 5, 6]))
+    expect(r2.status).toBe(200)
+    const fin = await r2.json() as Record<string, unknown>
+    expect(fin.file_id).toBe(id)
+    expect(fin.size).toBe(6)
+    expect(fin.mime).toBe("video/mp4")
+    expect(fin.name).toBe("clip.mp4")
+
+    const dl = await fetch(`${base()}/files/${id}`, { headers: { authorization: `Bearer ${token}` } })
+    expect(new Uint8Array(await dl.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4, 5, 6]))
+  })
+
+  test("wrong offset → 409 with Upload-Offset header (resume path)", async () => {
+    const made = makeChannel(); channel = made.channel; await channel.start()
+    const token = mintToken(made.devicesFile)
+    const id = await init(made, token, 6)
+    await patch(token, id, 0, new Uint8Array([1, 2, 3]))
+    const conflict = await patch(token, id, 0, new Uint8Array([9, 9, 9]))
+    expect(conflict.status).toBe(409)
+    expect(conflict.headers.get("upload-offset")).toBe("3")
+  })
+
+  test("overflow past total_size → 400", async () => {
+    const made = makeChannel(); channel = made.channel; await channel.start()
+    const token = mintToken(made.devicesFile)
+    const id = await init(made, token, 4)
+    const over = await patch(token, id, 0, new Uint8Array([1, 2, 3, 4, 5]))
+    expect(over.status).toBe(400)
+  })
+
+  test("unknown upload_id → 404; no auth → 401", async () => {
+    const made = makeChannel(); channel = made.channel; await channel.start()
+    const token = mintToken(made.devicesFile)
+    const missing = await patch(token, "00000000000000000000000000000000", 0, new Uint8Array([1]))
+    expect(missing.status).toBe(404)
+    const noauth = await fetch(`${base()}/upload/whatever`, {
+      method: "PATCH", headers: { "upload-offset": "0" }, body: new Uint8Array([1]),
+    })
+    expect(noauth.status).toBe(401)
+  })
+})
+
+describe("HEAD /upload/<id>", () => {
+  test("returns 200 + Upload-Offset for an in-flight upload, 404 for unknown", async () => {
+    const made = makeChannel(); channel = made.channel; await channel.start()
+    const token = mintToken(made.devicesFile)
+    const initRes = await fetch(`${base()}/upload/init`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ session: "s1", mime: "video/mp4", total_size: 10 }),
+    })
+    const id = (await initRes.json()).upload_id as string
+    await fetch(`${base()}/upload/${id}`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${token}`, "upload-offset": "0" },
+      body: new Uint8Array([1, 2, 3, 4]),
+    })
+
+    const head = await fetch(`${base()}/upload/${id}`, { method: "HEAD", headers: { authorization: `Bearer ${token}` } })
+    expect(head.status).toBe(200)
+    expect(head.headers.get("upload-offset")).toBe("4")
+
+    const missing = await fetch(`${base()}/upload/00000000000000000000000000000000`, {
+      method: "HEAD", headers: { authorization: `Bearer ${token}` },
+    })
+    expect(missing.status).toBe(404)
+  })
+})
