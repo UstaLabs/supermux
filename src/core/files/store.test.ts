@@ -97,3 +97,14 @@ describe("FileStore.putStream", () => {
     expect(allFiles(root)).toEqual([])
   })
 })
+
+describe("pending_uploads migration", () => {
+  test("creates the pending_uploads table", () => {
+    const db = openDb(":memory:")
+    runMigrations(db, MIGRATIONS)
+    const row = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='pending_uploads'",
+    ).get() as { name: string } | undefined
+    expect(row?.name).toBe("pending_uploads")
+  })
+})
