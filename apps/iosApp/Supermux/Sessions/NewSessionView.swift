@@ -365,9 +365,17 @@ struct NewSessionView: View {
                     // Audio clips → "voice"; images and videos stay nil so the broker infers the kind
                     // from the MIME (video/* → "video" server-side). Never mislabel a video as audio.
                     let kind = p.mime.hasPrefix("audio") ? "voice" : nil
-                    if let fid = await broker.upload(id, data: p.data, filename: p.filename, mime: p.mime, kind: kind) {
-                        ids.append(fid)
+                    let fid: String?
+                    if let url = p.fileURL {
+                        // Video/large: stream from the file URL (chunked, bounded RAM).
+                        fid = await broker.uploadResumable(id, source: NSFileHandleChunkSource(path: url.path),
+                            filename: p.filename, mime: p.mime, kind: kind) { _, _ in }
+                    } else if let data = p.data {
+                        fid = await broker.upload(id, data: data, filename: p.filename, mime: p.mime, kind: kind)
+                    } else {
+                        fid = nil
                     }
+                    if let fid { ids.append(fid) }
                 }
                 if !firstMsg.isEmpty || !ids.isEmpty {
                     broker.send(id, firstMsg, attachments: ids.isEmpty ? nil : ids)
