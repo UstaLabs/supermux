@@ -301,7 +301,7 @@ describe("PATCH /upload/<id>", () => {
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({ session: "s1", mime, name: "clip.mp4", total_size: total }),
     })
-    return (await res.json()).upload_id as string
+    return ((await res.json()) as Record<string, unknown>).upload_id as string
   }
   function patch(token: string, id: string, offset: number, chunk: Uint8Array) {
     return fetch(`${base()}/upload/${id}`, {
@@ -318,7 +318,7 @@ describe("PATCH /upload/<id>", () => {
 
     const r1 = await patch(token, id, 0, new Uint8Array([1, 2, 3]))
     expect(r1.status).toBe(200)
-    expect((await r1.json()).offset).toBe(3)
+    expect(((await r1.json()) as Record<string, unknown>).offset).toBe(3)
 
     const r2 = await patch(token, id, 3, new Uint8Array([4, 5, 6]))
     expect(r2.status).toBe(200)
@@ -371,7 +371,7 @@ describe("HEAD /upload/<id>", () => {
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({ session: "s1", mime: "video/mp4", total_size: 10 }),
     })
-    const id = (await initRes.json()).upload_id as string
+    const id = ((await initRes.json()) as Record<string, unknown>).upload_id as string
     await fetch(`${base()}/upload/${id}`, {
       method: "PATCH",
       headers: { authorization: `Bearer ${token}`, "upload-offset": "0" },

@@ -120,7 +120,7 @@ describe("FileStore.createPending", () => {
     expect(chunk_size).toBe(5 * 1024 * 1024)
     expect(await store.pendingOffset(upload_id)).toBe(0)
     expect(allFiles(root).length).toBe(1)
-    expect(allFiles(root)[0].endsWith(".part")).toBe(true)
+    expect(allFiles(root).some((f) => f.endsWith(".part"))).toBe(true)
   })
 })
 
@@ -197,7 +197,7 @@ describe("FileStore.finalizePending", () => {
     expect(meta).toMatchObject({ kind: "video", size: 11 })
     expect(readFileSync(meta!.path).toString()).toBe("hello world")
     expect(allFiles(root).length).toBe(1)
-    expect(allFiles(root)[0].endsWith(".part")).toBe(false)
+    expect(allFiles(root).some((f) => f.endsWith(".part"))).toBe(false)
     expect(await store.pendingOffset(upload_id)).toBeNull()
 
     // finalized file carries the device→file_id binding so a web send frame
