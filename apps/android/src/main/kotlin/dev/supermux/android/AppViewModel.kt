@@ -16,6 +16,7 @@ import dev.supermux.net.AddCommentBody
 import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
+import dev.supermux.net.ChunkSource
 import dev.supermux.net.CuratorSettingsResponse
 import dev.supermux.net.BrokerClient
 import dev.supermux.net.CodexResetResult
@@ -415,6 +416,20 @@ class AppViewModel(
         mime: String,
         kind: String? = null,
     ): String? = runCatching { api.upload(sessionId, bytes, name, mime, kind).file_id }.getOrNull()
+
+    /** Resumable/chunked upload from a [ChunkSource] (bounded RAM), reporting
+     *  progress. Returns the finalized file_id, or null on failure (the caller
+     *  surfaces a failed chip — never a silent drop). */
+    suspend fun uploadResumable(
+        sessionId: String,
+        source: ChunkSource,
+        name: String,
+        mime: String,
+        kind: String? = null,
+        onProgress: (Long, Long) -> Unit,
+    ): String? = runCatching {
+        api.uploadResumable(sessionId, source, name, mime, kind, onProgress).file_id
+    }.getOrNull()
 
     // ── Voice dictation ──────────────────────────────────────────────────────────
 

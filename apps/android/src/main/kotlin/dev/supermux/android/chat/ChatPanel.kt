@@ -84,6 +84,7 @@ import dev.supermux.android.theme.HapticKind
 import dev.supermux.android.theme.Radii
 import dev.supermux.android.theme.Space
 import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.net.ChunkSource
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.proto.ActivityEvent
@@ -98,6 +99,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import android.provider.OpenableColumns
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Active "/command" token at the END of the draft (cursor assumed at end), at line start or
@@ -137,7 +140,7 @@ fun ChatPanel(
     onInterrupt: () -> Unit,
     commands: List<SlashCommand>,
     commandsResolved: Boolean,
-    onUpload: suspend (bytes: ByteArray, name: String, mime: String, kind: String?) -> String?,
+    onUpload: suspend (source: ChunkSource, name: String, mime: String, kind: String?, onProgress: (Long, Long) -> Unit) -> String?,
     loadBytes: suspend (String) -> ByteArray?,
     transcribeAudio: suspend (bytes: ByteArray, filename: String) -> String?,
     transcribeDraft: suspend (draft: String) -> String?,
@@ -159,34 +162,77 @@ fun ChatPanel(
     val context = LocalContext.current
     val haptic = rememberHaptics()
 
-    // ── attachment state: list of (fileId, displayName, uploading) ────────────
-    // uploading==true while the upload coroutine is in-flight
-    data class PendingAttachment(val fileId: String, val name: String, val uploading: Boolean)
+    // ── attachment state ──────────────────────────────────────────────────────
+    // Each chip is tracked by a stable [id] (progress updates copy the object, so
+    // object identity is not usable). `uploading` while in-flight; `failed` after
+    // the resumable upload gave up (chip stays with a Retry affordance — never a
+    // silent drop). `source` is kept so Retry can re-run the upload.
+    data class PendingAttachment(
+        val id: Long,
+        val fileId: String,
+        val name: String,
+        val uploading: Boolean,
+        val progress: Float = 0f,
+        val failed: Boolean = false,
+        val source: ChunkSource? = null,
+        val mime: String = "",
+    )
     val pendingAttachments = remember { mutableStateListOf<PendingAttachment>() }
+    val attIdGen = remember { AtomicLong(0L) }
 
-    // Shared upload flow for ALL attachment sources (Photos / Files / Camera). Reads the URI's
-    // bytes, stages a placeholder chip (uploading=true), uploads, then swaps in the real fileId
-    // (or drops the chip on failure). The placeholder object is tracked by identity so concurrent
-    // uploads can't clobber each other's index.
+    fun updateAtt(id: Long, transform: (PendingAttachment) -> PendingAttachment) {
+        val idx = pendingAttachments.indexOfFirst { it.id == id }
+        if (idx >= 0) pendingAttachments[idx] = transform(pendingAttachments[idx])
+    }
+
+    // Name + byte size for a content Uri (DISPLAY_NAME/SIZE, falling back to the
+    // fd's statSize). Size is required to chunk + show determinate progress.
+    fun queryNameSize(uri: Uri): Pair<String, Long?> {
+        val resolver = context.contentResolver
+        var name = uri.lastPathSegment?.substringAfterLast('/') ?: "file"
+        var size: Long? = null
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { c ->
+            if (c.moveToFirst()) {
+                val ni = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (ni >= 0 && !c.isNull(ni)) name = c.getString(ni)
+                val si = c.getColumnIndex(OpenableColumns.SIZE)
+                if (si >= 0 && !c.isNull(si)) size = c.getLong(si)
+            }
+        }
+        if (size == null) {
+            size = runCatching { resolver.openFileDescriptor(uri, "r")?.use { it.statSize.takeIf { s -> s >= 0 } } }.getOrNull()
+        }
+        return name to size
+    }
+
+    // Run (or re-run, on Retry) the resumable upload for one staged attachment,
+    // driving its progress + failed state. Bounded RAM: streams from the Uri.
+    suspend fun uploadAtt(attId: Long, source: ChunkSource, name: String, mime: String) {
+        withContext(Dispatchers.Main) { updateAtt(attId) { it.copy(uploading = true, failed = false, progress = 0f) } }
+        val fileId = onUpload(source, name, mime, null) { sent, total ->
+            val p = if (total > 0) (sent.toFloat() / total).coerceIn(0f, 1f) else 0f
+            scope.launch(Dispatchers.Main) { updateAtt(attId) { it.copy(progress = p) } }
+        }
+        withContext(Dispatchers.Main) {
+            if (fileId != null) updateAtt(attId) { it.copy(fileId = fileId, uploading = false, failed = false, progress = 1f) }
+            else updateAtt(attId) { it.copy(uploading = false, failed = true) }
+        }
+    }
+
+    // Shared staging for ALL attachment sources (Photos / Files / Camera / paste).
+    // Keeps the Uri as a streaming ChunkSource instead of reading the whole file
+    // into RAM, then uploads it resumably with a progress chip.
     suspend fun stageFromUri(uri: Uri) {
         val resolver = context.contentResolver
         val mime = resolver.getType(uri) ?: "application/octet-stream"
-        val name = uri.lastPathSegment?.substringAfterLast('/') ?: "file"
-        val bytes = withContext(Dispatchers.IO) {
-            resolver.openInputStream(uri)?.use { it.readBytes() }
-        } ?: return
-        val placeholder = PendingAttachment(fileId = "", name = name, uploading = true)
-        withContext(Dispatchers.Main) { pendingAttachments.add(placeholder) }
-        val fileId = onUpload(bytes, name, mime, null)
+        val (name, size) = queryNameSize(uri)
+        if (size == null || size <= 0L) return
+        val source = ContentResolverChunkSource(resolver, uri, size)
+        val attId = attIdGen.incrementAndGet()
         withContext(Dispatchers.Main) {
-            val idx = pendingAttachments.indexOf(placeholder)
-            if (idx < 0) return@withContext
-            if (fileId != null) {
-                pendingAttachments[idx] = PendingAttachment(fileId, name, uploading = false)
-            } else {
-                pendingAttachments.removeAt(idx)
-            }
+            pendingAttachments.add(PendingAttachment(id = attId, fileId = "", name = name, uploading = true, source = source, mime = mime))
         }
+        uploadAtt(attId, source, name, mime)
     }
 
     // Clipboard helpers for paste-to-attach (web parity). Reading the clip *description* (mime
@@ -529,25 +575,35 @@ fun ChatPanel(
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    pendingAttachments.forEachIndexed { idx, att ->
+                    pendingAttachments.forEach { att ->
                         Row(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(16.dp))
-                                .background(MaterialTheme.colorScheme.surfaceContainer)
+                                .background(
+                                    if (att.failed) MaterialTheme.colorScheme.errorContainer
+                                    else MaterialTheme.colorScheme.surfaceContainer
+                                )
+                                .then(
+                                    att.source?.takeIf { att.failed }?.let { src ->
+                                        Modifier.clickable { scope.launch { uploadAtt(att.id, src, att.name, att.mime) } }
+                                    } ?: Modifier
+                                )
                                 .padding(horizontal = 10.dp, vertical = 5.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
                             if (att.uploading) {
                                 CircularProgressIndicator(
+                                    progress = { att.progress },
                                     modifier = Modifier.size(12.dp),
                                     color = MaterialTheme.colorScheme.primary,
                                     strokeWidth = 1.5.dp,
                                 )
                             }
                             Text(
-                                text = att.name,
-                                color = MaterialTheme.colorScheme.onSurface,
+                                text = if (att.failed) "${att.name} · Retry" else att.name,
+                                color = if (att.failed) MaterialTheme.colorScheme.onErrorContainer
+                                        else MaterialTheme.colorScheme.onSurface,
                                 fontSize = 12.sp,
                                 maxLines = 1,
                             )
@@ -555,9 +611,10 @@ fun ChatPanel(
                                 Icon(
                                     painter = painterResource(R.drawable.ic_x),
                                     contentDescription = "Remove",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    tint = if (att.failed) MaterialTheme.colorScheme.onErrorContainer
+                                           else MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier
-                                        .clickable { pendingAttachments.removeAt(idx) }
+                                        .clickable { pendingAttachments.removeAll { it.id == att.id } }
                                         .padding(start = 2.dp)
                                         .size(14.dp),
                                 )
@@ -588,13 +645,14 @@ fun ChatPanel(
             val focusBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = composerBorderAlpha)
 
             // Single send path used by BOTH the send button and the IME Send action.
-            val canSend = text.isNotBlank() || pendingAttachments.any { !it.uploading }
+            // Block send while any attachment is still uploading OR has failed —
+            // never send a message minus its attachment (the old silent drop).
+            val anyBlocking = pendingAttachments.any { it.uploading || it.failed }
+            val canSend = !anyBlocking && (text.isNotBlank() || pendingAttachments.isNotEmpty())
             fun doSend() {
                 if (!canSend) return
                 haptic(HapticKind.Confirm)
-                val attachmentIds = pendingAttachments
-                    .filter { !it.uploading }
-                    .map { it.fileId }
+                val attachmentIds = pendingAttachments.map { it.fileId }
                 onSendWith(text, attachmentIds)
                 text = ""
                 pendingAttachments.clear()

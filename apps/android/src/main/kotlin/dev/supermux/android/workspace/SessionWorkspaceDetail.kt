@@ -42,6 +42,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.supermux.android.R
 import dev.supermux.android.chat.ChatPanel
 import dev.supermux.android.chat.FinishButton
+import dev.supermux.net.ChunkSource
 import dev.supermux.android.chat.FinishSheet
 import dev.supermux.android.chat.SessionPanel
 import dev.supermux.android.display.DisplayPanel
@@ -93,7 +94,7 @@ fun SessionWorkspaceDetail(
     onInterrupt: () -> Unit,
     commands: List<SlashCommand>,
     commandsResolved: Boolean,
-    onUpload: suspend (bytes: ByteArray, name: String, mime: String, kind: String?) -> String?,
+    onUpload: suspend (source: ChunkSource, name: String, mime: String, kind: String?, onProgress: (Long, Long) -> Unit) -> String?,
     loadBytes: suspend (String) -> ByteArray?,
     transcribeAudio: suspend (bytes: ByteArray, filename: String) -> String?,
     transcribeDraft: suspend (draft: String) -> String?,

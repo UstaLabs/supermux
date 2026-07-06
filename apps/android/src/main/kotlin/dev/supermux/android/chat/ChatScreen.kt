@@ -79,6 +79,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import dev.supermux.net.ChunkSource
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ReasoningResponse
 import kotlinx.coroutines.Dispatchers
@@ -135,7 +136,7 @@ fun ChatScreen(
     sending: Boolean = false,
     onBack: () -> Unit,
     onSendWith: (text: String, attachments: List<String>) -> Unit,
-    onUpload: suspend (bytes: ByteArray, name: String, mime: String, kind: String?) -> String?,
+    onUpload: suspend (source: ChunkSource, name: String, mime: String, kind: String?, onProgress: (Long, Long) -> Unit) -> String?,
     transcribeAudio: suspend (bytes: ByteArray, filename: String) -> String? = { _, _ -> null },
     transcribeDraft: suspend (draft: String) -> String? = { null },
     loadGlossary: suspend () -> List<String> = { emptyList() },
