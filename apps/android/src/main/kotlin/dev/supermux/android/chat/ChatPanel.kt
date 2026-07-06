@@ -81,6 +81,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import dev.supermux.android.R
 import dev.supermux.android.theme.HapticKind
+import dev.supermux.android.theme.MonoFontFamily
 import dev.supermux.android.theme.Radii
 import dev.supermux.android.theme.Space
 import dev.supermux.android.theme.rememberHaptics
@@ -433,8 +434,8 @@ fun ChatPanel(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(horizontal = Space.lg, vertical = Space.md),
-                verticalArrangement = Arrangement.spacedBy(Space.lg),
+                    .padding(start = Space.sm, end = Space.md, top = Space.md, bottom = Space.md),
+                verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 items(timelineItems, key = { timelineItemKey(it) }) { item ->
                     TimelineItemRow(item, loadBytes, onOpenFile)
@@ -954,43 +955,39 @@ private fun WorkingIndicator(agent: AgentStatus, onStop: () -> Unit) {
         }
     }
     val elapsed = agent.workingSince?.let { ((now - it).coerceAtLeast(0)) / 1000 }
-    val label = when (agent.detail) {
-        "running" -> "Working…"
-        else -> "Thinking…"
-    }
+    val label = if (agent.detail == "running") "working" else "thinking"
+    // Terminal-prompt status line: a gutter-aligned live pulse continues the spine's thread,
+    // then a mono status + elapsed, then a compact stop. Reads as the prompt of a live session.
     Row(
-        modifier = Modifier.padding(vertical = Space.xs),
+        modifier = Modifier.fillMaxWidth().padding(top = Space.sm, bottom = Space.xs),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
-        CircularProgressIndicator(
-            modifier = Modifier.size(14.dp),
-            strokeWidth = 2.dp,
-            color = cs.primary,
-        )
+        Box(Modifier.width(44.dp)) {
+            BreathingDot(cs.primary, Modifier.align(Alignment.CenterEnd).padding(end = 6.dp), size = 7.dp)
+        }
         Text(
             text = label + (elapsed?.let { " · " + formatDuration(it) } ?: ""),
-            style = MaterialTheme.typography.bodySmall,
-            color = cs.onSurfaceVariant,
+            fontFamily = MonoFontFamily,
+            fontSize = 12.sp,
+            color = cs.primary,
         )
-        // Red Stop capsule → interrupt
+        Spacer(Modifier.width(Space.sm))
         Row(
             modifier = Modifier
-                .clip(RoundedCornerShape(50))
-                .background(cs.error.copy(alpha = 0.12f))
+                .clip(RoundedCornerShape(Radii.sm))
                 .clickable { haptic(HapticKind.Tick); onStop() }
                 .testTag("working_stop")
-                .padding(horizontal = Space.sm, vertical = 3.dp),
+                .padding(horizontal = Space.sm, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Icon(
                 painter = painterResource(R.drawable.ic_square),
                 contentDescription = "Stop",
                 tint = cs.error,
-                modifier = Modifier.size(11.dp),
+                modifier = Modifier.size(10.dp),
             )
-            Text("Stop", style = MaterialTheme.typography.labelMedium, color = cs.error)
+            Text("stop", fontFamily = MonoFontFamily, fontSize = 11.sp, color = cs.error)
         }
     }
 }
@@ -1005,38 +1002,35 @@ private fun SendingIndicator(onStop: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val haptic = rememberHaptics()
     Row(
-        modifier = Modifier.padding(vertical = Space.xs),
+        modifier = Modifier.fillMaxWidth().padding(top = Space.sm, bottom = Space.xs),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
-        CircularProgressIndicator(
-            modifier = Modifier.size(14.dp),
-            strokeWidth = 2.dp,
+        Box(Modifier.width(44.dp)) {
+            BreathingDot(cs.primary, Modifier.align(Alignment.CenterEnd).padding(end = 6.dp), size = 7.dp)
+        }
+        Text(
+            text = "sending",
+            fontFamily = MonoFontFamily,
+            fontSize = 12.sp,
             color = cs.primary,
         )
-        Text(
-            text = "Sending…",
-            style = MaterialTheme.typography.bodySmall,
-            color = cs.onSurfaceVariant,
-        )
-        // Red Stop capsule → interrupt
+        Spacer(Modifier.width(Space.sm))
         Row(
             modifier = Modifier
-                .clip(RoundedCornerShape(50))
-                .background(cs.error.copy(alpha = 0.12f))
+                .clip(RoundedCornerShape(Radii.sm))
                 .clickable { haptic(HapticKind.Tick); onStop() }
                 .testTag("sending_stop")
-                .padding(horizontal = Space.sm, vertical = 3.dp),
+                .padding(horizontal = Space.sm, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Icon(
                 painter = painterResource(R.drawable.ic_square),
                 contentDescription = "Stop",
                 tint = cs.error,
-                modifier = Modifier.size(11.dp),
+                modifier = Modifier.size(10.dp),
             )
-            Text("Stop", style = MaterialTheme.typography.labelMedium, color = cs.error)
+            Text("stop", fontFamily = MonoFontFamily, fontSize = 11.sp, color = cs.error)
         }
     }
 }

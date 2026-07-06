@@ -1,5 +1,6 @@
 package dev.supermux.android.settings
 
+import dev.supermux.android.theme.LocalSemantics
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -229,7 +230,7 @@ private fun ForgeConnectionRow(
                         Text("reconnect", color = warning, fontSize = 10.sp, fontWeight = FontWeight.Medium)
                     }
                 } else {
-                    Box(Modifier.size(7.dp).clip(CircleShape).background(Color(0xFF3FB950)))
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(LocalSemantics.current.success))
                 }
             }
             val host = c.host.ifEmpty { if (c.kind == "gitlab") "gitlab.com" else "github.com" }

@@ -102,6 +102,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.core.content.FileProvider
 import java.io.File
 import dev.supermux.android.R
+import dev.supermux.android.theme.MonoFontFamily
 import dev.supermux.android.theme.Radii
 import dev.supermux.util.formatDuration
 import dev.supermux.android.display.DisplayPanel
@@ -313,32 +314,26 @@ fun ChatScreen(
 
                 // Agent pill (only if non-idle). A spinner means "in progress" — so it
                 // shows only while working; the dead state is an error-colored label, no spinner.
-                if (agent != null && agent.state != "idle") {
-                    val isDead = agent.state == "dead"
-                    val pillColor = if (isDead) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                // Header shows ONLY the dead "not responding" state — the live running/thinking
+                // state is surfaced by the bottom-of-stream status line, so a header pill for it
+                // would be redundant.
+                if (agent != null && agent.state == "dead") {
+                    val error = MaterialTheme.colorScheme.error
                     Row(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(pillColor.copy(alpha = 0.16f))
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                            .clip(RoundedCornerShape(50))
+                            .background(error.copy(alpha = 0.14f))
+                            .border(1.dp, error.copy(alpha = 0.35f), RoundedCornerShape(50))
+                            .padding(horizontal = 9.dp, vertical = 3.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        if (!isDead) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(12.dp),
-                                color = MaterialTheme.colorScheme.primary,
-                                strokeWidth = 2.dp,
-                            )
-                        }
+                        Box(Modifier.size(6.dp).clip(CircleShape).background(error))
                         Text(
-                            text = when {
-                                isDead -> "Not responding"
-                                agent.detail == "running" -> "Running"
-                                else -> "Thinking"
-                            },
-                            color = pillColor,
-                            fontSize = 12.sp,
+                            text = "not responding",
+                            color = error,
+                            fontFamily = MonoFontFamily,
+                            fontSize = 11.sp,
                         )
                     }
                 }

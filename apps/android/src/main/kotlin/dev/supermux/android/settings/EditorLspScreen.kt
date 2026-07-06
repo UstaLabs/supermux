@@ -1,5 +1,6 @@
 package dev.supermux.android.settings
 
+import dev.supermux.android.theme.LocalSemantics
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -221,7 +222,7 @@ private fun LspServerRow(
                 if (server.extensions.isNotEmpty()) {
                     Text(extSummary(server.extensions), color = cs.onSurfaceVariant, fontSize = 11.sp)
                 }
-                Text(stateLabel(server), color = if (ready) Color(0xFF3FB950) else warning, fontSize = 11.sp)
+                Text(stateLabel(server), color = if (ready) LocalSemantics.current.success else warning, fontSize = 11.sp)
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (server.custom) {
@@ -289,7 +290,7 @@ private fun LspServerRow(
                 Icon(
                     painterResource(if (result.ok) R.drawable.ic_check else R.drawable.ic_x),
                     contentDescription = null,
-                    tint = if (result.ok) Color(0xFF3FB950) else cs.error,
+                    tint = if (result.ok) LocalSemantics.current.success else cs.error,
                     modifier = Modifier.size(14.dp),
                 )
                 Text(
