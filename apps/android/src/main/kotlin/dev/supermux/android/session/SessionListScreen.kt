@@ -319,8 +319,11 @@ fun SessionListScreen(
     animScope: AnimatedVisibilityScope? = null,
 ) {
     val cs = MaterialTheme.colorScheme
-    val groups = remember(sessions, home, lastBySession) {
-        groupSessions(sessions, home) { lastBySession[it.id]?.ts ?: "" }
+    // Infer the home dir from the sessions' workdirs (iOS `BrokerSession.grouped` parity) instead of
+    // the hardcoded DevConfig.HOME placeholder, so "~/…" abbreviation in group labels matches iOS.
+    val effectiveHome = inferHomeDir(sessions.firstOrNull()?.workdir) ?: home
+    val groups = remember(sessions, effectiveHome, lastBySession) {
+        groupSessions(sessions, effectiveHome) { lastBySession[it.id]?.ts ?: "" }
     }
 
     var menuExpanded by remember { mutableStateOf(false) }
