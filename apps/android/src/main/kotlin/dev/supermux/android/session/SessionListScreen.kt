@@ -39,6 +39,7 @@ import dev.supermux.android.theme.softElevation
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.session.formatWorkdir
+import dev.supermux.session.inferHomeDir
 import dev.supermux.session.groupSessions
 import kotlinx.coroutines.launch
 
@@ -209,7 +210,11 @@ fun SessionRow(
                     s.name,
                     color = cs.onSurface,
                     fontSize = 15.sp,
-                    fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.Medium,
+                    // Bold the ACTIVE session (selection) as well as unread ones. Previously only
+                    // unread (last-message-inbound) rows were bold, and selecting a row cleared its
+                    // unread → it *lost* bold on click and regained it when you selected away, which
+                    // read as "clicking doesn't bold it, but clicking another one does".
+                    fontWeight = if (active || hasUnread) FontWeight.Bold else FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
@@ -254,7 +259,9 @@ fun SessionRow(
                 )
             } else {
                 Text(
-                    s.workdir,
+                    // Match iOS: abbreviate the workdir via the shared KMP util (~/… under home,
+                    // …/parent/leaf when deep) instead of showing the raw absolute path.
+                    formatWorkdir(s.workdir, inferHomeDir(s.workdir)),
                     color = cs.onSurfaceVariant,
                     fontFamily = MonoFontFamily,
                     fontSize = 11.sp,

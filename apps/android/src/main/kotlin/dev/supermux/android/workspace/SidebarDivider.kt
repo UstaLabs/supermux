@@ -45,19 +45,17 @@ fun SidebarDivider(
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
+    // Transparent overlay: the caller positions this over the sidebar↔detail seam (it holds no
+    // layout width there), so the only thing that shows is the centered hairline + the chevron.
     Box(
         modifier
             .fillMaxHeight()
-            .width(14.dp)
-            // Blend the drag gutter into the sidebar surface so it doesn't read as a fat dark band
-            // over the app background (very visible on DeX / large displays). Only the trailing
-            // hairline shows — that's the "thin line" the divider should be.
-            .background(cs.surfaceContainerHigh),
+            .width(14.dp),
     ) {
-        // Hairline at the sidebar↔detail boundary (trailing edge), not floating mid-gutter.
+        // Hairline centered on the seam.
         Box(
             Modifier
-                .align(Alignment.CenterEnd)
+                .align(Alignment.Center)
                 .width(1.dp)
                 .fillMaxHeight()
                 .background(cs.outlineVariant),

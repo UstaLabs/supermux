@@ -30,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
@@ -186,6 +187,40 @@ fun TerminalPanel(
                         }
                     }
                 }
+            }
+            // Trackpad / mouse-wheel: real Scroll events (not a touch drag) reach us as
+            // PointerEventType.Scroll, which the drag handler above (keyed on awaitFirstDown)
+            // never sees — so wheel/trackpad scroll was dead in the terminal + native views.
+            // Forward them as the same tmux SGR wheel bytes.
+            .pointerInput(client, emulator) {
+                var scrollAccum = 0.0
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        if (event.type != PointerEventType.Scroll) continue
+                        var dy = 0f
+                        for (ch in event.changes) dy += ch.scrollDelta.y
+                        if (dy == 0f) continue
+                        // Compose negates AXIS_VSCROLL, so wheel-down → +y → newer output, which
+                        // matches linesFromPixels' sign. Accumulate so a trackpad's sub-line
+                        // deltas eventually move a whole row.
+                        scrollAccum += dy.toDouble()
+                        val lines = scrollAccum.toInt()
+                        if (lines != 0) {
+                            scrollAccum -= lines
+                            val rows = emulator.dimensions.rows
+                            val cols = emulator.dimensions.columns
+                            client.sendInput(
+                                wheelEventsFromLines(
+                                    lines,
+                                    if (cols > 1) cols / 2 else 1,
+                                    if (rows > 1) rows / 2 else 1,
+                                ),
+                            )
+                        }
+                        for (ch in event.changes) ch.consume()
+                    }
+                }
             },
     ) {
         Terminal(
@@ -195,7 +230,10 @@ fun TerminalPanel(
             backgroundColor = Color(c.terminal),
             foregroundColor = Color(c.terminalForeground),
             keyboardEnabled = true,
-            showSoftKeyboard = true,
+            // Don't grab focus + pop the keyboard the moment the pane appears — in the tablet
+            // workspace that steals focus from wherever the user was. Taps fall through to termlib
+            // (see the drag handler above), so tapping the terminal still focuses it.
+            showSoftKeyboard = false,
         )
         StatusChip(
             status = status,
