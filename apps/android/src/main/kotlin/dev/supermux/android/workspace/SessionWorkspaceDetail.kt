@@ -326,16 +326,16 @@ fun SessionWorkspaceDetail(
     val workColumn: @Composable () -> Unit = {
         val p = layout.panesFor(session.id)
         when {
-            p.editor && p.terminal -> ResizableSplit(
+            // Editor stays in the same split slot so it doesn't remount/flash when the terminal toggles.
+            p.editor -> ResizableSplit(
                 axis = SplitAxis.Vertical,
                 fraction = layout.editorTermFraction,
                 onFractionChange = layout::setEditorTermFraction,
                 range = WorkspaceLayout.EDITORTERM_MIN..WorkspaceLayout.EDITORTERM_MAX,
                 testTag = "divider_editor_terminal",
                 first = editorPane,
-                second = terminalPane,
+                second = if (p.terminal) terminalPane else null,
             )
-            p.editor -> editorPane()
             p.terminal -> terminalPane()
         }
     }
@@ -343,17 +343,17 @@ fun SessionWorkspaceDetail(
     val rightArea: @Composable () -> Unit = {
         val p = layout.panesFor(session.id)
         when {
-            p.display && (p.editor || p.terminal) -> ResizableSplit(
+            // Work column stays in the same split slot so it doesn't remount/flash when Display toggles.
+            p.editor || p.terminal -> ResizableSplit(
                 axis = SplitAxis.Horizontal,
                 fraction = layout.workDisplayFraction,
                 onFractionChange = layout::setWorkDisplayFraction,
                 range = WorkspaceLayout.WORKDISP_MIN..WorkspaceLayout.WORKDISP_MAX,
                 testTag = "divider_work_display",
                 first = workColumn,
-                second = displayPane,
+                second = if (p.display) displayPane else null,
             )
             p.display -> displayPane()
-            else -> workColumn()
         }
     }
 
@@ -607,16 +607,18 @@ fun SessionWorkspaceDetail(
         Box(Modifier.weight(1f).fillMaxWidth()) {
             val p = layout.panesFor(session.id)
             when {
-                p.chat && p.hasWork -> ResizableSplit(
+                // Chat always renders through the SAME split, so it never remounts (and the whole
+                // page never blinks) when a work pane toggles — the work area is just the split's
+                // second slot, present only when there's work to show.
+                p.chat -> ResizableSplit(
                     axis = SplitAxis.Horizontal,
                     fraction = layout.chatFraction,
                     onFractionChange = layout::setChatFraction,
                     range = WorkspaceLayout.CHAT_MIN..WorkspaceLayout.CHAT_MAX,
                     testTag = "divider_chat_work",
                     first = chatOrNative,
-                    second = rightArea,
+                    second = if (p.hasWork) rightArea else null,
                 )
-                p.chat -> chatOrNative()
                 else -> rightArea() // invariant guarantees a non-empty pane set
             }
         }
