@@ -397,6 +397,7 @@ private fun SessionChatLayer(
             onRename = { vm.rename(session.id, it) },
             onMute = { vm.setMute(session.id, it) },
             onKill = onKill,
+            sessionLinks = sessionLinks,
             vmModels = { vm.fetchModels(it) },
             vmReasoning = { vm.fetchReasoning(it) },
             onPickModel = { vm.switchModel(session.id, it) },

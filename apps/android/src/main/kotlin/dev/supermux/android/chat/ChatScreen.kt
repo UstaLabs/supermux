@@ -78,6 +78,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ReasoningResponse
@@ -104,6 +105,8 @@ import dev.supermux.android.R
 import dev.supermux.android.theme.MonoFontFamily
 import dev.supermux.android.theme.Radii
 import dev.supermux.util.formatDuration
+import dev.supermux.util.proxyDisplayUrl
+import dev.supermux.util.proxyUrl
 import dev.supermux.android.display.DisplayPanel
 import dev.supermux.android.ui.keepAlivePanel
 import dev.supermux.android.editor.EditorPanel
@@ -143,6 +146,7 @@ fun ChatScreen(
     onRename: (String) -> Unit = {},
     onMute: (Boolean) -> Unit = {},
     onKill: () -> Unit = {},
+    sessionLinks: List<dev.supermux.net.ProxyDto> = emptyList(),
     vmModels: suspend (String) -> ModelsResponse? = { null },
     vmReasoning: suspend (String) -> ReasoningResponse? = { null },
     onPickModel: (String) -> Unit = {},
@@ -334,6 +338,38 @@ fun ChatScreen(
                             fontFamily = MonoFontFamily,
                             fontSize = 11.sp,
                         )
+                    }
+                }
+
+                // Exposed proxy links (iOS sessionLinksMenu parity) — also in the phone header.
+                if (sessionLinks.isNotEmpty()) {
+                    var showLinks by remember { mutableStateOf(false) }
+                    val uriHandler = LocalUriHandler.current
+                    Box {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_globe),
+                            contentDescription = "Links",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .clickable { showLinks = true }
+                                .padding(start = 4.dp)
+                                .size(20.dp),
+                        )
+                        DropdownMenu(expanded = showLinks, onDismissRequest = { showLinks = false }) {
+                            sessionLinks.forEach { p ->
+                                DropdownMenuItem(
+                                    text = { Text(proxyDisplayUrl(p)) },
+                                    leadingIcon = {
+                                        Icon(
+                                            painter = painterResource(R.drawable.ic_external_link),
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    },
+                                    onClick = { showLinks = false; uriHandler.openUri(proxyUrl(p)) },
+                                )
+                            }
+                        }
                     }
                 }
 

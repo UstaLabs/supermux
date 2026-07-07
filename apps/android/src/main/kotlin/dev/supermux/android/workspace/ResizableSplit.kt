@@ -44,7 +44,10 @@ fun ResizableSplit(
     range: ClosedFloatingPointRange<Float>,
     testTag: String,
     first: @Composable () -> Unit,
-    second: @Composable () -> Unit,
+    // Nullable: when null, [first] takes the full space and no divider shows. This lets a caller
+    // keep [first] at a STABLE call position whether or not the second pane is present — so [first]
+    // isn't remounted (and doesn't flash) when the second pane toggles on/off.
+    second: (@Composable () -> Unit)? = null,
 ) {
     var totalPx by remember { mutableStateOf(0) }
     val horizontal = axis == SplitAxis.Horizontal
@@ -75,15 +78,19 @@ fun ResizableSplit(
 
     if (horizontal) {
         Row(Modifier.fillMaxSize().onSizeChanged { totalPx = it.width }) {
-            Box(Modifier.weight(fraction).fillMaxHeight()) { first() }
-            divider()
-            Box(Modifier.weight(1f - fraction).fillMaxHeight()) { second() }
+            Box(Modifier.weight(if (second != null) fraction else 1f).fillMaxHeight()) { first() }
+            if (second != null) {
+                divider()
+                Box(Modifier.weight(1f - fraction).fillMaxHeight()) { second() }
+            }
         }
     } else {
         Column(Modifier.fillMaxSize().onSizeChanged { totalPx = it.height }) {
-            Box(Modifier.weight(fraction).fillMaxWidth()) { first() }
-            divider()
-            Box(Modifier.weight(1f - fraction).fillMaxWidth()) { second() }
+            Box(Modifier.weight(if (second != null) fraction else 1f).fillMaxWidth()) { first() }
+            if (second != null) {
+                divider()
+                Box(Modifier.weight(1f - fraction).fillMaxWidth()) { second() }
+            }
         }
     }
 }
