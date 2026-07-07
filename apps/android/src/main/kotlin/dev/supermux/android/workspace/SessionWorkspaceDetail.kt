@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,6 +42,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.supermux.android.R
 import dev.supermux.android.chat.ChatPanel
+import dev.supermux.util.proxyDisplayUrl
+import dev.supermux.util.proxyUrl
 import dev.supermux.android.chat.FinishButton
 import dev.supermux.android.chat.FinishSheet
 import dev.supermux.android.chat.SessionPanel
@@ -113,6 +116,8 @@ fun SessionWorkspaceDetail(
     onNavigate: (String) -> Unit,
     // Workspace ⋮ git ops (op = fetch|push|pull|publish); the caller runs it + surfaces the result.
     onGitOp: (String) -> Unit = {},
+    // Exposed proxy links for this session (iOS sessionLinksMenu parity).
+    sessionLinks: List<dev.supermux.net.ProxyDto> = emptyList(),
     // Finish flow — threaded from SessionChatLayer exactly like ChatScreen (same VM-backed lambdas).
     finishJob: dev.supermux.proto.FinishJobDto? = null,
     onFinishReadiness: suspend () -> dev.supermux.net.FinishReadiness? = { null },
@@ -385,6 +390,40 @@ fun SessionWorkspaceDetail(
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(Space.sm))
+
+            // Exposed proxy links (iOS sessionLinksMenu parity): a link icon dropping a menu of the
+            // session's public URLs, each opening in the browser.
+            if (sessionLinks.isNotEmpty()) {
+                var showLinks by remember { mutableStateOf(false) }
+                val uriHandler = LocalUriHandler.current
+                Box {
+                    IconButton(onClick = { showLinks = true }, modifier = Modifier.testTag("session_links")) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_globe),
+                            contentDescription = "Links",
+                            tint = cs.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    DropdownMenu(expanded = showLinks, onDismissRequest = { showLinks = false }) {
+                        sessionLinks.forEach { p ->
+                            DropdownMenuItem(
+                                text = { Text(proxyDisplayUrl(p)) },
+                                leadingIcon = {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_external_link),
+                                        contentDescription = null,
+                                        tint = cs.onSurface,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                },
+                                onClick = { showLinks = false; uriHandler.openUri(proxyUrl(p)) },
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.width(Space.xs))
+            }
 
             // Chat ⇄ Native (raw agent PTY) toggle — claude only, and only while the Chat pane is
             // visible (it flips ChatPanel ⇄ agent-PTY inside that pane; see chatOrNative above).
