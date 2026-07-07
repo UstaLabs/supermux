@@ -73,6 +73,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -444,14 +445,33 @@ fun ChatPanel(
                 }.take(8)
             } else emptyList()
 
+            // Hardware-keyboard nav for the slash menu: ↑/↓ move the highlight, Enter picks, Esc
+            // dismisses — so you can drive it without touch (DeX / attached keyboard).
+            var selectedSlashIndex by remember { mutableIntStateOf(0) }
+            var slashMenuDismissed by remember { mutableStateOf(false) }
+            LaunchedEffect(slashQuery) { selectedSlashIndex = 0; slashMenuDismissed = false }
+            val slashMenuOpen = slashMatches.isNotEmpty() && !slashMenuDismissed
+            val safeSlashIndex = selectedSlashIndex.coerceIn(0, (slashMatches.size - 1).coerceAtLeast(0))
+
             // Replace the active "/token" with [insert], preserving any leading whitespace.
             fun replaceSlashToken(insert: String) {
                 val m = slashTokenRegex.find(text) ?: run { text = insert; return }
                 val lead = m.value.takeWhile { it == ' ' || it == '\n' || it == '\t' }
                 text = text.substring(0, m.range.first) + lead + insert
             }
+            // Apply a slash command — shared by a tap and by keyboard Enter.
+            fun selectSlashCommand(cmd: SlashCommand) {
+                haptic(HapticKind.Tick)
+                val action = cmd.action
+                if (action != null) {
+                    replaceSlashToken("")
+                    onControl(cmd)
+                } else {
+                    replaceSlashToken(cmd.insertText?.ifEmpty { null } ?: "${cmd.sigil}${cmd.name} ")
+                }
+            }
 
-            if (slashMatches.isNotEmpty()) {
+            if (slashMenuOpen) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -460,23 +480,16 @@ fun ChatPanel(
                         .verticalScroll(rememberScrollState())
                         .padding(vertical = 4.dp),
                 ) {
-                    slashMatches.forEach { cmd ->
+                    slashMatches.forEachIndexed { i, cmd ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("chat_slash_item_${cmd.name}")
-                                .clickable {
-                                    haptic(HapticKind.Tick)
-                                    val action = cmd.action
-                                    if (action != null) {
-                                        replaceSlashToken("")
-                                        onControl(cmd)
-                                    } else {
-                                        replaceSlashToken(
-                                            cmd.insertText?.ifEmpty { null } ?: "${cmd.sigil}${cmd.name} "
-                                        )
-                                    }
-                                }
+                                .background(
+                                    if (i == safeSlashIndex) MaterialTheme.colorScheme.surfaceContainerHighest
+                                    else Color.Transparent,
+                                )
+                                .clickable { selectSlashCommand(cmd) }
                                 .padding(horizontal = 14.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -683,14 +696,32 @@ fun ChatPanel(
                             // inserts a newline and no duplicate IME "Send" fires — fixes hardware
                             // Enter not sending, and the newline double-send, on DeX/desktop keyboards.
                             .onPreviewKeyEvent { e ->
-                                if (e.type == KeyEventType.KeyDown &&
-                                    (e.key == Key.Enter || e.key == Key.NumPadEnter) &&
-                                    !e.isShiftPressed
-                                ) {
-                                    doSend()
-                                    true
-                                } else {
+                                if (e.type != KeyEventType.KeyDown) {
                                     false
+                                } else when {
+                                    // Slash menu open → arrows move the highlight, Enter picks, Esc closes.
+                                    slashMenuOpen && e.key == Key.DirectionDown -> {
+                                        selectedSlashIndex = (safeSlashIndex + 1).coerceAtMost(slashMatches.size - 1)
+                                        true
+                                    }
+                                    slashMenuOpen && e.key == Key.DirectionUp -> {
+                                        selectedSlashIndex = (safeSlashIndex - 1).coerceAtLeast(0)
+                                        true
+                                    }
+                                    slashMenuOpen && (e.key == Key.Enter || e.key == Key.NumPadEnter) && !e.isShiftPressed -> {
+                                        slashMatches.getOrNull(safeSlashIndex)?.let { selectSlashCommand(it) }
+                                        true
+                                    }
+                                    slashMenuOpen && e.key == Key.Escape -> {
+                                        slashMenuDismissed = true
+                                        true
+                                    }
+                                    // Otherwise: Enter sends, Shift+Enter inserts a newline.
+                                    (e.key == Key.Enter || e.key == Key.NumPadEnter) && !e.isShiftPressed -> {
+                                        doSend()
+                                        true
+                                    }
+                                    else -> false
                                 }
                             }
                             // Paste/drag a copied image straight into the box (web parity). Text
