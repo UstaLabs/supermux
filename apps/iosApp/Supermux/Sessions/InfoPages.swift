@@ -472,7 +472,13 @@ struct UsageView: View {
             if let u {
                 usageBar("5-hour window", u.fiveHour.used, reset: resetClaude(u.fiveHour.resetsAt))
                 usageBar("7-day window", u.sevenDay.used, reset: resetClaude(u.sevenDay.resetsAt))
-                usageBar("7-day Sonnet", u.sevenDaySonnet.used, reset: resetClaude(u.sevenDaySonnet.resetsAt))
+                // Per-model weekly caps — shown only when Anthropic returns them.
+                if let sonnet = u.sevenDaySonnet {
+                    usageBar("7-day Sonnet", sonnet.used, reset: resetClaude(sonnet.resetsAt))
+                }
+                if let fable = u.sevenDayFable {
+                    usageBar("7-day Fable", fable.used, reset: resetClaude(fable.resetsAt))
+                }
                 if let extra = u.extraUsage, extra.enabled {
                     Divider()
                     rowLine("Extra usage", String(format: "$%.2f / $%.2f", extra.usedCredits, extra.monthlyLimit))

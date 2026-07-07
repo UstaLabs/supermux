@@ -17,7 +17,9 @@ export interface ClaudeExtraUsage {
 export interface ClaudeUsage {
   fiveHour: UsageWindow
   sevenDay: UsageWindow
-  sevenDaySonnet: UsageWindow
+  // Per-model weekly caps. null when Anthropic returns no such limit — clients hide the row.
+  sevenDaySonnet: UsageWindow | null
+  sevenDayFable: UsageWindow | null
   extraUsage: ClaudeExtraUsage | null
 }
 
@@ -100,6 +102,24 @@ export async function fetchClaudeUsage(
     resetsAt: w?.resets_at ?? null,
   })
 
+  // Anthropic moved per-model weekly caps into a `limits[]` array; the legacy
+  // top-level `seven_day_<model>` fields are being phased out (now null on many
+  // accounts). Read each scoped window from `limits[]` by model display name,
+  // falling back to the legacy field only while it's still populated. Returns
+  // null when neither exists so clients hide the row.
+  const limits: any[] = Array.isArray(data.limits) ? data.limits : []
+  const scopedWindow = (displayName: string): UsageWindow | null => {
+    const e = limits.find(
+      (l) =>
+        l?.group === "weekly" &&
+        typeof l?.scope?.model?.display_name === "string" &&
+        l.scope.model.display_name.toLowerCase() === displayName.toLowerCase(),
+    )
+    return e ? { used: e.percent ?? 0, resetsAt: e.resets_at ?? null } : null
+  }
+  const legacyWindow = (w: any): UsageWindow | null =>
+    w && typeof w === "object" ? mapWindow(w) : null
+
   const extra = data.extra_usage
   const extraUsage: ClaudeExtraUsage | null = extra
     ? {
@@ -113,7 +133,8 @@ export async function fetchClaudeUsage(
   return {
     fiveHour: mapWindow(data.five_hour),
     sevenDay: mapWindow(data.seven_day),
-    sevenDaySonnet: mapWindow(data.seven_day_sonnet),
+    sevenDaySonnet: scopedWindow("Sonnet") ?? legacyWindow(data.seven_day_sonnet),
+    sevenDayFable: scopedWindow("Fable"),
     extraUsage,
   }
 }

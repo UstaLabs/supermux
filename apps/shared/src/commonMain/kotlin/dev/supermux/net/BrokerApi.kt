@@ -216,7 +216,9 @@ data class ClaudeExtraUsage(
 data class ClaudeUsage(
     val fiveHour: ClaudeWindow = ClaudeWindow(),
     val sevenDay: ClaudeWindow = ClaudeWindow(),
-    val sevenDaySonnet: ClaudeWindow = ClaudeWindow(),
+    // Per-model weekly caps: null when Anthropic returns no such limit (row hidden).
+    val sevenDaySonnet: ClaudeWindow? = null,
+    val sevenDayFable: ClaudeWindow? = null,
     val extraUsage: ClaudeExtraUsage? = null,
 )
 

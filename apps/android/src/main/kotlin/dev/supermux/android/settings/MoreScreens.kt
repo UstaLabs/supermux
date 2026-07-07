@@ -836,6 +836,7 @@ private data class ClaudeUsageData(
     val fiveHour: UsageWindowData?,
     val sevenDay: UsageWindowData?,
     val sevenDaySonnet: UsageWindowData?,
+    val sevenDayFable: UsageWindowData?,
     val extraUsage: ClaudeExtraUsageData?,
 )
 private data class CodexCreditsData(val hasCredits: Boolean, val balance: String)
@@ -886,6 +887,7 @@ private fun parseUsage(raw: String): UsageData {
             fiveHour = parseWindow(o.objOrNull("fiveHour")),
             sevenDay = parseWindow(o.objOrNull("sevenDay")),
             sevenDaySonnet = parseWindow(o.objOrNull("sevenDaySonnet")),
+            sevenDayFable = parseWindow(o.objOrNull("sevenDayFable")),
             extraUsage = o.objOrNull("extraUsage")?.let { e ->
                 ClaudeExtraUsageData(
                     enabled = e.optBoolean("enabled", false),
@@ -1080,6 +1082,7 @@ private fun ClaudeUsageCard(claude: ClaudeUsageData?, error: String?) {
             claude.fiveHour?.let { UsageWindowRow("5-hour window", it.used, it.resetsAt, ResetKind.CLAUDE) }
             claude.sevenDay?.let { UsageWindowRow("7-day window", it.used, it.resetsAt, ResetKind.CLAUDE) }
             claude.sevenDaySonnet?.let { UsageWindowRow("7-day Sonnet", it.used, it.resetsAt, ResetKind.CLAUDE) }
+            claude.sevenDayFable?.let { UsageWindowRow("7-day Fable", it.used, it.resetsAt, ResetKind.CLAUDE) }
             claude.extraUsage?.takeIf { it.enabled }?.let { e ->
                 UsageFooterRow("Extra usage", "${dollars(e.usedCredits)} / ${dollars(e.monthlyLimit)}")
             }

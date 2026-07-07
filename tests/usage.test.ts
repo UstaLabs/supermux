@@ -64,12 +64,88 @@ test("fetchClaudeUsage returns usage when credentials valid", async () => {
   expect(result!.fiveHour.used).toBe(42)
   expect(result!.fiveHour.resetsAt).toBe("2026-05-25T12:00:00Z")
   expect(result!.sevenDay.used).toBe(15)
-  expect(result!.sevenDaySonnet.used).toBe(8)
+  // No limits[] array → Sonnet falls back to the legacy top-level field.
+  expect(result!.sevenDaySonnet!.used).toBe(8)
+  // No Fable limit anywhere → hidden.
+  expect(result!.sevenDayFable).toBeNull()
   expect(result!.extraUsage).not.toBeNull()
   expect(result!.extraUsage!.enabled).toBe(true)
   expect(result!.extraUsage!.monthlyLimit).toBe(100)
   expect(result!.extraUsage!.usedCredits).toBe(23.5)
   expect(result!.extraUsage!.currency).toBe("usd")
+})
+
+test("fetchClaudeUsage reads per-model weekly caps from limits[]", async () => {
+  const credsPath = join(tmpDir, "credentials.json")
+  writeFileSync(
+    credsPath,
+    JSON.stringify({
+      claudeAiOauth: { accessToken: "t", refreshToken: "r", expiresAt: Date.now() + 3600_000 },
+    }),
+  )
+
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        five_hour: { utilization: 12, resets_at: "2026-07-07T08:00:00Z" },
+        seven_day: { utilization: 4, resets_at: "2026-07-13T12:00:00Z" },
+        // legacy per-model fields are being phased out — null now
+        seven_day_sonnet: null,
+        limits: [
+          { kind: "session", group: "session", percent: 12, resets_at: "2026-07-07T08:00:00Z", scope: null },
+          { kind: "weekly_all", group: "weekly", percent: 4, resets_at: "2026-07-13T12:00:00Z", scope: null },
+          {
+            kind: "weekly_scoped",
+            group: "weekly",
+            percent: 7,
+            resets_at: "2026-07-13T12:00:00Z",
+            scope: { model: { id: null, display_name: "Fable" }, surface: null },
+          },
+          {
+            kind: "weekly_scoped",
+            group: "weekly",
+            percent: 3,
+            resets_at: "2026-07-13T12:00:00Z",
+            scope: { model: { id: null, display_name: "Sonnet" }, surface: null },
+          },
+        ],
+      }),
+    )) as unknown as typeof fetch
+
+  const result = await fetchClaudeUsage(credsPath)
+  expect(result).not.toBeNull()
+  // Fable is only present in limits[] — sourced from there.
+  expect(result!.sevenDayFable!.used).toBe(7)
+  expect(result!.sevenDayFable!.resetsAt).toBe("2026-07-13T12:00:00Z")
+  // limits[] wins over the (null) legacy seven_day_sonnet field.
+  expect(result!.sevenDaySonnet!.used).toBe(3)
+})
+
+test("fetchClaudeUsage hides per-model caps when neither limits[] nor legacy fields have them", async () => {
+  const credsPath = join(tmpDir, "credentials.json")
+  writeFileSync(
+    credsPath,
+    JSON.stringify({
+      claudeAiOauth: { accessToken: "t", refreshToken: "r", expiresAt: Date.now() + 3600_000 },
+    }),
+  )
+
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        five_hour: { utilization: 12, resets_at: "2026-07-07T08:00:00Z" },
+        seven_day: { utilization: 4, resets_at: "2026-07-13T12:00:00Z" },
+        seven_day_sonnet: null,
+        limits: [
+          { kind: "session", group: "session", percent: 12, resets_at: "2026-07-07T08:00:00Z", scope: null },
+          { kind: "weekly_all", group: "weekly", percent: 4, resets_at: "2026-07-13T12:00:00Z", scope: null },
+        ],
+      }),
+    )) as unknown as typeof fetch
+
+  const result = await fetchClaudeUsage(credsPath)
+  expect(result!.sevenDaySonnet).toBeNull()
+  expect(result!.sevenDayFable).toBeNull()
 })
 
 test("fetchClaudeUsage returns null when credentials missing", async () => {
