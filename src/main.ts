@@ -474,9 +474,11 @@ const nativeDevices = () => deviceTokenStore.all().filter((r) => r.routing_token
 const viewingTracker = new ViewingTracker()
 log.info("push_ready", { publicKey: vapid.publicKey.slice(0, 16) + "…", subject: vapid.subject })
 
-// hourly GC sweep — orphans older than 24h
+// hourly GC sweep — orphan attachments (24h) + abandoned in-flight uploads (TTL)
+const pendingTtlHours = Number(process.env.MUX_UPLOAD_PENDING_TTL_HOURS ?? 24)
 const gcInterval = setInterval(() => {
   fileStore.gcOnce({ graceHours: 24 }).catch((err) => log.error("filestore_gc_failed", { err: err?.message ?? String(err) }))
+  fileStore.gcPendingOnce({ ttlHours: pendingTtlHours }).catch((err) => log.error("filestore_gc_pending_failed", { err: err?.message ?? String(err) }))
 }, 60 * 60 * 1000)
 
 const TMUX_SESSION = process.env.MUX_TMUX_SESSION ?? "mux"

@@ -12,6 +12,8 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -19,21 +21,24 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
-import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
-import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.graphics.graphicsLayer
@@ -60,6 +65,11 @@ import dev.supermux.android.session.SessionKeepAliveTabletHost
 import dev.supermux.android.session.rememberVisitedSessions
 import dev.supermux.android.session.SessionLauncherScreen
 import dev.supermux.android.session.SessionListScreen
+import dev.supermux.android.workspace.SessionsRail
+import dev.supermux.android.workspace.SidebarDivider
+import dev.supermux.android.workspace.WorkspaceLayout
+import dev.supermux.android.workspace.isWorkspaceWidth
+import dev.supermux.android.workspace.workspaceShortcuts
 import dev.supermux.android.display.DisplaysScreen
 import dev.supermux.android.settings.AppearanceSettingsPage
 import dev.supermux.android.settings.ArchivedScreen
@@ -69,6 +79,7 @@ import dev.supermux.android.settings.SettingsScreen
 import dev.supermux.android.settings.UsageScreen
 import dev.supermux.android.theme.AppearanceMode
 import dev.supermux.android.theme.SupermuxTheme
+import dev.supermux.ui.ThemeDefaults
 import dev.supermux.android.DevConfig
 import dev.supermux.android.pairing.OnboardingScreen
 import dev.supermux.android.push.PushPermission
@@ -93,7 +104,7 @@ class MainActivity : ComponentActivity() {
         intentState.value = intent
     }
 
-    @OptIn(ExperimentalMaterial3WindowSizeClassApi::class, ExperimentalSharedTransitionApi::class, ExperimentalComposeUiApi::class)
+    @OptIn(ExperimentalSharedTransitionApi::class, ExperimentalComposeUiApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
@@ -116,7 +127,7 @@ class MainActivity : ComponentActivity() {
                     }.getOrDefault(AppearanceMode.SYSTEM)
                 )
             }
-            var dynamicColor by remember { mutableStateOf(prefs.getBoolean("dynamicColor", true)) }
+            var dynamicColor by remember { mutableStateOf(prefs.getBoolean("dynamicColor", ThemeDefaults.DYNAMIC_COLOR_ENABLED)) }
             SupermuxTheme(appearance = appearance, dynamicEnabled = dynamicColor) {
                 val store = remember { SecureTokenStore() }
                 // Debug-only: seed token+baseUrl on debuggable builds so the already-paired
@@ -157,14 +168,20 @@ class MainActivity : ComponentActivity() {
                 var selected by rememberSaveable { mutableStateOf<String?>(null) }
                 val liveSessionIds = remember(sessions) { sessions.map { it.id }.toSet() }
                 val (visitedSessions, removeVisited) = rememberVisitedSessions(selected, liveSessionIds)
+                // Shared multi-pane layout for wide screens — one instance across all sessions,
+                // saved across config-change/process-death, pruned when the broker drops a session.
+                val workspaceLayout = rememberSaveable(saver = WorkspaceLayout.Saver) { WorkspaceLayout() }
+                LaunchedEffect(liveSessionIds) { workspaceLayout.prune(liveSessionIds) }
                 // A session resumed from archive arrives via `session_added` (no history), so its
                 // transcript would be empty until the next snapshot/restart. Seed it whenever a chat
                 // is opened — a no-op for sessions the snapshot already populated. (iOS parity:
                 // ChatPane.loadPane → BrokerSession.ensureMessagesLoaded.)
                 LaunchedEffect(selected) { selected?.let { vm.ensureMessagesLoaded(it) } }
 
-                val windowSizeClass = calculateWindowSizeClass(this)
-                val expanded = windowSizeClass.widthSizeClass == WindowWidthSizeClass.Expanded
+                // Wide = available width ≥600dp (the shared isWorkspaceWidth predicate /
+                // WORKSPACE_MIN_WIDTH_DP). ">=600" (not only Expanded ≥840) means the unfolded
+                // Galaxy Z Fold 7 qualifies; narrower (phones / folded cover) keeps single-pane chat.
+                val wide = isWorkspaceWidth(LocalConfiguration.current.screenWidthDp)
                 val cs = MaterialTheme.colorScheme
 
                 val navController = rememberNavController()
@@ -191,28 +208,88 @@ class MainActivity : ComponentActivity() {
                     //    with `route = …` swapped for nav. The keep-alive / shared-element / predictive-back
                     //    code lives inside the hosts below and is unchanged. ──
                     composable<Home> {
-                        if (expanded) {
-                            Row(Modifier.fillMaxSize()) {
-                                Box(Modifier.width(320.dp)) {
-                                    SessionListScreen(
-                                        sessions = sessions,
-                                        home = DevConfig.HOME,
-                                        activeId = selected,
-                                        onOpen = { selected = it },
-                                        lastBySession = lastBySession,
-                                        agentState = agentState,
+                        if (wide) {
+                            // Container focus so hardware-keyboard shortcuts (Ctrl/Cmd + …) are
+                            // received; onPreviewKeyEvent still sees events when a descendant (chat
+                            // input / terminal) holds focus, so it intercepts combos yet lets typing
+                            // pass. Requesting focus once on first composition seeds the focus owner.
+                            val focusRequester = remember { FocusRequester() }
+                            LaunchedEffect(Unit) { focusRequester.requestFocus() }
+                            // Suppress the collapse/expand width spring while the divider is being
+                            // dragged (otherwise the spring chases the finger and feels laggy).
+                            var resizing by remember { mutableStateOf(false) }
+                            val collapsed = workspaceLayout.sidebarCollapsed
+                            val sidebarWidth by animateDpAsState(
+                                targetValue = if (collapsed) 64.dp else workspaceLayout.sidebarWidth,
+                                animationSpec = if (resizing) snap() else spring(stiffness = Spring.StiffnessMediumLow),
+                                label = "sidebarWidth",
+                            )
+                            Row(
+                                Modifier
+                                    .fillMaxSize()
+                                    .focusRequester(focusRequester)
+                                    .workspaceShortcuts(
+                                        layout = workspaceLayout,
+                                        selectedId = selected,
                                         onNewSession = { navController.navigate(NewSession) },
-                                        loadProjects = { vm.listProjects() },
-                                        validatePath = { vm.validatePath(it) },
-                                        onNavigate = navTo,
                                     )
-                                }
+                                    .focusable(),
+                            ) {
+                                // Sidebar: collapsed avatar rail OR the full list; the animating
+                                // parent Box clips (surfaceContainerHigh backs the reveal gap).
                                 Box(
                                     Modifier
-                                        .width(1.dp)
+                                        .width(sidebarWidth)
                                         .fillMaxHeight()
-                                        .background(cs.outlineVariant)
-                                )
+                                        .background(cs.surfaceContainerHigh)
+                                        .clipToBounds(),
+                                ) {
+                                    if (collapsed) {
+                                        SessionsRail(
+                                            sessions = sessions,
+                                            selectedId = selected,
+                                            agentState = agentState,
+                                            onSelect = { selected = it },
+                                            onExpand = { workspaceLayout.sidebarCollapsed = false },
+                                            onNewSession = { navController.navigate(NewSession) },
+                                        )
+                                    } else {
+                                        // requiredWidth keeps the list at its full width while the
+                                        // narrower animating parent clips it during the reveal.
+                                        Box(Modifier.requiredWidth(workspaceLayout.sidebarWidth).fillMaxHeight()) {
+                                            SessionListScreen(
+                                                sessions = sessions,
+                                                home = DevConfig.HOME,
+                                                activeId = selected,
+                                                onOpen = { selected = it },
+                                                lastBySession = lastBySession,
+                                                agentState = agentState,
+                                                onNewSession = { navController.navigate(NewSession) },
+                                                loadProjects = { vm.listProjects() },
+                                                validatePath = { vm.validatePath(it) },
+                                                onNavigate = navTo,
+                                            )
+                                        }
+                                    }
+                                }
+                                // Divider: drag-resize + collapse when expanded; hairline when collapsed.
+                                if (collapsed) {
+                                    Box(
+                                        Modifier
+                                            .width(1.dp)
+                                            .fillMaxHeight()
+                                            .background(cs.outlineVariant),
+                                    )
+                                } else {
+                                    SidebarDivider(
+                                        onDragDelta = { d ->
+                                            workspaceLayout.setSidebarWidth(workspaceLayout.sidebarWidth + d)
+                                        },
+                                        onCollapse = { workspaceLayout.sidebarCollapsed = true },
+                                        onStartDrag = { resizing = true },
+                                        onEndDrag = { resizing = false },
+                                    )
+                                }
                                 Box(Modifier.weight(1f)) {
                                     if (selected == null) {
                                         Box(
@@ -236,6 +313,9 @@ class MainActivity : ComponentActivity() {
                                         commands = commands,
                                         commandsResolved = commandsResolved,
                                         vm = vm,
+                                        wide = true,
+                                        layout = workspaceLayout,
+                                        onNavigate = navTo,
                                         onOpenDisplays = { navController.navigate(Displays) },
                                         modifier = Modifier.fillMaxSize(),
                                     )
@@ -264,7 +344,7 @@ class MainActivity : ComponentActivity() {
                     }
                     // ── New-session launcher (old "new" branch, verbatim, route→nav) ──
                     composable<NewSession> {
-                        if (expanded) {
+                        if (wide) {
                             Row(Modifier.fillMaxSize()) {
                                 Box(Modifier.width(320.dp)) {
                                     SessionListScreen(

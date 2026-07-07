@@ -7,6 +7,7 @@ import { home } from "../../shared/home"
 import { existsSync, writeFileSync, mkdirSync } from "fs"
 import { join, sep } from "path"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
+import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
 import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
 import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOriginOk } from "./cookies"
 import { FsService } from "../../core/editor/fs-service"
@@ -31,7 +32,7 @@ import { detectUpdateMode } from "../../core/update/mode"
 import { resolveAndApply, restartService } from "../../core/update/apply"
 import { BUILD_COMMIT, BUILD_VERSION } from "../../shared/build-info"
 
-const VALID_KINDS: AttachmentKind[] = ["photo", "document", "voice", "audio", "video_note"]
+const VALID_KINDS: AttachmentKind[] = ["photo", "document", "voice", "audio", "video", "video_note"]
 
 // Browser KeyboardEvent.key -> Android keycode (subset relevant for control).
 const SCRCPY_KEYCODES: Record<string, number> = {
@@ -1094,7 +1095,11 @@ export class WebChannel implements Channel {
     }
 
     if (method === "POST" && path === "/upload") {
-      log.info("upload.start", { ip: clientIp(req), contentLength: req.headers.get("content-length") })
+      log.info("upload.start", {
+        ip: clientIp(req),
+        contentType: req.headers.get("content-type"),
+        contentLength: req.headers.get("content-length"),
+      })
       const authResult = this.requireAuth(req)
       if (!authResult.ok) {
         log.warn("upload.unauth", { ip: clientIp(req) })
@@ -1105,59 +1110,188 @@ export class WebChannel implements Channel {
         return new Response("file store not mounted", { status: 500 })
       }
 
-      const MAX_UPLOAD_BYTES = Number(process.env.MUX_WEB_UPLOAD_MAX_MB ?? 25) * 1024 * 1024
+      // Streaming path gets the full cap (it never buffers). The legacy buffered
+      // multipart path keeps a smaller in-RAM cap so an old/hostile client can't
+      // OOM the broker with a huge multipart body.
+      const MAX_UPLOAD_BYTES = Number(process.env.MUX_WEB_UPLOAD_MAX_MB ?? 500) * 1024 * 1024
+      const MAX_MULTIPART_BYTES = Number(process.env.MUX_WEB_UPLOAD_MULTIPART_MAX_MB ?? 25) * 1024 * 1024
+      const contentType = req.headers.get("content-type") ?? ""
+
+      // ── Legacy buffered path: multipart/form-data (old app-store builds) ──
+      // RFC media types are case-insensitive, so normalize before matching.
+      if (contentType.toLowerCase().includes("multipart/form-data")) {
+        const contentLength = Number(req.headers.get("content-length") ?? 0)
+        if (contentLength > MAX_MULTIPART_BYTES) {
+          log.warn("upload.too_large_header", { contentLength, cap: MAX_MULTIPART_BYTES, device: authResult.device.name })
+          return new Response("payload too large", { status: 413 })
+        }
+
+        let form: Awaited<ReturnType<Request["formData"]>>
+        try {
+          form = await req.formData()
+        } catch (err: any) {
+          log.warn("upload.bad_multipart", { err: err?.message ?? String(err), device: authResult.device.name })
+          return new Response("bad multipart", { status: 400 })
+        }
+
+        const file = form.get("file")
+        const session = form.get("session")
+        const kindHint = form.get("kind")
+        if (!(file instanceof Blob)) {
+          log.warn("upload.no_file_field", { device: authResult.device.name })
+          return new Response("file field required", { status: 400 })
+        }
+        if (typeof session !== "string" || session.length === 0) {
+          log.warn("upload.no_session_field", { device: authResult.device.name })
+          return new Response("session field required", { status: 400 })
+        }
+        if (file.size > MAX_MULTIPART_BYTES) {
+          log.warn("upload.too_large_body", { size: file.size, cap: MAX_MULTIPART_BYTES, device: authResult.device.name })
+          return new Response("payload too large", { status: 413 })
+        }
+        if (file.size === 0) {
+          log.warn("upload.empty_file", { device: authResult.device.name })
+          return new Response("empty file", { status: 400 })
+        }
+
+        const bytes = new Uint8Array(await file.arrayBuffer())
+        const mime = file.type || undefined
+        const name = (file as any).name as string | undefined
+        const kind: AttachmentKind = (typeof kindHint === "string" && VALID_KINDS.includes(kindHint as AttachmentKind))
+          ? (kindHint as AttachmentKind)
+          : kindFromMime(mime)
+
+        try {
+          const { file_id, size } = await this.fileStore.put({
+            kind, mime, name, session, origin: "web-upload",
+            device: authResult.device.name, bytes,
+          })
+          log.info("upload.ok", { file_id, kind, mime, size, name, session, device: authResult.device.name, via: "multipart" })
+          return this.json({ file_id, size, mime, name })
+        } catch (err: any) {
+          log.error("upload.store_failed", { err: err?.message ?? String(err), device: authResult.device.name, session, mime, size: bytes.length })
+          return new Response("file store error", { status: 500 })
+        }
+      }
+
+      // ── Streaming path: raw request body (updated clients) ───────────────
+      const session = req.headers.get("x-mux-session") ?? ""
+      if (session.length === 0) {
+        log.warn("upload.no_session_header", { device: authResult.device.name })
+        return new Response("session header required", { status: 400 })
+      }
       const contentLength = Number(req.headers.get("content-length") ?? 0)
       if (contentLength > MAX_UPLOAD_BYTES) {
-        log.warn("upload.too_large_header", { contentLength, device: authResult.device.name })
+        log.warn("upload.too_large_header", { contentLength, cap: MAX_UPLOAD_BYTES, device: authResult.device.name })
         return new Response("payload too large", { status: 413 })
       }
-
-      let form: Awaited<ReturnType<Request["formData"]>>
-      try {
-        form = await req.formData()
-      } catch (err: any) {
-        log.warn("upload.bad_multipart", { err: err?.message ?? String(err), device: authResult.device.name })
-        return new Response("bad multipart", { status: 400 })
+      if (!req.body) {
+        log.warn("upload.no_body", { device: authResult.device.name })
+        return new Response("empty body", { status: 400 })
       }
 
-      const file = form.get("file")
-      const session = form.get("session")
-      const kindHint = form.get("kind")
-      if (!(file instanceof Blob)) {
-        log.warn("upload.no_file_field", { device: authResult.device.name })
-        return new Response("file field required", { status: 400 })
+      const mime = req.headers.get("x-mux-mime") || undefined
+      const filenameHeader = req.headers.get("x-mux-filename")
+      let name: string | undefined
+      if (filenameHeader) {
+        try { name = decodeURIComponent(filenameHeader) } catch { name = filenameHeader }
       }
-      if (typeof session !== "string" || session.length === 0) {
-        log.warn("upload.no_session_field", { device: authResult.device.name })
-        return new Response("session field required", { status: 400 })
-      }
-      if (file.size > MAX_UPLOAD_BYTES) {
-        log.warn("upload.too_large_body", { size: file.size, device: authResult.device.name })
-        return new Response("payload too large", { status: 413 })
-      }
-      if (file.size === 0) {
-        log.warn("upload.empty_file", { device: authResult.device.name })
-        return new Response("empty file", { status: 400 })
-      }
-
-      const bytes = new Uint8Array(await file.arrayBuffer())
-      const mime = file.type || undefined
-      const name = (file as any).name as string | undefined
-      const kind: AttachmentKind = (typeof kindHint === "string" && VALID_KINDS.includes(kindHint as AttachmentKind))
+      const kindHint = req.headers.get("x-mux-kind")
+      const kind: AttachmentKind = (kindHint && VALID_KINDS.includes(kindHint as AttachmentKind))
         ? (kindHint as AttachmentKind)
         : kindFromMime(mime)
 
       try {
-        const { file_id, size } = await this.fileStore.put({
-          kind, mime, name, session, origin: "web-upload",
-          device: authResult.device.name, bytes,
-        })
-        log.info("upload.ok", { file_id, kind, mime, size, name, session, device: authResult.device.name })
+        const { file_id, size } = await this.fileStore.putStream(
+          { kind, mime, name, session, origin: "web-upload", device: authResult.device.name, maxBytes: MAX_UPLOAD_BYTES },
+          req.body,
+        )
+        log.info("upload.ok", { file_id, kind, mime, size, name, session, device: authResult.device.name, via: "stream" })
         return this.json({ file_id, size, mime, name })
       } catch (err: any) {
-        log.error("upload.store_failed", { err: err?.message ?? String(err), device: authResult.device.name, session, mime, size: bytes.length })
+        if (err instanceof PayloadTooLargeError) {
+          log.warn("upload.too_large_stream", { device: authResult.device.name, cap: MAX_UPLOAD_BYTES })
+          return new Response("payload too large", { status: 413 })
+        }
+        if (err instanceof EmptyUploadError) {
+          log.warn("upload.empty_body", { device: authResult.device.name })
+          return new Response("empty body", { status: 400 })
+        }
+        log.error("upload.store_failed", { err: err?.message ?? String(err), device: authResult.device.name, session, mime, via: "stream" })
         return new Response("file store error", { status: 500 })
       }
+    }
+
+    // ── Resumable/chunked upload: init → PATCH chunks → HEAD probe ────────
+    if (method === "POST" && path === "/upload/init") {
+      const authResult = this.requireAuth(req)
+      if (!authResult.ok) return new Response("unauthorized", { status: 401 })
+      if (!this.fileStore) return new Response("file store not mounted", { status: 500 })
+      const MAX_UPLOAD_BYTES = Number(process.env.MUX_WEB_UPLOAD_MAX_MB ?? 500) * 1024 * 1024
+
+      let body: any
+      try { body = await req.json() } catch { return new Response("bad json", { status: 400 }) }
+      const session = typeof body?.session === "string" ? body.session : ""
+      if (session.length === 0) return new Response("session required", { status: 400 })
+      const totalSize = Number(body?.total_size)
+      if (!Number.isFinite(totalSize) || totalSize <= 0) return new Response("total_size required", { status: 400 })
+      if (totalSize > MAX_UPLOAD_BYTES) return new Response("payload too large", { status: 413 })
+
+      const mime = typeof body?.mime === "string" ? body.mime : undefined
+      const name = typeof body?.name === "string" ? body.name : undefined
+      const kindHint = typeof body?.kind === "string" ? body.kind : undefined
+      const kind: AttachmentKind = (kindHint && VALID_KINDS.includes(kindHint as AttachmentKind))
+        ? (kindHint as AttachmentKind)
+        : kindFromMime(mime)
+
+      try {
+        const { upload_id, chunk_size } = await this.fileStore.createPending({
+          session, kind, mime, name, totalSize, device: authResult.device.name, origin: "web-upload",
+        })
+        log.info("upload.init", { upload_id, kind, mime, name, session, totalSize, device: authResult.device.name })
+        return this.json({ upload_id, offset: 0, chunk_size })
+      } catch (err: any) {
+        log.error("upload.init_failed", { err: err?.message ?? String(err), device: authResult.device.name, session })
+        return new Response("file store error", { status: 500 })
+      }
+    }
+
+    if (method === "PATCH" && path.startsWith("/upload/")) {
+      const authResult = this.requireAuth(req)
+      if (!authResult.ok) return new Response("unauthorized", { status: 401 })
+      if (!this.fileStore) return new Response("file store not mounted", { status: 500 })
+      const upload_id = decodeURIComponent(path.slice("/upload/".length))
+
+      const offset = Number(req.headers.get("upload-offset"))
+      if (!Number.isInteger(offset) || offset < 0) return new Response("Upload-Offset required", { status: 400 })
+      if (!req.body) return new Response("empty body", { status: 400 })
+
+      const chunk = new Uint8Array(await req.arrayBuffer())
+      try {
+        const { received, done } = await this.fileStore.appendChunk(upload_id, offset, chunk)
+        if (!done) return this.json({ offset: received })
+        const fin = await this.fileStore.finalizePending(upload_id)
+        log.info("upload.finalized", { upload_id, size: fin.size, device: authResult.device.name })
+        return this.json({ file_id: fin.file_id, size: fin.size, mime: fin.mime, name: fin.name })
+      } catch (err: any) {
+        if (err instanceof UploadNotFoundError) return new Response("upload not found", { status: 404 })
+        if (err instanceof OffsetConflictError) {
+          return new Response("offset conflict", { status: 409, headers: { "upload-offset": String(err.offset) } })
+        }
+        if (err instanceof UploadOverflowError) return new Response("chunk exceeds total size", { status: 400 })
+        log.error("upload.patch_failed", { err: err?.message ?? String(err), upload_id, device: authResult.device.name })
+        return new Response("file store error", { status: 500 })
+      }
+    }
+
+    if (method === "HEAD" && path.startsWith("/upload/")) {
+      const authResult = this.requireAuth(req)
+      if (!authResult.ok) return new Response(null, { status: 401 })
+      if (!this.fileStore) return new Response(null, { status: 500 })
+      const upload_id = decodeURIComponent(path.slice("/upload/".length))
+      const offset = await this.fileStore.pendingOffset(upload_id)
+      if (offset === null) return new Response(null, { status: 404 })
+      return new Response(null, { status: 200, headers: { "upload-offset": String(offset) } })
     }
 
     if (method === "GET" && path === "/push/vapid-public-key") {

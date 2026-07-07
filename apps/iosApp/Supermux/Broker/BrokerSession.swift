@@ -301,6 +301,17 @@ final class BrokerSession {
         return (try? await api.uploadBase64(session: sessionId, base64: b64, filename: filename, mime: mime, kind: kind))?.file_id
     }
 
+    /// Resumable/chunked upload from a `ChunkSource` (bounded RAM — never buffers the whole
+    /// file), reporting absolute progress `(bytesSent, total)`. Returns the finalized file id,
+    /// or nil on failure so the caller can surface a failed chip instead of a silent drop.
+    func uploadResumable(_ sessionId: String, source: ChunkSource, filename: String, mime: String,
+                         kind: String? = nil, onProgress: @escaping (Int64, Int64) -> Void) async -> String? {
+        (try? await api.uploadResumable(
+            session: sessionId, source: source, filename: filename, mime: mime, kind: kind,
+            onProgress: { sent, total in onProgress(sent.int64Value, total.int64Value) }
+        ))?.file_id
+    }
+
     /// PWA-identical grouping (Personal Assistants + per-workdir) via the shared helper.
     func groups() -> [SessionGroup] {
         let home = inferHomeDir(workdir: sessions.first?.workdir) ?? ""

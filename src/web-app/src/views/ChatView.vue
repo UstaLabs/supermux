@@ -61,6 +61,7 @@ import {
   PromptInputAttachments,
 } from "@/components/ai-elements/prompt-input"
 import PromptInputActionAddCamera from "@/components/ai-elements/prompt-input/PromptInputActionAddCamera.vue"
+import PromptInputActionAddRecordVideo from "@/components/ai-elements/prompt-input/PromptInputActionAddRecordVideo.vue"
 import PromptInputDraftSync from "@/components/PromptInputDraftSync.vue"
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input"
 import { Suggestion } from "@/components/ai-elements/suggestion"
@@ -394,6 +395,22 @@ async function onPromptSubmit(payload: PromptInputMessage) {
   await submitComposer(payload)
 }
 
+function onPromptError(err: { code: string; message: string }) {
+  if (err.code === "max_file_size") {
+    toast.error("File too large", { description: "Attachments must be 500 MB or smaller." })
+    return
+  }
+  if (err.code === "max_files") {
+    toast.error("Too many files", { description: err.message })
+    return
+  }
+  if (err.code === "accept") {
+    toast.error("Unsupported file", { description: err.message })
+    return
+  }
+  toast.error(err.message)
+}
+
 async function flushPendingFirstMessage() {
   const payload = pendingFirstMessage.consume(props.id)
   if (!payload) return
@@ -634,9 +651,10 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
           <PromptInput
             class="relative"
             :max-files="10"
-            :max-file-size="25 * 1024 * 1024"
+            :max-file-size="500 * 1024 * 1024"
             :global-drop="true"
             @submit="onPromptSubmit"
+            @error="onPromptError"
           >
             <SlashCommandMenu :commands="sessionCommands" :loading="!commandsStore.isResolved(props.id)" @control="onControlCommand" />
             <PromptInputDraftSync :session-id="props.id" />
@@ -664,6 +682,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
                   <PromptInputActionMenuContent>
                     <PromptInputActionAddAttachments label="Files" />
                     <PromptInputActionAddCamera />
+                    <PromptInputActionAddRecordVideo />
                   </PromptInputActionMenuContent>
                 </PromptInputActionMenu>
                 <MicButton

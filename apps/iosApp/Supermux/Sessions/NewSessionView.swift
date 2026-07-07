@@ -49,6 +49,7 @@ struct NewSessionView: View {
     @State private var showPhotos = false
     @State private var showFiles = false
     @State private var showCamera = false
+    @State private var showVideoCamera = false
     @State private var photoItems: [PhotosPickerItem] = []
 
     private static let agents = ["claude", "codex", "cursor", "opencode"]
@@ -178,10 +179,11 @@ struct NewSessionView: View {
             guard !items.isEmpty else { return }
             Task { await composer.loadPhotos(items); photoItems = [] }
         }
-        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .images)
+        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .any(of: [.images, .videos]))
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { composer.handleFiles($0) }
         #if os(iOS)
-        .smFullScreenCover(isPresented: $showCamera) { CameraPicker { composer.addCameraImage($0) } }
+        .smFullScreenCover(isPresented: $showCamera) { CameraPicker(mode: .photo, onImage: { composer.addCameraImage($0) }) }
+        .smFullScreenCover(isPresented: $showVideoCamera) { CameraPicker(mode: .video, onVideo: { composer.addCameraVideo($0) }) }
         #endif
         .onChange(of: composer.refocusToken) { _, _ in composing = true }
         .onChange(of: workdir) { _, new in
@@ -321,7 +323,8 @@ struct NewSessionView: View {
             }
             // Action row — attach · mic · send.
             HStack(spacing: 16) {
-                AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera)
+                AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera,
+                           showVideoCamera: $showVideoCamera)
                 // Hidden while recording/dictating (the RecordingBar above owns stop/cancel) —
                 // parity with the original launcher + the chat composer.
                 if !composer.recorder.isRecording && !composer.dictation.isListening {
@@ -361,10 +364,20 @@ struct NewSessionView: View {
                 // Attachments need a session id, so upload after spawn (like the first message).
                 var ids: [String] = []
                 for p in toUpload {
+                    // Audio clips → "voice"; images and videos stay nil so the broker infers the kind
+                    // from the MIME (video/* → "video" server-side). Never mislabel a video as audio.
                     let kind = p.mime.hasPrefix("audio") ? "voice" : nil
-                    if let fid = await broker.upload(id, data: p.data, filename: p.filename, mime: p.mime, kind: kind) {
-                        ids.append(fid)
+                    let fid: String?
+                    if let url = p.fileURL {
+                        // Video/large: stream from the file URL (chunked, bounded RAM).
+                        fid = await broker.uploadResumable(id, source: NSFileHandleChunkSource(path: url.path),
+                            filename: p.filename, mime: p.mime, kind: kind) { _, _ in }
+                    } else if let data = p.data {
+                        fid = await broker.upload(id, data: data, filename: p.filename, mime: p.mime, kind: kind)
+                    } else {
+                        fid = nil
                     }
+                    if let fid { ids.append(fid) }
                 }
                 if !firstMsg.isEmpty || !ids.isEmpty {
                     broker.send(id, firstMsg, attachments: ids.isEmpty ? nil : ids)

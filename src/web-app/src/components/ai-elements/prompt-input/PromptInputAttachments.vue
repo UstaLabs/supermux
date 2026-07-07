@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue"
-import { X, FileIcon, Loader2, AlertCircle, Check } from "lucide-vue-next"
+import { X, FileIcon, AlertCircle, Check } from "lucide-vue-next"
 import { usePromptInput } from "./context"
 import { useUploads } from "@/stores/uploads"
 import VoiceChip from "@/components/voice/VoiceChip.vue"
@@ -14,6 +14,10 @@ function isImage(file: { mediaType?: string }): boolean {
 
 function isAudio(file: { mediaType?: string }): boolean {
   return !!file.mediaType?.startsWith("audio/")
+}
+
+function isVideo(file: { mediaType?: string }): boolean {
+  return !!file.mediaType?.startsWith("video/")
 }
 
 const items = computed(() => files.value)
@@ -44,6 +48,14 @@ const items = computed(() => files.value)
             :alt="f.filename ?? 'attachment'"
             class="size-10 object-cover"
           />
+          <video
+            v-else-if="isVideo(f) && f.url"
+            :src="f.url"
+            class="size-10 object-cover bg-black"
+            muted
+            playsinline
+            preload="metadata"
+          />
           <FileIcon v-else class="size-5 text-muted-foreground" />
         </div>
 
@@ -63,8 +75,15 @@ const items = computed(() => files.value)
           v-if="uploads.byId[f.id]?.status === 'uploading'"
           class="absolute inset-0 bg-background/60 flex items-center justify-center pointer-events-none"
         >
-          <Loader2 class="size-4 animate-spin text-foreground" />
+          <span class="text-[10px] font-medium tabular-nums text-foreground">
+            {{ Math.round(((uploads.byId[f.id] as any)?.progress ?? 0) * 100) }}%
+          </span>
         </div>
+        <div
+          v-if="uploads.byId[f.id]?.status === 'uploading'"
+          class="absolute bottom-0 left-0 h-0.5 bg-primary transition-all pointer-events-none"
+          :style="{ width: `${Math.round(((uploads.byId[f.id] as any)?.progress ?? 0) * 100)}%` }"
+        />
         <div
           v-else-if="uploads.byId[f.id]?.status === 'uploaded'"
           class="absolute top-0.5 right-7 size-3 rounded-full bg-emerald-500 flex items-center justify-center pointer-events-none"

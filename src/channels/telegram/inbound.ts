@@ -45,6 +45,9 @@ function pickRawAttachment(m: any): TelegramRawAttachment | null {
   if (m.video_note) {
     return { kind: "video_note", file_id: m.video_note.file_id, mime: m.video_note.mime_type, size: m.video_note.file_size }
   }
+  if (m.video) {
+    return { kind: "video", file_id: m.video.file_id, mime: m.video.mime_type, size: m.video.file_size, name: m.video.file_name }
+  }
   if (m.document) {
     return { kind: "document", file_id: m.document.file_id, mime: m.document.mime_type, size: m.document.file_size, name: m.document.file_name }
   }

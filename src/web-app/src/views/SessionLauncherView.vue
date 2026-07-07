@@ -36,6 +36,7 @@ import {
   PromptInputAttachments,
 } from "@/components/ai-elements/prompt-input"
 import PromptInputActionAddCamera from "@/components/ai-elements/prompt-input/PromptInputActionAddCamera.vue"
+import PromptInputActionAddRecordVideo from "@/components/ai-elements/prompt-input/PromptInputActionAddRecordVideo.vue"
 import SlashCommandMenu from "@/components/SlashCommandMenu.vue"
 import LauncherComposeLock from "@/components/LauncherComposeLock.vue"
 import LauncherDraftSync from "@/components/LauncherDraftSync.vue"
@@ -230,6 +231,22 @@ function onRecordingDone() {
   isRecording.value = false
 }
 
+function onPromptError(err: { code: string; message: string }) {
+  if (err.code === "max_file_size") {
+    toast.error("File too large", { description: "Attachments must be 500 MB or smaller." })
+    return
+  }
+  if (err.code === "max_files") {
+    toast.error("Too many files", { description: err.message })
+    return
+  }
+  if (err.code === "accept") {
+    toast.error("Unsupported file", { description: err.message })
+    return
+  }
+  toast.error(err.message)
+}
+
 async function onPromptSubmit(payload: PromptInputMessage) {
   const text = payload?.text?.trim() ?? ""
   const hasFiles = (payload?.files?.length ?? 0) > 0
@@ -332,10 +349,11 @@ function goBack() {
           class="relative"
           group-class="rounded-2xl border-border/70 bg-card dark:bg-card shadow-lg shadow-black/[0.04] dark:shadow-black/30"
           :max-files="10"
-          :max-file-size="25 * 1024 * 1024"
+          :max-file-size="500 * 1024 * 1024"
           :global-drop="isDesktop"
           :initial-input="launcherDraft.state.text"
           @submit="onPromptSubmit"
+          @error="onPromptError"
         >
           <LauncherComposeLock @engaged="composeStarted = true" />
           <LauncherDraftSync />
@@ -363,6 +381,7 @@ function goBack() {
                 <PromptInputActionMenuContent>
                   <PromptInputActionAddAttachments label="Files" />
                   <PromptInputActionAddCamera />
+                  <PromptInputActionAddRecordVideo />
                 </PromptInputActionMenuContent>
               </PromptInputActionMenu>
               <MicButton

@@ -29,6 +29,7 @@ struct ChatPane: View {
     @State private var showPhotos = false
     @State private var showFiles = false
     @State private var showCamera = false
+    @State private var showVideoCamera = false
     @State private var composing = false
 
     // MARK: - Model / reasoning sheet state
@@ -209,10 +210,11 @@ struct ChatPane: View {
             guard !items.isEmpty else { return }
             Task { await composer.loadPhotos(items); photoItems = [] }
         }
-        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .images)
+        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .any(of: [.images, .videos]))
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { composer.handleFiles($0) }
         #if os(iOS)
-        .smFullScreenCover(isPresented: $showCamera) { CameraPicker { composer.addCameraImage($0) } }
+        .smFullScreenCover(isPresented: $showCamera) { CameraPicker(mode: .photo, onImage: { composer.addCameraImage($0) }) }
+        .smFullScreenCover(isPresented: $showVideoCamera) { CameraPicker(mode: .video, onVideo: { composer.addCameraVideo($0) }) }
         #endif
     }
 
@@ -238,7 +240,8 @@ struct ChatPane: View {
             } else {
             if composerExpanded {
                 if !composer.pending.isEmpty {
-                    AttachmentTray(pending: composer.pending, onRemove: { composer.removeAttachment($0) })
+                    AttachmentTray(pending: composer.pending, onRemove: { composer.removeAttachment($0) },
+                                   onRetry: { _ in Task { await uploadThenSend() } })
                 }
                 if composer.transcribing {
                     transcribingBar
@@ -250,6 +253,7 @@ struct ChatPane: View {
             HStack(alignment: .center, spacing: 10) {
                 if !composerExpanded {
                     AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera,
+                               showVideoCamera: $showVideoCamera,
                                showPaste: pasteboardHasAttachment,
                                onPaste: { Task { await composer.pasteClipboard() } })
                 }
@@ -273,6 +277,7 @@ struct ChatPane: View {
             if composerExpanded {
                 HStack(spacing: 12) {
                     AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera,
+                               showVideoCamera: $showVideoCamera,
                                showPaste: pasteboardHasAttachment,
                                onPaste: { Task { await composer.pasteClipboard() } })
                     MicButton(model: composer)
@@ -331,17 +336,38 @@ struct ChatPane: View {
     // MARK: - Send
 
     private func sendMessage() {
-        let (text, toUpload) = composer.consume()
-        Task {
-            var ids: [String] = []
-            for p in toUpload {
-                let kind = p.mime.hasPrefix("audio") ? "voice" : nil
-                if let id = await broker.upload(session.id, data: p.data, filename: p.filename, mime: p.mime, kind: kind) {
-                    ids.append(id)
-                }
+        guard composer.canSubmit else { return }
+        Task { await uploadThenSend() }
+    }
+
+    /// Upload every not-yet-uploaded attachment (chunked+resumable for file-URL videos, single
+    /// POST for images/audio), driving each chip's progress. On any failure, mark it failed and
+    /// STOP — keep the draft + chips so the user can retry; never send minus an attachment.
+    @MainActor
+    private func uploadThenSend() async {
+        for p in composer.pending where p.uploadedFileId == nil {
+            composer.markUploading(p.id)
+            // Audio clips → "voice"; images and videos stay nil so the broker infers the kind
+            // from the MIME (video/* → "video" server-side). Never mislabel a video as audio.
+            let kind = p.mime.hasPrefix("audio") ? "voice" : nil
+            let fid: String?
+            if let url = p.fileURL {
+                fid = await broker.uploadResumable(session.id, source: NSFileHandleChunkSource(path: url.path),
+                    filename: p.filename, mime: p.mime, kind: kind) { sent, total in
+                        Task { @MainActor in composer.setProgress(p.id, total > 0 ? Double(sent) / Double(total) : 0) }
+                    }
+            } else if let data = p.data {
+                fid = await broker.upload(session.id, data: data, filename: p.filename, mime: p.mime, kind: kind)
+            } else {
+                fid = nil
             }
-            broker.send(session.id, text, attachments: ids.isEmpty ? nil : ids)
+            if let fid { composer.markUploaded(p.id, fid) } else { composer.markFailed(p.id); return }
         }
+        let ids = composer.pending.compactMap { $0.uploadedFileId }
+        let text = composer.draft
+        composer.draft = ""
+        composer.pending = []
+        broker.send(session.id, text, attachments: ids.isEmpty ? nil : ids)
     }
 
     // MARK: - Shared pill helper

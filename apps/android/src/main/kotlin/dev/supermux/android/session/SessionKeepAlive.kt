@@ -32,6 +32,8 @@ import dev.supermux.android.AppViewModel
 import dev.supermux.android.DevConfig
 import dev.supermux.android.chat.ChatScreen
 import dev.supermux.android.ui.keepAlivePanel
+import dev.supermux.android.workspace.SessionWorkspaceDetail
+import dev.supermux.android.workspace.WorkspaceLayout
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
@@ -166,6 +168,9 @@ fun SessionKeepAliveTabletHost(
     commands: Map<String, List<SlashCommand>>,
     commandsResolved: Map<String, Boolean>,
     vm: AppViewModel,
+    wide: Boolean,
+    layout: WorkspaceLayout,
+    onNavigate: (String) -> Unit,
     onOpenDisplays: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -187,6 +192,9 @@ fun SessionKeepAliveTabletHost(
                     commands = commands[sessionId] ?: emptyList(),
                     commandsResolved = commandsResolved[sessionId] ?: false,
                     vm = vm,
+                    wide = wide,
+                    layout = layout,
+                    onNavigate = onNavigate,
                     onBack = {},
                     onKill = {
                         vm.kill(sessionId) {
@@ -214,6 +222,13 @@ private fun SessionChatLayer(
     commands: List<SlashCommand>,
     commandsResolved: Boolean,
     vm: AppViewModel,
+    // Wide (tablet / unfolded-foldable) renders the multi-pane workspace instead of ChatScreen.
+    // Phone hosts leave these defaulted, keeping the single-pane chat path unchanged.
+    wide: Boolean = false,
+    layout: WorkspaceLayout? = null,
+    // Management-screen nav from the wide workspace header overflow. Phone/ChatScreen path defaults
+    // to a no-op (it has its own overflow), keeping the single-pane chat path unchanged.
+    onNavigate: (String) -> Unit = {},
     onBack: () -> Unit,
     onKill: () -> Unit,
     onOpenDisplays: () -> Unit,
@@ -229,8 +244,11 @@ private fun SessionChatLayer(
     val finishJob = finishJobs[session.id]
 
     if (visible) {
-        BackHandler(enabled = !editorConsumesBack) { onBack() }
-        PredictiveBackHandler(enabled = !editorConsumesBack) { backEvents ->
+        // Phone: Back returns to the session list (onBack). On the wide/tablet path onBack is a
+        // no-op (the list is always on-screen), so DON'T consume Back there — let it background the
+        // app. The editor pane keeps its own Back-consume via its own BackHandler + editorConsumesBack.
+        BackHandler(enabled = !editorConsumesBack && !wide) { onBack() }
+        PredictiveBackHandler(enabled = !editorConsumesBack && !wide) { backEvents ->
             try {
                 backEvents.collect { event -> gestureProgress = event.progress }
                 onBack()
@@ -252,6 +270,77 @@ private fun SessionChatLayer(
                 }
             },
     ) {
+        // Wide screens render the multi-pane workspace; the phone/compact path falls through to
+        // ChatScreen below (unchanged). `layout` is always non-null when `wide` (set by the tablet
+        // host); the null-guard keeps this a safe fallback if ever called wide without a layout.
+        val ws = layout
+        if (wide && ws != null) {
+            SessionWorkspaceDetail(
+                session = session,
+                messages = messages,
+                activity = activity,
+                agent = agent,
+                sending = sending,
+                layout = ws,
+                onSendWith = { text, atts -> vm.sendWith(session.id, text, atts) },
+                onInterrupt = { vm.interrupt(session.id) },
+                commands = commands,
+                commandsResolved = commandsResolved,
+                onUpload = { source, name, mime, kind, onProgress -> vm.uploadResumable(session.id, source, name, mime, kind, onProgress) },
+                loadBytes = { vm.fileBytes(it) },
+                transcribeAudio = { bytes, name -> vm.transcribeAudio(session.id, bytes, name) },
+                transcribeDraft = { draft -> vm.transcribeDraft(session.id, draft) },
+                loadGlossary = { vm.fetchGlossary() },
+                vmModels = { vm.fetchModels(it) },
+                vmReasoning = { vm.fetchReasoning(it) },
+                onPickModel = { vm.switchModel(session.id, it) },
+                onPickEffort = { vm.switchReasoning(session.id, it) },
+                loadDraft = { vm.loadDraft(it) },
+                saveDraft = { id, t -> vm.saveDraft(id, t) },
+                consumePendingFirst = { vm.consumePendingFirst(it) },
+                onRename = { vm.rename(session.id, it) },
+                onMute = { vm.setMute(session.id, it) },
+                onKill = onKill,
+                onNavigate = onNavigate,
+                // Finish flow — same VM-backed lambdas ChatScreen receives (see below).
+                finishJob = finishJob,
+                onFinishReadiness = { vm.finishReadiness(session.id) },
+                onFinish = { action, skipVerify, commitFirst, commitMessage, onKickoff ->
+                    vm.finish(session.id, action, skipVerify, commitFirst, commitMessage, onKickoff = onKickoff)
+                },
+                onClearFinishJob = { vm.clearFinishJob(session.id) },
+                onVerifySuggest = { vm.verifySuggest(session.id) },
+                onVerifySave = { vm.verifySave(session.id, it) },
+                onSendToAgent = { vm.sendMessage(session.id, it) },
+                fsList = { vm.fsList(session.id, it) },
+                fsRead = { vm.fsRead(session.id, it) },
+                fsWrite = { p, ct -> vm.fsWrite(session.id, p, ct) },
+                fsSearch = { vm.fsSearch(session.id, it) },
+                fsDiff = { vm.fsDiff(session.id) },
+                reviewAddComment = { body -> vm.reviewAddComment(session.id, body) },
+                reviewResolve = { commentId -> vm.reviewResolve(session.id, commentId) },
+                reviewSubmit = { vm.reviewSubmit(session.id) },
+                fsChanges = vm.fsChanges,
+                lspStatus = vm.lspStatus,
+                lspRpc = vm.lspRpc,
+                editorOpen = { vm.editorOpen(it) },
+                editorClose = { vm.editorClose(it) },
+                lspStatusQuery = { s, p -> vm.lspStatusQuery(s, p) },
+                lspOpen = { s, sid -> vm.lspOpen(s, sid) },
+                lspRpcOut = { s, sid, m -> vm.lspRpcOut(s, sid, m) },
+                lspClose = { s, sid -> vm.lspClose(s, sid) },
+                onEditorConsumesBackChange = { editorConsumesBack = it },
+                connectTerminal = { vm.connectTerminal(session.id) },
+                connectAgentTerminal = { vm.connectAgentTerminal(session.id) },
+                listDisplays = { vm.listDisplays() },
+                connectScrcpy = { vm.connectScrcpy(it) },
+                connectVnc = { vm.connectVnc(it) },
+                displays = vm.displays,
+                onStartDisplay = { vm.startDisplay(session.name) },
+                modifier = Modifier.fillMaxSize(),
+            )
+            return@Box
+        }
         ChatScreen(
             session = session,
             messages = messages,
@@ -260,7 +349,7 @@ private fun SessionChatLayer(
             sending = sending,
             onBack = onBack,
             onSendWith = { text, atts -> vm.sendWith(session.id, text, atts) },
-            onUpload = { bytes, name, mime, kind -> vm.upload(session.id, bytes, name, mime, kind) },
+            onUpload = { source, name, mime, kind, onProgress -> vm.uploadResumable(session.id, source, name, mime, kind, onProgress) },
             transcribeAudio = { bytes, name -> vm.transcribeAudio(session.id, bytes, name) },
             transcribeDraft = { draft -> vm.transcribeDraft(session.id, draft) },
             loadGlossary = { vm.fetchGlossary() },

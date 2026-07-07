@@ -7,7 +7,7 @@ export interface ChannelCapabilities {
 
 export interface OutboundAttachmentRef {
   file_id: string
-  kind: "photo" | "document" | "voice" | "audio" | "video_note"
+  kind: "photo" | "document" | "voice" | "audio" | "video" | "video_note"
   mime?: string
   size?: number
   name?: string
@@ -24,7 +24,7 @@ export type OutboundResult =
   | { ok: false; error: string }
 
 export interface InboundAttachment {
-  kind: "voice" | "photo" | "document" | "audio" | "video_note"
+  kind: "voice" | "photo" | "document" | "audio" | "video" | "video_note"
   file_id: string
   mime?: string
   size?: number
