@@ -116,6 +116,10 @@ class EditorEngine(
             settings.allowFileAccessFromFileURLs = true
             settings.allowUniversalAccessFromFileURLs = true
             settings.cacheMode = WebSettings.LOAD_DEFAULT
+            // Pin text to 100%: the editor's own `fontSize` setting is the size control. Without
+            // this, WebView multiplies CSS px by the system font scale, so on Samsung DeX / large
+            // external displays (which bump the scale) the code renders far too big.
+            settings.textZoom = 100
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                 setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true)
             }
