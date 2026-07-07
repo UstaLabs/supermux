@@ -48,12 +48,16 @@ fun SidebarDivider(
     Box(
         modifier
             .fillMaxHeight()
-            .width(16.dp),
+            .width(14.dp)
+            // Blend the drag gutter into the sidebar surface so it doesn't read as a fat dark band
+            // over the app background (very visible on DeX / large displays). Only the trailing
+            // hairline shows — that's the "thin line" the divider should be.
+            .background(cs.surfaceContainerHigh),
     ) {
-        // Hairline rule, centered in the gutter.
+        // Hairline at the sidebar↔detail boundary (trailing edge), not floating mid-gutter.
         Box(
             Modifier
-                .align(Alignment.Center)
+                .align(Alignment.CenterEnd)
                 .width(1.dp)
                 .fillMaxHeight()
                 .background(cs.outlineVariant),

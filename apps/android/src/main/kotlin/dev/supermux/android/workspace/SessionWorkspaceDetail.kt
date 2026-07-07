@@ -388,17 +388,12 @@ fun SessionWorkspaceDetail(
             // Chat ⇄ Native (raw agent PTY) toggle — claude only, and only while the Chat pane is
             // visible (it flips ChatPanel ⇄ agent-PTY inside that pane; see chatOrNative above).
             if (session.agent == "claude" && layout.panesFor(session.id).chat) {
-                IconToggleButton(
-                    checked = layout.nativeView(session.id),
-                    onCheckedChange = { layout.setNativeView(session.id, it) },
+                AgentViewToggle(
+                    nativeView = layout.nativeView(session.id),
+                    onSetNative = { layout.setNativeView(session.id, it) },
                     modifier = Modifier.testTag("toggle_native"),
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_terminal),
-                        contentDescription = "Toggle native agent terminal",
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
+                )
+                Spacer(Modifier.width(Space.xs))
             }
 
             // Finish — worktree-backed sessions only (same gate/badge as ChatScreen's header).
@@ -433,6 +428,7 @@ fun SessionWorkspaceDetail(
                 }
             }
 
+            Spacer(Modifier.width(Space.xs))
             PaneToggleCluster(
                 layout = layout,
                 sessionId = session.id,
