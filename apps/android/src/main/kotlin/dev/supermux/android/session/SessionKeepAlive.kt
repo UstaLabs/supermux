@@ -38,6 +38,7 @@ import dev.supermux.android.ui.keepAlivePanel
 import dev.supermux.android.workspace.SessionWorkspaceDetail
 import dev.supermux.android.workspace.WorkspaceLayout
 import dev.supermux.net.GitOpResult
+import dev.supermux.net.ProxyDto
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
@@ -267,6 +268,10 @@ private fun SessionChatLayer(
     val finishJobs by vm.finishJobs.collectAsState()
     val finishJob = finishJobs[session.id]
 
+    // Exposed proxy links for this session (iOS parity) — loaded on open, filtered by session name.
+    var sessionLinks by remember(session.id) { mutableStateOf<List<ProxyDto>>(emptyList()) }
+    LaunchedEffect(session.id) { sessionLinks = vm.proxies().filter { it.sessionName == session.name } }
+
     if (visible) {
         // Phone: Back returns to the session list (onBack). On the wide/tablet path onBack is a
         // no-op (the list is always on-screen), so DON'T consume Back there — let it background the
@@ -337,6 +342,7 @@ private fun SessionChatLayer(
                         "publish" -> vm.gitPublish(session.id, cb)
                     }
                 },
+                sessionLinks = sessionLinks,
                 // Finish flow — same VM-backed lambdas ChatScreen receives (see below).
                 finishJob = finishJob,
                 onFinishReadiness = { vm.finishReadiness(session.id) },
