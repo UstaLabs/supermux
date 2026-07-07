@@ -156,6 +156,10 @@ class SupermuxMessagingService : FirebaseMessagingService() {
             .setAutoCancel(true)
             .setContentIntent(pending)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
+            // Group every session's notifications under one stack (iMessage-style). Android
+            // shows the summary below only once 2+ children exist; a lone notification stands
+            // on its own.
+            .setGroup(GROUP_KEY)
 
         if (!hasPostPermission(this)) {
             // API 33+ without the runtime grant: posting is a silent no-op. The runtime
@@ -163,9 +167,19 @@ class SupermuxMessagingService : FirebaseMessagingService() {
             Log.i(TAG, "POST_NOTIFICATIONS not granted; skipping notify")
             return
         }
+        val nm = NotificationManagerCompat.from(this)
         // Distinct id per session so concurrent sessions don't overwrite each other.
         val id = (note.sessionId ?: note.session).hashCode().absoluteValue
-        NotificationManagerCompat.from(this).notify(id, builder.build())
+        nm.notify(id, builder.build())
+        // The summary carrier for the group. Cleared with the last child by
+        // `cancelForSession` (Android usually auto-removes it, but not on every OEM).
+        val summary = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setGroup(GROUP_KEY)
+            .setGroupSummary(true)
+            .setAutoCancel(true)
+            .build()
+        nm.notify(GROUP_SUMMARY_ID, summary)
     }
 
     private fun pairedCreds(): Creds? {
@@ -188,6 +202,27 @@ class SupermuxMessagingService : FirebaseMessagingService() {
         const val CHANNEL_ID = "sessions"
         const val CHANNEL_NAME = "Sessions"
         const val EXTRA_SESSION_ID = "supermux.sessionId"
+
+        /** All session notifications share this group so they stack together. */
+        const val GROUP_KEY = "dev.supermux.sessions"
+        /** Fixed id for the group summary carrier (never a real session's id). */
+        const val GROUP_SUMMARY_ID = 424242
+
+        /**
+         * Clear a chat's notification when its screen is opened in the app (parity with iOS
+         * `PushManager.clearDelivered`). Also drops the group summary once no per-session
+         * notifications remain, so an empty group doesn't linger on OEMs that don't auto-remove it.
+         */
+        fun cancelForSession(context: Context, sessionId: String) {
+            if (sessionId.isBlank()) return
+            val nm = NotificationManagerCompat.from(context)
+            nm.cancel(sessionId.hashCode().absoluteValue)
+            val sys = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val childrenLeft = runCatching {
+                sys.activeNotifications.count { it.id != GROUP_SUMMARY_ID }
+            }.getOrDefault(1)
+            if (childrenLeft == 0) nm.cancel(GROUP_SUMMARY_ID)
+        }
 
         /** Create the "Sessions" notification channel (idempotent; API 26+). */
         fun ensureChannel(context: Context) {

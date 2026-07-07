@@ -61,6 +61,7 @@ import dev.supermux.android.nav.NewSession
 import dev.supermux.android.nav.Proxies
 import dev.supermux.android.nav.Settings
 import dev.supermux.android.nav.Usage
+import dev.supermux.android.push.SupermuxMessagingService
 import dev.supermux.android.session.SessionKeepAlivePhoneHost
 import dev.supermux.android.session.SessionKeepAliveTabletHost
 import dev.supermux.android.session.rememberVisitedSessions
@@ -177,7 +178,21 @@ class MainActivity : ComponentActivity() {
                 // transcript would be empty until the next snapshot/restart. Seed it whenever a chat
                 // is opened — a no-op for sessions the snapshot already populated. (iOS parity:
                 // ChatPane.loadPane → BrokerSession.ensureMessagesLoaded.)
-                LaunchedEffect(selected) { selected?.let { vm.ensureMessagesLoaded(it) } }
+                LaunchedEffect(selected) {
+                    selected?.let {
+                        vm.ensureMessagesLoaded(it)
+                        // Opening a chat clears its (grouped) notifications — parity with iOS.
+                        SupermuxMessagingService.cancelForSession(applicationContext, it)
+                    }
+                }
+                // A tapped push carries the chat id — open that chat (parity with iOS PushRouter);
+                // the clear-on-open effect above then wipes its notifications. Keyed on the intent so
+                // a fresh tap while foregrounded (onNewIntent swaps intentState) re-opens it.
+                LaunchedEffect(currentIntent) {
+                    currentIntent?.getStringExtra(SupermuxMessagingService.EXTRA_SESSION_ID)
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { selected = it }
+                }
 
                 // Wide = available width ≥600dp (the shared isWorkspaceWidth predicate /
                 // WORKSPACE_MIN_WIDTH_DP). ">=600" (not only Expanded ≥840) means the unfolded

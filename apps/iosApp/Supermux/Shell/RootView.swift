@@ -17,6 +17,7 @@ struct RootView: View {
     @Environment(\.horizontalSizeClass) private var hSize
     private var isRegularWidth: Bool { hSize == .regular }
     #endif
+    @Environment(\.scenePhase) private var scenePhase
     var onUnpair: () -> Void
 
     /// Full-page destinations pushed from the sidebar (mirrors the web router).
@@ -108,6 +109,18 @@ struct RootView: View {
             guard let id else { return }
             selected = id
             PushRouter.shared.pendingSessionId = nil
+        }
+        // Opening a chat clears its delivered notifications and re-derives the app badge.
+        // `selected` is the single source of truth for the open chat on every form factor
+        // (iPhone detail, iPad/mac workspace), and a tapped push routes through it too, so
+        // this one hook covers them all.
+        .onChange(of: selected) { _, id in
+            if let id { PushManager.shared.clearDelivered(sessionId: id) }
+        }
+        // Returning to the foreground on an already-open chat clears whatever landed while
+        // the app was backgrounded.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active, let id = selected { PushManager.shared.clearDelivered(sessionId: id) }
         }
         #if os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: .smNewSession)) { _ in

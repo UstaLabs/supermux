@@ -53,7 +53,17 @@ class NotificationService: UNNotificationServiceExtension {
                     var info = best.userInfo
                     info["sm_session_id"] = sid
                     best.userInfo = info
+                    // Group every notification from the same chat into one stack
+                    // (iMessage-style). iOS collapses same-`threadIdentifier` alerts on the
+                    // lock screen and in Notification Center; the host app clears a chat's
+                    // stack by this same id when it's opened (see PushManager.clearDelivered).
+                    best.threadIdentifier = sid
                 }
+                // Reflect the growing unread count on the app icon. The push is E2E-encrypted,
+                // so the server can NOT set `aps.badge` — we keep the count on-device in the
+                // shared App Group and the host app re-derives it from the delivered list when
+                // a chat is opened (self-healing any drift).
+                best.badge = NSNumber(value: Self.bumpBadgeCount())
                 NSLog("[supermux NSE] decrypted ok — title=%{public}@ body=%{public}@", note.title, note.body)
                 // Record the last decrypted notification in the shared App Group container
                 // so the host app can read what was delivered (and so the decrypt can be
@@ -77,6 +87,20 @@ class NotificationService: UNNotificationServiceExtension {
     // MARK: - Shared App Group record (host app can read the last delivered push)
 
     private static let appGroup = "group.dev.supermux.app"
+
+    /// Key for the on-device unread badge count, shared with the host app via the App Group.
+    /// (Must match `PushManager.badgeKey`.)
+    private static let badgeKey = "sm_badge_count"
+
+    /// Increment the shared unread badge counter and return the new value. Falls back to `1`
+    /// if the App Group defaults are unavailable (e.g. the mac NSE, which omits the group) —
+    /// there the host app's re-derive-from-delivered path drives the badge instead.
+    private static func bumpBadgeCount() -> Int {
+        guard let defaults = UserDefaults(suiteName: appGroup) else { return 1 }
+        let next = defaults.integer(forKey: badgeKey) + 1
+        defaults.set(next, forKey: badgeKey)
+        return next
+    }
 
     /// Persist the last decrypted notification to the shared App Group container as JSON.
     /// The host app shares this group; on the simulator the file is readable via
