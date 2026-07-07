@@ -270,6 +270,9 @@ class MainActivity : ComponentActivity() {
                                                 loadProjects = { vm.listProjects() },
                                                 validatePath = { vm.validatePath(it) },
                                                 onNavigate = navTo,
+                                                onRename = { id, name -> vm.rename(id, name) },
+                                                onKill = { id -> vm.kill(id) },
+                                                onMute = { id, m -> vm.setMute(id, m) },
                                             )
                                         }
                                     }
@@ -365,6 +368,9 @@ class MainActivity : ComponentActivity() {
                                         loadProjects = { vm.listProjects() },
                                         validatePath = { vm.validatePath(it) },
                                         onNavigate = navTo,
+                                        onRename = { id, name -> vm.rename(id, name) },
+                                        onKill = { id -> vm.kill(id) },
+                                        onMute = { id, m -> vm.setMute(id, m) },
                                     )
                                 }
                                 Box(
