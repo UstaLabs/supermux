@@ -209,7 +209,11 @@ fun SessionRow(
                     s.name,
                     color = cs.onSurface,
                     fontSize = 15.sp,
-                    fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.Medium,
+                    // Bold the ACTIVE session (selection) as well as unread ones. Previously only
+                    // unread (last-message-inbound) rows were bold, and selecting a row cleared its
+                    // unread → it *lost* bold on click and regained it when you selected away, which
+                    // read as "clicking doesn't bold it, but clicking another one does".
+                    fontWeight = if (active || hasUnread) FontWeight.Bold else FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),

@@ -43,6 +43,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
@@ -668,6 +674,21 @@ fun ChatPanel(
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("chat_composer")
+                            // Physical keyboard: Enter sends, Shift+Enter inserts a newline. Handled
+                            // in the PREVIEW phase and consumed, so the multiline field never also
+                            // inserts a newline and no duplicate IME "Send" fires — fixes hardware
+                            // Enter not sending, and the newline double-send, on DeX/desktop keyboards.
+                            .onPreviewKeyEvent { e ->
+                                if (e.type == KeyEventType.KeyDown &&
+                                    (e.key == Key.Enter || e.key == Key.NumPadEnter) &&
+                                    !e.isShiftPressed
+                                ) {
+                                    doSend()
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
                             // Paste/drag a copied image straight into the box (web parity). Text
                             // and non-image content falls through to the field's normal handling.
                             .contentReceiver { transferable ->
