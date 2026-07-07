@@ -339,7 +339,11 @@ fun ChatPanel(
             if (activePanel != SessionPanel.Chat) return@LaunchedEffect
             val target = timelineItems.size - 1 + (if (working) 1 else 0)
             if (target >= 0 && (timelineItems.size > prevTimelineSize || working)) {
-                listState.animateScrollToItem(target)
+                // First paint for this session: jump to the bottom instantly — opening a chat should
+                // START at the bottom, not animate a fast scroll down. Only animate for content that
+                // arrives while you're already watching.
+                if (prevTimelineSize == 0) listState.scrollToItem(target)
+                else listState.animateScrollToItem(target)
             }
             prevTimelineSize = timelineItems.size
         }
