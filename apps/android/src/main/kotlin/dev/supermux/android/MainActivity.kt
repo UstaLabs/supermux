@@ -24,6 +24,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.requiredWidth
@@ -224,7 +225,7 @@ class MainActivity : ComponentActivity() {
                                 animationSpec = if (resizing) snap() else spring(stiffness = Spring.StiffnessMediumLow),
                                 label = "sidebarWidth",
                             )
-                            Row(
+                            Box(
                                 Modifier
                                     .fillMaxSize()
                                     .focusRequester(focusRequester)
@@ -235,6 +236,7 @@ class MainActivity : ComponentActivity() {
                                     )
                                     .focusable(),
                             ) {
+                              Row(Modifier.fillMaxSize()) {
                                 // Sidebar: collapsed avatar rail OR the full list; the animating
                                 // parent Box clips (surfaceContainerHigh backs the reveal gap).
                                 Box(
@@ -272,24 +274,6 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 }
-                                // Divider: drag-resize + collapse when expanded; hairline when collapsed.
-                                if (collapsed) {
-                                    Box(
-                                        Modifier
-                                            .width(1.dp)
-                                            .fillMaxHeight()
-                                            .background(cs.outlineVariant),
-                                    )
-                                } else {
-                                    SidebarDivider(
-                                        onDragDelta = { d ->
-                                            workspaceLayout.setSidebarWidth(workspaceLayout.sidebarWidth + d)
-                                        },
-                                        onCollapse = { workspaceLayout.sidebarCollapsed = true },
-                                        onStartDrag = { resizing = true },
-                                        onEndDrag = { resizing = false },
-                                    )
-                                }
                                 Box(Modifier.weight(1f)) {
                                     if (selected == null) {
                                         Box(
@@ -320,6 +304,29 @@ class MainActivity : ComponentActivity() {
                                         modifier = Modifier.fillMaxSize(),
                                     )
                                 }
+                              }
+                              // Resize divider as an OVERLAY on the seam (x = sidebarWidth): it holds
+                              // no layout width, so the detail column fills the full space and only a
+                              // hairline (+ the collapse chevron) floats on the boundary.
+                              if (collapsed) {
+                                  Box(
+                                      Modifier
+                                          .offset(x = sidebarWidth)
+                                          .width(1.dp)
+                                          .fillMaxHeight()
+                                          .background(cs.outlineVariant),
+                                  )
+                              } else {
+                                  SidebarDivider(
+                                      modifier = Modifier.offset(x = sidebarWidth - 7.dp),
+                                      onDragDelta = { d ->
+                                          workspaceLayout.setSidebarWidth(workspaceLayout.sidebarWidth + d)
+                                      },
+                                      onCollapse = { workspaceLayout.sidebarCollapsed = true },
+                                      onStartDrag = { resizing = true },
+                                      onEndDrag = { resizing = false },
+                                  )
+                              }
                             }
                         } else {
                             PhoneNavHost(

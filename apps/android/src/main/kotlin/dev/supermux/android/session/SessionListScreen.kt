@@ -39,6 +39,7 @@ import dev.supermux.android.theme.softElevation
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.session.formatWorkdir
+import dev.supermux.session.inferHomeDir
 import dev.supermux.session.groupSessions
 import kotlinx.coroutines.launch
 
@@ -258,7 +259,9 @@ fun SessionRow(
                 )
             } else {
                 Text(
-                    s.workdir,
+                    // Match iOS: abbreviate the workdir via the shared KMP util (~/… under home,
+                    // …/parent/leaf when deep) instead of showing the raw absolute path.
+                    formatWorkdir(s.workdir, inferHomeDir(s.workdir)),
                     color = cs.onSurfaceVariant,
                     fontFamily = MonoFontFamily,
                     fontSize = 11.sp,
