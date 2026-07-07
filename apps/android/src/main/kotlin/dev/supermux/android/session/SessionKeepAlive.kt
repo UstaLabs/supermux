@@ -1,5 +1,6 @@
 package dev.supermux.android.session
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedContent
@@ -27,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.zIndex
 import dev.supermux.android.AppViewModel
@@ -35,11 +37,26 @@ import dev.supermux.android.chat.ChatScreen
 import dev.supermux.android.ui.keepAlivePanel
 import dev.supermux.android.workspace.SessionWorkspaceDetail
 import dev.supermux.android.workspace.WorkspaceLayout
+import dev.supermux.net.GitOpResult
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
+
+/** Short human text for a git-op result (parity with iOS SessionChrome.gitResultText). */
+private fun gitOpResultText(r: GitOpResult?): String = when (r?.status) {
+    null -> "Failed"
+    "pushed" -> "Pushed"
+    "up_to_date" -> "Up to date"
+    "clean" -> "Pulled"
+    "rejected_non_ff" -> "Push rejected — pull first"
+    "conflict" -> "Conflict in ${r.files.size} file(s)"
+    "dirty" -> "Uncommitted changes block the pull"
+    "auth_failed" -> "Auth failed"
+    "error" -> r.message ?: "Error"
+    else -> r.status
+}
 
 /** Tracks session ids the user has opened; pruned when broker removes a session. */
 @Composable
@@ -243,6 +260,7 @@ private fun SessionChatLayer(
 ) {
     var gestureProgress by remember(session.id) { mutableFloatStateOf(0f) }
     var editorConsumesBack by remember(session.id) { mutableStateOf(false) }
+    val context = LocalContext.current
 
     // Collect the finish-job flow once at this layer (consistent with messages/activity/agent);
     // the per-session value drives ChatScreen's Finish button + sheet.
@@ -308,6 +326,17 @@ private fun SessionChatLayer(
                 onMute = { vm.setMute(session.id, it) },
                 onKill = onKill,
                 onNavigate = onNavigate,
+                onGitOp = { op ->
+                    val cb: (GitOpResult?) -> Unit = { r ->
+                        Toast.makeText(context, gitOpResultText(r), Toast.LENGTH_SHORT).show()
+                    }
+                    when (op) {
+                        "fetch" -> vm.gitFetch(session.id, cb)
+                        "push" -> vm.gitPush(session.id, cb)
+                        "pull" -> vm.gitPull(session.id, cb)
+                        "publish" -> vm.gitPublish(session.id, cb)
+                    }
+                },
                 // Finish flow — same VM-backed lambdas ChatScreen receives (see below).
                 finishJob = finishJob,
                 onFinishReadiness = { vm.finishReadiness(session.id) },

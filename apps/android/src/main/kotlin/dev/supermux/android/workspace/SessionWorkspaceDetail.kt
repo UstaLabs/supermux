@@ -111,6 +111,8 @@ fun SessionWorkspaceDetail(
     // Management-screen navigation (Settings/Usage/…) via the shared route strings MainActivity's
     // navTo handles — surfaced through the header overflow (iOS parity; sidebar-only otherwise).
     onNavigate: (String) -> Unit,
+    // Workspace ⋮ git ops (op = fetch|push|pull|publish); the caller runs it + surfaces the result.
+    onGitOp: (String) -> Unit = {},
     // Finish flow — threaded from SessionChatLayer exactly like ChatScreen (same VM-backed lambdas).
     finishJob: dev.supermux.proto.FinishJobDto? = null,
     onFinishReadiness: suspend () -> dev.supermux.net.FinishReadiness? = { null },
@@ -452,6 +454,33 @@ fun SessionWorkspaceDetail(
                     expanded = showOverflow,
                     onDismissRequest = { showOverflow = false },
                 ) {
+                    // Git ops — parity with iOS's overflow "Git" section; shown when the session
+                    // is a repo. Publish replaces Push when the branch has no upstream yet.
+                    if (session.git != null) {
+                        DropdownMenuItem(
+                            text = { Text("Fetch") },
+                            leadingIcon = { Icon(painterResource(R.drawable.ic_download), contentDescription = null, tint = cs.onSurface, modifier = Modifier.size(18.dp)) },
+                            onClick = { showOverflow = false; onGitOp("fetch") },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Pull") },
+                            leadingIcon = { Icon(painterResource(R.drawable.ic_git_pull_request), contentDescription = null, tint = cs.onSurface, modifier = Modifier.size(18.dp)) },
+                            onClick = { showOverflow = false; onGitOp("pull") },
+                        )
+                        if (session.git?.unpublished == true) {
+                            DropdownMenuItem(
+                                text = { Text("Publish") },
+                                leadingIcon = { Icon(painterResource(R.drawable.ic_cloud_off), contentDescription = null, tint = cs.onSurface, modifier = Modifier.size(18.dp)) },
+                                onClick = { showOverflow = false; onGitOp("publish") },
+                            )
+                        } else {
+                            DropdownMenuItem(
+                                text = { Text("Push") },
+                                leadingIcon = { Icon(painterResource(R.drawable.ic_git_merge), contentDescription = null, tint = cs.onSurface, modifier = Modifier.size(18.dp)) },
+                                onClick = { showOverflow = false; onGitOp("push") },
+                            )
+                        }
+                    }
                     DropdownMenuItem(
                         text = { Text("Settings") },
                         leadingIcon = {

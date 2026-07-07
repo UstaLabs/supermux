@@ -16,6 +16,7 @@ import dev.supermux.net.AddCommentBody
 import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
+import dev.supermux.net.GitOpResult
 import dev.supermux.net.CuratorSettingsResponse
 import dev.supermux.net.BrokerClient
 import dev.supermux.net.CodexResetResult
@@ -485,6 +486,13 @@ class AppViewModel(
 
     /** Post a message to the agent (the finish sheet's "Let the agent fix it"). */
     fun sendMessage(id: String, text: String) { viewModelScope.launch { runCatching { api.sendMessage(id, text) } } }
+
+    // Git ops for the workspace ⋮ menu — run the broker op and hand the result back so the caller
+    // can surface it (parity with iOS SessionChrome.fetch/push/pull/publish).
+    fun gitFetch(id: String, onResult: (GitOpResult?) -> Unit) { viewModelScope.launch { onResult(runCatching { api.gitFetch(id) }.getOrNull()) } }
+    fun gitPush(id: String, onResult: (GitOpResult?) -> Unit) { viewModelScope.launch { onResult(runCatching { api.gitPush(id) }.getOrNull()) } }
+    fun gitPull(id: String, onResult: (GitOpResult?) -> Unit) { viewModelScope.launch { onResult(runCatching { api.gitPull(id) }.getOrNull()) } }
+    fun gitPublish(id: String, onResult: (GitOpResult?) -> Unit) { viewModelScope.launch { onResult(runCatching { api.gitPublish(id) }.getOrNull()) } }
 
     data class PendingFirstMessage(val text: String, val attachments: List<String> = emptyList())
 
