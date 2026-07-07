@@ -27,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.zIndex
 import dev.supermux.android.AppViewModel
 import dev.supermux.android.DevConfig
@@ -174,6 +175,11 @@ fun SessionKeepAliveTabletHost(
     onOpenDisplays: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // Release keyboard focus whenever the visible session changes, so a hidden (kept-alive)
+    // session's terminal/composer can't keep the IME and swallow keystrokes meant for the new one
+    // (each session stays composed for instant switching, but only the visible one should type).
+    val focusManager = LocalFocusManager.current
+    LaunchedEffect(selected) { focusManager.clearFocus(force = true) }
     Box(modifier.fillMaxSize()) {
         if (visited.isEmpty() && selected == null) {
             return@Box
