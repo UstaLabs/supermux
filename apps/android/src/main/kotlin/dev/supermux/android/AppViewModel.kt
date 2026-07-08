@@ -630,6 +630,12 @@ class AppViewModel(
     suspend fun launcherRepoInfo(workdir: String): RepoInfo? =
         runCatching { api.getRepoInfo(workdir) }.getOrNull()
 
+    /** GET /commands/preview?agent=&workdir= — the agent's slash commands for the launcher (no
+     *  session yet). Empty on failure or blank workdir (iOS NewSessionView previewCommands parity). */
+    suspend fun launcherCommands(agent: String, workdir: String): List<SlashCommand> =
+        if (workdir.isBlank()) emptyList()
+        else runCatching { api.previewCommands(agent, workdir).commands }.getOrNull() ?: emptyList()
+
     /**
      * PUT /settings/config { voiceCleanupEngine?, voiceCleanupModel? }.
      * A null arg leaves that field unchanged; an empty-string model ("") resets the
