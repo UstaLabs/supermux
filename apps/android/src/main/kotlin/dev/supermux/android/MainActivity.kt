@@ -159,6 +159,11 @@ class MainActivity : ComponentActivity() {
                     return@SupermuxTheme
                 }
 
+                // Warm the WebView engine once, hidden, behind the session list — so the FIRST
+                // editor open doesn't black the whole window while Chromium + the render surface
+                // spin up (see WebViewWarmup). One-shot per process; tears itself down when warm.
+                dev.supermux.android.editor.WebViewWarmup()
+
                 val brokerUrl = remember { store.loadBaseUrl()!! }   // gate guarantees both are present
                 val token = remember { store.load()!! }
                 val vm: AppViewModel = viewModel(factory = AppViewModel.factory(application, brokerUrl, token))
