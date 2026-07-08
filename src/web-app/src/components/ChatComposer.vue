@@ -67,8 +67,8 @@ const cardClass = computed(() =>
   cn(
     "flex flex-col border shadow-lg backdrop-blur-xl transition-all duration-200 ease-out",
     expanded.value
-      ? "gap-2 rounded-3xl border-border/60 bg-card/90 px-3 py-2.5"
-      : "gap-0 rounded-full border-border/60 bg-card/90 pl-2.5 pr-2 py-1",
+      ? "gap-2 rounded-3xl border-border/60 bg-card/80 px-3 py-2.5"
+      : "gap-0 rounded-full border-border/60 bg-card/80 pl-2.5 pr-2 py-1",
   ),
 )
 </script>

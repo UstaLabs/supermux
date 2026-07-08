@@ -38,6 +38,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -367,7 +374,17 @@ fun ChatPanel(
         }
     }
 
-    Column(modifier) {
+    // Float the composer over the transcript (iOS ChatPane parity): the transcript fills the
+    // Box and the composer overlays the bottom; the transcript pads its content by the measured
+    // composer height so the last message still clears it. Tapping the transcript drops focus.
+    val focusManager = LocalFocusManager.current
+    val density = LocalDensity.current
+    var composerHeightPx by remember { mutableIntStateOf(0) }
+    Box(
+        modifier.pointerInput(Unit) {
+            detectTapGestures(onTap = { focusManager.clearFocus() })
+        },
+    ) {
         // ----------------------------------------------------------------
         // 2. Timeline
         // ----------------------------------------------------------------
@@ -397,8 +414,7 @@ fun ChatPanel(
             // ── Empty session: starter prompts (iOS ChatPane empty state) ──
             Column(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
+                    .fillMaxSize()
                     .padding(Space.xl),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(Space.md),
@@ -441,9 +457,9 @@ fun ChatPanel(
             LazyColumn(
                 state = listState,
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(start = Space.sm, end = Space.md, top = Space.md, bottom = Space.md),
+                    .fillMaxSize()
+                    .padding(start = Space.sm, end = Space.md, top = Space.md),
+                contentPadding = PaddingValues(bottom = with(density) { composerHeightPx.toDp() } + Space.sm),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 items(timelineItems, key = { timelineItemKey(it) }) { item ->
@@ -480,7 +496,9 @@ fun ChatPanel(
         // ----------------------------------------------------------------
         Column(
             modifier = Modifier
-                .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+                .align(Alignment.BottomCenter)
+                .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
+                .onSizeChanged { composerHeightPx = it.height },
         ) {
             // ── slash-command menu: active "/token" at end of draft (start-of-line or after
             //    whitespace), filtering on name OR family by `contains`, capped at 8 (iOS parity).
