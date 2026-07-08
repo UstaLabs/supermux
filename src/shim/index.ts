@@ -4,19 +4,23 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprot
 import { connectShim } from "./socket-client"
 import { listTools, callTool } from "./tools"
 import type { AgentKind } from "./tools"
+import { createInboundGate } from "./inbound-gate"
 import { SOCKETS_DIR } from "../shared/paths"
 import { randomBytes } from "crypto"
 import { makeLogger } from "../shared/log"
 const log = makeLogger("shim")
 
-// A `notifications/claude/channel` message sent the instant ListTools fires (i.e.
-// mid-init) is dropped by Claude — it isn't ready to inject channel messages yet.
-// Normal user messages never hit this (they arrive seconds after spawn, when the
-// session is long since ready). But an agent-RPC worker's prompt IS delivered the
-// moment it spawns, lands in the deferred queue, and would flush too early. So we
-// flush deferred inbound after a short grace, giving Claude time to be ready.
-// Tunable for slow/loaded hosts; warm sessions (mcpReady already true) never wait.
+// How long after the MCP initialize handshake completes before flushing
+// deferred inbound. Claude wires its channel-notification handler shortly
+// AFTER initialize ("Channel notifications registered", observed 0.6–1.0s
+// later); a notification sent inside that window is still dropped. Tunable
+// for slow/loaded hosts; sessions past the window never wait.
 const CHANNEL_INJECT_GRACE_MS = Number(process.env.MUX_CHANNEL_INJECT_GRACE_MS ?? 2500)
+// Last-resort flush if the client NEVER completes initialize (hung/dead
+// Claude). If it is dead the write is lost either way; a pathologically slow
+// boot still gets the message. Kept generous — the old 2s version of this
+// fallback is what raced Claude's startup and silently ate first messages.
+const CHANNEL_INIT_TIMEOUT_MS = Number(process.env.MUX_CHANNEL_INIT_TIMEOUT_MS ?? 30_000)
 
 const SESSION_ID = process.env.MUX_SESSION_ID ?? randomBytes(8).toString("hex")
 const CLAUDE_SESSION_ID = process.env.CLAUDE_SESSION_ID ?? undefined
@@ -46,10 +50,34 @@ async function main() {
     },
   )
 
-  let mcpReady = false
-  let mcpReadyResolve: () => void
-  const mcpReadyPromise = new Promise<void>(r => { mcpReadyResolve = r })
-  const pendingInbound: Array<{ content: string; meta: Record<string, string> }> = []
+  // Claude silently drops channel notifications sent before it finished the
+  // MCP initialize handshake + wired its channel handler. The gate buffers
+  // inbound until `oninitialized` + grace, then passes through. See
+  // inbound-gate.ts for the full story (this replaced two wall-clock flush
+  // timers that raced Claude's startup and lost fresh sessions' first message).
+  const gate = createInboundGate({
+    graceMs: CHANNEL_INJECT_GRACE_MS,
+    initTimeoutMs: CHANNEL_INIT_TIMEOUT_MS,
+    notify: (payload, trigger) => {
+      if (trigger === "init_timeout") {
+        log.error("on_inbound.init_timeout_flush", {
+          preview: payload.content.slice(0, 60),
+          waited_ms: CHANNEL_INIT_TIMEOUT_MS,
+        })
+      } else if (trigger === "initialized_grace") {
+        log.info("on_inbound.deferred_flush", { content: payload.content.slice(0, 80) })
+      }
+      void (mcp.notification as any)({
+        method: "notifications/claude/channel",
+        params: { content: payload.content, meta: payload.meta },
+      }).then(() => log.debug("on_inbound.dispatched", { trigger }))
+        .catch((err: unknown) => log.error("on_inbound.failed", { trigger, err: String(err) }))
+    },
+  })
+  mcp.oninitialized = () => {
+    log.info("mcp_initialized", { pending: gate.pendingCount() })
+    gate.initialized()
+  }
 
   const shim = await connectShim({
     socketsDir: SOCKETS_DIR,
@@ -60,65 +88,29 @@ async function main() {
     displayName: process.env.MUX_DISPLAY_NAME,
     agentSessionId: CLAUDE_SESSION_ID,
     onInbound: (payload) => {
-      log.debug("on_inbound.firing", { content: payload.content.slice(0, 80), mcpReady })
-      if (mcpReady) {
-        void (mcp.notification as any)({
-          method: "notifications/claude/channel",
-          params: { content: payload.content, meta: payload.meta },
-        }).then(() => log.debug("on_inbound.dispatched"))
-          .catch((err: unknown) => log.error("on_inbound.failed", { err: String(err) }))
-      } else {
+      log.debug("on_inbound.firing", { content: payload.content.slice(0, 80), open: gate.isOpen() })
+      if (!gate.isOpen()) {
         log.info("on_inbound.deferred", {
           channel_only: CHANNEL_ONLY,
           preview: payload.content.slice(0, 60),
-          pending: pendingInbound.length + 1,
+          pending: gate.pendingCount() + 1,
         })
-        pendingInbound.push(payload)
       }
+      gate.inbound(payload)
     },
   })
 
   log.info("registered", { name: shim.assignedName, agent_kind: AGENT_KIND })
 
   mcp.setRequestHandler(ListToolsRequestSchema, () => {
-    if (!mcpReady) {
-      mcpReady = true
-      mcpReadyResolve!()
-      // Flush after a grace — Claude drops channel notifications sent the instant
-      // ListTools fires (mid-init). See CHANNEL_INJECT_GRACE_MS above.
-      const toFlush = pendingInbound.splice(0)
-      if (toFlush.length) setTimeout(() => {
-        for (const p of toFlush) {
-          log.info("on_inbound.deferred_flush", { content: p.content.slice(0, 80) })
-          void (mcp.notification as any)({
-            method: "notifications/claude/channel",
-            params: { content: p.content, meta: p.meta },
-          }).catch((err: unknown) => log.error("on_inbound.deferred_failed", { err: String(err) }))
-        }
-      }, CHANNEL_INJECT_GRACE_MS)
-    }
     // Channel-only instance advertises ZERO tools (the tools instance is the sole
-    // provider). The tools capability is still declared so Claude calls ListTools
-    // here and mcpReady fires to flush pending inbound — it just gets an empty list.
+    // provider). The tools capability is still declared so Claude still calls
+    // ListTools here — it just gets an empty list.
     return { tools: CHANNEL_ONLY ? [] : listTools(AGENT_KIND, RPC_ONLY) }
   })
   mcp.setRequestHandler(CallToolRequestSchema, async (req) => callTool(req.params, shim, AGENT_KIND, RPC_ONLY))
 
   await mcp.connect(new StdioServerTransport())
-  // Fallback: on --resume, Claude may skip ListTools (tools cached), so
-  // mcpReady never fires from the handler. Flush after a short grace period.
-  if (!mcpReady) setTimeout(() => {
-    if (mcpReady) return
-    mcpReady = true
-    mcpReadyResolve!()
-    for (const p of pendingInbound.splice(0)) {
-      log.info("on_inbound.fallback_flush", { content: p.content.slice(0, 80) })
-      void (mcp.notification as any)({
-        method: "notifications/claude/channel",
-        params: { content: p.content, meta: p.meta },
-      }).catch((err: unknown) => log.error("on_inbound.fallback_failed", { err: String(err) }))
-    }
-  }, 2000)
 }
 
 main().catch(err => {
