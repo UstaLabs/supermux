@@ -8,6 +8,8 @@ export interface AgentStateEntry {
   tool?: string
   since: number
   workingSince?: number
+  waiting?: boolean   // idle but background tasks still open (turn will resume)
+  bgOpen?: number     // open background-task count
 }
 
 // Frozen so the shared default returned by get() for unknown sessions can never
