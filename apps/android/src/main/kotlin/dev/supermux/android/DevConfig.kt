@@ -9,13 +9,20 @@ object DevConfig {
     const val HOME = "/home/user"
 
     /**
-     * On-device speech-to-text (live transcript) toggle. OFF by default: Android's
-     * [android.speech.SpeechRecognizer] is OEM/locale-gated and materially weaker than
-     * host-side whisper, so audio-upload → whisper → cleanup is the primary, robust path
-     * (parity with the web PWA). When on, on-device STT only ever supplies a fallback raw
-     * draft; the real transcription is still the whisper POST. Flip after device testing.
+     * On-device speech-to-text (live transcript) toggle. ON to mirror iOS, which tries the
+     * platform on-device recognizer FIRST and only records-and-uploads audio as a fallback — so
+     * dictation produces text even when the broker has no whisper pipeline (ffmpeg + whisper-cli)
+     * installed, which is the default.
+     *
+     * When on, [dev.supermux.android.chat.DictationEngine] supplies the transcript locally and the
+     * whisper POST is reduced to an OPTIONAL cleanup pass over that draft (the JSON `draft` branch of
+     * /transcribe, no ffmpeg needed); if cleanup fails the raw on-device draft is kept
+     * ([dev.supermux.android.chat.DictationController.runTranscription] rawFallback), exactly as iOS
+     * does. On-device recognition is OEM/locale-gated: where it isn't available the controller falls
+     * back to the audio-upload → whisper path exactly as before, so enabling this never regresses a
+     * device — it only lights up the ones that support it.
      */
-    const val ENABLE_ONDEVICE_STT = false
+    const val ENABLE_ONDEVICE_STT = true
 
     private const val PHYSICAL_BROKER = "ws://CHANGE_ME:9898"  // set to your broker host
     private const val EMULATOR_BROKER = "ws://10.0.2.2:9898"

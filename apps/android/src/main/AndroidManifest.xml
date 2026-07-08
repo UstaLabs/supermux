@@ -9,6 +9,15 @@
     <!-- Attachment camera capture is delegated to the system camera app (TakePicture);
          the camera is optional so non-camera devices can still install. -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- Android 11+ (API 30) package visibility: without this, SpeechRecognizer's
+         isOnDeviceRecognitionAvailable()/createOnDeviceSpeechRecognizer() can't see the system
+         recognition service, so on-device dictation (DevConfig.ENABLE_ONDEVICE_STT) silently
+         reports UNAVAILABLE and falls back to the audio→whisper path. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
     <application
         android:name=".SupermuxApplication"
         android:label="supermux"
