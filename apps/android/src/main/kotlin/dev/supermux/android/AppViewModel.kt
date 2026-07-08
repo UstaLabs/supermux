@@ -53,6 +53,7 @@ import dev.supermux.net.VerifySuggestResult
 import dev.supermux.net.VncClient
 import dev.supermux.android.session.LauncherDraft
 import dev.supermux.android.session.LauncherPrefs
+import dev.supermux.android.session.StagedUpload
 import dev.supermux.android.settings.AddCustomLspArgs
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
@@ -536,7 +537,7 @@ class AppViewModel(
         agent: String,
         model: String?,
         text: String,
-        attachments: List<String> = emptyList(),
+        staged: List<StagedUpload> = emptyList(),
         worktree: Boolean = false,
         baseBranch: String? = null,
     ): String {
@@ -558,7 +559,13 @@ class AppViewModel(
             _sessions.value.firstOrNull { it.name == resp.name }?.id
                 ?: throw IllegalStateException("Session created but id not available yet")
         }
-        setPendingFirst(sessionId, PendingFirstMessage(text, attachments))
+        // Attachments need a session id, so they upload *after* spawn (mirrors iOS
+        // NewSessionView.spawn() and the web launcher). A file that fails to upload is skipped —
+        // the first message still sends with whatever succeeded, never blocking session creation.
+        val attachmentIds = staged.mapNotNull { s ->
+            uploadResumable(sessionId, s.source, s.name, s.mime, s.kind) { _, _ -> }
+        }
+        setPendingFirst(sessionId, PendingFirstMessage(text, attachmentIds))
         return sessionId
     }
 

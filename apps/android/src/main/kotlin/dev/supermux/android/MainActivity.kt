@@ -61,7 +61,6 @@ import dev.supermux.android.nav.NewSession
 import dev.supermux.android.nav.Proxies
 import dev.supermux.android.nav.Settings
 import dev.supermux.android.nav.Usage
-import dev.supermux.android.push.SupermuxMessagingService
 import dev.supermux.android.session.SessionKeepAlivePhoneHost
 import dev.supermux.android.session.SessionKeepAliveTabletHost
 import dev.supermux.android.session.rememberVisitedSessions
@@ -415,8 +414,8 @@ class MainActivity : ComponentActivity() {
                                         onLauncherPrefsChange = { vm.saveLauncherPrefs(it) },
                                         loadLauncherDraft = { vm.loadLauncherDraft() },
                                         onLauncherDraftChange = { vm.saveLauncherDraft(it) },
-                                        onSubmit = { wd, ag, md, msg, wt, base ->
-                                            vm.createSessionWithFirstMessage(wd, ag, md, msg, worktree = wt, baseBranch = base)
+                                        onSubmit = { wd, ag, md, msg, wt, base, staged ->
+                                            vm.createSessionWithFirstMessage(wd, ag, md, msg, staged, worktree = wt, baseBranch = base)
                                         },
                                         onOpenSession = { selected = it; navController.popBackStack() },
                                     )
@@ -443,8 +442,8 @@ class MainActivity : ComponentActivity() {
                                 onLauncherPrefsChange = { vm.saveLauncherPrefs(it) },
                                 loadLauncherDraft = { vm.loadLauncherDraft() },
                                 onLauncherDraftChange = { vm.saveLauncherDraft(it) },
-                                onSubmit = { wd, ag, md, msg, wt, base ->
-                                    vm.createSessionWithFirstMessage(wd, ag, md, msg, worktree = wt, baseBranch = base)
+                                onSubmit = { wd, ag, md, msg, wt, base, staged ->
+                                    vm.createSessionWithFirstMessage(wd, ag, md, msg, staged, worktree = wt, baseBranch = base)
                                 },
                                 onOpenSession = { selected = it; navController.popBackStack() },
                             )

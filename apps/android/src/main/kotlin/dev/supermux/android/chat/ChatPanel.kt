@@ -1096,7 +1096,7 @@ private fun SendingIndicator(onStop: () -> Unit) {
  * declared in file_paths.xml + reused by openAttachment). The system camera app writes the JPEG
  * here, then [stageFromUri] reads it back and uploads it.
  */
-private fun createImageUri(context: android.content.Context): Uri {
+internal fun createImageUri(context: android.content.Context): Uri {
     val dir = File(context.cacheDir, "attachments").apply { mkdirs() }
     val file = File(dir, "camera_${System.currentTimeMillis()}.jpg")
     return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
@@ -1109,7 +1109,7 @@ private fun createImageUri(context: android.content.Context): Uri {
  * .getType() maps the .mp4 extension to video/mp4 — and uploads it with kind=null so the broker
  * infers "video".
  */
-private fun createVideoUri(context: android.content.Context): Uri {
+internal fun createVideoUri(context: android.content.Context): Uri {
     val dir = File(context.cacheDir, "attachments").apply { mkdirs() }
     val file = File(dir, "camera_${System.currentTimeMillis()}.mp4")
     return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
