@@ -17,7 +17,9 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import dev.supermux.ui.SupermuxColors
@@ -129,10 +131,15 @@ private fun buildSupermuxScheme(c: SupermuxColors, other: SupermuxColors, dark: 
  * Root theme. Defaults keep the existing `SupermuxTheme { … }` call-site compiling;
  * the actual Appearance/Material-You settings are wired in (Phase 0a Task 3).
  */
+/** App-level text-size multiplier bounds (Appearance → Text size). */
+const val TEXT_SCALE_MIN = 0.9f
+const val TEXT_SCALE_MAX = 1.3f
+
 @Composable
 fun SupermuxTheme(
     appearance: AppearanceMode = AppearanceMode.SYSTEM,
     dynamicEnabled: Boolean = ThemeDefaults.DYNAMIC_COLOR_ENABLED,
+    textScale: Float = 1f,
     content: @Composable () -> Unit,
 ) {
     val dark = when (appearance) {
@@ -158,9 +165,16 @@ fun SupermuxTheme(
         else -> buildSupermuxScheme(supermuxLight(), supermuxDark(), dark = false)
     }
     val semantics = if (dark) supermuxSemanticsDark() else supermuxSemanticsLight()
+    // App-level text scale: multiplies the system fontScale so every sp in the app
+    // (type scale AND local fontSize literals) grows together; dp layout is untouched.
+    val density = LocalDensity.current
+    val scale = textScale.coerceIn(TEXT_SCALE_MIN, TEXT_SCALE_MAX)
+    val scaledDensity =
+        if (scale == 1f) density else Density(density.density, density.fontScale * scale)
     CompositionLocalProvider(
         LocalPanes provides paneTones,
         LocalSemantics provides semantics,
+        LocalDensity provides scaledDensity,
     ) {
         MaterialTheme(
             colorScheme = scheme,
