@@ -9,5 +9,16 @@
       "agent": "claude",
       "model": "opus-4.8"
     }
-  ]
+  ],
+  "bgTasks": {
+    "editor": [
+      {
+        "id": "b3137swze",
+        "kind": "shell",
+        "label": "run jvm tests",
+        "startedAt": 1717200000000,
+        "status": "running"
+      }
+    ]
+  }
 }

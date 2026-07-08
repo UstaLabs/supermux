@@ -122,6 +122,7 @@ sealed interface ServerFrame {
         val sessions: List<SessionInfo> = emptyList(),
         val logs: Map<String, List<LogEntry>> = emptyMap(),
         val activity: Map<String, List<ActivityEvent>> = emptyMap(),
+        val bgTasks: Map<String, List<BgTask>> = emptyMap(),
         val agentState: Map<String, AgentStatus> = emptyMap(),
         val commands: Map<String, List<SlashCommand>> = emptyMap(),
         val commandsResolved: Map<String, Boolean> = emptyMap(),
@@ -143,6 +144,8 @@ sealed interface ServerFrame {
         val tool: String? = null,
         val since: Long? = null,
         val workingSince: Long? = null,
+        val waiting: Boolean = false,      // idle but background tasks still open
+        val bgOpen: Int = 0,               // open background-task count
     ) : ServerFrame
 
     @Serializable @SerialName("agent_error")
@@ -157,6 +160,23 @@ sealed interface ServerFrame {
 
     @Serializable @SerialName("activity_append")
     data class ActivityAppend(val session: String, val event: ActivityEvent) : ServerFrame
+
+    // One background task (bg shell / subagent / workflow) as mirrored from the
+    // broker's BackgroundTaskStore. `kind`: shell | agent | workflow | task.
+    @Serializable
+    data class BgTask(
+        val id: String,
+        val kind: String = "task",
+        val label: String = "",
+        val startedAt: Long = 0,
+        val status: String = "running",    // running | completed | failed
+        val endedAt: Long? = null,
+        val summary: String? = null,
+        val callId: String? = null,        // launching tool_use id (broker plumbing)
+    )
+
+    @Serializable @SerialName("bg_tasks")
+    data class BgTasks(val session: String, val tasks: List<BgTask> = emptyList()) : ServerFrame
 
     @Serializable @SerialName("commands_changed")
     data class CommandsChanged(

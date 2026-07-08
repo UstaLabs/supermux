@@ -1,0 +1,23 @@
+{
+  "type": "bg_tasks",
+  "session": "550e8400-e29b-41d4-a716-446655440000",
+  "tasks": [
+    {
+      "id": "bxcdg51aa",
+      "kind": "shell",
+      "label": "Recompile Android Kotlin",
+      "startedAt": 1717200000000,
+      "status": "running",
+      "callId": "toolu_01AgxTWRTycjkLfksT2v439f"
+    },
+    {
+      "id": "a2bee0eded79e862d",
+      "kind": "agent",
+      "label": "Research WebKit quirks",
+      "startedAt": 1717200005000,
+      "status": "failed",
+      "endedAt": 1717200090000,
+      "summary": "Background command failed with exit code 1"
+    }
+  ]
+}
