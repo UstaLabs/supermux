@@ -25,6 +25,16 @@ final class BrokerSession {
     @ObservationIgnored private var wakeObserver: (any NSObjectProtocol)?
     #endif
 
+    // Viewing presence — tells the broker which chat is foreground (parity with the web
+    // `useViewing` composable) so it suppresses a push for a chat you're already looking at.
+    // The shell (RootView) pushes state in on selection/scene changes; a 60s heartbeat keeps
+    // the broker's 5-min viewing TTL fresh while you sit on a long, quiet turn.
+    @ObservationIgnored private var viewingSession: String?
+    @ObservationIgnored private var viewingVisible = false
+    @ObservationIgnored private var lastSentViewing: (session: String?, visible: Bool)?
+    @ObservationIgnored private var viewingHeartbeat: Task<Void, Never>?
+    private static let viewingHeartbeatNs: UInt64 = 60_000_000_000   // 60s, well under the 5-min TTL
+
     private(set) var sessions: [SessionInfo] = []
     private(set) var messages: [String: [LogEntry]] = [:]
     private(set) var activity: [String: [ActivityEvent]] = [:]
@@ -74,6 +84,7 @@ final class BrokerSession {
     deinit {
         framesTask?.cancel()
         runTask?.cancel()
+        viewingHeartbeat?.cancel()
         #if os(macOS)
         if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
         #endif
@@ -145,6 +156,8 @@ final class BrokerSession {
         framesTask = nil
         runTask?.cancel()
         runTask = nil
+        viewingHeartbeat?.cancel()
+        viewingHeartbeat = nil
         #if os(macOS)
         if let wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
@@ -187,6 +200,11 @@ final class BrokerSession {
             commands = s.commands
             finishJobs = Dictionary(uniqueKeysWithValues: s.sessions.compactMap { sess in sess.finish_job.map { (sess.id, $0) } })
             synced = true
+            // A (re)connect always begins with a snapshot; re-assert viewing presence so the
+            // broker's per-device tracker is current after a reconnect (we may have expired out
+            // of it). Clearing lastSentViewing forces the send even when the value is unchanged.
+            lastSentViewing = nil
+            sendViewingIfChanged()
         case .sessionAdded(let a):
             // The broker re-broadcasts session_added for the SAME session (an early add right
             // after spawn, then the authoritative post-register add that carries repo_root /
@@ -293,6 +311,47 @@ final class BrokerSession {
                                     args: SendArgs(text: t, attachments: atts.isEmpty ? nil : atts))
         Task { [client] in try? await client.send(frame: frame) }
         pendingSend.insert(sessionId)   // client-local "Sending…" until the next agent_state
+    }
+
+    // MARK: - Viewing presence (push suppression for the chat you're looking at)
+
+    /// Report the foreground chat (`nil` = the session list) + whether the app is visible.
+    /// Called by the shell on selection / scene-phase changes. Deduped, and it (lazily) starts
+    /// the keep-alive heartbeat. Mirrors the web `useViewing` composable.
+    func updateViewing(session: String?, visible: Bool) {
+        viewingSession = session
+        viewingVisible = visible
+        sendViewingIfChanged()
+        ensureViewingHeartbeat()
+    }
+
+    /// Emit a `viewing` frame only when the (session, visible) pair actually changed — the
+    /// broker re-reads it into its per-device tracker. Captures only `client` across the SKIE
+    /// suspend (never `self` — see `start()`'s GC-pinning note).
+    private func sendViewingIfChanged() {
+        if let last = lastSentViewing, last.session == viewingSession, last.visible == viewingVisible { return }
+        lastSentViewing = (viewingSession, viewingVisible)
+        let frame = ClientFrameViewing(session: viewingSession, visible: viewingVisible)
+        Task { [client] in try? await client.send(frame: frame) }
+    }
+
+    /// Re-assert the viewing frame every 60s so the broker's 5-min TTL never lapses while the
+    /// user reads a long, quiet turn (the exact bug the web heartbeat fixed). Only refreshes
+    /// while visible — a backgrounded app has no presence to keep alive. Idempotent; torn down
+    /// in `stop()`/`deinit`.
+    private func ensureViewingHeartbeat() {
+        guard viewingHeartbeat == nil else { return }
+        viewingHeartbeat = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.viewingHeartbeatNs)
+                guard let self else { return }
+                guard self.viewingVisible else { continue }
+                // Read state synchronously on the main actor, then send capturing only `client`.
+                let frame = ClientFrameViewing(session: self.viewingSession, visible: true)
+                let client = self.client
+                Task { [client] in try? await client.send(frame: frame) }
+            }
+        }
     }
 
     /// Upload bytes (base64 over the wire) → file id, for composing attachments.

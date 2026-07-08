@@ -40,7 +40,11 @@ struct RootView: View {
             if isRegularWidth { regularShell } else { compactShell }
         }
         .tint(Theme.teal)
-        .task { broker.start() }
+        .task {
+            broker.start()
+            // Seed viewing presence on launch (onChange won't fire for the initial state).
+            broker.updateViewing(session: selected, visible: scenePhase == .active)
+        }
         // Cross-platform teardown (deliberately NOT mac-gated): RootView leaves the hierarchy
         // on unpair and on re-pair recreation (`.id(base)` in SupermuxApp) — on iOS too —
         // and without stop() the old broker's frame loop retains it forever, leaving a stale
@@ -110,17 +114,21 @@ struct RootView: View {
             selected = id
             PushRouter.shared.pendingSessionId = nil
         }
-        // Opening a chat clears its delivered notifications and re-derives the app badge.
-        // `selected` is the single source of truth for the open chat on every form factor
-        // (iPhone detail, iPad/mac workspace), and a tapped push routes through it too, so
-        // this one hook covers them all.
+        // Opening a chat clears its delivered notifications and re-derives the app badge, and
+        // tells the broker we're now viewing it (so it won't push us for this chat). `selected`
+        // is the single source of truth for the open chat on every form factor (iPhone detail,
+        // iPad/mac workspace), and a tapped push routes through it too, so this one hook covers
+        // them all.
         .onChange(of: selected) { _, id in
             if let id { PushManager.shared.clearDelivered(sessionId: id) }
+            broker.updateViewing(session: id, visible: scenePhase == .active)
         }
-        // Returning to the foreground on an already-open chat clears whatever landed while
-        // the app was backgrounded.
+        // Returning to the foreground on an already-open chat clears whatever landed while the
+        // app was backgrounded; going to the background reports us away so pushes resume.
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active, let id = selected { PushManager.shared.clearDelivered(sessionId: id) }
+            let active = phase == .active
+            if active, let id = selected { PushManager.shared.clearDelivered(sessionId: id) }
+            broker.updateViewing(session: selected, visible: active)
         }
         #if os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: .smNewSession)) { _ in

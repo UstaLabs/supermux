@@ -35,6 +35,19 @@ class ChatFramesTest {
         assertTrue(s.contains("\"type\":\"send\"") && s.contains("\"text\":\"hello\"") && s.contains("\"op\":\"reply\""))
     }
 
+    @Test fun encodes_viewing_frame_with_session() {
+        val s = Json.encodeToString(ClientFrame.serializer(), ClientFrame.Viewing("s1", visible = true))
+        assertTrue(s.contains("\"type\":\"viewing\"") && s.contains("\"session\":\"s1\"") && s.contains("\"visible\":true"))
+    }
+
+    @Test fun encodes_viewing_frame_null_session_as_explicit_null() {
+        // The broker rejects a viewing frame with a MISSING `session`; on the chat list the
+        // session is null and MUST serialize as `"session":null` (regression guard for the
+        // no-default field — a default would let kotlinx omit it).
+        val s = Json.encodeToString(ClientFrame.serializer(), ClientFrame.Viewing(null, visible = false))
+        assertTrue(s.contains("\"type\":\"viewing\"") && s.contains("\"session\":null") && s.contains("\"visible\":false"))
+    }
+
     @Test fun parses_finish_job_running() {
         val f = json.decodeFromString<ServerFrame>(
             """{"type":"finish_job","session":"x","job":{"sessionId":"x","status":"running","stage":"Merging…","action":"merge","startedAt":1}}""")

@@ -235,6 +235,15 @@ sealed interface ClientFrame {
     @Serializable @SerialName("presence")
     data class Presence(val present: Boolean, val session: String? = null) : ClientFrame
 
+    /** Which chat the user is foregrounding (null = the session list) + whether the app is
+     *  visible. The broker's viewing-tracker uses it to suppress a push for a chat you're
+     *  already looking at (parity with the web `useViewing` composable). NOTE: `session` has
+     *  NO default — kotlinx omits a property that equals its default, and the broker rejects a
+     *  frame with a MISSING `session`; a null session (on the list) MUST serialize as
+     *  `"session":null`. */
+    @Serializable @SerialName("viewing")
+    data class Viewing(val session: String?, val visible: Boolean) : ClientFrame
+
     @Serializable @SerialName("send")
     data class Send(
         val session: String,

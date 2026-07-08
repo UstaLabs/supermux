@@ -47,6 +47,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.runtime.Composable
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
@@ -192,6 +195,24 @@ class MainActivity : ComponentActivity() {
                         ?.takeIf { it.isNotBlank() }
                         ?.let { selected = it }
                 }
+                // Report which chat is foreground so the broker suppresses a push for the chat
+                // you're looking at (parity with iOS/web). Visible = the activity is ≥ STARTED.
+                val lifecycleOwner = LocalLifecycleOwner.current
+                var appVisible by remember {
+                    mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+                }
+                DisposableEffect(lifecycleOwner) {
+                    val obs = LifecycleEventObserver { _, event ->
+                        when (event) {
+                            Lifecycle.Event.ON_START -> appVisible = true
+                            Lifecycle.Event.ON_STOP -> appVisible = false
+                            else -> {}
+                        }
+                    }
+                    lifecycleOwner.lifecycle.addObserver(obs)
+                    onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+                }
+                LaunchedEffect(selected, appVisible) { vm.updateViewing(selected, appVisible) }
 
                 // Wide = available width ≥600dp (the shared isWorkspaceWidth predicate /
                 // WORKSPACE_MIN_WIDTH_DP). ">=600" (not only Expanded ≥840) means the unfolded

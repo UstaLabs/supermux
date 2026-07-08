@@ -67,8 +67,11 @@ import dev.supermux.proto.SlashCommand
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.websocket.WebSockets
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -103,6 +106,14 @@ class AppViewModel(
     private val http = HttpClient(CIO) { install(WebSockets) }
     private val client = BrokerClient(baseUrl, token, http)
     private val api = BrokerApi(baseUrl, token, http)
+
+    // Viewing presence — tells the broker which chat is foreground (parity with iOS/web) so it
+    // suppresses a push for a chat you're already looking at. Driven by MainActivity (selected +
+    // app lifecycle); a 60s heartbeat keeps the broker's 5-min TTL fresh on a long quiet turn.
+    private var viewingSession: String? = null
+    private var viewingVisible: Boolean = false
+    private var lastSentViewing: Pair<String?, Boolean>? = null
+    private var viewingHeartbeat: Job? = null
     private val _sessions = MutableStateFlow<List<SessionInfo>>(emptyList())
     val sessions: StateFlow<List<SessionInfo>> = _sessions
     private val _messages = MutableStateFlow<Map<String, List<LogEntry>>>(emptyMap())
@@ -181,6 +192,10 @@ class AppViewModel(
                         _finishJobs.value = f.sessions
                             .mapNotNull { s -> s.finish_job?.let { s.id to it } }
                             .toMap()
+                        // A (re)connect always begins with a snapshot; re-assert viewing presence
+                        // so the broker's per-device tracker is current after a reconnect.
+                        lastSentViewing = null
+                        sendViewingIfChanged()
                     }
                     is ServerFrame.SessionAdded -> {
                         // The broker re-broadcasts session_added for the SAME session (an early add
@@ -282,6 +297,39 @@ class AppViewModel(
             }
         }
         viewModelScope.launch { client.run() }
+    }
+
+    // Viewing presence (mirrors iOS BrokerSession / web useViewing) — pushes suppression for the
+    // chat you're looking at.
+
+    /** Report the foreground chat (`null` = the session list) + whether the app is visible.
+     *  Called by the shell on selection / lifecycle changes. Deduped; (lazily) starts the
+     *  keep-alive heartbeat. */
+    fun updateViewing(session: String?, visible: Boolean) {
+        viewingSession = session
+        viewingVisible = visible
+        sendViewingIfChanged()
+        ensureViewingHeartbeat()
+    }
+
+    private fun sendViewingIfChanged() {
+        val next = viewingSession to viewingVisible
+        if (lastSentViewing == next) return
+        lastSentViewing = next
+        viewModelScope.launch { runCatching { client.send(ClientFrame.Viewing(viewingSession, viewingVisible)) } }
+    }
+
+    /** Re-assert the viewing frame every 60s so the broker's 5-min TTL never lapses while the
+     *  user reads a long, quiet turn. Only refreshes while visible. viewModelScope cancels it
+     *  when the VM clears. */
+    private fun ensureViewingHeartbeat() {
+        if (viewingHeartbeat?.isActive == true) return
+        viewingHeartbeat = viewModelScope.launch {
+            while (isActive) {
+                delay(60_000)
+                if (viewingVisible) runCatching { client.send(ClientFrame.Viewing(viewingSession, true)) }
+            }
+        }
     }
 
     /** Patch the `state` (and optionally `error`) of every [ServerFrame.LspStatus] entry
