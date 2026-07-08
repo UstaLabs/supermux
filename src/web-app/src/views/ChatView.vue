@@ -542,7 +542,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
         <Conversation v-else :key="props.id" class="flex-1" initial="instant" resize="instant">
           <ConversationContent
             class="px-3 py-3 gap-3 md:px-4 md:py-4 md:gap-3.5"
-            :style="!isDesktop ? { paddingBottom: `${composerDockHeight}px` } : undefined"
+            :style="!isDesktop ? { paddingBottom: `${composerDockHeight + 16}px` } : undefined"
           >
             <template v-if="entries.length === 0">
               <div class="py-10 text-center text-muted-foreground space-y-4">

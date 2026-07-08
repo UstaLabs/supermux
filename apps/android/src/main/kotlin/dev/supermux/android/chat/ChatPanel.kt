@@ -41,6 +41,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -410,10 +411,24 @@ fun ChatPanel(
                 // First paint for this session: jump to the bottom instantly — opening a chat should
                 // START at the bottom, not animate a fast scroll down. Only animate for content that
                 // arrives while you're already watching.
-                if (prevTimelineSize == 0) listState.scrollToItem(target)
-                else listState.animateScrollToItem(target)
+                // Reach the TRUE bottom (past the composer's contentPadding): position the last
+                // item, then scrollBy to the very end. Plain scrollToItem stops short of the padding.
+                if (prevTimelineSize == 0) listState.scrollToItem(target) else listState.animateScrollToItem(target)
+                listState.scrollBy(100_000f)
             }
             prevTimelineSize = timelineItems.size
+        }
+
+        // The floating composer is measured only after first layout (composer height settles over a
+        // few frames), and its height also changes on expand/collapse. Each time it (re)settles,
+        // re-pin to the true bottom so the last messages clear it — but only if we're already near
+        // the bottom, so a user who scrolled up to read history isn't yanked back down.
+        LaunchedEffect(composerHeightPx) {
+            if (composerHeightPx > 0 && activePanel == SessionPanel.Chat && timelineItems.isNotEmpty()) {
+                delay(150) // let the contentPadding relayout settle before measuring/scrolling
+                val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+                if (lastVisible >= timelineItems.size - 2) listState.scrollBy(100_000f)
+            }
         }
 
         if (timelineItems.isEmpty() && !working) {
@@ -465,7 +480,7 @@ fun ChatPanel(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(start = Space.sm, end = Space.md, top = Space.md),
-                contentPadding = PaddingValues(bottom = with(density) { composerHeightPx.toDp() } + Space.sm),
+                contentPadding = PaddingValues(bottom = with(density) { composerHeightPx.toDp() } + Space.md),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 items(timelineItems, key = { timelineItemKey(it) }) { item ->
@@ -503,8 +518,11 @@ fun ChatPanel(
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
-                .onSizeChanged { composerHeightPx = it.height },
+                // Measure the FULL footprint (pill + nav/ime inset) — the composer Column occupies
+                // pill + inset anchored at the bottom, so the transcript's bottom contentPadding must
+                // clear all of it. onSizeChanged sits OUTSIDE windowInsetsPadding to include the inset.
+                .onSizeChanged { composerHeightPx = it.height }
+                .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
         ) {
             // ── slash-command menu: active "/token" at end of draft (start-of-line or after
             //    whitespace), filtering on name OR family by `contains`, capped at 8 (iOS parity).
