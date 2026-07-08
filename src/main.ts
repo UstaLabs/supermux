@@ -2382,6 +2382,11 @@ function deliverInbound(sessionId: string, text: string, meta: any): Promise<Inb
     isClaude: (id) => (registry.get(id)?.agent ?? "claude") === "claude",
     sendInboundSocket: (id, payload) => server.sendInbound(id, payload),
     seen: recentInboundIds,
+    // Re-broadcast the session's CURRENT agent_state on a successful hand-off so clients clear
+    // their local "Sending…" bubble even when the turn-start UserPromptSubmit hook is dropped
+    // (fire-and-forget curl) and the turn emits no other state change. Mutates nothing — it just
+    // re-emits the same frame the change-listener would send (keeps delivery a pure reflector).
+    onDelivered: (id) => webChannel?.broadcastToAll(toAgentStateFrame(id, agentStateStore.get(id), bgTaskStore.openCount(id))),
   }, sessionId, text, meta)
 }
 
