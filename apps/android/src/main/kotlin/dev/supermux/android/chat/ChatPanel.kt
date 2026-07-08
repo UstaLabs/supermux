@@ -87,11 +87,13 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -302,7 +304,7 @@ fun ChatPanel(
     // Composer draft text. Hoisted here (not inside the composer Column) so the shared dictation
     // controller (below) can append cleaned/raw transcripts into the same state the BasicTextField
     // edits, via its `onAppend` sink (risk §5).
-    var text by remember { mutableStateOf("") }
+    var text by remember { mutableStateOf(TextFieldValue("")) }
 
     // ── per-session draft persistence (DataStore; survives switch + process death) §3 ──
     // Load once per session (parity with iOS loadPane). `draftLoaded` gates the save effect so
@@ -310,15 +312,16 @@ fun ChatPanel(
     var draftLoaded by remember(session.id) { mutableStateOf(false) }
     LaunchedEffect(session.id) {
         draftLoaded = false
-        text = loadDraft(session.id)
+        val restored = loadDraft(session.id)
+        text = TextFieldValue(restored, TextRange(restored.length))
         draftLoaded = true
     }
     // Persist, debounced (~400ms) — avoids a DataStore write per keystroke. Clearing on send
     // sets text="" which writes empty through this same effect.
-    LaunchedEffect(session.id, text, draftLoaded) {
+    LaunchedEffect(session.id, text.text, draftLoaded) {
         if (!draftLoaded) return@LaunchedEffect
         delay(400)
-        saveDraft(session.id, text)
+        saveDraft(session.id, text.text)
     }
 
     // Voice dictation (record → broker cleanup → into the composer draft `text`). The drive logic,
@@ -329,7 +332,10 @@ fun ChatPanel(
         loadGlossary = loadGlossary,
         transcribeDraft = transcribeDraft,
         transcribeAudio = transcribeAudio,
-        onAppend = { text = if (text.isBlank()) it else text.trimEnd() + " " + it },
+        onAppend = {
+            val joined = if (text.text.isBlank()) it else text.text.trimEnd() + " " + it
+            text = TextFieldValue(joined, TextRange(joined.length))
+        },
     )
 
     // ── model picker state ───────────────────────────────────────────────────
@@ -503,8 +509,8 @@ fun ChatPanel(
             // ── slash-command menu: active "/token" at end of draft (start-of-line or after
             //    whitespace), filtering on name OR family by `contains`, capped at 8 (iOS parity).
             //    Matching lives in SlashCommands.kt, shared with the New Session launcher. ──
-            val slashQuery = activeSlashQuery(text)
-            val slashMatches = slashCommandMatches(text, commands)
+            val slashQuery = activeSlashQuery(text.text)
+            val slashMatches = slashCommandMatches(text.text, commands)
 
             // Hardware-keyboard nav for the slash menu: ↑/↓ move the highlight, Enter picks, Esc
             // dismisses — so you can drive it without touch (DeX / attached keyboard).
@@ -519,10 +525,15 @@ fun ChatPanel(
             fun selectSlashCommand(cmd: SlashCommand) {
                 haptic(HapticKind.Tick)
                 if (cmd.action != null) {
-                    text = replaceSlashToken(text, "")
+                    val cleared = replaceSlashToken(text.text, "")
+                    text = TextFieldValue(cleared, TextRange(cleared.length))
                     onControl(cmd)
                 } else {
-                    text = replaceSlashToken(text, slashInsertText(cmd))
+                    // The active "/token" is always at the end of the draft (activeSlashQuery only
+                    // matches end-of-draft), so the inserted command becomes the new tail — put the
+                    // caret right after it instead of leaving it stuck at the old offset (mid-token).
+                    val inserted = replaceSlashToken(text.text, slashInsertText(cmd))
+                    text = TextFieldValue(inserted, TextRange(inserted.length))
                 }
             }
 
@@ -640,13 +651,13 @@ fun ChatPanel(
             // Block send while any attachment is still uploading OR has failed —
             // never send a message minus its attachment (the old silent drop).
             val anyBlocking = pendingAttachments.any { it.uploading || it.failed }
-            val canSend = !anyBlocking && (text.isNotBlank() || pendingAttachments.isNotEmpty())
+            val canSend = !anyBlocking && (text.text.isNotBlank() || pendingAttachments.isNotEmpty())
             fun doSend() {
                 if (!canSend) return
                 haptic(HapticKind.Confirm)
                 val attachmentIds = pendingAttachments.map { it.fileId }
-                onSendWith(text, attachmentIds)
-                text = ""
+                onSendWith(text.text, attachmentIds)
+                text = TextFieldValue("")
                 pendingAttachments.clear()
             }
 
@@ -673,7 +684,7 @@ fun ChatPanel(
             //    into the full card on focus / draft / attachment. Recording is a full takeover
             //    (RecordingBar). ONE persistent BasicTextField across states so focus is never
             //    dropped mid-morph; the +/mic controls move to the footer as the field takes over. ──
-            val composerExpanded = composerFocused || text.isNotBlank() || pendingAttachments.isNotEmpty()
+            val composerExpanded = composerFocused || text.text.isNotBlank() || pendingAttachments.isNotEmpty()
             val composerRadius by animateDpAsState(
                 targetValue = if (composerExpanded) 22.dp else 26.dp,
                 animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
@@ -835,7 +846,7 @@ fun ChatPanel(
                                 .weight(1f)
                                 .padding(horizontal = 6.dp, vertical = if (composerExpanded) 4.dp else 0.dp),
                         ) {
-                            if (text.isEmpty()) {
+                            if (text.text.isEmpty()) {
                                 Text(
                                     text = "Message ${session.name}…",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
