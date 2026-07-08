@@ -119,6 +119,8 @@ data class SpawnRequest(
     val worktree: Boolean? = null,
     /** Base branch the worktree is cut from (defaults to the repo's current branch when null). */
     val baseBranch: String? = null,
+    /** Reasoning ("thinking") effort to start the session at (agent-specific; ignored when unsupported). */
+    val reasoningLevel: String? = null,
 )
 
 @Serializable
@@ -1003,6 +1005,13 @@ class BrokerApi(
     /** GET /models?agent= — models for the launcher (no session). */
     suspend fun listModels(agent: String): LauncherModels =
         getJson("$httpBase/models?agent=${urlEncode(agent)}")
+
+    /** GET /reasoning-levels?agent=&model= — reasoning levels for the launcher (no session). */
+    suspend fun getReasoningLevels(agent: String, model: String? = null): ReasoningResponse =
+        getJson(
+            "$httpBase/reasoning-levels?agent=${urlEncode(agent)}" +
+                (if (model != null) "&model=${urlEncode(model)}" else ""),
+        )
 
     /** GET /commands/preview?agent=&workdir= — agent slash commands for the launcher (no session). */
     suspend fun previewCommands(agent: String, workdir: String): LauncherCommands =

@@ -20,6 +20,7 @@ data class StagedUpload(
 data class LauncherPrefs(
     val agent: String = "claude",
     val models: Map<String, String> = emptyMap(),
+    val reasoningLevels: Map<String, String> = emptyMap(),
 )
 
 /** In-progress New Session launcher draft — cleared once a session is actually created.

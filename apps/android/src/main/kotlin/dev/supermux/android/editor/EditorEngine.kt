@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
@@ -312,8 +313,13 @@ fun EditorWebViewHost(
 
     AndroidView(
         modifier = modifier,
-        factory = { engine.obtainWebView() },
-        update = { /* WebView instance is stable; content pushed via engine.setDocument */ },
+        // Keep the WebView INVISIBLE until cm6 has first-painted (`ready`). A WebView draws its
+        // raw surface WHITE for the first frames of a fresh load — before the page's own dark
+        // background applies — which no setBackgroundColor reliably prevents. While invisible the
+        // dark backing Box behind shows through, so the first open of each session reads as the
+        // editor's dark, not a white flash; we reveal only once it's already painted dark.
+        factory = { engine.obtainWebView().also { it.visibility = if (engine.ready) View.VISIBLE else View.INVISIBLE } },
+        update = { it.visibility = if (engine.ready) View.VISIBLE else View.INVISIBLE },
         onRelease = { /* destroyed with engine */ },
     )
 }

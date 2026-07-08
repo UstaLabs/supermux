@@ -15,6 +15,12 @@ struct NewSessionView: View {
     @State private var agent: String
     @State private var model: String?
     @State private var models: [ModelInfo] = []
+    // Thinking-level picker (web LauncherEffortPicker parity) — levels come from the broker's
+    // session-less /reasoning-levels, refetched on agent/model change; hidden when the agent
+    // offers no real choice. `reasoningLevel` is what spawn() sends.
+    @State private var reasoningLevels: [ReasoningLevel] = []
+    @State private var reasoningLevel: String?
+    @State private var reasoningVisible = false
     @State private var projectSearch = false
     @State private var launcherCommands: [SlashCommand] = []
     @State private var spawning = false
@@ -72,6 +78,7 @@ struct NewSessionView: View {
         _launcherState = State(initialValue: store)
         _agent = State(initialValue: resolvedAgent)
         _model = State(initialValue: store.prefs.models[resolvedAgent])
+        _reasoningLevel = State(initialValue: store.prefs.reasoningLevels[resolvedAgent])
         _workdir = State(initialValue: store.draft.workdir ?? "")
         _useWorktree = State(initialValue: store.draft.useWorktree)
         _baseBranch = State(initialValue: store.draft.baseBranch)
@@ -143,6 +150,18 @@ struct NewSessionView: View {
                 model = nil
             }
             lastSeenAgent = agent
+        }
+        // Thinking levels depend on the agent and (for Codex) the chosen model. Idempotent — it
+        // resolves from the sticky per-agent choice each run, so a duplicate .task(id:) re-invocation
+        // is harmless (nothing to reset, unlike the model task above).
+        .task(id: "\(agent)|\(model ?? "")") {
+            let resp = await broker.reasoningLevels(agent, model)
+            let levels = resp?.levels ?? []
+            reasoningLevels = levels
+            reasoningVisible = (resp?.visible ?? false) && ReasoningLevelsKt.showReasoningPicker(levels: levels)
+            reasoningLevel = reasoningVisible
+                ? ReasoningLevelsKt.resolveReasoningLevel(levels: levels, stored: launcherState.prefs.reasoningLevels[agent])
+                : nil
         }
         // Agent slash commands depend on both the agent and the chosen project.
         .task(id: "\(agent)|\(workdir)") {
@@ -345,6 +364,25 @@ struct NewSessionView: View {
                     }.foregroundStyle(.secondary)
                 }
                 .smMacBorderlessMenu()
+                // Thinking-level menu (web LauncherEffortPicker parity) — only when the agent offers
+                // a real choice. Mirrors the model menu's style.
+                if reasoningVisible {
+                    Menu {
+                        ForEach(reasoningLevels, id: \.id) { l in
+                            Button(l.id.capitalized) {
+                                reasoningLevel = l.id
+                                launcherState.prefs.reasoningLevels[agent] = l.id
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "brain").font(.caption2)
+                            Text((reasoningLevel ?? "").capitalized).font(.subheadline.weight(.medium)).lineLimit(1)
+                            Image(systemName: "chevron.down").font(.caption2)
+                        }.foregroundStyle(.secondary)
+                    }
+                    .smMacBorderlessMenu()
+                }
                 Spacer(minLength: 0)
             }
             // Action row — attach · mic · send.
@@ -386,7 +424,7 @@ struct NewSessionView: View {
         let base = (eligible && useWorktree && !baseBranch.isEmpty) ? baseBranch : nil
         Task {
             let id = await broker.spawn(workdir: workdir, agent: agent, name: nil, model: model,
-                                        worktree: wantsWorktree, baseBranch: base)
+                                        worktree: wantsWorktree, baseBranch: base, reasoningLevel: reasoningLevel)
             if let id, !id.isEmpty {
                 // Attachments need a session id, so upload after spawn (like the first message).
                 var ids: [String] = []

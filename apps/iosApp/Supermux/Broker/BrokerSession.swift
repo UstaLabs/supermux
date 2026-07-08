@@ -447,11 +447,11 @@ final class BrokerSession {
     func sendMessage(_ id: String, _ text: String) { Task { [api] in try? await api.sendMessage(id: id, text: text) } }
     func projects() async -> [String] { (try? await api.listProjects()) ?? [] }
     func spawn(workdir: String, agent: String?, name: String?, model: String? = nil,
-               worktree: Bool? = nil, baseBranch: String? = nil) async -> String? {
+               worktree: Bool? = nil, baseBranch: String? = nil, reasoningLevel: String? = nil) async -> String? {
         // Resolve ~ to an absolute path so the worktree is cut from the real repo root (web parity).
         let resolved = (try? await api.validatePath(path: workdir)).flatMap { $0.ok ? $0.path : nil } ?? workdir
         let req = SpawnRequest(workdir: resolved, name: name, agent: agent, model: model,
-                               worktree: worktree?.kb, baseBranch: baseBranch)
+                               worktree: worktree?.kb, baseBranch: baseBranch, reasoningLevel: reasoningLevel)
         return (try? await api.spawn(req: req))?.id
     }
 
@@ -494,6 +494,10 @@ final class BrokerSession {
         Task { [api] in try? await api.switchModel(id: id, model: model) }
     }
     func reasoning(_ id: String) async -> ReasoningResponse? { try? await api.reasoningLevels(id: id) }
+    /// GET /reasoning-levels?agent=&model= — thinking levels for the launcher (no session yet).
+    func reasoningLevels(_ agent: String, _ model: String?) async -> ReasoningResponse? {
+        try? await api.getReasoningLevels(agent: agent, model: model)
+    }
     func switchReasoning(_ id: String, _ level: String) {
         Task { [api] in try? await api.switchReasoning(id: id, level: level) }
     }
