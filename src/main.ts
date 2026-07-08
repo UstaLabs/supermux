@@ -121,7 +121,9 @@ import { scanRepos } from "./core/editor/repo-scanner"
 import { ActivityStore } from "./core/session-manager/activity-store"
 import { AgentStateStore } from "./core/session-manager/agent-state-store"
 import { toAgentStateFrame } from "./core/session-manager/agent-state-frame"
+import { BackgroundTaskStore } from "./core/session-manager/background-task-store"
 import { TranscriptTailer } from "./core/agents/claude/transcript-tailer"
+import { BgTaskDetector } from "./core/agents/claude/bg-task-detector"
 import { claudeTranscriptPath } from "./core/agents/claude/transcript-path"
 import { renderTranscript } from "./core/search/transcript-render"
 import { normalizeToolName } from "./core/agents/tool-normalize"
@@ -333,6 +335,7 @@ messageLog.on("append", (sessionId: string, entry: any) => {
 })
 const activityStore = new ActivityStore()
 const agentStateStore = new AgentStateStore()
+const bgTaskStore = new BackgroundTaskStore()
 
 function resolveGitDirs(workdir: string): { gitDir: string; commonDir: string } | null {
   try {
@@ -369,14 +372,24 @@ function gitServiceSessions(): ServiceSession[] {
 }
 
 const tailers = new Map<string, TranscriptTailer>()  // keyed by session UUID
+const bgDetectors = new Map<string, BgTaskDetector>()  // keyed by session UUID
 
 function ensureClaudeTailer(sessionUuid: string, _name: string, workdir: string, seekToEnd = false): void {
   const session = registry.get(sessionUuid)
   if (!session || (session.agent ?? "claude") !== "claude") return
   const claudeSid = session.agent_session_id
   if (!claudeSid || tailers.has(sessionUuid)) return
+  const detector = new BgTaskDetector({
+    onOpen: (t) => bgTaskStore.upsertOpen(sessionUuid, t),
+    onClose: (c) => bgTaskStore.close(sessionUuid, c),
+    // Notification delivery = the harness waking claude; reflect it immediately
+    // (same transcript-as-signal channel as interrupt detection).
+    onWake: () => agentStateStore.applyEvent(sessionUuid, "turn-start"),
+  })
+  bgDetectors.set(sessionUuid, detector)
   const tailer = new TranscriptTailer({
     path: claudeTranscriptPath(workdir, claudeSid),
+    onLine: (line) => bgDetectors.get(sessionUuid)?.feedLine(line),
     onEvent: (event) => {
       // The transcript interrupt marker is the SOLE interrupt signal (no hook fires
       // on ESC) — and it catches terminal-direct ESC too. It is state, not activity.
@@ -392,7 +405,9 @@ function ensureClaudeTailer(sessionUuid: string, _name: string, workdir: string,
 function stopClaudeTailer(sessionUuid: string): void {
   tailers.get(sessionUuid)?.stop()
   tailers.delete(sessionUuid)
+  bgDetectors.delete(sessionUuid)
   activityStore.clear(sessionUuid)
+  bgTaskStore.clear(sessionUuid)
 }
 
 const modelCache = new ModelCache()
@@ -638,6 +653,7 @@ function unregisterSession(id: string): void {
   if (s) deleteRuntime(s.id)
   commandRegistry.remove(id)
   agentStateStore.clear(id)  // drop any lingering working/dead state for the now-archived session
+  bgTaskStore.clear(id)      // archived sessions cannot be "waiting"
   // NOTE: do NOT delete agent_home here — archived sessions are resumable, so
   // their home (cursor runtime symlink + per-session state/history) must
   // survive. Truly orphaned dirs (no registry entry) are reclaimed by the
@@ -1069,8 +1085,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getSessionAgentState: (id) => {
       const s = registry.get(id)
       const st = s ? agentStateStore.get(s.id) : { phase: "idle" as const, since: 0 }
-      const { type: _type, session: _session, ...payload } = toAgentStateFrame(s?.id ?? id, st)
+      const { type: _type, session: _session, ...payload } = toAgentStateFrame(s?.id ?? id, st, bgTaskStore.openCount(s?.id ?? id))
       return payload
+    },
+    getSessionBgTasks: (id) => {
+      const s = registry.get(id)
+      return s ? bgTaskStore.get(s.id) : []
     },
     getSessionCommands: (id) => {
       const s = registry.get(id)
@@ -1586,7 +1606,7 @@ async function killSession(id: string) {
     if (runtime?.kind === AgentKind.OpenCode) runtime.handle.kill()
   }
   deleteRuntime(s.id)
-  stopClaudeTailer(s.id)
+  stopClaudeTailer(s.id)   // also clears the session's background tasks
   agentStateStore.clear(s.id)
   recentInboundIds.clear(s.id)
   pendingReapply.clear(s.id)
@@ -1901,6 +1921,7 @@ const server = await startSocketServer({
       agentStateStore.applyEvent(session_id, "connected")          // revives a dead session; no-op otherwise
     } else if (s && s.status !== "suspended") {
       agentStateStore.applyEvent(session_id, "dead")               // crash/shim-gone — but NOT an intentional suspend
+      bgTaskStore.clear(session_id)  // a dead harness can never deliver its wakes — no fake "waiting"
     }
   },
   // Safety net: a queued inbound that can't reach a live channel shim within the
@@ -2931,8 +2952,13 @@ messageLog.on("append", (sessionId, entry) => {
 activityStore.on("append", (sessionId: string, event) => {
   webChannel?.broadcastToAll({ type: "activity_append", session: sessionId, event })
 })
+bgTaskStore.on("change", (sessionId: string) => {
+  webChannel?.broadcastToAll({ type: "bg_tasks", session: sessionId, tasks: bgTaskStore.get(sessionId) })
+  // waiting/bgOpen live on agent_state — re-derive whenever tasks move.
+  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgTaskStore.openCount(sessionId)))
+})
 agentStateStore.on("change", (sessionId: string, state) => {
-  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, state))
+  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, state, bgTaskStore.openCount(sessionId)))
   if (state.phase === "idle" && pendingReapply.has(sessionId)) {
     const olds = pendingReapply.take(sessionId)!
     void reapplySessionAgentConfig(sessionId).then((r) => {

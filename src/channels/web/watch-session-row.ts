@@ -6,6 +6,8 @@
 export interface WatchRowExtras {
   phase?: string
   tool?: string
+  waiting?: boolean   // idle but background tasks still open
+  bgOpen?: number     // open background-task count
   lastText?: string
   lastTs?: string
   lastFrom?: "in" | "out"
@@ -18,7 +20,7 @@ const PREVIEW_MAX = 120
  *  entry, and its server-side read pointer. Pure; unit-tested. `unread` uses the same
  *  string-timestamp comparison as the web unread store (src/web-app/src/stores/unread.ts). */
 export function watchRowExtras(
-  state: { phase?: string; tool?: string } | undefined,
+  state: { phase?: string; tool?: string; waiting?: boolean; bgOpen?: number } | undefined,
   last: { ts?: string; direction?: string; text?: string } | undefined,
   readTs: string | undefined,
 ): WatchRowExtras {
@@ -27,6 +29,8 @@ export function watchRowExtras(
   return {
     phase: state?.phase,
     tool: state?.tool,
+    waiting: state?.waiting,
+    bgOpen: state?.bgOpen,
     lastText: text
       ? (text.length > PREVIEW_MAX ? text.slice(0, PREVIEW_MAX - 1) + "…" : text)
       : undefined,

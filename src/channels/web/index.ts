@@ -128,6 +128,7 @@ export interface WebChannelOpts {
   getSessionsSnapshot: () => SessionSnapshot[]
   getSessionLog: (name: string) => unknown[]
   getSessionActivity?: (name: string) => unknown[]
+  getSessionBgTasks?: (name: string) => unknown[]
   setMute: (name: string, muted: boolean) => void
   onSendFromWeb: (msg: InboundMessage) => void
   fileStore?: import("../../core/files/store").FileStore
@@ -736,6 +737,7 @@ export class WebChannel implements Channel {
       const sessions = this.opts.getSessionsSnapshot()
       const logs: Record<string, unknown[]> = {}
       const activity: Record<string, unknown[]> = {}
+      const bgTasks: Record<string, unknown[]> = {}
       const agentState: Record<string, unknown> = {}
       const commands: Record<string, unknown[]> = {}
       const commandsResolved: Record<string, boolean> = {}
@@ -743,6 +745,7 @@ export class WebChannel implements Channel {
         const sessionKey = s.id ?? s.name
         logs[sessionKey] = this.opts.getSessionLog(sessionKey)
         activity[sessionKey] = this.opts.getSessionActivity?.(sessionKey) ?? []
+        bgTasks[sessionKey] = this.opts.getSessionBgTasks?.(sessionKey) ?? []
         agentState[sessionKey] = this.opts.getSessionAgentState?.(sessionKey)
         commands[sessionKey] = this.opts.getSessionCommands?.(sessionKey) ?? []
         commandsResolved[sessionKey] = this.opts.getSessionCommandsResolved?.(sessionKey) ?? false
@@ -752,7 +755,7 @@ export class WebChannel implements Channel {
       const onboarded = this.opts.getAppConfig?.()?.onboarded ?? false
       const reads = this.opts.getReads?.() ?? {}
       const drafts = this.opts.getDrafts?.() ?? {}
-      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, agentState, proxies, displays, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts }))
+      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts }))
       return
     }
     if (frame.type === "ping") {
