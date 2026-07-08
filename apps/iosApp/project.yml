@@ -173,6 +173,7 @@ targets:
       # the keypair from the shared Keychain group and opens the blob with the same code.
       - path: Supermux/Push/PushCrypto.swift
       - path: Supermux/Push/PushKeypair.swift
+      - path: Supermux/Push/PushGroupState.swift
     info:
       path: SupermuxPushNSE/Info.plist
       properties:
@@ -272,6 +273,7 @@ targets:
       - path: SupermuxPushNSE/NotificationService.swift
       - path: Supermux/Push/PushCrypto.swift
       - path: Supermux/Push/PushKeypair.swift
+      - path: Supermux/Push/PushGroupState.swift
     info:
       path: SupermuxPushNSE/InfoMac.plist
       properties:
