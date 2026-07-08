@@ -65,10 +65,10 @@ const ROUND_BTN = "size-8 shrink-0 rounded-full text-muted-foreground"
 // pill and the expanded card; height animates as the footer/attachments reveal.
 const cardClass = computed(() =>
   cn(
-    "flex flex-col border shadow-lg backdrop-blur-xl transition-all duration-200 ease-out",
+    "flex flex-col border backdrop-blur-xl transition-all duration-200 ease-out",
     expanded.value
-      ? "gap-2 rounded-3xl border-border/60 bg-card/80 px-3 py-2.5"
-      : "gap-0 rounded-full border-border/60 bg-card/80 pl-2.5 pr-2 py-1",
+      ? "gap-2 rounded-3xl border-border/60 bg-card/80 px-3 py-2.5 shadow-lg"
+      : "gap-0 rounded-full border-border/60 bg-card/80 pl-2.5 pr-2 py-1 shadow-sm",
   ),
 )
 </script>
