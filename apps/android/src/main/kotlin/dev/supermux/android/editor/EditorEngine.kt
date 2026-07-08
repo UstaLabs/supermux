@@ -18,6 +18,7 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,10 +35,11 @@ import org.json.JSONObject
 class EditorEngine(
     context: Context,
     private val lineWrap: Boolean,
-    private val fontSize: Int,
+    fontSize: Int,
     onChange: (String) -> Unit,
     onSave: () -> Unit,
     onLspOut: (String) -> Unit = {},
+    onFontSize: (Int) -> Unit = {},
 ) {
     private val appContext = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
@@ -45,6 +47,11 @@ class EditorEngine(
     private val onSaveS = mutableStateOf(onSave)
     /** Outbound LSP JSON-RPC string `{serverId,message}` posted by cm6's LSPClient. */
     private val onLspOutS = mutableStateOf(onLspOut)
+    /** Persist callback for a user zoom (pinch / keyboard) reported by the WebView. */
+    private val onFontSizeS = mutableStateOf(onFontSize)
+    /** Latest editor font size (px). Mutable so a zoom updates it in place (no WebView
+     *  rebuild); used by cmInit and every document push so a re-push keeps the zoom. */
+    private var currentFontSize: Int = fontSize
 
     var ready by mutableStateOf(false)
         private set
@@ -55,10 +62,23 @@ class EditorEngine(
     private var lastContent = ""
     private var lastFilename = ""
 
-    fun updateCallbacks(onChange: (String) -> Unit, onSave: () -> Unit, onLspOut: (String) -> Unit = onLspOutS.value) {
+    fun updateCallbacks(
+        onChange: (String) -> Unit,
+        onSave: () -> Unit,
+        onLspOut: (String) -> Unit = onLspOutS.value,
+        onFontSize: (Int) -> Unit = onFontSizeS.value,
+    ) {
         onChangeS.value = onChange
         onSaveS.value = onSave
         onLspOutS.value = onLspOut
+        onFontSizeS.value = onFontSize
+    }
+
+    /** Push a new font size to the live editor WITHOUT rebuilding the WebView. Called
+     *  when the settings font size changes; a pinch/keyboard zoom applies itself. */
+    fun setFontSize(px: Int) {
+        currentFontSize = px.coerceIn(10, 24)
+        if (ready) webView?.evaluateJavascript("cmSetFontSize($currentFontSize)", null)
     }
 
     fun obtainWebView(): WebView {
@@ -137,6 +157,14 @@ class EditorEngine(
             addJavascriptInterface(object {
                 @JavascriptInterface fun onChange(s: String) { main.post { onChangeS.value.invoke(s) } }
                 @JavascriptInterface fun onSave() { main.post { onSaveS.value.invoke() } }
+                // A user zoom (pinch/keyboard) in the WebView: the editor already applied
+                // it live; keep our copy in sync and persist it (no rebuild).
+                @JavascriptInterface fun onFontSize(px: Int) {
+                    main.post {
+                        currentFontSize = px.coerceIn(10, 24)
+                        onFontSizeS.value.invoke(currentFontSize)
+                    }
+                }
                 @JavascriptInterface fun onReady() {
                     main.post {
                         ready = true
@@ -160,7 +188,7 @@ class EditorEngine(
                     // is already JSON.stringify({serverId,message}); forward it verbatim.
                     view?.evaluateJavascript(LSP_BRIDGE_SHIM, null)
                     view?.evaluateJavascript(
-                        "cmInit(${q(lastContent)}, ${q(lastFilename)}, $lineWrap, $fontSize)",
+                        "cmInit(${q(lastContent)}, ${q(lastFilename)}, $lineWrap, $currentFontSize)",
                     ) { r -> Log.d("EditorEngine", "cmInit returned: $r") }
                 }
                 override fun onReceivedError(
@@ -190,7 +218,7 @@ class EditorEngine(
         view.evaluateJavascript("cmSetContent(${q(content)})", null)
         view.evaluateJavascript("cmSetLanguage(${q(filename)})", null)
         view.evaluateJavascript("cmSetLineWrap($lineWrap)", null)
-        view.evaluateJavascript("cmSetFontSize($fontSize)", null)
+        view.evaluateJavascript("cmSetFontSize($currentFontSize)", null)
         view.evaluateJavascript("cmSetScrollTop($scrollTop)", null)
         flushReveal()
     }
@@ -237,15 +265,21 @@ fun rememberEditorEngine(
     onChange: (String) -> Unit,
     onSave: () -> Unit,
     onLspOut: (String) -> Unit = {},
+    onFontSize: (Int) -> Unit = {},
 ): EditorEngine {
     val context = androidx.compose.ui.platform.LocalContext.current
     val onChangeS = rememberUpdatedState(onChange)
     val onSaveS = rememberUpdatedState(onSave)
     val onLspOutS = rememberUpdatedState(onLspOut)
-    val engine = remember(lineWrap, fontSize) {
-        EditorEngine(context, lineWrap, fontSize, onChangeS.value, onSaveS.value, onLspOutS.value)
+    val onFontSizeS = rememberUpdatedState(onFontSize)
+    // NOT keyed on fontSize: a zoom pushes the size in place (engine.setFontSize)
+    // rather than rebuilding the WebView, so a pinch/shortcut never reloads the file.
+    val engine = remember(lineWrap) {
+        EditorEngine(context, lineWrap, fontSize, onChangeS.value, onSaveS.value, onLspOutS.value, onFontSizeS.value)
     }
-    engine.updateCallbacks(onChangeS.value, onSaveS.value, onLspOutS.value)
+    engine.updateCallbacks(onChangeS.value, onSaveS.value, onLspOutS.value, onFontSizeS.value)
+    // Push settings-driven size changes to the live editor (initial size comes from cmInit).
+    LaunchedEffect(engine, fontSize) { engine.setFontSize(fontSize) }
     DisposableEffect(engine) {
         onDispose { engine.destroy() }
     }

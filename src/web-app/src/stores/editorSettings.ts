@@ -1,10 +1,11 @@
 import { defineStore } from "pinia"
 import { reactive, watch } from "vue"
 import { clampTreeWidth, TREE_WIDTH } from "@/lib/editor-resize"
+import { FONT_SIZE, clampFont } from "@/lib/editor-font-zoom"
 
 const KEY = "cmux:editor-settings"
 
-export const FONT_SIZE = { default: 13, min: 10, max: 24 }
+export { FONT_SIZE }
 
 export interface EditorSettings {
   // Wrap long lines onto the next visual line instead of scrolling horizontally.
@@ -13,11 +14,6 @@ export interface EditorSettings {
   fontSize: number
   // File-tree sidebar width in pixels (desktop layout).
   treeWidth: number
-}
-
-function clampFontSize(v: unknown): number {
-  if (typeof v !== "number" || Number.isNaN(v)) return FONT_SIZE.default
-  return Math.min(FONT_SIZE.max, Math.max(FONT_SIZE.min, Math.round(v)))
 }
 
 function defaults(): EditorSettings {
@@ -33,7 +29,7 @@ function load(): EditorSettings {
     if (!p || typeof p !== "object") return base
     return {
       lineWrap: typeof p.lineWrap === "boolean" ? p.lineWrap : base.lineWrap,
-      fontSize: clampFontSize(p.fontSize),
+      fontSize: clampFont(p.fontSize),
       treeWidth: clampTreeWidth(p.treeWidth),
     }
   } catch {
@@ -50,7 +46,7 @@ export const useEditorSettings = defineStore("editorSettings", () => {
 
   function setLineWrap(value: boolean) { state.lineWrap = value }
   function toggleLineWrap() { state.lineWrap = !state.lineWrap }
-  function setFontSize(value: number) { state.fontSize = clampFontSize(value) }
+  function setFontSize(value: number) { state.fontSize = clampFont(value) }
   function setTreeWidth(value: number) { state.treeWidth = clampTreeWidth(value) }
 
   return { state, setLineWrap, toggleLineWrap, setFontSize, setTreeWidth }

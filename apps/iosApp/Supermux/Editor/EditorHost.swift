@@ -36,7 +36,8 @@ final class EditorHost {
         window.AndroidEditor = {
           onChange: (s) => window.webkit.messageHandlers.editor.postMessage({ t: 'change', s: s }),
           onSave: () => window.webkit.messageHandlers.editor.postMessage({ t: 'save' }),
-          onReady: () => window.webkit.messageHandlers.editor.postMessage({ t: 'ready' })
+          onReady: () => window.webkit.messageHandlers.editor.postMessage({ t: 'ready' }),
+          onFontSize: (px) => window.webkit.messageHandlers.editor.postMessage({ t: 'font', px: px })
         };
         """
         let userScript = WKUserScript(

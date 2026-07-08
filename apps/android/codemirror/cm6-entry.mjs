@@ -77,10 +77,88 @@ const bridge = () => (typeof window !== "undefined" ? window.AndroidEditor : nul
 const wrapExt = (on) => (on ? EditorView.lineWrapping : [])
 const fontExt = (px) => EditorView.theme({ "&": { fontSize: (px || 13) + "px" } })
 
+// ── Font zoom: Cmd/Ctrl +/−/0 + two-finger pinch. Mirrors the web app's
+// src/web-app/src/lib/editor-font-zoom.ts — keep the two in sync. ─────────────
+const FONT_MIN = 10, FONT_MAX = 24, FONT_DEFAULT = 13
+let currentFontSize = FONT_DEFAULT
+function clampFont(v) {
+  if (typeof v !== "number" || Number.isNaN(v)) return FONT_DEFAULT
+  return Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(v)))
+}
+const stepFont = (cur, delta) => clampFont(cur + delta)
+const pinchFont = (baseFont, baseDist, curDist) =>
+  baseDist > 0 ? clampFont(baseFont * (curDist / baseDist)) : clampFont(baseFont)
+
+// Apply a size + remember it. NO badge, NO native notify — used by cmInit and the
+// native->JS cmSetFontSize push, so a document push never flashes the badge and a
+// native-driven change never loops back to native.
+function reconfigureFont(px) {
+  currentFontSize = clampFont(px)
+  if (view) view.dispatch({ effects: fontC.reconfigure(fontExt(currentFontSize)) })
+  return currentFontSize
+}
+// A user gesture (keyboard/pinch): apply, flash the badge, tell native to persist.
+function setFontFromUser(px) {
+  const next = reconfigureFont(px)
+  showFontBadge(next)
+  try { bridge() && bridge().onFontSize(next) } catch (e) {}
+}
+
+let badgeEl = null, badgeTimer = 0
+function showFontBadge(px) {
+  const parent = document.getElementById("editor")
+  if (!parent) return
+  if (!badgeEl) {
+    badgeEl = document.createElement("div")
+    badgeEl.style.cssText = "position:absolute;top:10px;right:12px;z-index:10;padding:3px 8px;" +
+      "border-radius:6px;background:rgba(0,0,0,0.7);color:#fff;pointer-events:none;opacity:0;" +
+      "transition:opacity 150ms ease;font:600 12px/1.2 system-ui,-apple-system,sans-serif;" +
+      "font-variant-numeric:tabular-nums;"
+    parent.appendChild(badgeEl)
+  }
+  badgeEl.textContent = px + "px"
+  badgeEl.style.opacity = "1"
+  clearTimeout(badgeTimer)
+  badgeTimer = setTimeout(() => { if (badgeEl) badgeEl.style.opacity = "0" }, 900)
+}
+
+// Two-finger pinch. index.html sets user-scalable=no, so the WebView won't
+// page-zoom and these multi-touch events are ours to interpret.
+let pinchBaseDist = 0, pinchBaseFont = FONT_DEFAULT, pinchEl = null
+const touchDist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY)
+function onPinchStart(e) {
+  if (e.touches.length === 2) { pinchBaseDist = touchDist(e.touches); pinchBaseFont = currentFontSize }
+}
+function onPinchMove(e) {
+  if (e.touches.length === 2 && pinchBaseDist > 0) {
+    e.preventDefault()
+    setFontFromUser(pinchFont(pinchBaseFont, pinchBaseDist, touchDist(e.touches)))
+  }
+}
+function onPinchEnd(e) { if (e.touches.length < 2) pinchBaseDist = 0 }
+function attachPinch(el) {
+  detachPinch()
+  pinchEl = el
+  el.addEventListener("touchstart", onPinchStart, { passive: true })
+  el.addEventListener("touchmove", onPinchMove, { passive: false })
+  el.addEventListener("touchend", onPinchEnd, { passive: true })
+  el.addEventListener("touchcancel", onPinchEnd, { passive: true })
+}
+function detachPinch() {
+  if (!pinchEl) return
+  pinchEl.removeEventListener("touchstart", onPinchStart)
+  pinchEl.removeEventListener("touchmove", onPinchMove)
+  pinchEl.removeEventListener("touchend", onPinchEnd)
+  pinchEl.removeEventListener("touchcancel", onPinchEnd)
+  pinchEl = null
+}
+
 window.cmInit = function (content, filename, lineWrap, fontSize) {
   const parent = document.getElementById("editor")
   if (!parent) return
   if (view) { view.destroy(); view = null }
+  detachPinch()
+  currentFontSize = clampFont(fontSize)
   const state = EditorState.create({
     doc: content || "",
     extensions: [
@@ -89,7 +167,7 @@ window.cmInit = function (content, filename, lineWrap, fontSize) {
       bracketMatching(), closeBrackets(), lintGutter(), indentOnInput(),
       highlightSelectionMatches(),
       wrapC.of(wrapExt(!!lineWrap)),
-      fontC.of(fontExt(fontSize)),
+      fontC.of(fontExt(currentFontSize)),
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       oneDark,
       langC.of(langFor(filename)),
@@ -98,6 +176,11 @@ window.cmInit = function (content, filename, lineWrap, fontSize) {
         ...closeBracketsKeymap, ...completionKeymap, ...lintKeymap,
         ...defaultKeymap, ...searchKeymap, ...historyKeymap, indentWithTab,
         { key: "Mod-s", run: () => { try { bridge() && bridge().onSave() } catch (e) {} return true } },
+        { key: "Mod-=", run: () => { setFontFromUser(stepFont(currentFontSize, 1)); return true } },
+        { key: "Mod-+", run: () => { setFontFromUser(stepFont(currentFontSize, 1)); return true } },
+        { key: "Shift-Mod-=", run: () => { setFontFromUser(stepFont(currentFontSize, 1)); return true } },
+        { key: "Mod--", run: () => { setFontFromUser(stepFont(currentFontSize, -1)); return true } },
+        { key: "Mod-0", run: () => { setFontFromUser(FONT_DEFAULT); return true } },
       ]),
       EditorView.updateListener.of((u) => {
         if (u.docChanged) { try { bridge() && bridge().onChange(u.state.doc.toString()) } catch (e) {} }
@@ -106,6 +189,7 @@ window.cmInit = function (content, filename, lineWrap, fontSize) {
     ],
   })
   view = new EditorView({ state, parent })
+  attachPinch(parent)
   try { bridge() && bridge().onReady() } catch (e) {}
 }
 window.cmSetContent = function (content) {
@@ -135,7 +219,7 @@ window.cmRevealLine = function (line, endLine) {
 }
 window.cmGetContent = function () { return view ? view.state.doc.toString() : "" }
 window.cmSetLineWrap = function (on) { if (view) view.dispatch({ effects: wrapC.reconfigure(wrapExt(!!on)) }) }
-window.cmSetFontSize = function (px) { if (view) view.dispatch({ effects: fontC.reconfigure(fontExt(px)) }) }
+window.cmSetFontSize = function (px) { reconfigureFont(px) }
 window.cmSetLanguage = function (filename) { if (view) view.dispatch({ effects: langC.reconfigure(langFor(filename)) }) }
 
 // ---------------------------------------------------------------------------
