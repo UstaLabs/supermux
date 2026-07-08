@@ -161,6 +161,7 @@ struct EditorPane: View {
                     .foregroundStyle(state.treeVisible ? Theme.teal : .secondary)
                     .frame(width: 36, height: 36)
             }
+            .smMacPlainButton()
             .accessibilityLabel(state.treeVisible ? "Hide files" : "Show files")
 
             EditorSearchField(search: { await broker.fsSearch(session.id, $0) },
@@ -173,6 +174,7 @@ struct EditorPane: View {
                         .foregroundStyle(previewMode ? Theme.teal : .secondary)
                         .frame(width: 36, height: 36)
                 }
+                .smMacPlainButton()
                 .accessibilityLabel(previewMode ? "Edit" : "Preview")
             }
 
@@ -188,6 +190,7 @@ struct EditorPane: View {
                 }
                 .frame(width: 36, height: 36)
             }
+            .smMacPlainButton()
             .accessibilityLabel("View changes")
 
             Button { showSettings = true } label: {
@@ -195,6 +198,7 @@ struct EditorPane: View {
                     .font(.body).foregroundStyle(.secondary)
                     .frame(width: 36, height: 36)
             }
+            .smMacPlainButton()
             .accessibilityLabel("Editor settings")
         }
         .padding(.horizontal, 10).padding(.vertical, 6)

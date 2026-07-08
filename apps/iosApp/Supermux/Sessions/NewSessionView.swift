@@ -217,6 +217,7 @@ struct NewSessionView: View {
                 Image(systemName: "chevron.down").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
             }
         }
+        .smMacPlainButton()
     }
     private var modelLabel: String {
         guard let model else { return "Default" }
@@ -243,6 +244,7 @@ struct NewSessionView: View {
             .padding(.horizontal, 11).padding(.vertical, 5)
             .background(Color.smSecondaryBackground, in: Capsule())
         }
+        .smMacPlainButton()
     }
 
     /// Fetch origin once per repo when the worktree sheet opens, so the branch
@@ -279,6 +281,9 @@ struct NewSessionView: View {
                              onCancel: { composer.cancelMic() })
             }
             TextField("What should the agent do?", text: $composer.draft, axis: .vertical)
+                // Plain style: the card is the field's chrome — without this, macOS wraps it
+                // in a bezel + blue focus ring (iOS already renders it plain here).
+                .textFieldStyle(.plain)
                 .lineLimit(3...8).focused($composing)
                 .composerHardwareKeyboardSubmit(canSubmit: canSpawn && !spawning) { spawn() }
             if !matches.isEmpty {
@@ -288,6 +293,25 @@ struct NewSessionView: View {
             // into vertical letter-columns (the action buttons used to share this row and
             // overflow it on a narrow iPhone).
             HStack(spacing: 12) {
+                #if os(macOS)
+                // The logo sits OUTSIDE the Menu label on the Mac: AppKit flattens custom
+                // menu-button labels and draws asset images at intrinsic size — a giant
+                // unscaled logo. iOS below keeps the logo inside the tap target, unchanged.
+                HStack(spacing: 5) {
+                    AgentLogo(agent: agent, size: 18)
+                    Menu {
+                        ForEach(agents, id: \.self) { a in
+                            Button(a.capitalized) { agent = a; launcherState.prefs.agent = a }
+                        }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Text(agent.capitalized).font(.subheadline.weight(.medium)).lineLimit(1)
+                            Image(systemName: "chevron.down").font(.caption2)
+                        }.foregroundStyle(.primary)
+                    }
+                    .smMacBorderlessMenu()
+                }
+                #else
                 Menu {
                     ForEach(agents, id: \.self) { a in
                         Button(a.capitalized) { agent = a; launcherState.prefs.agent = a }
@@ -299,6 +323,7 @@ struct NewSessionView: View {
                         Image(systemName: "chevron.down").font(.caption2)
                     }.foregroundStyle(.primary)
                 }
+                #endif
                 // Always show the model menu (web LauncherModelPicker parity). Hiding it
                 // when the list is empty made cursor/opencode look model-less after a
                 // transient /models miss or before the cache warmed.
@@ -319,6 +344,7 @@ struct NewSessionView: View {
                         Image(systemName: "chevron.down").font(.caption2)
                     }.foregroundStyle(.secondary)
                 }
+                .smMacBorderlessMenu()
                 Spacer(minLength: 0)
             }
             // Action row — attach · mic · send.
@@ -340,11 +366,12 @@ struct NewSessionView: View {
                             .background(canSpawn ? Theme.teal : Color.gray.opacity(0.5), in: Circle())
                     }
                 }
+                .smMacPlainButton()
                 .disabled(!canSpawn || spawning)
             }
         }
         .padding(16)
-        .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .smCardSurface(cornerRadius: 20)
     }
 
     private var canSpawn: Bool { !workdir.isEmpty }

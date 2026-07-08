@@ -29,8 +29,12 @@
 #    is safe — the app regenerates both, ACL'd to the new signature.
 set -euo pipefail
 
-TOKEN="${1:?usage: mac-app-run.sh <pair-token> [broker-base]}"
+TOKEN="${1:?usage: mac-app-run.sh <pair-token> [broker-base] [KEY=VAL ...]}"
 BASE="${2:-http://100.84.92.82:9898}"
+# Any further args are extra env for the app (the SM_* debug hooks: SM_SNAPSHOT=1,
+# SM_OPEN_SHEET=settings, SM_IPAD_OPEN_PANES=editor,terminal, …), appended to `open --env`.
+EXTRA_ENV=""
+for kv in "${@:3}"; do EXTRA_ENV+=" --env '$kv'"; done
 cd "$(git rev-parse --show-toplevel)"
 
 # Single-quoted: this must reach the remote shell as a literal `~` and be
@@ -79,7 +83,7 @@ step "[5/7] launch via open --env (a direct ssh exec mounts no UI/WS — see hea
 # literal string "~/supermux-mac/..." to `open`, which does no tilde expansion
 # of its own and would fail to find the app.
 ssh mac "pkill -x Supermux 2>/dev/null || true; \
-  open --env SM_PAIR_TOKEN='$TOKEN' --env SM_PAIR_BASE='$BASE' $REMOTE_APP"
+  open --env SM_PAIR_TOKEN='$TOKEN' --env SM_PAIR_BASE='$BASE'$EXTRA_ENV $REMOTE_APP"
 
 step "[6/7] PID proof (12s settle) + best-effort log tail"
 PID="$(ssh mac 'sleep 12; pgrep -x Supermux' || true)"

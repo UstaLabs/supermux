@@ -28,6 +28,10 @@ struct SupermuxApp: App {
             BrokerConfig.pair(PairToken(baseURL: b, token: t))
         }
         _paired = State(initialValue: BrokerConfig.isPaired)
+        #if os(macOS)
+        // Headless feel-test eyes (SM_SNAPSHOT=1) — see DebugSnapshot.swift.
+        DebugSnapshot.startIfEnabled()
+        #endif
         #if os(iOS)
         // Start the WatchConnectivity channel so a paired Apple Watch gets the broker
         // credentials (pushed on activation + whenever they change below).

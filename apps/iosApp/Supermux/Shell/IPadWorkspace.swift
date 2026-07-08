@@ -292,6 +292,7 @@ private struct WorkspaceDetail: View {
             } label: {
                 Image(systemName: "link").font(.body)
             }
+            .smMacBorderlessMenu()
             .smHoverHighlight()
         }
     }
@@ -312,6 +313,7 @@ private struct WorkspaceDetail: View {
             }
             Section {
                 Button { route = .personalAssistants } label: { Label("Assistants", systemImage: "person.2") }
+                Button { route = .archived } label: { Label("Archived", systemImage: "archivebox") }
                 Button { route = .usage } label: { Label("Usage", systemImage: "chart.bar") }
                 Button { route = .devices } label: { Label("Devices", systemImage: "ipad.and.iphone") }
                 Button { route = .proxies } label: { Label("Proxies", systemImage: "network") }
@@ -321,6 +323,7 @@ private struct WorkspaceDetail: View {
         } label: {
             Image(systemName: "ellipsis.circle").font(.body)
         }
+        .smMacBorderlessMenu()
         .smHoverHighlight()
     }
 

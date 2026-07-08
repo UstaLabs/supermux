@@ -234,6 +234,10 @@ targets:
         MACOSX_DEPLOYMENT_TARGET: "26.0"
         ARCHS: arm64
         EXCLUDED_ARCHS: x86_64
+        # Brand the SYSTEM accent (sidebar selection, focus rings, default buttons) teal on
+        # the Mac — AppKit's List/NSTableView selection follows the app accent color asset,
+        # not SwiftUI `.tint`. Mac-only setting: iOS keeps its explicit `.tint(Theme.teal)`.
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         CODE_SIGN_ENTITLEMENTS: Supermux/SupermuxMac.entitlements
         FRAMEWORK_SEARCH_PATHS:
           - $(inherited)

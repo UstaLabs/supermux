@@ -54,7 +54,14 @@ struct SessionsListView: View {
                 } header: { header(group) }
             }
         }
+        // On the Mac this list IS the app sidebar — the source-list style gives it the native
+        // sidebar row metrics + selection treatment instead of a flat content-list look.
+        // (Other management lists keep `.inset` via the shim; iPhone keeps `.insetGrouped`.)
+        #if os(macOS)
+        .listStyle(.sidebar)
+        #else
         .smInsetGroupedListStyle()
+        #endif
         // Continuous Mail-style reveal: the "Archived" bar lives in a top safeAreaInset (outside
         // the scroll content) and its height tracks the live overscroll 1:1. The offset signal
         // (contentOffset.y + contentInsets.top) is invariant to the inset's own height, so the

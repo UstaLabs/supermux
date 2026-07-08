@@ -205,6 +205,7 @@ struct ChatPane: View {
             composerField
         }
         .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 2)
+        .smContentWidthCap()
         .animation(.smooth(duration: 0.28), value: composerExpanded)
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
@@ -292,6 +293,7 @@ struct ChatPane: View {
                             .frame(width: 34, height: 34)
                             .background(composer.canSubmit ? Theme.teal : Color.gray.opacity(0.4), in: Circle())
                     }
+                    .smMacPlainButton()
                     .disabled(!composer.canSubmit)
                 }
             }
@@ -299,7 +301,7 @@ struct ChatPane: View {
         }
         .padding(.horizontal, composerExpanded ? 12 : 16)
         .padding(.vertical, composerExpanded ? 12 : 10)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: composerExpanded ? 20 : 24, style: .continuous))
+        .composerSurface(cornerRadius: composerExpanded ? 20 : 24)
     }
 
     /// Web ModelPill parity: always visible; "Default" when unset, else a short label.
@@ -428,6 +430,7 @@ struct SessionTranscript: View, Equatable {
                 if blocks.isEmpty {
                     starterPrompts
                         .frame(maxWidth: .infinity)
+                        .smContentWidthCap()
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
@@ -443,28 +446,33 @@ struct SessionTranscript: View, Equatable {
                                 }
                             }
                         }
+                        .smContentWidthCap()
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
                         .listRowBackground(Color.clear)
                     }
                     if !visibleBgTasks.isEmpty {
                         BgTaskChipsView(tasks: visibleBgTasks)
+                            .smContentWidthCap()
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
                             .listRowBackground(Color.clear)
                     }
                     if working {
                         workingIndicator
+                            .smContentWidthCap()
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
                             .listRowBackground(Color.clear)
                     } else if sending {
                         sendingIndicator
+                            .smContentWidthCap()
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
                             .listRowBackground(Color.clear)
                     } else if waiting {
                         waitingIndicator
+                            .smContentWidthCap()
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
                             .listRowBackground(Color.clear)
@@ -574,7 +582,7 @@ struct SessionTranscript: View, Equatable {
     private var starterPrompts: some View {
         VStack(spacing: 10) {
             Spacer().frame(height: 36)
-            Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(Theme.teal)
+            Image(systemName: "bubble.left.and.bubble.right").font(.largeTitle).foregroundStyle(Theme.teal)
             Text("Start the conversation").font(.headline)
             ForEach(["What's the current state?", "Run the tests", "Summarize recent changes"], id: \.self) { p in
                 Button { broker.send(session.id, p) } label: {
