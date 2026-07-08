@@ -13,6 +13,7 @@ struct RootView: View {
     @State private var layout = WorkspaceLayoutModel()
     #if os(macOS)
     private let isRegularWidth = true   // the Mac is always the wide multi-pane workspace
+    @Environment(\.openSettings) private var openSettings
     #else
     @Environment(\.horizontalSizeClass) private var hSize
     private var isRegularWidth: Bool { hSize == .regular }
@@ -134,6 +135,13 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .smNewSession)) { _ in
             // macOS File ▸ New Session (⌘N) → open the launcher (a sheet on the Mac).
             route = .newSession
+        }
+        // Settings is a real window on the Mac, not a sheet — redirect any route to it
+        // (covers the SM_OPEN_SHEET=settings headless hook; the ⋯ menu opens it directly).
+        .onChange(of: route) { _, r in
+            guard r == .settings else { return }
+            route = nil
+            openSettings()
         }
         #endif
     }

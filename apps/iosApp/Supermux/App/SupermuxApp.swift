@@ -109,6 +109,11 @@ struct SupermuxApp: App {
             }
         }
         .defaultSize(width: 1000, height: 760)
+
+        // The native Settings window (adds Supermux ▸ Settings… + ⌘, automatically).
+        Settings {
+            MacSettingsWindow()
+        }
         #endif
     }
 }

@@ -47,7 +47,16 @@ struct CuratorSettingsView: View {
             curatorEnabled = c.config.enabled
             curatorHour = Int(c.config.hour)
             curatorMinute = Int(c.config.minute)
-            nextRun = c.nextRun
+            nextRun = c.nextRun.map(Self.formatNextRun)
         }
+    }
+
+    /// The broker sends an ISO-8601 instant; show it as a local, human date-time
+    /// ("8 Jul 2026 at 22:00") instead of the raw `2026-07-08T22:00:00.000Z`.
+    private static func formatNextRun(_ iso: String) -> String {
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let date = parser.date(from: iso) ?? ISO8601DateFormatter().date(from: iso) else { return iso }
+        return date.formatted(date: .abbreviated, time: .shortened)
     }
 }
