@@ -471,10 +471,10 @@ fun ChatPanel(
                 items(timelineItems, key = { timelineItemKey(it) }) { item ->
                     TimelineItemRow(item, loadBytes, onOpenFile)
                 }
-                // Background-task chips (bg shells / subagents / workflows): shown while any
-                // task runs or the agent is reacting to one that finished; gone once the
-                // session is idle with nothing open — the story then lives in the stream.
-                val visibleBgTasks = if (bgTasks.any { it.status == "running" } || working) bgTasks else emptyList()
+                // Background-task chips (bg shells / subagents / workflows): only RUNNING
+                // tasks get a chip, so a chip clears the moment its task finishes and they
+                // never accumulate. The outcome lives in the chat stream.
+                val visibleBgTasks = bgTasks.filter { it.status == "running" }
                 if (visibleBgTasks.isNotEmpty()) {
                     item(key = "__bgtasks__") {
                         BgTaskChipsRow(visibleBgTasks)
@@ -1068,18 +1068,17 @@ private fun WorkingIndicator(agent: AgentStatus, onStop: () -> Unit) {
 
 /**
  * Background-task chips (direction B of the waiting-state design): one mono chip per
- * bg shell / subagent / workflow, its own elapsed while running, ✓/✕ once closed.
- * Visibility gating (linger only while the agent reacts) is done by the caller.
- * Motion stays chat-only per the design language — the session LIST badge is static.
+ * RUNNING bg shell / subagent / workflow, with its own live elapsed. Chips clear the
+ * moment their task finishes (the caller passes running-only), so they never accumulate;
+ * the outcome lives in the chat stream. Motion stays chat-only per the design language.
  */
 @Composable
 private fun BgTaskChipsRow(tasks: List<ServerFrame.BgTask>) {
     val cs = MaterialTheme.colorScheme
     val sem = LocalSemantics.current
-    val anyRunning = tasks.any { it.status == "running" }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(anyRunning) {
-        while (anyRunning) {
+    LaunchedEffect(Unit) {
+        while (true) {
             delay(1000)
             now = System.currentTimeMillis()
         }
@@ -1093,31 +1092,20 @@ private fun BgTaskChipsRow(tasks: List<ServerFrame.BgTask>) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         tasks.forEach { t ->
-            val running = t.status == "running"
-            val failed = t.status == "failed"
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
                 modifier = Modifier
                     .clip(RoundedCornerShape(999.dp))
-                    .border(1.dp, if (failed) cs.error.copy(alpha = 0.4f) else cs.outlineVariant, RoundedCornerShape(999.dp))
+                    .border(1.dp, cs.outlineVariant, RoundedCornerShape(999.dp))
                     .padding(horizontal = 10.dp, vertical = 3.dp),
             ) {
-                if (running) {
-                    BreathingDot(sem.warning, size = 6.dp)
-                } else {
-                    Text(
-                        text = if (failed) "✕" else "✓",
-                        color = if (failed) cs.error else sem.success,
-                        fontFamily = MonoFontFamily,
-                        fontSize = 11.sp,
-                    )
-                }
+                BreathingDot(sem.warning, size = 6.dp)
                 Text(
-                    text = t.label + " · " + if (running) formatDuration(((now - t.startedAt).coerceAtLeast(0)) / 1000) else t.status,
+                    text = t.label + " · " + formatDuration(((now - t.startedAt).coerceAtLeast(0)) / 1000),
                     fontFamily = MonoFontFamily,
                     fontSize = 11.sp,
-                    color = if (failed) cs.error else cs.onSurfaceVariant,
+                    color = cs.onSurfaceVariant,
                     maxLines = 1,
                 )
             }

@@ -411,12 +411,10 @@ struct SessionTranscript: View, Equatable {
     private var working: Bool { broker.agentWorking[session.id] == true }
     private var sending: Bool { broker.pendingSend.contains(session.id) }
     private var waiting: Bool { broker.agentWaiting[session.id] == true }
-    /// Chips linger only while the agent still has open tasks or is reacting to a
-    /// finished one; idle with nothing open → the story lives in the chat stream.
+    /// Only RUNNING tasks get a chip — a chip clears the moment its task finishes, so
+    /// chips never accumulate. The outcome (done/failed) lives in the chat stream.
     private var visibleBgTasks: [ServerFrameBgTask] {
-        let tasks = broker.bgTasks[session.id] ?? []
-        let anyRunning = tasks.contains { $0.status == "running" }
-        return (anyRunning || working) ? tasks : []
+        (broker.bgTasks[session.id] ?? []).filter { $0.status == "running" }
     }
     private var activityEvents: [ActivityEvent] { broker.activity[session.id] ?? [] }
     /// Messages + tool-call activity, time-merged into blocks (parity with the web ChatView).

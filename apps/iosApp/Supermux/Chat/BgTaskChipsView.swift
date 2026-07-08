@@ -2,9 +2,9 @@ import SwiftUI
 import Shared
 
 /// Background-task chips (direction B of the waiting-state design): one mono chip per
-/// bg shell / subagent / workflow, its own elapsed timer while running, ✓/✕ once closed.
-/// Visibility gating (chips linger only while the agent still has open tasks or is
-/// reacting to a finished one) is done by the caller — this view renders what it's given.
+/// RUNNING bg shell / subagent / workflow, with its own live elapsed. The caller passes
+/// running-only tasks, so a chip clears the moment its task finishes — chips never
+/// accumulate; the outcome (done/failed) lives in the chat stream.
 struct BgTaskChipsView: View {
     let tasks: [ServerFrameBgTask]
 
@@ -21,23 +21,15 @@ struct BgTaskChipsView: View {
     }
 
     @ViewBuilder private func chip(_ t: ServerFrameBgTask, now: Date) -> some View {
-        let running = t.status == "running"
-        let failed = t.status == "failed"
         HStack(spacing: 5) {
-            if running {
-                PulsingHourglass()
-            } else {
-                Text(failed ? "✕" : "✓")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(failed ? Color.red : Color.green)
-            }
-            Text("\(t.label) · \(running ? Self.elapsed(fromMs: t.startedAt, now: now) : t.status)")
+            PulsingHourglass()
+            Text("\(t.label) · \(Self.elapsed(fromMs: t.startedAt, now: now))")
                 .font(.system(size: 11, design: .monospaced))
                 .lineLimit(1)
-                .foregroundStyle(failed ? Color.red : Color.secondary)
+                .foregroundStyle(Color.secondary)
         }
         .padding(.horizontal, 10).padding(.vertical, 3)
-        .overlay(Capsule().stroke(failed ? Color.red.opacity(0.4) : Color.secondary.opacity(0.3), lineWidth: 1))
+        .overlay(Capsule().stroke(Color.secondary.opacity(0.3), lineWidth: 1))
         .help(t.summary ?? t.label)
     }
 
