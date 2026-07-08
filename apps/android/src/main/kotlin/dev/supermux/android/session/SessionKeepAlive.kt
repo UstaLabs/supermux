@@ -164,6 +164,18 @@ fun SessionKeepAlivePhoneHost(
                         loadProjects = { vm.listProjects() },
                         validatePath = { vm.validatePath(it) },
                         onNavigate = onNavigate,
+                        // Long-press row actions were never wired on the phone list host, so
+                        // Kill/Rename/Mute opened their dialogs but the confirm was a no-op
+                        // (SessionListScreen defaults these to {}). Mirror the tablet host +
+                        // MainActivity wiring; kill also prunes the kept-alive layer.
+                        onRename = { id, name -> vm.rename(id, name) },
+                        onKill = { id ->
+                            vm.kill(id) {
+                                onRemoveVisited(id)
+                                if (selected == id) onClearSelected()
+                            }
+                        },
+                        onMute = { id, m -> vm.setMute(id, m) },
                         sharedScope = this@SharedTransitionLayout,
                         animScope = this,
                     )

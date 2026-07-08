@@ -43,10 +43,12 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -130,7 +132,7 @@ fun SessionLauncherScreen(
     var workdirTouched by remember { mutableStateOf(false) }
     var agent by remember { mutableStateOf("claude") }
     var model by remember { mutableStateOf<String?>(null) }     // null == "Default"
-    var message by remember { mutableStateOf("") }
+    var message by remember { mutableStateOf(TextFieldValue("")) }
     var projects by remember { mutableStateOf(emptyList<String>()) }
     var showProjectSheet by remember { mutableStateOf(false) }
     var submitting by remember { mutableStateOf(false) }
@@ -216,14 +218,14 @@ fun SessionLauncherScreen(
         }
         useWorktree = draft.useWorktree
         baseBranch = draft.baseBranch
-        message = draft.text
+        message = TextFieldValue(draft.text, TextRange(draft.text.length))
         launcherRestoring = false
     }
 
     // Persist the in-progress draft, debounced (~400ms) — mirrors ChatScreen.kt's per-session
     // draft save. launcherRestoring gates it so the restore's own assignments (above) don't
     // immediately re-save right back over themselves before they've even settled.
-    LaunchedEffect(workdir, workdirTouched, useWorktree, baseBranch, message, launcherRestoring) {
+    LaunchedEffect(workdir, workdirTouched, useWorktree, baseBranch, message.text, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
         delay(400)
         onLauncherDraftChange(
@@ -231,7 +233,7 @@ fun SessionLauncherScreen(
                 workdir = if (workdirTouched) workdir else null,
                 useWorktree = useWorktree,
                 baseBranch = baseBranch,
-                text = message,
+                text = message.text,
             )
         )
     }
@@ -250,7 +252,7 @@ fun SessionLauncherScreen(
                         workdir = if (workdirTouched) workdir else null,
                         useWorktree = useWorktree,
                         baseBranch = baseBranch,
-                        text = message,
+                        text = message.text,
                     )
                 )
             }
@@ -273,7 +275,10 @@ fun SessionLauncherScreen(
         loadGlossary = loadGlossary,
         transcribeDraft = transcribeDraft,
         transcribeAudio = transcribeAudio,
-        onAppend = { message = if (message.isBlank()) it else message.trimEnd() + " " + it; error = null },
+        onAppend = {
+            val joined = if (message.text.isBlank()) it else message.text.trimEnd() + " " + it
+            message = TextFieldValue(joined, TextRange(joined.length)); error = null
+        },
     )
 
     // ── Attachment staging (no session yet) ────────────────────────────────────────────────────
@@ -352,7 +357,7 @@ fun SessionLauncherScreen(
         animationSpec = spring(stiffness = Spring.StiffnessMedium, dampingRatio = Spring.DampingRatioMediumBouncy),
         label = "send_scale",
     )
-    val canSend = workdir.isNotBlank() && (message.isNotBlank() || staged.isNotEmpty())
+    val canSend = workdir.isNotBlank() && (message.text.isNotBlank() || staged.isNotEmpty())
 
     // Spawn → (upload staged files) → send first message → open the session. The circular send
     // button spins through the whole flow, then onOpenSession pops this screen (iOS spawn() parity).
@@ -372,7 +377,7 @@ fun SessionLauncherScreen(
         }
         scope.launch {
             try {
-                val sessionId = onSubmit(workdir.trim(), agent, model, message.trim(), wantsWorktree, base, toUpload)
+                val sessionId = onSubmit(workdir.trim(), agent, model, message.text.trim(), wantsWorktree, base, toUpload)
                 onLauncherDraftChange(LauncherDraft())
                 draftCleared = true
                 onOpenSession(sessionId)
@@ -388,15 +393,18 @@ fun SessionLauncherScreen(
     // Matches for the active "/token" at the end of the draft. Insert-only here: pre-spawn there is
     // no session to run a control command against, so a pick just drops the command's text in (iOS
     // SlashMenu `showsActionGlyph: false`). Keyboard nav mirrors the chat composer for DeX keyboards.
-    val slashMatches = slashCommandMatches(message, launcherCommands)
+    val slashMatches = slashCommandMatches(message.text, launcherCommands)
     var slashSelectedIndex by remember { mutableIntStateOf(0) }
     var slashDismissed by remember { mutableStateOf(false) }
-    LaunchedEffect(activeSlashQuery(message)) { slashSelectedIndex = 0; slashDismissed = false }
+    LaunchedEffect(activeSlashQuery(message.text)) { slashSelectedIndex = 0; slashDismissed = false }
     val slashMenuOpen = slashMatches.isNotEmpty() && !slashDismissed
     val safeSlashIndex = slashSelectedIndex.coerceIn(0, (slashMatches.size - 1).coerceAtLeast(0))
     fun selectSlashCommand(cmd: SlashCommand) {
         haptic(HapticKind.Tick)
-        message = replaceSlashToken(message, slashInsertText(cmd))
+        // The token is always the draft's tail (activeSlashQuery only matches end-of-draft), so the
+        // inserted command becomes the new tail — move the caret to the end, not the old offset.
+        val inserted = replaceSlashToken(message.text, slashInsertText(cmd))
+        message = TextFieldValue(inserted, TextRange(inserted.length))
         error = null
     }
 
@@ -533,7 +541,7 @@ fun SessionLauncherScreen(
                 } else {
                     // ── Text input (placeholder overlay + primary cursor + card focus border) ──
                     Box(modifier = Modifier.fillMaxWidth().heightIn(min = 116.dp)) {
-                        if (message.isEmpty()) {
+                        if (message.text.isEmpty()) {
                             Text("What should the agent do?", color = cs.onSurfaceVariant, fontSize = 15.sp)
                         }
                         BasicTextField(
