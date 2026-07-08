@@ -110,12 +110,6 @@ import kotlinx.coroutines.withContext
 import android.provider.OpenableColumns
 import java.util.concurrent.atomic.AtomicLong
 
-/**
- * Active "/command" token at the END of the draft (cursor assumed at end), at line start or
- * after whitespace — mirrors iOS slashQuery (ChatPane.swift:508). Group 1 is the slash token.
- */
-private val slashTokenRegex = Regex("""(?:^|\s)(/\S*)$""")
-
 /** Stable list key for timeline diffing so the optimistic→real id swap (§9) doesn't flicker. */
 private fun timelineItemKey(item: TimelineItem): String = when (item) {
     is TimelineItem.Msg -> "m:${item.entry.id}"
@@ -479,16 +473,10 @@ fun ChatPanel(
             )
 
             // ── slash-command menu: active "/token" at end of draft (start-of-line or after
-            //    whitespace), filtering on name OR family by `contains`, capped at 8 (iOS parity) ──
-            val slashMatch = slashTokenRegex.find(text)
-            val slashQuery = slashMatch?.groupValues?.get(1)?.drop(1)?.lowercase()
-            val slashMatches = if (slashQuery != null) {
-                commands.filter {
-                    slashQuery.isEmpty() ||
-                        it.name.contains(slashQuery, ignoreCase = true) ||
-                        it.family.contains(slashQuery, ignoreCase = true)
-                }.take(8)
-            } else emptyList()
+            //    whitespace), filtering on name OR family by `contains`, capped at 8 (iOS parity).
+            //    Matching lives in SlashCommands.kt, shared with the New Session launcher. ──
+            val slashQuery = activeSlashQuery(text)
+            val slashMatches = slashCommandMatches(text, commands)
 
             // Hardware-keyboard nav for the slash menu: ↑/↓ move the highlight, Enter picks, Esc
             // dismisses — so you can drive it without touch (DeX / attached keyboard).
@@ -498,76 +486,29 @@ fun ChatPanel(
             val slashMenuOpen = slashMatches.isNotEmpty() && !slashMenuDismissed
             val safeSlashIndex = selectedSlashIndex.coerceIn(0, (slashMatches.size - 1).coerceAtLeast(0))
 
-            // Replace the active "/token" with [insert], preserving any leading whitespace.
-            fun replaceSlashToken(insert: String) {
-                val m = slashTokenRegex.find(text) ?: run { text = insert; return }
-                val lead = m.value.takeWhile { it == ' ' || it == '\n' || it == '\t' }
-                text = text.substring(0, m.range.first) + lead + insert
-            }
-            // Apply a slash command — shared by a tap and by keyboard Enter.
+            // Apply a slash command — shared by a tap and by keyboard Enter. Control commands clear
+            // the token and fire onControl; everything else inserts its text (SlashCommands.kt).
             fun selectSlashCommand(cmd: SlashCommand) {
                 haptic(HapticKind.Tick)
-                val action = cmd.action
-                if (action != null) {
-                    replaceSlashToken("")
+                if (cmd.action != null) {
+                    text = replaceSlashToken(text, "")
                     onControl(cmd)
                 } else {
-                    replaceSlashToken(cmd.insertText?.ifEmpty { null } ?: "${cmd.sigil}${cmd.name} ")
+                    text = replaceSlashToken(text, slashInsertText(cmd))
                 }
             }
 
             if (slashMenuOpen) {
-                Column(
+                SlashMenu(
+                    matches = slashMatches,
+                    selectedIndex = safeSlashIndex,
+                    onSelect = { selectSlashCommand(it) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 240.dp)
-                        .background(MaterialTheme.colorScheme.surfaceContainer)
-                        .verticalScroll(rememberScrollState())
-                        .padding(vertical = 4.dp),
-                ) {
-                    slashMatches.forEachIndexed { i, cmd ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("chat_slash_item_${cmd.name}")
-                                .background(
-                                    if (i == safeSlashIndex) MaterialTheme.colorScheme.surfaceContainerHighest
-                                    else Color.Transparent,
-                                )
-                                .clickable { selectSlashCommand(cmd) }
-                                .padding(horizontal = 14.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = "${cmd.sigil}${cmd.name}",
-                                color = MaterialTheme.colorScheme.onSurface,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.width(120.dp),
-                            )
-                            val desc = cmd.description
-                            if (desc != null) {
-                                Text(
-                                    text = desc,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 12.sp,
-                                    maxLines = 1,
-                                )
-                            }
-                            // Trailing "executes" glyph for control commands (iOS bolt.fill).
-                            if (cmd.action != null) {
-                                Spacer(Modifier.weight(1f))
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_zap),
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                    modifier = Modifier.size(13.dp),
-                                )
-                            }
-                        }
-                    }
-                }
+                        .background(MaterialTheme.colorScheme.surfaceContainer),
+                    testTagPrefix = "chat_slash_item_",
+                    showActionGlyph = true,
+                )
                 // Separator between menu and composer
                 Box(
                     modifier = Modifier
