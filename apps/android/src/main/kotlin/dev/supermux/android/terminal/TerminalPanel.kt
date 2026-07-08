@@ -6,8 +6,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -56,10 +58,15 @@ import org.connectbot.terminal.TerminalEmulatorFactory
  * Native terminal panel backed by ConnectBot termlib (libvterm).
  * I/O stays on the broker websocket via [TerminalClient].
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TerminalPanel(
     connect: () -> TerminalClient,
     modifier: Modifier = Modifier,
+    // Whether this terminal is the foreground pane. Drives soft-keyboard focus: a background
+    // (kept-alive) pane must never hold the IME. Defaults true for hosts that mount/unmount the
+    // pane instead of keeping it alive (the tablet workspace).
+    active: Boolean = true,
     // Fires once when the session ends (CONNECTED → DISCONNECTED). The agent-PTY ("Native")
     // tab uses this to fall back to Chat on agent exit (iOS onExit parity). Null = no-op.
     onExit: (() -> Unit)? = null,
@@ -125,6 +132,23 @@ fun TerminalPanel(
 
     // Pixel height of the laid-out terminal viewport, for converting drag pixels → rows.
     var boxHeightPx by remember { mutableStateOf(0) }
+
+    // ── Soft-keyboard focus (iOS TerminalPane parity) ─────────────────────────────────────────
+    // The terminal must NOT grab focus on appear — in the tablet workspace that steals the IME
+    // from another visible pane, and on a phone tab it pops the keyboard over output you may only
+    // want to read. termlib shows the keyboard purely from `showSoftKeyboard` (it has no built-in
+    // tap→IME path), so we drive that flag from a tap: tapping the terminal focuses it. The request
+    // is cleared when the pane leaves the foreground (a kept-alive background terminal must never
+    // hold the IME) and when the platform IME is dismissed (back button) — termlib can't observe a
+    // system dismissal, so we watch WindowInsets.ime for it — so the next tap re-shows the keyboard.
+    var wantKeyboard by remember { mutableStateOf(false) }
+    var imeWasVisible by remember { mutableStateOf(false) }
+    val imeVisible = WindowInsets.isImeVisible
+    LaunchedEffect(active) { if (!active) { wantKeyboard = false; imeWasVisible = false } }
+    LaunchedEffect(imeVisible) {
+        if (imeVisible) imeWasVisible = true
+        else if (imeWasVisible) { imeWasVisible = false; wantKeyboard = false }
+    }
 
     // Shrink the terminal above the soft keyboard (and nav bar) under edge-to-edge — mirrors the
     // chat composer's inset handling. Resizing the view makes termlib recompute its grid and emit a
@@ -230,10 +254,10 @@ fun TerminalPanel(
             backgroundColor = Color(c.terminal),
             foregroundColor = Color(c.terminalForeground),
             keyboardEnabled = true,
-            // Don't grab focus + pop the keyboard the moment the pane appears — in the tablet
-            // workspace that steals focus from wherever the user was. Taps fall through to termlib
-            // (see the drag handler above), so tapping the terminal still focuses it.
-            showSoftKeyboard = false,
+            // No auto-focus on appear (see the wantKeyboard note above); a tap requests the
+            // keyboard. termlib has no built-in tap→IME path, so onTerminalTap drives the flag.
+            showSoftKeyboard = active && wantKeyboard,
+            onTerminalTap = { wantKeyboard = true },
         )
         StatusChip(
             status = status,
