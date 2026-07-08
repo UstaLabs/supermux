@@ -96,6 +96,8 @@ data class AgentStatus(
     val tool: String? = null,
     val since: Long? = null,
     val workingSince: Long? = null,
+    val waiting: Boolean = false,    // idle but background tasks still open
+    val bgOpen: Int = 0,             // open background-task count
 )
 
 @Serializable

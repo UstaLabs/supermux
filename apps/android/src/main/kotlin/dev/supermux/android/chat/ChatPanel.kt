@@ -88,6 +88,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import dev.supermux.android.R
 import dev.supermux.android.theme.HapticKind
+import dev.supermux.android.theme.LocalSemantics
 import dev.supermux.android.theme.MonoFontFamily
 import dev.supermux.android.theme.Radii
 import dev.supermux.android.theme.Space
@@ -98,6 +99,7 @@ import dev.supermux.net.ReasoningResponse
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.ui.FilePathRef
@@ -142,6 +144,7 @@ fun ChatPanel(
     messages: List<LogEntry>,
     activity: List<ActivityEvent>,
     agent: AgentStatus?,
+    bgTasks: List<ServerFrame.BgTask> = emptyList(),
     sending: Boolean,
     activePanel: SessionPanel,
     onSendWith: (text: String, attachments: List<String>) -> Unit,
@@ -451,6 +454,15 @@ fun ChatPanel(
                 items(timelineItems, key = { timelineItemKey(it) }) { item ->
                     TimelineItemRow(item, loadBytes, onOpenFile)
                 }
+                // Background-task chips (bg shells / subagents / workflows): shown while any
+                // task runs or the agent is reacting to one that finished; gone once the
+                // session is idle with nothing open — the story then lives in the stream.
+                val visibleBgTasks = if (bgTasks.any { it.status == "running" } || working) bgTasks else emptyList()
+                if (visibleBgTasks.isNotEmpty()) {
+                    item(key = "__bgtasks__") {
+                        BgTaskChipsRow(visibleBgTasks)
+                    }
+                }
                 // Live working indicator pinned to the bottom (iOS renders it below the last block).
                 if (working && agent != null) {
                     item(key = "__working__") {
@@ -459,6 +471,10 @@ fun ChatPanel(
                 } else if (sending) {
                     item(key = "__sending__") {
                         SendingIndicator(onStop = onInterrupt)
+                    }
+                } else if (agent?.waiting == true) {
+                    item(key = "__waiting__") {
+                        WaitingIndicator(agent.bgOpen)
                     }
                 }
             }
@@ -1011,7 +1027,9 @@ private fun WorkingIndicator(agent: AgentStatus, onStop: () -> Unit) {
         }
     }
     val elapsed = agent.workingSince?.let { ((now - it).coerceAtLeast(0)) / 1000 }
-    val label = if (agent.detail == "running") "working" else "thinking"
+    // Name the blocker while a tool runs ("working · Bash") — the tool is already in the frame.
+    val label = (if (agent.detail == "running") "working" else "thinking") +
+        (agent.tool?.takeIf { agent.detail == "running" }?.let { " · $it" } ?: "")
     // Terminal-prompt status line: a gutter-aligned live pulse continues the spine's thread,
     // then a mono status + elapsed, then a compact stop. Reads as the prompt of a live session.
     Row(
@@ -1045,6 +1063,89 @@ private fun WorkingIndicator(agent: AgentStatus, onStop: () -> Unit) {
             )
             Text("stop", fontFamily = MonoFontFamily, fontSize = 11.sp, color = cs.error)
         }
+    }
+}
+
+/**
+ * Background-task chips (direction B of the waiting-state design): one mono chip per
+ * bg shell / subagent / workflow, its own elapsed while running, ✓/✕ once closed.
+ * Visibility gating (linger only while the agent reacts) is done by the caller.
+ * Motion stays chat-only per the design language — the session LIST badge is static.
+ */
+@Composable
+private fun BgTaskChipsRow(tasks: List<ServerFrame.BgTask>) {
+    val cs = MaterialTheme.colorScheme
+    val sem = LocalSemantics.current
+    val anyRunning = tasks.any { it.status == "running" }
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(anyRunning) {
+        while (anyRunning) {
+            delay(1000)
+            now = System.currentTimeMillis()
+        }
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(start = 44.dp, top = Space.xs, bottom = Space.xs, end = Space.md),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        tasks.forEach { t ->
+            val running = t.status == "running"
+            val failed = t.status == "failed"
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .border(1.dp, if (failed) cs.error.copy(alpha = 0.4f) else cs.outlineVariant, RoundedCornerShape(999.dp))
+                    .padding(horizontal = 10.dp, vertical = 3.dp),
+            ) {
+                if (running) {
+                    BreathingDot(sem.warning, size = 6.dp)
+                } else {
+                    Text(
+                        text = if (failed) "✕" else "✓",
+                        color = if (failed) cs.error else sem.success,
+                        fontFamily = MonoFontFamily,
+                        fontSize = 11.sp,
+                    )
+                }
+                Text(
+                    text = t.label + " · " + if (running) formatDuration(((now - t.startedAt).coerceAtLeast(0)) / 1000) else t.status,
+                    fontFamily = MonoFontFamily,
+                    fontSize = 11.sp,
+                    color = if (failed) cs.error else cs.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * "waiting · N background tasks" status row — the turn is over but the harness will
+ * wake the agent when its background tasks finish. Amber = attention-not-error; no
+ * Stop capsule because the agent is idle (there is nothing to interrupt).
+ */
+@Composable
+private fun WaitingIndicator(bgOpen: Int) {
+    val sem = LocalSemantics.current
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = Space.sm, bottom = Space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.width(44.dp)) {
+            BreathingDot(sem.warning, Modifier.align(Alignment.CenterEnd).padding(end = 6.dp), size = 7.dp)
+        }
+        Text(
+            text = "waiting · " + if (bgOpen == 1) "1 background task" else "$bgOpen background tasks",
+            fontFamily = MonoFontFamily,
+            fontSize = 12.sp,
+            color = sem.warning,
+        )
     }
 }
 

@@ -122,6 +122,8 @@ class AppViewModel(
     val activity: StateFlow<Map<String, List<ActivityEvent>>> = _activity
     private val _agentState = MutableStateFlow<Map<String, AgentStatus>>(emptyMap())
     val agentState: StateFlow<Map<String, AgentStatus>> = _agentState
+    private val _bgTasks = MutableStateFlow<Map<String, List<ServerFrame.BgTask>>>(emptyMap())
+    val bgTasks: StateFlow<Map<String, List<ServerFrame.BgTask>>> = _bgTasks
     private val _pendingSend = MutableStateFlow<Set<String>>(emptySet())
     val pendingSend: StateFlow<Set<String>> = _pendingSend
     private val _commands = MutableStateFlow<Map<String, List<SlashCommand>>>(emptyMap())
@@ -185,6 +187,7 @@ class AppViewModel(
                         _sessions.value = f.sessions
                         _messages.value = f.logs
                         _activity.value = f.activity
+                        _bgTasks.value = f.bgTasks
                         _agentState.value = f.agentState
                         _commands.value = f.commands
                         _commandsResolved.value = f.commandsResolved
@@ -225,7 +228,10 @@ class AppViewModel(
                         }
                         incoming.finish_job?.let { job -> _finishJobs.update { it + (incoming.id to job) } }
                     }
-                    is ServerFrame.SessionRemoved -> _sessions.value = _sessions.value.filterNot { it.id == f.id }
+                    is ServerFrame.SessionRemoved -> {
+                        _sessions.value = _sessions.value.filterNot { it.id == f.id }
+                        _bgTasks.update { it - f.id }
+                    }
                     is ServerFrame.MessageAppend -> {
                         // Optimistic-echo dedup (iOS BrokerSession parity): when the real inbound
                         // message lands, drop the matching local-… placeholder we appended on send.
@@ -242,11 +248,15 @@ class AppViewModel(
                             this[f.session] = (this[f.session] ?: emptyList()) + f.event
                         }
                     }
+                    is ServerFrame.BgTasks -> {
+                        _bgTasks.update { it + (f.session to f.tasks) }
+                    }
                     is ServerFrame.AgentState -> {
                         _agentState.value = _agentState.value.toMutableMap().apply {
                             this[f.session] = AgentStatus(
                                 phase = f.phase, state = f.state, working = f.working,
                                 detail = f.detail, tool = f.tool, since = f.since, workingSince = f.workingSince,
+                                waiting = f.waiting, bgOpen = f.bgOpen,
                             )
                         }
                         _pendingSend.update { it - f.session }   // first real state clears the client-local "Sending…"

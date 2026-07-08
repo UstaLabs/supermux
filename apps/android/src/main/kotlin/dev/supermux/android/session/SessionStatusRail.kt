@@ -32,11 +32,17 @@ import dev.supermux.proto.sessionStatus
 /**
  * Leading per-session state: working spinner (top priority), else the git/cloud status icon.
  * Worktree: ✓ done / ⎇ not-done / neutral pristine. Remote: cloud-done / cloud-off + ↑N ↓N counts.
+ * `bgOpen` > 0 adds a static mono "⧗N" badge (open background tasks) — static because the
+ * session list is a 100+/day surface and the design language budgets motion there.
  */
 @Composable
-fun SessionStatusRail(git: GitLiteStatusDto?, working: Boolean, modifier: Modifier = Modifier) {
+fun SessionStatusRail(git: GitLiteStatusDto?, working: Boolean, bgOpen: Int = 0, modifier: Modifier = Modifier) {
     val sem = LocalSemantics.current
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        if (bgOpen > 0) {
+            Text("⧗$bgOpen", color = sem.warning, fontFamily = MonoFontFamily, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.width(4.dp))
+        }
         if (working) {
             CircularProgressIndicator(
                 modifier = Modifier.size(14.dp),

@@ -268,6 +268,10 @@ private fun SessionChatLayer(
     val finishJobs by vm.finishJobs.collectAsState()
     val finishJob = finishJobs[session.id]
 
+    // Background tasks (bg shells / subagents / workflows) for the chips row + waiting state.
+    val bgTasksAll by vm.bgTasks.collectAsState()
+    val bgTasks = bgTasksAll[session.id] ?: emptyList()
+
     // Exposed proxy links for this session (iOS parity) — loaded on open, filtered by session name.
     var sessionLinks by remember(session.id) { mutableStateOf<List<ProxyDto>>(emptyList()) }
     LaunchedEffect(session.id) { sessionLinks = vm.proxies().filter { it.sessionName == session.name } }
@@ -309,6 +313,7 @@ private fun SessionChatLayer(
                 messages = messages,
                 activity = activity,
                 agent = agent,
+                bgTasks = bgTasks,
                 sending = sending,
                 layout = ws,
                 onSendWith = { text, atts -> vm.sendWith(session.id, text, atts) },
@@ -387,6 +392,7 @@ private fun SessionChatLayer(
             messages = messages,
             activity = activity,
             agent = agent,
+            bgTasks = bgTasks,
             sending = sending,
             onBack = onBack,
             onSendWith = { text, atts -> vm.sendWith(session.id, text, atts) },

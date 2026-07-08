@@ -63,6 +63,7 @@ import dev.supermux.net.ReasoningResponse
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.session.inferHomeDir
@@ -91,6 +92,7 @@ fun SessionWorkspaceDetail(
     messages: List<LogEntry>,
     activity: List<ActivityEvent>,
     agent: AgentStatus?,
+    bgTasks: List<ServerFrame.BgTask> = emptyList(),
     sending: Boolean,
     layout: WorkspaceLayout,
     onSendWith: (text: String, attachments: List<String>) -> Unit,
@@ -275,6 +277,7 @@ fun SessionWorkspaceDetail(
                 messages = messages,
                 activity = activity,
                 agent = agent,
+                bgTasks = bgTasks,
                 sending = sending,
                 activePanel = SessionPanel.Chat,
                 onSendWith = onSendWith,

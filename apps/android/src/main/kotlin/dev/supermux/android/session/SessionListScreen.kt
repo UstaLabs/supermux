@@ -168,6 +168,7 @@ fun SessionRow(
     active: Boolean,
     preview: LogEntry? = null,
     working: Boolean = false,
+    bgOpen: Int = 0,
     onClick: () -> Unit,
     onRename: () -> Unit = {},
     onKill: () -> Unit = {},
@@ -213,7 +214,7 @@ fun SessionRow(
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        SessionStatusRail(git = s.git, working = working, modifier = Modifier.align(Alignment.CenterVertically))
+        SessionStatusRail(git = s.git, working = working, bgOpen = bgOpen, modifier = Modifier.align(Alignment.CenterVertically))
         Spacer(Modifier.width(12.dp))
 
         Column(Modifier.weight(1f)) {
@@ -496,6 +497,7 @@ fun SessionListScreen(
                         active = s.id == activeId,
                         preview = lastBySession[s.id],
                         working = agentState[s.id]?.working == true,
+                        bgOpen = agentState[s.id]?.bgOpen ?: 0,
                         onClick = { onOpen(s.id) },
                         onRename = { renameTarget = s; renameText = s.name },
                         onKill = { killTarget = s },
