@@ -19,7 +19,7 @@ final class AgentDeadStateTests: XCTestCase {
     /// Full positional `AgentStatus` init (mirrors `ComposerModelTests`' `SlashCommand` helper —
     /// avoids relying on SKIE default-arg overloads).
     private func agentStatus(state: String) -> AgentStatus {
-        AgentStatus(phase: "idle", state: state, working: false, detail: nil, tool: nil, since: nil, workingSince: nil)
+        AgentStatus(phase: "idle", state: state, working: false, detail: nil, tool: nil, since: nil, workingSince: nil, waiting: false, bgOpen: 0)
     }
 
     // MARK: - Live agent_state frames (BrokerSession.swift ~line 133 area)
@@ -30,13 +30,15 @@ final class AgentDeadStateTests: XCTestCase {
         // A live agent_state frame with state == "dead" for session "s1"…
         broker.reduce(ServerFrameAgentState(session: "s1", phase: "stalled", state: "dead",
                                              working: false, detail: nil, tool: nil,
-                                             since: nil, workingSince: nil))
+                                             since: nil, workingSince: nil,
+                                             waiting: false, bgOpen: 0))
         XCTAssertEqual(broker.agentDead["s1"], true)
 
         // …then a state == "idle" frame clears it.
         broker.reduce(ServerFrameAgentState(session: "s1", phase: "idle", state: "idle",
                                              working: false, detail: nil, tool: nil,
-                                             since: nil, workingSince: nil))
+                                             since: nil, workingSince: nil,
+                                             waiting: false, bgOpen: 0))
         XCTAssertEqual(broker.agentDead["s1"], false)
     }
 
@@ -44,7 +46,8 @@ final class AgentDeadStateTests: XCTestCase {
         let broker = makeBroker()
         broker.reduce(ServerFrameAgentState(session: "s1", phase: "running", state: "working",
                                              working: true, detail: "running", tool: nil,
-                                             since: nil, workingSince: nil))
+                                             since: nil, workingSince: nil,
+                                             waiting: false, bgOpen: 0))
         XCTAssertEqual(broker.agentDead["s1"], false)
         XCTAssertEqual(broker.agentWorking["s1"], true)
     }
@@ -53,7 +56,8 @@ final class AgentDeadStateTests: XCTestCase {
         let broker = makeBroker()
         broker.reduce(ServerFrameAgentState(session: "s1", phase: "stalled", state: "dead",
                                              working: false, detail: nil, tool: nil,
-                                             since: nil, workingSince: nil))
+                                             since: nil, workingSince: nil,
+                                             waiting: false, bgOpen: 0))
         XCTAssertEqual(broker.agentDead["s1"], true)
 
         // Kill/archive removes the session — but a resume REUSES the same id over a continuous
@@ -74,7 +78,7 @@ final class AgentDeadStateTests: XCTestCase {
     func testSnapshotMapsDeadState() {
         let broker = makeBroker()
         let snapshot = ServerFrameSnapshot(
-            sessions: [], logs: [:], activity: [:],
+            sessions: [], logs: [:], activity: [:], bgTasks: [:],
             agentState: ["s1": agentStatus(state: "dead"), "s2": agentStatus(state: "idle")],
             commands: [:], commandsResolved: [:]
         )

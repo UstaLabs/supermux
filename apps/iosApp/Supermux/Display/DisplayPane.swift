@@ -30,6 +30,9 @@ struct DisplayPane: View {
                 emptyState
             }
         }
+        // The pane surface is always terminal-dark; without this, light mode paints the
+        // empty state's labels near-black on black (unreadable on every platform).
+        .environment(\.colorScheme, .dark)
     }
 
     private var emptyState: some View {

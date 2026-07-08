@@ -173,6 +173,7 @@ targets:
       # the keypair from the shared Keychain group and opens the blob with the same code.
       - path: Supermux/Push/PushCrypto.swift
       - path: Supermux/Push/PushKeypair.swift
+      - path: Supermux/Push/PushGroupState.swift
     info:
       path: SupermuxPushNSE/Info.plist
       properties:
@@ -234,6 +235,10 @@ targets:
         MACOSX_DEPLOYMENT_TARGET: "26.0"
         ARCHS: arm64
         EXCLUDED_ARCHS: x86_64
+        # Brand the SYSTEM accent (sidebar selection, focus rings, default buttons) teal on
+        # the Mac — AppKit's List/NSTableView selection follows the app accent color asset,
+        # not SwiftUI `.tint`. Mac-only setting: iOS keeps its explicit `.tint(Theme.teal)`.
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         CODE_SIGN_ENTITLEMENTS: Supermux/SupermuxMac.entitlements
         FRAMEWORK_SEARCH_PATHS:
           - $(inherited)
@@ -268,6 +273,7 @@ targets:
       - path: SupermuxPushNSE/NotificationService.swift
       - path: Supermux/Push/PushCrypto.swift
       - path: Supermux/Push/PushKeypair.swift
+      - path: Supermux/Push/PushGroupState.swift
     info:
       path: SupermuxPushNSE/InfoMac.plist
       properties:

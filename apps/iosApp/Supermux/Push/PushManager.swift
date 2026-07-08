@@ -52,12 +52,6 @@ final class PushManager: NSObject {
     // the broker learns to segment device platforms.
     private static let platform = "ios"
 
-    // Shared with the Notification Service Extension (see `NotificationService.swift`):
-    // the App Group + the on-device unread badge counter key. The NSE increments the
-    // counter as alerts arrive; the app re-derives it from the delivered list on open.
-    private static let appGroup = "group.dev.supermux.app"
-    private static let badgeKey = "sm_badge_count"
-
     private override init() { super.init() }
 
     /// Build the shared Ktor client the same way `BrokerSession` does (Darwin engine,
@@ -124,21 +118,29 @@ final class PushManager: NSObject {
 
     // MARK: - Clear-on-open
 
-    /// Called when the user opens a chat: remove that chat's delivered notifications (they
-    /// were grouped under `threadIdentifier == sessionId` by the NSE) and re-derive the
-    /// app-icon badge from whatever remains. The delivered list is the source of truth, so
-    /// this self-heals any drift in the shared counter the NSE maintains.
+    /// Called when the user opens a chat: forget that chat's unread state (the single card
+    /// the NSE keeps under `threadIdentifier == sessionId`) and reset the app-icon badge to
+    /// the total unread that remains. `PushGroupState` is the source of truth on iOS; the
+    /// mac client (no App Group) falls back to counting the chats still on screen.
     func clearDelivered(sessionId: String) {
         guard !sessionId.isEmpty else { return }
         let center = UNUserNotificationCenter.current()
+        PushGroupState.reset(sessionId: sessionId)
         center.getDeliveredNotifications { notes in
             let ids = notes
                 .filter { $0.request.content.threadIdentifier == sessionId }
                 .map { $0.request.identifier }
             if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
-            let remaining = max(0, notes.count - ids.count)
-            UserDefaults(suiteName: Self.appGroup)?.set(remaining, forKey: Self.badgeKey)
-            Task { @MainActor in try? await center.setBadgeCount(remaining) }
+            let badge: Int
+            if PushGroupState.hasStore {
+                badge = PushGroupState.totalUnread()
+            } else {
+                let remainingChats = Set(notes
+                    .map { $0.request.content.threadIdentifier }
+                    .filter { !$0.isEmpty && $0 != sessionId })
+                badge = remainingChats.count
+            }
+            Task { @MainActor in try? await center.setBadgeCount(badge) }
         }
     }
 

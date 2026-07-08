@@ -35,5 +35,6 @@ struct AttachMenu: View {
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
+        .smMacBorderlessMenu()
     }
 }
