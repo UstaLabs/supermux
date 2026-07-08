@@ -53,6 +53,23 @@ const doneNotification = JSON.stringify({
   message: { content: "<task-notification>\n<task-id>a2bee0eded79e862d</task-id>\n<tool-use-id>toolu_01BBB</tool-use-id>\n<output-file>/tmp/x/tasks/a2bee0eded79e862d.output</output-file>\n<status>completed</status>\n<summary>Agent finished</summary>\n</task-notification>" },
 })
 
+// Monitor tool: launches a background watch. Its start result is the fixed string
+// "Monitoring in background…" (NO task-id — unlike Bash/Agent); the task-id only
+// appears later in the notification, so the launching tool_use_id is the join key.
+const monitorToolUse = JSON.stringify({
+  type: "assistant", timestamp: TS,
+  message: { content: [{ type: "tool_use", id: "toolu_01MON", name: "Monitor",
+    input: { description: "Monitor build 38 to completion", command: "until grep -q DONE log; do sleep 2; done" } }] },
+})
+const monitorResult = JSON.stringify({
+  type: "user", timestamp: TS,
+  message: { content: [{ type: "tool_result", tool_use_id: "toolu_01MON", content: "Monitoring in background..." }] },
+})
+const monitorNotification = JSON.stringify({
+  type: "user", timestamp: TS,
+  message: { content: "<task-notification>\n<task-id>bhos3m26s</task-id>\n<tool-use-id>toolu_01MON</tool-use-id>\n<output-file>/tmp/x/tasks/bhos3m26s.output</output-file>\n<status>completed</status>\n<summary>Background command \"Monitor build 38 to completion\" completed (exit code 0)</summary>\n</task-notification>" },
+})
+
 describe("BgTaskDetector", () => {
   test("opens a shell task with label from the paired tool_use description", () => {
     const { d, opens } = harness()
@@ -81,15 +98,32 @@ describe("BgTaskDetector", () => {
     expect(opens).toEqual([{ id: "bxcdg51aa", kind: "shell", label: "bxcdg51aa", ts: TS_MS, callId: "toolu_01AAA" }])
   })
 
-  test("task-notification closes with status + summary and emits wake", () => {
+  test("task-notification closes with status + summary + callId and emits wake", () => {
     const { d, closes, wakes } = harness()
     d.feedLine(failNotification)
     d.feedLine(doneNotification)
     expect(closes).toEqual([
-      { id: "bxcdg51aa", status: "failed", summary: 'Background command "Recompile Android Kotlin" failed with exit code 1', ts: TS_MS },
-      { id: "a2bee0eded79e862d", status: "completed", summary: "Agent finished", ts: TS_MS },
+      { id: "bxcdg51aa", status: "failed", summary: 'Background command "Recompile Android Kotlin" failed with exit code 1', ts: TS_MS, callId: "toolu_01AAA" },
+      { id: "a2bee0eded79e862d", status: "completed", summary: "Agent finished", ts: TS_MS, callId: "toolu_01BBB" },
     ])
     expect(wakes()).toBe(2)
+  })
+
+  test("Monitor: opens keyed by tool_use_id (no task-id at start), label from description", () => {
+    const { d, opens } = harness()
+    d.feedLine(monitorToolUse)
+    d.feedLine(monitorResult)
+    expect(opens).toEqual([{ id: "toolu_01MON", kind: "shell", label: "Monitor build 38 to completion", ts: TS_MS, callId: "toolu_01MON" }])
+  })
+
+  test("Monitor: notification closes it by callId (task-id differs from the open id)", () => {
+    const { d, closes } = harness()
+    d.feedLine(monitorToolUse)
+    d.feedLine(monitorResult)
+    d.feedLine(monitorNotification)
+    expect(closes).toEqual([
+      { id: "bhos3m26s", status: "completed", summary: 'Background command "Monitor build 38 to completion" completed (exit code 0)', ts: TS_MS, callId: "toolu_01MON" },
+    ])
   })
 
   test("garbage and irrelevant lines are ignored", () => {

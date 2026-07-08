@@ -36,6 +36,18 @@ describe("BackgroundTaskStore", () => {
     expect(store.openCount("s1")).toBe(0)
   })
 
+  test("close matches by callId when the task-id differs (Monitor: opened under its tool_use_id)", () => {
+    const store = new BackgroundTaskStore()
+    // Monitor tasks are stored keyed by their launching tool_use_id (no task-id at start).
+    store.upsertOpen("s1", { id: "toolu_MON", kind: "shell", label: "Monitor build 38", ts: 1000, callId: "toolu_MON" })
+    // The notification reports a DIFFERENT task-id but the same tool-use-id.
+    store.close("s1", { id: "bhos3m26s", status: "completed", ts: 5000, callId: "toolu_MON" })
+    expect(store.openCount("s1")).toBe(0)
+    const t = store.get("s1")[0]!
+    expect(t).toMatchObject({ id: "toolu_MON", label: "Monitor build 38", status: "completed", endedAt: 5000 })
+    expect(store.get("s1")).toHaveLength(1)   // did NOT create a second (unseen-id) task
+  })
+
   test("close for an unseen id creates it already-closed (kind from prefix)", () => {
     const store = new BackgroundTaskStore()
     store.close("s1", { id: "a9", status: "completed", ts: 5000 })

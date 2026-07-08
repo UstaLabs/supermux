@@ -582,6 +582,7 @@ fun ChatScreen(
                         TerminalPanel(
                             connect = cat,
                             modifier = Modifier.fillMaxSize(),
+                            active = activePanel == SessionPanel.Native,
                             // Agent PTY exited → fall back to Chat (iOS onExit: { tab = .chat }).
                             onExit = { activePanel = SessionPanel.Chat },
                         )
@@ -623,7 +624,7 @@ fun ChatScreen(
                 val ct = connectTerminal
                 Box(Modifier.keepAlivePanel(activePanel == SessionPanel.Terminal)) {
                     if (ct != null) {
-                        TerminalPanel(connect = ct, modifier = Modifier.fillMaxSize())
+                        TerminalPanel(connect = ct, modifier = Modifier.fillMaxSize(), active = activePanel == SessionPanel.Terminal)
                     } else {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Text("Terminal unavailable", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)

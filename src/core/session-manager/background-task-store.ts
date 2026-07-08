@@ -16,7 +16,7 @@ export interface BackgroundTask {
 }
 
 export interface BgTaskOpen { id: string; kind: BgTaskKind; label: string; ts: number; callId?: string }
-export interface BgTaskClose { id: string; status: "completed" | "failed"; summary?: string; ts: number }
+export interface BgTaskClose { id: string; status: "completed" | "failed"; summary?: string; ts: number; callId?: string }
 
 export function kindFromId(id: string): BgTaskKind {
   if (id.startsWith("wf_")) return "workflow"
@@ -42,7 +42,9 @@ export class BackgroundTaskStore extends EventEmitter {
 
   close(sessionId: string, c: BgTaskClose): void {
     const list = this.bySession.get(sessionId) ?? []
-    const existing = list.find((x) => x.id === c.id)
+    // Match by task-id first (Bash/Agent), then by the launching tool_use_id (Monitor,
+    // whose stored id IS its callId because its start result carries no task-id).
+    const existing = list.find((x) => x.id === c.id) ?? (c.callId ? list.find((x) => x.callId === c.callId) : undefined)
     if (existing) {
       if (existing.status !== "running") return   // replayed notification
       existing.status = c.status
