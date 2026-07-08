@@ -6,6 +6,7 @@ import Foundation
 struct LauncherPrefs: Codable, Equatable {
     var agent: String = "claude"
     var models: [String: String] = [:]
+    var reasoningLevels: [String: String] = [:]
 }
 
 /// In-progress New Session launcher draft — cleared once a session is actually created.

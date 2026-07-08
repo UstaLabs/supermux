@@ -598,6 +598,7 @@ class AppViewModel(
         staged: List<StagedUpload> = emptyList(),
         worktree: Boolean = false,
         baseBranch: String? = null,
+        reasoningLevel: String? = null,
     ): String {
         val validation = validatePath(workdir) ?: throw IllegalArgumentException("Could not validate path")
         val resolvedPath = validation.path
@@ -611,6 +612,7 @@ class AppViewModel(
                 model = model?.ifBlank { null },
                 worktree = if (worktree) true else null,
                 baseBranch = baseBranch?.ifBlank { null },
+                reasoningLevel = reasoningLevel?.ifBlank { null },
             ),
         )
         val sessionId = resp.id.ifBlank {
@@ -635,6 +637,10 @@ class AppViewModel(
     /** GET /models?agent= — models for the cleanup-engine + launcher pickers (no session). */
     suspend fun launcherModels(agent: String): List<ModelInfo> =
         runCatching { api.listModels(agent).models }.getOrNull() ?: emptyList()
+
+    /** GET /reasoning-levels?agent=&model= — thinking levels for the launcher (null on failure). */
+    suspend fun launcherReasoning(agent: String, model: String?): ReasoningResponse? =
+        runCatching { api.getReasoningLevels(agent, model) }.getOrNull()
 
     /** GET /repos/info?path= — git status for the launcher's worktree picker (null on failure). */
     suspend fun launcherRepoInfo(workdir: String): RepoInfo? =

@@ -428,6 +428,7 @@ class MainActivity : ComponentActivity() {
                                         loadProjects = { vm.listProjects() },
                                         validatePath = { vm.validatePath(it) },
                                         loadModels = { vm.launcherModels(it) },
+                                        loadReasoningLevels = { ag, md -> vm.launcherReasoning(ag, md) },
                                         loadRepoInfo = { vm.launcherRepoInfo(it) },
                                         loadCommands = { ag, wd -> vm.launcherCommands(ag, wd) },
                                         loadForges = { vm.listForges() },
@@ -442,8 +443,8 @@ class MainActivity : ComponentActivity() {
                                         onLauncherPrefsChange = { vm.saveLauncherPrefs(it) },
                                         loadLauncherDraft = { vm.loadLauncherDraft() },
                                         onLauncherDraftChange = { vm.saveLauncherDraft(it) },
-                                        onSubmit = { wd, ag, md, msg, wt, base, staged ->
-                                            vm.createSessionWithFirstMessage(wd, ag, md, msg, staged, worktree = wt, baseBranch = base)
+                                        onSubmit = { wd, ag, md, rl, msg, wt, base, staged ->
+                                            vm.createSessionWithFirstMessage(wd, ag, md, msg, staged, worktree = wt, baseBranch = base, reasoningLevel = rl)
                                         },
                                         onOpenSession = { selected = it; navController.popBackStack() },
                                     )
@@ -457,6 +458,7 @@ class MainActivity : ComponentActivity() {
                                 loadProjects = { vm.listProjects() },
                                 validatePath = { vm.validatePath(it) },
                                 loadModels = { vm.launcherModels(it) },
+                                loadReasoningLevels = { ag, md -> vm.launcherReasoning(ag, md) },
                                 loadRepoInfo = { vm.launcherRepoInfo(it) },
                                 loadCommands = { ag, wd -> vm.launcherCommands(ag, wd) },
                                 loadForges = { vm.listForges() },
@@ -471,8 +473,8 @@ class MainActivity : ComponentActivity() {
                                 onLauncherPrefsChange = { vm.saveLauncherPrefs(it) },
                                 loadLauncherDraft = { vm.loadLauncherDraft() },
                                 onLauncherDraftChange = { vm.saveLauncherDraft(it) },
-                                onSubmit = { wd, ag, md, msg, wt, base, staged ->
-                                    vm.createSessionWithFirstMessage(wd, ag, md, msg, staged, worktree = wt, baseBranch = base)
+                                onSubmit = { wd, ag, md, rl, msg, wt, base, staged ->
+                                    vm.createSessionWithFirstMessage(wd, ag, md, msg, staged, worktree = wt, baseBranch = base, reasoningLevel = rl)
                                 },
                                 onOpenSession = { selected = it; navController.popBackStack() },
                             )

@@ -56,6 +56,7 @@ import dev.supermux.android.R
 import dev.supermux.android.chat.ContentResolverChunkSource
 import dev.supermux.android.chat.MicButton
 import dev.supermux.android.chat.MicDeniedDialog
+import dev.supermux.android.chat.EffortPill
 import dev.supermux.android.chat.ModelPill
 import dev.supermux.android.chat.PickerSheet
 import dev.supermux.android.chat.RecordingBar
@@ -73,6 +74,10 @@ import dev.supermux.android.theme.Space
 import dev.supermux.android.theme.rememberHaptics
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ModelInfo
+import dev.supermux.net.ReasoningLevel
+import dev.supermux.net.ReasoningResponse
+import dev.supermux.net.resolveReasoningLevel
+import dev.supermux.net.showReasoningPicker
 import dev.supermux.net.RemoteRepo
 import dev.supermux.net.RepoInfo
 import dev.supermux.proto.SessionInfo
@@ -97,6 +102,9 @@ fun SessionLauncherScreen(
     validatePath: suspend (String) -> dev.supermux.net.PathValidation?,
     // Launcher model list for the chosen agent (no session yet); refetched when the agent changes.
     loadModels: suspend (agent: String) -> List<ModelInfo> = { emptyList() },
+    // Launcher reasoning ("thinking") levels for the chosen agent+model (no session yet);
+    // refetched when either changes. Codex's are per-model; Cursor/OpenCode have none.
+    loadReasoningLevels: suspend (agent: String, model: String?) -> ReasoningResponse? = { _, _ -> null },
     // Git status for the chosen project; gates the worktree picker on RepoInfo.eligible.
     loadRepoInfo: suspend (workdir: String) -> RepoInfo? = { null },
     // Agent slash commands for the composer's "/" menu (no session yet); refetched on agent/project
@@ -121,7 +129,7 @@ fun SessionLauncherScreen(
     onLauncherDraftChange: (LauncherDraft) -> Unit = {},
     // Spawn a session and send the first message. `staged` files upload right after spawn (there is
     // no session id to upload against until then) — see AppViewModel.createSessionWithFirstMessage.
-    onSubmit: suspend (workdir: String, agent: String, model: String?, message: String, worktree: Boolean, baseBranch: String?, staged: List<StagedUpload>) -> String,
+    onSubmit: suspend (workdir: String, agent: String, model: String?, reasoningLevel: String?, message: String, worktree: Boolean, baseBranch: String?, staged: List<StagedUpload>) -> String,
     onOpenSession: (String) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -172,6 +180,27 @@ fun SessionLauncherScreen(
         lastSeenAgent = agent
     }
 
+    // Thinking-level picker — mirrors the model picker: refetch the levels the broker offers for
+    // this agent+model, resolve the selection (default High, keep a valid sticky choice), and hide
+    // when there's no real choice. reasoningLevel is what the launcher sends on spawn;
+    // launcherReasoning mirrors LauncherPrefs.reasoningLevels (per-agent memory) so a pick can
+    // rebuild the whole prefs blob to persist.
+    var reasoningLevels by remember { mutableStateOf(emptyList<ReasoningLevel>()) }
+    var reasoningLevel by remember { mutableStateOf<String?>(null) }
+    var reasoningVisible by remember { mutableStateOf(false) }
+    var launcherReasoning by remember { mutableStateOf(emptyMap<String, String>()) }
+    var showReasoningSheet by remember { mutableStateOf(false) }
+    LaunchedEffect(agent, model, launcherRestoring) {
+        if (launcherRestoring) return@LaunchedEffect
+        val resp = loadReasoningLevels(agent, model)
+        val levels = resp?.levels ?: emptyList()
+        reasoningLevels = levels
+        reasoningVisible = resp != null && resp.visible && showReasoningPicker(levels)
+        // Resolve against the sticky per-agent choice so an agent switch restores it (defaulting to
+        // High when unset); cleared to null when the agent/model offers nothing to send.
+        reasoningLevel = if (reasoningVisible) resolveReasoningLevel(levels, launcherReasoning[agent]) else null
+    }
+
     // Worktree picker (iOS: useWorktree defaults on; gated on repoInfo.eligible).
     var repoInfo by remember { mutableStateOf<RepoInfo?>(null) }
     var useWorktree by remember { mutableStateOf(true) }
@@ -210,6 +239,7 @@ fun SessionLauncherScreen(
         // was written can't leave `agent` holding a value the picker has no matching row for.
         agent = if (agents.contains(prefs.agent)) prefs.agent else "claude"
         launcherModels = prefs.models
+        launcherReasoning = prefs.reasoningLevels
         model = prefs.models[agent]
         val draft = loadLauncherDraft()
         if (draft.workdir != null) {
@@ -377,7 +407,7 @@ fun SessionLauncherScreen(
         }
         scope.launch {
             try {
-                val sessionId = onSubmit(workdir.trim(), agent, model, message.text.trim(), wantsWorktree, base, toUpload)
+                val sessionId = onSubmit(workdir.trim(), agent, model, reasoningLevel, message.text.trim(), wantsWorktree, base, toUpload)
                 onLauncherDraftChange(LauncherDraft())
                 draftCleared = true
                 onOpenSession(sessionId)
@@ -626,7 +656,7 @@ fun SessionLauncherScreen(
                                         modifier = Modifier.testTag("agent_$a"),
                                         onClick = {
                                             agent = a
-                                            onLauncherPrefsChange(LauncherPrefs(agent = a, models = launcherModels))
+                                            onLauncherPrefsChange(LauncherPrefs(agent = a, models = launcherModels, reasoningLevels = launcherReasoning))
                                             agentMenu = false
                                         },
                                     )
@@ -642,6 +672,15 @@ fun SessionLauncherScreen(
                                 current = modelLabel,
                                 onClick = { if (!launcherRestoring) showModelSheet = true },
                             )
+                        }
+                        // Thinking-level pill → only when the agent offers a real choice.
+                        if (reasoningVisible) {
+                            Box(Modifier.testTag("launcher_effort_picker")) {
+                                EffortPill(
+                                    current = reasoningLevel?.replaceFirstChar { it.uppercase() },
+                                    onClick = { if (!launcherRestoring) showReasoningSheet = true },
+                                )
+                            }
                         }
                         Spacer(Modifier.weight(1f))
                     }
@@ -809,9 +848,24 @@ fun SessionLauncherScreen(
                 val newModel = if (picked == DEFAULT_MODEL_ID) null else picked
                 model = newModel
                 launcherModels = if (newModel != null) launcherModels + (agent to newModel) else launcherModels - agent
-                onLauncherPrefsChange(LauncherPrefs(agent = agent, models = launcherModels))
+                onLauncherPrefsChange(LauncherPrefs(agent = agent, models = launcherModels, reasoningLevels = launcherReasoning))
             },
             onDismiss = { showModelSheet = false },
+        )
+    }
+
+    // ── Thinking-level sheet — same PickerSheet style as the chat effort switcher. ──
+    if (showReasoningSheet) {
+        PickerSheet(
+            title = "Thinking level",
+            options = reasoningLevels.map { it.id to (it.description ?: it.id) },
+            current = reasoningLevel,
+            onPick = { picked ->
+                reasoningLevel = picked
+                launcherReasoning = launcherReasoning + (agent to picked)
+                onLauncherPrefsChange(LauncherPrefs(agent = agent, models = launcherModels, reasoningLevels = launcherReasoning))
+            },
+            onDismiss = { showReasoningSheet = false },
         )
     }
 
