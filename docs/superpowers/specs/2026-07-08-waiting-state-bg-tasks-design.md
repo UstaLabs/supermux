@@ -189,7 +189,13 @@ Shared vocabulary (from the approved mockups):
 
 ## Open items to verify during implementation
 
-1. Task-notification line timing vs actual wake (experiment on a live session).
+1. Task-notification line timing vs actual wake — **RESOLVED (2026-07-08).** Confirmed
+   first-hand: a real background shell (`byvz3l2sf`) logged its "Command running in
+   background with ID" tool-result at launch (transcript ts `07:39:39.721Z`) and its
+   `<task-notification>` (`status=completed`) arrived only when the command finished,
+   waking the agent at that moment — not earlier. So `onWake` on the notification line
+   reflects the wake correctly. The end-to-end `bg-task-integration.test.ts` locks the
+   pipeline behavior (waiting on idle-with-open, thinking on wake).
 2. Workflow launch-marker text + `wf_` id confirmation.
 3. Tailer behavior on session attach/resume (replay window vs end-seek) —
    detector must tolerate both (idempotent upsert already covers it).
