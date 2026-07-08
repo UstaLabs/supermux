@@ -18,6 +18,7 @@ import MuxLogo from "@/components/MuxLogo.vue"
 import ProjectPathPicker from "@/components/ProjectPathPicker.vue"
 import LauncherAgentPicker from "@/components/LauncherAgentPicker.vue"
 import LauncherModelPicker from "@/components/LauncherModelPicker.vue"
+import LauncherEffortPicker from "@/components/LauncherEffortPicker.vue"
 import LauncherWorktreePicker from "@/components/LauncherWorktreePicker.vue"
 import MicButton from "@/components/voice/MicButton.vue"
 import VoiceRecorder from "@/components/voice/VoiceRecorder.vue"
@@ -59,6 +60,7 @@ const workdirTouched = ref(false)
 const composeStarted = ref(false)
 const agent = ref<"claude" | "codex" | "cursor" | "opencode">("claude")
 const model = ref("")
+const reasoningLevel = ref("")
 const LS_KEY = "cmux:launcher-prefs"
 
 const repoInfo = ref<{ isGitRepo: boolean; eligible: boolean; repoRoot?: string; currentBranch?: string; branches?: { local: string[]; remote: string[] } } | null>(null)
@@ -118,6 +120,7 @@ async function onWorktreeRefresh() {
 interface LauncherPrefs {
   agent: "claude" | "codex" | "cursor" | "opencode"
   models: Partial<Record<"claude" | "codex" | "cursor" | "opencode", string>>
+  reasoningLevels?: Partial<Record<"claude" | "codex" | "cursor" | "opencode", string>>
 }
 
 function loadPrefs(): LauncherPrefs | null {
@@ -132,10 +135,11 @@ function loadPrefs(): LauncherPrefs | null {
 
 function savePrefs() {
   try {
-    const existing = loadPrefs() ?? { models: {} }
+    const existing = loadPrefs() ?? { models: {}, reasoningLevels: {} }
     const merged: LauncherPrefs = {
       agent: agent.value,
       models: { ...existing.models, [agent.value]: model.value },
+      reasoningLevels: { ...existing.reasoningLevels, [agent.value]: reasoningLevel.value },
     }
     localStorage.setItem(LS_KEY, JSON.stringify(merged))
   } catch {}
@@ -146,9 +150,17 @@ const prefs = loadPrefs()
 if (prefs) {
   agent.value = AGENTS.includes(prefs.agent as typeof AGENTS[number]) ? prefs.agent : "claude"
   model.value = prefs.models[prefs.agent] ?? ""
+  reasoningLevel.value = prefs.reasoningLevels?.[agent.value] ?? ""
 }
 
-watch([agent, model], () => {
+// Restore the sticky thinking level for whichever agent is now selected (and
+// clear it for agents that store none), so the picker resolves against the
+// right agent and a submit never carries a stale level across an agent switch.
+watch(agent, (a) => {
+  reasoningLevel.value = loadPrefs()?.reasoningLevels?.[a] ?? ""
+})
+
+watch([agent, model, reasoningLevel], () => {
   savePrefs()
 })
 
@@ -272,6 +284,7 @@ async function onPromptSubmit(payload: PromptInputMessage) {
       workdir: validation.path,
       agent: agent.value,
       model: model.value || undefined,
+      reasoningLevel: reasoningLevel.value || undefined,
       worktree: repoInfo.value?.eligible ? useWorktree.value : false,
       baseBranch: repoInfo.value?.eligible && useWorktree.value ? (baseBranch.value || undefined) : undefined,
     })
@@ -376,6 +389,7 @@ function goBack() {
             <PromptInputTools>
               <LauncherAgentPicker v-model:agent="agent" />
               <LauncherModelPicker v-model:model="model" :agent="agent" />
+              <LauncherEffortPicker v-model:level="reasoningLevel" :agent="agent" :model="model" />
               <PromptInputActionMenu>
                 <PromptInputActionMenuTrigger />
                 <PromptInputActionMenuContent>

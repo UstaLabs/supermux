@@ -1176,6 +1176,11 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       if (!s) return { ok: false, error: "session not found" }
       return switchSessionReasoningLevel(s.id, reasoningLevel, { applyNow })
     },
+    getReasoningLevels: (agent, model) => {
+      const models = lookupModels(agent)
+      const visible = shouldShowReasoningControl(agent, models, model)
+      return { agent, levels: visible ? supportedReasoningLevels(agent, models, model) : [], visible }
+    },
     getSessionAgent: (id) => {
       const s = registry.get(id)
       if (!s) return undefined

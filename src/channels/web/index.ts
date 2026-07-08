@@ -143,6 +143,9 @@ export interface WebChannelOpts {
   getModels?: (agent: AgentKind) => { id: string; displayName: string }[]
   switchModel?: (sessionName: string, model: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
   getSessionReasoningLevels?: (id: string) => { agent: string; current?: string; levels: { id: string; description?: string }[]; visible: boolean } | undefined
+  // Session-less reasoning levels for the New Session launcher (no session id yet):
+  // resolves the levels an agent+model offers before spawn. Codex's are per-model.
+  getReasoningLevels?: (agent: AgentKind, model?: string) => { agent: string; levels: { id: string; description?: string }[]; visible: boolean }
   switchReasoningLevel?: (id: string, level: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
   getSessionAgent?: (name: string) => { agent: AgentKind; model?: string; reasoningLevel?: string } | undefined
   interruptSession?: (id: string) => Promise<{ ok: boolean; reason?: string }>
@@ -1976,6 +1979,16 @@ export class WebChannel implements Channel {
       const info = this.opts.getSessionReasoningLevels?.(id)
       if (!info) return this.json({ error: "session not found" }, 404)
       return this.json(info)
+    }
+    if (method === "GET" && path === "/reasoning-levels") {
+      const url = new URL(req.url)
+      const agent = url.searchParams.get("agent")
+      const model = url.searchParams.get("model") || undefined
+      if (!isAgentKind(agent)) {
+        return this.json({ error: `agent required (${AGENT_KINDS.join("|")})` }, 400)
+      }
+      const info = this.opts.getReasoningLevels?.(agent, model)
+      return this.json(info ?? { agent, levels: [], visible: false })
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/reasoning-level$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
