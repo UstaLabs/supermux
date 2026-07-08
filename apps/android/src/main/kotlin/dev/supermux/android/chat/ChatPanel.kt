@@ -79,6 +79,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -120,6 +122,7 @@ import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
 import android.provider.OpenableColumns
 import java.util.concurrent.atomic.AtomicLong
@@ -419,15 +422,28 @@ fun ChatPanel(
             prevTimelineSize = timelineItems.size
         }
 
-        // The floating composer is measured only after first layout (composer height settles over a
-        // few frames), and its height also changes on expand/collapse. Each time it (re)settles,
-        // re-pin to the true bottom so the last messages clear it — but only if we're already near
-        // the bottom, so a user who scrolled up to read history isn't yanked back down.
-        LaunchedEffect(composerHeightPx) {
-            if (composerHeightPx > 0 && activePanel == SessionPanel.Chat && timelineItems.isNotEmpty()) {
-                delay(150) // let the contentPadding relayout settle before measuring/scrolling
-                val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-                if (lastVisible >= timelineItems.size - 2) listState.scrollBy(100_000f)
+        // Follow the floating composer SMOOTHLY as its height changes — first layout, expand/collapse,
+        // and the keyboard's ime inset animating in/out — by scrolling the transcript by the SAME
+        // delta, so it tracks the composer at exactly its speed (= the keyboard's) instead of jumping.
+        // Uses snapshotFlow.collect (NOT a per-change LaunchedEffect) so awaiting a frame for the
+        // contentPadding relayout doesn't get cancelled by the next change; conflation is handled by
+        // the accumulated delta (h - lastProcessed). Only while near the bottom, so reading history
+        // isn't disturbed.
+        LaunchedEffect(activePanel, session.id) {
+            if (activePanel != SessionPanel.Chat) return@LaunchedEffect
+            var prev = 0
+            snapshotFlow { composerHeightPx }.collect { h ->
+                val delta = h - prev
+                prev = h
+                // Only follow GROWTH (focus / keyboard-up / expand). On shrink (blur / keyboard-down)
+                // the LazyColumn auto-clamps the shrinking contentPadding, keeping the last item at
+                // the bottom — an extra downward scroll here would over-shoot into older messages.
+                if (delta > 0) {
+                    withFrameNanos {} // let this height's contentPadding relayout apply first
+                    val info = listState.layoutInfo
+                    val atBottom = (info.visibleItemsInfo.lastOrNull()?.index ?: -1) >= info.totalItemsCount - 2
+                    if (atBottom) listState.scrollBy(delta.toFloat())
+                }
             }
         }
 
@@ -711,7 +727,7 @@ fun ChatPanel(
             val composerShape = RoundedCornerShape(composerRadius)
             // Shadow is almost none at rest; lifts on expand/focus.
             val composerShadow by animateDpAsState(
-                targetValue = if (composerExpanded) 3.dp else 1.dp,
+                targetValue = if (composerExpanded) 3.dp else 0.dp,
                 animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
                 label = "composer_shadow",
             )
