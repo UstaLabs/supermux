@@ -13,11 +13,16 @@ export interface BgTaskDetectorOpts {
 
 const PENDING_CAP = 50
 const LABEL_MAX = 80
-const LAUNCH_TOOLS = new Set(["Bash", "Agent", "Task", "Workflow"])
+const LAUNCH_TOOLS = new Set(["Bash", "Agent", "Task", "Workflow", "Monitor"])
 
 const SHELL_START_RE = /Command running in background with ID:\s*([A-Za-z0-9_-]+)/
 const AGENT_START_RE = /Async agent launched[\s\S]{0,200}?agentId:\s*([A-Za-z0-9_.-]+)/
 const WORKFLOW_START_RE = /\b(wf_[a-z0-9-]{6,})\b/
+// Monitor's start result is the fixed string "Monitoring in background…" and carries NO
+// task-id (the id first appears in the completion notification). So a Monitor task is
+// opened keyed by its launching tool_use_id and reconciled/closed by that same id, which
+// the notification also carries as <tool-use-id>.
+const MONITOR_START_RE = /Monitoring in background/
 const NOTIFICATION_RE = /<task-notification>([\s\S]*?)<\/task-notification>/g
 
 function firstLine(s: string): string {
@@ -90,9 +95,11 @@ export class BgTaskDetector {
         const shell = text.match(SHELL_START_RE)
         const agent = shell ? null : text.match(AGENT_START_RE)
         const wf = !shell && !agent && /[Ww]orkflow/.test(text) ? text.match(WORKFLOW_START_RE) : null
-        const id = shell?.[1] ?? agent?.[1] ?? wf?.[1]
+        // Monitor has no id in its start text — key it by the launching tool_use_id.
+        const monitor = !shell && !agent && !wf && callId ? MONITOR_START_RE.test(text) : false
+        const id = shell?.[1] ?? agent?.[1] ?? wf?.[1] ?? (monitor ? callId : undefined)
         if (id) {
-          const kind = shell ? "shell" as const : agent ? "agent" as const : kindFromId(id)
+          const kind = shell || monitor ? "shell" as const : agent ? "agent" as const : kindFromId(id)
           const label = (callId ? this.pending.get(callId)?.label : undefined) ?? id
           if (callId) this.pending.delete(callId)
           this.opts.onOpen({ id, kind, label, ts, ...(callId ? { callId } : {}) })
@@ -114,7 +121,10 @@ export class BgTaskDetector {
       matched = true
       const status = tag(body, "status") === "completed" ? "completed" as const : "failed" as const
       const summary = tag(body, "summary")
-      this.opts.onClose({ id, status, ...(summary ? { summary } : {}), ts })
+      // tool-use-id is the join key: a Monitor task was opened under it (its start
+      // result carries no task-id), so the store closes by callId when id doesn't match.
+      const callId = tag(body, "tool-use-id")
+      this.opts.onClose({ id, status, ...(summary ? { summary } : {}), ts, ...(callId ? { callId } : {}) })
     }
     if (matched && wake) this.opts.onWake?.(ts)
   }

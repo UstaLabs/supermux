@@ -108,6 +108,38 @@ describe("bg-task pipeline (tailer → detector → store → frame)", () => {
     expect(bgTaskStore.get(S).every((t) => t.status !== "running")).toBe(true)
   })
 
+  test("Monitor lifecycle shows waiting while it runs, clears on wake", () => {
+    const { tailer, bgTaskStore, agentStateStore, frame } = pipeline()
+    const monitorToolUse = JSON.stringify({
+      type: "assistant", timestamp: TS,
+      message: { content: [{ type: "tool_use", id: "toolu_MON", name: "Monitor",
+        input: { description: "Monitor build 38 to completion" } }] },
+    })
+    const monitorResult = JSON.stringify({
+      type: "user", timestamp: TS,
+      message: { content: [{ type: "tool_result", tool_use_id: "toolu_MON", content: "Monitoring in background..." }] },
+    })
+    const monitorNotification = JSON.stringify({
+      type: "user", timestamp: TS,
+      message: { content: "<task-notification>\n<task-id>bhos3m26s</task-id>\n<tool-use-id>toolu_MON</tool-use-id>\n<status>completed</status>\n<summary>Background command \"Monitor build 38 to completion\" completed (exit code 0)</summary>\n</task-notification>" },
+    })
+
+    agentStateStore.applyEvent(S, "UserPromptSubmit")
+    tailer.ingest(monitorToolUse + "\n" + monitorResult + "\n")
+    agentStateStore.applyEvent(S, "Stop")   // turn ends while the monitor runs
+
+    const waitingFrame = frame()
+    expect(waitingFrame.waiting).toBe(true)             // the previously-missed case
+    expect(waitingFrame.bgOpen).toBe(1)
+    const running = bgTaskStore.get(S)[0]!
+    expect(running).toMatchObject({ status: "running", label: "Monitor build 38 to completion" })
+
+    tailer.ingest(monitorNotification + "\n")
+    expect(bgTaskStore.openCount(S)).toBe(0)            // closed by tool-use-id, not left dangling
+    expect(agentStateStore.get(S).phase).toBe("thinking")  // notification woke the agent
+    expect(bgTaskStore.get(S)).toHaveLength(1)          // exactly one chip, now completed
+  })
+
   test("partial-line chunking across reads does not break detection", () => {
     const { tailer, bgTaskStore } = pipeline()
     const full = lines.bashToolUse + "\n" + lines.bashResult + "\n"
