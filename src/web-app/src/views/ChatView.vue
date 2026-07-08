@@ -364,6 +364,34 @@ const hasPendingUploads = computed(() =>
   Object.values(uploads.byId).some((s) => s.status === "uploading" || s.status === "failed")
 )
 
+// --- Mobile: float the composer over the transcript (iOS ChatPane parity) ---
+// The composer dock is absolutely positioned on mobile so the transcript scrolls
+// behind it; measure its height so the transcript can pad its bottom and the last
+// message still scrolls clear of the floating dock.
+const composerDockRef = ref<HTMLElement | null>(null)
+const composerDockHeight = ref(0)
+let _dockRO: ResizeObserver | undefined
+watch(composerDockRef, (el) => {
+  _dockRO?.disconnect()
+  if (el) {
+    _dockRO = new ResizeObserver(() => { composerDockHeight.value = el.offsetHeight })
+    _dockRO.observe(el)
+    composerDockHeight.value = el.offsetHeight
+  }
+})
+onBeforeUnmount(() => _dockRO?.disconnect())
+
+// Tap the transcript → drop composer focus (dismiss keyboard, collapse to the pill).
+// Bound on the chat-panel div (clicks bubble up); clicks inside the composer dock are
+// excluded so tapping the composer keeps focus. Mobile only — on desktop the composer
+// stays expanded, so blurring on every click would be noise. Draft is preserved.
+function onTranscriptTap(e: MouseEvent) {
+  if (isDesktop.value) return
+  if (composerDockRef.value?.contains(e.target as Node)) return
+  const el = document.activeElement as HTMLElement | null
+  if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT")) el.blur()
+}
+
 async function onPromptSubmit(payload: PromptInputMessage) {
   await submitComposer(payload)
 }
@@ -489,12 +517,13 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
     <div ref="contentRowRef" class="flex-1 flex overflow-hidden" :class="isDesktop && rightVisible ? 'flex-row' : 'flex-col'">
       <!-- Chat panel -->
       <div
-        class="flex flex-col min-w-0 overflow-hidden"
+        class="relative flex flex-col min-w-0 overflow-hidden"
         :class="{
           'flex-1': !isDesktop,
           'hidden': (!isDesktop && rightVisible && activeTab !== 'chat') || (isDesktop && !panels.chatOpen),
         }"
         :style="chatStyle"
+        @click="onTranscriptTap"
       >
         <template v-if="mainView === 'chat'">
         <!-- Skeletons live outside Conversation so the first real message render is the
@@ -511,7 +540,10 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
              and resize are instant so opening a chat lands at the bottom without animation
              and content settling (images/blocks loading) doesn't re-scroll repeatedly. -->
         <Conversation v-else :key="props.id" class="flex-1" initial="instant" resize="instant">
-          <ConversationContent class="px-3 py-3 gap-3 md:px-4 md:py-4 md:gap-3.5">
+          <ConversationContent
+            class="px-3 py-3 gap-3 md:px-4 md:py-4 md:gap-3.5"
+            :style="!isDesktop ? { paddingBottom: `${composerDockHeight}px` } : undefined"
+          >
             <template v-if="entries.length === 0">
               <div class="py-10 text-center text-muted-foreground space-y-4">
                 <p class="text-sm">No messages yet in <span class="text-foreground font-medium">{{ displayName }}</span>.</p>
@@ -624,33 +656,46 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
           </ConversationContent>
         </Conversation>
 
-        <div v-if="isClaude && !isArchived" class="flex justify-center px-3 pt-2 bg-[var(--cmux-chat)]">
-          <AgentViewToggle :session-id="props.id" />
-        </div>
+        <!-- Composer dock. Mobile: floats over the transcript (absolute) so messages
+             scroll behind the translucent composer; desktop: in-flow (unchanged). -->
         <div
           v-if="!isArchived"
-          class="px-3 pt-3 bg-[var(--cmux-chat)]"
-          :style="{ paddingBottom: isDesktop ? 'calc(env(safe-area-inset-bottom, 0px) + 0.5rem)' : '0.5rem' }"
+          ref="composerDockRef"
+          class="inset-x-0 bottom-0"
+          :class="isDesktop ? '' : 'absolute z-20'"
         >
-          <PromptInput
-            class="relative"
-            :group-class="isDesktop ? undefined : 'contents'"
-            :max-files="10"
-            :max-file-size="500 * 1024 * 1024"
-            :global-drop="true"
-            @submit="onPromptSubmit"
-            @error="onPromptError"
+          <div
+            v-if="isClaude"
+            class="flex justify-center px-3 pt-2"
+            :class="isDesktop ? 'bg-[var(--cmux-chat)]' : ''"
           >
-            <SlashCommandMenu :commands="sessionCommands" :loading="!commandsStore.isResolved(props.id)" @control="onControlCommand" />
-            <PromptInputDraftSync :session-id="props.id" />
-            <ChatComposer
-              :session-id="props.id"
-              :connected="ws.status === 'connected'"
-              :has-pending-uploads="hasPendingUploads"
-              @open-model="modelSwitcherOpen = true"
-              @open-effort="effortSwitcherOpen = true"
-            />
-          </PromptInput>
+            <AgentViewToggle :session-id="props.id" />
+          </div>
+          <div
+            class="px-3 pt-3"
+            :class="isDesktop ? 'bg-[var(--cmux-chat)]' : ''"
+            :style="{ paddingBottom: isDesktop ? 'calc(env(safe-area-inset-bottom, 0px) + 0.5rem)' : '0.5rem' }"
+          >
+            <PromptInput
+              class="relative"
+              :group-class="isDesktop ? undefined : 'contents'"
+              :max-files="10"
+              :max-file-size="500 * 1024 * 1024"
+              :global-drop="true"
+              @submit="onPromptSubmit"
+              @error="onPromptError"
+            >
+              <SlashCommandMenu :commands="sessionCommands" :loading="!commandsStore.isResolved(props.id)" @control="onControlCommand" />
+              <PromptInputDraftSync :session-id="props.id" />
+              <ChatComposer
+                :session-id="props.id"
+                :connected="ws.status === 'connected'"
+                :has-pending-uploads="hasPendingUploads"
+                @open-model="modelSwitcherOpen = true"
+                @open-effort="effortSwitcherOpen = true"
+              />
+            </PromptInput>
+          </div>
         </div>
         </template>
         <template v-else>
