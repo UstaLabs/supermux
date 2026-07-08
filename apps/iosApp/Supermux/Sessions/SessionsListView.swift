@@ -190,10 +190,11 @@ struct SessionRow: View {
     var muted: Bool = false
 
     private var working: Bool { broker.agentWorking[session.id] == true }
+    private var bgOpen: Int { broker.agentBgOpen[session.id] ?? 0 }
 
     var body: some View {
         HStack(spacing: 8) {
-            SessionStatusRail(git: session.git, working: working)
+            SessionStatusRail(git: session.git, working: working, bgOpen: bgOpen)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(session.name).font(.subheadline.weight(.semibold)).lineLimit(1)

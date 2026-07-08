@@ -45,6 +45,10 @@ final class BrokerSession {
     private(set) var agentState: [String: String] = [:]       // idle | working | dead
     private(set) var agentDetail: [String: String] = [:]      // thinking | running
     private(set) var agentWorkingSince: [String: Int64] = [:]
+    private(set) var agentTool: [String: String] = [:]        // running tool name (e.g. Bash)
+    private(set) var agentWaiting: [String: Bool] = [:]       // idle but background tasks still open
+    private(set) var agentBgOpen: [String: Int] = [:]         // open background-task count
+    private(set) var bgTasks: [String: [ServerFrameBgTask]] = [:]
     private(set) var pendingSend: Set<String> = []            // client-local "Sending…"
     private(set) var commands: [String: [SlashCommand]] = [:]
     private(set) var displays: [DisplayStream] = []
@@ -197,6 +201,10 @@ final class BrokerSession {
             agentState = s.agentState.mapValues { $0.state }
             agentDetail = s.agentState.compactMapValues { $0.detail }
             agentWorkingSince = s.agentState.compactMapValues { $0.workingSince?.int64Value }
+            agentTool = s.agentState.compactMapValues { $0.tool }
+            agentWaiting = s.agentState.mapValues { $0.waiting }
+            agentBgOpen = s.agentState.mapValues { Int($0.bgOpen) }
+            bgTasks = s.bgTasks
             commands = s.commands
             finishJobs = Dictionary(uniqueKeysWithValues: s.sessions.compactMap { sess in sess.finish_job.map { (sess.id, $0) } })
             synced = true
@@ -240,6 +248,10 @@ final class BrokerSession {
             agentState.removeValue(forKey: r.id)
             agentDetail.removeValue(forKey: r.id)
             agentWorkingSince.removeValue(forKey: r.id)
+            agentTool.removeValue(forKey: r.id)
+            agentWaiting.removeValue(forKey: r.id)
+            agentBgOpen.removeValue(forKey: r.id)
+            bgTasks.removeValue(forKey: r.id)
             evictTerminalHosts(sessionId: r.id)   // session killed → tear down its live terminals
             dropEditorHost(sessionId: r.id)       // …its editor webview (stop() breaks the bridge cycle)
             if let removedName { evictDisplayHosts(sessionName: removedName) }  // …and its displays
@@ -250,6 +262,7 @@ final class BrokerSession {
             }
             messages[m.session, default: []].append(m.entry)
         case .activityAppend(let a): activity[a.session, default: []].append(a.event)
+        case .bgTasks(let f): bgTasks[f.session] = f.tasks
         case .agentState(let st):
             agentPhase[st.session] = st.phase
             agentSince[st.session] = (st.since ?? st.workingSince)?.int64Value
@@ -258,6 +271,9 @@ final class BrokerSession {
             agentState[st.session] = st.state
             if let d = st.detail { agentDetail[st.session] = d } else { agentDetail[st.session] = nil }
             agentWorkingSince[st.session] = st.workingSince?.int64Value
+            if let t = st.tool { agentTool[st.session] = t } else { agentTool[st.session] = nil }
+            agentWaiting[st.session] = st.waiting
+            agentBgOpen[st.session] = Int(st.bgOpen)
             pendingSend.remove(st.session)   // first real state clears the client-local Sending…
         case .commandsChanged(let c): commands[c.session] = c.commands
         case .fsChanged(let f): editorStates[f.session]?.markChanged(f.paths)

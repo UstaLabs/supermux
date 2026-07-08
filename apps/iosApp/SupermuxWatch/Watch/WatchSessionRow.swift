@@ -6,6 +6,7 @@ struct WatchSessionRow: View {
     let session: SessionInfo
 
     private var working: Bool { isWorking(session.phase) }
+    private var waiting: Bool { session.waiting == true }
     private var unread: Bool { session.unread ?? false }
     private var preview: String { session.lastText ?? session.agent ?? "" }
 
@@ -33,6 +34,9 @@ struct WatchSessionRow: View {
     @ViewBuilder private var statusRail: some View {
         if working {
             ProgressView().controlSize(.mini)
+        } else if waiting {
+            // Idle but background tasks still running — the harness will wake the agent.
+            glyph("hourglass", .orange)
         } else if let st = sessionStatus(session.git) {
             switch (st.kind, st.level) {
             case (.worktree, .done):     glyph("checkmark", .green)

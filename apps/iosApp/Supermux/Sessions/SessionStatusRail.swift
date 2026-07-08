@@ -3,11 +3,25 @@ import Shared
 
 /// Leading per-session state: working spinner (top priority), else the git/cloud status.
 /// Worktree: ✓ done / ⎇ not-done / neutral pristine. Remote: cloud-done / cloud-off + ↑N ↓N counts.
+/// `bgOpen` > 0 adds a static mono "⧗N" badge (open background tasks) — static because the
+/// session list is a high-frequency surface; the pulse lives in the chat, not here.
 struct SessionStatusRail: View {
     let git: GitLiteStatusDto?
     var working: Bool = false
+    var bgOpen: Int = 0
 
     var body: some View {
+        HStack(spacing: 4) {
+            if bgOpen > 0 {
+                Text("⧗\(bgOpen)")
+                    .font(.caption2.monospaced().weight(.medium))
+                    .foregroundStyle(.orange)
+            }
+            mainIndicator
+        }
+    }
+
+    @ViewBuilder private var mainIndicator: some View {
         if working {
             ProgressView().controlSize(.mini)
         } else if let st = GitBadgeKt.sessionStatus(git: git) {

@@ -410,6 +410,14 @@ struct SessionTranscript: View, Equatable {
     private var phase: String? { broker.agentPhase[session.id] }
     private var working: Bool { broker.agentWorking[session.id] == true }
     private var sending: Bool { broker.pendingSend.contains(session.id) }
+    private var waiting: Bool { broker.agentWaiting[session.id] == true }
+    /// Chips linger only while the agent still has open tasks or is reacting to a
+    /// finished one; idle with nothing open → the story lives in the chat stream.
+    private var visibleBgTasks: [ServerFrameBgTask] {
+        let tasks = broker.bgTasks[session.id] ?? []
+        let anyRunning = tasks.contains { $0.status == "running" }
+        return (anyRunning || working) ? tasks : []
+    }
     private var activityEvents: [ActivityEvent] { broker.activity[session.id] ?? [] }
     /// Messages + tool-call activity, time-merged into blocks (parity with the web ChatView).
     private var blocks: [ChatBlock] { buildChatBlocks(messages: log, activity: activityEvents) }
@@ -439,6 +447,12 @@ struct SessionTranscript: View, Equatable {
                         .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
                         .listRowBackground(Color.clear)
                     }
+                    if !visibleBgTasks.isEmpty {
+                        BgTaskChipsView(tasks: visibleBgTasks)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                            .listRowBackground(Color.clear)
+                    }
                     if working {
                         workingIndicator
                             .listRowSeparator(.hidden)
@@ -446,6 +460,11 @@ struct SessionTranscript: View, Equatable {
                             .listRowBackground(Color.clear)
                     } else if sending {
                         sendingIndicator
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                            .listRowBackground(Color.clear)
+                    } else if waiting {
+                        waitingIndicator
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
                             .listRowBackground(Color.clear)
@@ -509,9 +528,27 @@ struct SessionTranscript: View, Equatable {
     }
     private var workingLabel: String {
         switch broker.agentDetail[session.id] {
-        case "running": return "Working…"
+        case "running":
+            // Name the blocker while a tool runs ("Working… · Bash") — already in the frame.
+            if let tool = broker.agentTool[session.id], !tool.isEmpty { return "Working… · \(tool)" }
+            return "Working…"
         default: return "Thinking…"
         }
+    }
+
+    /// Turn over, background tasks still open: the harness will wake the agent when
+    /// they finish. Amber pulse = attention-not-error; no Stop (nothing to interrupt).
+    private var waitingIndicator: some View {
+        HStack(spacing: 8) {
+            Text("⧗")
+                .font(.caption)
+                .foregroundStyle(Color.orange)
+                .modifier(WaitingPulse())
+            Text("Waiting on background tasks")
+                .font(.caption).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var sendingIndicator: some View {
