@@ -709,6 +709,12 @@ fun ChatPanel(
                 label = "composer_radius",
             )
             val composerShape = RoundedCornerShape(composerRadius)
+            // Shadow is almost none at rest; lifts on expand/focus.
+            val composerShadow by animateDpAsState(
+                targetValue = if (composerExpanded) 3.dp else 1.dp,
+                animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                label = "composer_shadow",
+            )
 
             // "+" attach menu — inline while compact, in the footer while expanded (one definition).
             @Composable
@@ -852,7 +858,7 @@ fun ChatPanel(
             } else Surface(
                 shape = composerShape,
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shadowElevation = 3.dp,
+                shadowElevation = composerShadow,
                 modifier = composerGutter.border(1.dp, focusBorderColor, composerShape),
             ) {
                 Column(modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)) {
