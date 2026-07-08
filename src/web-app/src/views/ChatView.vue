@@ -4,7 +4,7 @@ defineOptions({ name: "ChatView" })
 import { computed, ref, provide, onMounted, onBeforeUnmount, nextTick, watch } from "vue"
 import { useRouter } from "vue-router"
 import { ChevronLeft, GitMerge } from "@lucide/vue"
-import { AlertTriangleIcon, Loader2Icon, SendHorizonalIcon, SquareIcon } from "lucide-vue-next"
+import { AlertTriangleIcon, HourglassIcon, Loader2Icon, SendHorizonalIcon, SquareIcon } from "lucide-vue-next"
 import { useMessages } from "@/stores/messages"
 import { useWS } from "@/api/ws"
 import { useSessions } from "@/stores/sessions"
@@ -22,6 +22,7 @@ import { formatWorkdir } from "@/lib/format-workdir"
 import { toWorkdirRelativePath } from "@/lib/workdir-display"
 import { toast } from "vue-sonner"
 import AgentLogo from "@/components/AgentLogo.vue"
+import BgTaskChips from "@/components/BgTaskChips.vue"
 import BranchSyncStatus from "@/components/BranchSyncStatus.vue"
 import SessionLinks from "@/components/SessionLinks.vue"
 import ModelSwitcher from "@/components/ModelSwitcher.vue"
@@ -577,8 +578,12 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
                   </template>
                 </div>
               </template>
+              <!-- Background tasks (bg shells / subagents / workflows): one chip
+                   per task; closed chips linger only while claude reacts. -->
+              <BgTaskChips v-if="!isArchived" :session="props.id" />
               <!-- Live status: "Sending…" until the agent's real start signal,
-                   then "Working…" until idle. Nothing when idle. -->
+                   then "Working…" until idle; "Waiting" when idle with open
+                   background tasks. Nothing when idle with none. -->
               <div
                 v-if="!isArchived && liveState.state === 'dead'"
                 class="flex items-center gap-1.5 px-1 py-0.5 text-xs italic text-muted-foreground/70 ml-2"
@@ -624,7 +629,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
                 class="flex items-center gap-1.5 px-1 py-0.5 text-xs text-muted-foreground ml-2"
               >
                 <Loader2Icon class="size-3.5 shrink-0 animate-spin text-primary" />
-                Working…
+                Working…<span v-if="liveState.detail === 'running' && liveState.tool" class="opacity-60">· {{ liveState.tool }}</span>
                 <span class="opacity-60">{{ formatDuration(workingElapsed) }}</span>
                 <button
                   type="button"
@@ -635,6 +640,13 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
                   <SquareIcon class="size-3 shrink-0" />
                   Stop
                 </button>
+              </div>
+              <div
+                v-else-if="!isArchived && liveState.waiting"
+                class="flex items-center gap-1.5 px-1 py-0.5 text-xs text-muted-foreground ml-2"
+              >
+                <HourglassIcon class="size-3.5 shrink-0 text-amber-500 animate-pulse" />
+                Waiting on background tasks
               </div>
             </template>
           </ConversationContent>

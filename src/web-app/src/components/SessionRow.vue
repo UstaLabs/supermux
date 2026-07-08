@@ -38,6 +38,10 @@ const agentState = useAgentState()
 // never disagree.
 const working = computed(() => isAgentWorking(agentState.get(props.id)))
 
+// Background-task badge: open-task count from the same agent_state frame.
+// Pulses while nothing else moves (waiting); steady alongside the spinner.
+const bgOpen = computed(() => agentState.get(props.id).bgOpen ?? 0)
+
 const gitStatus = useGitStatus()
 const badge = computed(() => gitBadge(gitStatus.get(props.id)))
 const status = computed(() => sessionStatus(gitStatus.get(props.id)))
@@ -97,6 +101,12 @@ defineExpose({ startRename })
   >
     <div class="flex items-start gap-3">
       <div class="flex w-5 shrink-0 items-center justify-center self-stretch pt-0.5">
+        <span
+          v-if="bgOpen > 0"
+          class="inline-flex items-center font-mono text-[11px] text-amber-500"
+          :class="{ 'animate-pulse': !working }"
+          aria-label="background tasks"
+        >⧗{{ bgOpen }}</span>
         <Loader2Icon v-if="working" class="size-4 animate-spin text-primary" aria-label="working" />
         <Check v-else-if="status?.kind === 'worktree' && status.level === 'done'" :title="badge?.title" class="size-4 text-emerald-400" />
         <GitBranch v-else-if="status?.kind === 'worktree' && status.level === 'not-done'" :title="badge?.title" class="size-4 text-amber-500" />
