@@ -120,7 +120,6 @@ private val slashTokenRegex = Regex("""(?:^|\s)(/\S*)$""")
 private fun timelineItemKey(item: TimelineItem): String = when (item) {
     is TimelineItem.Msg -> "m:${item.entry.id}"
     is TimelineItem.Tool -> "t:${item.event.callId ?: "${item.event.kind}:${item.event.seq}:${item.event.ts}"}"
-    is TimelineItem.Act -> "a:${item.event.seq ?: -1}:${item.event.ts}"
 }
 
 /**

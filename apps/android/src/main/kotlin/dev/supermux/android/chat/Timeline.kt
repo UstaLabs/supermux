@@ -128,7 +128,6 @@ sealed interface TimelineItem {
         val status: ToolStatus,
         val output: String? = null,   // detail from the matching tool_result event (iOS folds as Output)
     ) : TimelineItem
-    data class Act(val event: ActivityEvent) : TimelineItem
 }
 
 /**
@@ -138,7 +137,8 @@ sealed interface TimelineItem {
  * event and later a separate `tool_result` (phase=completed|failed) event with the same
  * callId. We resolve a single status per call and render ONE [TimelineItem.Tool] row —
  * the result event is not shown on its own (otherwise completed tools look stuck running).
- * Other activity kinds (thinking…) pass through as [TimelineItem.Act].
+ * Non-tool activity (notably "thinking" → "Thought for Ns") is dropped here: thinking is
+ * surfaced only as a live status indicator, never as a persistent history row (matches web).
  */
 fun mergeTimeline(
     messages: List<LogEntry>,
@@ -164,14 +164,15 @@ fun mergeTimeline(
                 items.add(TimelineItem.Tool(e, status, output))
             }
             "tool_result" -> { /* folded into the matching tool row above */ }
-            else -> items.add(TimelineItem.Act(e))
+            // "thinking" (and any other non-tool kind) is intentionally dropped — thinking
+            // shows as a live indicator, not a persistent "Thought for Ns" history row.
+            else -> { /* dropped */ }
         }
     }
     return items.sortedBy { item ->
         when (item) {
             is TimelineItem.Msg -> item.entry.ts
             is TimelineItem.Tool -> item.event.ts
-            is TimelineItem.Act -> item.event.ts
         }
     }
 }
@@ -641,63 +642,6 @@ private fun ioBlock(label: String, text: String, error: Boolean) {
     }
 }
 
-/**
- * Calm Premium — reasoning/thinking activity.
- * Collapsed by default: a faint "✦ Thought for Ns" row (labelMedium, italic,
- * mutedForeground @70%) with a tiny chevron. Tapping expands detail if present.
- * Feels like a faint timestamp, not a card.
- */
-@Composable
-fun ReasoningLine(event: ActivityEvent) {
-    val cs = MaterialTheme.colorScheme
-    val hasDetail = !event.detail.isNullOrBlank()
-    var expanded by remember { mutableStateOf(false) }
-
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clickable(enabled = hasDetail) { expanded = !expanded },
-    ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "✦ ${event.title ?: "Thought"}",
-                color = cs.onSurfaceVariant.copy(alpha = 0.7f),
-                style = MaterialTheme.typography.labelMedium,
-                fontStyle = FontStyle.Italic,
-            )
-            if (hasDetail) {
-                Spacer(Modifier.width(Space.xs))
-                Text(
-                    text = if (expanded) "∧" else "∨",
-                    color = cs.onSurfaceVariant.copy(alpha = 0.5f),
-                    fontSize = 9.sp,
-                )
-            }
-        }
-
-        AnimatedVisibility(
-            visible = expanded,
-            enter = expandVertically(),
-            exit = shrinkVertically(),
-        ) {
-            val detail = event.detail
-            if (detail != null) {
-                Box(Modifier.padding(top = Space.xs)) {
-                    Text(
-                        text = detail,
-                        color = cs.onSurfaceVariant.copy(alpha = 0.7f),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontStyle = FontStyle.Italic,
-                    )
-                }
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Session-log stream layout — a mono gutter (time + status node, threaded by a
 // hairline spine) beside each entry. Consecutive spine rows join into one thread.
@@ -807,13 +751,6 @@ fun TimelineItemRow(
             }
             StreamRow(node = node, spine = true, time = gutterTime(item.event.ts)) {
                 ToolCard(item.event, item.status, item.output)
-            }
-        }
-        is TimelineItem.Act -> {
-            when (item.event.kind) {
-                "thinking" -> StreamRow(node = StreamNode.DONE, spine = true, time = null) {
-                    ReasoningLine(item.event)
-                }
             }
         }
     }
