@@ -51,23 +51,32 @@ class NotificationService: UNNotificationServiceExtension {
             if let sid = note.sessionId, !sid.isEmpty {
                 var info = best.userInfo
                 info["sm_session_id"] = sid
-                best.userInfo = info
 
                 // iMessage-style SINGLE card per chat: fold this message into the chat's
-                // running summary (unread count + recent lines), then remove the chat's
+                // running summary (unread count + recent messages), then remove the chat's
                 // previously-delivered alert and deliver this updated one in its place — so
-                // the chat shows ONE self-updating notification, expandable to the recent
-                // lines, instead of a growing stack. `threadIdentifier` keys the removal here
-                // and in `PushManager.clearDelivered` when the chat is opened.
+                // the chat shows ONE self-updating notification instead of a growing stack.
+                // `threadIdentifier` keys the removal here and in `PushManager.clearDelivered`
+                // when the chat is opened.
                 best.threadIdentifier = sid
-                let rendered = PushGroupState.recordIncoming(sessionId: sid, title: note.title, body: note.body)
-                best.title = rendered.title
-                best.subtitle = rendered.subtitle
-                best.body = rendered.body
-                NSLog("[supermux NSE] decrypted ok — %{public}@ / %{public}@", rendered.title,
-                      rendered.subtitle.isEmpty ? rendered.body : rendered.subtitle)
+                let group = PushGroupState.recordIncoming(sessionId: sid, title: note.title, body: note.body)
+                best.title = group.rendered.title
+                best.subtitle = group.rendered.subtitle
+                best.body = group.rendered.body
+
+                // Route a long-press / pull-down to the custom expanded content extension
+                // (SupermuxNotifContent) and carry the transcript it renders — the recent
+                // messages (text + time) + unread count — inside the notification itself.
+                best.categoryIdentifier = PushGroupState.chatCategory
+                info["sm_title"] = note.title
+                info["sm_count"] = group.count
+                info["sm_items"] = group.items
+                best.userInfo = info
+
+                NSLog("[supermux NSE] decrypted ok — %{public}@ / %{public}@", group.rendered.title,
+                      group.rendered.subtitle.isEmpty ? group.rendered.body : group.rendered.subtitle)
                 // Record for the simulator's deterministic-decrypt verification (iOS only).
-                Self.recordLastDelivered(title: rendered.title, body: rendered.body)
+                Self.recordLastDelivered(title: group.rendered.title, body: group.rendered.body)
                 collapseAndDeliver(sessionId: sid, content: best)
                 return
             }

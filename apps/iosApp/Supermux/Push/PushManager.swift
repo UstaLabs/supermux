@@ -283,6 +283,13 @@ private extension PushAppDelegate {
     /// `applicationDidFinishLaunching(_:)` body.
     func handleLaunch() {
         UNUserNotificationCenter.current().delegate = self
+        // Register the chat category so a long-press / pull-down on a collapsed chat
+        // notification routes to the custom expanded content extension (SupermuxNotifContent).
+        // No actions yet — the expanded view is read-only (quick-reply is a future add).
+        UNUserNotificationCenter.current().setNotificationCategories([
+            UNNotificationCategory(identifier: PushGroupState.chatCategory, actions: [],
+                                   intentIdentifiers: [], options: [])
+        ])
         // Warm the push keypair on launch so its public key is generated + persisted in
         // the shared Keychain group up front (the NSE reads the same key to decrypt, and
         // the bootstrap handler registers this pubkey with the broker). Idempotent.
