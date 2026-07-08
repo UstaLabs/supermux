@@ -98,10 +98,22 @@ class EditorEngine(
     }
 
     fun setDocument(content: String, filename: String, scrollTop: Int = 0) {
-        lastContent = content
+        val pathChanged = filename != lastFilename
         lastFilename = filename
-        lastScrollTop = scrollTop
-        if (ready) pushToView(content, filename, scrollTop)
+        if (pathChanged) {
+            // A different tab/file: push the whole document + language + wrap + font + scroll
+            // (parity EditorWebView.swift:72-84). cmSetContent is a JS no-op if unchanged.
+            lastContent = content
+            lastScrollTop = scrollTop
+            if (ready) pushToView(content, filename, scrollTop)
+        } else if (content != lastContent) {
+            // Same file, content changed out-of-band (disk reload) — or our own echo of a user
+            // edit. Push ONLY the text: re-pushing scrollTop/language/font on every keystroke
+            // yanks the caret + scroll back (cmSetScrollTop is NOT a no-op). Parity
+            // EditorWebView.swift:86-89.
+            lastContent = content
+            if (ready) webView?.evaluateJavascript("cmSetContent(${q(content)})", null)
+        }
     }
 
     /** Scroll to a 1-indexed line (optional end). Deferred until [ready], like scrollTop. */
@@ -155,7 +167,11 @@ class EditorEngine(
                 }
             }
             addJavascriptInterface(object {
-                @JavascriptInterface fun onChange(s: String) { main.post { onChangeS.value.invoke(s) } }
+                // Record the edit as the last-known document BEFORE it round-trips back through
+                // Compose state, so setDocument's `content != lastContent` guard skips re-pushing
+                // the user's own keystroke (parity EditorWebView.swift:203). Without this, fast
+                // typing can shove a stale snapshot back and drop characters / jump the caret.
+                @JavascriptInterface fun onChange(s: String) { main.post { lastContent = s; onChangeS.value.invoke(s) } }
                 @JavascriptInterface fun onSave() { main.post { onSaveS.value.invoke() } }
                 // A user zoom (pinch/keyboard) in the WebView: the editor already applied
                 // it live; keep our copy in sync and persist it (no rebuild).
