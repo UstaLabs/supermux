@@ -48,14 +48,16 @@ fun supermuxTypography(): Typography {
         titleMedium = TextStyle(
             fontFamily = sans,
             fontWeight = FontWeight.SemiBold,
-            fontSize = 15.sp,
-            letterSpacing = (-0.15).sp,
+            fontSize = 16.sp,
+            letterSpacing = (-0.16).sp,
         ),
-        // Assistant prose — generous line height for readability
+        // Assistant prose — generous line height for readability.
+        // Reading styles sit AT the M3 baseline (not below): the compact feel comes from
+        // titles/labels, while body text stays legible on low-PPD displays (DeX on glasses).
         bodyLarge = TextStyle(
             fontFamily = sans,
             fontWeight = FontWeight.Normal,
-            fontSize = 15.sp,
+            fontSize = 16.sp,
             lineHeight = 24.sp,
             letterSpacing = 0.sp,
         ),
@@ -63,7 +65,7 @@ fun supermuxTypography(): Typography {
         bodyMedium = TextStyle(
             fontFamily = sans,
             fontWeight = FontWeight.Normal,
-            fontSize = 13.5.sp,
+            fontSize = 14.sp,
             lineHeight = 20.sp,
             letterSpacing = 0.sp,
         ),
@@ -71,14 +73,14 @@ fun supermuxTypography(): Typography {
         labelLarge = TextStyle(
             fontFamily = sans,
             fontWeight = FontWeight.Medium,
-            fontSize = 13.sp,
+            fontSize = 14.sp,
             letterSpacing = 0.sp,
         ),
         // Pills / meta
         labelMedium = TextStyle(
             fontFamily = sans,
             fontWeight = FontWeight.Medium,
-            fontSize = 11.5.sp,
+            fontSize = 12.sp,
             letterSpacing = 0.sp,
         ),
         // Timestamps / path labels (use MonoFontFamily locally for path/code content)

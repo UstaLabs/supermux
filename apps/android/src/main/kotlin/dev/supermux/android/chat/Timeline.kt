@@ -205,7 +205,7 @@ fun mdAnnotated(
                     SpanStyleKind.CODE -> withStyle(
                         SpanStyle(
                             fontFamily = MonoFontFamily,
-                            fontSize = 12.sp,
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Normal,
                         )
                     ) { append(s.text) }
@@ -283,8 +283,8 @@ fun FencedCodeBlock(code: String) {
                 Text(
                     text = code,
                     fontFamily = MonoFontFamily,
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp,
+                    fontSize = 13.sp,
+                    lineHeight = 19.5.sp,
                     color = cs.onSurface.copy(alpha = 0.9f),
                 )
             }
@@ -446,7 +446,7 @@ fun UserMessage(text: String) {
             text = "you",
             color = cs.primary,
             fontFamily = MonoFontFamily,
-            fontSize = 9.sp,
+            fontSize = 10.sp,
             letterSpacing = 1.2.sp,
             modifier = Modifier.padding(bottom = 2.dp),
         )
@@ -507,13 +507,13 @@ fun ToolCard(event: ActivityEvent, status: ToolStatus, output: String? = null) {
                 .padding(horizontal = Space.sm + Space.xs, vertical = Space.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("▸", color = cs.primary, fontFamily = MonoFontFamily, fontSize = 12.sp)
+            Text("▸", color = cs.primary, fontFamily = MonoFontFamily, fontSize = 13.sp)
             Spacer(Modifier.width(Space.sm))
             Text(
                 text = verb,
                 color = cs.onSurface,
                 fontFamily = MonoFontFamily,
-                fontSize = 12.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
             )
             if (arg != null) {
@@ -521,7 +521,7 @@ fun ToolCard(event: ActivityEvent, status: ToolStatus, output: String? = null) {
                     text = arg,
                     color = cs.onSurfaceVariant,
                     fontFamily = MonoFontFamily,
-                    fontSize = 11.5.sp,
+                    fontSize = 12.5.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f).padding(start = Space.sm),
@@ -603,8 +603,8 @@ private fun InlineDiff(text: String) {
             Text(
                 text = line.ifEmpty { " " },
                 fontFamily = MonoFontFamily,
-                fontSize = 11.5.sp,
-                lineHeight = 17.sp,
+                fontSize = 12.5.sp,
+                lineHeight = 18.5.sp,
                 color = fg,
                 modifier = Modifier.fillMaxWidth().background(bg).padding(horizontal = Space.md, vertical = 0.5.dp),
             )
@@ -634,8 +634,8 @@ private fun ioBlock(label: String, text: String, error: Boolean) {
             Text(
                 text = text,
                 fontFamily = MonoFontFamily,
-                fontSize = 12.sp,
-                lineHeight = 18.sp,
+                fontSize = 13.sp,
+                lineHeight = 19.5.sp,
                 color = if (error) cs.error else cs.onSurface.copy(alpha = 0.9f),
             )
         }
@@ -705,7 +705,7 @@ fun StreamRow(node: StreamNode, spine: Boolean, time: String?, content: @Composa
                 Text(
                     text = time,
                     fontFamily = MonoFontFamily,
-                    fontSize = 9.sp,
+                    fontSize = 10.sp,
                     color = if (node == StreamNode.USER) cs.primary else cs.onSurfaceVariant.copy(alpha = 0.5f),
                     modifier = Modifier.align(Alignment.TopStart).padding(start = 2.dp, top = 12.dp),
                 )
@@ -1036,7 +1036,7 @@ private fun AttachmentChip(
         Text(
             text = label,
             color = cs.onSurface,
-            fontSize = 12.sp,
+            fontSize = 13.sp,
             fontFamily = MonoFontFamily,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
