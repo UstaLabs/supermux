@@ -27,8 +27,6 @@ import BranchSyncStatus from "@/components/BranchSyncStatus.vue"
 import SessionLinks from "@/components/SessionLinks.vue"
 import ModelSwitcher from "@/components/ModelSwitcher.vue"
 import EffortSwitcher from "@/components/EffortSwitcher.vue"
-import ModelPill from "@/components/ModelPill.vue"
-import EffortPill from "@/components/EffortPill.vue"
 import SlashCommandMenu from "@/components/SlashCommandMenu.vue"
 import KillConfirmDialog from "@/components/KillConfirmDialog.vue"
 import { useCommandsStore, type SlashCommand } from "@/stores/commands"
@@ -47,28 +45,12 @@ import { Conversation, ConversationContent } from "@/components/ai-elements/conv
 import { Message, MessageContent } from "@/components/ai-elements/message"
 import MessageText from "@/components/MessageText.vue"
 import AttachmentList from "@/components/attachments/AttachmentList.vue"
-import {
-  PromptInput,
-  PromptInputBody,
-  PromptInputHeader,
-  PromptInputTextarea,
-  PromptInputFooter,
-  PromptInputTools,
-  PromptInputSubmit,
-  PromptInputActionMenu,
-  PromptInputActionMenuTrigger,
-  PromptInputActionMenuContent,
-  PromptInputActionAddAttachments,
-  PromptInputAttachments,
-} from "@/components/ai-elements/prompt-input"
-import PromptInputActionAddCamera from "@/components/ai-elements/prompt-input/PromptInputActionAddCamera.vue"
-import PromptInputActionAddRecordVideo from "@/components/ai-elements/prompt-input/PromptInputActionAddRecordVideo.vue"
-import PromptInputDraftSync from "@/components/PromptInputDraftSync.vue"
+import { PromptInput } from "@/components/ai-elements/prompt-input"
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input"
+import PromptInputDraftSync from "@/components/PromptInputDraftSync.vue"
 import { Suggestion } from "@/components/ai-elements/suggestion"
 import Tool from "@/components/ai-elements/tool/Tool.vue"
-import MicButton from "@/components/voice/MicButton.vue"
-import VoiceRecorder from "@/components/voice/VoiceRecorder.vue"
+import ChatComposer from "@/components/ChatComposer.vue"
 
 const props = defineProps<{ id: string }>()
 const router = useRouter()
@@ -378,16 +360,6 @@ watch(entries, (curr) => {
 
 const uploads = useUploads()
 
-const isRecording = ref(false)
-
-function startRecording() {
-  isRecording.value = true
-}
-
-function onRecordingDone() {
-  isRecording.value = false
-}
-
 const hasPendingUploads = computed(() =>
   Object.values(uploads.byId).some((s) => s.status === "uploading" || s.status === "failed")
 )
@@ -662,6 +634,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
         >
           <PromptInput
             class="relative"
+            :group-class="isDesktop ? undefined : 'contents'"
             :max-files="10"
             :max-file-size="500 * 1024 * 1024"
             :global-drop="true"
@@ -670,45 +643,13 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
           >
             <SlashCommandMenu :commands="sessionCommands" :loading="!commandsStore.isResolved(props.id)" @control="onControlCommand" />
             <PromptInputDraftSync :session-id="props.id" />
-            <PromptInputHeader>
-              <PromptInputAttachments />
-            </PromptInputHeader>
-            <PromptInputBody>
-              <VoiceRecorder v-if="isRecording" :session-id="props.id" @done="onRecordingDone" />
-              <PromptInputTextarea v-else placeholder="Message…" />
-            </PromptInputBody>
-            <PromptInputFooter>
-              <PromptInputTools>
-                <ModelPill
-                  :session-id="props.id"
-                  :disabled="ws.status !== 'connected'"
-                  @click="modelSwitcherOpen = true"
-                />
-                <EffortPill
-                  :session-id="props.id"
-                  :disabled="ws.status !== 'connected'"
-                  @click="effortSwitcherOpen = true"
-                />
-                <PromptInputActionMenu>
-                  <PromptInputActionMenuTrigger />
-                  <PromptInputActionMenuContent>
-                    <PromptInputActionAddAttachments label="Files" />
-                    <PromptInputActionAddCamera />
-                    <PromptInputActionAddRecordVideo />
-                  </PromptInputActionMenuContent>
-                </PromptInputActionMenu>
-                <MicButton
-                  :disabled="ws.status !== 'connected' || hasPendingUploads || isRecording"
-                  @start="startRecording"
-                />
-              </PromptInputTools>
-              <PromptInputTools class="ml-auto">
-                <PromptInputSubmit
-                  :disabled="ws.status !== 'connected' || hasPendingUploads || isRecording"
-                  class="rounded-full size-8 bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"
-                />
-              </PromptInputTools>
-            </PromptInputFooter>
+            <ChatComposer
+              :session-id="props.id"
+              :connected="ws.status === 'connected'"
+              :has-pending-uploads="hasPendingUploads"
+              @open-model="modelSwitcherOpen = true"
+              @open-effort="effortSwitcherOpen = true"
+            />
           </PromptInput>
         </div>
         </template>

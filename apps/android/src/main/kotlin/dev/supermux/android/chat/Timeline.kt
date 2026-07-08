@@ -128,7 +128,6 @@ sealed interface TimelineItem {
         val status: ToolStatus,
         val output: String? = null,   // detail from the matching tool_result event (iOS folds as Output)
     ) : TimelineItem
-    data class Act(val event: ActivityEvent) : TimelineItem
 }
 
 /**
@@ -138,7 +137,8 @@ sealed interface TimelineItem {
  * event and later a separate `tool_result` (phase=completed|failed) event with the same
  * callId. We resolve a single status per call and render ONE [TimelineItem.Tool] row —
  * the result event is not shown on its own (otherwise completed tools look stuck running).
- * Other activity kinds (thinking…) pass through as [TimelineItem.Act].
+ * Non-tool activity (notably "thinking" → "Thought for Ns") is dropped here: thinking is
+ * surfaced only as a live status indicator, never as a persistent history row (matches web).
  */
 fun mergeTimeline(
     messages: List<LogEntry>,
@@ -164,14 +164,15 @@ fun mergeTimeline(
                 items.add(TimelineItem.Tool(e, status, output))
             }
             "tool_result" -> { /* folded into the matching tool row above */ }
-            else -> items.add(TimelineItem.Act(e))
+            // "thinking" (and any other non-tool kind) is intentionally dropped — thinking
+            // shows as a live indicator, not a persistent "Thought for Ns" history row.
+            else -> { /* dropped */ }
         }
     }
     return items.sortedBy { item ->
         when (item) {
             is TimelineItem.Msg -> item.entry.ts
             is TimelineItem.Tool -> item.event.ts
-            is TimelineItem.Act -> item.event.ts
         }
     }
 }
@@ -204,7 +205,7 @@ fun mdAnnotated(
                     SpanStyleKind.CODE -> withStyle(
                         SpanStyle(
                             fontFamily = MonoFontFamily,
-                            fontSize = 12.sp,
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Normal,
                         )
                     ) { append(s.text) }
@@ -282,8 +283,8 @@ fun FencedCodeBlock(code: String) {
                 Text(
                     text = code,
                     fontFamily = MonoFontFamily,
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp,
+                    fontSize = 13.sp,
+                    lineHeight = 19.5.sp,
                     color = cs.onSurface.copy(alpha = 0.9f),
                 )
             }
@@ -445,7 +446,7 @@ fun UserMessage(text: String) {
             text = "you",
             color = cs.primary,
             fontFamily = MonoFontFamily,
-            fontSize = 9.sp,
+            fontSize = 10.sp,
             letterSpacing = 1.2.sp,
             modifier = Modifier.padding(bottom = 2.dp),
         )
@@ -506,13 +507,13 @@ fun ToolCard(event: ActivityEvent, status: ToolStatus, output: String? = null) {
                 .padding(horizontal = Space.sm + Space.xs, vertical = Space.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("▸", color = cs.primary, fontFamily = MonoFontFamily, fontSize = 12.sp)
+            Text("▸", color = cs.primary, fontFamily = MonoFontFamily, fontSize = 13.sp)
             Spacer(Modifier.width(Space.sm))
             Text(
                 text = verb,
                 color = cs.onSurface,
                 fontFamily = MonoFontFamily,
-                fontSize = 12.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
             )
             if (arg != null) {
@@ -520,7 +521,7 @@ fun ToolCard(event: ActivityEvent, status: ToolStatus, output: String? = null) {
                     text = arg,
                     color = cs.onSurfaceVariant,
                     fontFamily = MonoFontFamily,
-                    fontSize = 11.5.sp,
+                    fontSize = 12.5.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f).padding(start = Space.sm),
@@ -602,8 +603,8 @@ private fun InlineDiff(text: String) {
             Text(
                 text = line.ifEmpty { " " },
                 fontFamily = MonoFontFamily,
-                fontSize = 11.5.sp,
-                lineHeight = 17.sp,
+                fontSize = 12.5.sp,
+                lineHeight = 18.5.sp,
                 color = fg,
                 modifier = Modifier.fillMaxWidth().background(bg).padding(horizontal = Space.md, vertical = 0.5.dp),
             )
@@ -633,67 +634,10 @@ private fun ioBlock(label: String, text: String, error: Boolean) {
             Text(
                 text = text,
                 fontFamily = MonoFontFamily,
-                fontSize = 12.sp,
-                lineHeight = 18.sp,
+                fontSize = 13.sp,
+                lineHeight = 19.5.sp,
                 color = if (error) cs.error else cs.onSurface.copy(alpha = 0.9f),
             )
-        }
-    }
-}
-
-/**
- * Calm Premium — reasoning/thinking activity.
- * Collapsed by default: a faint "✦ Thought for Ns" row (labelMedium, italic,
- * mutedForeground @70%) with a tiny chevron. Tapping expands detail if present.
- * Feels like a faint timestamp, not a card.
- */
-@Composable
-fun ReasoningLine(event: ActivityEvent) {
-    val cs = MaterialTheme.colorScheme
-    val hasDetail = !event.detail.isNullOrBlank()
-    var expanded by remember { mutableStateOf(false) }
-
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clickable(enabled = hasDetail) { expanded = !expanded },
-    ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "✦ ${event.title ?: "Thought"}",
-                color = cs.onSurfaceVariant.copy(alpha = 0.7f),
-                style = MaterialTheme.typography.labelMedium,
-                fontStyle = FontStyle.Italic,
-            )
-            if (hasDetail) {
-                Spacer(Modifier.width(Space.xs))
-                Text(
-                    text = if (expanded) "∧" else "∨",
-                    color = cs.onSurfaceVariant.copy(alpha = 0.5f),
-                    fontSize = 9.sp,
-                )
-            }
-        }
-
-        AnimatedVisibility(
-            visible = expanded,
-            enter = expandVertically(),
-            exit = shrinkVertically(),
-        ) {
-            val detail = event.detail
-            if (detail != null) {
-                Box(Modifier.padding(top = Space.xs)) {
-                    Text(
-                        text = detail,
-                        color = cs.onSurfaceVariant.copy(alpha = 0.7f),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontStyle = FontStyle.Italic,
-                    )
-                }
-            }
         }
     }
 }
@@ -761,7 +705,7 @@ fun StreamRow(node: StreamNode, spine: Boolean, time: String?, content: @Composa
                 Text(
                     text = time,
                     fontFamily = MonoFontFamily,
-                    fontSize = 9.sp,
+                    fontSize = 10.sp,
                     color = if (node == StreamNode.USER) cs.primary else cs.onSurfaceVariant.copy(alpha = 0.5f),
                     modifier = Modifier.align(Alignment.TopStart).padding(start = 2.dp, top = 12.dp),
                 )
@@ -807,13 +751,6 @@ fun TimelineItemRow(
             }
             StreamRow(node = node, spine = true, time = gutterTime(item.event.ts)) {
                 ToolCard(item.event, item.status, item.output)
-            }
-        }
-        is TimelineItem.Act -> {
-            when (item.event.kind) {
-                "thinking" -> StreamRow(node = StreamNode.DONE, spine = true, time = null) {
-                    ReasoningLine(item.event)
-                }
             }
         }
     }
@@ -1099,7 +1036,7 @@ private fun AttachmentChip(
         Text(
             text = label,
             color = cs.onSurface,
-            fontSize = 12.sp,
+            fontSize = 13.sp,
             fontFamily = MonoFontFamily,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,

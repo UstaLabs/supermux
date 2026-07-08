@@ -58,9 +58,14 @@ import dev.supermux.android.chat.ModelPill
 import dev.supermux.android.chat.PickerSheet
 import dev.supermux.android.chat.RecordingBar
 import dev.supermux.android.chat.TranscribingIndicator
+import dev.supermux.android.chat.SlashMenu
+import dev.supermux.android.chat.activeSlashQuery
 import dev.supermux.android.chat.createImageUri
 import dev.supermux.android.chat.createVideoUri
 import dev.supermux.android.chat.rememberDictation
+import dev.supermux.android.chat.replaceSlashToken
+import dev.supermux.android.chat.slashCommandMatches
+import dev.supermux.android.chat.slashInsertText
 import dev.supermux.android.theme.HapticKind
 import dev.supermux.android.theme.Space
 import dev.supermux.android.theme.rememberHaptics
@@ -69,6 +74,7 @@ import dev.supermux.net.ModelInfo
 import dev.supermux.net.RemoteRepo
 import dev.supermux.net.RepoInfo
 import dev.supermux.proto.SessionInfo
+import dev.supermux.proto.SlashCommand
 import dev.supermux.session.formatWorkdir
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.Dispatchers
@@ -91,6 +97,9 @@ fun SessionLauncherScreen(
     loadModels: suspend (agent: String) -> List<ModelInfo> = { emptyList() },
     // Git status for the chosen project; gates the worktree picker on RepoInfo.eligible.
     loadRepoInfo: suspend (workdir: String) -> RepoInfo? = { null },
+    // Agent slash commands for the composer's "/" menu (no session yet); refetched on agent/project
+    // change, empty = no menu (iOS NewSessionView previewCommands parity).
+    loadCommands: suspend (agent: String, workdir: String) -> List<SlashCommand> = { _, _ -> emptyList() },
     // Forge omnibox for the project picker (connections + clone/create). Defaults = "no forges".
     loadForges: suspend () -> List<ForgeConnection> = { emptyList() },
     searchForge: suspend (query: String) -> List<RemoteRepo> = { emptyList() },
@@ -176,6 +185,15 @@ fun SessionLauncherScreen(
             baseBranch = info?.currentBranch ?: ""
         }
         lastSeenWorkdir = workdir
+    }
+
+    // Agent slash commands for the composer "/" menu — refetched when the agent or project changes
+    // (iOS NewSessionView `.task(id: "\(agent)|\(workdir)")`). Gated on restore so it never fetches
+    // against the pre-restore default agent/workdir; loadCommands returns [] for a blank workdir.
+    var launcherCommands by remember { mutableStateOf(emptyList<SlashCommand>()) }
+    LaunchedEffect(agent, workdir, launcherRestoring) {
+        if (launcherRestoring) return@LaunchedEffect
+        launcherCommands = loadCommands(agent, workdir)
     }
 
     // Restore persisted launcher state once. Runs after useWorktree/baseBranch are declared
@@ -366,6 +384,22 @@ fun SessionLauncherScreen(
         }
     }
 
+    // ── Slash-command menu (mirrors ChatPanel + iOS NewSessionView) ─────────────────────────────
+    // Matches for the active "/token" at the end of the draft. Insert-only here: pre-spawn there is
+    // no session to run a control command against, so a pick just drops the command's text in (iOS
+    // SlashMenu `showsActionGlyph: false`). Keyboard nav mirrors the chat composer for DeX keyboards.
+    val slashMatches = slashCommandMatches(message, launcherCommands)
+    var slashSelectedIndex by remember { mutableIntStateOf(0) }
+    var slashDismissed by remember { mutableStateOf(false) }
+    LaunchedEffect(activeSlashQuery(message)) { slashSelectedIndex = 0; slashDismissed = false }
+    val slashMenuOpen = slashMatches.isNotEmpty() && !slashDismissed
+    val safeSlashIndex = slashSelectedIndex.coerceIn(0, (slashMatches.size - 1).coerceAtLeast(0))
+    fun selectSlashCommand(cmd: SlashCommand) {
+        haptic(HapticKind.Tick)
+        message = replaceSlashToken(message, slashInsertText(cmd))
+        error = null
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -512,15 +546,51 @@ fun SessionLauncherScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("launcher_message")
-                                // Hardware keyboard: Enter submits, Shift+Enter inserts a newline
-                                // (DeX / attached keyboard). Soft keyboard keeps the normal return.
+                                // Hardware keyboard: with the "/" menu open, ↑/↓ move the highlight,
+                                // Enter picks, Esc closes; otherwise Enter submits and Shift+Enter (or
+                                // the soft keyboard's return) inserts a newline (DeX / attached kbd).
                                 .onPreviewKeyEvent { e ->
-                                    if (e.type == KeyEventType.KeyDown &&
-                                        (e.key == Key.Enter || e.key == Key.NumPadEnter) && !e.isShiftPressed
-                                    ) {
-                                        doSubmit(); true
-                                    } else false
+                                    if (e.type != KeyEventType.KeyDown) false
+                                    else when {
+                                        slashMenuOpen && e.key == Key.DirectionDown -> {
+                                            slashSelectedIndex = (safeSlashIndex + 1).coerceAtMost(slashMatches.size - 1)
+                                            true
+                                        }
+                                        slashMenuOpen && e.key == Key.DirectionUp -> {
+                                            slashSelectedIndex = (safeSlashIndex - 1).coerceAtLeast(0)
+                                            true
+                                        }
+                                        slashMenuOpen && (e.key == Key.Enter || e.key == Key.NumPadEnter) && !e.isShiftPressed -> {
+                                            slashMatches.getOrNull(safeSlashIndex)?.let { selectSlashCommand(it) }
+                                            true
+                                        }
+                                        slashMenuOpen && e.key == Key.Escape -> {
+                                            slashDismissed = true
+                                            true
+                                        }
+                                        (e.key == Key.Enter || e.key == Key.NumPadEnter) && !e.isShiftPressed -> {
+                                            doSubmit()
+                                            true
+                                        }
+                                        else -> false
+                                    }
                                 },
+                        )
+                    }
+
+                    // ── "/" command menu: matches for the active token (insert-only pre-spawn) ──
+                    if (slashMenuOpen) {
+                        Spacer(Modifier.height(8.dp))
+                        SlashMenu(
+                            matches = slashMatches,
+                            selectedIndex = safeSlashIndex,
+                            onSelect = { selectSlashCommand(it) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(cs.surfaceContainerHigh),
+                            testTagPrefix = "launcher_slash_item_",
+                            showActionGlyph = false,
                         )
                     }
 

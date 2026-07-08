@@ -26,12 +26,13 @@ import dev.supermux.android.theme.MonoFontFamily
 import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.SessionStatusKind
 import dev.supermux.proto.SessionStatusLevel
-import dev.supermux.proto.gitBadge
 import dev.supermux.proto.sessionStatus
 
 /**
  * Leading per-session state: working spinner (top priority), else the git/cloud status icon.
- * Worktree: ✓ done / ⎇ not-done / neutral pristine. Remote: cloud-done / cloud-off + ↑N ↓N counts.
+ * Worktree: ✓ done / ⎇ not-done / neutral pristine. Remote: cloud-done / cloud-off.
+ * Numbers (ahead/behind/dirty) are intentionally omitted here — the list is icon-only; the
+ * session view surfaces the counts.
  * `bgOpen` > 0 adds a static mono "⧗N" badge (open background tasks) — static because the
  * session list is a 100+/day surface and the design language budgets motion there.
  */
@@ -61,14 +62,8 @@ fun SessionStatusRail(git: GitLiteStatusDto?, working: Boolean, bgOpen: Int = 0,
                 StatusIcon(R.drawable.ic_git_branch, sem.warning)
             st.kind == SessionStatusKind.REMOTE && st.level == SessionStatusLevel.DONE ->
                 StatusIcon(R.drawable.ic_cloud_done, sem.success)
-            else -> {
+            else ->
                 StatusIcon(R.drawable.ic_cloud_off, sem.warning)
-                val text = gitBadge(git)?.text
-                if (!text.isNullOrEmpty()) {
-                    Spacer(Modifier.width(4.dp))
-                    Text(text, color = sem.warning, fontFamily = MonoFontFamily, fontSize = 10.sp, fontWeight = FontWeight.Medium)
-                }
-            }
         }
     }
 }

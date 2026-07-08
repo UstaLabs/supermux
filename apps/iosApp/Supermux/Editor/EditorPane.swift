@@ -265,7 +265,8 @@ struct EditorPane: View {
                               onMakeView: { webView = $0 },
                               onLspOut: { serverId, message in
                                   broker.lspBridge(for: session.id).rpcOut(serverId, message)
-                              })
+                              },
+                              onFontSize: { settings.fontSize = $0 })
                     .background(Color(red: 40/255, green: 44/255, blue: 52/255)) // #282c34, matches cm6 one-dark
                     .ignoresSafeArea(.container, edges: .bottom)
             }

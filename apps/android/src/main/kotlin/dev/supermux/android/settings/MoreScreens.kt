@@ -38,6 +38,9 @@ import dev.supermux.android.chat.TimelineItemRow
 import dev.supermux.android.chat.mergeTimeline
 import dev.supermux.android.theme.AppearanceMode
 import dev.supermux.android.theme.LocalPanes
+import dev.supermux.android.theme.TEXT_SCALE_MAX
+import dev.supermux.android.theme.TEXT_SCALE_MIN
+import kotlin.math.roundToInt
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
 import dev.supermux.net.ArchivedDto
@@ -671,8 +674,10 @@ private fun StepperButton(text: String, enabled: Boolean, onClick: () -> Unit) {
 fun AppearanceSettingsPage(
     appearance: AppearanceMode,
     dynamicColor: Boolean,
+    textScale: Float,
     onAppearanceChange: (AppearanceMode) -> Unit,
     onDynamicChange: (Boolean) -> Unit,
+    onTextScaleChange: (Float) -> Unit,
     onBack: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -732,6 +737,34 @@ fun AppearanceSettingsPage(
                 }
                 Spacer(Modifier.width(12.dp))
                 Switch(checked = dynamicColor, onCheckedChange = onDynamicChange)
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Text size", style = MaterialTheme.typography.titleMedium, color = cs.onBackground)
+                        Text(
+                            "Scales all text in the app — the whole screen previews it live.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = cs.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        "${(textScale * 100).roundToInt()}%",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = if (textScale == 1f) cs.onSurfaceVariant else cs.primary,
+                    )
+                }
+                Slider(
+                    value = textScale,
+                    onValueChange = { raw ->
+                        // Snap to 5% increments so the stored value stays clean.
+                        val snapped = (raw * 20).roundToInt() / 20f
+                        if (snapped != textScale) onTextScaleChange(snapped)
+                    },
+                    valueRange = TEXT_SCALE_MIN..TEXT_SCALE_MAX,
+                    steps = 7,
+                )
             }
         }
     }

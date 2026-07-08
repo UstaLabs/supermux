@@ -132,7 +132,8 @@ class MainActivity : ComponentActivity() {
                 )
             }
             var dynamicColor by remember { mutableStateOf(prefs.getBoolean("dynamicColor", ThemeDefaults.DYNAMIC_COLOR_ENABLED)) }
-            SupermuxTheme(appearance = appearance, dynamicEnabled = dynamicColor) {
+            var textScale by remember { mutableStateOf(prefs.getFloat("textScale", 1f)) }
+            SupermuxTheme(appearance = appearance, dynamicEnabled = dynamicColor, textScale = textScale) {
                 val store = remember { SecureTokenStore() }
                 // Debug-only: seed token+baseUrl on debuggable builds so the already-paired
                 // emulator boots past the gate (no-op on release / when DEBUG_TOKEN is empty).
@@ -423,6 +424,7 @@ class MainActivity : ComponentActivity() {
                                         validatePath = { vm.validatePath(it) },
                                         loadModels = { vm.launcherModels(it) },
                                         loadRepoInfo = { vm.launcherRepoInfo(it) },
+                                        loadCommands = { ag, wd -> vm.launcherCommands(ag, wd) },
                                         loadForges = { vm.listForges() },
                                         searchForge = { vm.searchForge(it) },
                                         cloneForge = { cid, owner, name -> vm.cloneForge(cid, owner, name) },
@@ -451,6 +453,7 @@ class MainActivity : ComponentActivity() {
                                 validatePath = { vm.validatePath(it) },
                                 loadModels = { vm.launcherModels(it) },
                                 loadRepoInfo = { vm.launcherRepoInfo(it) },
+                                loadCommands = { ag, wd -> vm.launcherCommands(ag, wd) },
                                 loadForges = { vm.listForges() },
                                 searchForge = { vm.searchForge(it) },
                                 cloneForge = { cid, owner, name -> vm.cloneForge(cid, owner, name) },
@@ -565,6 +568,7 @@ class MainActivity : ComponentActivity() {
                         AppearanceSettingsPage(
                             appearance = appearance,
                             dynamicColor = dynamicColor,
+                            textScale = textScale,
                             onAppearanceChange = {
                                 appearance = it
                                 prefs.edit().putString("appearance", it.name).apply()
@@ -572,6 +576,10 @@ class MainActivity : ComponentActivity() {
                             onDynamicChange = {
                                 dynamicColor = it
                                 prefs.edit().putBoolean("dynamicColor", it).apply()
+                            },
+                            onTextScaleChange = {
+                                textScale = it
+                                prefs.edit().putFloat("textScale", it).apply()
                             },
                             onBack = { navController.popBackStack() },
                         )
