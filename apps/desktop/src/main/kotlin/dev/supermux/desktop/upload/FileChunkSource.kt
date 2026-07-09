@@ -11,6 +11,11 @@ import java.nio.ByteBuffer
  * Android's `ContentResolverChunkSource` (fresh-FD-per-read, NOT a shared mutable
  * position) so concurrent reads from the resumable-upload retry logic are safe.
  * Synchronous by contract — see [ChunkSource].
+ *
+ * KNOWN LIMITATION: [size] reflects the file's CURRENT length at read time, so a file deleted or
+ * truncated between staging (launcher) and upload (post-spawn) streams as fewer/zero bytes rather
+ * than failing — the attachment lands short/empty. Acceptable: launcher staging→upload is a short
+ * window and a best-effort attachment; not worth snapshotting bytes at stage time (bounded RAM).
  */
 class FileChunkSource(private val file: File) : ChunkSource {
     override val size: Long get() = file.length()

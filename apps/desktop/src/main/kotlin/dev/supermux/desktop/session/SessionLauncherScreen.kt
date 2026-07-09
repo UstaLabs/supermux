@@ -305,9 +305,13 @@ fun SessionLauncherScreen(
     }
 
     // Debounced (~400ms) draft save — gated on restoring so the restore's own writes don't re-save
-    // right over themselves before settling.
-    LaunchedEffect(workdir, workdirTouched, useWorktree, baseBranch, message.text, launcherRestoring) {
-        if (launcherRestoring) return@LaunchedEffect
+    // right over themselves before settling, AND on draftCleared so a fast submit that clears the
+    // draft cancels any still-pending delay (draftCleared is a KEY, so flipping it relaunches this
+    // effect, cancelling the in-flight coroutine before its delay elapses). Without this a pending
+    // save from just before submit would re-write the just-cleared draft — a resurrection race that
+    // must not depend on the caller closing the launcher promptly.
+    LaunchedEffect(workdir, workdirTouched, useWorktree, baseBranch, message.text, launcherRestoring, draftCleared) {
+        if (launcherRestoring || draftCleared) return@LaunchedEffect
         delay(400)
         onDraftChange(
             LauncherDraft(
@@ -416,7 +420,10 @@ fun SessionLauncherScreen(
                 Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(Space.sm))
-                        .clickable { projectMenu = true }
+                        // Gated like the agent/model/effort controls: a project pick DURING the
+                        // restore window (draft.workdir != null) would be clobbered by the restore
+                        // effect settling — ignore taps until restore lands.
+                        .clickable(enabled = !launcherRestoring) { projectMenu = true }
                         .padding(horizontal = Space.sm, vertical = Space.xs)
                         .testTag("launcher_project_field"),
                     verticalAlignment = Alignment.CenterVertically,

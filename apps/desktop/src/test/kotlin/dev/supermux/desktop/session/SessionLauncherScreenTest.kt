@@ -131,6 +131,7 @@ class SessionLauncherScreenTest {
         reasoning: (String, String?) -> ReasoningResponse? = { _, _ -> null },
         repoInfo: RepoInfo? = null,
         onPrefsChange: (LauncherPrefs) -> Unit = {},
+        onDraftChange: (LauncherDraft) -> Unit = {},
         onClearDraft: () -> Unit = {},
         onSubmit: suspend (String, String, String?, String?, String, List<StagedUpload>, Boolean, String?) -> Unit = { _, _, _, _, _, _, _, _ -> },
     ) {
@@ -147,7 +148,7 @@ class SessionLauncherScreenTest {
                 loadPrefs = { prefs },
                 onPrefsChange = onPrefsChange,
                 loadDraft = { draft },
-                onDraftChange = {},
+                onDraftChange = onDraftChange,
                 onClearDraft = onClearDraft,
                 onSubmit = onSubmit,
             )
@@ -187,6 +188,33 @@ class SessionLauncherScreenTest {
             captured,
         )
         assertTrue(cleared) // successful submit clears the draft
+    }
+
+    @Test fun submit_clear_cancels_the_pending_debounce_no_draft_resurrection() = runComposeUiTest {
+        // Deterministic clock: the restored draft schedules a debounced save at t+400ms. A submit
+        // BEFORE that elapses clears the draft; the pending save must be CANCELLED, not fire late and
+        // resurrect the just-cleared draft. Freeze the clock so submit lands inside the debounce
+        // window, then advance past 400ms and assert onDraftChange never re-saved after the clear.
+        mainClock.autoAdvance = false
+        val drafts = mutableListOf<LauncherDraft>()
+        var cleared = false
+        setContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "seed"),
+                onDraftChange = { drafts.add(it) },
+                onClearDraft = { cleared = true },
+            )
+        }
+        waitForIdle() // restore + effects settle; the debounce delay(400) is now PENDING (not fired)
+        assertTrue(drafts.isEmpty(), "no save should fire before the debounce window elapses")
+
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle() // onSubmit → onClearDraft + draftCleared=true → debounce effect relaunches + early-returns
+        assertTrue(cleared)
+
+        mainClock.advanceTimeBy(600) // any still-pending 400ms save would fire here — with the fix, cancelled
+        waitForIdle()
+        assertTrue(drafts.isEmpty(), "the cleared draft must not be resurrected by a stale debounce; got $drafts")
     }
 
     @Test fun agent_change_resets_model_to_default() = runComposeUiTest {
