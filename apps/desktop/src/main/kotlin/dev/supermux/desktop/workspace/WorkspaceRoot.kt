@@ -10,7 +10,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -25,8 +28,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
+import dev.supermux.desktop.chat.TimelineItemRow
+import dev.supermux.desktop.chat.mergeTimeline
 import dev.supermux.desktop.session.SessionListPanel
 import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.desktop.theme.Space
 import dev.supermux.session.inferHomeDir
 
 /** Fixed sidebar width for M1 — Task 9 (Workspace shell) replaces this with a real
@@ -37,11 +43,23 @@ private val SIDEBAR_WIDTH = 320.dp
 fun WorkspaceRoot(app: DesktopAppState) {
     val sessions by app.sessions.collectAsState()
     val messages by app.messages.collectAsState()
+    val activity by app.activity.collectAsState()
     val agentState by app.agentState.collectAsState()
     val lastBySession = remember(messages) { messages.mapValues { it.value.lastOrNull() } }
 
     var selectedId by remember { mutableStateOf<String?>(null) }
     val focused = LocalWindowInfo.current.isWindowFocused
+
+    // TEMP(T8): auto-select the most-recently-active session so the timeline renders in a headless
+    // run (no pointer to click a row). Task 8's real ChatPanel + composer replaces this whole block.
+    LaunchedEffect(sessions, lastBySession) {
+        if (selectedId == null && sessions.isNotEmpty()) {
+            selectedId = sessions.maxByOrNull { lastBySession[it.id]?.ts ?: "" }?.id ?: sessions.first().id
+        }
+    }
+
+    // Lazily fetch the selected session's transcript (archive resume has no snapshot history).
+    LaunchedEffect(selectedId) { selectedId?.let(app::ensureMessagesLoaded) }
 
     // Re-assert viewing presence whenever the selection or window focus changes (Android
     // AppViewModel / iOS BrokerSession parity) — the broker's per-device "viewing" tracker keys
@@ -74,16 +92,25 @@ fun WorkspaceRoot(app: DesktopAppState) {
                 onMute = { id, muted -> app.setMute(id, muted) },
                 modifier = Modifier.width(SIDEBAR_WIDTH).fillMaxHeight(),
             )
+            // TEMP(T8): rough read-only timeline preview so Task 7's rendering can be verified
+            // before Task 8 builds the real ChatPanel (header, composer, autoscroll, callbacks).
             Box(
                 Modifier
                     .fillMaxSize()
                     .background(MaterialTheme.colorScheme.surfaceContainerLow),
-                contentAlignment = Alignment.Center,
+                contentAlignment = if (selectedId == null) Alignment.Center else Alignment.TopStart,
             ) {
-                val label = selectedId?.let { id ->
-                    "selected: ${sessions.firstOrNull { it.id == id }?.name ?: id}"
-                } ?: "select a session"
-                Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val id = selectedId
+                if (id == null) {
+                    Text("select a session", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    val items = remember(messages, activity, id) {
+                        mergeTimeline(messages[id].orEmpty(), activity[id].orEmpty())
+                    }
+                    LazyColumn(Modifier.fillMaxSize().padding(horizontal = Space.lg, vertical = Space.md)) {
+                        items(items) { item -> TimelineItemRow(item = item) }
+                    }
+                }
             }
         }
     }
