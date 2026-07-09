@@ -117,4 +117,41 @@ class PairingStateTest {
         val s = state()
         assertNull(s.fallbackBaseUrl())
     }
+
+    // ── close() semantics ────────────────────────────────────────────────────────────
+    // close() only releases the internal probe HttpClient (ktor's close() is idempotent);
+    // it does NOT tear down the caller-owned scope or reset the state machine. So:
+    //  - calling it twice is safe,
+    //  - calling it before any validate is safe,
+    //  - validate-after-close still works when the probe seam bypasses the http client
+    //    (the injected probeOverride never touches it). Only a real network probe after
+    //    close() would fail — and that failure surfaces as the normal Error state.
+
+    @Test fun close_is_idempotent() {
+        val s = state()
+        s.close()
+        s.close()
+        assertIs<PairingUiState.Idle>(s.state.value)
+    }
+
+    @Test fun close_before_any_validate_is_safe() {
+        val s = state(probe = { "dev" })
+        s.close()
+        assertIs<PairingUiState.Idle>(s.state.value)
+    }
+
+    @Test fun validate_after_close_still_works_via_the_probe_seam() {
+        val s = state(probe = { "dev" })
+        s.close()
+        s.validate("https://host:9898/pair?t=abc123")
+        val confirm = assertIs<PairingUiState.Confirm>(s.state.value)
+        assertEquals("dev", confirm.deviceName)
+    }
+
+    @Test fun parse_failure_after_close_still_reports_error() {
+        val s = state(probe = { error("must not be called") })
+        s.close()
+        s.validate("garbage with no token")
+        assertIs<PairingUiState.Error>(s.state.value)
+    }
 }

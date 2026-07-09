@@ -117,7 +117,15 @@ class PairingState(
         _state.value = PairingUiState.Idle
     }
 
-    /** Release the throwaway probe [HttpClient]. Counterpart of PairingViewModel.onCleared. */
+    /**
+     * Release the throwaway probe [HttpClient]. Counterpart of PairingViewModel.onCleared.
+     *
+     * Semantics (covered by PairingStateTest): idempotent (ktor's close() is safe to call
+     * repeatedly), safe before any [validate], and does NOT reset the state machine or cancel
+     * the caller-owned [scope] — a [validate] after close still parses and (via a probe seam)
+     * transitions normally; only a real network probe would then fail, surfacing as the usual
+     * [PairingUiState.Error].
+     */
     fun close() {
         http.close()
     }

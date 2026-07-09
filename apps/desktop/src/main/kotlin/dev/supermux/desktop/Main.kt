@@ -20,11 +20,25 @@ import dev.supermux.desktop.workspace.WorkspaceRoot
 
 fun main() {
     val store = DesktopTokenStore()
-    // Dev override, mirrors the mac app's SM_PAIR_TOKEN/SM_PAIR_BASE — lets a dev/CI run seed a
-    // pairing without going through the onboarding UI by hand.
-    System.getenv("SM_PAIR_TOKEN")?.takeIf { it.isNotBlank() }?.let { tok ->
-        store.save(tok)
-        System.getenv("SM_PAIR_BASE")?.takeIf { it.isNotBlank() }?.let { store.saveBaseUrl(it) }
+    // Dev override, mirrors the mac app's SM_PAIR_TOKEN/SM_PAIR_BASE guard (SupermuxApp.swift
+    // requires BOTH to be present and non-empty) — lets a dev/CI run seed a pairing without the
+    // onboarding UI. Requiring both prevents a stray SM_PAIR_TOKEN from silently clobbering a
+    // real user token, and a mismatched token/baseUrl pair from bypassing TOFU.
+    val envToken = System.getenv("SM_PAIR_TOKEN")?.takeIf { it.isNotBlank() }
+    val envBase = System.getenv("SM_PAIR_BASE")?.takeIf { it.isNotBlank() }
+    if (envToken != null && envBase != null) {
+        // A filesystem error here must not crash main() before the window ever opens —
+        // log and fall through to normal onboarding instead.
+        runCatching {
+            store.save(envToken)
+            store.saveBaseUrl(envBase)
+        }.onSuccess {
+            println("[Main] dev pairing seed applied from SM_PAIR_* env")
+        }.onFailure { e ->
+            println("[Main] dev pairing seed failed (falling through to onboarding): $e")
+        }
+    } else if (envToken != null || envBase != null) {
+        println("[Main] ignoring partial SM_PAIR_* env — both SM_PAIR_TOKEN and SM_PAIR_BASE must be set")
     }
     application {
         Window(

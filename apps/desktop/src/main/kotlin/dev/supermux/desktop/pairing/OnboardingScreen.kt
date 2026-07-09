@@ -39,9 +39,29 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.PairUrl
+
+/** Desktop Enter-to-submit: fire [submit] (and consume) on Enter/NumPad-Enter key-down when
+ *  [enabled]; otherwise let the field handle the event (e.g. no-op / newline while blank). */
+private fun Modifier.submitOnEnter(enabled: Boolean, submit: () -> Unit): Modifier =
+    onPreviewKeyEvent { e: KeyEvent ->
+        if (e.type == KeyEventType.KeyDown && (e.key == Key.Enter || e.key == Key.NumPadEnter) && enabled) {
+            submit()
+            true
+        } else {
+            false
+        }
+    }
 
 private enum class PairMode { Paste, Manual }
 
@@ -71,6 +91,24 @@ fun OnboardingScreen(
     var linkInput by remember { mutableStateOf("") }
     var manualHost by remember { mutableStateOf("") }
     var manualToken by remember { mutableStateOf("") }
+
+    // Submit actions shared by the Pair buttons and Enter-to-submit on the fields.
+    val canSubmitPaste = !validating && linkInput.isNotBlank()
+    val submitPaste = { pairing.validate(linkInput.trim()) }
+    val canSubmitManual = !validating && manualHost.isNotBlank() && manualToken.isNotBlank()
+    // Manual host is the fallback base; the bare token is validated via /me-/pair.json.
+    val submitManual = { pairing.validate(manualToken.trim(), fallbackBase = manualHost.trim()) }
+
+    // Desktop keyboard UX: focus the primary field of the active mode so the user can
+    // Ctrl+V / type immediately without reaching for the mouse.
+    val linkFocus = remember { FocusRequester() }
+    val hostFocus = remember { FocusRequester() }
+    LaunchedEffect(mode) {
+        when (mode) {
+            PairMode.Paste -> linkFocus.requestFocus()
+            PairMode.Manual -> hostFocus.requestFocus()
+        }
+    }
 
     // A deep-link arrival (cold start) validates immediately → straight to the TOFU dialog.
     LaunchedEffect(initialDeepLink) {
@@ -148,11 +186,14 @@ fun OnboardingScreen(
                         minLines = 1,
                         maxLines = 3,
                         enabled = !validating,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(linkFocus)
+                            .submitOnEnter(canSubmitPaste, submitPaste),
                     )
                     Button(
-                        onClick = { pairing.validate(linkInput) },
-                        enabled = !validating && linkInput.isNotBlank(),
+                        onClick = submitPaste,
+                        enabled = canSubmitPaste,
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("Pair") }
                 }
@@ -165,7 +206,10 @@ fun OnboardingScreen(
                         placeholder = { Text("ws://127.0.0.1:9898 or https://host") },
                         singleLine = true,
                         enabled = !validating,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(hostFocus)
+                            .submitOnEnter(canSubmitManual, submitManual),
                     )
                     OutlinedTextField(
                         value = manualToken,
@@ -173,12 +217,13 @@ fun OnboardingScreen(
                         label = { Text("Device token") },
                         singleLine = true,
                         enabled = !validating,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .submitOnEnter(canSubmitManual, submitManual),
                     )
                     Button(
-                        // Manual host is the fallback base; the bare token is validated via /me-/pair.json.
-                        onClick = { pairing.validate(manualToken.trim(), fallbackBase = manualHost.trim()) },
-                        enabled = !validating && manualHost.isNotBlank() && manualToken.isNotBlank(),
+                        onClick = submitManual,
+                        enabled = canSubmitManual,
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("Pair") }
                 }
