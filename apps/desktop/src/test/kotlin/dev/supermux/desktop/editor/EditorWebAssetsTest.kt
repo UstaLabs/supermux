@@ -29,11 +29,26 @@ class EditorWebAssetsTest {
     }
 
     @Test
+    fun re_extract_restores_a_same_size_but_changed_file() {
+        val index = EditorWebAssets.extractTo(tmp)
+        val originalHtml = Files.readAllBytes(index)
+
+        // Corrupt WITHOUT changing the byte length — a size stamp would miss this; the CRC catches it.
+        val corrupt = originalHtml.copyOf()
+        corrupt[0] = (corrupt[0] + 1).toByte()
+        Files.write(index, corrupt)
+        assertEquals(originalHtml.size, Files.size(index).toInt(), "test setup: length must be unchanged")
+
+        EditorWebAssets.extractTo(tmp)
+
+        assertTrue(originalHtml.contentEquals(Files.readAllBytes(index)), "same-size corruption was not re-extracted")
+    }
+
+    @Test
     fun re_extract_restores_a_file_whose_size_drifted() {
         EditorWebAssets.extractTo(tmp)
         val original = Files.size(tmp.resolve("cm6.js"))
 
-        // Simulate a stale/corrupt bundle (different size) and re-extract.
         Files.write(tmp.resolve("cm6.js"), byteArrayOf(1, 2, 3))
         EditorWebAssets.extractTo(tmp)
 
@@ -41,11 +56,11 @@ class EditorWebAssetsTest {
     }
 
     @Test
-    fun re_extract_is_a_noop_when_sizes_match() {
+    fun re_extract_is_a_noop_when_crc_matches() {
         val index = EditorWebAssets.extractTo(tmp)
         val firstModified = Files.getLastModifiedTime(index)
 
-        // Second call must NOT rewrite (same size) — modified time stays put.
+        // Second call must NOT rewrite (CRC matches) — modified time stays put.
         val index2 = EditorWebAssets.extractTo(tmp)
 
         assertEquals(index, index2)

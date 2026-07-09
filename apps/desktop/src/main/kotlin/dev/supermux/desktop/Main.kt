@@ -53,7 +53,15 @@ fun main() {
     }
     application {
         Window(
-            onCloseRequest = ::exitApplication,
+            // Dispose the shared KCEF (embedded Chromium) runtime BEFORE the process exits, on this
+            // (main/AWT) thread while the window still exists — CEF wants an orderly shutdown here,
+            // not from a JVM shutdown hook. No-op if the editor never booted KCEF. Without it,
+            // closing the window orphans the Chromium helper/GPU/renderer subprocesses. See
+            // KcefRuntime.dispose.
+            onCloseRequest = {
+                dev.supermux.desktop.editor.KcefRuntime.dispose()
+                exitApplication()
+            },
             title = "supermux",
             state = rememberWindowState(width = 1440.dp, height = 900.dp),
         ) {

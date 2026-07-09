@@ -12,6 +12,7 @@ package dev.supermux.desktop.editor
 
 import dev.datlag.kcef.KCEF
 import dev.datlag.kcef.KCEFBrowser
+import dev.datlag.kcef.KCEFClient
 import dev.supermux.desktop.auth.DesktopTokenStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,10 +36,21 @@ sealed interface KcefState {
     /** CefApp is up; [KcefRuntime.newBrowser] will return a live browser. */
     data object Ready : KcefState
 
-    /** Init failed. [msg] is the underlying throwable's message (surface it; do NOT swallow). */
+    /**
+     * Init failed. [msg] is the underlying throwable's message (surface it; do NOT swallow).
+     *
+     * ⚠️ TERMINAL / DEAD END: this state never recovers within the process. [started] is a
+     * compare-and-set that only flips once, so [ensureInit] is a no-op after the first attempt, and
+     * CefApp is a process-global singleton that cannot be re-initialized after a failed load. So a
+     * "Retry" affordance would do nothing but re-render Error. UI MUST treat Error like
+     * [RestartRequired] — show the message + a "restart the app" path, NOT a retry button.
+     */
     data class Error(val msg: String) : KcefState
 
-    /** CEF requires a JVM restart to finish (fresh native install on some platforms). */
+    /**
+     * CEF requires a JVM restart to finish (fresh native install on some platforms). Like [Error],
+     * this is terminal for the current process — surface a restart path, not a retry.
+     */
     data object RestartRequired : KcefState
 }
 
@@ -122,9 +134,7 @@ object KcefRuntime {
                         // switches that stop that (e.g. --in-process-gpu --disable-gpu-sandbox)
                         // WITHOUT baking headless-only flags into the shipped app, which runs on a
                         // real GPU. See KcefRuntime KDoc / the M3-T1 report.
-                        val extra = System.getenv("SMX_KCEF_EXTRA_ARGS")
-                            ?.split(Regex("\\s+"))?.filter { it.isNotBlank() }
-                            ?: emptyList()
+                        val extra = parseExtraArgs(System.getenv("SMX_KCEF_EXTRA_ARGS"))
                         addArgs("--no-sandbox", "--disable-gpu", "--disable-gpu-compositing", *extra.toTypedArray())
                     },
                     onError = { t -> _state.value = KcefState.Error(t?.message ?: t.toString()) },
@@ -140,12 +150,49 @@ object KcefRuntime {
     }
 
     /**
-     * A fresh browser pointed at [url]. Returns null if KCEF isn't ready (no client available).
-     * Blocking — call off the main thread, or from the SwingPanel factory on the EDT (cheap once
-     * ready). The returned [KCEFBrowser.getUIComponent] is the AWT child to embed in a SwingPanel.
+     * A fresh [KCEFClient] the caller fully owns (client-per-engine — see [DesktopEditorEngine] for
+     * why: KCEFClient exposes only a SINGLE load/display handler, so one client per browser keeps an
+     * engine's handlers from stomping another's). Returns null unless [state] is [KcefState.Ready] —
+     * NEVER call the KCEF client factory optimistically, since it throws (NotInitialized) before init
+     * completes. Blocking; cheap once ready. The caller adds its message router / handlers, then
+     * calls `client.createBrowser(url)`, and disposes the client in its own teardown.
+     */
+    fun newClient(): KCEFClient? {
+        if (_state.value != KcefState.Ready) return null
+        return KCEF.newClientOrNullBlocking()
+    }
+
+    /**
+     * A fresh browser pointed at [url] on its own client. Returns null unless [state] is
+     * [KcefState.Ready] (gated — no optimistic creation). Blocking — call off the main thread, or
+     * from the SwingPanel factory on the EDT (cheap once ready). The returned
+     * [KCEFBrowser.getUIComponent] is the AWT child to embed in a SwingPanel. Prefer [newClient] when
+     * you need to attach a message router / load handler before the page loads (the editor bridge).
      */
     fun newBrowser(url: String): KCEFBrowser? {
-        val client = KCEF.newClientOrNullBlocking() ?: return null
+        val client = newClient() ?: return null
         return client.createBrowser(url)
     }
+
+    /**
+     * Tear down the whole CEF runtime (all browsers, the CefApp, and the native subprocesses).
+     * Idempotent-ish: safe to call even if init never ran (KCEF guards internally). Wired into the
+     * app's `onCloseRequest` (Main.kt) — NOT a JVM shutdown hook, because CEF wants an orderly
+     * shutdown on the AWT/main thread before the process exits, and onCloseRequest runs there while
+     * the Compose window still exists. Without this, closing the window orphans the Chromium
+     * subprocess (helper + GPU + renderer) — it lingers until the OS reaps it. Blocking.
+     */
+    fun dispose() {
+        if (!started.get()) return
+        KCEF.disposeBlocking()
+    }
 }
+
+/**
+ * Split a raw `SMX_KCEF_EXTRA_ARGS` value into CEF switches on ASCII whitespace. Blank/absent → no
+ * args. LIMITATION: a plain whitespace split — NO quoting or escaping, so a switch value that itself
+ * contains a space can't be expressed (fine for the flag-only headless/CI switches this seam exists
+ * for, e.g. `--in-process-gpu --disable-gpu-sandbox`). Pure + total for [parseExtraArgs] tests.
+ */
+internal fun parseExtraArgs(raw: String?): List<String> =
+    raw?.split(Regex("\\s+"))?.filter { it.isNotBlank() } ?: emptyList()
