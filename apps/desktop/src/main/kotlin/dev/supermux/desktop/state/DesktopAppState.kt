@@ -4,9 +4,10 @@
 // BrokerApi (HTTP) and reduces inbound ServerFrames into StateFlows the Compose UI observes.
 // The Milestone-1 surface is ported here — sessions / messages / activity / agentState / bgTasks /
 // commands + the send/viewing/control paths — plus the M3 editor filesystem surface (fsList/fsRead/
-// fsWrite/fsSearch, editorOpen/editorClose, and the fs_changed → [fsChanges] fold). Still-out-of-scope
-// frames (finish, git, LSP, displays) and features (uploads beyond Send args, dictation, models/
-// reasoning, drafts, push, notifications) are deliberately no-op'd with a milestone marker so the
+// fsWrite/fsSearch, editorOpen/editorClose, and the fs_changed → [fsChanges] fold) and the M4b finish
+// surface (the finish_job + session_git reducer branches + finish/finishReadiness/verifySuggest/
+// verifySave/clearFinishJob). Still-out-of-scope frames (LSP, displays) and features (uploads beyond
+// Send args, dictation, models/reasoning, drafts, push, notifications) are deliberately no-op'd so the
 // reducer stays a faithful subset of AppViewModel's `when (frame)`.
 package dev.supermux.desktop.state
 
@@ -14,6 +15,7 @@ import dev.supermux.desktop.session.StagedUpload
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.BrokerClient
 import dev.supermux.net.ChunkSource
+import dev.supermux.net.FinishReadiness
 import dev.supermux.net.FsEntry
 import dev.supermux.net.FsSearchResult
 import dev.supermux.net.ModelInfo
@@ -24,9 +26,12 @@ import dev.supermux.net.SpawnRequest
 import dev.supermux.net.SpawnResponse
 import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalSummary
+import dev.supermux.net.VerifySaveResult
+import dev.supermux.net.VerifySuggestResult
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.ClientFrame
+import dev.supermux.proto.FinishJobDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SendArgs
 import dev.supermux.proto.ServerFrame
@@ -109,6 +114,14 @@ class DesktopAppState(
     private val _commandsResolved = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     val commandsResolved: StateFlow<Map<String, Boolean>> = _commandsResolved
 
+    // ── Finish flow (M4b) ──────────────────────────────────────────────────────────
+    // The last/in-flight finish job per session, keyed by session id (Android AppViewModel
+    // parity). Seeded from each SessionInfo.finish_job in the Snapshot and kept current by the
+    // FinishJobFrame reducer; the FinishDialog drives its 3-state machine (menu/running/outcome)
+    // off this flow. clearFinishJob drops an entry client-side once the user dismisses the outcome.
+    private val _finishJobs = MutableStateFlow<Map<String, FinishJobDto>>(emptyMap())
+    val finishJobs: StateFlow<Map<String, FinishJobDto>> = _finishJobs
+
     // ── Editor file-watch (M3) ─────────────────────────────────────────────────────
     // The reducer folds inbound fs_changed frames into this app-wide SharedFlow (mirrors Android's
     // AppViewModel.fsChanges). Each EditorPanel collects it and calls its EditorState.markChanged
@@ -182,6 +195,10 @@ class DesktopAppState(
                 _agentState.value = frame.agentState
                 _commands.value = frame.commands
                 _commandsResolved.value = frame.commandsResolved
+                // Seed finish jobs from each session's snapshot record (keyed by session id).
+                _finishJobs.value = frame.sessions
+                    .mapNotNull { s -> s.finish_job?.let { s.id to it } }
+                    .toMap()
                 // A (re)connect always begins with a snapshot; re-assert viewing presence so the
                 // broker's per-device tracker is current after a reconnect (reset the dedup cache).
                 lastSentViewing = null
@@ -212,6 +229,9 @@ class DesktopAppState(
                         }
                     }
                 }
+                // A session resumed from archive can arrive carrying a finish_job — seed it
+                // (Android AppViewModel parity) so the FinishDialog sees it before the next snapshot.
+                incoming.finish_job?.let { job -> _finishJobs.update { it + (incoming.id to job) } }
             }
             is ServerFrame.SessionRemoved -> {
                 _sessions.update { it.filterNot { s -> s.id == frame.id } }
@@ -257,8 +277,27 @@ class DesktopAppState(
             is ServerFrame.FsChanged -> {
                 _fsChanges.tryEmit(frame)
             }
-            // Out of M1/M3 scope — reduced in later milestones: agent_error, finish_job, session_git,
-            // display_*, lsp_* (see AppViewModel for the full reducer).
+            // M4b finish flow: the async job's progress/outcome arrives here. Update the finishJobs
+            // flow the FinishDialog drives AND write the job back onto the session's finish_job so a
+            // list row (and any later snapshot round-trip) stays consistent (AppViewModel:275 parity).
+            is ServerFrame.FinishJobFrame -> {
+                val job = frame.job
+                if (job != null) {
+                    _finishJobs.update { it + (frame.session to job) }
+                    _sessions.update { current ->
+                        current.map { s -> if (s.id == frame.session) s.copy(finish_job = job) else s }
+                    }
+                }
+            }
+            // M4b: live per-session git divergence delta → the sidebar/header git badge
+            // (AppViewModel:301 parity). Match on session id like every other session mutation.
+            is ServerFrame.SessionGit -> {
+                _sessions.update { current ->
+                    current.map { s -> if (s.id == frame.session) s.copy(git = frame.git) else s }
+                }
+            }
+            // Out of M1/M3/M4b scope — reduced in later milestones: agent_error, display_*, lsp_*
+            // (see AppViewModel for the full reducer). Deferred to M4g/M5; they must still not crash.
             else -> {}
         }
     }
@@ -361,6 +400,48 @@ class DesktopAppState(
             onDone()
         }
     }
+
+    // ── Finish flow (M4b; mirrors AppViewModel.finish/finishReadiness/verifySuggest/verifySave) ──
+    // The FinishDialog drives the whole job lifecycle off the [finishJobs] StateFlow; [finish] only
+    // KICKS OFF the async job — its terminal outcome arrives on the WS finish_job frame ([reduce]).
+    // The readiness/verify helpers getOrNull-degrade through [runApi] like the launcher wrappers.
+
+    /**
+     * Kick off a finish job for the session's branch. `action`: "merge" | "pr" | "keep" | "discard".
+     * Fire-and-forget: returns only whether the POST was ACCEPTED (the job's progress/outcome lands
+     * on the finish_job frame, not here). Mirrors Android's `runCatching{api.finish}.isSuccess` — a
+     * non-2xx makes BrokerApi.decode throw (SKIE-safe), so isSuccess is the kickoff-accepted signal.
+     */
+    suspend fun finish(
+        id: String,
+        action: String,
+        skipVerify: Boolean? = null,
+        commitFirst: Boolean? = null,
+        commitMessage: String? = null,
+        prTitle: String? = null,
+        prBody: String? = null,
+        draft: Boolean? = null,
+        prRequiresGreen: Boolean? = null,
+    ): Boolean =
+        runCatching {
+            api.finish(id, action, skipVerify, commitFirst, commitMessage, prTitle, prBody, draft, prRequiresGreen)
+        }.isSuccess
+
+    /** Preflight snapshot for the finish menu (branch sync / diff / conflict / dirty). Null on failure. */
+    suspend fun finishReadiness(id: String): FinishReadiness? =
+        runApi("finishReadiness") { api.finishReadiness(id) }
+
+    /** Suggest a `.mux/verify.sh` for the no_verify recovery path. Null on failure. */
+    suspend fun verifySuggest(id: String): VerifySuggestResult? =
+        runApi("verifySuggest") { api.verifySuggest(id) }
+
+    /** Save an edited verify script (the FinishDialog auto-runs merge when `ok`). Null on failure. */
+    suspend fun verifySave(id: String, content: String): VerifySaveResult? =
+        runApi("verifySave") { api.verifySave(id, content) }
+
+    /** Dismiss a finished/failed job's card (client-side only; mirrors web `finishJob.clear(id)`).
+     *  The broker keeps its record — this only drops the local overlay so the dialog closes. */
+    fun clearFinishJob(id: String) { _finishJobs.update { it - id } }
 
     // ── Scratch / agent terminals (Android AppViewModel:439-444 parity) ──────────────
 
