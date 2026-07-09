@@ -1,7 +1,9 @@
 // Modeled on apps/android/src/main/kotlin/dev/supermux/android/terminal/TerminalPanel.kt —
-// same public shape (connect/active/onExit), same lifecycle discipline, same agent-exit latch and
-// status chip. Platform swap: ConnectBot termlib → JediTermWidget (Swing) hosted in a SwingPanel,
-// with MuxTtyConnector bridging the shared TerminalClient byte stream to JediTerm's char stream.
+// same public shape (connect/active/onExit), same lifecycle discipline, same status chip.
+// DELIBERATE DIVERGENCE: onExit fires on the broker's exit frame (TerminalClient.exit — web
+// parity), not on Android's CONNECTED→DISCONNECTED status latch; see the onExit KDoc. Platform
+// swap: ConnectBot termlib → JediTermWidget (Swing) hosted in a SwingPanel, with MuxTtyConnector
+// bridging the shared TerminalClient byte stream to JediTerm's char stream.
 package dev.supermux.desktop.terminal
 
 import androidx.compose.foundation.background
@@ -21,7 +23,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -39,17 +40,6 @@ import dev.supermux.net.TerminalStatus
 import kotlinx.coroutines.launch
 
 /**
- * Agent-exit latch as a pure function (Android TerminalPanel:111-122 semantics): once the client
- * has EVER been CONNECTED ([hadConnected] latches true), a drop to DISCONNECTED means the session
- * ended → fire onExit. The latch subsumes any "previous status" argument — a transient pre-connect
- * DISCONNECTED (or CONNECTING→DISCONNECTED retry loop) never fires because the latch is still
- * false, regardless of what the previous status was. Extracted so the decision is unit-testable
- * headlessly; the composable wiring itself is exercised in the Task 8 live verification.
- */
-internal fun shouldFireExit(now: TerminalStatus, hadConnected: Boolean): Boolean =
-    now == TerminalStatus.DISCONNECTED && hadConnected
-
-/**
  * Native terminal panel backed by JediTerm (Swing) embedded via [SwingPanel].
  * I/O stays on the broker websocket via the shared [TerminalClient].
  *
@@ -59,8 +49,14 @@ internal fun shouldFireExit(now: TerminalStatus, hadConnected: Boolean): Boolean
  *   NOT auto-focus on composition (Android rule). Kept-alive background panes are hidden by the
  *   host via [dev.supermux.desktop.ui.KeepAlivePanel], which shrinks the heavyweight Swing child
  *   to 0×0 so it can't be clicked (and thus can't take focus) while hidden.
- * @param onExit fires once when the session ends (CONNECTED → DISCONNECTED). The agent-PTY
- *   ("Native") tab uses this to fall back to Chat on agent exit. Null = no-op (scratch terminal).
+ * @param onExit fires when the broker reports the pty ended — its `{"type":"exit"|"error"}` text
+ *   frame, surfaced as [TerminalClient.exit] — NOT on disconnection. Web parity (useTerminal.ts
+ *   fires exit off that frame, never off socket status): a transient CONNECTED→DISCONNECTED
+ *   (reconnect backoff, wifi blip, broker restart — routine here: every deploy restarts the
+ *   broker) keeps the panel alive and the client's reconnect loop resumes the pty. The agent-PTY
+ *   ("Native") view uses this to fall back to Chat on agent exit. Null = no-op (scratch terminal).
+ *   NB deliberate divergence: Android's TerminalPanel still uses the CONNECTED→DISCONNECTED status
+ *   heuristic (same reconnect false-positive) — consider backporting the exit-frame trigger there.
  */
 @Composable
 fun DesktopTerminalPanel(
@@ -151,16 +147,13 @@ fun DesktopTerminalPanel(
         }
     }
 
+    // Status feeds ONLY the StatusChip below — never the exit decision (see the onExit KDoc).
     val status by client.status.collectAsState()
 
-    // Agent-PTY exit detection (Android TerminalPanel:111-122 parity) — see shouldFireExit.
-    val hadConnected = remember(client) { mutableStateOf(false) }
-    LaunchedEffect(client, status) {
-        if (status == TerminalStatus.CONNECTED) {
-            hadConnected.value = true
-        } else if (shouldFireExit(status, hadConnected.value)) {
-            onExit?.invoke()
-        }
+    // Agent-PTY exit: the broker's explicit exit/error frame (web-parity trigger). A dropped
+    // socket does NOT land here — the client's reconnect loop handles that silently.
+    LaunchedEffect(client) {
+        client.exit.collect { onExit?.invoke() }
     }
 
     // SwingPanel is a HEAVYWEIGHT AWT child: without the experimental interop blending

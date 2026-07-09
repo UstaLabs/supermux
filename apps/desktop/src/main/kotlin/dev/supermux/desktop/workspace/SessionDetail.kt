@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -123,9 +124,13 @@ fun SessionDetail(
     val chatOrNative: @Composable () -> Unit = {
         val native = layout.nativeView(session.id) && session.agent == "claude"
         // Once Native has been shown for this session, keep it composed (kept-alive) so a flip back
-        // to Chat doesn't drop its PTY; reset per session so a switch starts closed.
+        // to Chat doesn't drop its PTY; reset per session so a switch starts closed. Latched in an
+        // effect, not a bare state write during composition (which Compose may re-execute/discard).
+        // session.id must be an effect key too: on a session switch with native on for BOTH
+        // sessions, `native` doesn't change (true→true) while the remember resets — without the
+        // key the effect wouldn't relaunch and the new session's Native would never mount.
         var nativeOpened by remember(session.id) { mutableStateOf(false) }
-        if (native) nativeOpened = true
+        LaunchedEffect(session.id, native) { if (native) nativeOpened = true }
         Box(Modifier.fillMaxSize()) {
             ChatPanel(
                 app = app,
@@ -140,10 +145,13 @@ fun SessionDetail(
                     KeepAlivePanel(visible = native, modifier = Modifier.testTag("pane_native")) {
                         nativePanelContent(
                             { app.connectAgentTerminal(session.id) },
-                            // Agent PTY exited → clear the persisted preference (so a dead PTY never
+                            // Agent PTY exited (the broker's exit frame — see DesktopTerminalPanel's
+                            // onExit KDoc) → clear the persisted preference (so a dead PTY never
                             // re-opens on restart) and drop the kept-alive panel so a later re-open
-                            // builds a fresh client rather than showing the dead one (Android onExit
-                            // parity: Native falls back to Chat on agent exit).
+                            // builds a fresh client rather than showing the dead one. NB: Android
+                            // still fires its onExit off the CONNECTED→DISCONNECTED status heuristic,
+                            // which false-positives on reconnects/broker restarts — desktop diverges
+                            // deliberately (web is the reference; consider backporting to Android).
                             {
                                 layout.setNativeView(session.id, false)
                                 nativeOpened = false

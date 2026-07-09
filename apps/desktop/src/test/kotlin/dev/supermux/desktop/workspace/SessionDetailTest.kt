@@ -3,6 +3,10 @@ package dev.supermux.desktop.workspace
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -186,6 +190,45 @@ class SessionDetailTest {
 
         onNodeWithTag("agent_view_chat").performClick()
         assertEquals(false, layout.nativeView("s1"))
+    }
+
+    @Test
+    fun sessionSwitchDisposesOldNativePanelAndMountsFresh() = runComposeUiTest {
+        // The hard constraint behind key(session.id): WorkspaceRoot renders ONE SessionDetail in
+        // the same composition slot for the selection, so a session switch recomposes this test's
+        // single SessionDetail with a new `session` — exactly the reuse that would bind the wrong
+        // session's agent PTY without the key. The mount/dispose ledger proves DISTINCT panel
+        // instances: a mere recomposition of a reused panel would re-run neither effect.
+        val layout = WorkspaceLayout()
+        layout.setNativeView("s1", true)
+        layout.setNativeView("s2", true)
+        val sessionB = SessionInfo(id = "s2", name = "demo2", workdir = "/w/s2", agent = "claude")
+        val mounts = mutableListOf<String>()
+        val disposals = mutableListOf<String>()
+        var current by mutableStateOf(session) // s1
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                SessionDetail(app = app(), session = current, agent = null,
+                    layout = layout, draft = "", onDraftChange = {},
+                    nativePanelContent = { _, _ ->
+                        val forSession = current.id
+                        DisposableEffect(Unit) {
+                            mounts.add(forSession)
+                            onDispose { disposals.add(forSession) }
+                        }
+                        Box(Modifier.fillMaxSize().testTag("native_fake_$forSession"))
+                    })
+            }
+        }
+        onNodeWithTag("native_fake_s1").assertIsDisplayed()
+
+        // Switch to session B (native pref on for both).
+        runOnIdle { current = sessionB }
+        onNodeWithTag("native_fake_s2").assertIsDisplayed()
+        onNodeWithTag("native_fake_s1").assertDoesNotExist()
+        // A's panel was DISPOSED and B's mounted FRESH — not a reused composition slot.
+        assertEquals(listOf("s1", "s2"), mounts)
+        assertEquals(listOf("s1"), disposals)
     }
 }
 
