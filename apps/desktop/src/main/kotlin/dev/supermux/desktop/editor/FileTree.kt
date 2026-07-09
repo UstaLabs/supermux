@@ -81,6 +81,12 @@ internal suspend fun loadAndExpand(
     node: TreeNode,
     loadDir: suspend (String) -> List<TreeNode>,
 ) {
+    // In-flight guard: a second tap while the listing is loading must NOT launch a duplicate fsList
+    // (the expand-only-on-success change means the path isn't yet in expandedPaths / node.loaded, so
+    // toggleDir's own guards don't catch it) — two loaders racing on the shared node.children list
+    // would double every child row. The check + add below is synchronous (no suspension before the
+    // loadDir call), so on the single-threaded UI dispatcher only the first loader passes.
+    if (node.path in editor.treeLoadingPaths) return
     editor.treeLoadingPaths = editor.treeLoadingPaths + node.path
     try {
         val children = loadDir(node.path)

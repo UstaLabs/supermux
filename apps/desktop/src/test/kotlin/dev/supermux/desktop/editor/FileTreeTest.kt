@@ -91,4 +91,18 @@ class FileTreeTest {
         assertEquals("permission denied", e.treeLoadError["src"])
         assertFalse("src" in e.treeLoadingPaths) // always cleared in finally
     }
+
+    // In-flight guard: a second tap while a slow listing is loading must not launch a duplicate
+    // fsList (which would double the child rows on the shared node.children list).
+    @Test fun load_and_expand_is_a_no_op_when_the_dir_is_already_loading() = runTest {
+        val e = editor(this)
+        val node = dirNode("src")
+        e.treeLoadingPaths = setOf("src") // a listing is already in flight for this path
+
+        var listed = false
+        loadAndExpand(e, node) { listed = true; emptyList() }
+
+        assertFalse(listed) // guarded — no second listing was issued
+        assertFalse("src" in e.expandedPaths) // and it did not expand off the in-flight load
+    }
 }

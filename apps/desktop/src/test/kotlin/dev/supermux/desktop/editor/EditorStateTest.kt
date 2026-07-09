@@ -412,6 +412,35 @@ class EditorStateTest {
         assertEquals("a.kt", s.activeTabPath)
     }
 
+    // Two overlapping cross-path opens: the LAST-opened file stays active regardless of which
+    // networked read returns first, and an earlier load doesn't wipe the newer load's spinner.
+    @Test fun overlapping_cross_path_opens_keep_the_last_opened_active_regardless_of_return_order() = runTest {
+        val gateA = CompletableDeferred<Unit>()
+        val gateB = CompletableDeferred<Unit>()
+        val s = EditorState(
+            fsRead = { path ->
+                when (path) { "a.kt" -> gateA.await(); "b.kt" -> gateB.await() }
+                Result.success("body:$path")
+            },
+            fsWrite = { _, _ -> true },
+            scope = this,
+        )
+        s.openFile("a.kt") // slow
+        s.openFile("b.kt") // opened last → must end up active; loadingPath is now "b.kt"
+
+        // B returns FIRST, then A returns later (out of open order).
+        gateB.complete(Unit)
+        advanceUntilIdle()
+        assertEquals("b.kt", s.activeTabPath)
+
+        gateA.complete(Unit)
+        advanceUntilIdle()
+        // A's late completion must NOT steal focus back from B.
+        assertEquals("b.kt", s.activeTabPath)
+        assertEquals(setOf("a.kt", "b.kt"), s.tabs.map { it.path }.toSet())
+        assertNull(s.loadingPath)
+    }
+
     // Obligation 2: a superseded pending-reveal poll is dropped; the newest reveal wins.
     @Test fun open_file_at_line_drops_a_superseded_reveal_and_applies_the_newest() = runTest {
         val gate = CompletableDeferred<Unit>()

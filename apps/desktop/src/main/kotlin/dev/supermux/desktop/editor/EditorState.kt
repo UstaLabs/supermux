@@ -114,18 +114,28 @@ class EditorState(
                         if (loadingPath == path) loadingPath = null
                         return@onSuccess
                     }
-                    // Guard against a concurrent load of the same path having already added the tab.
+                    // The tab is always added (a valid file the user opened), but activation +
+                    // spinner-clear defer to whichever open is CURRENT: `loadingPath` is single-slot,
+                    // so two overlapping cross-path loads both complete — gating on `loadingPath ==
+                    // path` keeps the LAST-opened file active (not the last-to-return over the
+                    // network) and stops an earlier load from wiping a newer one's loading indicator.
                     if (tabs.none { it.path == path }) tabs.add(EditorTab(path, content))
-                    activeTabPath = path
-                    loadingPath = null
+                    if (loadingPath == path) {
+                        activeTabPath = path
+                        loadingPath = null
+                    }
                 }
                 .onFailure { err ->
                     if (cancelledPaths.remove(path)) {
                         if (loadingPath == path) loadingPath = null
                         return@onFailure
                     }
-                    loadError = err.message ?: "Could not open file"
-                    loadingPath = null
+                    // Only surface the error (and clear the spinner) if this is still the current
+                    // open — a superseded load's failure must not stomp the newer load in progress.
+                    if (loadingPath == path) {
+                        loadError = err.message ?: "Could not open file"
+                        loadingPath = null
+                    }
                 }
         }
     }
