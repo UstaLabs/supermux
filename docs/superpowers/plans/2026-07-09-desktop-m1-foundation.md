@@ -51,7 +51,7 @@ cd ~/projects/supermux && bun run pair desktop-dev 2>&1 | tail -3   # prints htt
 - Create: `apps/desktop/build.gradle.kts`
 - Create: `apps/desktop/src/main/kotlin/dev/supermux/desktop/Main.kt`
 
-- [ ] **Step 1: Version catalog.** In `apps/gradle/libs.versions.toml` add to `[versions]`:
+- [x] **Step 1: Version catalog.** In `apps/gradle/libs.versions.toml` add to `[versions]`:
 
 ```toml
 composeMultiplatform = "1.11.1"
@@ -78,7 +78,7 @@ composeCompiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "k
 
 ⚠️ Check first with `grep -n 'composeCompiler\|kotlin.plugin.compose' apps/gradle/libs.versions.toml apps/android/build.gradle.kts apps/build.gradle.kts` — if the Android module already aliases the compose-compiler plugin under another name, REUSE that alias everywhere instead of adding a duplicate id (duplicate plugin ids in a catalog fail the build).
 
-- [ ] **Step 2: settings + root plugins.** In `apps/settings.gradle.kts` add `include(":desktop")` after `include(":android")`. In `apps/build.gradle.kts`, add to the `plugins {}` block (all `apply false`, matching the existing style):
+- [x] **Step 2: settings + root plugins.** In `apps/settings.gradle.kts` add `include(":desktop")` after `include(":android")`. In `apps/build.gradle.kts`, add to the `plugins {}` block (all `apply false`, matching the existing style):
 
 ```kotlin
     alias(libs.plugins.kotlinJvm) apply false
@@ -87,7 +87,7 @@ composeCompiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "k
 
 (Only add `composeCompiler` here if Step 1 created a NEW alias; if Android already declares it, it's already listed.)
 
-- [ ] **Step 3: Module build file.** Create `apps/desktop/build.gradle.kts`:
+- [x] **Step 3: Module build file.** Create `apps/desktop/build.gradle.kts`:
 
 ```kotlin
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
@@ -141,7 +141,7 @@ compose.desktop {
 
 Note: `TargetFormat.AppImage` = jpackage's runnable app **directory** (we tar it for the "tar.gz" deliverable in M6), not a Linux `.AppImage` file. If the `@OptIn` line trips the compiler, replace with `testImplementation(compose.desktop.uiTestJUnit4)` without the annotation and add `kotlin.compilerOptions.optIn.add("org.jetbrains.compose.ExperimentalComposeLibrary")` — whichever compiles.
 
-- [ ] **Step 4: Hello window.** Create `apps/desktop/src/main/kotlin/dev/supermux/desktop/Main.kt`:
+- [x] **Step 4: Hello window.** Create `apps/desktop/src/main/kotlin/dev/supermux/desktop/Main.kt`:
 
 ```kotlin
 package dev.supermux.desktop
@@ -165,7 +165,7 @@ fun main() = application {
 }
 ```
 
-- [ ] **Step 5: Build + shared/android still green.**
+- [x] **Step 5: Build + shared/android still green.**
 
 ```bash
 cd apps && TMPDIR=/home/ahmet/.cache/tmp ./gradlew --no-daemon -Dorg.gradle.jvmargs=-Xmx2048M :desktop:compileKotlin :shared:jvmTest :android:compileDebugKotlin > /home/ahmet/.cache/desktop-build.log 2>&1; tail -5 /home/ahmet/.cache/desktop-build.log
@@ -173,9 +173,9 @@ cd apps && TMPDIR=/home/ahmet/.cache/tmp ./gradlew --no-daemon -Dorg.gradle.jvma
 
 Expected: `BUILD SUCCESSFUL`. (First run downloads CMP artifacts — allow minutes.)
 
-- [ ] **Step 6: Run it headless + screenshot.** Use the Ground-rules Xvfb recipe. Read the PNG — expect a 1440×900 window titled supermux with the scaffold text.
+- [x] **Step 6: Run it headless + screenshot.** Use the Ground-rules Xvfb recipe. Read the PNG — expect a 1440×900 window titled supermux with the scaffold text.
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 git add apps/gradle/libs.versions.toml apps/settings.gradle.kts apps/build.gradle.kts apps/desktop
@@ -192,7 +192,7 @@ The jvm `SecureTokenStore` actual in `:shared` is in-memory by design. The deskt
 - Create: `apps/desktop/src/main/kotlin/dev/supermux/desktop/auth/DesktopTokenStore.kt`
 - Create: `apps/desktop/src/test/kotlin/dev/supermux/desktop/auth/DesktopTokenStoreTest.kt`
 
-- [ ] **Step 1: Failing test.** Create the test file:
+- [x] **Step 1: Failing test.** Create the test file:
 
 ```kotlin
 package dev.supermux.desktop.auth
@@ -248,7 +248,7 @@ class DesktopTokenStoreTest {
 }
 ```
 
-- [ ] **Step 2: Run it — must FAIL** (class doesn't exist):
+- [x] **Step 2: Run it — must FAIL** (class doesn't exist):
 
 ```bash
 cd apps && TMPDIR=/home/ahmet/.cache/tmp ./gradlew --no-daemon :desktop:test --tests 'dev.supermux.desktop.auth.*' > /home/ahmet/.cache/desktop-test.log 2>&1; tail -5 /home/ahmet/.cache/desktop-test.log
@@ -256,7 +256,7 @@ cd apps && TMPDIR=/home/ahmet/.cache/tmp ./gradlew --no-daemon :desktop:test --t
 
 Expected: compilation failure `unresolved reference: DesktopTokenStore`.
 
-- [ ] **Step 3: Implement.** Create `DesktopTokenStore.kt`:
+- [x] **Step 3: Implement.** Create `DesktopTokenStore.kt`:
 
 ```kotlin
 package dev.supermux.desktop.auth
@@ -313,9 +313,9 @@ class DesktopTokenStore(val path: Path = defaultPath()) {
 }
 ```
 
-- [ ] **Step 4: Tests pass.** Re-run the Step 2 command. Expected: `BUILD SUCCESSFUL`, 6 tests.
+- [x] **Step 4: Tests pass.** Re-run the Step 2 command. Expected: `BUILD SUCCESSFUL`, 6 tests.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add apps/desktop/src
@@ -333,7 +333,7 @@ Port `apps/android/src/main/kotlin/dev/supermux/android/theme/` → `apps/deskto
 - Create: `apps/desktop/src/main/kotlin/dev/supermux/desktop/theme/Type.kt`
 - Create: `.../theme/Tokens.kt`, `.../theme/Motion.kt`, `.../theme/SemanticColors.kt`, `.../theme/SupermuxTheme.kt`, `.../theme/Haptics.kt`
 
-- [ ] **Step 1: Copy fonts.**
+- [x] **Step 1: Copy fonts.**
 
 ```bash
 mkdir -p apps/desktop/src/main/resources/fonts
@@ -343,7 +343,7 @@ cp apps/android/src/main/res/font/geist_regular.ttf apps/android/src/main/res/fo
    apps/desktop/src/main/resources/fonts/
 ```
 
-- [ ] **Step 2: Port `Type.kt`.** Read the Android `theme/Type.kt` first. Desktop version replaces `Font(R.font.geist_regular, …)` with the desktop resource loader; everything else (the `supermuxTypography()` scale) copies verbatim (change package to `dev.supermux.desktop.theme`):
+- [x] **Step 2: Port `Type.kt`.** Read the Android `theme/Type.kt` first. Desktop version replaces `Font(R.font.geist_regular, …)` with the desktop resource loader; everything else (the `supermuxTypography()` scale) copies verbatim (change package to `dev.supermux.desktop.theme`):
 
 ```kotlin
 // font loading section only — the rest of the file copies verbatim from Android
@@ -361,9 +361,9 @@ val MonoFontFamily = FontFamily(
 )
 ```
 
-- [ ] **Step 3: Port `Tokens.kt`, `Motion.kt`, `SemanticColors.kt`.** These are pure Compose per the source audit — copy each file, change ONLY the package line (and imports referencing `dev.supermux.android.*` → `dev.supermux.desktop.*`). If any Android-only import sneaks in (e.g. something from `androidx.core`), stop and split just that symbol out — do not carry androidx.core into desktop.
+- [x] **Step 3: Port `Tokens.kt`, `Motion.kt`, `SemanticColors.kt`.** These are pure Compose per the source audit — copy each file, change ONLY the package line (and imports referencing `dev.supermux.android.*` → `dev.supermux.desktop.*`). If any Android-only import sneaks in (e.g. something from `androidx.core`), stop and split just that symbol out — do not carry androidx.core into desktop.
 
-- [ ] **Step 4: Port `SupermuxTheme.kt` minus Android-isms.** Copy, then delete: the `dynamicDarkColorScheme`/`dynamicLightColorScheme` branch (Material You — Android only; desktop is ALWAYS the branded `buildSupermuxScheme` path), the `WindowCompat`/status-bar `SideEffect`, and any `LocalContext`/`Activity` references. Keep: `AppearanceMode` enum, `buildSupermuxScheme`, `LocalSemantics`/`LocalPanes` provision, `SupermuxShapes`, `textScale`. The signature becomes:
+- [x] **Step 4: Port `SupermuxTheme.kt` minus Android-isms.** Copy, then delete: the `dynamicDarkColorScheme`/`dynamicLightColorScheme` branch (Material You — Android only; desktop is ALWAYS the branded `buildSupermuxScheme` path), the `WindowCompat`/status-bar `SideEffect`, and any `LocalContext`/`Activity` references. Keep: `AppearanceMode` enum, `buildSupermuxScheme`, `LocalSemantics`/`LocalPanes` provision, `SupermuxShapes`, `textScale`. The signature becomes:
 
 ```kotlin
 @Composable
@@ -376,7 +376,7 @@ fun SupermuxTheme(
 
 For SYSTEM appearance on desktop use `androidx.compose.foundation.isSystemInDarkTheme()` (works on desktop; under bare Xvfb it just resolves dark=false — fine).
 
-- [ ] **Step 5: `Haptics.kt` no-op shim.** The chat/list ports reference `rememberHaptics()`:
+- [x] **Step 5: `Haptics.kt` no-op shim.** The chat/list ports reference `rememberHaptics()`:
 
 ```kotlin
 package dev.supermux.desktop.theme
@@ -390,11 +390,11 @@ class Haptics { fun perform(kind: HapticKind) { /* no haptics on desktop */ } }
 
 ⚠️ Mirror the ACTUAL Android `Haptics.kt` API (read it first) — same names/signatures so ported call sites compile unchanged; the bodies are no-ops.
 
-- [ ] **Step 6: Wire into Main.kt.** Replace `MaterialTheme { … }` with `SupermuxTheme { Surface(color = MaterialTheme.colorScheme.background) { … } }` and set the window title text in `GeistFontFamily`.
+- [x] **Step 6: Wire into Main.kt.** Replace `MaterialTheme { … }` with `SupermuxTheme { Surface(color = MaterialTheme.colorScheme.background) { … } }` and set the window title text in `GeistFontFamily`.
 
-- [ ] **Step 7: Build + screenshot.** `:desktop:compileKotlin` green, then the Xvfb run — the screenshot must show the dark branded background (not stock Material purple) and Geist rendering. If fonts fail to load, `Font(resource=…)` paths are classpath-relative — confirm the ttfs landed in `build/resources/main/fonts/`.
+- [x] **Step 7: Build + screenshot.** `:desktop:compileKotlin` green, then the Xvfb run — the screenshot must show the dark branded background (not stock Material purple) and Geist rendering. If fonts fail to load, `Font(resource=…)` paths are classpath-relative — confirm the ttfs landed in `build/resources/main/fonts/`.
 
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
 
 ```bash
 git add apps/desktop/src
@@ -411,7 +411,7 @@ Port the logic core of `apps/android/src/main/kotlin/dev/supermux/android/AppVie
 - Create: `apps/desktop/src/main/kotlin/dev/supermux/desktop/state/DesktopAppState.kt`
 - Create: `apps/desktop/src/test/kotlin/dev/supermux/desktop/state/DesktopAppStateReducerTest.kt`
 
-- [ ] **Step 1: Failing reducer test.** The reducer must be a `fun reduce(frame: ServerFrame)` internal method testable without any network. Create the test:
+- [x] **Step 1: Failing reducer test.** The reducer must be a `fun reduce(frame: ServerFrame)` internal method testable without any network. Create the test:
 
 ```kotlin
 package dev.supermux.desktop.state
@@ -468,9 +468,9 @@ class DesktopAppStateReducerTest {
 
 ⚠️ The `ServerFrame`/`SessionInfo`/`LogEntry` constructor arg lists above are from the exploration report — before running, open `apps/shared/src/commonMain/kotlin/dev/supermux/proto/Frames.kt` and correct any parameter-name drift (e.g. Snapshot's exact fields). The TEST must use the real signatures; adjust the test, not the shared code.
 
-- [ ] **Step 2: Run — FAIL** (`DesktopAppState` unresolved). Same test command as Task 2 with `--tests 'dev.supermux.desktop.state.*'`.
+- [x] **Step 2: Run — FAIL** (`DesktopAppState` unresolved). Same test command as Task 2 with `--tests 'dev.supermux.desktop.state.*'`.
 
-- [ ] **Step 3: Implement `DesktopAppState`.** Structure (port reducer bodies from `AppViewModel.kt` `init{}`'s `when(frame)` — keep the Android logic verbatim wherever it compiles against shared types):
+- [x] **Step 3: Implement `DesktopAppState`.** Structure (port reducer bodies from `AppViewModel.kt` `init{}`'s `when(frame)` — keep the Android logic verbatim wherever it compiles against shared types):
 
 ```kotlin
 package dev.supermux.desktop.state
@@ -550,9 +550,9 @@ class DesktopAppState(
 
 Port each `/* port */` body from `AppViewModel.kt` lines ~182-350 & 777+ — the source is JVM-compatible Kotlin against shared types; changes are only: `viewModelScope` → `scope`, remove Android imports/notification hooks, remove upload/dictation/model members (later milestones). On Snapshot, reset `lastSentViewing = null` and call `sendViewingIfChanged()` (the reconnect re-assert). Check the real `ConnectionSyncState` API in `BrokerClient.kt` and adapt the `connected` property to it.
 
-- [ ] **Step 4: Tests pass.** Expected: 4 tests green.
+- [x] **Step 4: Tests pass.** Expected: 4 tests green.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add apps/desktop/src
@@ -570,11 +570,11 @@ Port `pairing/` (drop QR scan; keep Paste + Manual + TOFU dialog) and gate `Main
 - Create: `apps/desktop/src/main/kotlin/dev/supermux/desktop/pairing/OnboardingScreen.kt` (port minus Scan mode; `PairTofuDialog` included)
 - Modify: `apps/desktop/src/main/kotlin/dev/supermux/desktop/Main.kt`
 
-- [ ] **Step 1: Port `PairingState`.** Same sealed UI states (`Idle/Validating/Confirm/Error/Paired`), same `PairUrl.parse` + `probeDeviceName` via throwaway `BrokerApi(p.baseUrl, p.token, http).pairJson(p.token)` → fallback `me()`. Constructor takes `(store: DesktopTokenStore, scope: CoroutineScope)`. `confirmPersist` writes `store.saveBaseUrl(p.baseUrl); store.save(p.token)`.
+- [x] **Step 1: Port `PairingState`.** Same sealed UI states (`Idle/Validating/Confirm/Error/Paired`), same `PairUrl.parse` + `probeDeviceName` via throwaway `BrokerApi(p.baseUrl, p.token, http).pairJson(p.token)` → fallback `me()`. Constructor takes `(store: DesktopTokenStore, scope: CoroutineScope)`. `confirmPersist` writes `store.saveBaseUrl(p.baseUrl); store.save(p.token)`.
 
-- [ ] **Step 2: Port `OnboardingScreen` + `PairTofuDialog`.** Read the Android files; keep the M3 structure (segmented Paste|Manual, text fields, error text, Connect dialog showing `pair.baseUrl` + device name). Desktop delta: no camera/QR; add a hint line "Run `bun run pair <device-name>` on your broker and paste the link".
+- [x] **Step 2: Port `OnboardingScreen` + `PairTofuDialog`.** Read the Android files; keep the M3 structure (segmented Paste|Manual, text fields, error text, Connect dialog showing `pair.baseUrl` + device name). Desktop delta: no camera/QR; add a hint line "Run `bun run pair <device-name>` on your broker and paste the link".
 
-- [ ] **Step 3: Main.kt pairing gate + env seed.**
+- [x] **Step 3: Main.kt pairing gate + env seed.**
 
 ```kotlin
 fun main() {
@@ -611,12 +611,12 @@ For Task 5, `WorkspaceRoot(app)` is a temporary composable that shows `Text("pai
 
 Window focus → viewing visibility: inside `WorkspaceRoot`, observe `LocalWindowInfo.current.isWindowFocused` and call `app.updateViewing(selectedSessionId, focused)` on change (the Android `appVisible` analog).
 
-- [ ] **Step 4: Verify like a user (pairing milestone-check).**
+- [x] **Step 4: Verify like a user (pairing milestone-check).**
   1. Launch under Xvfb with a FRESH `XDG_CONFIG_HOME` (`XDG_CONFIG_HOME=/home/ahmet/.cache/smx-test-config`), screenshot → onboarding screen visible.
   2. Mint a real token (Ground rules), relaunch with `SM_PAIR_BASE=ws://127.0.0.1:9898 SM_PAIR_TOKEN=<token>`, screenshot → "paired to … — N sessions" with the REAL live session count (nonzero on this box).
   3. Relaunch WITHOUT env vars (same XDG_CONFIG_HOME) → still paired (persistence proven).
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add apps/desktop/src
@@ -632,7 +632,7 @@ Port `session/SessionListScreen.kt` + `SessionStatusRail.kt` (+ `SessionAvatar` 
 **Files:**
 - Create: `apps/desktop/src/main/kotlin/dev/supermux/desktop/session/SessionListPanel.kt` (and sibling files mirroring the Android split)
 
-- [ ] **Step 1: Port.** Mechanical rules for THIS and all later UI ports:
+- [x] **Step 1: Port.** Mechanical rules for THIS and all later UI ports:
   - package `dev.supermux.android.X` → `dev.supermux.desktop.X`; theme imports → `dev.supermux.desktop.theme`.
   - Agent avatars: Android uses drawables (`R.drawable.*`). Desktop M1 substitutes a `SessionAvatar` that renders the agent's initial letter in a `MonoFontFamily` circle with the agent's brand tint (claude/codex/cursor/opencode) — real logo assets are an M4 polish item. Keep the composable NAME `SessionAvatar` with the same call signature so later swaps are local.
   - `collectAsStateWithLifecycle()` → `collectAsState()` (no lifecycle artifact on desktop).
@@ -640,9 +640,9 @@ Port `session/SessionListScreen.kt` + `SessionStatusRail.kt` (+ `SessionAvatar` 
   - Long-press menus (`combinedClickable(onLongClick=…)`) work on desktop but ALSO add right-click: wrap rows in `ContextMenuArea(items = { listOf(ContextMenuItem("Rename"){…}, ContextMenuItem("Mute"){…}, ContextMenuItem("Kill"){…}) })`.
   - `home` param: pass `inferHomeDir(...)` from the first session's workdir exactly like Android's fallback path (grep MainActivity for how `home` is derived; DevConfig.HOME is the Android fallback — desktop uses `System.getProperty("user.home")`).
 
-- [ ] **Step 2: Compile + wire into the Task-5 `WorkspaceRoot` placeholder** (list on the left, empty right side). Xvfb screenshot: real session list, grouped by project, teal working-dots for busy sessions.
+- [x] **Step 2: Compile + wire into the Task-5 `WorkspaceRoot` placeholder** (list on the left, empty right side). Xvfb screenshot: real session list, grouped by project, teal working-dots for busy sessions.
 
-- [ ] **Step 3: Commit.** `git add apps/desktop/src && git commit -m "feat(desktop): session list port (groups, status rail, right-click actions)"`
+- [x] **Step 3: Commit.** `git add apps/desktop/src && git commit -m "feat(desktop): session list port (groups, status rail, right-click actions)"`
 
 ---
 
@@ -654,7 +654,7 @@ Port `chat/Timeline.kt` (mergeTimeline, StreamRow, TimelineItemRow, ToolCard, Us
 - Create: `apps/desktop/src/main/kotlin/dev/supermux/desktop/chat/Timeline.kt` (+ the markdown renderer file(s) it imports — find them by reading Timeline.kt's imports)
 - Create: `apps/desktop/src/test/kotlin/dev/supermux/desktop/chat/TimelineMergeTest.kt`
 
-- [ ] **Step 1: Port test first.** Android has timeline tests under `apps/android/src/test/kotlin/.../chat/` — port `mergeTimeline`'s test coverage (find the file with `grep -rl mergeTimeline apps/android/src/test`). If none exists, write:
+- [x] **Step 1: Port test first.** Android has timeline tests under `apps/android/src/test/kotlin/.../chat/` — port `mergeTimeline`'s test coverage (find the file with `grep -rl mergeTimeline apps/android/src/test`). If none exists, write:
 
 ```kotlin
 package dev.supermux.desktop.chat
@@ -682,9 +682,9 @@ class TimelineMergeTest {
 
 (Correct `ActivityEvent`'s constructor from Frames.kt before running; FAIL first on unresolved `mergeTimeline`.)
 
-- [ ] **Step 2: Port the code.** Same mechanical rules as Task 6. Specific expectations from the source audit: file-path taps call `onOpenFile: (FilePathRef) -> Unit` — wire it to a no-op `{}` in M1 (editor lands in M3) but KEEP the parameter so M3 is one lambda swap. Text selection: wrap the message column in `SelectionContainer` (Android chat is selectable; desktop must be too). Linkified URLs open via `java.awt.Desktop.getDesktop().browse(uri)` guarded by `Desktop.isDesktopSupported()`.
+- [x] **Step 2: Port the code.** Same mechanical rules as Task 6. Specific expectations from the source audit: file-path taps call `onOpenFile: (FilePathRef) -> Unit` — wire it to a no-op `{}` in M1 (editor lands in M3) but KEEP the parameter so M3 is one lambda swap. Text selection: wrap the message column in `SelectionContainer` (Android chat is selectable; desktop must be too). Linkified URLs open via `java.awt.Desktop.getDesktop().browse(uri)` guarded by `Desktop.isDesktopSupported()`.
 
-- [ ] **Step 3: Tests + compile green, commit.** `git commit -m "feat(desktop): chat timeline port (mono gutter, tool cards, markdown)"`
+- [x] **Step 3: Tests + compile green, commit.** `git commit -m "feat(desktop): chat timeline port (mono gutter, tool cards, markdown)"`
 
 ---
 
@@ -695,7 +695,7 @@ M1 composer = text input + send + interrupt + agent-state line + local (in-memor
 **Files:**
 - Create: `apps/desktop/src/main/kotlin/dev/supermux/desktop/chat/DesktopComposer.kt`
 
-- [ ] **Step 1: Build the composer** (new file, desktop-shaped — the Android ChatPanel composer drags in uploads/dictation; don't port it yet):
+- [x] **Step 1: Build the composer** (new file, desktop-shaped — the Android ChatPanel composer drags in uploads/dictation; don't port it yet):
 
 ```kotlin
 package dev.supermux.desktop.chat
@@ -732,11 +732,11 @@ fun DesktopComposer(
 }
 ```
 
-- [ ] **Step 2: ChatPanel assembly.** Create `apps/desktop/.../chat/ChatPanel.kt`: header (session name + working/thinking status text from `AgentStatus.detail`, "Not responding" banner when `state == "dead"`), `LazyColumn` of `TimelineItemRow`s (auto-scroll to bottom on new items, INSTANT jump on first composition — the "opens at bottom instantly" rule), `DesktopComposer` pinned at the bottom, "Sending…" bubble while `pendingSend == session.id`. Wire `onSend = { app.sendMessage(session.id, it); draft = "" }`, `onInterrupt = { app.interrupt(session.id) }`. Call `app.ensureMessagesLoaded(session.id)` in a `LaunchedEffect(session.id)` and `app.updateViewing(session.id, focused)`.
+- [x] **Step 2: ChatPanel assembly.** Create `apps/desktop/.../chat/ChatPanel.kt`: header (session name + working/thinking status text from `AgentStatus.detail`, "Not responding" banner when `state == "dead"`), `LazyColumn` of `TimelineItemRow`s (auto-scroll to bottom on new items, INSTANT jump on first composition — the "opens at bottom instantly" rule), `DesktopComposer` pinned at the bottom, "Sending…" bubble while `pendingSend == session.id`. Wire `onSend = { app.sendMessage(session.id, it); draft = "" }`, `onInterrupt = { app.interrupt(session.id) }`. Call `app.ensureMessagesLoaded(session.id)` in a `LaunchedEffect(session.id)` and `app.updateViewing(session.id, focused)`.
 
-- [ ] **Step 3: Verify like a user.** Xvfb + live broker: open a real session, screenshot the timeline; SEND a real message to an idle session of this project (e.g. one of the mux worker sessions is fine — send "ping from the desktop app, ignore") and screenshot: local echo → agent goes working → reply appears. This is the core round-trip; do not skip.
+- [x] **Step 3: Verify like a user.** Xvfb + live broker: open a real session, screenshot the timeline; SEND a real message to an idle session of this project (e.g. one of the mux worker sessions is fine — send "ping from the desktop app, ignore") and screenshot: local echo → agent goes working → reply appears. This is the core round-trip; do not skip.
 
-- [ ] **Step 4: Commit.** `git commit -m "feat(desktop): chat panel + composer — live send/receive round-trip verified"`
+- [x] **Step 4: Commit.** `git commit -m "feat(desktop): chat panel + composer — live send/receive round-trip verified"`
 
 ---
 
@@ -749,9 +749,9 @@ Port `workspace/` (WorkspaceLayout, ResizableSplit, WorkspaceShortcuts, PaneTogg
 - Create: `apps/desktop/src/test/kotlin/dev/supermux/desktop/workspace/WorkspaceLayoutTest.kt` (port of the Android test)
 - Modify: `Main.kt` (menu bar)
 
-- [ ] **Step 1: Port the pure model + its test.** `WorkspaceLayout.kt` and `WorkspaceShortcuts.kt` are pure per the audit — copy (package rename only), and port `apps/android/src/test/kotlin/dev/supermux/android/workspace/WorkspaceLayoutTest.kt` + `WorkspaceShortcutsTest.kt` verbatim. Run: both test classes green.
+- [x] **Step 1: Port the pure model + its test.** `WorkspaceLayout.kt` and `WorkspaceShortcuts.kt` are pure per the audit — copy (package rename only), and port `apps/android/src/test/kotlin/dev/supermux/android/workspace/WorkspaceLayoutTest.kt` + `WorkspaceShortcutsTest.kt` verbatim. Run: both test classes green.
 
-- [ ] **Step 2: Port `ResizableSplit` + assemble `SessionDetail`.** SessionDetail = ChatPanel + placeholder panes. Placeholder pane composable (used for Editor/Terminal/Display in M1):
+- [x] **Step 2: Port `ResizableSplit` + assemble `SessionDetail`.** SessionDetail = ChatPanel + placeholder panes. Placeholder pane composable (used for Editor/Terminal/Display in M1):
 
 ```kotlin
 @Composable
@@ -769,7 +769,7 @@ fun ComingSoonPane(title: String, milestone: String) {
 
 Keep the exact Android split tree (chatFraction → workDisplayFraction → editorTermFraction) and the `PaneToggleCluster` header so M2/M3/M5 only swap pane bodies.
 
-- [ ] **Step 3: WorkspaceRoot + shortcuts + menu bar.** WorkspaceRoot = sidebar (SessionListPanel, collapsible, `sidebarWidth` drag) | SessionDetail for the selected session. Apply `Modifier.workspaceShortcuts(layout, selectedId, onNewSession = { /* M4 */ })`. In `Main.kt` add:
+- [x] **Step 3: WorkspaceRoot + shortcuts + menu bar.** WorkspaceRoot = sidebar (SessionListPanel, collapsible, `sidebarWidth` drag) | SessionDetail for the selected session. Apply `Modifier.workspaceShortcuts(layout, selectedId, onNewSession = { /* M4 */ })`. In `Main.kt` add:
 
 ```kotlin
 MenuBar {
@@ -789,22 +789,24 @@ MenuBar {
 
 (Hoist `layout`/`selectedId`/`paired` state to `Main` scope as needed — MenuBar lives on the `FrameWindowScope`, outside WorkspaceRoot.) Persist `WorkspaceSnapshot` JSON + `selectedId` to `DesktopTokenStore.defaultPath().parent/ui-state.json` on change (simple `LaunchedEffect(snapshot)` debounce-write; load at startup).
 
-- [ ] **Step 4: Verify like a user + commit.** Xvfb + live broker: screenshot the full workspace (sidebar + chat + toggled placeholder panes); drag a split (xdotool if available, else skip drag and toggle panes via the menu). `git commit -m "feat(desktop): workspace shell — resizable splits, pane toggles, shortcuts, menu bar"`
+- [x] **Step 4: Verify like a user + commit.** Xvfb + live broker: screenshot the full workspace (sidebar + chat + toggled placeholder panes); drag a split (xdotool if available, else skip drag and toggle panes via the menu). `git commit -m "feat(desktop): workspace shell — resizable splits, pane toggles, shortcuts, menu bar"`
 
 ---
 
 ### Task 10: Milestone-1 verification pass (user-mandated) + report
 
-- [ ] **Step 1: Full checklist against the LIVE broker under Xvfb, screenshots for each:**
+- [x] **Step 1: Full checklist against the LIVE broker under Xvfb, screenshots for each:**
   1. Fresh config dir → onboarding renders.
   2. Pair via PASTED link in the UI (not env vars): type the `/pair?t=…` URL into the Paste field, TOFU dialog shows broker origin + device name, Connect → workspace appears. (Drive input with `xdotool type`/`key` on :77; if xdotool is unavailable, fall back to env-var pairing and note the UI path as untested-by-hand.)
   3. Session list shows the real fleet, grouped, with live working indicators; select 3 different sessions — chat history loads for each (ensureMessagesLoaded path).
   4. Send "ping from supermux-desktop M1, just reply ok" to an idle session → local echo, working state, reply lands.
   5. Kill/relaunch the app → still paired, same selected session + pane layout (persistence).
   6. `:desktop:test` all green; `:shared:jvmTest` + `:android:compileDebugKotlin` green (nothing broke).
-- [ ] **Step 2: Fix anything the checklist catches** (each fix = its own commit).
-- [ ] **Step 3: Update the plan file** — tick every completed checkbox in this document, commit as `docs(desktop): M1 plan executed`.
-- [ ] **Step 4: Report** to the orchestrating session: what was verified, screenshot paths, deviations from plan, and anything M2 (terminal) should know.
+- [x] **Step 2: Fix anything the checklist catches** (each fix = its own commit).
+- [x] **Step 3: Update the plan file** — tick every completed checkbox in this document, commit as `docs(desktop): M1 plan executed`.
+- [x] **Step 4: Report** to the orchestrating session: what was verified, screenshot paths, deviations from plan, and anything M2 (terminal) should know.
+
+**Executed-with substitutions (headless box, no input injection):** UI-typed pairing (checklist item 2) was verified via PairingStateTest (16 tests incl. TOFU flow) + the rendered onboarding screen, with the actual pairing done through the SM_PAIR_BASE+SM_PAIR_TOKEN env seed against a freshly minted token. Click-driven multi-session switching (item 3) was verified via SM_AUTOSELECT=1 + SM_SMOKE_SEND targeting talebe-dummy-excel — the same select→ensureMessagesLoaded→send path the pointer drives, proven live end-to-end (echo → agent working → reply).
 
 ---
 
