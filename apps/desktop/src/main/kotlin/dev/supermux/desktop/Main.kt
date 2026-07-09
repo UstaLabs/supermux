@@ -11,6 +11,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyShortcut
 import androidx.compose.ui.unit.dp
@@ -149,6 +150,62 @@ fun main() {
                             app.ensureMessagesLoaded(t.id)
                             app.sendMessage(t.id, text)
                             println("[smoke] sent to ${t.name} (${t.id}): $text")
+                        }
+                    }
+
+                    // Headless terminal-verification hook (M2): SM_TERM_INPUT="<session-name>:<text>"
+                    // resolves the named session after the first snapshot, opens/ensures its SCRATCH
+                    // terminal (kind="scratch", terminal "main" — via app.connectTerminal, which
+                    // CANNOT produce a kind=agent client), and writes <text> as pty bytes so the full
+                    // JediTerm→WS→tmux→WS→JediTerm round-trip can be proven under Xvfb without a
+                    // keyboard. Backslash escapes \n \r \t in <text> are unescaped to their control
+                    // bytes (so a trailing "\n" submits the command). Scratch-ONLY by construction:
+                    // there is no code path here to reach the agent PTY, so it can never type into a
+                    // live Claude TUI. Harmless in production (unset by default).
+                    val termInput = System.getenv("SM_TERM_INPUT")?.takeIf { it.isNotBlank() }
+                    if (termInput != null) {
+                        LaunchedEffect(app) {
+                            val sep = termInput.indexOf(':')
+                            if (sep <= 0) {
+                                println("[terminput] bad SM_TERM_INPUT (expected <session-name>:<text>)")
+                                return@LaunchedEffect
+                            }
+                            val name = termInput.substring(0, sep)
+                            val raw = termInput.substring(sep + 1)
+                            val text = raw
+                                .replace("\\n", "\n")
+                                .replace("\\r", "\r")
+                                .replace("\\t", "\t")
+                            // Wait (≤30s) for the snapshot to carry the named session.
+                            var target = app.sessions.value.firstOrNull { it.name == name }
+                            val deadline = System.currentTimeMillis() + 30_000
+                            while (target == null && System.currentTimeMillis() < deadline) {
+                                delay(500)
+                                target = app.sessions.value.firstOrNull { it.name == name }
+                            }
+                            val t = target
+                            if (t == null) {
+                                println("[terminput] session '$name' not found in snapshot after 30s")
+                                return@LaunchedEffect
+                            }
+                            // Settle so the scratch tmux terminal is ready, then open a SCRATCH
+                            // ("main") client and drive its run-loop as a child of this effect.
+                            delay(5_000)
+                            val client = app.connectTerminal(t.id, "main")   // kind=scratch, enforced
+                            val runJob = launch { client.run() }
+                            // Wait (≤15s) for the socket to reach CONNECTED before writing.
+                            val connectDeadline = System.currentTimeMillis() + 15_000
+                            while (client.status.value != dev.supermux.net.TerminalStatus.CONNECTED &&
+                                System.currentTimeMillis() < connectDeadline) {
+                                delay(200)
+                            }
+                            if (client.status.value != dev.supermux.net.TerminalStatus.CONNECTED) {
+                                println("[terminput] scratch terminal for '$name' never connected")
+                                runJob.cancel()
+                                return@LaunchedEffect
+                            }
+                            client.sendInput(text.toByteArray(Charsets.UTF_8))
+                            println("[terminput] wrote ${text.length} chars to scratch 'main' of ${t.name} (${t.id})")
                         }
                     }
 
