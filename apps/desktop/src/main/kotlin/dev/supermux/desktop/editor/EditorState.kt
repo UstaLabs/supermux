@@ -9,7 +9,20 @@
 //     both are cleanly separable from tabs/tree/search/reload, so left out rather than kept inert.
 //   - Everything else — tabs, tree UI state, search, changedPaths/markChanged/isStale/reload,
 //     openFile/openFileAtLine/closeTab/selectTab/updateContent/saveActive — mirrors Android 1:1,
-//     INCLUDING two shapes that disagree with the Swift test-reference file (Android is the
+//     EXCEPT for three DELIBERATE M3-T4 divergences hardened for the over-the-network fsRead (Android
+//     does its fsRead in-process, so these races don't bite there — desktop's do once the read is a
+//     broker round-trip; each is backport-worthy and flagged in the task report):
+//       (A) openFile has an in-flight guard (`if (loadingPath == path) return`) so two taps on the
+//           same not-yet-loaded file can't launch two loads → two duplicate tabs. The success/failure
+//           branches also drop their result when the path was closed mid-load (see [cancelledPaths]).
+//       (B) openFileAtLine guards its pending-reveal poll with a monotonic [revealNonce] (the iOS
+//           EditorState.swift:121-129 pattern) so a superseded reveal never fires on a tab that
+//           arrived from a LATER open, and logs when the poll gives up (superseded or 1s timeout).
+//           Android instead polls unconditionally — desktop deliberately diverges toward the
+//           iOS-fixed semantics here (backport candidate).
+//       (C) closeTab cancels an in-flight load for the closed path so its late fsRead result can't
+//           resurrect the tab the user just closed.
+//   - INCLUDING two shapes that disagree with the Swift test-reference file (Android is the
 //     implementation reference per the M3 Task 3 brief; both are flagged in the task report):
 //       (1) `captureActiveScroll(scrollTop)` acts on the currently ACTIVE tab implicitly, unlike
 //           iOS's per-path `setScroll(path, top)`.
@@ -58,6 +71,17 @@ class EditorState(
     /** Workdir-relative paths the broker reported changed on disk (fs_changed) → reload banner. */
     var changedPaths by mutableStateOf(setOf<String>())
 
+    /** Per-directory tree-listing errors (path → message) surfaced as an inline row (M3-T4). */
+    var treeLoadError by mutableStateOf<Map<String, String>>(emptyMap())
+
+    /** Paths whose in-flight load was cancelled by [closeTab] — the load result is dropped, never
+     *  re-added, so a close during a slow (networked) fsRead can't resurrect the closed tab (M3-T4). */
+    private val cancelledPaths = mutableSetOf<String>()
+
+    /** Monotonic guard for [openFileAtLine]'s pending-reveal poll (iOS revealNonce parity). A poll
+     *  only applies its reveal while it is still the newest request; a superseded poll logs + drops. */
+    private var revealNonce = 0
+
     val activeTab: EditorTab?
         get() = tabs.find { it.path == activeTabPath }
 
@@ -76,42 +100,78 @@ class EditorState(
             loadError = null
             return
         }
+        // In-flight guard (M3-T4 divergence A): a second open of the SAME still-loading path is a
+        // no-op, so two quick taps can't launch two networked fsRead loads → two duplicate tabs.
+        if (loadingPath == path) return
+        cancelledPaths.remove(path) // a fresh open supersedes a prior close-cancel of this path
         loadingPath = path
         loadError = null
         scope.launch {
             fsRead(path)
                 .onSuccess { content ->
-                    tabs.add(EditorTab(path, content))
+                    // Dropped if the tab was closed mid-load (divergence C) — never resurrect it.
+                    if (cancelledPaths.remove(path)) {
+                        if (loadingPath == path) loadingPath = null
+                        return@onSuccess
+                    }
+                    // Guard against a concurrent load of the same path having already added the tab.
+                    if (tabs.none { it.path == path }) tabs.add(EditorTab(path, content))
                     activeTabPath = path
                     loadingPath = null
                 }
                 .onFailure { err ->
+                    if (cancelledPaths.remove(path)) {
+                        if (loadingPath == path) loadingPath = null
+                        return@onFailure
+                    }
                     loadError = err.message ?: "Could not open file"
                     loadingPath = null
                 }
         }
     }
 
-    /** Open [path] and, once present, request a scroll to [line] (1-indexed). */
+    /**
+     * Open [path] and, once present, request a scroll to [line] (1-indexed). The reveal is guarded by
+     * a monotonic [revealNonce] (iOS EditorState.swift:121-129 parity): a poll only applies its reveal
+     * while it remains the newest request, so a stale reveal from an earlier call can't land on a tab
+     * that a later navigation produced. Logs when a poll gives up (superseded or the 1s timeout).
+     */
     fun openFileAtLine(path: String, line: Int?, endLine: Int?) {
         openFile(path)
-        // openFile may add the tab synchronously (cache hit) or after fsRead; set on the tab
-        // when it exists, else stash on a fresh open via a one-shot.
+        if (line == null) return
+        val myNonce = ++revealNonce
+        // openFile may add the tab synchronously (cache hit / a non-suspending fsRead) or after the
+        // read completes. Set on the tab when it exists, else poll briefly for it to arrive.
         val tab = tabs.find { it.path == path }
-        if (line != null) {
-            if (tab != null) tab.revealLine = line to endLine
-            else scope.launch {
-                // tab arrives after fsRead completes; poll the state list briefly.
-                repeat(50) {
-                    val t = tabs.find { it.path == path }
-                    if (t != null) { t.revealLine = line to endLine; return@launch }
-                    delay(20)
+        if (tab != null) {
+            if (myNonce == revealNonce) tab.revealLine = line to endLine
+            return
+        }
+        scope.launch {
+            repeat(50) {
+                if (myNonce != revealNonce) {
+                    println("[EditorState] openFileAtLine('$path') reveal superseded — dropping stale reveal")
+                    return@launch
                 }
+                val t = tabs.find { it.path == path }
+                if (t != null) {
+                    if (myNonce == revealNonce) t.revealLine = line to endLine
+                    return@launch
+                }
+                delay(20)
             }
+            println("[EditorState] openFileAtLine('$path') gave up after 1s — tab never arrived")
         }
     }
 
     fun closeTab(path: String) {
+        // Cancel an in-flight load for this path (divergence C) so its late result is dropped and the
+        // just-closed tab can't reappear. Done BEFORE the tab lookup: on a close during a cold open
+        // there is no tab yet, only a loadingPath.
+        if (loadingPath == path) {
+            cancelledPaths.add(path)
+            loadingPath = null
+        }
         val idx = tabs.indexOfFirst { it.path == path }
         if (idx == -1) return
         tabs.removeAt(idx)

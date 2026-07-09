@@ -2,11 +2,11 @@
 // the wide-screen detail for ONE session: a minimal identity header + the nested, drag-resizable
 // split tree of live panes driven by [layout].panesFor([session].id).
 //
-// Live surfaces: Chat (M1) and Terminal — scratch tabs + the Native agent PTY (M2). Editor /
-// Display remain ComingSoonPane placeholders (they arrive in M3 / M5). Deliberately SKIPPED for
-// M1 (present in the Android original, all TODO(M4) here): git badge menus, Finish button, the
-// session-links menu, and the overflow (⋮) management menu. The AgentViewToggle (Chat⇄Native) was
-// pulled forward into M2 (terminal UX) — see the chatOrNative slot below.
+// Live surfaces: Chat (M1), Terminal — scratch tabs + the Native agent PTY (M2), and Editor (M3, the
+// KCEF-backed code editor). Display remains a ComingSoonPane placeholder (it arrives in M5).
+// Deliberately SKIPPED for M1 (present in the Android original, all TODO(M4) here): git badge menus,
+// Finish button, the session-links menu, and the overflow (⋮) management menu. The AgentViewToggle
+// (Chat⇄Native) was pulled forward into M2 (terminal UX) — see the chatOrNative slot below.
 //
 // The split structure and the "chat stays in the same composition slot" discipline are copied
 // exactly from Android so a pane toggle never remounts (and never blinks) the chat pane. The
@@ -46,6 +46,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.testTag
 import dev.supermux.desktop.chat.ChatPanel
+import dev.supermux.desktop.editor.EditorPanel
+import dev.supermux.desktop.editor.EditorPrefsStore
 import dev.supermux.desktop.session.SessionAvatar
 import dev.supermux.desktop.session.SessionStatusRail
 import dev.supermux.desktop.state.DesktopAppState
@@ -87,6 +89,38 @@ fun ComingSoonPane(title: String, milestone: String, testTagName: String, modifi
     }
 }
 
+/**
+ * App-aware wrapper around the editor [EditorPanel]: binds the session's fs* broker calls to the
+ * panel's path-only lambdas (exactly as Android's ChatScreen binds the AppViewModel wrappers), owns
+ * the on-disk [EditorPrefsStore] (loaded once, font-zoom writes back), and forwards the app-wide
+ * fs_changed stream + editor_open/close lifecycle. Kept OUT of the panel so [EditorPanel] itself
+ * stays disk-free and runComposeUiTest-able; this wrapper is the seam SessionDetail defaults to.
+ */
+@Composable
+fun DesktopEditorPanel(app: DesktopAppState, session: SessionInfo, modifier: Modifier = Modifier) {
+    val prefsStore = remember { EditorPrefsStore() }
+    var prefs by remember { mutableStateOf(prefsStore.load()) }
+    EditorPanel(
+        sessionId = session.id,
+        workdir = session.workdir,
+        fsList = { path -> app.fsList(session, path) },
+        fsRead = { path -> app.fsRead(session, path) },
+        fsWrite = { path, content -> app.fsWrite(session, path, content) },
+        fsSearch = { q -> app.fsSearch(session, q) },
+        fsChanges = app.fsChanges,
+        editorOpen = { app.editorOpen(session) },
+        editorClose = { app.editorClose(session) },
+        prefs = prefs,
+        onFontSize = { px ->
+            // The engine already applied the zoom live; persist it so it survives reopen/relaunch.
+            val next = prefs.copy(fontSize = px).clamped()
+            prefs = next
+            prefsStore.save(next)
+        },
+        modifier = modifier,
+    )
+}
+
 @Composable
 fun SessionDetail(
     app: DesktopAppState,
@@ -102,6 +136,13 @@ fun SessionDetail(
     nativePanelContent: @Composable (connect: () -> TerminalClient, onExit: () -> Unit) -> Unit = {
         connect, onExit ->
         DesktopTerminalPanel(connect = connect, modifier = Modifier.fillMaxSize(), onExit = onExit)
+    },
+    // Injectable seam for the Editor panel — defaults to the real KCEF-backed [DesktopEditorPanel].
+    // Same reason as nativePanelContent: KCEF (embedded Chromium) can't boot under runComposeUiTest,
+    // and even constructing the real panel touches the on-disk EditorPrefsStore — so SessionDetail's
+    // tests inject a pure-Compose fake tagged `pane_editor`.
+    editorPanelContent: @Composable () -> Unit = {
+        DesktopEditorPanel(app = app, session = session, modifier = Modifier.fillMaxSize().testTag("pane_editor"))
     },
 ) {
     val cs = MaterialTheme.colorScheme
@@ -162,7 +203,7 @@ fun SessionDetail(
             }
         }
     }
-    val editorPane: @Composable () -> Unit = { ComingSoonPane("Editor", "M3", "pane_editor") }
+    val editorPane: @Composable () -> Unit = editorPanelContent
     // Real scratch terminal with web-parity tabs (list/add/close). One strip per session.
     val terminalPane: @Composable () -> Unit = {
         // Only ever composed when the terminal pane is on (the split slot is null otherwise), so

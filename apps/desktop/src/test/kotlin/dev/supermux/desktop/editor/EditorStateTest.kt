@@ -351,4 +351,83 @@ class EditorStateTest {
         s.searchQuery = "foo"
         assertEquals("foo", s.searchQuery)
     }
+
+    // ── M3-T4 divergences: in-flight guard / stale-reveal nonce / close-cancel ─────────────────────
+    // These harden the state model for an OVER-THE-NETWORK fsRead (Android reads in-process, so the
+    // races don't bite there). They use StandardTestDispatcher (runTest's default) so two opens can
+    // happen BEFORE any load body runs — the whole point of the guards.
+
+    // Obligation 1: two un-advanced opens of the same path launch ONE load → ONE tab.
+    @Test fun open_file_dedupes_two_un_advanced_opens_of_the_same_path() = runTest {
+        var reads = 0
+        val s = EditorState(
+            fsRead = { path -> reads++; Result.success("body:$path") },
+            fsWrite = { _, _ -> true },
+            scope = this, // StandardTestDispatcher — launch bodies queue until advanceUntilIdle
+        )
+        s.openFile("a.kt")
+        s.openFile("a.kt") // in-flight guard: loadingPath == "a.kt" → no second load
+        assertEquals("a.kt", s.loadingPath)
+
+        advanceUntilIdle()
+        assertEquals(1, s.tabs.size)
+        assertEquals(1, reads)
+    }
+
+    // Obligation 3: closing a tab whose load is still in flight drops the result (no resurrect).
+    @Test fun close_tab_during_in_flight_load_drops_the_result_no_resurrect() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val s = EditorState(
+            fsRead = { path -> gate.await(); Result.success("body:$path") },
+            fsWrite = { _, _ -> true },
+            scope = this,
+        )
+        s.openFile("a.kt")
+        assertEquals("a.kt", s.loadingPath)
+
+        s.closeTab("a.kt") // cancels the in-flight load
+        assertNull(s.loadingPath)
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertTrue(s.tabs.isEmpty()) // the resolved load was dropped, not re-added
+        assertNull(s.activeTabPath)
+    }
+
+    // Obligation 3 (companion): a fresh open AFTER a close-cancel supersedes the cancel and loads.
+    @Test fun reopen_after_close_cancel_loads_normally() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val s = EditorState(
+            fsRead = { path -> gate.await(); Result.success("body:$path") },
+            fsWrite = { _, _ -> true },
+            scope = this,
+        )
+        s.openFile("a.kt")
+        s.closeTab("a.kt")
+        s.openFile("a.kt") // supersedes the cancel
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(listOf("a.kt"), s.tabs.map { it.path })
+        assertEquals("a.kt", s.activeTabPath)
+    }
+
+    // Obligation 2: a superseded pending-reveal poll is dropped; the newest reveal wins.
+    @Test fun open_file_at_line_drops_a_superseded_reveal_and_applies_the_newest() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val s = EditorState(
+            fsRead = { path -> gate.await(); Result.success("body:$path") },
+            fsWrite = { _, _ -> true },
+            scope = this,
+        )
+        s.openFileAtLine("a.kt", 10, null) // poll (nonce 1) waits for a.kt
+        s.openFileAtLine("a.kt", 99, null) // supersedes: nonce 2 (openFile no-ops via in-flight guard)
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+        val tab = s.tabs.find { it.path == "a.kt" }
+        assertNotNull(tab)
+        assertEquals(99 to null, tab.revealLine) // newest wins; the stale nonce-1 reveal was dropped
+        assertEquals(1, s.tabs.size)
+    }
 }

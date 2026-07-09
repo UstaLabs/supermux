@@ -1,8 +1,12 @@
 package dev.supermux.desktop.editor
 
 import dev.supermux.net.FsEntry
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * Pure-logic port of Android's FileTree.kt sort/path-join helpers (M3 plan Task 3: "tree-node
@@ -51,5 +55,40 @@ class FileTreeTest {
 
     @Test fun child_path_joins_nested_dirs_with_a_slash() {
         assertEquals("src/main", childPath("src", "main"))
+    }
+
+    // ── loadAndExpand: the pure state part of toggleDir's failure handling (M3-T4 obligation 4) ────
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun editor(scope: kotlinx.coroutines.CoroutineScope) =
+        EditorState(fsRead = { Result.success("") }, fsWrite = { _, _ -> true }, scope = scope)
+
+    private fun dirNode(path: String) =
+        TreeNode(entry = entry(path.substringAfterLast('/'), "dir"), path = path, children = mutableListOf())
+
+    @Test fun load_and_expand_marks_expanded_and_clears_error_on_success() = runTest {
+        val e = editor(this)
+        val node = dirNode("src")
+        e.treeLoadError = mapOf("src" to "stale error") // a prior error that success must clear
+
+        loadAndExpand(e, node) { listOf(TreeNode(entry("a.kt", "file"), "src/a.kt")) }
+
+        assertTrue("src" in e.expandedPaths)
+        assertTrue(node.loaded)
+        assertEquals(1, node.children!!.size)
+        assertFalse("src" in e.treeLoadError)
+        assertFalse("src" in e.treeLoadingPaths)
+    }
+
+    @Test fun load_and_expand_does_not_expand_and_records_error_on_failure() = runTest {
+        val e = editor(this)
+        val node = dirNode("src")
+
+        loadAndExpand(e, node) { throw RuntimeException("permission denied") }
+
+        assertFalse("src" in e.expandedPaths) // NOT expanded on failure
+        assertFalse(node.loaded)
+        assertEquals("permission denied", e.treeLoadError["src"])
+        assertFalse("src" in e.treeLoadingPaths) // always cleared in finally
     }
 }

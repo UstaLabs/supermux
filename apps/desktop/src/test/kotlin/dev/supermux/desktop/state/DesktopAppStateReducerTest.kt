@@ -6,6 +6,7 @@ import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlin.test.Test
@@ -114,6 +115,32 @@ class DesktopAppStateReducerTest {
         // …and subsequent reduces still work.
         s.reduce(ServerFrame.Snapshot(sessions = listOf(session("s1"))))
         assertEquals(listOf("s1"), s.sessions.value.map { it.id })
+    }
+
+    // ── M3 editor: fs_changed fold + editor lifecycle senders ─────────────────────────────
+    @Test fun fs_changed_frame_is_broadcast_on_the_fs_changes_flow() {
+        val s = state()
+        val received = mutableListOf<ServerFrame.FsChanged>()
+        // UnconfinedTestDispatcher runs the collector eagerly → it subscribes before the reduce,
+        // so the replay-0 SharedFlow delivers the pulse.
+        val job = kotlinx.coroutines.CoroutineScope(UnconfinedTestDispatcher()).launch {
+            s.fsChanges.collect { received.add(it) }
+        }
+        s.reduce(ServerFrame.FsChanged(session = "s1", paths = listOf("src/a.kt", "src/b.kt")))
+        assertEquals(1, received.size)
+        assertEquals("s1", received.first().session)
+        assertEquals(listOf("src/a.kt", "src/b.kt"), received.first().paths)
+        job.cancel()
+    }
+
+    @Test fun editor_open_and_close_send_the_lifecycle_frames() {
+        val s = state()
+        s.editorOpen(session("s1"))
+        s.editorClose(session("s1"))
+        assertEquals(
+            listOf(ClientFrame.EditorOpen("s1"), ClientFrame.EditorClose("s1")),
+            sent.filter { it is ClientFrame.EditorOpen || it is ClientFrame.EditorClose },
+        )
     }
 
     @Test fun close_cancels_owned_scope_so_no_more_outbound_sends() {

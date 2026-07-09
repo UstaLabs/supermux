@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.net.FsEntry
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 data class TreeNode(
@@ -67,6 +68,35 @@ internal fun List<FsEntry>.sortedForTree(): List<FsEntry> =
         compareBy<FsEntry> { if (it.type == "dir") 0 else 1 }
             .thenBy { it.name.lowercase() },
     )
+
+/**
+ * Load [node]'s children via [loadDir] and, ON SUCCESS ONLY, mark it expanded. Split out of the
+ * composable so its failure path is unit-testable without Compose (M3-T4 obligation): an fsList
+ * failure does NOT add the node to `expandedPaths` (an empty dir would look identical to a failed
+ * one otherwise), records the message in `editor.treeLoadError` for an inline error row, and logs.
+ * A success clears any prior error for the path. `treeLoadingPaths` is always cleared in `finally`.
+ */
+internal suspend fun loadAndExpand(
+    editor: EditorState,
+    node: TreeNode,
+    loadDir: suspend (String) -> List<TreeNode>,
+) {
+    editor.treeLoadingPaths = editor.treeLoadingPaths + node.path
+    try {
+        val children = loadDir(node.path)
+        node.children?.apply { clear(); addAll(children) }
+        node.loaded = true
+        editor.treeLoadError = editor.treeLoadError - node.path
+        editor.expandedPaths = editor.expandedPaths + node.path // expand ONLY after a good listing
+    } catch (e: CancellationException) {
+        throw e // never swallow a real coroutine cancellation
+    } catch (e: Throwable) {
+        editor.treeLoadError = editor.treeLoadError + (node.path to (e.message ?: "Could not list directory"))
+        println("[FileTree] loadDir('${node.path}') failed: $e")
+    } finally {
+        editor.treeLoadingPaths = editor.treeLoadingPaths - node.path
+    }
+}
 
 @Composable
 fun FileTree(
@@ -99,19 +129,14 @@ fun FileTree(
             editor.expandedPaths = editor.expandedPaths - node.path
             return
         }
-        if (!node.loaded && node.children != null) {
-            editor.treeLoadingPaths = editor.treeLoadingPaths + node.path
-            scope.launch {
-                try {
-                    node.children!!.clear()
-                    node.children!!.addAll(loadDir(node.path))
-                    node.loaded = true
-                } finally {
-                    editor.treeLoadingPaths = editor.treeLoadingPaths - node.path
-                }
-            }
+        if (node.loaded || node.children == null) {
+            // Already listed (or somehow a file): expand immediately, no fs round-trip.
+            editor.expandedPaths = editor.expandedPaths + node.path
+            return
         }
-        editor.expandedPaths = editor.expandedPaths + node.path
+        // Not yet listed: load first and expand ONLY on success (see [loadAndExpand]). A prior error
+        // is retried on tap; the failure path re-records it rather than expanding into a blank dir.
+        scope.launch { loadAndExpand(editor, node, ::loadDir) }
     }
 
     fun onNodeClick(node: TreeNode) {
@@ -125,6 +150,7 @@ fun FileTree(
                 depth = 0,
                 expanded = editor.expandedPaths,
                 loading = editor.treeLoadingPaths,
+                errors = editor.treeLoadError,
                 onClick = { onNodeClick(it) },
             )
         }
@@ -137,12 +163,14 @@ private fun TreeNodeRow(
     depth: Int,
     expanded: Set<String>,
     loading: Set<String>,
+    errors: Map<String, String>,
     onClick: (TreeNode) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     val isDir = node.entry.type == "dir"
     val isOpen = expanded.contains(node.path)
     val isLoading = loading.contains(node.path)
+    val loadError = errors[node.path]
     val alpha = if (node.entry.ignored) 0.5f else 1f
 
     Row(
@@ -186,6 +214,22 @@ private fun TreeNodeRow(
         )
     }
 
+    // Inline listing-error row (M3-T4): a failed fsList leaves the dir collapsed and shows why here,
+    // just under the offending directory row. Tapping the dir again retries the listing.
+    if (isDir && loadError != null) {
+        Text(
+            loadError,
+            color = cs.error,
+            fontFamily = MonoFontFamily,
+            fontSize = 11.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = (depth * 14 + 30).dp, end = SpaceEnd, top = 2.dp, bottom = 4.dp),
+        )
+    }
+
     if (isDir && isOpen && node.children != null) {
         node.children.forEach { child ->
             TreeNodeRow(
@@ -193,6 +237,7 @@ private fun TreeNodeRow(
                 depth = depth + 1,
                 expanded = expanded,
                 loading = loading,
+                errors = errors,
                 onClick = onClick,
             )
         }

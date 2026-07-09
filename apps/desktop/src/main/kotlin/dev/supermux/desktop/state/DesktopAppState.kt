@@ -2,15 +2,18 @@
 //
 // This is the LOGIC CORE of the desktop client: it wires the shared BrokerClient (WS) and
 // BrokerApi (HTTP) and reduces inbound ServerFrames into StateFlows the Compose UI observes.
-// Only the Milestone-1 surface is ported here — sessions / messages / activity / agentState /
-// bgTasks / commands + the send/viewing/control paths. Out-of-scope frames (finish, git, LSP,
-// displays, fs) and features (uploads beyond Send args, dictation, models/reasoning, drafts,
-// push, notifications) are deliberately no-op'd with a milestone marker so the reducer stays a
-// faithful subset of AppViewModel's `when (frame)`.
+// The Milestone-1 surface is ported here — sessions / messages / activity / agentState / bgTasks /
+// commands + the send/viewing/control paths — plus the M3 editor filesystem surface (fsList/fsRead/
+// fsWrite/fsSearch, editorOpen/editorClose, and the fs_changed → [fsChanges] fold). Still-out-of-scope
+// frames (finish, git, LSP, displays) and features (uploads beyond Send args, dictation, models/
+// reasoning, drafts, push, notifications) are deliberately no-op'd with a milestone marker so the
+// reducer stays a faithful subset of AppViewModel's `when (frame)`.
 package dev.supermux.desktop.state
 
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.BrokerClient
+import dev.supermux.net.FsEntry
+import dev.supermux.net.FsSearchResult
 import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalSummary
 import dev.supermux.proto.ActivityEvent
@@ -32,8 +35,11 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -93,6 +99,15 @@ class DesktopAppState(
     /** Per-session resolution state of the slash-command set (true = fully resolved). */
     private val _commandsResolved = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     val commandsResolved: StateFlow<Map<String, Boolean>> = _commandsResolved
+
+    // ── Editor file-watch (M3) ─────────────────────────────────────────────────────
+    // The reducer folds inbound fs_changed frames into this app-wide SharedFlow (mirrors Android's
+    // AppViewModel.fsChanges). Each EditorPanel collects it and calls its EditorState.markChanged
+    // FILTERED to its own session — the stale-on-disk banner is dead without this stream. A replay
+    // of 0 (transient signal, not state) + a generous extraBufferCapacity so tryEmit from the
+    // synchronous reducer never drops a change or suspends.
+    private val _fsChanges = MutableSharedFlow<ServerFrame.FsChanged>(extraBufferCapacity = 64)
+    val fsChanges: SharedFlow<ServerFrame.FsChanged> = _fsChanges.asSharedFlow()
 
     /** Whether the client has a fresh snapshot from the broker (i.e. we're synced/connected). */
     val connected: Boolean get() = client.sync.synced
@@ -221,8 +236,15 @@ class DesktopAppState(
                 _commands.update { it + (frame.session to frame.commands) }
                 _commandsResolved.update { it + (frame.session to frame.resolved) }
             }
-            // Out of M1 scope — reduced in later milestones: agent_error, finish_job, session_git,
-            // fs_changed, display_*, lsp_* (see AppViewModel for the full reducer).
+            // M3 editor: broadcast the disk-change pulse to whichever EditorPanel is watching this
+            // session (it filters by session id). tryEmit never suspends the reducer; a full buffer
+            // (64) would drop the oldest pulse, harmless since the banner only needs "something
+            // changed", and editor_open/close bounds how long the watcher fires at all.
+            is ServerFrame.FsChanged -> {
+                _fsChanges.tryEmit(frame)
+            }
+            // Out of M1/M3 scope — reduced in later milestones: agent_error, finish_job, session_git,
+            // display_*, lsp_* (see AppViewModel for the full reducer).
             else -> {}
         }
     }
@@ -350,6 +372,51 @@ class DesktopAppState(
      *  parity: the tmux session may already be gone). */
     fun closeTerminal(sessionId: String, terminalId: String) {
         stateScope.launch { runApi("closeTerminal") { api.closeTerminal(sessionId, terminalId) } }
+    }
+
+    // ── Editor filesystem + lifecycle (M3; mirrors AppViewModel.fsList/fsRead/fsWrite/fsSearch
+    //    + editorOpen/editorClose) ─────────────────────────────────────────────────────
+    // The EditorPanel binds these to path-only lambdas capturing the session, exactly as Android's
+    // ChatScreen binds the AppViewModel wrappers. All broker calls run through [runApi] EXCEPT
+    // [fsRead] (see its note — it must preserve the FsException message for the editor's error UI).
+
+    /** GET /sessions/<id>/fs → directory listing (workdir-relative). Empty on any failure. */
+    suspend fun fsList(session: SessionInfo, path: String): List<FsEntry> =
+        runApi("fsList") { api.fsList(session.id, path) } ?: emptyList()
+
+    /**
+     * GET /sessions/<id>/fs/read → file text as a Result (mirrors AppViewModel.fsRead). Deliberately
+     * NOT run through [runApi]: the FsException message (413 too large / 415 binary) must reach the
+     * editor's load-error UI, and runApi log-and-nulls it. runApi's cancellation discipline is
+     * preserved inline — a REAL scope cancel rethrows (structured concurrency), any other failure is
+     * captured into Result.failure so the caller can surface `err.message`.
+     */
+    suspend fun fsRead(session: SessionInfo, path: String): Result<String> =
+        try {
+            Result.success(api.fsRead(session.id, path))
+        } catch (c: CancellationException) {
+            currentCoroutineContext().ensureActive() // real cancel → propagate
+            Result.failure(c)
+        } catch (e: Throwable) {
+            Result.failure(e)
+        }
+
+    /** PUT /sessions/<id>/fs/write → true on success, false on any failure. */
+    suspend fun fsWrite(session: SessionInfo, path: String, content: String): Boolean =
+        runApi("fsWrite") { api.fsWrite(session.id, path, content) } ?: false
+
+    /** GET /sessions/<id>/fs/search → filename matches. Empty on any failure. */
+    suspend fun fsSearch(session: SessionInfo, q: String): List<FsSearchResult> =
+        runApi("fsSearch") { api.fsSearch(session.id, q) } ?: emptyList()
+
+    /** Start the broker fs-watcher for this session (so fs_changed fires → the stale banner works).
+     *  Sent on EditorPanel mount; the [editorClose] counterpart stops it on dispose. */
+    fun editorOpen(session: SessionInfo) {
+        stateScope.launch { runApi("editorOpen") { sendFrame(ClientFrame.EditorOpen(session.id)) } }
+    }
+
+    fun editorClose(session: SessionInfo) {
+        stateScope.launch { runApi("editorClose") { sendFrame(ClientFrame.EditorClose(session.id)) } }
     }
 
     // ── Lazy transcript load ─────────────────────────────────────────────────────────

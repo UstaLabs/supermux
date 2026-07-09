@@ -47,8 +47,15 @@ class SessionDetailTest {
     private val session =
         SessionInfo(id = "s1", name = "demo", workdir = "/w/s1", agent = "claude")
 
+    // The real editor pane embeds KCEF (embedded Chromium) which can't boot under runComposeUiTest —
+    // and even constructing it touches the on-disk EditorPrefsStore — so inject a pure-Compose fake
+    // via SessionDetail's `editorPanelContent` seam, tagged `pane_editor` like the real panel.
+    private val fakeEditor: @Composable () -> Unit = {
+        Box(Modifier.fillMaxSize().testTag("pane_editor"))
+    }
+
     @Test
-    fun togglingWorkPanesMountsComingSoonPanes() = runComposeUiTest {
+    fun togglingWorkPanesMountsPanes() = runComposeUiTest {
         val layout = WorkspaceLayout()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
@@ -59,6 +66,7 @@ class SessionDetailTest {
                     layout = layout,
                     draft = "",
                     onDraftChange = {},
+                    editorPanelContent = fakeEditor,
                 )
             }
         }
@@ -69,7 +77,7 @@ class SessionDetailTest {
         onNodeWithTag("pane_terminal").assertDoesNotExist()
         onNodeWithTag("pane_display").assertDoesNotExist()
 
-        // Toggle editor on → its ComingSoonPane mounts; chat stays.
+        // Toggle editor on → the editor pane mounts; chat stays.
         runOnIdle { layout.toggleEditor("s1") }
         onNodeWithTag("pane_editor").assertIsDisplayed()
         onNodeWithTag("pane_chat").assertIsDisplayed()
