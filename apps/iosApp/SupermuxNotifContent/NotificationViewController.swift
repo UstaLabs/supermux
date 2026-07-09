@@ -26,10 +26,19 @@ import UserNotificationsUI
 class NotificationViewController: UIViewController, UNNotificationContentExtension {
     private var hosting: UIHostingController<ExpandedNotificationView>?
 
+    // A programmatic content extension (NSExtensionPrincipalClass, no storyboard) MUST establish
+    // its own view in loadView(). The default UIViewController.loadView() tries to load a nib named
+    // after the class, finds none, and leaves the extension's view effectively unrendered → the
+    // whole expanded notification comes up totally blank. (Apple DevForums thread 93596.) This was
+    // the actual cause of the blank; the sizing work below is the correct-but-secondary fix.
+    override func loadView() {
+        let root = UIView()
+        root.backgroundColor = .clear   // let the system notification material show behind SwiftUI
+        view = root
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
-        // Clear so the system notification material shows behind the SwiftUI content.
-        view.backgroundColor = .clear
         NSLog("[supermux CE] viewDidLoad bounds=%.0fx%.0f", view.bounds.width, view.bounds.height)
     }
 
