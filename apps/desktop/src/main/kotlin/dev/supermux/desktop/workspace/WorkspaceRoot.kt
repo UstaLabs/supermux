@@ -77,6 +77,9 @@ fun WorkspaceRoot(app: DesktopAppState) {
     // selection, otherwise updateViewing keeps asserting a dead session id.
     LaunchedEffect(sessions) {
         if (selectedId != null && sessions.none { it.id == selectedId }) selectedId = null
+        // Prune drafts for sessions that no longer exist (slow key leak otherwise).
+        val live = sessions.mapTo(mutableSetOf()) { it.id }
+        drafts.keys.filterNot { it in live }.forEach(drafts::remove)
     }
 
     val home = remember(sessions) {
