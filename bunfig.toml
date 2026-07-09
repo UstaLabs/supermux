@@ -1,0 +1,5 @@
+[test]
+# Redirect all broker state writes to a throwaway dir before any module loads —
+# see tests/preload-isolate-state.ts. Without this, `bun test` writes to the
+# live ~/.mux/state.
+preload = ["./tests/preload-isolate-state.ts"]

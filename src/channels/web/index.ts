@@ -1079,17 +1079,19 @@ export class WebChannel implements Channel {
 
     if (method === "POST" && path.startsWith("/internal/agent-hook/")) {
       // Machine-to-machine (Claude hooks curl this from localhost). Gated by a
-      // per-boot secret embedded in the hook URL so a reachable web port can't
+      // persistent secret embedded in the hook URL so a reachable web port can't
       // forge agent-state/error/push events. Legacy hooks files (written before
       // secret support, or clobbered by tests) omit ?s= — accept those until the
-      // file is regenerated with a secret on the next broker restart.
+      // file is regenerated with a secret on the next broker restart. A mismatch
+      // is worth a log line: hooks drive agent status, the sending curl discards
+      // its own failures (`|| true`), and a silent 403 here once froze every
+      // pre-restart session at "idle" for days before anyone could see why.
       if (this.opts.internalSecret) {
         const provided = url.searchParams.get("s")
         const requiresSecret = hooksFileUsesHookSecret()
-        if (requiresSecret && provided !== this.opts.internalSecret) {
-          return new Response("forbidden", { status: 403 })
-        }
-        if (!requiresSecret && provided && provided !== this.opts.internalSecret) {
+        const mismatch = requiresSecret ? provided !== this.opts.internalSecret : Boolean(provided) && provided !== this.opts.internalSecret
+        if (mismatch) {
+          log.warn("agent_hook_rejected", { path, hasSecret: provided !== null })
           return new Response("forbidden", { status: 403 })
         }
       }

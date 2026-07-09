@@ -93,7 +93,7 @@ import { join, dirname, resolve, isAbsolute } from "path"
 import { fileURLToPath } from "url"
 import { ClaudeCodeAdapter } from "./core/agents/claude/index"
 import { wireClaudeStateEvents } from "./core/agents/claude/state-projection"
-import { writeClaudeHooksSettings, writePersistedHookSecret, CLAUDE_HOOKS_SETTINGS_PATH } from "./core/agents/claude/hooks-settings"
+import { writeClaudeHooksSettings, resolveInternalHookSecret, CLAUDE_HOOKS_SETTINGS_PATH } from "./core/agents/claude/hooks-settings"
 import type { AgentAdapter } from "./core/agents/types"
 import { resolveCodexAuth } from "./core/agents/codex/auth"
 import { spawnCodexAppServer, type CodexSpawnHandle } from "./core/agents/codex/spawn"
@@ -966,9 +966,12 @@ function spawnLoginProc(kind: string) {
   }
 }
 
-// Per-boot secret gating the localhost-only /internal/agent-hook endpoint
-// (embedded in the Claude hook curl URLs). In-memory; rotates every restart.
-const INTERNAL_SECRET = randomBytes(24).toString("hex")
+// Secret gating the localhost-only /internal/agent-hook endpoint (embedded in
+// the Claude hook curl URLs). Stable across restarts — Claude Code snapshots
+// hook config at CLI startup, so rotating this per boot would silently 403 the
+// hooks of every session that outlives a restart, freezing their status at
+// "idle". Generated once, persisted next to the hooks file it's embedded in.
+const INTERNAL_SECRET = resolveInternalHookSecret(() => randomBytes(24).toString("hex"))
 
 // In-app update checker. Kill switch MUX_UPDATE_CHECK=0 → no checker at all
 // (the web routes then report disabled). Otherwise it polls versions.json on a
@@ -1566,7 +1569,6 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     onChange: (kind, st) => webChannel?.broadcastToAll({ type: "agent_login_state", kind, state: st }),
   })
   channels.web = webChannel as Channel
-  writePersistedHookSecret(INTERNAL_SECRET)
   writeClaudeHooksSettings(MUX_WEB_PORT, INTERNAL_SECRET)
 } else {
   try { rmSync(CLAUDE_HOOKS_SETTINGS_PATH, { force: true }) } catch {}
