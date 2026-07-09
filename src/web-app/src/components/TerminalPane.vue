@@ -5,8 +5,11 @@ import { FitAddon } from "@xterm/addon-fit"
 import { WebLinksAddon } from "@xterm/addon-web-links"
 import { WebglAddon } from "@xterm/addon-webgl"
 import { ClipboardPaste } from "lucide-vue-next"
+import { useMediaQuery } from "@vueuse/core"
 import "@xterm/xterm/css/xterm.css"
 import { useTerminal } from "@/composables/useTerminal"
+import TerminalKeyBar from "./TerminalKeyBar.vue"
+import { specialKeySequence, printableSequence, type Mods, type ModState, type KeyPress } from "@/lib/terminal-keys"
 import { linesFromPixels, wheelEventsFromLines } from "@/lib/touch-scroll"
 import { PredictionEngine } from "@/lib/predictive-echo/engine"
 import { XtermPredictionAdapter } from "@/lib/predictive-echo/xterm-adapter"
@@ -46,6 +49,60 @@ let touchLastY = 0
 let touchAccumPx = 0
 
 const terminal = useTerminal(toRef(() => props.sessionName), toRef(() => props.terminalId), toRef(() => props.kind ?? "scratch"))
+
+// Mobile key-accessory bar: only useful (and only shown) on touch devices, where
+// the soft keyboard has no Esc/Tab/arrows/Ctrl. Desktops keep their real keys.
+const isTouch = useMediaQuery("(pointer: coarse)")
+
+// Sticky Ctrl/Alt modifiers (tri-state, like iOS Shift): off → armed-for-one-key
+// → locked → off. An armed modifier applies to the next key from the bar OR the
+// real keyboard; `once` clears after it's consumed, `locked` persists.
+const ctrlState = ref<ModState>("off")
+const altState = ref<ModState>("off")
+
+function currentMods(): Mods {
+  return { ctrl: ctrlState.value !== "off", alt: altState.value !== "off" }
+}
+
+function cycleModifier(state: typeof ctrlState) {
+  state.value = state.value === "off" ? "once" : state.value === "once" ? "locked" : "off"
+}
+
+/** Consume `once` modifiers after they've modified a key (leave `locked` alone). */
+function consumeOnceModifiers() {
+  if (ctrlState.value === "once") ctrlState.value = "off"
+  if (altState.value === "once") altState.value = "off"
+}
+
+/** Send a byte string to the shell, priming the keystroke→echo latency probe. */
+function sendSequence(seq: string) {
+  if (!seq) return
+  lastKeyAt = performance.now()
+  terminal.sendInput(new TextEncoder().encode(seq))
+}
+
+function appCursorKeys(): boolean {
+  return term?.modes.applicationCursorKeysMode ?? false
+}
+
+function onKeyPress(press: KeyPress) {
+  if (press.type === "modifier") {
+    cycleModifier(press.mod === "ctrl" ? ctrlState : altState)
+    return
+  }
+  const seq = press.type === "special"
+    ? specialKeySequence(press.key, currentMods(), appCursorKeys())
+    : printableSequence(press.ch, currentMods())
+  sendSequence(seq)
+  consumeOnceModifiers()
+}
+
+/** A single printable ASCII char (0x20–0x7e) — the only input a bar modifier transforms. */
+function isSinglePrintable(data: string): boolean {
+  if (data.length !== 1) return false
+  const code = data.charCodeAt(0)
+  return code >= 0x20 && code <= 0x7e
+}
 
 function cssVar(name: string, fallback: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
@@ -194,6 +251,14 @@ onMounted(() => {
   // Pipe terminal input → WS (+ predictive local echo: show the keystroke instantly
   // and advance the caret — the engine emits caret-aware ops, the adapter renders them).
   term.onData((data) => {
+    // A bar modifier armed for the next key transforms a real-keyboard keystroke
+    // (Ctrl then `c` on the soft keyboard = Ctrl-C). Control codes aren't
+    // printable, so skip predictive echo and send the transformed bytes directly.
+    if ((ctrlState.value !== "off" || altState.value !== "off") && isSinglePrintable(data)) {
+      sendSequence(printableSequence(data, currentMods()))
+      consumeOnceModifiers()
+      return
+    }
     if (predictor && predAdapter) predAdapter.render(predictor.onInput(decodeInput(data), predAdapter.cursor()))
     lastKeyAt = performance.now() // mark for the keystroke→echo RTT measured below
     const encoder = new TextEncoder()
@@ -287,9 +352,13 @@ onActivated(() => {
 </script>
 
 <template>
-  <div class="relative w-full h-full bg-[var(--cmux-terminal)]">
+  <div class="relative flex flex-col w-full h-full bg-[var(--cmux-terminal)]">
     <!-- Terminal container: xterm handles its own padding -->
-    <div ref="containerRef" class="w-full h-full" />
+    <div ref="containerRef" class="flex-1 min-h-0 w-full" />
+
+    <!-- Mobile key-accessory bar: Esc/Tab/Ctrl/Alt/arrows the soft keyboard lacks.
+         Touch-only; sits at the bottom of the pane, just above the on-screen keyboard. -->
+    <TerminalKeyBar v-if="isTouch" :ctrl="ctrlState" :alt="altState" @press="onKeyPress" />
 
     <!-- Connection status badge -->
     <div class="absolute top-2 right-2 pointer-events-none">
@@ -322,8 +391,8 @@ onActivated(() => {
     <!-- Paste button: long-press paste is unreliable on touch, so offer an explicit tap target -->
     <button
       type="button"
-      class="absolute bottom-3 right-3 size-10 rounded-full bg-[var(--cmux-header)]/95 text-foreground border border-border shadow-lg flex items-center justify-center active:scale-95 transition-transform"
-      style="bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem)"
+      class="absolute right-3 size-10 rounded-full bg-[var(--cmux-header)]/95 text-foreground border border-border shadow-lg flex items-center justify-center active:scale-95 transition-transform"
+      :style="{ bottom: isTouch ? 'calc(env(safe-area-inset-bottom, 0px) + 4rem)' : 'calc(env(safe-area-inset-bottom, 0px) + 0.75rem)' }"
       aria-label="Paste from clipboard"
       @click="pasteFromClipboard"
     >
