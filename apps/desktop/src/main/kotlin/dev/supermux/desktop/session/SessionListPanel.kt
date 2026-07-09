@@ -12,8 +12,6 @@
 //    Android-style shared-element navigation.
 //  - Long-press-to-open-menu is dropped in favour of a right-click ContextMenuArea, which is the
 //    native desktop affordance for row actions (mouse long-press has no clean desktop equivalent).
-//  - SessionAvatar now renders per-row (Android only uses it in the collapsed rail / chat header /
-//    workspace detail, not in the list row) — see per-function doc for why.
 package dev.supermux.desktop.session
 
 import androidx.compose.foundation.ContextMenuArea
@@ -36,7 +34,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -49,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontStyle
@@ -108,6 +110,12 @@ private fun agentBrand(agent: String?): AgentBrand? = when (agent?.lowercase()) 
  * shared-element params (no Android-style shared-element nav on desktop) and the drawable lookup
  * (desktop has no bundled per-agent logo art yet).
  *
+ * NOT used in [SessionRow] — matching Android, where list rows deliberately stay lean (the small
+ * [SessionStatusRail] IS the row's leading visual; a per-row avatar column was tried on Android
+ * and reverted as a heavy, repetitive wall of near-identical marks). Currently unused on desktop:
+ * its Android call sites — collapsed sessions rail, chat header, workspace detail — arrive with
+ * Task 9+ and will use this.
+ *
  * TODO(M4): swap the letter tile for real per-agent logo marks once desktop ships bundled agent
  * artwork (Android uses `R.drawable.agent_*`; this is a placeholder for the M1 port).
  */
@@ -141,9 +149,11 @@ fun SessionAvatar(name: String, agent: String? = null, modifier: Modifier = Modi
     }
 }
 
-/** Path-group header with the session count, matching the web app's group headers. */
+/** Path-group header with a leading chevron + session count, matching the web app's group
+ *  headers. [collapsed] mirrors the Android source: rendered (rotated -90°) but never triggered —
+ *  group collapse is not wired up yet on either platform. */
 @Composable
-fun PathGroupHeader(label: String, count: Int) {
+fun PathGroupHeader(label: String, count: Int, collapsed: Boolean = false) {
     val cs = MaterialTheme.colorScheme
     Row(
         Modifier
@@ -152,6 +162,16 @@ fun PathGroupHeader(label: String, count: Int) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
+        // Android uses R.drawable.ic_chevron_down; desktop has no bundled icon set, so the
+        // materialIconsExtended equivalent stands in.
+        Icon(
+            imageVector = Icons.Filled.KeyboardArrowDown,
+            contentDescription = null,
+            tint = cs.onSurfaceVariant,
+            modifier = Modifier
+                .size(14.dp)
+                .rotate(if (collapsed) -90f else 0f),
+        )
         Text(
             label,
             color = cs.onSurfaceVariant,
@@ -173,9 +193,10 @@ fun PathGroupHeader(label: String, count: Int) {
 }
 
 /**
- * One session row: avatar, status rail, name/time header, status badge, and message/workdir
- * preview. Right-click opens the row's action menu (Rename/Mute/Kill); Android's long-press +
- * DropdownMenu becomes a native `ContextMenuArea` on desktop (see file header).
+ * One session row: status rail, name/time header, status badge, and message/workdir preview —
+ * lean by design, no per-row avatar (Android parity; see [SessionAvatar]). Right-click opens the
+ * row's action menu (Rename/Mute/Kill); Android's long-press + DropdownMenu becomes a native
+ * `ContextMenuArea` on desktop (see file header).
  */
 @Composable
 fun SessionRow(
@@ -227,8 +248,6 @@ fun SessionRow(
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.Top,
         ) {
-            SessionAvatar(name = s.name, agent = s.agent, modifier = Modifier.align(Alignment.CenterVertically))
-            Spacer(Modifier.width(8.dp))
             SessionStatusRail(git = s.git, working = working, bgOpen = bgOpen, modifier = Modifier.align(Alignment.CenterVertically))
             Spacer(Modifier.width(12.dp))
 
