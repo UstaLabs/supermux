@@ -6,6 +6,9 @@ package dev.supermux.desktop.terminal
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -129,29 +132,30 @@ fun DesktopTerminalPanel(
         }
     }
 
-    Box(
+    // SwingPanel is a HEAVYWEIGHT AWT child: without the experimental interop blending
+    // (`compose.interop.blending`), Compose siblings CANNOT paint above it — an overlaid chip
+    // would be occluded (review catch). The status bar therefore lives in its own lightweight
+    // strip ABOVE the terminal (only present in non-CONNECTED states, so the terminal keeps the
+    // full pane height while healthy).
+    Column(
         modifier
             .fillMaxSize()
             .background(Color(c.terminal)),
     ) {
+        if (status != TerminalStatus.CONNECTED) {
+            Row(
+                Modifier.fillMaxWidth().padding(Space.sm),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                StatusChip(status = status)
+            }
+        }
         // No auto-focus on composition: SwingPanel does not request focus for its child; the
         // JediTerm panel takes focus on click (Swing default), matching the Android rule.
         SwingPanel(
             factory = { widget },
             modifier = Modifier.fillMaxSize(),
         )
-        // ⚠️ SwingPanel is a HEAVYWEIGHT AWT child: without the experimental interop blending
-        // (`compose.interop.blending`), Compose siblings cannot paint ABOVE it. The chip is
-        // rendered only in the non-CONNECTED states, where it matters most and where the widget
-        // is typically blank/frozen; Task 8's live pass verifies actual visibility.
-        if (status != TerminalStatus.CONNECTED) {
-            StatusChip(
-                status = status,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(Space.sm),
-            )
-        }
     }
 }
 
