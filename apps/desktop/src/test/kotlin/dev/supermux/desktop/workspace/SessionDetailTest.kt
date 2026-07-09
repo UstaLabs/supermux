@@ -378,6 +378,59 @@ class SessionDetailTest {
         assertEquals(listOf("s1", "s2"), mounts)
         assertEquals(listOf("s1"), disposals)
     }
+
+    // ── Finish button gate + SM_FINISH_TEST force-open hook ─────────────────────────────────────────
+
+    private val branchedSession =
+        SessionInfo(id = "s1", name = "demo", workdir = "/w/s1", agent = "claude", session_branch = "feat/x")
+
+    @Test
+    fun finishButtonShownOnlyForBranchedSession() = runComposeUiTest {
+        // No session_branch → no Finish button in the header.
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                SessionDetail(app = app(), session = session, agent = null,
+                    layout = WorkspaceLayout(), draft = "", onDraftChange = {},
+                    editorPanelContent = fakeEditor)
+            }
+        }
+        onNodeWithTag("finish_button").assertDoesNotExist()
+    }
+
+    @Test
+    fun finishButtonShownForBranchedSession() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                SessionDetail(app = app(), session = branchedSession, agent = null,
+                    layout = WorkspaceLayout(), draft = "", onDraftChange = {},
+                    editorPanelContent = fakeEditor)
+            }
+        }
+        onNodeWithTag("finish_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun forceFinishDialogConsumesTheOneShotFlag() = runComposeUiTest {
+        // The SM_FINISH_TEST delivery path: flipping forceFinishDialog true drives the SAME open path
+        // the button click uses, then consumes the one-shot source exactly once. Proves the hook is
+        // wired into the session_branch block without needing to assert on the (windowed) Dialog.
+        var consumed = 0
+        var force by mutableStateOf(false)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                SessionDetail(app = app(), session = branchedSession, agent = null,
+                    layout = WorkspaceLayout(), draft = "", onDraftChange = {},
+                    editorPanelContent = fakeEditor,
+                    forceFinishDialog = force,
+                    onForceFinishConsumed = { consumed++ })
+            }
+        }
+        // Not yet requested → not consumed.
+        runOnIdle { assertEquals(0, consumed) }
+        // Request the open → the hook fires and consumes exactly once.
+        runOnIdle { force = true }
+        runOnIdle { assertEquals(1, consumed) }
+    }
 }
 
 // Captured onExit from the most recent [fakeNative] composition, so a test can drive the agent-exit

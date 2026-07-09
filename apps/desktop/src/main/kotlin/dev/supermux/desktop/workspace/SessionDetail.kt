@@ -158,6 +158,12 @@ fun SessionDetail(
     // operation; when non-null it is applied once then [onExternalOpenConsumed] clears the source.
     externalOpen: FilePathRef? = null,
     onExternalOpenConsumed: () -> Unit = {},
+    // Off-by-default headless hook (SM_FINISH_TEST, Main.kt) delivery: when true, opens the Finish
+    // dialog in its Menu state (same path the FinishButton click flips) so the readiness card can be
+    // screenshot. NEVER triggers a finish action. Applied once, then [onForceFinishConsumed] clears
+    // the source. No-op when the session has no session_branch (the dialog/button don't render).
+    forceFinishDialog: Boolean = false,
+    onForceFinishConsumed: () -> Unit = {},
     // Injectable seam for the Native (agent-PTY) panel — defaults to the real [DesktopTerminalPanel].
     // Its SwingPanel cannot be hosted under `runComposeUiTest` (no real AWT window), so the UI tests
     // inject a lightweight pure-Compose fake to exercise the toggle + keep-alive + onExit wiring.
@@ -375,6 +381,16 @@ fun SessionDetail(
                 // wrongly re-show A's already-seen dot. Derive "acked" from the app flow instead.
                 val acked = finishJob != null && ackedFinish[session.id] == finishJob.startedAt
                 val isUnacked = isFinishUnacked(finishJob, acked)
+                // SM_FINISH_TEST headless hook delivery: drive the SAME open path the button click
+                // uses (ack the current job so the dot latches "seen" + flip showFinishDialog on),
+                // then consume so it fires once. NEVER kicks off a finish action.
+                LaunchedEffect(forceFinishDialog) {
+                    if (forceFinishDialog) {
+                        finishJob?.let { app.ackFinish(session.id, it.startedAt) }
+                        showFinishDialog = true
+                        onForceFinishConsumed()
+                    }
+                }
                 FinishButton(
                     finishJob = finishJob,
                     isUnacked = isUnacked,

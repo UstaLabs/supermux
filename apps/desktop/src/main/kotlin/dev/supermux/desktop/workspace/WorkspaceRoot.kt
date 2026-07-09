@@ -77,6 +77,15 @@ class WorkspaceUiState {
     var externalOpen by mutableStateOf<Pair<String, dev.supermux.ui.FilePathRef>?>(null)
 
     /**
+     * One-shot "open the Finish dialog for this session" request (session id), consumed by the
+     * matching [SessionDetail] — it drives the SAME `showFinishDialog` state the FinishButton click
+     * flips, so the dialog opens in its Menu state and loads readiness. Set by the off-by-default
+     * `SM_FINISH_TEST` headless hook in Main.kt; null in normal operation. Cleared once the matching
+     * SessionDetail consumes it. It NEVER triggers a finish action — it only opens the menu.
+     */
+    var forceFinishDialogFor by mutableStateOf<String?>(null)
+
+    /**
      * Reconciles the hydrated UI state against the [live] session-id set: drops a selection whose
      * session vanished (killed elsewhere / agent exit) and prunes the layout's per-session pane
      * state.
@@ -258,6 +267,10 @@ fun WorkspaceRoot(
                         // SessionDetail whose id matches, which routes it through onOpenFile.
                         externalOpen = ui.externalOpen?.takeIf { it.first == session.id }?.second,
                         onExternalOpenConsumed = { ui.externalOpen = null },
+                        // SM_FINISH_TEST hook (Main.kt) delivery: open the Finish dialog (menu state)
+                        // for the SessionDetail whose id matches; consumed once opened.
+                        forceFinishDialog = ui.forceFinishDialogFor == session.id,
+                        onForceFinishConsumed = { ui.forceFinishDialogFor = null },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

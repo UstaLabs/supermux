@@ -39,6 +39,7 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //   SM_OPEN_FILE="name:path[:ln]" — open a file in the editor at a line (M3)            [main]
 //   SM_LAUNCH_TEST="wd|agent|msg[|attach]" — drive the launcher spawn→first-msg chain (M4a) [main]
 //   SM_LAUNCH_PAUSE_MS=<ms>       — hold the launcher OPEN this long before submitting (M4a) [main]
+//   SM_FINISH_TEST=<session-name> — select the session + open its Finish dialog (menu, M4b) [main]
 //   SMX_KCEF_FORCE_ERROR=1        — force KcefState.Error (native-fallback editor, M3)   [KcefRuntime]
 //   SM_EDITOR_SAVE_TEST           — drive the editor save path (M3)                      [EditorPanel]
 //   SMX_KCEF_EXTRA_ARGS="…"       — extra CEF switches for headless CI                   [KcefRuntime]
@@ -356,6 +357,39 @@ fun main() {
                             app.sendMessage(id, message, app.consumeFirstUploads(id))
                             ui.launcherOpen = false
                             println("[launch] spawned session $id in '$workdir' (agent=$agent, staged=${staged.size}); first message sent")
+                        }
+                    }
+
+                    // Headless Finish-verification hook (M4b): SM_FINISH_TEST="<session-name>"
+                    // resolves the named session after the first snapshot, SELECTS it, and flips the
+                    // shared one-shot `forceFinishDialogFor` so the matching SessionDetail opens its
+                    // Finish dialog in the MENU state — the SAME state the FinishButton click flips,
+                    // which loads finishReadiness → the ReadinessCard + Merge/PR/Keep/Discard rows. It
+                    // does NOT trigger any finish action (no merge/discard/keep) — it only opens the
+                    // menu so the readiness card can be screenshot under Xvfb without a pointer. Only
+                    // effective when the session has session_branch != null (else the button/dialog
+                    // don't render and the flag is a no-op). Harmless in production (unset by default).
+                    val finishTest = System.getenv("SM_FINISH_TEST")?.takeIf { it.isNotBlank() }
+                    if (finishTest != null) {
+                        LaunchedEffect(app) {
+                            // Wait (≤30s) for the snapshot to carry the named session.
+                            var target = app.sessions.value.firstOrNull { it.name == finishTest }
+                            val deadline = System.currentTimeMillis() + 30_000
+                            while (target == null && System.currentTimeMillis() < deadline) {
+                                delay(500)
+                                target = app.sessions.value.firstOrNull { it.name == finishTest }
+                            }
+                            val t = target
+                            if (t == null) {
+                                println("[finish] session '$finishTest' not found in snapshot after 30s")
+                                return@LaunchedEffect
+                            }
+                            if (t.session_branch == null) {
+                                println("[finish] session '$finishTest' has no session_branch — Finish button/dialog won't render")
+                            }
+                            ui.selectedId = t.id
+                            ui.forceFinishDialogFor = t.id
+                            println("[finish] opened Finish dialog for ${t.name} (${t.id}); branch=${t.session_branch}")
                         }
                     }
 
