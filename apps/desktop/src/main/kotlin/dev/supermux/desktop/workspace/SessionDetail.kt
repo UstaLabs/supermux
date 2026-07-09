@@ -4,9 +4,10 @@
 //
 // Live surfaces: Chat (M1), Terminal — scratch tabs + the Native agent PTY (M2), and Editor (M3, the
 // KCEF-backed code editor). Display remains a ComingSoonPane placeholder (it arrives in M5).
-// The Finish button (worktree-backed sessions) lands in M4b; still TODO(M4c) from the Android
-// original: git badge menus, the session-links menu, and the overflow (⋮) management menu. The AgentViewToggle
-// (Chat⇄Native) was pulled forward into M2 (terminal UX) — see the chatOrNative slot below.
+// The Finish button (worktree-backed sessions) lands in M4b; the git-badge count menu, the
+// session-links (proxies) menu, and the overflow (⋮) Rename/Mute/Kill menu land in M4c (see
+// SessionHeaderMenus.kt). The AgentViewToggle (Chat⇄Native) was pulled forward into M2 (terminal
+// UX) — see the chatOrNative slot below.
 //
 // The split structure and the "chat stays in the same composition slot" discipline are copied
 // exactly from Android so a pane toggle never remounts (and never blinks) the chat pane. The
@@ -220,7 +221,12 @@ fun SessionDetail(
     // changes (no proxy WS frame is reduced; see the loadProxies seam KDoc). getOrNull-degraded
     // upstream, so a broker hiccup just leaves the list empty and the globe menu hidden.
     var proxies by remember { mutableStateOf<List<ProxyDto>>(emptyList()) }
-    LaunchedEffect(session.id) { proxies = loadProxies() }
+    LaunchedEffect(session.id) {
+        // Clear first so the previous session's global snapshot can't transiently render
+        // filtered-for-the-new-session while the fresh load is in flight.
+        proxies = emptyList()
+        proxies = loadProxies()
+    }
 
     // SM_OPEN_FILE headless hook delivery: feed an external open request through the exact same
     // onOpenFile chain a chat file-path tap uses (toWorkdirRelativePath → pendingEditorOpen + editor

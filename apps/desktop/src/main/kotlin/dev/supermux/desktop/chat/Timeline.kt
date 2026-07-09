@@ -90,6 +90,7 @@ import dev.supermux.desktop.theme.LocalSemantics
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Radii
 import dev.supermux.desktop.theme.Space
+import dev.supermux.desktop.ui.openInBrowser
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.Attachment
 import dev.supermux.proto.LogEntry
@@ -100,9 +101,6 @@ import dev.supermux.ui.parseInlineMarkdown
 import dev.supermux.ui.parseMarkdownBlocks
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.awt.Desktop
-import java.net.URI
-import kotlin.concurrent.thread
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -172,22 +170,6 @@ fun mergeTimeline(
 // ---------------------------------------------------------------------------
 // Markdown helpers
 // ---------------------------------------------------------------------------
-
-/** Open [uri] in the system browser (desktop replacement for Android's intent launch).
- *  `Desktop.browse` blocks the calling thread while it hands off to the OS (it can spawn and
- *  wait on the browser process), so it must never run on the Compose UI thread — a click would
- *  freeze the frame. Off-load to a short-lived daemon thread and log on failure instead of the
- *  old silent swallow, so a broken browser handoff is at least diagnosable. */
-private fun openInBrowser(uri: String) {
-    thread(isDaemon = true, name = "open-browser") {
-        runCatching {
-            if (Desktop.isDesktopSupported()) {
-                val desktop = Desktop.getDesktop()
-                if (desktop.isSupported(Desktop.Action.BROWSE)) desktop.browse(URI(uri))
-            }
-        }.onFailure { e -> println("[Timeline] openInBrowser failed for $uri: $e") }
-    }
-}
 
 /**
  * Convert a markdown string to an [AnnotatedString] with inline bold/italic/code spans.

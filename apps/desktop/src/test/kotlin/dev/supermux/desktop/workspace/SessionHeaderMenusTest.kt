@@ -15,6 +15,7 @@ import dev.supermux.proto.GitBadgeKind
 import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.gitBadge
+import kotlinx.coroutines.CompletableDeferred
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -158,6 +159,40 @@ class SessionHeaderMenusTest {
     }
 
     @Test
+    fun gitOpResultReflectsLastLaunchedOpNotLastToComplete() = runComposeUiTest {
+        // Out-of-order completion race: gate each op with a CompletableDeferred so the test controls
+        // WHEN it resolves. Launch Fetch (slow) first, then reopen + launch Pull (fast); resolve Pull
+        // first, then the slower Fetch LAST. The op-sequence token must keep Pull's result showing —
+        // the late Fetch is stale and must not clobber it.
+        val gateFetch = CompletableDeferred<GitOpResult?>()
+        val gatePull = CompletableDeferred<GitOpResult?>()
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitBadgeMenu(
+                    session = baseSession,
+                    onFetch = { gateFetch.await() },
+                    onPull = { gatePull.await() },
+                    onPush = { GitOpResult() },
+                    onPublish = { GitOpResult() },
+                )
+            }
+        }
+        onNodeWithTag("git_badge").performClick()
+        onNodeWithTag("git_fetch").performClick() // launches the slow op first
+        onNodeWithTag("git_badge").performClick() // reopen clears + bumps the token
+        onNodeWithTag("git_pull").performClick()  // launches the fast op second
+
+        gatePull.complete(GitOpResult(status = "pulled"))
+        waitForIdle()
+        onNodeWithText("pulled").assertIsDisplayed()
+
+        gateFetch.complete(GitOpResult(status = "fetched")) // the slow op resolves LAST
+        waitForIdle()
+        onNodeWithText("pulled").assertIsDisplayed()
+        onNodeWithText("fetched").assertDoesNotExist()
+    }
+
+    @Test
     fun gitBadgeHiddenWhenGitNull() = runComposeUiTest {
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
@@ -230,6 +265,7 @@ class SessionHeaderMenusTest {
         onNodeWithTag("overflow_rename").performClick()
         // The dialog opens seeded with the current name.
         onNodeWithTag("overflow_rename_field").assertIsDisplayed()
+        onNodeWithText("demo").assertIsDisplayed() // pre-filled with session.name
         onNodeWithTag("overflow_rename_field").performTextReplacement("renamed-demo")
         onNodeWithTag("overflow_rename_confirm").performClick()
         assertEquals("renamed-demo", renamed)

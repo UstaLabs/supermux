@@ -69,6 +69,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import dev.supermux.desktop.theme.HapticKind
 import dev.supermux.desktop.theme.rememberHaptics
+import dev.supermux.desktop.ui.openInBrowser
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.FinishResult
 import dev.supermux.net.VerifySaveResult
@@ -76,9 +77,6 @@ import dev.supermux.net.VerifySuggestResult
 import dev.supermux.proto.FinishJobDto
 import dev.supermux.proto.SessionInfo
 import kotlinx.coroutines.launch
-import java.awt.Desktop
-import java.net.URI
-import kotlin.concurrent.thread
 
 /** Header Finish button — a compact M3 [TextButton] with an unacked-result dot overlay.
  *  Red ([colorScheme.error]) when the background job ended `failed`, teal ([colorScheme.primary])
@@ -936,17 +934,4 @@ fun issueMessage(o: FinishResult): String = when (o.status) {
     "dirty_overlap" -> "The base checkout has unsaved changes in: ${o.files.joinToString(", ")} — the same files my work touches. Please commit or stash them so Finish can fast-forward."
     "push_rejected" -> "Pushing the branch for a PR was rejected because the remote has diverged: ${o.message ?: ""}. Please reconcile (pull/rebase) and I'll run Finish again."
     else -> "Finish reported: ${o.message ?: o.status}"
-}
-
-/** Open [url] in the OS browser off the Compose UI thread (Timeline.openInBrowser idiom): the AWT
- *  Desktop.browse handoff can block, so it must never run inline on a click. */
-private fun openInBrowser(url: String) {
-    thread(isDaemon = true, name = "finish-open-browser") {
-        runCatching {
-            if (Desktop.isDesktopSupported()) {
-                val desktop = Desktop.getDesktop()
-                if (desktop.isSupported(Desktop.Action.BROWSE)) desktop.browse(URI(url))
-            }
-        }.onFailure { e -> println("[FinishDialog] openInBrowser failed for $url: $e") }
-    }
 }

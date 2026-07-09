@@ -14,9 +14,9 @@
 //     desktop yet (Usage=M4f, Archived=M4e, the rest later) — OMITTED here rather than adding dead
 //     nav. The overflow keeps only the session-scoped Rename/Mute/Kill (parity with the session
 //     list's right-click menu).
-//   • Link opening: Android uses LocalUriHandler.openUri; desktop opens via java.awt.Desktop.browse
-//     on a daemon thread (the Timeline.openInBrowser idiom) — injected as onOpenUrl so tests can
-//     capture the URL without spawning a browser.
+//   • Link opening: Android uses LocalUriHandler.openUri; desktop opens via the shared
+//     ui.openInBrowser (java.awt.Desktop.browse on a daemon thread) — injected as onOpenUrl so tests
+//     can capture the URL without spawning a browser.
 package dev.supermux.desktop.workspace
 
 import androidx.compose.foundation.background
@@ -43,6 +43,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Space
+import dev.supermux.desktop.ui.openInBrowser
 import dev.supermux.net.GitOpResult
 import dev.supermux.net.ProxyDto
 import dev.supermux.proto.GitBadge
@@ -67,9 +69,6 @@ import dev.supermux.proto.gitBadge
 import dev.supermux.util.proxyDisplayUrl
 import dev.supermux.util.proxyUrl
 import kotlinx.coroutines.launch
-import java.awt.Desktop
-import java.net.URI
-import kotlin.concurrent.thread
 
 // ── Pure, testable bits (no Compose) ──────────────────────────────────────────────────
 
@@ -123,11 +122,23 @@ fun GitBadgeMenu(
     val scope = rememberCoroutineScope()
     var expanded by remember { mutableStateOf(false) }
     var result by remember(session.id) { mutableStateOf<String?>(null) }
+    // Monotonic op token: each launch (and each fresh menu-open) bumps it, and a completing op only
+    // writes [result] when its captured token is still current. Without this, out-of-order
+    // completions race — a slow op launched first would clobber a fast op launched later
+    // (Fetch·slow → reopen → Pull·fast shows Pull, then late Fetch overwrites it). Keyed on session.
+    var seq by remember(session.id) { mutableStateOf(0) }
+    // A session switch with the menu open must not leave it bound to the new session's callbacks.
+    LaunchedEffect(session.id) { expanded = false }
 
-    // Fire an op on a coroutine, record its outcome into the inline result label, and close the menu.
+    // Fire an op on a coroutine, record its outcome into the inline result label (only if this op is
+    // still the latest one), and close the menu.
     fun run(op: String, call: suspend () -> GitOpResult?) {
         expanded = false
-        scope.launch { result = gitOpResultLabel(op, call()) }
+        val token = ++seq
+        scope.launch {
+            val label = gitOpResultLabel(op, call())
+            if (token == seq) result = label
+        }
     }
 
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
@@ -144,7 +155,10 @@ fun GitBadgeMenu(
                     .testTag("git_badge")
                     .border(1.dp, cs.outlineVariant, RoundedCornerShape(6.dp))
                     .clickable {
-                        result = null // a fresh open clears the last op's label
+                        // A fresh open clears the last op's label and bumps the token, so a still
+                        // in-flight op from a prior open can't write its result after this clear.
+                        result = null
+                        seq++
                         expanded = true
                     }
                     .padding(horizontal = Space.sm, vertical = 3.dp),
@@ -207,6 +221,8 @@ fun SessionLinksMenu(
     if (links.isEmpty()) return
     val cs = MaterialTheme.colorScheme
     var expanded by remember { mutableStateOf(false) }
+    // Close on a session switch so the menu never stays open bound to the new session.
+    LaunchedEffect(session.id) { expanded = false }
     Box(modifier) {
         IconButton(onClick = { expanded = true }, modifier = Modifier.testTag("session_links")) {
             Icon(
@@ -250,6 +266,9 @@ fun OverflowMenu(
     var renameText by remember(session.id) { mutableStateOf(session.name) }
     var showKill by remember(session.id) { mutableStateOf(false) }
     val muted = session.mute ?: false
+    // Close on a session switch so the ⋮ menu never stays bound to the new session's callbacks
+    // (a stale open Kill would otherwise target the wrong session).
+    LaunchedEffect(session.id) { expanded = false }
 
     Box(modifier) {
         IconButton(onClick = { expanded = true }, modifier = Modifier.testTag("workspace_overflow")) {
@@ -315,18 +334,5 @@ fun OverflowMenu(
             },
             dismissButton = { TextButton(onClick = { showKill = false }) { Text("Cancel") } },
         )
-    }
-}
-
-/** Open [uri] in the system browser off the Compose UI thread (Timeline.openInBrowser idiom):
- *  Desktop.browse can block while handing off to the OS, so it must never run inline on a click. */
-private fun openInBrowser(uri: String) {
-    thread(isDaemon = true, name = "open-browser") {
-        runCatching {
-            if (Desktop.isDesktopSupported()) {
-                val desktop = Desktop.getDesktop()
-                if (desktop.isSupported(Desktop.Action.BROWSE)) desktop.browse(URI(uri))
-            }
-        }.onFailure { e -> println("[SessionHeaderMenus] openInBrowser failed for $uri: $e") }
     }
 }
