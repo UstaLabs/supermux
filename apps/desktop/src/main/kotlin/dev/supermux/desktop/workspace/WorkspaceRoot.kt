@@ -23,6 +23,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -31,7 +32,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalWindowInfo
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.withContext
 import dev.supermux.desktop.session.SessionListPanel
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.session.inferHomeDir
@@ -45,6 +49,24 @@ import dev.supermux.session.inferHomeDir
 class WorkspaceUiState {
     val layout = WorkspaceLayout()
     var selectedId by mutableStateOf<String?>(null)
+
+    /**
+     * Reconciles the hydrated UI state against the [live] session-id set: drops a selection whose
+     * session vanished (killed elsewhere / agent exit) and prunes the layout's per-session pane
+     * state.
+     *
+     * GUARD: an EMPTY [live] set is treated as "sessions not loaded yet", NOT "everything died" —
+     * `app.sessions` starts empty until the first WS Snapshot arrives, and reconciling against that
+     * transient [] would nuke the hydrated selection + panes (and the debounced save would then
+     * persist the emptied state back to ui-state.json permanently). Known edge case: a
+     * genuinely-empty fleet never prunes — harmless, since with zero live sessions there is nothing
+     * to select/render and stale pane entries are inert.
+     */
+    fun reconcileSessions(live: Set<String>) {
+        if (live.isEmpty()) return
+        if (selectedId != null && selectedId !in live) selectedId = null
+        layout.prune(live)
+    }
 }
 
 @Composable
@@ -106,22 +128,25 @@ fun WorkspaceRoot(
         app.updateViewing(ui.selectedId, focused)
     }
 
-    // Sessions changed: drop a selection whose session vanished (killed elsewhere / agent exit),
-    // prune the layout's per-session pane state, and prune stale drafts.
+    // Sessions changed: reconcile selection + pane state against the live set (empty-guarded — see
+    // WorkspaceUiState.reconcileSessions) and prune stale drafts.
     LaunchedEffect(sessions) {
+        if (sessions.isEmpty()) return@LaunchedEffect // first Snapshot not in yet — don't wipe state
         val live = sessions.mapTo(mutableSetOf()) { it.id }
-        if (ui.selectedId != null && ui.selectedId !in live) ui.selectedId = null
-        layout.prune(live)
+        ui.reconcileSessions(live)
         drafts.keys.filterNot { it in live }.forEach(drafts::remove)
     }
 
-    // Debounced persistence: whenever the layout snapshot or the selection changes, wait 500ms of
-    // quiet then write ui-state.json. Reading layout.snapshot() here subscribes to all the layout's
-    // snapshot state, so any change re-runs this effect (and restarts the debounce).
-    val snapshot = layout.snapshot()
-    LaunchedEffect(snapshot, ui.selectedId) {
-        delay(500)
-        store.save(PersistedUiState(layout = snapshot, selectedId = ui.selectedId))
+    // Debounced persistence, observed through snapshotFlow rather than a composition-scope
+    // layout.snapshot() read — the latter would subscribe the whole WorkspaceRoot to every
+    // fraction/pane change and recompose the root per frame during split drags. collectLatest +
+    // delay(500) = settle 500ms after the last change; the file write runs off the UI thread.
+    LaunchedEffect(Unit) {
+        snapshotFlow { PersistedUiState(layout = layout.snapshot(), selectedId = ui.selectedId) }
+            .collectLatest {
+                delay(500)
+                withContext(Dispatchers.IO) { store.save(it) }
+            }
     }
 
     val home = remember(sessions) {

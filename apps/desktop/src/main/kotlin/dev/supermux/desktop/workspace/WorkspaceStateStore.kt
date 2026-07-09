@@ -24,6 +24,13 @@ class WorkspaceStateStore(val path: Path = defaultPath()) {
 
     fun load(): PersistedUiState =
         runCatching { json.decodeFromString<PersistedUiState>(Files.readString(path)) }
+            // A missing file is the normal first-run path (NoSuchFileException lands here too);
+            // anything else is a corrupt/unreadable ui-state.json — log it, fall back to empty.
+            .onFailure {
+                if (it !is java.nio.file.NoSuchFileException) {
+                    println("[WorkspaceStateStore] corrupt ui-state.json ignored: $it")
+                }
+            }
             .getOrDefault(PersistedUiState())
 
     fun save(state: PersistedUiState) {

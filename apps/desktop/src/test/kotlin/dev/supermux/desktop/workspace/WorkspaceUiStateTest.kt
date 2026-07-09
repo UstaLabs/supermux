@@ -1,0 +1,47 @@
+package dev.supermux.desktop.workspace
+
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+/**
+ * Regression tests for [WorkspaceUiState.reconcileSessions] — the startup-order bug: app.sessions
+ * starts EMPTY until the first WS Snapshot arrives, and reconciling against that transient [] used
+ * to wipe the hydrated selection + per-session panes (which the debounced save then persisted back
+ * to ui-state.json permanently). An empty live set must be treated as "not loaded yet", not
+ * "everything died".
+ */
+class WorkspaceUiStateTest {
+    private fun hydrated(): WorkspaceUiState = WorkspaceUiState().apply {
+        selectedId = "s1"
+        layout.toggleEditor("s1")
+        layout.toggleTerminal("s2")
+    }
+
+    @Test fun emptyReconcilePreservesHydratedState() {
+        val ui = hydrated()
+        ui.reconcileSessions(emptySet())
+        assertEquals("s1", ui.selectedId)
+        assertTrue(ui.layout.panesFor("s1").editor)
+        assertTrue(ui.layout.panesFor("s2").terminal)
+    }
+
+    @Test fun nonEmptyReconcilePrunesDeadSessionsAndSelection() {
+        val ui = hydrated()
+        // s1 genuinely gone, s2 (and a fresh s3) still live.
+        ui.reconcileSessions(setOf("s2", "s3"))
+        assertNull(ui.selectedId)
+        assertFalse(ui.layout.panesFor("s1").editor)
+        assertTrue(ui.layout.panesFor("s2").terminal)
+    }
+
+    @Test fun reconcileKeepsLiveSelectionAndPanes() {
+        val ui = hydrated()
+        ui.reconcileSessions(setOf("s1", "s2"))
+        assertEquals("s1", ui.selectedId)
+        assertTrue(ui.layout.panesFor("s1").editor)
+        assertTrue(ui.layout.panesFor("s2").terminal)
+    }
+}
