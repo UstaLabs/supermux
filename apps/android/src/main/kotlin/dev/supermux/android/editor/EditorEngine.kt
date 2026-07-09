@@ -42,7 +42,15 @@ class EditorEngine(
     onLspOut: (String) -> Unit = {},
     onFontSize: (Int) -> Unit = {},
 ) {
-    private val appContext = context.applicationContext
+    // The WINDOW context, not applicationContext: a WebView derives its CSS-px scale from
+    // the density of the display its construction Context lives on. The application context
+    // always carries the DEFAULT (phone) display's density, so on Samsung DeX / external
+    // displays (whose density differs — e.g. Fold ~2.6x phone vs ~1.2x DeX) the editor's web
+    // content rendered ~2-3x larger than the surrounding native UI. The engine never outlives
+    // its composition (rememberEditorEngine disposes it), so holding the activity context is
+    // leak-safe, and a DeX attach/detach recreates the activity → a fresh engine + WebView
+    // with the right density.
+    private val viewContext = context
     private val main = Handler(Looper.getMainLooper())
     private val onChangeS = mutableStateOf(onChange)
     private val onSaveS = mutableStateOf(onSave)
@@ -138,7 +146,7 @@ class EditorEngine(
     @SuppressLint("SetJavaScriptEnabled")
     private fun createWebView(): WebView {
         Log.d("EditorEngine", "create WebView")
-        return WebView(appContext).apply {
+        return WebView(viewContext).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
