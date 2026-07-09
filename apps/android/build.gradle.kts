@@ -90,6 +90,9 @@ dependencies {
     implementation(libs.zxing.android.embedded)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)
+    // Inline markdown images (async load + cache). ktor3 backend reuses our ktor stack.
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.ktor3)
     debugImplementation(libs.compose.ui.tooling)
     implementation(libs.compose.ui.tooling.preview)
     testImplementation(kotlin("test"))
