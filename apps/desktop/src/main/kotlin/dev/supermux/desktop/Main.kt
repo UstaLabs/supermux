@@ -1,11 +1,13 @@
 package dev.supermux.desktop
 
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
@@ -60,6 +62,41 @@ fun main() {
                     val scope = rememberCoroutineScope()
                     val app = remember { DesktopAppState(store.loadBaseUrl()!!, store.load()!!, scope) }
                     DisposableEffect(Unit) { onDispose { app.close() } }
+
+                    // Headless-verification hook (no input injection on CI boxes): SM_SMOKE_SEND=
+                    // "<session-name>:<text>" resolves the named session after the first snapshot
+                    // and sends <text> through the SAME send path the composer calls, so a live
+                    // send/receive round-trip can be proven under Xvfb without a pointer/keyboard.
+                    // Harmless in production (unset by default); M2 terminal verification reuses it.
+                    val smoke = System.getenv("SM_SMOKE_SEND")?.takeIf { it.isNotBlank() }
+                    if (smoke != null) {
+                        LaunchedEffect(app) {
+                            val sep = smoke.indexOf(':')
+                            if (sep <= 0) {
+                                println("[smoke] bad SM_SMOKE_SEND (expected <session-name>:<text>)")
+                                return@LaunchedEffect
+                            }
+                            val name = smoke.substring(0, sep)
+                            val text = smoke.substring(sep + 1)
+                            // Wait (≤30s) for the snapshot to carry the named session.
+                            var target = app.sessions.value.firstOrNull { it.name == name }
+                            val deadline = System.currentTimeMillis() + 30_000
+                            while (target == null && System.currentTimeMillis() < deadline) {
+                                delay(500)
+                                target = app.sessions.value.firstOrNull { it.name == name }
+                            }
+                            val t = target
+                            if (t == null) {
+                                println("[smoke] session '$name' not found in snapshot after 30s")
+                                return@LaunchedEffect
+                            }
+                            app.updateViewing(t.id, true)
+                            app.ensureMessagesLoaded(t.id)
+                            app.sendMessage(t.id, text)
+                            println("[smoke] sent to ${t.name} (${t.id}): $text")
+                        }
+                    }
+
                     WorkspaceRoot(app)
                 }
             }
