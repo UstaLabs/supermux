@@ -73,6 +73,11 @@ fun DesktopTerminalPanel(
     val scope = rememberCoroutineScope()
     val client = remember { connect() }
 
+    // Predictive local echo: the shared Kotlin engine + JediTerm op-renderer + keystroke->echo RTT
+    // stamp, bundled so the connector's pre-send input tap and the output collector can reach an
+    // engine/adapter built AFTER the widget exists. Mirrors Android's PredictionPipeline.
+    val pred = remember(client) { PredictionPipeline() }
+
     // Byte-stream bridge: JediTerm writes (keystrokes/paste) → client.sendInput (FIFO queue, safe
     // from any thread); JediTerm grid resizes → client.resize (suspending → scoped launch);
     // isConnected mirrors the live status. Server output is pushed in via offerServerBytes below.
@@ -107,13 +112,30 @@ fun DesktopTerminalPanel(
     // behaviour. See the mouse-reporting note on [SupermuxTermSettings] for the empirical
     // verification and the fallback plan — read it BEFORE adding any wheel listener here.
 
+    // Build the engine+adapter once the widget exists and install the pre-send input tap; drop them
+    // on teardown. Runs on the AWT EDT (composition), AFTER widget.start(), so onUserInput is armed
+    // by the time JediTerm can dispatch a keystroke — @Volatile on the field covers the visibility.
+    DisposableEffect(widget, connector) {
+        pred.attach(widget, connector)
+        // Pre-send tap: JediTerm routes user input through connector.write() → onUserInput → sendInput.
+        // handleInput renders the predicted ops BEFORE the bytes leave, mirroring Android's ordering.
+        connector.onUserInput = { pred.handleInput(it) }
+        onDispose {
+            connector.onUserInput = null
+            pred.teardown()
+        }
+    }
+
     LaunchedEffect(client) { client.run() }
 
-    // Server → screen. Single consumer of client.output, feeding the connector's ordered FIFO.
+    // Server → screen. Single consumer of client.output. When the pipeline is attached the bytes
+    // flow engine.onServerData → ops → adapter.render (Passthrough → injectDisplayBytes), so they
+    // are NOT also offered directly (that would double-render). The lambda is the fallback the
+    // pipeline calls only before attach / after teardown / on an adapter failure, keeping every
+    // byte on the same ordered FIFO either way.
     LaunchedEffect(client, connector) {
         client.output.collect { bytes ->
-            // Task 5 wires the prediction pipeline here (pred.handleOutput(bytes) { offer... }).
-            connector.offerServerBytes(bytes)
+            pred.handleOutput(bytes) { connector.offerServerBytes(bytes) }
         }
     }
 
