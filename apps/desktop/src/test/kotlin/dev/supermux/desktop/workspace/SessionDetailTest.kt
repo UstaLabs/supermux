@@ -22,7 +22,9 @@ import dev.supermux.desktop.editor.PendingEditorOpen
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.net.ProxyDto
 import dev.supermux.net.TerminalClient
+import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
@@ -429,6 +431,73 @@ class SessionDetailTest {
         runOnIdle { assertEquals(0, consumed) }
         // Request the open → the hook fires and consumes exactly once.
         runOnIdle { force = true }
+        runOnIdle { assertEquals(1, consumed) }
+    }
+
+    // ── SM_GIT_MENU / SM_LINKS_MENU / SM_OVERFLOW_MENU force-open hooks (M4c Task 3) ────────────
+
+    private val gitSession = session.copy(
+        git = GitLiteStatusDto(mode = "base", compareRef = "main", ahead = 2, behind = 0, dirty = 1),
+    )
+
+    @Test
+    fun forceGitMenuOpensTheBadgeDropdownAndConsumesTheOneShotFlag() = runComposeUiTest {
+        var consumed = 0
+        var force by mutableStateOf<GitMenuForceOp?>(null)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                SessionDetail(app = app(), session = gitSession, agent = null,
+                    layout = WorkspaceLayout(), draft = "", onDraftChange = {},
+                    editorPanelContent = fakeEditor,
+                    forceGitMenu = force,
+                    onForceGitMenuConsumed = { consumed++ })
+            }
+        }
+        onNodeWithTag("git_fetch").assertDoesNotExist()
+        runOnIdle { force = GitMenuForceOp.OPEN }
+        waitForIdle()
+        onNodeWithTag("git_fetch").assertIsDisplayed()
+        runOnIdle { assertEquals(1, consumed) }
+    }
+
+    @Test
+    fun forceLinksMenuOpensTheGlobeDropdownAndConsumesTheOneShotFlag() = runComposeUiTest {
+        var consumed = 0
+        var force by mutableStateOf(false)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                SessionDetail(app = app(), session = session, agent = null,
+                    layout = WorkspaceLayout(), draft = "", onDraftChange = {},
+                    editorPanelContent = fakeEditor,
+                    loadProxies = { listOf(ProxyDto(domain = "d.example", sessionName = "demo", port = 3000)) },
+                    forceLinksMenu = force,
+                    onForceLinksMenuConsumed = { consumed++ })
+            }
+        }
+        onNodeWithTag("session_links").assertIsDisplayed()
+        runOnIdle { force = true }
+        waitForIdle()
+        onNodeWithText("d.example").assertIsDisplayed()
+        runOnIdle { assertEquals(1, consumed) }
+    }
+
+    @Test
+    fun forceOverflowMenuOpensTheDropdownAndConsumesTheOneShotFlag() = runComposeUiTest {
+        var consumed = 0
+        var force by mutableStateOf(false)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                SessionDetail(app = app(), session = session, agent = null,
+                    layout = WorkspaceLayout(), draft = "", onDraftChange = {},
+                    editorPanelContent = fakeEditor,
+                    forceOverflowMenu = force,
+                    onForceOverflowMenuConsumed = { consumed++ })
+            }
+        }
+        onNodeWithTag("overflow_rename").assertDoesNotExist()
+        runOnIdle { force = true }
+        waitForIdle()
+        onNodeWithTag("overflow_rename").assertIsDisplayed()
         runOnIdle { assertEquals(1, consumed) }
     }
 }

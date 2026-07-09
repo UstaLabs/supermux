@@ -40,6 +40,11 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //   SM_LAUNCH_TEST="wd|agent|msg[|attach]" — drive the launcher spawn→first-msg chain (M4a) [main]
 //   SM_LAUNCH_PAUSE_MS=<ms>       — hold the launcher OPEN this long before submitting (M4a) [main]
 //   SM_FINISH_TEST=<session-name> — select the session + open its Finish dialog (menu, M4b) [main]
+//   SM_GIT_MENU="<name>[:fetch|:pull]" — force-open the header git-badge menu; :fetch/:pull ALSO
+//                                  fire that op live (M4c, no Push/Publish member — see
+//                                  GitMenuForceOp KDoc)                                   [main]
+//   SM_LINKS_MENU=<session-name>  — force-open the header session-links (proxies) menu (M4c) [main]
+//   SM_OVERFLOW_MENU=<session-name> — force-open the header ⋮ overflow menu (M4c)          [main]
 //   SMX_KCEF_FORCE_ERROR=1        — force KcefState.Error (native-fallback editor, M3)   [KcefRuntime]
 //   SM_EDITOR_SAVE_TEST           — drive the editor save path (M3)                      [EditorPanel]
 //   SMX_KCEF_EXTRA_ARGS="…"       — extra CEF switches for headless CI                   [KcefRuntime]
@@ -390,6 +395,100 @@ fun main() {
                             ui.selectedId = t.id
                             ui.forceFinishDialogFor = t.id
                             println("[finish] opened Finish dialog for ${t.name} (${t.id}); branch=${t.session_branch}")
+                        }
+                    }
+
+                    // Headless git-badge-menu verification hook (M4c): SM_GIT_MENU="<session-name>
+                    // [:fetch|:pull]" resolves the named session after the first snapshot, SELECTS
+                    // it, and flips the shared one-shot `forceGitMenuFor` so the matching
+                    // SessionDetail's GitBadgeMenu expands — the SAME state a click on the badge
+                    // flips. A bare name (no suffix) only opens the dropdown (screenshot the
+                    // Fetch/Pull/Publish-or-Push rows); a `:fetch` or `:pull` suffix ADDITIONALLY
+                    // fires that op through the real `run(...)` path a click uses (both are safe-ish
+                    // per the M4c live-verification ground rules), so the inline `git_op_result`
+                    // label can be screenshot too. There is NO `:push`/`:publish` suffix — those
+                    // mutate a real remote, so this hook cannot ever auto-fire them (see
+                    // GitMenuForceOp's KDoc in SessionHeaderMenus.kt). Harmless in production (unset
+                    // by default).
+                    val gitMenuTest = System.getenv("SM_GIT_MENU")?.takeIf { it.isNotBlank() }
+                    if (gitMenuTest != null) {
+                        LaunchedEffect(app) {
+                            val parts = gitMenuTest.split(":", limit = 2)
+                            val name = parts[0]
+                            val op = when (parts.getOrNull(1)?.trim()?.lowercase()) {
+                                "fetch" -> dev.supermux.desktop.workspace.GitMenuForceOp.FETCH
+                                "pull" -> dev.supermux.desktop.workspace.GitMenuForceOp.PULL
+                                null, "" -> dev.supermux.desktop.workspace.GitMenuForceOp.OPEN
+                                else -> {
+                                    println("[gitmenu] unknown SM_GIT_MENU suffix '${parts[1]}' — falling back to open-only")
+                                    dev.supermux.desktop.workspace.GitMenuForceOp.OPEN
+                                }
+                            }
+                            // Wait (≤30s) for the snapshot to carry the named session.
+                            var target = app.sessions.value.firstOrNull { it.name == name }
+                            val deadline = System.currentTimeMillis() + 30_000
+                            while (target == null && System.currentTimeMillis() < deadline) {
+                                delay(500)
+                                target = app.sessions.value.firstOrNull { it.name == name }
+                            }
+                            val t = target
+                            if (t == null) {
+                                println("[gitmenu] session '$name' not found in snapshot after 30s")
+                                return@LaunchedEffect
+                            }
+                            ui.selectedId = t.id
+                            ui.forceGitMenuFor = t.id to op
+                            println("[gitmenu] forced git-badge menu ($op) for ${t.name} (${t.id}); git=${t.git}")
+                        }
+                    }
+
+                    // Headless session-links-menu verification hook (M4c): SM_LINKS_MENU=
+                    // "<session-name>" resolves the named session, SELECTS it, and flips the shared
+                    // one-shot `forceLinksMenuFor` so the matching SessionDetail's SessionLinksMenu
+                    // (globe icon) expands. Never opens a URL — only the dropdown. A no-op if the
+                    // session has no proxies (the menu doesn't render). Harmless in production.
+                    val linksMenuTest = System.getenv("SM_LINKS_MENU")?.takeIf { it.isNotBlank() }
+                    if (linksMenuTest != null) {
+                        LaunchedEffect(app) {
+                            var target = app.sessions.value.firstOrNull { it.name == linksMenuTest }
+                            val deadline = System.currentTimeMillis() + 30_000
+                            while (target == null && System.currentTimeMillis() < deadline) {
+                                delay(500)
+                                target = app.sessions.value.firstOrNull { it.name == linksMenuTest }
+                            }
+                            val t = target
+                            if (t == null) {
+                                println("[linksmenu] session '$linksMenuTest' not found in snapshot after 30s")
+                                return@LaunchedEffect
+                            }
+                            ui.selectedId = t.id
+                            ui.forceLinksMenuFor = t.id
+                            println("[linksmenu] forced session-links menu for ${t.name} (${t.id})")
+                        }
+                    }
+
+                    // Headless overflow-menu verification hook (M4c): SM_OVERFLOW_MENU=
+                    // "<session-name>" resolves the named session, SELECTS it, and flips the shared
+                    // one-shot `forceOverflowFor` so the matching SessionDetail's ⋮ OverflowMenu
+                    // expands. NEVER auto-clicks Rename/Mute/Kill — only the dropdown. Harmless in
+                    // production (unset by default).
+                    val overflowMenuTest = System.getenv("SM_OVERFLOW_MENU")?.takeIf { it.isNotBlank() }
+                    if (overflowMenuTest != null) {
+                        LaunchedEffect(app) {
+                            var target = app.sessions.value.firstOrNull { it.name == overflowMenuTest }
+                            val deadline = System.currentTimeMillis() + 30_000
+                            while (target == null && System.currentTimeMillis() < deadline) {
+                                delay(500)
+                                target = app.sessions.value.firstOrNull { it.name == overflowMenuTest }
+                            }
+                            val t = target
+                            if (t == null) {
+                                println("[overflowmenu] session '$overflowMenuTest' not found in snapshot after 30s")
+                                return@LaunchedEffect
+                            }
+                            ui.selectedId = t.id
+                            ui.forceOverflowFor = t.id
+                            println("[overflowmenu] forced overflow menu for ${t.name} (${t.id})")
                         }
                     }
 

@@ -86,6 +86,33 @@ class WorkspaceUiState {
     var forceFinishDialogFor by mutableStateOf<String?>(null)
 
     /**
+     * One-shot "force-open the header git-badge menu" request (session id + [GitMenuForceOp]),
+     * consumed by the matching [SessionDetail] → [GitBadgeMenu]. `OPEN` only expands the dropdown;
+     * `FETCH`/`PULL` additionally fire that op live through the SAME code path a real click uses
+     * (see [GitMenuForceOp] KDoc — Push/Publish have no member here, so no hook can ever auto-fire
+     * them). Set by the off-by-default `SM_GIT_MENU` headless hook in Main.kt; null in normal
+     * operation. Cleared once the matching SessionDetail consumes it.
+     */
+    var forceGitMenuFor by mutableStateOf<Pair<String, GitMenuForceOp>?>(null)
+
+    /**
+     * One-shot "force-open the session-links (proxies) globe menu" request (session id), consumed
+     * by the matching [SessionDetail] → [SessionLinksMenu]. Never opens a URL — only expands the
+     * dropdown. Set by the off-by-default `SM_LINKS_MENU` headless hook in Main.kt; null in normal
+     * operation; a no-op when the session has no proxies (the menu doesn't render). Cleared once
+     * consumed.
+     */
+    var forceLinksMenuFor by mutableStateOf<String?>(null)
+
+    /**
+     * One-shot "force-open the ⋮ overflow menu" request (session id), consumed by the matching
+     * [SessionDetail] → [OverflowMenu]. NEVER auto-clicks Rename/Mute/Kill — only expands the
+     * dropdown. Set by the off-by-default `SM_OVERFLOW_MENU` headless hook in Main.kt; null in
+     * normal operation. Cleared once consumed.
+     */
+    var forceOverflowFor by mutableStateOf<String?>(null)
+
+    /**
      * Reconciles the hydrated UI state against the [live] session-id set: drops a selection whose
      * session vanished (killed elsewhere / agent exit) and prunes the layout's per-session pane
      * state.
@@ -271,6 +298,14 @@ fun WorkspaceRoot(
                         // for the SessionDetail whose id matches; consumed once opened.
                         forceFinishDialog = ui.forceFinishDialogFor == session.id,
                         onForceFinishConsumed = { ui.forceFinishDialogFor = null },
+                        // SM_GIT_MENU/SM_LINKS_MENU/SM_OVERFLOW_MENU hook (Main.kt) delivery — see
+                        // WorkspaceUiState's KDoc for each field.
+                        forceGitMenu = ui.forceGitMenuFor?.takeIf { it.first == session.id }?.second,
+                        onForceGitMenuConsumed = { ui.forceGitMenuFor = null },
+                        forceLinksMenu = ui.forceLinksMenuFor == session.id,
+                        onForceLinksMenuConsumed = { ui.forceLinksMenuFor = null },
+                        forceOverflowMenu = ui.forceOverflowFor == session.id,
+                        onForceOverflowMenuConsumed = { ui.forceOverflowFor = null },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

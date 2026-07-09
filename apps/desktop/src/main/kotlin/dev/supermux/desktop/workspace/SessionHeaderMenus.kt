@@ -17,6 +17,16 @@
 //   • Link opening: Android uses LocalUriHandler.openUri; desktop opens via the shared
 //     ui.openInBrowser (java.awt.Desktop.browse on a daemon thread) — injected as onOpenUrl so tests
 //     can capture the URL without spawning a browser.
+//
+// Headless verification (M4c Task 3): there is no xdotool/input-injection under Xvfb, so each menu
+// takes an optional one-shot force-open param (WorkspaceUiState.forceGitMenuFor/forceLinksMenuFor/
+// forceOverflowFor, set by the off-by-default SM_GIT_MENU/SM_LINKS_MENU/SM_OVERFLOW_MENU env hooks
+// in Main.kt) that expands its DropdownMenu exactly the way a real click would. GitBadgeMenu's hook
+// additionally accepts [GitMenuForceOp.FETCH]/[PULL] to fire that op live through the SAME `run(...)`
+// path a click uses — see that enum's KDoc for why Push/Publish are structurally excluded from ever
+// being auto-fired. SessionLinksMenu/OverflowMenu are open-ONLY: opening a URL or renaming/muting/
+// killing a session from a hook is left to a real user (or a direct DesktopAppState call in a test
+// harness) rather than simulating a click through a dialog/text field neither hook can drive.
 package dev.supermux.desktop.workspace
 
 import androidx.compose.foundation.background
@@ -97,6 +107,15 @@ fun gitOpResultLabel(op: String, result: GitOpResult?): String {
     return result.status.ifBlank { "$op done" }
 }
 
+/**
+ * The restricted force-op set the headless `SM_GIT_MENU` hook (Main.kt) may drive against
+ * [GitBadgeMenu]: [OPEN] only expands the dropdown (no click), [FETCH]/[PULL] additionally fire
+ * that op through the SAME `run(...)` path a real click uses. There is deliberately NO Push/Publish
+ * member — those mutate a real remote, so no env hook may ever auto-fire them; menu-RENDER is the
+ * only headless surface for those two (screenshot the item, never click it).
+ */
+enum class GitMenuForceOp { OPEN, FETCH, PULL }
+
 // ── GitBadgeMenu ───────────────────────────────────────────────────────────────────────
 
 /**
@@ -116,6 +135,12 @@ fun GitBadgeMenu(
     onPush: suspend () -> GitOpResult?,
     onPublish: suspend () -> GitOpResult?,
     modifier: Modifier = Modifier,
+    // Off-by-default headless hook (SM_GIT_MENU, Main.kt) delivery: a one-shot [GitMenuForceOp].
+    // OPEN just expands the dropdown; FETCH/PULL also fire that op via the real `run(...)` path
+    // below (same as a live click) so the inline `git_op_result` label can be screenshot under
+    // Xvfb. Applied once, then [onForceOpConsumed] clears the source.
+    forceOp: GitMenuForceOp? = null,
+    onForceOpConsumed: () -> Unit = {},
 ) {
     val badge = gitBadge(session.git) ?: return
     val cs = MaterialTheme.colorScheme
@@ -139,6 +164,21 @@ fun GitBadgeMenu(
             val label = gitOpResultLabel(op, call())
             if (token == seq) result = label
         }
+    }
+
+    // SM_GIT_MENU headless hook delivery — see [GitMenuForceOp] KDoc for the safety rationale.
+    LaunchedEffect(forceOp) {
+        when (forceOp) {
+            null -> {}
+            GitMenuForceOp.OPEN -> {
+                result = null
+                seq++
+                expanded = true
+            }
+            GitMenuForceOp.FETCH -> run("Fetch", onFetch)
+            GitMenuForceOp.PULL -> run("Pull", onPull)
+        }
+        if (forceOp != null) onForceOpConsumed()
     }
 
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
@@ -216,6 +256,12 @@ fun SessionLinksMenu(
     proxies: List<ProxyDto>,
     onOpenUrl: (String) -> Unit = ::openInBrowser,
     modifier: Modifier = Modifier,
+    // Off-by-default headless hook (SM_LINKS_MENU, Main.kt) delivery: force-expands the dropdown
+    // (no click on a row — opening a URL is left to a real user). No-op when the session has no
+    // proxies (the early return above means the menu never renders to force-open in the first
+    // place). Applied once, then [onForceOpenConsumed] clears the source.
+    forceOpen: Boolean = false,
+    onForceOpenConsumed: () -> Unit = {},
 ) {
     val links = sessionProxies(proxies, session)
     if (links.isEmpty()) return
@@ -223,6 +269,7 @@ fun SessionLinksMenu(
     var expanded by remember { mutableStateOf(false) }
     // Close on a session switch so the menu never stays open bound to the new session.
     LaunchedEffect(session.id) { expanded = false }
+    LaunchedEffect(forceOpen) { if (forceOpen) { expanded = true; onForceOpenConsumed() } }
     Box(modifier) {
         IconButton(onClick = { expanded = true }, modifier = Modifier.testTag("session_links")) {
             Icon(
@@ -259,6 +306,12 @@ fun OverflowMenu(
     onToggleMute: (Boolean) -> Unit,
     onKill: () -> Unit,
     modifier: Modifier = Modifier,
+    // Off-by-default headless hook (SM_OVERFLOW_MENU, Main.kt) delivery: force-expands the
+    // dropdown only — NEVER auto-clicks Rename/Mute/Kill (those are destructive-ish/user-facing,
+    // so a live verification drives onRename/onToggleMute directly instead). Applied once, then
+    // [onForceOpenConsumed] clears the source.
+    forceOpen: Boolean = false,
+    onForceOpenConsumed: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     var expanded by remember { mutableStateOf(false) }
@@ -269,6 +322,7 @@ fun OverflowMenu(
     // Close on a session switch so the ⋮ menu never stays bound to the new session's callbacks
     // (a stale open Kill would otherwise target the wrong session).
     LaunchedEffect(session.id) { expanded = false }
+    LaunchedEffect(forceOpen) { if (forceOpen) { expanded = true; onForceOpenConsumed() } }
 
     Box(modifier) {
         IconButton(onClick = { expanded = true }, modifier = Modifier.testTag("workspace_overflow")) {

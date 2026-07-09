@@ -166,6 +166,15 @@ fun SessionDetail(
     // the source. No-op when the session has no session_branch (the dialog/button don't render).
     forceFinishDialog: Boolean = false,
     onForceFinishConsumed: () -> Unit = {},
+    // Off-by-default headless hooks (SM_GIT_MENU/SM_LINKS_MENU/SM_OVERFLOW_MENU, Main.kt) delivery:
+    // force-open the matching header menu (GitBadgeMenu additionally supports a live Fetch/Pull via
+    // [GitMenuForceOp]) — see SessionHeaderMenus.kt's file header for the mechanism + safety notes.
+    forceGitMenu: GitMenuForceOp? = null,
+    onForceGitMenuConsumed: () -> Unit = {},
+    forceLinksMenu: Boolean = false,
+    onForceLinksMenuConsumed: () -> Unit = {},
+    forceOverflowMenu: Boolean = false,
+    onForceOverflowMenuConsumed: () -> Unit = {},
     // Injectable seam for the Native (agent-PTY) panel — defaults to the real [DesktopTerminalPanel].
     // Its SwingPanel cannot be hosted under `runComposeUiTest` (no real AWT window), so the UI tests
     // inject a lightweight pure-Compose fake to exercise the toggle + keep-alive + onExit wiring.
@@ -383,9 +392,16 @@ fun SessionDetail(
                 onPull = { app.gitPull(session.id) },
                 onPush = { app.gitPush(session.id) },
                 onPublish = { app.gitPublish(session.id) },
+                forceOp = forceGitMenu,
+                onForceOpConsumed = onForceGitMenuConsumed,
             )
             // Exposed proxy links (hidden when this session has none).
-            SessionLinksMenu(session = session, proxies = proxies)
+            SessionLinksMenu(
+                session = session,
+                proxies = proxies,
+                forceOpen = forceLinksMenu,
+                onForceOpenConsumed = onForceLinksMenuConsumed,
+            )
             Spacer(Modifier.width(Space.xs))
             // Chat ⇄ Native (raw agent PTY) toggle — claude only, and only while the Chat pane is
             // visible (it flips ChatPanel ⇄ agent-PTY inside that pane; see chatOrNative above).
@@ -463,6 +479,8 @@ fun SessionDetail(
                 onRename = { newName -> app.rename(session.id, newName) },
                 onToggleMute = { muted -> app.setMute(session.id, muted) },
                 onKill = { app.kill(session.id) },
+                forceOpen = forceOverflowMenu,
+                onForceOpenConsumed = onForceOverflowMenuConsumed,
             )
         }
         Box(

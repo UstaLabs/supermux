@@ -1,5 +1,8 @@
 package dev.supermux.desktop.workspace
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
@@ -192,6 +195,94 @@ class SessionHeaderMenusTest {
         onNodeWithText("fetched").assertDoesNotExist()
     }
 
+    // ── SM_GIT_MENU force-op hook (M4c Task 3) ──────────────────────────────────────────
+
+    @Test
+    fun forceOpenExpandsMenuAndConsumesOnceWithoutFiringAnyOp() = runComposeUiTest {
+        var fetched = false
+        var pulled = false
+        var consumed = 0
+        var force by mutableStateOf<GitMenuForceOp?>(null)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitBadgeMenu(
+                    session = baseSession,
+                    onFetch = { fetched = true; GitOpResult() },
+                    onPull = { pulled = true; GitOpResult() },
+                    onPush = { GitOpResult() },
+                    onPublish = { GitOpResult() },
+                    forceOp = force,
+                    onForceOpConsumed = { consumed++ },
+                )
+            }
+        }
+        onNodeWithTag("git_fetch").assertDoesNotExist() // menu starts closed
+        runOnIdle { force = GitMenuForceOp.OPEN }
+        waitForIdle()
+        onNodeWithTag("git_fetch").assertIsDisplayed()
+        onNodeWithTag("git_pull").assertIsDisplayed()
+        assertFalse(fetched)
+        assertFalse(pulled)
+        assertEquals(1, consumed)
+    }
+
+    @Test
+    fun forceFetchFiresTheRealRunPathAndSurfacesTheResultLabel() = runComposeUiTest {
+        var fetched = false
+        var consumed = 0
+        var force by mutableStateOf<GitMenuForceOp?>(null)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitBadgeMenu(
+                    session = baseSession,
+                    onFetch = { fetched = true; GitOpResult(status = "fetched") },
+                    onPull = { error("pull not expected from a FETCH force-op") },
+                    onPush = { error("push not expected from a FETCH force-op") },
+                    onPublish = { error("publish not expected from a FETCH force-op") },
+                    forceOp = force,
+                    onForceOpConsumed = { consumed++ },
+                )
+            }
+        }
+        runOnIdle { force = GitMenuForceOp.FETCH }
+        waitForIdle()
+        assertTrue(fetched)
+        assertEquals(1, consumed)
+        onNodeWithTag("git_op_result").assertIsDisplayed()
+        onNodeWithText("fetched").assertIsDisplayed()
+    }
+
+    @Test
+    fun forcePullFiresTheRealRunPathAndSurfacesTheResultLabel() = runComposeUiTest {
+        var pulled = false
+        var force by mutableStateOf<GitMenuForceOp?>(null)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitBadgeMenu(
+                    session = baseSession,
+                    onFetch = { error("fetch not expected from a PULL force-op") },
+                    onPull = { pulled = true; GitOpResult(status = "pulled") },
+                    onPush = { error("push not expected from a PULL force-op") },
+                    onPublish = { error("publish not expected from a PULL force-op") },
+                    forceOp = force,
+                )
+            }
+        }
+        runOnIdle { force = GitMenuForceOp.PULL }
+        waitForIdle()
+        assertTrue(pulled)
+        onNodeWithText("pulled").assertIsDisplayed()
+    }
+
+    @Test
+    fun gitMenuForceOpHasNoPushOrPublishMember() {
+        // Structural safety net for the SM_GIT_MENU hook: Push/Publish mutate a real remote, so no
+        // env hook may ever auto-fire them — this pins the enum to exactly {OPEN, FETCH, PULL} so a
+        // future edit that adds a PUSH/PUBLISH member fails loudly here instead of silently opening
+        // a live-mutation hole.
+        assertEquals(listOf("OPEN", "FETCH", "PULL"), GitMenuForceOp.entries.map { it.name })
+    }
+
     @Test
     fun gitBadgeHiddenWhenGitNull() = runComposeUiTest {
         setContent {
@@ -233,6 +324,31 @@ class SessionHeaderMenusTest {
         onNodeWithText("mine.example").performClick()
         // Opens the canonical proxyUrl (with scheme), not the display form.
         assertEquals("https://mine.example/", opened)
+    }
+
+    @Test
+    fun linksMenuForceOpenExpandsAndConsumesOnceWithoutOpeningAUrl() = runComposeUiTest {
+        val mine = ProxyDto(domain = "mine.example", sessionName = "demo", port = 3000)
+        var opened: String? = null
+        var consumed = 0
+        var force by mutableStateOf(false)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                SessionLinksMenu(
+                    session = baseSession,
+                    proxies = listOf(mine),
+                    onOpenUrl = { opened = it },
+                    forceOpen = force,
+                    onForceOpenConsumed = { consumed++ },
+                )
+            }
+        }
+        onNodeWithText("mine.example").assertDoesNotExist() // menu starts closed
+        runOnIdle { force = true }
+        waitForIdle()
+        onNodeWithText("mine.example").assertIsDisplayed()
+        assertNull(opened)
+        assertEquals(1, consumed)
     }
 
     @Test
@@ -328,6 +444,37 @@ class SessionHeaderMenusTest {
         assertFalse(killed) // opening the confirm dialog does not kill yet
         onNodeWithTag("overflow_kill_confirm").performClick()
         assertTrue(killed)
+    }
+
+    @Test
+    fun overflowForceOpenExpandsAndConsumesOnceWithoutFiringAnyAction() = runComposeUiTest {
+        var renamed: String? = null
+        var muted: Boolean? = null
+        var killed = false
+        var consumed = 0
+        var force by mutableStateOf(false)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                OverflowMenu(
+                    session = baseSession,
+                    onRename = { renamed = it },
+                    onToggleMute = { muted = it },
+                    onKill = { killed = true },
+                    forceOpen = force,
+                    onForceOpenConsumed = { consumed++ },
+                )
+            }
+        }
+        onNodeWithTag("overflow_rename").assertDoesNotExist() // menu starts closed
+        runOnIdle { force = true }
+        waitForIdle()
+        onNodeWithTag("overflow_rename").assertIsDisplayed()
+        onNodeWithTag("overflow_mute").assertIsDisplayed()
+        onNodeWithTag("overflow_kill").assertIsDisplayed()
+        assertNull(renamed)
+        assertNull(muted)
+        assertFalse(killed)
+        assertEquals(1, consumed)
     }
 
     @Test
