@@ -57,6 +57,14 @@ import kotlin.test.assertEquals
  *    `writeString(cursorX - 1, cursorY, buf)`; to read that same cell back for a snapshot/restore,
  *    call `getCharAt(cursorX - 1, cursorY - 1)`. `PredictionAdapterTest` (Task 5) must assert this
  *    exact mapping — do not re-derive it from scratch there.
+ *
+ * ### ⚠️ Stability caveat
+ * The `writeString` y-basis is UNDOCUMENTED upstream (no KDoc on it in `TerminalTextBuffer`,
+ * unlike `getLine`/`getCharAt`) — it is incidental behavior pinned empirically against the 3.73
+ * bytecode, NOT a stated contract, and looks like the kind of off-by-one inconsistency an upstream
+ * patch might "fix". Constructor/interface shapes are compile-time-guaranteed; the coordinate
+ * conventions are runtime-asserted only. On ANY JediTerm version bump, re-run this suite BEFORE
+ * trusting PredictionAdapter's coordinate math — these tests are the tripwire.
  */
 class JediTermSmokeTest {
 
@@ -95,7 +103,7 @@ class JediTermSmokeTest {
     }
 
     @Test
-    fun `emulator write path renders hello world across two lines`() {
+    fun emulator_write_path_renders_hello_world_across_two_lines() {
         val model = newTerminal()
         feed(model.terminal, "hello\r\nworld")
 
@@ -107,7 +115,7 @@ class JediTermSmokeTest {
     }
 
     @Test
-    fun `cursor advances with writes and CRLF, 1-based VT100 convention`() {
+    fun cursor_advances_with_writes_and_crlf_one_based_vt100_convention() {
         val model = newTerminal()
         feed(model.terminal, "hello\r\nworld")
 
@@ -118,7 +126,7 @@ class JediTermSmokeTest {
     }
 
     @Test
-    fun `programmatic styled write via TerminalTextBuffer writeString works`() {
+    fun programmatic_styled_write_via_terminaltextbuffer_writestring_works() {
         val model = newTerminal()
         // This is the prediction-adapter dependency: draw synthetic chars directly into the
         // buffer, independent of the emulator's own write path. writeString's y is 1-based
@@ -132,7 +140,7 @@ class JediTermSmokeTest {
     }
 
     @Test
-    fun `writing at the current cursor cell and reading it back round-trips`() {
+    fun writing_at_current_cursor_cell_and_reading_back_round_trips() {
         val model = newTerminal()
         feed(model.terminal, "ab") // cursor now at column 3 (1-based), row 1
 
@@ -145,7 +153,7 @@ class JediTermSmokeTest {
     }
 
     @Test
-    fun `getCharAt and cursor getters are readable on a fresh buffer`() {
+    fun getcharat_and_cursor_getters_readable_on_fresh_buffer() {
         val model = newTerminal()
 
         // Fresh cells read back as blank (space) rather than throwing.

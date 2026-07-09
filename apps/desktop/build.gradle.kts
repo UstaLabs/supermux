@@ -23,7 +23,7 @@ dependencies {
     implementation(libs.serialization.json)
     implementation(libs.ktor.client.cio)
     implementation(libs.ktor.client.websockets)
-    implementation(libs.jediterm.core) // dual LGPLv3/Apache-2.0 — used under Apache-2.0
+    implementation(libs.jediterm.core) // both jediterm modules: dual LGPLv3/Apache-2.0 — used under Apache-2.0
     implementation(libs.jediterm.ui)
 
     testImplementation(libs.coroutines.test)
