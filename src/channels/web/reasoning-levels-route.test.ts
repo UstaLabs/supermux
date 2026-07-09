@@ -3,7 +3,7 @@
 // itself (supportedReasoningLevels) is unit-tested; this proves the route parses
 // agent+model, wires the getReasoningLevels opt, and guards a bad/missing agent.
 import { afterEach, expect, test } from "bun:test"
-import { mkdtempSync } from "fs"
+import { mkdtempSync, writeFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
 import { WebChannel, type WebChannelOpts } from "./index"
@@ -77,6 +77,31 @@ test("GET /reasoning-levels rejects a missing or unknown agent", async () => {
   expect(missing.status).toBe(400)
   const bogus = await fetch(`${base()}/reasoning-levels?agent=nope`, { headers: { authorization: `Bearer ${token}` } })
   expect(bogus.status).toBe(400)
+})
+
+test("GET /reasoning-levels reaches the route even with a staticDir (not swallowed by the SPA fallback)", async () => {
+  // Regression: /reasoning-levels must be listed in API_PREFIXES. Otherwise the
+  // static-serve gate (any GET not matching an API prefix serves index.html)
+  // returns the SPA shell for it — the launcher's fetch then parses HTML as JSON,
+  // fails, and hides the pill. A test WITHOUT a staticDir can't catch this.
+  const staticDir = mkdtempSync(join(tmpdir(), "mux-rl-static-"))
+  writeFileSync(join(staticDir, "index.html"), "<!doctype html><html><body>SPA</body></html>")
+  const made = makeChannel({
+    staticDir,
+    getReasoningLevels: (agent) => ({ agent, levels: [{ id: "low" }, { id: "high" }], visible: true }),
+  })
+  channel = made.channel
+  await channel.start()
+  const token = mintToken(made.devicesFile)
+
+  const res = await fetch(`${base()}/reasoning-levels?agent=claude`, {
+    headers: { authorization: `Bearer ${token}` },
+  })
+  expect(res.status).toBe(200)
+  // Would be text/html (the SPA shell) if the static gate swallowed the route.
+  const body = await res.json()
+  expect(body.levels).toEqual([{ id: "low" }, { id: "high" }])
+  expect(body.visible).toBe(true)
 })
 
 test("GET /reasoning-levels falls back to empty when no provider is wired", async () => {
