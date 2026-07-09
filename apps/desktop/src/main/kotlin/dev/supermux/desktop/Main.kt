@@ -221,6 +221,59 @@ fun main() {
                         }
                     }
 
+                    // Headless editor-verification hook (M3): SM_OPEN_FILE="<session-name>:<path>[:line]"
+                    // resolves the named session after the first snapshot, SELECTS it, flips its
+                    // editor pane on, and delivers a PendingEditorOpen(path, line) through the SAME
+                    // handler chain a chat file-path tap uses (WorkspaceUiState.externalOpen →
+                    // SessionDetail.onOpenFile → toWorkdirRelativePath → the pending-open holder →
+                    // openFileAtLine → cmRevealLine). <path> is workdir-relative or absolute-within-
+                    // workdir; the optional trailing :<line> reveals+centers that 1-based line. So a
+                    // file can be opened at a line under Xvfb without a pointer/keyboard. Harmless in
+                    // production (unset by default).
+                    val openFile = System.getenv("SM_OPEN_FILE")?.takeIf { it.isNotBlank() }
+                    if (openFile != null) {
+                        LaunchedEffect(app) {
+                            val firstSep = openFile.indexOf(':')
+                            if (firstSep <= 0) {
+                                println("[openfile] bad SM_OPEN_FILE (expected <session-name>:<path>[:line])")
+                                return@LaunchedEffect
+                            }
+                            val name = openFile.substring(0, firstSep)
+                            var rest = openFile.substring(firstSep + 1)
+                            // Peel an optional trailing :<line> (a bare integer); leaves ':'-bearing
+                            // paths intact when the tail isn't numeric.
+                            var line: Int? = null
+                            val lastColon = rest.lastIndexOf(':')
+                            if (lastColon > 0) {
+                                val tail = rest.substring(lastColon + 1).toIntOrNull()
+                                if (tail != null) {
+                                    line = tail
+                                    rest = rest.substring(0, lastColon)
+                                }
+                            }
+                            val path = rest
+                            // Wait (≤30s) for the snapshot to carry the named session.
+                            var target = app.sessions.value.firstOrNull { it.name == name }
+                            val deadline = System.currentTimeMillis() + 30_000
+                            while (target == null && System.currentTimeMillis() < deadline) {
+                                delay(500)
+                                target = app.sessions.value.firstOrNull { it.name == name }
+                            }
+                            val t = target
+                            if (t == null) {
+                                println("[openfile] session '$name' not found in snapshot after 30s")
+                                return@LaunchedEffect
+                            }
+                            ui.selectedId = t.id
+                            // Flip the editor pane on up-front so the panel mounts even before the
+                            // routed onOpenFile runs (onOpenFile flips it too — this is belt-and-braces
+                            // for the screenshot deadline).
+                            ui.layout.setPanes(t.id, ui.layout.panesFor(t.id).copy(editor = true))
+                            ui.externalOpen = t.id to dev.supermux.ui.FilePathRef(path, line)
+                            println("[openfile] requested '$path'${line?.let { ":$it" } ?: ""} in ${t.name} (${t.id})")
+                        }
+                    }
+
                     WorkspaceRoot(app, ui, uiStore)
 
                     // Unpair confirmation (File ▸ Unpair…): clears the credential store and flips

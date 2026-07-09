@@ -51,6 +51,14 @@ class WorkspaceUiState {
     var selectedId by mutableStateOf<String?>(null)
 
     /**
+     * One-shot external "open this file" request (sessionId → ref), consumed by [SessionDetail] and
+     * routed through the SAME `onOpenFile` chain a chat-tap uses (toWorkdirRelativePath → pending
+     * editor open + editor-pane flip). Set by the off-by-default `SM_OPEN_FILE` headless hook in
+     * Main.kt; null in normal operation. Cleared once the matching SessionDetail consumes it.
+     */
+    var externalOpen by mutableStateOf<Pair<String, dev.supermux.ui.FilePathRef>?>(null)
+
+    /**
      * Reconciles the hydrated UI state against the [live] session-id set: drops a selection whose
      * session vanished (killed elsewhere / agent exit) and prunes the layout's per-session pane
      * state.
@@ -216,6 +224,10 @@ fun WorkspaceRoot(
                         layout = layout,
                         draft = drafts[session.id] ?: "",
                         onDraftChange = { drafts[session.id] = it },
+                        // SM_OPEN_FILE hook (Main.kt) delivery: hand the pending external open to the
+                        // SessionDetail whose id matches, which routes it through onOpenFile.
+                        externalOpen = ui.externalOpen?.takeIf { it.first == session.id }?.second,
+                        onExternalOpenConsumed = { ui.externalOpen = null },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

@@ -147,6 +147,11 @@ fun SessionDetail(
     draft: String,
     onDraftChange: (String) -> Unit,
     modifier: Modifier = Modifier,
+    // Off-by-default headless hook (SM_OPEN_FILE, Main.kt) delivery: an external "open this file"
+    // request routed through the SAME [onOpenFile] chain a chat-tap uses (see below). Null in normal
+    // operation; when non-null it is applied once then [onExternalOpenConsumed] clears the source.
+    externalOpen: FilePathRef? = null,
+    onExternalOpenConsumed: () -> Unit = {},
     // Injectable seam for the Native (agent-PTY) panel — defaults to the real [DesktopTerminalPanel].
     // Its SwingPanel cannot be hosted under `runComposeUiTest` (no real AWT window), so the UI tests
     // inject a lightweight pure-Compose fake to exercise the toggle + keep-alive + onExit wiring.
@@ -189,6 +194,16 @@ fun SessionDetail(
                 pendingEditorOpen = PendingEditorOpen(rel, ref.line, ref.endLine)
                 layout.setPanes(session.id, layout.panesFor(session.id).copy(editor = true))
             }
+        }
+    }
+
+    // SM_OPEN_FILE headless hook delivery: feed an external open request through the exact same
+    // onOpenFile chain a chat file-path tap uses (toWorkdirRelativePath → pendingEditorOpen + editor
+    // pane flip), then clear the source so it fires once. Keyed on the ref so a new request re-runs.
+    LaunchedEffect(externalOpen) {
+        externalOpen?.let {
+            onOpenFile(it)
+            onExternalOpenConsumed()
         }
     }
 
