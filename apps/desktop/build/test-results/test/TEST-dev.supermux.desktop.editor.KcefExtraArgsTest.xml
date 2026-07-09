@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dev.supermux.desktop.editor.KcefExtraArgsTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-07-09T20:00:03.571Z" hostname="ustalabs" time="0.002">
+  <properties/>
+  <testcase name="single_switch" classname="dev.supermux.desktop.editor.KcefExtraArgsTest" time="0.001"/>
+  <testcase name="null_and_blank_yield_no_args" classname="dev.supermux.desktop.editor.KcefExtraArgsTest" time="0.0"/>
+  <testcase name="multiple_switches_split_on_any_whitespace_run" classname="dev.supermux.desktop.editor.KcefExtraArgsTest" time="0.0"/>
+  <testcase name="no_quoting_a_spaced_value_splits_into_two_tokens" classname="dev.supermux.desktop.editor.KcefExtraArgsTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

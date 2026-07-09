@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dev.supermux.desktop.editor.EditorPanelTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-07-09T20:00:00.206Z" hostname="ustalabs" time="3.119">
+  <properties/>
+  <testcase name="downloading_kcef_state_shows_the_progress_strip" classname="dev.supermux.desktop.editor.EditorPanelTest" time="0.76"/>
+  <testcase name="stale_banner_appears_when_the_active_file_changes_on_disk" classname="dev.supermux.desktop.editor.EditorPanelTest" time="0.389"/>
+  <testcase name="reveal_is_not_consumed_while_the_engine_is_absent" classname="dev.supermux.desktop.editor.EditorPanelTest" time="0.067"/>
+  <testcase name="a_null_pendingOpen_never_calls_onPendingOpenConsumed" classname="dev.supermux.desktop.editor.EditorPanelTest" time="0.127"/>
+  <testcase name="pending_open_opens_a_tab_for_the_delivered_path_and_is_consumed_exactly_once" classname="dev.supermux.desktop.editor.EditorPanelTest" time="0.085"/>
+  <testcase name="a_change_for_another_session_does_not_raise_the_banner" classname="dev.supermux.desktop.editor.EditorPanelTest" time="0.237"/>
+  <testcase name="error_kcef_state_renders_the_native_fallback_editor" classname="dev.supermux.desktop.editor.EditorPanelTest" time="0.345"/>
+  <testcase name="opening_a_file_from_the_tree_shows_a_tab_and_clears_the_empty_state" classname="dev.supermux.desktop.editor.EditorPanelTest" time="0.191"/>
+  <testcase name="switching_files_captures_the_outgoing_scroll_via_the_reader_seam" classname="dev.supermux.desktop.editor.EditorPanelTest" time="0.747"/>
+  <testcase name="renders_the_tree_and_the_empty_state" classname="dev.supermux.desktop.editor.EditorPanelTest" time="0.167"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

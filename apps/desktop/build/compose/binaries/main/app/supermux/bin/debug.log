@@ -1,0 +1,23 @@
+[0709/225222.447736:ERROR:viz_main_impl.cc(186)] Exiting GPU process due to errors during initialization
+[0709/225222.741372:WARNING:sandbox_linux.cc(393)] InitializeSandbox() called with multiple threads in process gpu-process.
+[0709/225222.758238:ERROR:gpu_memory_buffer_support_x11.cc(49)] dri3 extension not supported.
+[0709/225222.770641:ERROR:command_buffer_proxy_impl.cc(128)] ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+[0709/225336.550602:ERROR:viz_main_impl.cc(186)] Exiting GPU process due to errors during initialization
+[0709/225337.153843:ERROR:viz_main_impl.cc(186)] Exiting GPU process due to errors during initialization
+[0709/225337.170507:WARNING:value_store_frontend.cc(47)] Reading mhjfbmdgcfjbbpaeojofohoefgiehjai.alarms from  failed: IO error: .../LOCK: File currently in use. (ChromeMethodBFE: 15::LockFile::2)
+[0709/225337.404396:WARNING:sandbox_linux.cc(393)] InitializeSandbox() called with multiple threads in process gpu-process.
+[0709/225337.412272:ERROR:gpu_memory_buffer_support_x11.cc(49)] dri3 extension not supported.
+[0709/225337.422199:ERROR:command_buffer_proxy_impl.cc(128)] ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+[0709/225430.294987:ERROR:viz_main_impl.cc(186)] Exiting GPU process due to errors during initialization
+[0709/225430.631638:WARNING:sandbox_linux.cc(393)] InitializeSandbox() called with multiple threads in process gpu-process.
+[0709/225430.646499:ERROR:gpu_memory_buffer_support_x11.cc(49)] dri3 extension not supported.
+[0709/225430.659769:ERROR:command_buffer_proxy_impl.cc(128)] ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+[0709/225537.879391:ERROR:viz_main_impl.cc(186)] Exiting GPU process due to errors during initialization
+[0709/225538.377421:ERROR:viz_main_impl.cc(186)] Exiting GPU process due to errors during initialization
+[0709/225538.533244:WARNING:sandbox_linux.cc(393)] InitializeSandbox() called with multiple threads in process gpu-process.
+[0709/225538.548024:ERROR:gpu_memory_buffer_support_x11.cc(49)] dri3 extension not supported.
+[0709/225538.560551:ERROR:command_buffer_proxy_impl.cc(128)] ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+[0709/225835.619765:ERROR:viz_main_impl.cc(186)] Exiting GPU process due to errors during initialization
+[0709/225835.939527:WARNING:sandbox_linux.cc(393)] InitializeSandbox() called with multiple threads in process gpu-process.
+[0709/225835.956705:ERROR:gpu_memory_buffer_support_x11.cc(49)] dri3 extension not supported.
+[0709/225835.978960:ERROR:command_buffer_proxy_impl.cc(128)] ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.

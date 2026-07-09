@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dev.supermux.desktop.editor.EditorPushPlannerTest" tests="12" skipped="0" failures="0" errors="0" timestamp="2026-07-09T20:00:03.354Z" hostname="ustalabs" time="0.014">
+  <properties/>
+  <testcase name="on_ready_flushes_the_queued_document_in_push_order" classname="dev.supermux.desktop.editor.EditorPushPlannerTest" time="0.006"/>
+  <testcase name="reveal_before_ready_is_queued_then_flushed_after_the_document_on_ready" classname="dev.supermux.desktop.editor.EditorPushPlannerTest" time="0.003"/>
+  <testcase name="same_file_content_change_after_ready_pushes_only_the_text" classname="dev.supermux.desktop.editor.EditorPushPlannerTest" time="0.001"/>
+  <testcase name="set_document_before_ready_emits_nothing_but_records_state" classname="dev.supermux.desktop.editor.EditorPushPlannerTest" time="0.0"/>
+  <testcase name="set_line_wrap_updates_state_and_emits_when_ready" classname="dev.supermux.desktop.editor.EditorPushPlannerTest" time="0.001"/>
+  <testcase name="reveal_after_ready_emits_immediately" classname="dev.supermux.desktop.editor.EditorPushPlannerTest" time="0.0"/>
+  <testcase name="echo_of_our_own_edit_is_skipped" classname="dev.supermux.desktop.editor.EditorPushPlannerTest" time="0.0"/>
+  <testcase name="set_scroll_top_emits_only_when_ready" classname="dev.supermux.desktop.editor.EditorPushPlannerTest" time="0.0"/>
+  <testcase name="renderer_lost_queues_pushes_again_and_a_fresh_ready_restores_the_document" classname="dev.supermux.desktop.editor.EditorPushPlannerTest" time="0.001"/>
+  <testcase name="user_font_size_updates_state_without_emitting" classname="dev.supermux.desktop.editor.EditorPushPlannerTest" time="0.0"/>
+  <testcase name="path_change_after_ready_pushes_the_full_document" classname="dev.supermux.desktop.editor.EditorPushPlannerTest" time="0.001"/>
+  <testcase name="font_size_is_clamped_and_only_emits_when_ready" classname="dev.supermux.desktop.editor.EditorPushPlannerTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

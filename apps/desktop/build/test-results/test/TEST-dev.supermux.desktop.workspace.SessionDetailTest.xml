@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dev.supermux.desktop.workspace.SessionDetailTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-07-09T20:00:06.562Z" hostname="ustalabs" time="1.595">
+  <properties/>
+  <testcase name="togglingSwapsContentButKeepsChatInTree" classname="dev.supermux.desktop.workspace.SessionDetailTest" time="0.208"/>
+  <testcase name="togglingWorkPanesMountsPanes" classname="dev.supermux.desktop.workspace.SessionDetailTest" time="0.322"/>
+  <testcase name="chatTapOpensTheEditorPaneAndDeliversAWorkdirRelativePendingOpen" classname="dev.supermux.desktop.workspace.SessionDetailTest" time="0.192"/>
+  <testcase name="aTapWhileThePaneIsAlreadyOpenUpdatesThePendingOpen" classname="dev.supermux.desktop.workspace.SessionDetailTest" time="0.134"/>
+  <testcase name="aTapOnAPathOutsideTheWorkdirIsDroppedWithoutOpeningThePane" classname="dev.supermux.desktop.workspace.SessionDetailTest" time="0.144"/>
+  <testcase name="toggleShownForClaudeHiddenForOthers" classname="dev.supermux.desktop.workspace.SessionDetailTest" time="0.149"/>
+  <testcase name="sessionSwitchDisposesOldNativePanelAndMountsFresh" classname="dev.supermux.desktop.workspace.SessionDetailTest" time="0.138"/>
+  <testcase name="onExitFlipsBackToChatAndClearsNativeView" classname="dev.supermux.desktop.workspace.SessionDetailTest" time="0.07"/>
+  <testcase name="toggleHiddenForNonClaude" classname="dev.supermux.desktop.workspace.SessionDetailTest" time="0.054"/>
+  <testcase name="clickingNativePillPersistsPreferenceViaLayout" classname="dev.supermux.desktop.workspace.SessionDetailTest" time="0.178"/>
+  <system-out><![CDATA[[SessionDetail] onOpenFile: '/etc/motd.txt' is outside session workdir '/w/s1' — dropped
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

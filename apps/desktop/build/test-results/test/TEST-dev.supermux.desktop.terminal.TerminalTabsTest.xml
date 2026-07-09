@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dev.supermux.desktop.terminal.TerminalTabsTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-07-09T20:00:04.782Z" hostname="ustalabs" time="1.56">
+  <properties/>
+  <testcase name="empty_list_hydrates_a_single_main_tab_with_add_button" classname="dev.supermux.desktop.terminal.TerminalTabsTest" time="0.38"/>
+  <testcase name="close_removes_the_tab_from_the_strip" classname="dev.supermux.desktop.terminal.TerminalTabsTest" time="0.159"/>
+  <testcase name="hydrates_all_tabs_from_broker_list_but_mounts_only_the_active" classname="dev.supermux.desktop.terminal.TerminalTabsTest" time="0.077"/>
+  <testcase name="switching_tabs_mounts_a_distinct_panel_per_tab_id" classname="dev.supermux.desktop.terminal.TerminalTabsTest" time="0.111"/>
+  <testcase name="tab_added_during_hydration_survives_the_merge" classname="dev.supermux.desktop.terminal.TerminalTabsTest" time="0.302"/>
+  <testcase name="add_button_creates_a_new_active_tab_as_its_own_panel_instance" classname="dev.supermux.desktop.terminal.TerminalTabsTest" time="0.267"/>
+  <testcase name="bounded_keepalive_disposes_all_but_active_and_last_active" classname="dev.supermux.desktop.terminal.TerminalTabsTest" time="0.262"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

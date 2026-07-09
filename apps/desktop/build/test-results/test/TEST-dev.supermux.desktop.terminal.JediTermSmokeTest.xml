@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dev.supermux.desktop.terminal.JediTermSmokeTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-07-09T20:00:03.850Z" hostname="ustalabs" time="0.057">
+  <properties/>
+  <testcase name="getcharat_and_cursor_getters_readable_on_fresh_buffer" classname="dev.supermux.desktop.terminal.JediTermSmokeTest" time="0.039"/>
+  <testcase name="cursor_advances_with_writes_and_crlf_one_based_vt100_convention" classname="dev.supermux.desktop.terminal.JediTermSmokeTest" time="0.014"/>
+  <testcase name="writing_at_current_cursor_cell_and_reading_back_round_trips" classname="dev.supermux.desktop.terminal.JediTermSmokeTest" time="0.001"/>
+  <testcase name="programmatic_styled_write_via_terminaltextbuffer_writestring_works" classname="dev.supermux.desktop.terminal.JediTermSmokeTest" time="0.001"/>
+  <testcase name="emulator_write_path_renders_hello_world_across_two_lines" classname="dev.supermux.desktop.terminal.JediTermSmokeTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

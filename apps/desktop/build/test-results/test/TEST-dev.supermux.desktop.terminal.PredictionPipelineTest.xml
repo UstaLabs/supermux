@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dev.supermux.desktop.terminal.PredictionPipelineTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-07-09T20:00:04.102Z" hostname="ustalabs" time="0.497">
+  <properties/>
+  <testcase name="handle_output_before_attach_uses_fallback" classname="dev.supermux.desktop.terminal.PredictionPipelineTest" time="0.003"/>
+  <testcase name="handle_output_falls_back_when_the_adapter_throws" classname="dev.supermux.desktop.terminal.PredictionPipelineTest" time="0.003"/>
+  <testcase name="concurrent_input_and_output_do_not_corrupt_the_pipeline" classname="dev.supermux.desktop.terminal.PredictionPipelineTest" time="0.468"/>
+  <testcase name="input_tap_stamps_last_key_at_and_output_consumes_it_as_latency" classname="dev.supermux.desktop.terminal.PredictionPipelineTest" time="0.006"/>
+  <testcase name="handle_output_when_attached_renders_through_engine_not_fallback" classname="dev.supermux.desktop.terminal.PredictionPipelineTest" time="0.01"/>
+  <testcase name="teardown_routes_later_output_back_to_fallback" classname="dev.supermux.desktop.terminal.PredictionPipelineTest" time="0.003"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

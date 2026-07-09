@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dev.supermux.desktop.chat.TimelineMergeTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-07-09T19:59:59.920Z" hostname="ustalabs" time="0.008">
+  <properties/>
+  <testcase name="toolEventBecomesToolItemRunningWhenNoResult" classname="dev.supermux.desktop.chat.TimelineMergeTest" time="0.002"/>
+  <testcase name="thinkingAndUnknownKindsAreDropped" classname="dev.supermux.desktop.chat.TimelineMergeTest" time="0.0"/>
+  <testcase name="emptyInputsProduceEmptyTimeline" classname="dev.supermux.desktop.chat.TimelineMergeTest" time="0.001"/>
+  <testcase name="equalTimestampsPreserveStableInsertionOrder" classname="dev.supermux.desktop.chat.TimelineMergeTest" time="0.002"/>
+  <testcase name="messagesAndToolsInterleaveByTs" classname="dev.supermux.desktop.chat.TimelineMergeTest" time="0.0"/>
+  <testcase name="messagesOnlyBecomeMsgItemsInTsOrder" classname="dev.supermux.desktop.chat.TimelineMergeTest" time="0.0"/>
+  <testcase name="toolWithoutCallIdStaysRunningEvenIfAResultExists" classname="dev.supermux.desktop.chat.TimelineMergeTest" time="0.0"/>
+  <testcase name="toolResultCompletedMapsToDoneAndFolds" classname="dev.supermux.desktop.chat.TimelineMergeTest" time="0.0"/>
+  <testcase name="toolResultFailedMapsToError" classname="dev.supermux.desktop.chat.TimelineMergeTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

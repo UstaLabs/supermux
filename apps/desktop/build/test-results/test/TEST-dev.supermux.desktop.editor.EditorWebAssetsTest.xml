@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dev.supermux.desktop.editor.EditorWebAssetsTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-07-09T20:00:03.452Z" hostname="ustalabs" time="0.094">
+  <properties/>
+  <testcase name="extract_writes_both_files_and_returns_index_html" classname="dev.supermux.desktop.editor.EditorWebAssetsTest" time="0.015"/>
+  <testcase name="re_extract_restores_a_same_size_but_changed_file" classname="dev.supermux.desktop.editor.EditorWebAssetsTest" time="0.026"/>
+  <testcase name="re_extract_restores_a_file_whose_size_drifted" classname="dev.supermux.desktop.editor.EditorWebAssetsTest" time="0.031"/>
+  <testcase name="re_extract_is_a_noop_when_crc_matches" classname="dev.supermux.desktop.editor.EditorWebAssetsTest" time="0.021"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

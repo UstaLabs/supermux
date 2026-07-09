@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dev.supermux.desktop.state.DesktopAppStateReducerTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-07-09T20:00:03.726Z" hostname="ustalabs" time="0.114">
+  <properties/>
+  <testcase name="editor_open_and_close_send_the_lifecycle_frames" classname="dev.supermux.desktop.state.DesktopAppStateReducerTest" time="0.061"/>
+  <testcase name="fs_changed_frame_is_broadcast_on_the_fs_changes_flow" classname="dev.supermux.desktop.state.DesktopAppStateReducerTest" time="0.014"/>
+  <testcase name="snapshot_resets_viewing_dedup" classname="dev.supermux.desktop.state.DesktopAppStateReducerTest" time="0.011"/>
+  <testcase name="message_append_dedups_local_echo" classname="dev.supermux.desktop.state.DesktopAppStateReducerTest" time="0.005"/>
+  <testcase name="close_cancels_owned_scope_so_no_more_outbound_sends" classname="dev.supermux.desktop.state.DesktopAppStateReducerTest" time="0.006"/>
+  <testcase name="snapshot_populates_sessions_and_state" classname="dev.supermux.desktop.state.DesktopAppStateReducerTest" time="0.004"/>
+  <testcase name="guarded_swallows_errors_and_state_keeps_working" classname="dev.supermux.desktop.state.DesktopAppStateReducerTest" time="0.003"/>
+  <testcase name="session_removed_prunes" classname="dev.supermux.desktop.state.DesktopAppStateReducerTest" time="0.003"/>
+  <testcase name="agent_state_updates_map_and_clears_pending" classname="dev.supermux.desktop.state.DesktopAppStateReducerTest" time="0.003"/>
+  <system-out><![CDATA[[DesktopAppState] reduce error: java.lang.IllegalStateException: poison frame
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

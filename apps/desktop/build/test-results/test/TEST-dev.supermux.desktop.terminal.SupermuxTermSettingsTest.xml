@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dev.supermux.desktop.terminal.SupermuxTermSettingsTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-07-09T20:00:04.610Z" hostname="ustalabs" time="0.167">
+  <properties/>
+  <testcase name="audible_bell_is_off" classname="dev.supermux.desktop.terminal.SupermuxTermSettingsTest" time="0.008"/>
+  <testcase name="default_style_uses_constructor_colors" classname="dev.supermux.desktop.terminal.SupermuxTermSettingsTest" time="0.003"/>
+  <testcase name="typeahead_is_disabled" classname="dev.supermux.desktop.terminal.SupermuxTermSettingsTest" time="0.002"/>
+  <testcase name="terminal_font_is_bundled_geist_mono_at_size_13" classname="dev.supermux.desktop.terminal.SupermuxTermSettingsTest" time="0.146"/>
+  <testcase name="mono_font_falls_back_when_resource_missing" classname="dev.supermux.desktop.terminal.SupermuxTermSettingsTest" time="0.002"/>
+  <testcase name="default_colors_are_the_dark_terminal_tones" classname="dev.supermux.desktop.terminal.SupermuxTermSettingsTest" time="0.0"/>
+  <testcase name="mono_font_falls_back_when_stream_is_not_a_font" classname="dev.supermux.desktop.terminal.SupermuxTermSettingsTest" time="0.003"/>
+  <testcase name="terminal_color_converts_argb_channels" classname="dev.supermux.desktop.terminal.SupermuxTermSettingsTest" time="0.0"/>
+  <testcase name="mono_font_falls_back_when_stream_open_throws" classname="dev.supermux.desktop.terminal.SupermuxTermSettingsTest" time="0.002"/>
+  <system-out><![CDATA[[SupermuxTermSettings] Geist Mono load failed — falling back to logical monospaced: java.lang.IllegalStateException: font resource /fonts/geist_mono_regular.ttf not found
+[SupermuxTermSettings] Geist Mono load failed — falling back to logical monospaced: java.awt.FontFormatException: Unsupported sfnt /tmp/+~JF6645469475580803762.tmp
+[SupermuxTermSettings] Geist Mono load failed — falling back to logical monospaced: java.io.IOException: boom
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

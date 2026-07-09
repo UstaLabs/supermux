@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dev.supermux.desktop.editor.EditorZoomPersistenceTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-07-09T20:00:03.549Z" hostname="ustalabs" time="0.003">
+  <properties/>
+  <testcase name="writeback_persists_and_a_brand_new_engine_init_pushes_the_persisted_size" classname="dev.supermux.desktop.editor.EditorZoomPersistenceTest" time="0.002"/>
+  <testcase name="repeated_zoom_changes_never_touch_content_even_across_many_steps" classname="dev.supermux.desktop.editor.EditorZoomPersistenceTest" time="0.001"/>
+  <testcase name="a_zoom_change_on_a_ready_engine_never_resends_content_or_language" classname="dev.supermux.desktop.editor.EditorZoomPersistenceTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

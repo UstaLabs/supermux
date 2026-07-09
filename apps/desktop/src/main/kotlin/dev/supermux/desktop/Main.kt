@@ -29,6 +29,17 @@ import dev.supermux.desktop.workspace.WorkspaceRoot
 import dev.supermux.desktop.workspace.WorkspaceStateStore
 import dev.supermux.desktop.workspace.WorkspaceUiState
 
+// Headless-verification env hooks (ALL off by default; for Xvfb runs with no input injection).
+// Catalogued here for discoverability — some are read at their use-site rather than in main():
+//   SM_PAIR_TOKEN + SM_PAIR_BASE  — seed a pairing without onboarding (both required)   [main, below]
+//   SM_AUTOSELECT=1               — auto-select a session so a pane renders             [WorkspaceRoot]
+//   SM_PANES=etd                  — force Editor/Terminal/Display panes on              [WorkspaceRoot]
+//   SM_SMOKE_SEND="name:text"     — send a chat message to a session                    [main]
+//   SM_TERM_INPUT="name:text"     — type into a session's scratch terminal (M2)         [main]
+//   SM_OPEN_FILE="name:path[:ln]" — open a file in the editor at a line (M3)            [main]
+//   SMX_KCEF_FORCE_ERROR=1        — force KcefState.Error (native-fallback editor, M3)   [KcefRuntime]
+//   SM_EDITOR_SAVE_TEST           — drive the editor save path (M3)                      [EditorPanel]
+//   SMX_KCEF_EXTRA_ARGS="…"       — extra CEF switches for headless CI                   [KcefRuntime]
 fun main() {
     val store = DesktopTokenStore()
     // Dev override, mirrors the mac app's SM_PAIR_TOKEN/SM_PAIR_BASE guard (SupermuxApp.swift

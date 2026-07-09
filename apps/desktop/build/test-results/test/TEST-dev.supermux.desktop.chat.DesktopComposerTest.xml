@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dev.supermux.desktop.chat.DesktopComposerTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-07-09T19:59:55.709Z" hostname="ustalabs" time="3.954">
+  <properties/>
+  <testcase name="sendKeyPredicate_enterDownNoShift_sends" classname="dev.supermux.desktop.chat.DesktopComposerTest" time="0.004"/>
+  <testcase name="sendDisabled_whileSending_evenWithText" classname="dev.supermux.desktop.chat.DesktopComposerTest" time="2.06"/>
+  <testcase name="sendDisabled_whenBlank" classname="dev.supermux.desktop.chat.DesktopComposerTest" time="0.206"/>
+  <testcase name="enterKey_sends_shiftEnter_doesNot" classname="dev.supermux.desktop.chat.DesktopComposerTest" time="0.781"/>
+  <testcase name="sendEnabled_whenNonBlankAndNotSending" classname="dev.supermux.desktop.chat.DesktopComposerTest" time="0.172"/>
+  <testcase name="sendKeyPredicate_keyUpAndOtherKeys_dontSend" classname="dev.supermux.desktop.chat.DesktopComposerTest" time="0.0"/>
+  <testcase name="typingThenClickSend_firesTrimmed_andClears" classname="dev.supermux.desktop.chat.DesktopComposerTest" time="0.486"/>
+  <testcase name="stopShown_whileAgentWorking_firesInterrupt" classname="dev.supermux.desktop.chat.DesktopComposerTest" time="0.24"/>
+  <testcase name="sendKeyPredicate_shiftEnter_isNewlineNotSend" classname="dev.supermux.desktop.chat.DesktopComposerTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

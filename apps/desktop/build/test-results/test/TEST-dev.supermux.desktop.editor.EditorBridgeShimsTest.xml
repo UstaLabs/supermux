@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dev.supermux.desktop.editor.EditorBridgeShimsTest" tests="13" skipped="0" failures="0" errors="0" timestamp="2026-07-09T19:59:59.934Z" hostname="ustalabs" time="0.232">
+  <properties/>
+  <testcase name="parse_lsp_out_carries_the_payload" classname="dev.supermux.desktop.editor.EditorBridgeShimsTest" time="0.005"/>
+  <testcase name="js_quote_wraps_a_plain_string_in_double_quotes" classname="dev.supermux.desktop.editor.EditorBridgeShimsTest" time="0.008"/>
+  <testcase name="parse_change_carries_the_content" classname="dev.supermux.desktop.editor.EditorBridgeShimsTest" time="0.003"/>
+  <testcase name="parse_content_with_escaped_quotes_and_newlines_round_trips" classname="dev.supermux.desktop.editor.EditorBridgeShimsTest" time="0.124"/>
+  <testcase name="parse_save_and_ready_are_singletons" classname="dev.supermux.desktop.editor.EditorBridgeShimsTest" time="0.002"/>
+  <testcase name="init_script_puts_the_shim_before_cm_init" classname="dev.supermux.desktop.editor.EditorBridgeShimsTest" time="0.045"/>
+  <testcase name="parse_malformed_json_is_null" classname="dev.supermux.desktop.editor.EditorBridgeShimsTest" time="0.001"/>
+  <testcase name="js_quote_escapes_quotes_newlines_backslashes_tabs" classname="dev.supermux.desktop.editor.EditorBridgeShimsTest" time="0.001"/>
+  <testcase name="js_quote_survives_a_nasty_content_string" classname="dev.supermux.desktop.editor.EditorBridgeShimsTest" time="0.019"/>
+  <testcase name="parse_font_size_reads_the_numeric_arg" classname="dev.supermux.desktop.editor.EditorBridgeShimsTest" time="0.008"/>
+  <testcase name="parse_font_size_with_non_numeric_arg_is_null" classname="dev.supermux.desktop.editor.EditorBridgeShimsTest" time="0.002"/>
+  <testcase name="bridge_shim_defines_the_bundle_globals_and_routes_through_the_query_fn" classname="dev.supermux.desktop.editor.EditorBridgeShimsTest" time="0.006"/>
+  <testcase name="parse_unknown_fn_is_null" classname="dev.supermux.desktop.editor.EditorBridgeShimsTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dev.supermux.desktop.terminal.MuxTtyConnectorTest" tests="13" skipped="0" failures="0" errors="0" timestamp="2026-07-09T20:00:03.915Z" hostname="ustalabs" time="0.12">
+  <properties/>
+  <testcase name="write_string_forwards_as_utf8_bytes" classname="dev.supermux.desktop.terminal.MuxTtyConnectorTest" time="0.002"/>
+  <testcase name="inject_display_bytes_preserve_order_with_server_bytes" classname="dev.supermux.desktop.terminal.MuxTtyConnectorTest" time="0.004"/>
+  <testcase name="offer_server_bytes_are_readable_as_chars" classname="dev.supermux.desktop.terminal.MuxTtyConnectorTest" time="0.001"/>
+  <testcase name="on_user_input_tap_fires_before_send_input" classname="dev.supermux.desktop.terminal.MuxTtyConnectorTest" time="0.002"/>
+  <testcase name="on_user_input_null_by_default_and_write_still_sends" classname="dev.supermux.desktop.terminal.MuxTtyConnectorTest" time="0.001"/>
+  <testcase name="wait_for_unblocks_after_close_stream" classname="dev.supermux.desktop.terminal.MuxTtyConnectorTest" time="0.053"/>
+  <testcase name="write_bytes_forwards_verbatim_to_send_input" classname="dev.supermux.desktop.terminal.MuxTtyConnectorTest" time="0.0"/>
+  <testcase name="resize_forwards_cols_and_rows" classname="dev.supermux.desktop.terminal.MuxTtyConnectorTest" time="0.001"/>
+  <testcase name="small_buffer_over_large_chunk_returns_partial_without_loss" classname="dev.supermux.desktop.terminal.MuxTtyConnectorTest" time="0.001"/>
+  <testcase name="multibyte_char_split_across_two_offers_decodes_whole" classname="dev.supermux.desktop.terminal.MuxTtyConnectorTest" time="0.001"/>
+  <testcase name="close_stream_makes_read_return_minus_one" classname="dev.supermux.desktop.terminal.MuxTtyConnectorTest" time="0.051"/>
+  <testcase name="is_connected_delegates_to_lambda" classname="dev.supermux.desktop.terminal.MuxTtyConnectorTest" time="0.001"/>
+  <testcase name="ready_reflects_pending_data" classname="dev.supermux.desktop.terminal.MuxTtyConnectorTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
