@@ -18,8 +18,10 @@ import dev.supermux.net.ChunkSource
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.FsEntry
 import dev.supermux.net.FsSearchResult
+import dev.supermux.net.GitOpResult
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.PathValidation
+import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RepoInfo
 import dev.supermux.net.SpawnRequest
@@ -409,6 +411,37 @@ class DesktopAppState(
             onDone()
         }
     }
+
+    // ── Git ops + proxies (M4c; mirrors AppViewModel.gitFetch/gitPush/gitPull/gitPublish:566-569
+    //    + proxies:871) ───────────────────────────────────────────────────────────────────────
+    // Android exposes these as fire-and-forget calls taking an `onResult` callback
+    // (`runCatching { api.gitOp(id) }.getOrNull()`); desktop instead exposes plain suspend funs
+    // returning the same getOrNull-degraded result through [runApi] — the caller (the header's
+    // GitBadgeMenu, M4c Task 2) awaits it directly from a coroutine rather than passing a lambda.
+    // All four are bare `POST /sessions/<id>/git/<op>` with no body, decoding to [GitOpResult]
+    // (BrokerApi.gitOp) — Android's naming (GitOpResult vs a push/pull-specific type) doesn't
+    // apply here; the real BrokerApi has ONE flat result shape for all four ops.
+
+    /** POST /sessions/<id>/git/fetch. Null on any failure. */
+    suspend fun gitFetch(id: String): GitOpResult? =
+        runApi("gitFetch") { api.gitFetch(id) }
+
+    /** POST /sessions/<id>/git/pull. Null on any failure. */
+    suspend fun gitPull(id: String): GitOpResult? =
+        runApi("gitPull") { api.gitPull(id) }
+
+    /** POST /sessions/<id>/git/push. Null on any failure. */
+    suspend fun gitPush(id: String): GitOpResult? =
+        runApi("gitPush") { api.gitPush(id) }
+
+    /** POST /sessions/<id>/git/publish. Null on any failure. */
+    suspend fun gitPublish(id: String): GitOpResult? =
+        runApi("gitPublish") { api.gitPublish(id) }
+
+    /** GET /proxies — all exposed proxies (session-links menu filters by session). Empty on
+     *  any failure. */
+    suspend fun proxies(): List<ProxyDto> =
+        runApi("proxies") { api.proxies() } ?: emptyList()
 
     // ── Finish flow (M4b; mirrors AppViewModel.finish/finishReadiness/verifySuggest/verifySave) ──
     // The FinishDialog drives the whole job lifecycle off the [finishJobs] StateFlow; [finish] only
