@@ -37,6 +37,8 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //   SM_SMOKE_SEND="name:text"     — send a chat message to a session                    [main]
 //   SM_TERM_INPUT="name:text"     — type into a session's scratch terminal (M2)         [main]
 //   SM_OPEN_FILE="name:path[:ln]" — open a file in the editor at a line (M3)            [main]
+//   SM_LAUNCH_TEST="wd|agent|msg[|attach]" — drive the launcher spawn→first-msg chain (M4a) [main]
+//   SM_LAUNCH_PAUSE_MS=<ms>       — hold the launcher OPEN this long before submitting (M4a) [main]
 //   SMX_KCEF_FORCE_ERROR=1        — force KcefState.Error (native-fallback editor, M3)   [KcefRuntime]
 //   SM_EDITOR_SAVE_TEST           — drive the editor save path (M3)                      [EditorPanel]
 //   SMX_KCEF_EXTRA_ARGS="…"       — extra CEF switches for headless CI                   [KcefRuntime]
@@ -284,6 +286,76 @@ fun main() {
                             ui.layout.setPanes(t.id, ui.layout.panesFor(t.id).copy(editor = true))
                             ui.externalOpen = t.id to dev.supermux.ui.FilePathRef(path, line)
                             println("[openfile] requested '$path'${line?.let { ":$it" } ?: ""} in ${t.name} (${t.id})")
+                        }
+                    }
+
+                    // Headless launcher-verification hook (M4a): SM_LAUNCH_TEST=
+                    // "<workdir>|<agent>|<message>[|<attachPath>]" drives the SAME onSubmit chain the
+                    // launcher UI uses — after settle it flips the launcher overlay OPEN, then (unless
+                    // SM_LAUNCH_PAUSE_MS holds it open first, for a screenshot of the composer card /
+                    // a restored draft) exercises the real spawn→first-message→uploads path:
+                    // createSessionWithFirstMessage(workdir, agent, model=null, reasoning=null, message,
+                    // staged, worktree=false, baseBranch=null) → select the new session → sendMessage
+                    // with consumeFirstUploads → close the overlay. PIPE-delimited (not colon) so the
+                    // message may contain colons/spaces; an optional 4th field stages one real file
+                    // (FileChunkSource) that uploads post-spawn. A BLANK message opens the launcher
+                    // without submitting (draft/prefs screenshot mode). This SPAWNS a real session —
+                    // point it at a throwaway temp workdir, never a real project. Off by default.
+                    val launchTest = System.getenv("SM_LAUNCH_TEST")?.takeIf { it.isNotBlank() }
+                    if (launchTest != null) {
+                        LaunchedEffect(app) {
+                            val parts = launchTest.split("|", limit = 4)
+                            if (parts.size < 3) {
+                                println("[launch] bad SM_LAUNCH_TEST (expected <workdir>|<agent>|<message>[|<attach>])")
+                                return@LaunchedEffect
+                            }
+                            val workdir = parts[0]
+                            val agent = parts[1]
+                            val message = parts[2]
+                            val attachPath = parts.getOrNull(3)?.takeIf { it.isNotBlank() }
+                            // Let the first WS snapshot land so the session list is populated before a
+                            // (possibly blank-id) spawn has to resolve its id against it.
+                            delay(3_000)
+                            ui.launcherOpen = true
+                            // Optional hold so a screenshot can capture the OPEN launcher (composer card
+                            // / a pre-written restored draft) before the spawn submit runs.
+                            val pauseMs = System.getenv("SM_LAUNCH_PAUSE_MS")?.toLongOrNull() ?: 0L
+                            if (pauseMs > 0) delay(pauseMs)
+                            if (message.isBlank()) {
+                                println("[launch] launcher opened (blank message → no submit)")
+                                return@LaunchedEffect
+                            }
+                            val staged = attachPath?.let { p ->
+                                val file = java.io.File(p)
+                                if (!file.isFile) {
+                                    println("[launch] attach path is not a file, skipping: $p")
+                                    return@let null
+                                }
+                                val mime = runCatching { java.nio.file.Files.probeContentType(file.toPath()) }
+                                    .getOrNull() ?: "application/octet-stream"
+                                listOf(dev.supermux.desktop.session.StagedUpload(
+                                    dev.supermux.desktop.upload.FileChunkSource(file), file.name, mime,
+                                ))
+                            } ?: emptyList()
+                            val id = app.createSessionWithFirstMessage(
+                                workdir = workdir,
+                                agent = agent,
+                                model = null,
+                                reasoningLevel = null,
+                                text = message,
+                                staged = staged,
+                                worktree = false,
+                                baseBranch = null,
+                            )
+                            if (id == null) {
+                                println("[launch] createSessionWithFirstMessage returned null (invalid workdir / spawn failed)")
+                                ui.launcherOpen = false
+                                return@LaunchedEffect
+                            }
+                            ui.selectedId = id
+                            app.sendMessage(id, message, app.consumeFirstUploads(id))
+                            ui.launcherOpen = false
+                            println("[launch] spawned session $id in '$workdir' (agent=$agent, staged=${staged.size}); first message sent")
                         }
                     }
 
