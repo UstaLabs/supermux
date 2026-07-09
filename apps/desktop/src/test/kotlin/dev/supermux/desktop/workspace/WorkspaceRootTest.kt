@@ -115,9 +115,10 @@ class WorkspaceRootTest {
         val sent = mutableListOf<ClientFrame>()
         val app = appFor(sent, spawnId = "sess-new")
         val ui = WorkspaceUiState().apply { launcherOpen = true }
+        val launcherStore = LauncherStore(tempPath("launcher"))
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(app, ui, WorkspaceStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+                WorkspaceRoot(app, ui, WorkspaceStateStore(tempPath("state")), launcherStore)
             }
         }
         waitForIdle()
@@ -132,6 +133,13 @@ class WorkspaceRootTest {
         val send = sent.filterIsInstance<ClientFrame.Send>().singleOrNull()
         assertEquals("sess-new", send?.session)
         assertEquals("hello there", send?.args?.text)
+
+        // The screen's own post-onSubmit onClearDraft() must win even though `ui.launcherOpen =
+        // false` (set by OUR onSubmit, before returning) disposes the SessionLauncherScreen
+        // composable right around the same time — the exact race the T4 header note calls "no
+        // longer load-bearing". Assert the draft actually landed cleared on disk, not just that
+        // the overlay went away.
+        assertEquals("", launcherStore.loadDraft().text)
     }
 
     @Test fun submit_with_a_null_id_keeps_the_overlay_open_and_surfaces_the_error() = runComposeUiTest {
