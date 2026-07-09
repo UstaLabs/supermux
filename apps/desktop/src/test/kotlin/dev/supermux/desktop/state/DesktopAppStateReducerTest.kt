@@ -105,4 +105,28 @@ class DesktopAppStateReducerTest {
         assertEquals(2, viewing.size)
         assertEquals(ClientFrame.Viewing("s1", true), viewing.last())
     }
+
+    @Test fun guarded_swallows_errors_and_state_keeps_working() {
+        val s = state()
+        // The frame collector wraps reduce in guarded {} — one poison frame must drop one
+        // update, not kill the collector. guarded must swallow (and log) the throw…
+        s.guarded("reduce") { error("poison frame") }
+        // …and subsequent reduces still work.
+        s.reduce(ServerFrame.Snapshot(sessions = listOf(session("s1"))))
+        assertEquals(listOf("s1"), s.sessions.value.map { it.id })
+    }
+
+    @Test fun close_cancels_owned_scope_so_no_more_outbound_sends() {
+        val s = state()
+        s.updateViewing("s1", true)
+        assertEquals(1, sent.filterIsInstance<ClientFrame.Viewing>().size)
+
+        s.close()
+        // A CHANGED viewing state after close() would emit if the owned scope were still alive;
+        // the cancelled stateScope must drop it (heartbeat and send launches are dead).
+        s.updateViewing("s2", true)
+        s.sendMessage("s2", "should not go out")
+        assertEquals(1, sent.filterIsInstance<ClientFrame.Viewing>().size)
+        assertTrue(sent.none { it is ClientFrame.Send })
+    }
 }

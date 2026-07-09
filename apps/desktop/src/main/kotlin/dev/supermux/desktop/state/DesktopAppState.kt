@@ -24,6 +24,8 @@ import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.websocket.WebSockets
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,17 +40,28 @@ import java.time.Instant
  *   a network. Production uses the default `true`.
  * @param sendFrameOverride injectable outbound-frame seam; defaults to `client.send`. Tests pass
  *   a capturing lambda to assert outbound ClientFrames without a live WebSocket.
+ * @param apiOverride injectable HTTP seam mirroring [sendFrameOverride]. NOTE: BrokerApi is a
+ *   FINAL concrete class (not open, no interface), so this cannot take a mock subclass — tests
+ *   exercising HTTP paths construct a real BrokerApi against a ktor MockEngine HttpClient and
+ *   pass it here.
  */
 class DesktopAppState(
     val baseUrl: String,
     token: String,
-    private val scope: CoroutineScope,
+    scope: CoroutineScope,
     connectOnInit: Boolean = true,
     sendFrameOverride: (suspend (ClientFrame) -> Unit)? = null,
+    apiOverride: BrokerApi? = null,
 ) {
+    /** Own child scope — supervised and parented to the caller's [scope] — so [close] can cancel
+     *  the collector / WS run-loop / heartbeat without tearing down the caller's scope, and one
+     *  failed child never cancels its siblings. */
+    private val stateScope =
+        CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
+
     private val http = HttpClient(CIO) { install(WebSockets) }
     val client = BrokerClient(baseUrl, token, http)
-    val api = BrokerApi(baseUrl, token, http)
+    val api = apiOverride ?: BrokerApi(baseUrl, token, http)
     private val sendFrame: suspend (ClientFrame) -> Unit = sendFrameOverride ?: { client.send(it) }
 
     // ── Viewing presence (mirrors iOS BrokerSession / web useViewing) ──────────────
@@ -81,18 +94,28 @@ class DesktopAppState(
 
     init {
         if (connectOnInit) {
-            scope.launch { client.frames.collect { reduce(it) } }
-            scope.launch { client.run() }
+            // Guarded per-frame: one poison frame drops one update, never the whole collector.
+            stateScope.launch { client.frames.collect { guarded("reduce") { reduce(it) } } }
+            stateScope.launch { client.run() }
             ensureViewingHeartbeat()
         }
     }
 
+    /** Run [block], swallowing (and logging) any failure — used to guard the frame collector so
+     *  a throwing reducer branch never cancels the collecting coroutine. Internal for tests. */
+    internal fun guarded(op: String, block: () -> Unit) {
+        runCatching(block).onFailure { e -> println("[DesktopAppState] $op error: $e") }
+    }
+
     // ── ServerFrame reducer (ported subset of AppViewModel's when(frame)) ──────────
 
-    /** Fold one inbound frame into the StateFlows. Public for reducer tests. */
+    /** Fold one inbound frame into the StateFlows. Public for reducer tests. All read-modify-
+     *  write mutations go through atomic `.update {}` — appendLocalEcho (caller thread) and the
+     *  reducer coroutine can race on [_messages], and a lost update here is a lost message. */
     fun reduce(frame: ServerFrame) {
         when (frame) {
             is ServerFrame.Snapshot -> {
+                // Straight replacement (not read-modify-write) — plain assignment is atomic.
                 _sessions.value = frame.sessions
                 _messages.value = frame.logs
                 _activity.value = frame.activity
@@ -110,62 +133,62 @@ class DesktopAppState(
                 // then the authoritative post-register add carrying repo_root / session_branch).
                 // Dedup by id and backfill omitted fields rather than appending a duplicate row.
                 val incoming = frame.session
-                _sessions.value = if (_sessions.value.none { it.id == incoming.id }) {
-                    _sessions.value + incoming
-                } else {
-                    _sessions.value.map { s ->
-                        if (s.id != incoming.id) s
-                        else incoming.copy(
-                            status = incoming.status ?: s.status,
-                            mute = incoming.mute ?: s.mute,
-                            connected = incoming.connected ?: s.connected,
-                            model = incoming.model ?: s.model,
-                            repo_root = incoming.repo_root ?: s.repo_root,
-                            role = incoming.role ?: s.role,
-                            session_branch = incoming.session_branch ?: s.session_branch,
-                            git = incoming.git ?: s.git,
-                            finish_job = incoming.finish_job ?: s.finish_job,
-                        )
+                _sessions.update { current ->
+                    if (current.none { it.id == incoming.id }) {
+                        current + incoming
+                    } else {
+                        current.map { s ->
+                            if (s.id != incoming.id) s
+                            else incoming.copy(
+                                status = incoming.status ?: s.status,
+                                mute = incoming.mute ?: s.mute,
+                                connected = incoming.connected ?: s.connected,
+                                model = incoming.model ?: s.model,
+                                repo_root = incoming.repo_root ?: s.repo_root,
+                                role = incoming.role ?: s.role,
+                                session_branch = incoming.session_branch ?: s.session_branch,
+                                git = incoming.git ?: s.git,
+                                finish_job = incoming.finish_job ?: s.finish_job,
+                            )
+                        }
                     }
                 }
             }
             is ServerFrame.SessionRemoved -> {
-                _sessions.value = _sessions.value.filterNot { it.id == frame.id }
+                _sessions.update { it.filterNot { s -> s.id == frame.id } }
                 _bgTasks.update { it - frame.id }
             }
             is ServerFrame.MessageAppend -> {
                 // Optimistic-echo dedup (iOS BrokerSession parity): when the real inbound message
                 // lands, drop the matching local-… placeholder we appended on send.
-                _messages.value = _messages.value.toMutableMap().apply {
-                    val prev = this[frame.session] ?: emptyList()
+                _messages.update { current ->
+                    val prev = current[frame.session] ?: emptyList()
                     val pruned = if (frame.entry.direction.startsWith("in")) {
                         prev.filterNot { it.id.startsWith("local-") && it.text == frame.entry.text }
                     } else prev
-                    this[frame.session] = pruned + frame.entry
+                    current + (frame.session to (pruned + frame.entry))
                 }
             }
             is ServerFrame.ActivityAppend -> {
-                _activity.value = _activity.value.toMutableMap().apply {
-                    this[frame.session] = (this[frame.session] ?: emptyList()) + frame.event
+                _activity.update { current ->
+                    current + (frame.session to ((current[frame.session] ?: emptyList()) + frame.event))
                 }
             }
             is ServerFrame.BgTasks -> {
                 _bgTasks.update { it + (frame.session to frame.tasks) }
             }
             is ServerFrame.AgentState -> {
-                _agentState.value = _agentState.value.toMutableMap().apply {
-                    this[frame.session] = AgentStatus(
+                _agentState.update { current ->
+                    current + (frame.session to AgentStatus(
                         phase = frame.phase, state = frame.state, working = frame.working,
                         detail = frame.detail, tool = frame.tool, since = frame.since,
                         workingSince = frame.workingSince, waiting = frame.waiting, bgOpen = frame.bgOpen,
-                    )
+                    ))
                 }
                 _pendingSend.update { it - frame.session }   // first real state clears the client-local "Sending…"
             }
             is ServerFrame.CommandsChanged -> {
-                _commands.value = _commands.value.toMutableMap().apply {
-                    this[frame.session] = frame.commands
-                }
+                _commands.update { it + (frame.session to frame.commands) }
                 _commandsResolved.update { it + (frame.session to frame.resolved) }
             }
             // Out of M1 scope — reduced in later milestones: agent_error, finish_job, session_git,
@@ -189,17 +212,23 @@ class DesktopAppState(
         val next = viewingSession to viewingVisible
         if (lastSentViewing == next) return
         lastSentViewing = next
-        scope.launch { runCatching { sendFrame(ClientFrame.Viewing(viewingSession, viewingVisible)) } }
+        stateScope.launch {
+            runCatching { sendFrame(ClientFrame.Viewing(viewingSession, viewingVisible)) }
+                .onFailure { e -> println("[DesktopAppState] viewing send failed: $e") }
+        }
     }
 
     /** Re-assert the viewing frame every 60s so the broker's 5-min TTL never lapses while the user
-     *  reads a long, quiet turn. Only refreshes while visible; [scope] cancels it on close. */
+     *  reads a long, quiet turn. Only refreshes while visible; [close] cancels it via [stateScope]. */
     private fun ensureViewingHeartbeat() {
         if (viewingHeartbeat?.isActive == true) return
-        viewingHeartbeat = scope.launch {
+        viewingHeartbeat = stateScope.launch {
             while (isActive) {
                 delay(60_000)
-                if (viewingVisible) runCatching { sendFrame(ClientFrame.Viewing(viewingSession, true)) }
+                if (viewingVisible) {
+                    runCatching { sendFrame(ClientFrame.Viewing(viewingSession, true)) }
+                        .onFailure { e -> println("[DesktopAppState] viewing heartbeat failed: $e") }
+                }
             }
         }
     }
@@ -229,30 +258,61 @@ class DesktopAppState(
         _pendingSend.update { it + sessionId }
     }
 
-    /** Send a reply over the WS (ClientFrame.Send op="reply"); optionally with attachment ids. */
+    /** Send a reply over the WS (ClientFrame.Send op="reply"); optionally with attachment ids.
+     *  NOTE: on send failure the optimistic local-echo bubble is NOT reconciled/removed — the
+     *  message shows as sent even though it wasn't (same gap as Android). M4 follow-up: mark or
+     *  retract the bubble on failure. */
     fun sendMessage(sessionId: String, text: String, attachments: List<String> = emptyList()) {
         if (text.isBlank() && attachments.isEmpty()) return
         appendLocalEcho(sessionId, text.trim())
-        scope.launch {
+        stateScope.launch {
             runCatching {
                 sendFrame(ClientFrame.Send(sessionId, args = SendArgs(text, attachments.ifEmpty { null })))
                 markPendingSend(sessionId)
-            }
+            }.onFailure { e -> println("[DesktopAppState] sendMessage failed: $e") }
         }
     }
 
     // ── Session controls (HTTP via BrokerApi) ───────────────────────────────────────
 
     /** Soft-stop the running agent (POST /sessions/<id>/interrupt). */
-    fun interrupt(id: String) { scope.launch { runCatching { api.interrupt(id) } } }
-    fun rename(id: String, name: String) { scope.launch { runCatching { api.rename(id, name) } } }
-    fun setMute(id: String, muted: Boolean) { scope.launch { runCatching { api.setMute(id, muted) } } }
-    fun kill(id: String, onDone: () -> Unit = {}) { scope.launch { runCatching { api.kill(id) }; onDone() } }
+    fun interrupt(id: String) {
+        stateScope.launch {
+            runCatching { api.interrupt(id) }
+                .onFailure { e -> println("[DesktopAppState] interrupt failed: $e") }
+        }
+    }
+
+    fun rename(id: String, name: String) {
+        stateScope.launch {
+            runCatching { api.rename(id, name) }
+                .onFailure { e -> println("[DesktopAppState] rename failed: $e") }
+        }
+    }
+
+    fun setMute(id: String, muted: Boolean) {
+        stateScope.launch {
+            runCatching { api.setMute(id, muted) }
+                .onFailure { e -> println("[DesktopAppState] setMute failed: $e") }
+        }
+    }
+
+    /** [onDone] fires even when the DELETE fails — mirrors Android AppViewModel.kill, which
+     *  invokes the callback unconditionally after the runCatching. */
+    fun kill(id: String, onDone: () -> Unit = {}) {
+        stateScope.launch {
+            runCatching { api.kill(id) }
+                .onFailure { e -> println("[DesktopAppState] kill failed: $e") }
+            onDone()
+        }
+    }
 
     // ── Lazy transcript load ─────────────────────────────────────────────────────────
 
     private suspend fun archivedLogs(sessionId: String): List<LogEntry> =
-        runCatching { api.archivedLogs(sessionId) }.getOrNull() ?: emptyList()
+        runCatching { api.archivedLogs(sessionId) }
+            .onFailure { e -> println("[DesktopAppState] archivedLogs failed: $e") }
+            .getOrNull() ?: emptyList()
 
     /**
      * Lazily fetch a session's transcript when we don't already have it. The WS Snapshot seeds
@@ -264,7 +324,7 @@ class DesktopAppState(
      */
     fun ensureMessagesLoaded(sessionId: String) {
         if (_messages.value[sessionId]?.isNotEmpty() == true) return
-        scope.launch {
+        stateScope.launch {
             val fetched = archivedLogs(sessionId)
             // Re-check after the await: a live MessageAppend / optimistic send / fresh snapshot may
             // have populated the buffer while the fetch was in flight — don't clobber it.
@@ -274,6 +334,11 @@ class DesktopAppState(
         }
     }
 
-    /** Release the shared HttpClient (WS + HTTP). Mirrors AppViewModel.onCleared. */
-    fun close() { http.close() }
+    /** Stop all owned coroutines (collector, WS run-loop, heartbeat, in-flight ops) and release
+     *  the shared HttpClient (WS + HTTP). Counterpart of AppViewModel.onCleared, plus the explicit
+     *  scope cancel a plain (non-ViewModel) class needs. */
+    fun close() {
+        stateScope.cancel()
+        http.close()
+    }
 }
