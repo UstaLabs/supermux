@@ -4,13 +4,15 @@
 //
 // M1 scope: only the Chat pane is a real surface (the desktop ChatPanel). Editor / Terminal /
 // Display are ComingSoonPane placeholders (they arrive in M3 / M2 / M5). Deliberately SKIPPED for
-// M1 (present in the Android original, all TODO(M4) here): git badge menus, Finish button,
-// AgentViewToggle (Chat⇄Native), the session-links menu, and the overflow (⋮) management menu.
+// M1 (present in the Android original, all TODO(M4) here): git badge menus, Finish button, the
+// session-links menu, and the overflow (⋮) management menu. The AgentViewToggle (Chat⇄Native) was
+// pulled forward into M2 (terminal UX) — see the chatOrNative slot below.
 //
 // The split structure and the "chat stays in the same composition slot" discipline are copied
-// exactly from Android so a pane toggle never remounts (and never blinks) the chat pane:
+// exactly from Android so a pane toggle never remounts (and never blinks) the chat pane. The
+// Chat⇄Native pair is the one keep-alive exception (mirrors Android's chatOrNative):
 // ```
-//   chat + work → [ Chat | RightArea ]            (horizontal, chatFraction)
+//   chat + work → [ Chat|Native | RightArea ]     (horizontal, chatFraction)
 //   RightArea:  work + display → [ WorkColumn | Display ]   (horizontal, workDisplayFraction)
 //   WorkColumn: editor + terminal → [ Editor / Terminal ]  (vertical, editorTermFraction)
 // ```
@@ -30,6 +32,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -41,9 +48,13 @@ import dev.supermux.desktop.chat.ChatPanel
 import dev.supermux.desktop.session.SessionAvatar
 import dev.supermux.desktop.session.SessionStatusRail
 import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.desktop.terminal.DesktopTerminalPanel
 import dev.supermux.desktop.terminal.TerminalTabs
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Space
+import dev.supermux.desktop.ui.KeepAlivePanel
+import dev.supermux.desktop.ui.keepAlivePanel
+import dev.supermux.net.TerminalClient
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.SessionInfo
 
@@ -84,21 +95,64 @@ fun SessionDetail(
     draft: String,
     onDraftChange: (String) -> Unit,
     modifier: Modifier = Modifier,
+    // Injectable seam for the Native (agent-PTY) panel — defaults to the real [DesktopTerminalPanel].
+    // Its SwingPanel cannot be hosted under `runComposeUiTest` (no real AWT window), so the UI tests
+    // inject a lightweight pure-Compose fake to exercise the toggle + keep-alive + onExit wiring.
+    nativePanelContent: @Composable (connect: () -> TerminalClient, onExit: () -> Unit) -> Unit = {
+        connect, onExit ->
+        DesktopTerminalPanel(connect = connect, modifier = Modifier.fillMaxSize(), onExit = onExit)
+    },
 ) {
     val cs = MaterialTheme.colorScheme
 
     // ── individual panes (each fills its split slot) ──
-    // Chat is defined ONCE and always rendered through the same split slot, so toggling a work pane
-    // never remounts it (mirrors the Android fix for the whole-page-blink bug).
-    val chatPane: @Composable () -> Unit = {
-        ChatPanel(
-            app = app,
-            session = session,
-            draft = draft,
-            onDraftChange = onDraftChange,
-            modifier = Modifier.fillMaxSize().testTag("pane_chat"),
-            showHeader = false, // this SessionDetail owns the identity header
-        )
+    // Chat/Native slot: defined ONCE and always rendered through the same split slot, so toggling a
+    // work pane never remounts it (mirrors the Android fix for the whole-page-blink bug). The
+    // Chat⇄Native flip is the keep-alive exception — mirrors Android's chatOrNative:
+    //   • Chat is PURE Compose → the lightweight `Modifier.keepAlivePanel(visible)` variant hides it
+    //     (stays composed under Native so its unsaved draft survives the flip; never remounts).
+    //   • Native is a SwingPanel (HEAVYWEIGHT AWT child) → the `KeepAlivePanel` composable variant
+    //     that lays it out at 0×0 when hidden (alpha/zIndex don't hide a heavyweight child).
+    //   • Native is LAZY: not composed at all until the user first opens it (Android openedPanels
+    //     parity), then kept alive across flips so its agent PTY / grid survive.
+    //   • key(session.id) wraps the Native panel: [DesktopTerminalPanel]'s `remember { connect() }`
+    //     is deliberately unkeyed, and WorkspaceRoot renders ONE SessionDetail in the same
+    //     composition slot for ui.selectedId — so on a session switch this slot recomposes with a
+    //     new `session`. Without the key, the reused `remember` would bind the WRONG session's
+    //     agent PTY into the new session's chat slot.
+    val chatOrNative: @Composable () -> Unit = {
+        val native = layout.nativeView(session.id) && session.agent == "claude"
+        // Once Native has been shown for this session, keep it composed (kept-alive) so a flip back
+        // to Chat doesn't drop its PTY; reset per session so a switch starts closed.
+        var nativeOpened by remember(session.id) { mutableStateOf(false) }
+        if (native) nativeOpened = true
+        Box(Modifier.fillMaxSize()) {
+            ChatPanel(
+                app = app,
+                session = session,
+                draft = draft,
+                onDraftChange = onDraftChange,
+                modifier = Modifier.keepAlivePanel(visible = !native).testTag("pane_chat"),
+                showHeader = false, // this SessionDetail owns the identity header
+            )
+            if (nativeOpened) {
+                key(session.id) {
+                    KeepAlivePanel(visible = native, modifier = Modifier.testTag("pane_native")) {
+                        nativePanelContent(
+                            { app.connectAgentTerminal(session.id) },
+                            // Agent PTY exited → clear the persisted preference (so a dead PTY never
+                            // re-opens on restart) and drop the kept-alive panel so a later re-open
+                            // builds a fresh client rather than showing the dead one (Android onExit
+                            // parity: Native falls back to Chat on agent exit).
+                            {
+                                layout.setNativeView(session.id, false)
+                                nativeOpened = false
+                            },
+                        )
+                    }
+                }
+            }
+        }
     }
     val editorPane: @Composable () -> Unit = { ComingSoonPane("Editor", "M3", "pane_editor") }
     // Real scratch terminal with web-parity tabs (list/add/close). One strip per session.
@@ -177,8 +231,19 @@ fun SessionDetail(
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(Space.sm))
-            // TODO(M4): git badge menu, Finish button, AgentViewToggle (Chat⇄Native), session-links
-            // menu, and the overflow (⋮) management menu — all present in the Android original.
+            // Chat ⇄ Native (raw agent PTY) toggle — claude only, and only while the Chat pane is
+            // visible (it flips ChatPanel ⇄ agent-PTY inside that pane; see chatOrNative above).
+            // Pulled forward from M4 because it is terminal UX.
+            if (session.agent == "claude" && layout.panesFor(session.id).chat) {
+                AgentViewToggle(
+                    nativeView = layout.nativeView(session.id),
+                    onSetNative = { layout.setNativeView(session.id, it) },
+                    modifier = Modifier.testTag("toggle_native"),
+                )
+                Spacer(Modifier.width(Space.xs))
+            }
+            // TODO(M4): git badge menu, Finish button, session-links menu, and the overflow (⋮)
+            // management menu — all present in the Android original.
             PaneToggleCluster(layout = layout, sessionId = session.id)
         }
         Box(
@@ -201,7 +266,7 @@ fun SessionDetail(
                     onFractionChange = layout::setChatFraction,
                     range = WorkspaceLayout.CHAT_MIN..WorkspaceLayout.CHAT_MAX,
                     testTag = "divider_chat_work",
-                    first = chatPane,
+                    first = chatOrNative,
                     second = if (p.hasWork) rightArea else null,
                 )
                 else -> rightArea() // invariant guarantees a non-empty pane set
