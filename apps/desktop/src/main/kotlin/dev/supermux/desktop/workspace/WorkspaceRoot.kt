@@ -31,11 +31,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.platform.testTag
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.withContext
+import dev.supermux.desktop.session.LauncherStore
+import dev.supermux.desktop.session.SessionLauncherScreen
 import dev.supermux.desktop.session.SessionListPanel
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.session.inferHomeDir
@@ -49,6 +57,16 @@ import dev.supermux.session.inferHomeDir
 class WorkspaceUiState {
     val layout = WorkspaceLayout()
     var selectedId by mutableStateOf<String?>(null)
+
+    /**
+     * Whether the New-Session launcher overlay (M4a Task 5) is showing. Flipped on by
+     * onNewSession's three entry points (Ctrl+N via [workspaceShortcuts], the File menu item in
+     * Main.kt, and the sidebar rail `+`) and by [WorkspaceRoot]'s own onNewSession; flipped off by
+     * the launcher's back/escape or a successful submit. Lives here (not local to WorkspaceRoot) so
+     * Main's MenuBar — which renders in the same FrameWindowScope but outside WorkspaceRoot's
+     * composition — can open it too, the same reason [selectedId] lives here.
+     */
+    var launcherOpen by mutableStateOf(false)
 
     /**
      * One-shot external "open this file" request (sessionId → ref), consumed by [SessionDetail] and
@@ -82,6 +100,10 @@ fun WorkspaceRoot(
     app: DesktopAppState,
     ui: WorkspaceUiState,
     store: WorkspaceStateStore,
+    // Injected (not `remember`-ed internally) for the SAME reason as [store]: production (Main.kt)
+    // constructs the real default-path file, while tests pass a temp path so they never touch the
+    // developer's real ~/.config/supermux-desktop/launcher-state.json.
+    launcherStore: LauncherStore,
 ) {
     val layout = ui.layout
     val sessions by app.sessions.collectAsState()
@@ -91,8 +113,11 @@ fun WorkspaceRoot(
 
     val focused = LocalWindowInfo.current.isWindowFocused
 
-    // TODO(M4): a real session launcher. For now New Session (shortcut Ctrl+N + File menu) is a no-op.
-    val onNewSession: () -> Unit = { println("[workspace] New Session (TODO M4 launcher)") }
+    // New-Session launcher (M4a Task 5): Ctrl+N (workspaceShortcuts below), the rail `+`
+    // (SessionsRail/SessionListPanel — already wired to onNewSession) and Main's File menu item
+    // (which flips ui.launcherOpen directly, since WorkspaceUiState is shared with Main) all reach
+    // the SAME overlay via ui.launcherOpen.
+    val onNewSession: () -> Unit = { ui.launcherOpen = true }
 
     // Per-session composer drafts, hoisted here so switching sessions preserves each draft.
     // In-memory only for M1 — broker-side draft sync is M4.
@@ -229,6 +254,62 @@ fun WorkspaceRoot(
                         externalOpen = ui.externalOpen?.takeIf { it.first == session.id }?.second,
                         onExternalOpenConsumed = { ui.externalOpen = null },
                         modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+
+            // ── New-Session launcher: a FULL-PANE overlay above the workspace (M4a Task 5) ──
+            // Desktop takes the overlay shape rather than Android's route-navigation — there's no
+            // back stack here, and a Box drawn last (top of z-order) over the still-mounted
+            // workspace keeps the sidebar/session list state alive underneath while the launcher is
+            // up. Escape closes it (same as the back button) without spawning; the draft persists
+            // either way (SessionLauncherScreen's own dispose-flush, T4).
+            if (ui.launcherOpen) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .testTag("launcher_overlay")
+                        .onPreviewKeyEvent { e ->
+                            if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                                ui.launcherOpen = false
+                                true
+                            } else {
+                                false
+                            }
+                        },
+                ) {
+                    SessionLauncherScreen(
+                        sessions = sessions,
+                        home = home,
+                        onBack = { ui.launcherOpen = false },
+                        loadProjects = { app.listProjects() },
+                        validatePath = { app.validatePath(it) },
+                        loadModels = { app.launcherModels(it) },
+                        loadReasoningLevels = { a, m -> app.launcherReasoning(a, m) },
+                        loadRepoInfo = { app.launcherRepoInfo(it) },
+                        loadPrefs = { launcherStore.loadPrefs() },
+                        onPrefsChange = { launcherStore.savePrefs(it) },
+                        loadDraft = { launcherStore.loadDraft() },
+                        onDraftChange = { launcherStore.saveDraft(it) },
+                        onClearDraft = { launcherStore.clearDraft() },
+                        // Spawn → select + send the first message → close. A null id (invalid
+                        // workdir / spawn failure) is surfaced by THROWING — SessionLauncherScreen's
+                        // own doSubmit try/catch turns any thrown message into the inline
+                        // launcher_error text (its onSubmit contract is Unit-returning, so a failure
+                        // has no other channel back to the screen).
+                        onSubmit = { workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch ->
+                            val id = app.createSessionWithFirstMessage(
+                                workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
+                            )
+                            if (id == null) {
+                                throw IllegalStateException(
+                                    "Couldn't create the session — check the working directory and try again.",
+                                )
+                            }
+                            ui.selectedId = id
+                            app.sendMessage(id, text, app.consumeFirstUploads(id))
+                            ui.launcherOpen = false
+                        },
                     )
                 }
             }

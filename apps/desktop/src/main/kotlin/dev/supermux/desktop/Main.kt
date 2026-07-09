@@ -87,6 +87,7 @@ fun main() {
                 mutableStateOf(!store.load().isNullOrBlank() && !store.loadBaseUrl().isNullOrBlank())
             }
             val uiStore = remember { WorkspaceStateStore() }
+            val launcherStore = remember { dev.supermux.desktop.session.LauncherStore() }
             // Hydrate the layout + last selection from ui-state.json (the selection is re-validated
             // against live sessions inside WorkspaceRoot once the first snapshot lands).
             val ui = remember {
@@ -102,13 +103,14 @@ fun main() {
             // they carry NO KeyShortcut, because the in-app `Modifier.workspaceShortcuts` already
             // owns Ctrl/Cmd+B/E/T/D; registering the same accelerator on the menu would risk a
             // double-toggle (menu action + the key event still bubbling to the modifier). File ▸
-            // New Session keeps its conventional Ctrl+N accelerator — its action is a harmless
-            // TODO(M4) no-op in M1, so even a double-fire is inconsequential.
+            // New Session keeps its conventional Ctrl+N accelerator too — it and the in-app shortcut
+            // both just flip `ui.launcherOpen`, which is idempotent, so a double-fire (menu action +
+            // the key event still bubbling to workspaceShortcuts) is harmless.
             if (paired) {
                 MenuBar {
                     Menu("File", mnemonic = 'F') {
                         Item("New Session", shortcut = KeyShortcut(Key.N, ctrl = true)) {
-                            println("[menu] New Session (TODO M4 launcher)")
+                            ui.launcherOpen = true
                         }
                         Separator()
                         Item("Unpair…") { showUnpairConfirm = true }
@@ -285,7 +287,7 @@ fun main() {
                         }
                     }
 
-                    WorkspaceRoot(app, ui, uiStore)
+                    WorkspaceRoot(app, ui, uiStore, launcherStore)
 
                     // Unpair confirmation (File ▸ Unpair…): clears the credential store and flips
                     // back to onboarding, which disposes `app` (DisposableEffect above).
