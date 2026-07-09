@@ -5,8 +5,8 @@
 //   - Bundled drawables → compose.materialIconsExtended:
 //       ic_chevron_right → Icons.Filled.ChevronRight  (reuses the SessionsRail.kt mapping for the
 //         same drawable)
-//       ic_chevron_down  → Icons.Filled.ExpandMore     (Material has no distinct "chevron down"
-//         glyph; ExpandMore is the same chevron family, just pointing down, so it pairs visually
+//       ic_chevron_down  → Icons.Filled.KeyboardArrowDown     (Material has no distinct "chevron down"
+//         glyph; KeyboardArrowDown is the same chevron family, just pointing down, so it pairs visually
 //         with ChevronRight for the collapsed/expanded pair)
 //       ic_folder_open   → Icons.Filled.FolderOpen
 //       ic_file          → Icons.Filled.InsertDriveFile
@@ -31,7 +31,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material3.CircularProgressIndicator
@@ -162,7 +162,7 @@ private fun TreeNodeRow(
                     color = cs.onSurfaceVariant,
                 )
                 isDir -> Icon(
-                    imageVector = if (isOpen) Icons.Filled.ExpandMore else Icons.Filled.ChevronRight,
+                    imageVector = if (isOpen) Icons.Filled.KeyboardArrowDown else Icons.Filled.ChevronRight,
                     contentDescription = null,
                     tint = cs.onSurfaceVariant.copy(alpha = alpha),
                     modifier = Modifier.size(14.dp),

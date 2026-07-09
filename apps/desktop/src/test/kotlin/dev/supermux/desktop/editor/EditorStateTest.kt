@@ -19,7 +19,7 @@ import kotlin.test.assertTrue
  * apps/iosApp/SupermuxTests/EditorStateTests.swift, backed by
  * apps/android/src/main/kotlin/dev/supermux/android/editor/EditorState.kt as the IMPLEMENTATION
  * reference — where Android and the Swift suite disagree in shape (see per-test notes below), these
- * tests assert Android's behavior; the disagreement is called out in the M3 Task 3 report rather
+ * tests assert Android's behavior; the disagreement is called out in the file headers (EditorState.kt) rather
  * than silently resolved.
  *
  * `TestScope(UnconfinedTestDispatcher())` runs a `scope.launch { }` with no genuine suspension point
@@ -279,7 +279,7 @@ class EditorStateTest {
 
     // ── captureActiveScroll — ADDED. Android acts on the ACTIVE tab implicitly; the Swift port
     //    instead exposes a per-path `setScroll(path, top)`. Android is the impl reference here (see
-    //    the M3 Task 3 report for the flagged parity conflict). ─────────────────────────────────
+    //    EditorState.kt's header for the flagged parity conflict). ─────────────────────────────────
 
     @Test fun capture_active_scroll_stores_on_the_active_tab_only() {
         val s = state()
