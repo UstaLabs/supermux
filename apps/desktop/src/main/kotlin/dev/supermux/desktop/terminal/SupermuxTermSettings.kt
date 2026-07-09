@@ -54,6 +54,35 @@ class SupermuxTermSettings(
 
     override fun audibleBell(): Boolean = false
 
+    /**
+     * JediTerm's own SGR mouse-report forwarding OFF — [WheelAccumulator] via
+     * [DesktopTerminalPanel]'s wheel listener is the sole path for wheel→tmux bytes.
+     *
+     * `DefaultSettingsProvider.enableMouseReporting()` is `true` by default, and 3.73's
+     * `TerminalPanel` has its OWN built-in remote-mouse listener (`JediTerminal`, registered via
+     * `TerminalPanel.addTerminalMouseListener` inside `JediTermWidget`'s constructor) that, when
+     * this flag is on AND the emulator has parsed a mouse-tracking DECSET from the pty (exactly
+     * what tmux's `mouse on` sends on attach — `JediEmulator` DOES implement `?1000`/`?1002`/
+     * `?1003`/`?1006` parsing), sends its OWN SGR wheel-button (64/65) bytes to the `TtyConnector`
+     * automatically. Confirmed empirically (headless probe: construct a `JediTermWidget`, force
+     * both the model's and display's negotiated `MouseMode`/`MouseFormat` the way the real DECSET
+     * parse would, dispatch a synthetic `MouseWheelEvent` at `TerminalPanel`, and observe
+     * `sendInput`): with this flag left at its `true` default, JediTerm's own listener sends one
+     * `"[<65;...M"` sequence *before* any listener added afterwards (ours, added once the
+     * widget already exists) even runs — `MouseWheelEvent.consume()` does NOT stop sibling
+     * `MouseWheelListener`s registered on the same component (`AWTEventMulticaster` invokes all of
+     * them unconditionally), so a second, our own, forward on top would double every wheel notch.
+     * Flipping this to `false` disables ONLY that remote byte-send path (confirmed via the same
+     * probe: zero `sendInput` calls once this returns `false`); it does not resurrect JediTerm's
+     * LOCAL scrollback scroll, which is independently gated on the terminal's negotiated
+     * `MouseMode` (see `TerminalPanel.isLocalMouseAction`), not on this setting, and is a no-op
+     * under our tmux alt-screen sessions regardless (same "inert" story as SwiftTerm-mac/termlib).
+     * Click/drag mouse-report forwarding is not part of this milestone on ANY supermux client
+     * (Android/iOS are touch-only and don't attempt it either), so losing JediTerm's built-in
+     * version of it here is scope-consistent, not a regression.
+     */
+    override fun enableMouseReporting(): Boolean = false
+
     companion object {
         /** Dark pane tones (shared Theme.kt `supermuxDark`) — defaults only; production passes
          *  the resolved theme colors. */

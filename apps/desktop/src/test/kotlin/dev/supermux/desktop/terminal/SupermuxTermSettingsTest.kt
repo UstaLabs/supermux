@@ -32,6 +32,17 @@ class SupermuxTermSettingsTest {
         assertFalse(SupermuxTermSettings().audibleBell())
     }
 
+    // ── mouse reporting ───────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun mouse_reporting_is_disabled_so_jediterm_cannot_double_forward_wheel_bytes() {
+        // JediTerm 3.73's DEFAULT is enabled=true, with its own built-in remote-mouse listener
+        // that forwards SGR wheel bytes once the terminal negotiates mouse tracking (what tmux's
+        // `mouse on` does) — confirmed via a headless probe to double-send alongside our own
+        // WheelAccumulator-driven listener. See the enableMouseReporting() KDoc for the full story.
+        assertFalse(SupermuxTermSettings().enableMouseReporting())
+    }
+
     // ── colors ────────────────────────────────────────────────────────────────────────────────
 
     @Test
