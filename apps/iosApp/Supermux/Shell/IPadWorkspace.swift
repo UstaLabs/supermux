@@ -204,6 +204,9 @@ private struct WorkspaceDetail: View {
     @Binding var renameText: String
     @Binding var showKillConfirm: Bool
     @State private var finishSheet = false
+    #if os(macOS)
+    @Environment(\.openSettings) private var openSettings
+    #endif
 
     var body: some View {
         VStack(spacing: 0) {
@@ -292,6 +295,7 @@ private struct WorkspaceDetail: View {
             } label: {
                 Image(systemName: "link").font(.body)
             }
+            .smMacBorderlessMenu()
             .smHoverHighlight()
         }
     }
@@ -312,15 +316,24 @@ private struct WorkspaceDetail: View {
             }
             Section {
                 Button { route = .personalAssistants } label: { Label("Assistants", systemImage: "person.2") }
+                Button { route = .archived } label: { Label("Archived", systemImage: "archivebox") }
                 Button { route = .usage } label: { Label("Usage", systemImage: "chart.bar") }
                 Button { route = .devices } label: { Label("Devices", systemImage: "ipad.and.iphone") }
                 Button { route = .proxies } label: { Label("Proxies", systemImage: "network") }
                 Button { route = .displays } label: { Label("Displays", systemImage: "display") }
-                Button { route = .settings } label: { Label("Settings", systemImage: "gearshape") }
+                Button {
+                    // The Mac has a real Settings window (⌘,); iOS keeps the sheet route.
+                    #if os(macOS)
+                    openSettings()
+                    #else
+                    route = .settings
+                    #endif
+                } label: { Label("Settings", systemImage: "gearshape") }
             }
         } label: {
             Image(systemName: "ellipsis.circle").font(.body)
         }
+        .smMacBorderlessMenu()
         .smHoverHighlight()
     }
 

@@ -116,6 +116,34 @@ final class PushManager: NSObject {
         }
     }
 
+    // MARK: - Clear-on-open
+
+    /// Called when the user opens a chat: forget that chat's unread state (the single card
+    /// the NSE keeps under `threadIdentifier == sessionId`) and reset the app-icon badge to
+    /// the total unread that remains. `PushGroupState` is the source of truth on iOS; the
+    /// mac client (no App Group) falls back to counting the chats still on screen.
+    func clearDelivered(sessionId: String) {
+        guard !sessionId.isEmpty else { return }
+        let center = UNUserNotificationCenter.current()
+        PushGroupState.reset(sessionId: sessionId)
+        center.getDeliveredNotifications { notes in
+            let ids = notes
+                .filter { $0.request.content.threadIdentifier == sessionId }
+                .map { $0.request.identifier }
+            if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+            let badge: Int
+            if PushGroupState.hasStore {
+                badge = PushGroupState.totalUnread()
+            } else {
+                let remainingChats = Set(notes
+                    .map { $0.request.content.threadIdentifier }
+                    .filter { !$0.isEmpty && $0 != sessionId })
+                badge = remainingChats.count
+            }
+            Task { @MainActor in try? await center.setBadgeCount(badge) }
+        }
+    }
+
     // MARK: - Step 3: bootstrap push → register device with broker
 
     /// Handle a background remote notification. Returns a platform-neutral fetch result
@@ -255,6 +283,13 @@ private extension PushAppDelegate {
     /// `applicationDidFinishLaunching(_:)` body.
     func handleLaunch() {
         UNUserNotificationCenter.current().delegate = self
+        // Register the chat category so a long-press / pull-down on a collapsed chat
+        // notification routes to the custom expanded content extension (SupermuxNotifContent).
+        // No actions yet — the expanded view is read-only (quick-reply is a future add).
+        UNUserNotificationCenter.current().setNotificationCategories([
+            UNNotificationCategory(identifier: PushGroupState.chatCategory, actions: [],
+                                   intentIdentifiers: [], options: [])
+        ])
         // Warm the push keypair on launch so its public key is generated + persisted in
         // the shared Keychain group up front (the NSE reads the same key to decrypt, and
         // the bootstrap handler registers this pubkey with the broker). Idempotent.

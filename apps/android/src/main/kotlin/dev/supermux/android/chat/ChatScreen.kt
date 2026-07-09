@@ -124,6 +124,7 @@ import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.GitBadgeKind
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.proto.gitBadge
@@ -137,6 +138,7 @@ fun ChatScreen(
     messages: List<LogEntry>,
     activity: List<ActivityEvent>,
     agent: AgentStatus?,
+    bgTasks: List<ServerFrame.BgTask> = emptyList(),
     sending: Boolean = false,
     onBack: () -> Unit,
     onSendWith: (text: String, attachments: List<String>) -> Unit,
@@ -544,6 +546,7 @@ fun ChatScreen(
                     messages = messages,
                     activity = activity,
                     agent = agent,
+                    bgTasks = bgTasks,
                     sending = sending,
                     activePanel = activePanel,
                     onSendWith = onSendWith,
@@ -579,6 +582,7 @@ fun ChatScreen(
                         TerminalPanel(
                             connect = cat,
                             modifier = Modifier.fillMaxSize(),
+                            active = activePanel == SessionPanel.Native,
                             // Agent PTY exited → fall back to Chat (iOS onExit: { tab = .chat }).
                             onExit = { activePanel = SessionPanel.Chat },
                         )
@@ -620,7 +624,7 @@ fun ChatScreen(
                 val ct = connectTerminal
                 Box(Modifier.keepAlivePanel(activePanel == SessionPanel.Terminal)) {
                     if (ct != null) {
-                        TerminalPanel(connect = ct, modifier = Modifier.fillMaxSize())
+                        TerminalPanel(connect = ct, modifier = Modifier.fillMaxSize(), active = activePanel == SessionPanel.Terminal)
                     } else {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Text("Terminal unavailable", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)

@@ -115,7 +115,13 @@ fun EditorPanel(
     val windowSizeClass = calculateWindowSizeClass(context as Activity)
     val expanded = windowSizeClass.widthSizeClass == WindowWidthSizeClass.Expanded
 
-    val editor = remember(fsRead, fsWrite) {
+    // Own the editor state for the LIFETIME OF THE SESSION — deliberately NOT keyed on the
+    // fs* lambdas. Those lambdas capture the whole `session` object, so every background
+    // session update (status / git / finish-job flips while the agent works) re-instances
+    // them; keying on them here would rebuild EditorState and wipe every open tab + unsaved
+    // edit on each pulse. fsRead/fsWrite only ever call vm.<fs>(session.id, …) and session.id
+    // is invariant for a given sessionId, so capturing the first instances stays correct.
+    val editor = remember(sessionId) {
         EditorState(fsRead, fsWrite, scope)
     }
 
@@ -162,6 +168,9 @@ fun EditorPanel(
             val (sid, msg) = parseLspOut(payload) ?: return@rememberEditorEngine
             bridge.rpcOut(sid, msg)
         },
+        // A pinch / keyboard zoom in the WebView persists here so it survives reopen.
+        // The engine already applied it live, so this only writes the pref (no rebuild).
+        onFontSize = { px -> prefs.edit().putInt("fontSize", px.coerceIn(10, 24)).apply() },
     )
 
     val activeIsMarkdown = editor.activeTab?.path?.let(::isMarkdownPath) == true

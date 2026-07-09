@@ -35,6 +35,10 @@ struct GitHostingSettingsView: View {
         .navigationTitle("Git hosting")
         .smInlineNavigationTitle()
         .tint(Theme.teal)
+        // iOS-only: in the mac Settings window a NavigationStack toolbar item gets hoisted
+        // into the window toolbar and reads as a phantom ninth "tab". The Mac keeps the
+        // in-list "Add account" button, which is the native settings idiom anyway.
+        #if os(iOS)
         .toolbar {
             ToolbarItem(placement: .smTopTrailing) {
                 Button { addKindPreset = nil; addSheetOpen = true }
@@ -42,6 +46,7 @@ struct GitHostingSettingsView: View {
                     .disabled(working)
             }
         }
+        #endif
         .sheet(isPresented: $addSheetOpen) {
             AddForgeSheet(broker: broker, presetKind: addKindPreset) { Task { await load() } }
         }

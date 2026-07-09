@@ -25,6 +25,16 @@ final class BrokerSession {
     @ObservationIgnored private var wakeObserver: (any NSObjectProtocol)?
     #endif
 
+    // Viewing presence — tells the broker which chat is foreground (parity with the web
+    // `useViewing` composable) so it suppresses a push for a chat you're already looking at.
+    // The shell (RootView) pushes state in on selection/scene changes; a 60s heartbeat keeps
+    // the broker's 5-min viewing TTL fresh while you sit on a long, quiet turn.
+    @ObservationIgnored private var viewingSession: String?
+    @ObservationIgnored private var viewingVisible = false
+    @ObservationIgnored private var lastSentViewing: (session: String?, visible: Bool)?
+    @ObservationIgnored private var viewingHeartbeat: Task<Void, Never>?
+    private static let viewingHeartbeatNs: UInt64 = 60_000_000_000   // 60s, well under the 5-min TTL
+
     private(set) var sessions: [SessionInfo] = []
     private(set) var messages: [String: [LogEntry]] = [:]
     private(set) var activity: [String: [ActivityEvent]] = [:]
@@ -35,6 +45,10 @@ final class BrokerSession {
     private(set) var agentState: [String: String] = [:]       // idle | working | dead
     private(set) var agentDetail: [String: String] = [:]      // thinking | running
     private(set) var agentWorkingSince: [String: Int64] = [:]
+    private(set) var agentTool: [String: String] = [:]        // running tool name (e.g. Bash)
+    private(set) var agentWaiting: [String: Bool] = [:]       // idle but background tasks still open
+    private(set) var agentBgOpen: [String: Int] = [:]         // open background-task count
+    private(set) var bgTasks: [String: [ServerFrameBgTask]] = [:]
     private(set) var pendingSend: Set<String> = []            // client-local "Sending…"
     private(set) var commands: [String: [SlashCommand]] = [:]
     private(set) var displays: [DisplayStream] = []
@@ -74,6 +88,7 @@ final class BrokerSession {
     deinit {
         framesTask?.cancel()
         runTask?.cancel()
+        viewingHeartbeat?.cancel()
         #if os(macOS)
         if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
         #endif
@@ -145,6 +160,8 @@ final class BrokerSession {
         framesTask = nil
         runTask?.cancel()
         runTask = nil
+        viewingHeartbeat?.cancel()
+        viewingHeartbeat = nil
         #if os(macOS)
         if let wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
@@ -184,9 +201,18 @@ final class BrokerSession {
             agentState = s.agentState.mapValues { $0.state }
             agentDetail = s.agentState.compactMapValues { $0.detail }
             agentWorkingSince = s.agentState.compactMapValues { $0.workingSince?.int64Value }
+            agentTool = s.agentState.compactMapValues { $0.tool }
+            agentWaiting = s.agentState.mapValues { $0.waiting }
+            agentBgOpen = s.agentState.mapValues { Int($0.bgOpen) }
+            bgTasks = s.bgTasks
             commands = s.commands
             finishJobs = Dictionary(uniqueKeysWithValues: s.sessions.compactMap { sess in sess.finish_job.map { (sess.id, $0) } })
             synced = true
+            // A (re)connect always begins with a snapshot; re-assert viewing presence so the
+            // broker's per-device tracker is current after a reconnect (we may have expired out
+            // of it). Clearing lastSentViewing forces the send even when the value is unchanged.
+            lastSentViewing = nil
+            sendViewingIfChanged()
         case .sessionAdded(let a):
             // The broker re-broadcasts session_added for the SAME session (an early add right
             // after spawn, then the authoritative post-register add that carries repo_root /
@@ -222,6 +248,10 @@ final class BrokerSession {
             agentState.removeValue(forKey: r.id)
             agentDetail.removeValue(forKey: r.id)
             agentWorkingSince.removeValue(forKey: r.id)
+            agentTool.removeValue(forKey: r.id)
+            agentWaiting.removeValue(forKey: r.id)
+            agentBgOpen.removeValue(forKey: r.id)
+            bgTasks.removeValue(forKey: r.id)
             evictTerminalHosts(sessionId: r.id)   // session killed → tear down its live terminals
             dropEditorHost(sessionId: r.id)       // …its editor webview (stop() breaks the bridge cycle)
             if let removedName { evictDisplayHosts(sessionName: removedName) }  // …and its displays
@@ -232,6 +262,7 @@ final class BrokerSession {
             }
             messages[m.session, default: []].append(m.entry)
         case .activityAppend(let a): activity[a.session, default: []].append(a.event)
+        case .bgTasks(let f): bgTasks[f.session] = f.tasks
         case .agentState(let st):
             agentPhase[st.session] = st.phase
             agentSince[st.session] = (st.since ?? st.workingSince)?.int64Value
@@ -240,6 +271,9 @@ final class BrokerSession {
             agentState[st.session] = st.state
             if let d = st.detail { agentDetail[st.session] = d } else { agentDetail[st.session] = nil }
             agentWorkingSince[st.session] = st.workingSince?.int64Value
+            if let t = st.tool { agentTool[st.session] = t } else { agentTool[st.session] = nil }
+            agentWaiting[st.session] = st.waiting
+            agentBgOpen[st.session] = Int(st.bgOpen)
             pendingSend.remove(st.session)   // first real state clears the client-local Sending…
         case .commandsChanged(let c): commands[c.session] = c.commands
         case .fsChanged(let f): editorStates[f.session]?.markChanged(f.paths)
@@ -293,6 +327,47 @@ final class BrokerSession {
                                     args: SendArgs(text: t, attachments: atts.isEmpty ? nil : atts))
         Task { [client] in try? await client.send(frame: frame) }
         pendingSend.insert(sessionId)   // client-local "Sending…" until the next agent_state
+    }
+
+    // MARK: - Viewing presence (push suppression for the chat you're looking at)
+
+    /// Report the foreground chat (`nil` = the session list) + whether the app is visible.
+    /// Called by the shell on selection / scene-phase changes. Deduped, and it (lazily) starts
+    /// the keep-alive heartbeat. Mirrors the web `useViewing` composable.
+    func updateViewing(session: String?, visible: Bool) {
+        viewingSession = session
+        viewingVisible = visible
+        sendViewingIfChanged()
+        ensureViewingHeartbeat()
+    }
+
+    /// Emit a `viewing` frame only when the (session, visible) pair actually changed — the
+    /// broker re-reads it into its per-device tracker. Captures only `client` across the SKIE
+    /// suspend (never `self` — see `start()`'s GC-pinning note).
+    private func sendViewingIfChanged() {
+        if let last = lastSentViewing, last.session == viewingSession, last.visible == viewingVisible { return }
+        lastSentViewing = (viewingSession, viewingVisible)
+        let frame = ClientFrameViewing(session: viewingSession, visible: viewingVisible)
+        Task { [client] in try? await client.send(frame: frame) }
+    }
+
+    /// Re-assert the viewing frame every 60s so the broker's 5-min TTL never lapses while the
+    /// user reads a long, quiet turn (the exact bug the web heartbeat fixed). Only refreshes
+    /// while visible — a backgrounded app has no presence to keep alive. Idempotent; torn down
+    /// in `stop()`/`deinit`.
+    private func ensureViewingHeartbeat() {
+        guard viewingHeartbeat == nil else { return }
+        viewingHeartbeat = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.viewingHeartbeatNs)
+                guard let self else { return }
+                guard self.viewingVisible else { continue }
+                // Read state synchronously on the main actor, then send capturing only `client`.
+                let frame = ClientFrameViewing(session: self.viewingSession, visible: true)
+                let client = self.client
+                Task { [client] in try? await client.send(frame: frame) }
+            }
+        }
     }
 
     /// Upload bytes (base64 over the wire) → file id, for composing attachments.
@@ -372,11 +447,11 @@ final class BrokerSession {
     func sendMessage(_ id: String, _ text: String) { Task { [api] in try? await api.sendMessage(id: id, text: text) } }
     func projects() async -> [String] { (try? await api.listProjects()) ?? [] }
     func spawn(workdir: String, agent: String?, name: String?, model: String? = nil,
-               worktree: Bool? = nil, baseBranch: String? = nil) async -> String? {
+               worktree: Bool? = nil, baseBranch: String? = nil, reasoningLevel: String? = nil) async -> String? {
         // Resolve ~ to an absolute path so the worktree is cut from the real repo root (web parity).
         let resolved = (try? await api.validatePath(path: workdir)).flatMap { $0.ok ? $0.path : nil } ?? workdir
         let req = SpawnRequest(workdir: resolved, name: name, agent: agent, model: model,
-                               worktree: worktree?.kb, baseBranch: baseBranch)
+                               worktree: worktree?.kb, baseBranch: baseBranch, reasoningLevel: reasoningLevel)
         return (try? await api.spawn(req: req))?.id
     }
 
@@ -419,6 +494,10 @@ final class BrokerSession {
         Task { [api] in try? await api.switchModel(id: id, model: model) }
     }
     func reasoning(_ id: String) async -> ReasoningResponse? { try? await api.reasoningLevels(id: id) }
+    /// GET /reasoning-levels?agent=&model= — thinking levels for the launcher (no session yet).
+    func reasoningLevels(_ agent: String, _ model: String?) async -> ReasoningResponse? {
+        try? await api.getReasoningLevels(agent: agent, model: model)
+    }
     func switchReasoning(_ id: String, _ level: String) {
         Task { [api] in try? await api.switchReasoning(id: id, level: level) }
     }

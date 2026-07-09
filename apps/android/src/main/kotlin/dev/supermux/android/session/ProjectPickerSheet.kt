@@ -1,7 +1,6 @@
 package dev.supermux.android.session
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -30,51 +29,6 @@ import dev.supermux.session.buildOmniboxOptions
 import dev.supermux.session.formatWorkdir
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-
-/** Tappable project field for the launcher — shows the chosen workdir and opens [ProjectPickerSheet]. */
-@Composable
-internal fun ProjectField(
-    workdir: String,
-    home: String,
-    onClick: () -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    // A read-only OutlinedTextField look-alike: the whole row is clickable and the
-    // value mirrors the other launcher fields' styling. (A real text field would
-    // steal the tap to place a cursor; we want the tap to open the picker.)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(4.dp))
-            .clickable { onClick() }
-            .border(1.dp, cs.outline, RoundedCornerShape(4.dp))
-            .padding(horizontal = 16.dp, vertical = 16.dp)
-            .testTag("launcher_project_field"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text(
-            formatWorkdir(workdir, home),
-            color = cs.onSurface,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 14.sp,
-            maxLines = 1,
-            modifier = Modifier.weight(1f),
-        )
-        Icon(
-            painter = painterResource(R.drawable.ic_folder_open),
-            contentDescription = "Select project",
-            tint = cs.onSurfaceVariant,
-            modifier = Modifier.size(18.dp),
-        )
-        Icon(
-            painter = painterResource(R.drawable.ic_chevron_down),
-            contentDescription = null,
-            tint = cs.onSurfaceVariant,
-            modifier = Modifier.size(14.dp),
-        )
-    }
-}
 
 private fun basename(path: String): String =
     path.trimEnd('/').substringAfterLast('/').ifEmpty { path }

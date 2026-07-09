@@ -63,7 +63,7 @@ function clientIp(req: Request): string {
 // case — each new instance already starts with an empty bucket.
 export function __resetAuthFailures(): void {}
 
-const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/system", "/repos", "/forge"]
+const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge"]
 const MAX_CLIENT_LOG_RING = 800
 
 export type StoredClientLogEntry = {
@@ -128,6 +128,7 @@ export interface WebChannelOpts {
   getSessionsSnapshot: () => SessionSnapshot[]
   getSessionLog: (name: string) => unknown[]
   getSessionActivity?: (name: string) => unknown[]
+  getSessionBgTasks?: (name: string) => unknown[]
   setMute: (name: string, muted: boolean) => void
   onSendFromWeb: (msg: InboundMessage) => void
   fileStore?: import("../../core/files/store").FileStore
@@ -142,6 +143,9 @@ export interface WebChannelOpts {
   getModels?: (agent: AgentKind) => { id: string; displayName: string }[]
   switchModel?: (sessionName: string, model: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
   getSessionReasoningLevels?: (id: string) => { agent: string; current?: string; levels: { id: string; description?: string }[]; visible: boolean } | undefined
+  // Session-less reasoning levels for the New Session launcher (no session id yet):
+  // resolves the levels an agent+model offers before spawn. Codex's are per-model.
+  getReasoningLevels?: (agent: AgentKind, model?: string) => { agent: string; levels: { id: string; description?: string }[]; visible: boolean }
   switchReasoningLevel?: (id: string, level: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
   getSessionAgent?: (name: string) => { agent: AgentKind; model?: string; reasoningLevel?: string } | undefined
   interruptSession?: (id: string) => Promise<{ ok: boolean; reason?: string }>
@@ -736,6 +740,7 @@ export class WebChannel implements Channel {
       const sessions = this.opts.getSessionsSnapshot()
       const logs: Record<string, unknown[]> = {}
       const activity: Record<string, unknown[]> = {}
+      const bgTasks: Record<string, unknown[]> = {}
       const agentState: Record<string, unknown> = {}
       const commands: Record<string, unknown[]> = {}
       const commandsResolved: Record<string, boolean> = {}
@@ -743,6 +748,7 @@ export class WebChannel implements Channel {
         const sessionKey = s.id ?? s.name
         logs[sessionKey] = this.opts.getSessionLog(sessionKey)
         activity[sessionKey] = this.opts.getSessionActivity?.(sessionKey) ?? []
+        bgTasks[sessionKey] = this.opts.getSessionBgTasks?.(sessionKey) ?? []
         agentState[sessionKey] = this.opts.getSessionAgentState?.(sessionKey)
         commands[sessionKey] = this.opts.getSessionCommands?.(sessionKey) ?? []
         commandsResolved[sessionKey] = this.opts.getSessionCommandsResolved?.(sessionKey) ?? false
@@ -752,7 +758,7 @@ export class WebChannel implements Channel {
       const onboarded = this.opts.getAppConfig?.()?.onboarded ?? false
       const reads = this.opts.getReads?.() ?? {}
       const drafts = this.opts.getDrafts?.() ?? {}
-      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, agentState, proxies, displays, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts }))
+      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts }))
       return
     }
     if (frame.type === "ping") {
@@ -1073,17 +1079,19 @@ export class WebChannel implements Channel {
 
     if (method === "POST" && path.startsWith("/internal/agent-hook/")) {
       // Machine-to-machine (Claude hooks curl this from localhost). Gated by a
-      // per-boot secret embedded in the hook URL so a reachable web port can't
+      // persistent secret embedded in the hook URL so a reachable web port can't
       // forge agent-state/error/push events. Legacy hooks files (written before
       // secret support, or clobbered by tests) omit ?s= — accept those until the
-      // file is regenerated with a secret on the next broker restart.
+      // file is regenerated with a secret on the next broker restart. A mismatch
+      // is worth a log line: hooks drive agent status, the sending curl discards
+      // its own failures (`|| true`), and a silent 403 here once froze every
+      // pre-restart session at "idle" for days before anyone could see why.
       if (this.opts.internalSecret) {
         const provided = url.searchParams.get("s")
         const requiresSecret = hooksFileUsesHookSecret()
-        if (requiresSecret && provided !== this.opts.internalSecret) {
-          return new Response("forbidden", { status: 403 })
-        }
-        if (!requiresSecret && provided && provided !== this.opts.internalSecret) {
+        const mismatch = requiresSecret ? provided !== this.opts.internalSecret : Boolean(provided) && provided !== this.opts.internalSecret
+        if (mismatch) {
+          log.warn("agent_hook_rejected", { path, hasSecret: provided !== null })
           return new Response("forbidden", { status: 403 })
         }
       }
@@ -1973,6 +1981,16 @@ export class WebChannel implements Channel {
       const info = this.opts.getSessionReasoningLevels?.(id)
       if (!info) return this.json({ error: "session not found" }, 404)
       return this.json(info)
+    }
+    if (method === "GET" && path === "/reasoning-levels") {
+      const url = new URL(req.url)
+      const agent = url.searchParams.get("agent")
+      const model = url.searchParams.get("model") || undefined
+      if (!isAgentKind(agent)) {
+        return this.json({ error: `agent required (${AGENT_KINDS.join("|")})` }, 400)
+      }
+      const info = this.opts.getReasoningLevels?.(agent, model)
+      return this.json(info ?? { agent, levels: [], visible: false })
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/reasoning-level$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)

@@ -16,6 +16,20 @@ export function writePersistedHookSecret(secret: string): void {
   writeFileSync(INTERNAL_HOOK_SECRET_FILE, secret, "utf8")
 }
 
+/** Boot-time secret for the /internal/agent-hook endpoint. MUST be stable
+ *  across broker restarts: Claude Code snapshots hook config at CLI startup,
+ *  so a session that outlives a restart keeps curling with the secret it was
+ *  born with — a per-boot secret 403s all of those hooks silently and their
+ *  sessions' statuses freeze at "idle". Reuse the persisted secret; generate
+ *  one only on first boot (or a wiped state dir). */
+export function resolveInternalHookSecret(generate: () => string): string {
+  const persisted = readPersistedHookSecret()
+  if (persisted) return persisted
+  const fresh = generate()
+  writePersistedHookSecret(fresh)
+  return fresh
+}
+
 /** True when claude-hooks.json curl commands embed ?s= (broker requires matching secret). */
 export function hooksFileUsesHookSecret(path = CLAUDE_HOOKS_SETTINGS_PATH): boolean {
   if (!existsSync(path)) return false

@@ -20,6 +20,7 @@ struct MicButton: View {
             .frame(width: 44, height: 44)
             .contentShape(Rectangle())
         }
+        .smMacPlainButton()
         .disabled(model.transcribing || model.micStarting)
     }
 }

@@ -68,6 +68,9 @@ targets:
       # in the app bundle under PlugIns/.
       - target: SupermuxPushNSE
         embed: true
+      # Notification Content Extension: the custom expanded (long-press) view. iOS-only.
+      - target: SupermuxNotifContent
+        embed: true
     info:
       path: Supermux/Info.plist
       properties:
@@ -173,6 +176,7 @@ targets:
       # the keypair from the shared Keychain group and opens the blob with the same code.
       - path: Supermux/Push/PushCrypto.swift
       - path: Supermux/Push/PushKeypair.swift
+      - path: Supermux/Push/PushGroupState.swift
     info:
       path: SupermuxPushNSE/Info.plist
       properties:
@@ -191,6 +195,38 @@ targets:
       configs:
         Release:
           PROVISIONING_PROFILE_SPECIFIER: "Supermux Push NSE App Store"
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
+
+  SupermuxNotifContent:
+    # Notification Content Extension: draws the custom expanded (long-press) view — a mini
+    # transcript of the chat's recent messages. iOS-only (macOS has no content extensions).
+    # Reads everything from the notification userInfo the NSE sets (no App Group / network).
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: SupermuxNotifContent
+    info:
+      path: SupermuxNotifContent/Info.plist
+      properties:
+        CFBundleDisplayName: SupermuxNotifContent
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.content-extension
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationViewController
+          NSExtensionAttributes:
+            UNNotificationExtensionCategory: supermux.chat
+            UNNotificationExtensionInitialContentSizeRatio: 0.7
+            UNNotificationExtensionDefaultContentHidden: true
+            UNNotificationExtensionUserInteractionEnabled: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app.notif-content
+        APPLICATION_EXTENSION_API_ONLY: "YES"
+      configs:
+        Release:
+          PROVISIONING_PROFILE_SPECIFIER: "Supermux Notif Content App Store"
           CODE_SIGN_IDENTITY: "Apple Distribution"
           "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
 
@@ -234,6 +270,10 @@ targets:
         MACOSX_DEPLOYMENT_TARGET: "26.0"
         ARCHS: arm64
         EXCLUDED_ARCHS: x86_64
+        # Brand the SYSTEM accent (sidebar selection, focus rings, default buttons) teal on
+        # the Mac — AppKit's List/NSTableView selection follows the app accent color asset,
+        # not SwiftUI `.tint`. Mac-only setting: iOS keeps its explicit `.tint(Theme.teal)`.
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         CODE_SIGN_ENTITLEMENTS: Supermux/SupermuxMac.entitlements
         FRAMEWORK_SEARCH_PATHS:
           - $(inherited)
@@ -268,6 +308,7 @@ targets:
       - path: SupermuxPushNSE/NotificationService.swift
       - path: Supermux/Push/PushCrypto.swift
       - path: Supermux/Push/PushKeypair.swift
+      - path: Supermux/Push/PushGroupState.swift
     info:
       path: SupermuxPushNSE/InfoMac.plist
       properties:

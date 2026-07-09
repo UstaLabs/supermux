@@ -37,6 +37,9 @@ struct EditorWebView: PlatformViewRepresentable {
     /// JS->Swift LSP relay: the webview's CodeMirror LSP client posts outbound
     /// JSON-RPC `{serverId, message}` here; the parent forwards it to the broker.
     var onLspOut: (_ serverId: String, _ message: String) -> Void = { _, _ in }
+    /// JS->Swift font zoom: the webview posts the new size after a pinch / keyboard
+    /// zoom; the parent persists it (EditorSettingsStore) so it survives reopen.
+    var onFontSize: (_ px: Int) -> Void = { _ in }
 
     /// Reuse the host's long-lived coordinator (the bridge target + nav delegate +
     /// ready/lastPath/lastContent state), so remounts don't reset the handshake.
@@ -61,6 +64,7 @@ struct EditorWebView: PlatformViewRepresentable {
         coordinator.onChange = onChange
         coordinator.onSave = onSave
         coordinator.onLspOut = onLspOut
+        coordinator.onFontSize = onFontSize
 
         let newFilename = filename(from: path)
         let pathChanged = coordinator.lastPath != path
@@ -127,6 +131,7 @@ struct EditorWebView: PlatformViewRepresentable {
         var onChange: (String) -> Void
         var onSave: () -> Void
         var onLspOut: (String, String) -> Void
+        var onFontSize: (Int) -> Void
 
         /// Held so the parent can resign the keyboard and so we can reload after a
         /// renderer crash. Not owned (WebKit/SwiftUI own the view).
@@ -147,10 +152,12 @@ struct EditorWebView: PlatformViewRepresentable {
         var pendingReveal: (Int, Int?)?
 
         init(onChange: @escaping (String) -> Void, onSave: @escaping () -> Void,
-             onLspOut: @escaping (String, String) -> Void) {
+             onLspOut: @escaping (String, String) -> Void,
+             onFontSize: @escaping (Int) -> Void = { _ in }) {
             self.onChange = onChange
             self.onSave = onSave
             self.onLspOut = onLspOut
+            self.onFontSize = onFontSize
         }
 
         func cache(content: String, filename: String, scrollTop: Int) {
@@ -197,6 +204,8 @@ struct EditorWebView: PlatformViewRepresentable {
                 onChange(s)
             case "save":
                 onSave()
+            case "font":
+                if let px = body["px"] as? NSNumber { onFontSize(px.intValue) }
             case "ready":
                 ready = true
                 pushCachedDocument()

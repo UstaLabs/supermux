@@ -7,6 +7,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -36,6 +38,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -69,6 +79,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -78,16 +90,19 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import dev.supermux.android.R
 import dev.supermux.android.theme.HapticKind
+import dev.supermux.android.theme.LocalSemantics
 import dev.supermux.android.theme.MonoFontFamily
 import dev.supermux.android.theme.Radii
 import dev.supermux.android.theme.Space
@@ -98,6 +113,7 @@ import dev.supermux.net.ReasoningResponse
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.ui.FilePathRef
@@ -106,21 +122,15 @@ import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
 import android.provider.OpenableColumns
 import java.util.concurrent.atomic.AtomicLong
-
-/**
- * Active "/command" token at the END of the draft (cursor assumed at end), at line start or
- * after whitespace — mirrors iOS slashQuery (ChatPane.swift:508). Group 1 is the slash token.
- */
-private val slashTokenRegex = Regex("""(?:^|\s)(/\S*)$""")
 
 /** Stable list key for timeline diffing so the optimistic→real id swap (§9) doesn't flicker. */
 private fun timelineItemKey(item: TimelineItem): String = when (item) {
     is TimelineItem.Msg -> "m:${item.entry.id}"
     is TimelineItem.Tool -> "t:${item.event.callId ?: "${item.event.kind}:${item.event.seq}:${item.event.ts}"}"
-    is TimelineItem.Act -> "a:${item.event.seq ?: -1}:${item.event.ts}"
 }
 
 /**
@@ -142,6 +152,7 @@ fun ChatPanel(
     messages: List<LogEntry>,
     activity: List<ActivityEvent>,
     agent: AgentStatus?,
+    bgTasks: List<ServerFrame.BgTask> = emptyList(),
     sending: Boolean,
     activePanel: SessionPanel,
     onSendWith: (text: String, attachments: List<String>) -> Unit,
@@ -297,7 +308,7 @@ fun ChatPanel(
     // Composer draft text. Hoisted here (not inside the composer Column) so the shared dictation
     // controller (below) can append cleaned/raw transcripts into the same state the BasicTextField
     // edits, via its `onAppend` sink (risk §5).
-    var text by remember { mutableStateOf("") }
+    var text by remember { mutableStateOf(TextFieldValue("")) }
 
     // ── per-session draft persistence (DataStore; survives switch + process death) §3 ──
     // Load once per session (parity with iOS loadPane). `draftLoaded` gates the save effect so
@@ -305,15 +316,16 @@ fun ChatPanel(
     var draftLoaded by remember(session.id) { mutableStateOf(false) }
     LaunchedEffect(session.id) {
         draftLoaded = false
-        text = loadDraft(session.id)
+        val restored = loadDraft(session.id)
+        text = TextFieldValue(restored, TextRange(restored.length))
         draftLoaded = true
     }
     // Persist, debounced (~400ms) — avoids a DataStore write per keystroke. Clearing on send
     // sets text="" which writes empty through this same effect.
-    LaunchedEffect(session.id, text, draftLoaded) {
+    LaunchedEffect(session.id, text.text, draftLoaded) {
         if (!draftLoaded) return@LaunchedEffect
         delay(400)
-        saveDraft(session.id, text)
+        saveDraft(session.id, text.text)
     }
 
     // Voice dictation (record → broker cleanup → into the composer draft `text`). The drive logic,
@@ -324,7 +336,10 @@ fun ChatPanel(
         loadGlossary = loadGlossary,
         transcribeDraft = transcribeDraft,
         transcribeAudio = transcribeAudio,
-        onAppend = { text = if (text.isBlank()) it else text.trimEnd() + " " + it },
+        onAppend = {
+            val joined = if (text.text.isBlank()) it else text.text.trimEnd() + " " + it
+            text = TextFieldValue(joined, TextRange(joined.length))
+        },
     )
 
     // ── model picker state ───────────────────────────────────────────────────
@@ -369,7 +384,17 @@ fun ChatPanel(
         }
     }
 
-    Column(modifier) {
+    // Float the composer over the transcript (iOS ChatPane parity): the transcript fills the
+    // Box and the composer overlays the bottom; the transcript pads its content by the measured
+    // composer height so the last message still clears it. Tapping the transcript drops focus.
+    val focusManager = LocalFocusManager.current
+    val density = LocalDensity.current
+    var composerHeightPx by remember { mutableIntStateOf(0) }
+    Box(
+        modifier.pointerInput(Unit) {
+            detectTapGestures(onTap = { focusManager.clearFocus() })
+        },
+    ) {
         // ----------------------------------------------------------------
         // 2. Timeline
         // ----------------------------------------------------------------
@@ -389,18 +414,44 @@ fun ChatPanel(
                 // First paint for this session: jump to the bottom instantly — opening a chat should
                 // START at the bottom, not animate a fast scroll down. Only animate for content that
                 // arrives while you're already watching.
-                if (prevTimelineSize == 0) listState.scrollToItem(target)
-                else listState.animateScrollToItem(target)
+                // Reach the TRUE bottom (past the composer's contentPadding): position the last
+                // item, then scrollBy to the very end. Plain scrollToItem stops short of the padding.
+                if (prevTimelineSize == 0) listState.scrollToItem(target) else listState.animateScrollToItem(target)
+                listState.scrollBy(100_000f)
             }
             prevTimelineSize = timelineItems.size
+        }
+
+        // Follow the floating composer SMOOTHLY as its height changes — first layout, expand/collapse,
+        // and the keyboard's ime inset animating in/out — by scrolling the transcript by the SAME
+        // delta, so it tracks the composer at exactly its speed (= the keyboard's) instead of jumping.
+        // Uses snapshotFlow.collect (NOT a per-change LaunchedEffect) so awaiting a frame for the
+        // contentPadding relayout doesn't get cancelled by the next change; conflation is handled by
+        // the accumulated delta (h - lastProcessed). Only while near the bottom, so reading history
+        // isn't disturbed.
+        LaunchedEffect(activePanel, session.id) {
+            if (activePanel != SessionPanel.Chat) return@LaunchedEffect
+            var prev = 0
+            snapshotFlow { composerHeightPx }.collect { h ->
+                val delta = h - prev
+                prev = h
+                // Only follow GROWTH (focus / keyboard-up / expand). On shrink (blur / keyboard-down)
+                // the LazyColumn auto-clamps the shrinking contentPadding, keeping the last item at
+                // the bottom — an extra downward scroll here would over-shoot into older messages.
+                if (delta > 0) {
+                    withFrameNanos {} // let this height's contentPadding relayout apply first
+                    val info = listState.layoutInfo
+                    val atBottom = (info.visibleItemsInfo.lastOrNull()?.index ?: -1) >= info.totalItemsCount - 2
+                    if (atBottom) listState.scrollBy(delta.toFloat())
+                }
+            }
         }
 
         if (timelineItems.isEmpty() && !working) {
             // ── Empty session: starter prompts (iOS ChatPane empty state) ──
             Column(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
+                    .fillMaxSize()
                     .padding(Space.xl),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(Space.md),
@@ -443,13 +494,22 @@ fun ChatPanel(
             LazyColumn(
                 state = listState,
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(start = Space.sm, end = Space.md, top = Space.md, bottom = Space.md),
+                    .fillMaxSize()
+                    .padding(start = Space.sm, end = Space.md, top = Space.md),
+                contentPadding = PaddingValues(bottom = with(density) { composerHeightPx.toDp() } + Space.md),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 items(timelineItems, key = { timelineItemKey(it) }) { item ->
                     TimelineItemRow(item, loadBytes, onOpenFile)
+                }
+                // Background-task chips (bg shells / subagents / workflows): only RUNNING
+                // tasks get a chip, so a chip clears the moment its task finishes and they
+                // never accumulate. The outcome lives in the chat stream.
+                val visibleBgTasks = bgTasks.filter { it.status == "running" }
+                if (visibleBgTasks.isNotEmpty()) {
+                    item(key = "__bgtasks__") {
+                        BgTaskChipsRow(visibleBgTasks)
+                    }
                 }
                 // Live working indicator pinned to the bottom (iOS renders it below the last block).
                 if (working && agent != null) {
@@ -460,6 +520,10 @@ fun ChatPanel(
                     item(key = "__sending__") {
                         SendingIndicator(onStop = onInterrupt)
                     }
+                } else if (agent?.waiting == true) {
+                    item(key = "__waiting__") {
+                        WaitingIndicator(agent.bgOpen)
+                    }
                 }
             }
         }
@@ -469,27 +533,18 @@ fun ChatPanel(
         // ----------------------------------------------------------------
         Column(
             modifier = Modifier
+                .align(Alignment.BottomCenter)
+                // Measure the FULL footprint (pill + nav/ime inset) — the composer Column occupies
+                // pill + inset anchored at the bottom, so the transcript's bottom contentPadding must
+                // clear all of it. onSizeChanged sits OUTSIDE windowInsetsPadding to include the inset.
+                .onSizeChanged { composerHeightPx = it.height }
                 .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
         ) {
-            // Top border above composer
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(1.dp)
-                    .background(MaterialTheme.colorScheme.outlineVariant),
-            )
-
             // ── slash-command menu: active "/token" at end of draft (start-of-line or after
-            //    whitespace), filtering on name OR family by `contains`, capped at 8 (iOS parity) ──
-            val slashMatch = slashTokenRegex.find(text)
-            val slashQuery = slashMatch?.groupValues?.get(1)?.drop(1)?.lowercase()
-            val slashMatches = if (slashQuery != null) {
-                commands.filter {
-                    slashQuery.isEmpty() ||
-                        it.name.contains(slashQuery, ignoreCase = true) ||
-                        it.family.contains(slashQuery, ignoreCase = true)
-                }.take(8)
-            } else emptyList()
+            //    whitespace), filtering on name OR family by `contains`, capped at 8 (iOS parity).
+            //    Matching lives in SlashCommands.kt, shared with the New Session launcher. ──
+            val slashQuery = activeSlashQuery(text.text)
+            val slashMatches = slashCommandMatches(text.text, commands)
 
             // Hardware-keyboard nav for the slash menu: ↑/↓ move the highlight, Enter picks, Esc
             // dismisses — so you can drive it without touch (DeX / attached keyboard).
@@ -499,76 +554,34 @@ fun ChatPanel(
             val slashMenuOpen = slashMatches.isNotEmpty() && !slashMenuDismissed
             val safeSlashIndex = selectedSlashIndex.coerceIn(0, (slashMatches.size - 1).coerceAtLeast(0))
 
-            // Replace the active "/token" with [insert], preserving any leading whitespace.
-            fun replaceSlashToken(insert: String) {
-                val m = slashTokenRegex.find(text) ?: run { text = insert; return }
-                val lead = m.value.takeWhile { it == ' ' || it == '\n' || it == '\t' }
-                text = text.substring(0, m.range.first) + lead + insert
-            }
-            // Apply a slash command — shared by a tap and by keyboard Enter.
+            // Apply a slash command — shared by a tap and by keyboard Enter. Control commands clear
+            // the token and fire onControl; everything else inserts its text (SlashCommands.kt).
             fun selectSlashCommand(cmd: SlashCommand) {
                 haptic(HapticKind.Tick)
-                val action = cmd.action
-                if (action != null) {
-                    replaceSlashToken("")
+                if (cmd.action != null) {
+                    val cleared = replaceSlashToken(text.text, "")
+                    text = TextFieldValue(cleared, TextRange(cleared.length))
                     onControl(cmd)
                 } else {
-                    replaceSlashToken(cmd.insertText?.ifEmpty { null } ?: "${cmd.sigil}${cmd.name} ")
+                    // The active "/token" is always at the end of the draft (activeSlashQuery only
+                    // matches end-of-draft), so the inserted command becomes the new tail — put the
+                    // caret right after it instead of leaving it stuck at the old offset (mid-token).
+                    val inserted = replaceSlashToken(text.text, slashInsertText(cmd))
+                    text = TextFieldValue(inserted, TextRange(inserted.length))
                 }
             }
 
             if (slashMenuOpen) {
-                Column(
+                SlashMenu(
+                    matches = slashMatches,
+                    selectedIndex = safeSlashIndex,
+                    onSelect = { selectSlashCommand(it) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 240.dp)
-                        .background(MaterialTheme.colorScheme.surfaceContainer)
-                        .verticalScroll(rememberScrollState())
-                        .padding(vertical = 4.dp),
-                ) {
-                    slashMatches.forEachIndexed { i, cmd ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("chat_slash_item_${cmd.name}")
-                                .background(
-                                    if (i == safeSlashIndex) MaterialTheme.colorScheme.surfaceContainerHighest
-                                    else Color.Transparent,
-                                )
-                                .clickable { selectSlashCommand(cmd) }
-                                .padding(horizontal = 14.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = "${cmd.sigil}${cmd.name}",
-                                color = MaterialTheme.colorScheme.onSurface,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.width(120.dp),
-                            )
-                            val desc = cmd.description
-                            if (desc != null) {
-                                Text(
-                                    text = desc,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 12.sp,
-                                    maxLines = 1,
-                                )
-                            }
-                            // Trailing "executes" glyph for control commands (iOS bolt.fill).
-                            if (cmd.action != null) {
-                                Spacer(Modifier.weight(1f))
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_zap),
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                    modifier = Modifier.size(13.dp),
-                                )
-                            }
-                        }
-                    }
-                }
+                        .background(MaterialTheme.colorScheme.surfaceContainer),
+                    testTagPrefix = "chat_slash_item_",
+                    showActionGlyph = true,
+                )
                 // Separator between menu and composer
                 Box(
                     modifier = Modifier
@@ -652,7 +665,7 @@ fun ChatPanel(
             val composerInteractionSource = remember { MutableInteractionSource() }
             val composerFocused by composerInteractionSource.collectIsFocusedAsState()
             val composerBorderAlpha by animateFloatAsState(
-                targetValue = if (composerFocused) 0.5f else 0f,
+                targetValue = if (composerFocused) 0.4f else 0f,
                 animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
                 label = "composer_border_alpha",
             )
@@ -672,13 +685,13 @@ fun ChatPanel(
             // Block send while any attachment is still uploading OR has failed —
             // never send a message minus its attachment (the old silent drop).
             val anyBlocking = pendingAttachments.any { it.uploading || it.failed }
-            val canSend = !anyBlocking && (text.isNotBlank() || pendingAttachments.isNotEmpty())
+            val canSend = !anyBlocking && (text.text.isNotBlank() || pendingAttachments.isNotEmpty())
             fun doSend() {
                 if (!canSend) return
                 haptic(HapticKind.Confirm)
                 val attachmentIds = pendingAttachments.map { it.fileId }
-                onSendWith(text, attachmentIds)
-                text = ""
+                onSendWith(text.text, attachmentIds)
+                text = TextFieldValue("")
                 pendingAttachments.clear()
             }
 
@@ -701,265 +714,308 @@ fun ChatPanel(
             // ── "Transcribing…" indicator (parity with iOS transcribingBar) ──
             if (mic.transcribing) TranscribingIndicator()
 
-            // ── Composer takeover: RecordingBar replaces the card while dictating ──
-            if (mic.recording || mic.listening) {
-                RecordingBar(
-                    seconds = mic.recordingSeconds,
-                    liveTranscript = mic.liveTranscript,
-                    onStop = { mic.stopMic() },
-                    onCancel = { mic.cancelMic() },
-                )
-            } else Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                    .padding(horizontal = 10.dp, vertical = 10.dp),
-            ) {
-                // ── Text input area (card background, animated focus border) ──
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainer)
-                        .border(1.dp, focusBorderColor, RoundedCornerShape(12.dp))
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                ) {
-                    if (text.isEmpty()) {
-                        Text(
-                            text = "Message ${session.name}…",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 14.sp,
-                        )
-                    }
-                    BasicTextField(
-                        value = text,
-                        onValueChange = { text = it },
-                        textStyle = TextStyle(
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontSize = 14.sp,
-                        ),
-                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                        interactionSource = composerInteractionSource,
-                        maxLines = 6,
-                        keyboardOptions = KeyboardOptions(
-                            capitalization = KeyboardCapitalization.Sentences,
-                            imeAction = ImeAction.Send,
-                        ),
-                        keyboardActions = KeyboardActions(onSend = { doSend() }),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("chat_composer")
-                            // Physical keyboard: Enter sends, Shift+Enter inserts a newline. Handled
-                            // in the PREVIEW phase and consumed, so the multiline field never also
-                            // inserts a newline and no duplicate IME "Send" fires — fixes hardware
-                            // Enter not sending, and the newline double-send, on DeX/desktop keyboards.
-                            .onPreviewKeyEvent { e ->
-                                if (e.type != KeyEventType.KeyDown) {
-                                    false
-                                } else when {
-                                    // Slash menu open → arrows move the highlight, Enter picks, Esc closes.
-                                    slashMenuOpen && e.key == Key.DirectionDown -> {
-                                        selectedSlashIndex = (safeSlashIndex + 1).coerceAtMost(slashMatches.size - 1)
-                                        true
-                                    }
-                                    slashMenuOpen && e.key == Key.DirectionUp -> {
-                                        selectedSlashIndex = (safeSlashIndex - 1).coerceAtLeast(0)
-                                        true
-                                    }
-                                    slashMenuOpen && (e.key == Key.Enter || e.key == Key.NumPadEnter) && !e.isShiftPressed -> {
-                                        slashMatches.getOrNull(safeSlashIndex)?.let { selectSlashCommand(it) }
-                                        true
-                                    }
-                                    slashMenuOpen && e.key == Key.Escape -> {
-                                        slashMenuDismissed = true
-                                        true
-                                    }
-                                    // Otherwise: Enter sends, Shift+Enter inserts a newline.
-                                    (e.key == Key.Enter || e.key == Key.NumPadEnter) && !e.isShiftPressed -> {
-                                        doSend()
-                                        true
-                                    }
-                                    else -> false
-                                }
-                            }
-                            // Paste/drag a copied image straight into the box (web parity). Text
-                            // and non-image content falls through to the field's normal handling.
-                            .contentReceiver { transferable ->
-                                transferable.consume { item ->
-                                    val uri = item.uri
-                                    if (uri != null &&
-                                        isAttachableMediaMime(context.contentResolver.getType(uri))) {
-                                        scope.launch { stageFromUri(uri) }
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                }
-                            },
-                    )
-                }
+            // ── Composer expansion (iOS ChatPane parity): a slim floating pill at rest that grows
+            //    into the full card on focus / draft / attachment. Recording is a full takeover
+            //    (RecordingBar). ONE persistent BasicTextField across states so focus is never
+            //    dropped mid-morph; the +/mic controls move to the footer as the field takes over. ──
+            val composerExpanded = composerFocused || text.text.isNotBlank() || pendingAttachments.isNotEmpty()
+            val composerRadius by animateDpAsState(
+                targetValue = if (composerExpanded) 22.dp else 26.dp,
+                animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                label = "composer_radius",
+            )
+            val composerShape = RoundedCornerShape(composerRadius)
+            // Shadow is almost none at rest; lifts on expand/focus.
+            val composerShadow by animateDpAsState(
+                targetValue = if (composerExpanded) 3.dp else 0.dp,
+                animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                label = "composer_shadow",
+            )
 
-                Spacer(Modifier.height(6.dp))
-
-                // ── Toolbar row: [Model pill] [Effort pill?]  <spacer>  [+] [mic] [● send] ──
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
-                ) {
-                    // Model pill → opens model picker
-                    ModelPill(
-                        current = modelsData?.current ?: session.model,
-                        onClick = {
-                            scope.launch {
-                                val resp = withContext(Dispatchers.IO) { vmModels(session.id) }
-                                modelsData = resp
-                                showModelSheet = true
-                            }
-                        },
-                    )
-
-                    // Effort pill — only when visible
-                    if (effortVisible) {
-                        EffortPill(
-                            current = reasoningData?.current,
-                            onClick = {
-                                scope.launch {
-                                    val resp = withContext(Dispatchers.IO) { vmReasoning(session.id) }
-                                    reasoningData = resp
-                                    effortVisible = resp != null && resp.visible && resp.levels.size > 1
-                                    showEffortSheet = true
-                                }
-                            },
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.weight(1f))
-
-                    // Attach (+) button → menu: Photos / Files / Camera (iOS + menu parity).
-                    var attachMenu by remember { mutableStateOf(false) }
-                    Box {
-                        IconButton(onClick = { attachMenu = true }) {
-                            Box(
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(MaterialTheme.colorScheme.surfaceContainer),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_plus),
-                                    contentDescription = "Attach",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            }
-                        }
-                        DropdownMenu(
-                            expanded = attachMenu,
-                            onDismissRequest = { attachMenu = false },
-                        ) {
-                            // Paste — only offered when the clipboard actually holds an image.
-                            if (clipboardHasImage()) {
-                                DropdownMenuItem(
-                                    text = { Text("Paste") },
-                                    leadingIcon = {
-                                        Icon(painterResource(R.drawable.ic_copy), null, modifier = Modifier.size(18.dp))
-                                    },
-                                    modifier = Modifier.testTag("attach_menu_paste"),
-                                    onClick = {
-                                        attachMenu = false
-                                        scope.launch { clipboardImageUris().forEach { stageFromUri(it) } }
-                                    },
-                                )
-                            }
-                            DropdownMenuItem(
-                                text = { Text("Photos") },
-                                leadingIcon = {
-                                    Icon(painterResource(R.drawable.ic_image), null, modifier = Modifier.size(18.dp))
-                                },
-                                modifier = Modifier.testTag("attach_menu_photos"),
-                                onClick = {
-                                    attachMenu = false
-                                    photoPicker.launch(
-                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
-                                    )
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Files") },
-                                leadingIcon = {
-                                    Icon(painterResource(R.drawable.ic_file), null, modifier = Modifier.size(18.dp))
-                                },
-                                modifier = Modifier.testTag("attach_menu_files"),
-                                onClick = {
-                                    attachMenu = false
-                                    filePickerLauncher.launch("*/*")
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Camera") },
-                                leadingIcon = {
-                                    Icon(painterResource(R.drawable.ic_camera), null, modifier = Modifier.size(18.dp))
-                                },
-                                modifier = Modifier.testTag("attach_menu_camera"),
-                                onClick = {
-                                    attachMenu = false
-                                    val uri = createImageUri(context)
-                                    cameraUri = uri
-                                    takePicture.launch(uri)
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Record video") },
-                                leadingIcon = {
-                                    Icon(painterResource(R.drawable.ic_play), null, modifier = Modifier.size(18.dp))
-                                },
-                                modifier = Modifier.testTag("attach_menu_record_video"),
-                                onClick = {
-                                    attachMenu = false
-                                    val uri = createVideoUri(context)
-                                    videoCaptureUri = uri
-                                    captureVideo.launch(uri)
-                                },
-                            )
-                        }
-                    }
-
-                    // Mic button — starts dictation (the RecordingBar takes over while active).
-                    // Disabled while a transcription POST is in flight. 48dp tap target / 32dp visual.
-                    MicButton(
-                        onClick = { mic.onMicClick() },
-                        enabled = !mic.transcribing,
-                        modifier = Modifier.testTag("chat_mic"),
-                    )
-
-                    // Circular send button — ALWAYS sends (iOS parity); the Stop/interrupt
-                    // affordance lives in the transcript WorkingIndicator, not here. Scale press +
-                    // confirm haptic; dims when there is nothing to send.
-                    IconButton(
-                        onClick = { doSend() },
-                        enabled = canSend,
-                        interactionSource = sendInteractionSource,
-                        modifier = Modifier.testTag("chat_send"),
-                    ) {
+            // "+" attach menu — inline while compact, in the footer while expanded (one definition).
+            @Composable
+            fun AttachMenuButton() {
+                var attachMenu by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { attachMenu = true }) {
                         Box(
                             modifier = Modifier
-                                .scale(sendScale)
-                                .size(38.dp)
-                                .clip(androidx.compose.foundation.shape.CircleShape)
-                                .background(
-                                    if (canSend) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
-                                ),
+                                .size(32.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.surfaceContainer),
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(
-                                painter = painterResource(R.drawable.ic_send),
-                                contentDescription = "Send",
-                                tint = MaterialTheme.colorScheme.onPrimary,
+                                painter = painterResource(R.drawable.ic_plus),
+                                contentDescription = "Attach",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(18.dp),
                             )
+                        }
+                    }
+                    DropdownMenu(
+                        expanded = attachMenu,
+                        onDismissRequest = { attachMenu = false },
+                    ) {
+                        // Paste — only offered when the clipboard actually holds an image.
+                        if (clipboardHasImage()) {
+                            DropdownMenuItem(
+                                text = { Text("Paste") },
+                                leadingIcon = {
+                                    Icon(painterResource(R.drawable.ic_copy), null, modifier = Modifier.size(18.dp))
+                                },
+                                modifier = Modifier.testTag("attach_menu_paste"),
+                                onClick = {
+                                    attachMenu = false
+                                    scope.launch { clipboardImageUris().forEach { stageFromUri(it) } }
+                                },
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text("Photos") },
+                            leadingIcon = {
+                                Icon(painterResource(R.drawable.ic_image), null, modifier = Modifier.size(18.dp))
+                            },
+                            modifier = Modifier.testTag("attach_menu_photos"),
+                            onClick = {
+                                attachMenu = false
+                                photoPicker.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
+                                )
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Files") },
+                            leadingIcon = {
+                                Icon(painterResource(R.drawable.ic_file), null, modifier = Modifier.size(18.dp))
+                            },
+                            modifier = Modifier.testTag("attach_menu_files"),
+                            onClick = {
+                                attachMenu = false
+                                filePickerLauncher.launch("*/*")
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Camera") },
+                            leadingIcon = {
+                                Icon(painterResource(R.drawable.ic_camera), null, modifier = Modifier.size(18.dp))
+                            },
+                            modifier = Modifier.testTag("attach_menu_camera"),
+                            onClick = {
+                                attachMenu = false
+                                val uri = createImageUri(context)
+                                cameraUri = uri
+                                takePicture.launch(uri)
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Record video") },
+                            leadingIcon = {
+                                Icon(painterResource(R.drawable.ic_play), null, modifier = Modifier.size(18.dp))
+                            },
+                            modifier = Modifier.testTag("attach_menu_record_video"),
+                            onClick = {
+                                attachMenu = false
+                                val uri = createVideoUri(context)
+                                videoCaptureUri = uri
+                                captureVideo.launch(uri)
+                            },
+                        )
+                    }
+                }
+            }
+
+            // Circular send button — ALWAYS sends (iOS parity); the Stop/interrupt affordance
+            // lives in the transcript WorkingIndicator, not here. Scale press + dims when idle.
+            @Composable
+            fun SendButton() {
+                IconButton(
+                    onClick = { doSend() },
+                    enabled = canSend,
+                    interactionSource = sendInteractionSource,
+                    modifier = Modifier.testTag("chat_send"),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .scale(sendScale)
+                            .size(38.dp)
+                            .clip(androidx.compose.foundation.shape.CircleShape)
+                            .background(
+                                if (canSend) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_send),
+                            contentDescription = "Send",
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+            }
+
+            // Floating gutter shared by the recording bar and the composer card.
+            val composerGutter = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+
+            // ── Composer takeover: RecordingBar replaces the card while dictating ──
+            if (mic.recording || mic.listening) {
+                Box(composerGutter) {
+                    RecordingBar(
+                        seconds = mic.recordingSeconds,
+                        liveTranscript = mic.liveTranscript,
+                        onStop = { mic.stopMic() },
+                        onCancel = { mic.cancelMic() },
+                    )
+                }
+            } else Surface(
+                shape = composerShape,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shadowElevation = composerShadow,
+                modifier = composerGutter.border(1.dp, focusBorderColor, composerShape),
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)) {
+                    // ── Main row: the ONE persistent field; inline +/mic while compact. ──
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (!composerExpanded) AttachMenuButton()
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 6.dp, vertical = if (composerExpanded) 4.dp else 0.dp),
+                        ) {
+                            if (text.text.isEmpty()) {
+                                Text(
+                                    text = "Message ${session.name}…",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 14.sp,
+                                )
+                            }
+                            BasicTextField(
+                                value = text,
+                                onValueChange = { text = it },
+                                textStyle = TextStyle(
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontSize = 14.sp,
+                                ),
+                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                interactionSource = composerInteractionSource,
+                                maxLines = if (composerExpanded) 6 else 1,
+                                keyboardOptions = KeyboardOptions(
+                                    capitalization = KeyboardCapitalization.Sentences,
+                                    imeAction = ImeAction.Send,
+                                ),
+                                keyboardActions = KeyboardActions(onSend = { doSend() }),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("chat_composer")
+                                    // Physical keyboard: Enter sends, Shift+Enter inserts a newline. Handled
+                                    // in the PREVIEW phase and consumed, so the multiline field never also
+                                    // inserts a newline and no duplicate IME "Send" fires — fixes hardware
+                                    // Enter not sending, and the newline double-send, on DeX/desktop keyboards.
+                                    .onPreviewKeyEvent { e ->
+                                        if (e.type != KeyEventType.KeyDown) {
+                                            false
+                                        } else when {
+                                            // Slash menu open → arrows move the highlight, Enter picks, Esc closes.
+                                            slashMenuOpen && e.key == Key.DirectionDown -> {
+                                                selectedSlashIndex = (safeSlashIndex + 1).coerceAtMost(slashMatches.size - 1)
+                                                true
+                                            }
+                                            slashMenuOpen && e.key == Key.DirectionUp -> {
+                                                selectedSlashIndex = (safeSlashIndex - 1).coerceAtLeast(0)
+                                                true
+                                            }
+                                            slashMenuOpen && (e.key == Key.Enter || e.key == Key.NumPadEnter) && !e.isShiftPressed -> {
+                                                slashMatches.getOrNull(safeSlashIndex)?.let { selectSlashCommand(it) }
+                                                true
+                                            }
+                                            slashMenuOpen && e.key == Key.Escape -> {
+                                                slashMenuDismissed = true
+                                                true
+                                            }
+                                            // Otherwise: Enter sends, Shift+Enter inserts a newline.
+                                            (e.key == Key.Enter || e.key == Key.NumPadEnter) && !e.isShiftPressed -> {
+                                                doSend()
+                                                true
+                                            }
+                                            else -> false
+                                        }
+                                    }
+                                    // Paste/drag a copied image straight into the box (web parity). Text
+                                    // and non-image content falls through to the field's normal handling.
+                                    .contentReceiver { transferable ->
+                                        transferable.consume { item ->
+                                            val uri = item.uri
+                                            if (uri != null &&
+                                                isAttachableMediaMime(context.contentResolver.getType(uri))) {
+                                                scope.launch { stageFromUri(uri) }
+                                                true
+                                            } else {
+                                                false
+                                            }
+                                        }
+                                    },
+                            )
+                        }
+                        if (!composerExpanded) {
+                            MicButton(
+                                onClick = { mic.onMicClick() },
+                                enabled = !mic.transcribing,
+                                modifier = Modifier.testTag("chat_mic"),
+                            )
+                        }
+                    }
+
+                    // ── Footer (revealed on expand): [Model] [Effort?]  <spacer>  [+] [mic] [● send] ──
+                    AnimatedVisibility(visible = composerExpanded) {
+                        Column {
+                            Spacer(Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                            ) {
+                                // Actions cluster left, send right (iOS/web parity).
+                                AttachMenuButton()
+                                // Mic — starts dictation (RecordingBar takes over while active).
+                                MicButton(
+                                    onClick = { mic.onMicClick() },
+                                    enabled = !mic.transcribing,
+                                    modifier = Modifier.testTag("chat_mic"),
+                                )
+                                // Model pill → opens model picker
+                                ModelPill(
+                                    current = modelsData?.current ?: session.model,
+                                    onClick = {
+                                        scope.launch {
+                                            val resp = withContext(Dispatchers.IO) { vmModels(session.id) }
+                                            modelsData = resp
+                                            showModelSheet = true
+                                        }
+                                    },
+                                )
+
+                                // Effort pill — only when visible
+                                if (effortVisible) {
+                                    EffortPill(
+                                        current = reasoningData?.current,
+                                        onClick = {
+                                            scope.launch {
+                                                val resp = withContext(Dispatchers.IO) { vmReasoning(session.id) }
+                                                reasoningData = resp
+                                                effortVisible = resp != null && resp.visible && resp.levels.size > 1
+                                                showEffortSheet = true
+                                            }
+                                        },
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.weight(1f))
+                                SendButton()
+                            }
                         }
                     }
                 }
@@ -1011,7 +1067,9 @@ private fun WorkingIndicator(agent: AgentStatus, onStop: () -> Unit) {
         }
     }
     val elapsed = agent.workingSince?.let { ((now - it).coerceAtLeast(0)) / 1000 }
-    val label = if (agent.detail == "running") "working" else "thinking"
+    // Name the blocker while a tool runs ("working · Bash") — the tool is already in the frame.
+    val label = (if (agent.detail == "running") "working" else "thinking") +
+        (agent.tool?.takeIf { agent.detail == "running" }?.let { " · $it" } ?: "")
     // Terminal-prompt status line: a gutter-aligned live pulse continues the spine's thread,
     // then a mono status + elapsed, then a compact stop. Reads as the prompt of a live session.
     Row(
@@ -1045,6 +1103,77 @@ private fun WorkingIndicator(agent: AgentStatus, onStop: () -> Unit) {
             )
             Text("stop", fontFamily = MonoFontFamily, fontSize = 11.sp, color = cs.error)
         }
+    }
+}
+
+/**
+ * Background-task chips (direction B of the waiting-state design): one mono chip per
+ * RUNNING bg shell / subagent / workflow, with its own live elapsed. Chips clear the
+ * moment their task finishes (the caller passes running-only), so they never accumulate;
+ * the outcome lives in the chat stream. Motion stays chat-only per the design language.
+ */
+@Composable
+private fun BgTaskChipsRow(tasks: List<ServerFrame.BgTask>) {
+    val cs = MaterialTheme.colorScheme
+    val sem = LocalSemantics.current
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000)
+            now = System.currentTimeMillis()
+        }
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(start = 44.dp, top = Space.xs, bottom = Space.xs, end = Space.md),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        tasks.forEach { t ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .border(1.dp, cs.outlineVariant, RoundedCornerShape(999.dp))
+                    .padding(horizontal = 10.dp, vertical = 3.dp),
+            ) {
+                BreathingDot(sem.warning, size = 6.dp)
+                Text(
+                    text = t.label + " · " + formatDuration(((now - t.startedAt).coerceAtLeast(0)) / 1000),
+                    fontFamily = MonoFontFamily,
+                    fontSize = 11.sp,
+                    color = cs.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * "waiting · N background tasks" status row — the turn is over but the harness will
+ * wake the agent when its background tasks finish. Amber = attention-not-error; no
+ * Stop capsule because the agent is idle (there is nothing to interrupt).
+ */
+@Composable
+private fun WaitingIndicator(bgOpen: Int) {
+    val sem = LocalSemantics.current
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = Space.sm, bottom = Space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.width(44.dp)) {
+            BreathingDot(sem.warning, Modifier.align(Alignment.CenterEnd).padding(end = 6.dp), size = 7.dp)
+        }
+        Text(
+            text = "waiting · " + if (bgOpen == 1) "1 background task" else "$bgOpen background tasks",
+            fontFamily = MonoFontFamily,
+            fontSize = 12.sp,
+            color = sem.warning,
+        )
     }
 }
 
@@ -1096,7 +1225,7 @@ private fun SendingIndicator(onStop: () -> Unit) {
  * declared in file_paths.xml + reused by openAttachment). The system camera app writes the JPEG
  * here, then [stageFromUri] reads it back and uploads it.
  */
-private fun createImageUri(context: android.content.Context): Uri {
+internal fun createImageUri(context: android.content.Context): Uri {
     val dir = File(context.cacheDir, "attachments").apply { mkdirs() }
     val file = File(dir, "camera_${System.currentTimeMillis()}.jpg")
     return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
@@ -1109,7 +1238,7 @@ private fun createImageUri(context: android.content.Context): Uri {
  * .getType() maps the .mp4 extension to video/mp4 — and uploads it with kind=null so the broker
  * infers "video".
  */
-private fun createVideoUri(context: android.content.Context): Uri {
+internal fun createVideoUri(context: android.content.Context): Uri {
     val dir = File(context.cacheDir, "attachments").apply { mkdirs() }
     val file = File(dir, "camera_${System.currentTimeMillis()}.mp4")
     return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)

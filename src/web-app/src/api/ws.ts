@@ -7,6 +7,7 @@ import { useProxies } from "../stores/proxies"
 import { useDisplays } from "../stores/displays"
 import { useActivity } from "../stores/activity"
 import { useAgentState } from "../stores/agentState"
+import { useBgTasks } from "../stores/bgTasks"
 import { useCommandsStore } from "../stores/commands"
 import { useLsp } from "../stores/lsp"
 import { useOnboarding } from "../stores/onboarding"
@@ -27,6 +28,7 @@ export const useWS = defineStore("ws", () => {
   const displays = useDisplays()
   const activity = useActivity()
   const agentState = useAgentState()
+  const bgTasks = useBgTasks()
   const commands = useCommandsStore()
   const onboarding = useOnboarding()
   const finishJob = useFinishJob()
@@ -99,6 +101,7 @@ export const useWS = defineStore("ws", () => {
       for (const s of (frame.sessions ?? [])) { finishJob.fromSnapshot(s.id, s.finish_job); gitStatus.fromSnapshot(s.id, s.git) }
       if (frame.logs) for (const [s, log] of Object.entries(frame.logs)) messages.replace(s, log as any)
       if (frame.activity) for (const [s, list] of Object.entries(frame.activity)) activity.replace(s, list as any)
+      if (frame.bgTasks) for (const [s, list] of Object.entries(frame.bgTasks)) bgTasks.set(s, list as any)
       if (frame.agentState) for (const [s, st] of Object.entries(frame.agentState)) agentState.set(s, st as any)
       if (frame.proxies) proxies.replace(frame.proxies.map((p: { isPublic?: boolean }) => ({ ...p, isPublic: !!p.isPublic })))
       if (frame.displays) displays.replace(frame.displays)
@@ -115,6 +118,7 @@ export const useWS = defineStore("ws", () => {
       commands.remove(frame.id)
       useSessionCache().drop(frame.id)
       gitStatus.clear(frame.id)
+      bgTasks.clear(frame.id)
       navigateAwayFromKilledSession(frame.id)
     }
     else if   (frame.type === "session_renamed")  sessions.rename(frame.id, frame.new)
@@ -124,7 +128,8 @@ export const useWS = defineStore("ws", () => {
     else if   (frame.type === "draft_clear")      drafts.applyRemote(frame.session, "")
     else if   (frame.type === "message_append")   messages.append(frame.session, frame.entry)
     else if   (frame.type === "activity_append")  activity.append(frame.session, frame.event)
-    else if   (frame.type === "agent_state")      agentState.set(frame.session, { state: frame.state, working: frame.working, detail: frame.detail, tool: frame.tool, since: frame.since, workingSince: frame.workingSince })
+    else if   (frame.type === "bg_tasks")         bgTasks.set(frame.session, frame.tasks)
+    else if   (frame.type === "agent_state")      agentState.set(frame.session, { state: frame.state, working: frame.working, detail: frame.detail, tool: frame.tool, since: frame.since, workingSince: frame.workingSince, waiting: frame.waiting, bgOpen: frame.bgOpen })
     else if   (frame.type === "agent_error")      toast.error(`${frame.session}: ${frame.errorMessage}`, { description: frame.errorType, duration: 10000 })
     else if   (frame.type === "message_update")   messages.update(frame.session, frame.entry_id, { text: frame.text, edited_at: frame.edited_at })
     else if   (frame.type === "message_reaction") messages.addReaction(frame.session, frame.entry_id, frame.emoji, frame.ts)

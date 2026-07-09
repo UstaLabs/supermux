@@ -344,6 +344,37 @@ extension View {
         modifier(MacHoverHighlight())
         #endif
     }
+    /// macOS renders a default `Button` as a bordered bezel (iOS: borderless label) — the
+    /// bezel is right for dialogs but wrong for the icon/pill controls these shims serve.
+    /// No-op on iOS so call sites keep their exact current rendering.
+    @ViewBuilder func smMacPlainButton() -> some View {
+        #if os(macOS)
+        buttonStyle(.plain)
+        #else
+        self
+        #endif
+    }
+    /// macOS renders a default `Menu` as a bordered pull-down with an indicator chevron;
+    /// our icon-labelled menus (link/⋯/+) want the iOS look: just the label. No-op on iOS.
+    /// (`.button` + `.plain` is the non-deprecated borderless combo — `.borderlessButton`
+    /// is soft-deprecated on macOS 14+.)
+    @ViewBuilder func smMacBorderlessMenu() -> some View {
+        #if os(macOS)
+        menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+        #else
+        self
+        #endif
+    }
+    /// Cap reading-content width on the Mac's wide panes (a chat-only layout is ~1000 pt —
+    /// ~180 chars/line; cap to a readable measure and center). No-op on iOS/iPad, whose
+    /// pane widths are already bounded.
+    @ViewBuilder func smContentWidthCap(_ max: CGFloat = 860) -> some View {
+        #if os(macOS)
+        frame(maxWidth: max).frame(maxWidth: .infinity, alignment: .center)
+        #else
+        self
+        #endif
+    }
     /// iOS full-screen cover; a regular sheet on the Mac (macOS has no full-screen cover).
     @ViewBuilder func smFullScreenCover<C: View>(
         isPresented: Binding<Bool>, onDismiss: (() -> Void)? = nil, @ViewBuilder content: @escaping () -> C

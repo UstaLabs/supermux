@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
@@ -18,6 +19,7 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,17 +36,31 @@ import org.json.JSONObject
 class EditorEngine(
     context: Context,
     private val lineWrap: Boolean,
-    private val fontSize: Int,
+    fontSize: Int,
     onChange: (String) -> Unit,
     onSave: () -> Unit,
     onLspOut: (String) -> Unit = {},
+    onFontSize: (Int) -> Unit = {},
 ) {
-    private val appContext = context.applicationContext
+    // The WINDOW context, not applicationContext: a WebView derives its CSS-px scale from
+    // the density of the display its construction Context lives on. The application context
+    // always carries the DEFAULT (phone) display's density, so on Samsung DeX / external
+    // displays (whose density differs — e.g. Fold ~2.6x phone vs ~1.2x DeX) the editor's web
+    // content rendered ~2-3x larger than the surrounding native UI. The engine never outlives
+    // its composition (rememberEditorEngine disposes it), so holding the activity context is
+    // leak-safe, and a DeX attach/detach recreates the activity → a fresh engine + WebView
+    // with the right density.
+    private val viewContext = context
     private val main = Handler(Looper.getMainLooper())
     private val onChangeS = mutableStateOf(onChange)
     private val onSaveS = mutableStateOf(onSave)
     /** Outbound LSP JSON-RPC string `{serverId,message}` posted by cm6's LSPClient. */
     private val onLspOutS = mutableStateOf(onLspOut)
+    /** Persist callback for a user zoom (pinch / keyboard) reported by the WebView. */
+    private val onFontSizeS = mutableStateOf(onFontSize)
+    /** Latest editor font size (px). Mutable so a zoom updates it in place (no WebView
+     *  rebuild); used by cmInit and every document push so a re-push keeps the zoom. */
+    private var currentFontSize: Int = fontSize
 
     var ready by mutableStateOf(false)
         private set
@@ -55,10 +71,23 @@ class EditorEngine(
     private var lastContent = ""
     private var lastFilename = ""
 
-    fun updateCallbacks(onChange: (String) -> Unit, onSave: () -> Unit, onLspOut: (String) -> Unit = onLspOutS.value) {
+    fun updateCallbacks(
+        onChange: (String) -> Unit,
+        onSave: () -> Unit,
+        onLspOut: (String) -> Unit = onLspOutS.value,
+        onFontSize: (Int) -> Unit = onFontSizeS.value,
+    ) {
         onChangeS.value = onChange
         onSaveS.value = onSave
         onLspOutS.value = onLspOut
+        onFontSizeS.value = onFontSize
+    }
+
+    /** Push a new font size to the live editor WITHOUT rebuilding the WebView. Called
+     *  when the settings font size changes; a pinch/keyboard zoom applies itself. */
+    fun setFontSize(px: Int) {
+        currentFontSize = px.coerceIn(10, 24)
+        if (ready) webView?.evaluateJavascript("cmSetFontSize($currentFontSize)", null)
     }
 
     fun obtainWebView(): WebView {
@@ -78,10 +107,22 @@ class EditorEngine(
     }
 
     fun setDocument(content: String, filename: String, scrollTop: Int = 0) {
-        lastContent = content
+        val pathChanged = filename != lastFilename
         lastFilename = filename
-        lastScrollTop = scrollTop
-        if (ready) pushToView(content, filename, scrollTop)
+        if (pathChanged) {
+            // A different tab/file: push the whole document + language + wrap + font + scroll
+            // (parity EditorWebView.swift:72-84). cmSetContent is a JS no-op if unchanged.
+            lastContent = content
+            lastScrollTop = scrollTop
+            if (ready) pushToView(content, filename, scrollTop)
+        } else if (content != lastContent) {
+            // Same file, content changed out-of-band (disk reload) — or our own echo of a user
+            // edit. Push ONLY the text: re-pushing scrollTop/language/font on every keystroke
+            // yanks the caret + scroll back (cmSetScrollTop is NOT a no-op). Parity
+            // EditorWebView.swift:86-89.
+            lastContent = content
+            if (ready) webView?.evaluateJavascript("cmSetContent(${q(content)})", null)
+        }
     }
 
     /** Scroll to a 1-indexed line (optional end). Deferred until [ready], like scrollTop. */
@@ -105,7 +146,7 @@ class EditorEngine(
     @SuppressLint("SetJavaScriptEnabled")
     private fun createWebView(): WebView {
         Log.d("EditorEngine", "create WebView")
-        return WebView(appContext).apply {
+        return WebView(viewContext).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -135,8 +176,20 @@ class EditorEngine(
                 }
             }
             addJavascriptInterface(object {
-                @JavascriptInterface fun onChange(s: String) { main.post { onChangeS.value.invoke(s) } }
+                // Record the edit as the last-known document BEFORE it round-trips back through
+                // Compose state, so setDocument's `content != lastContent` guard skips re-pushing
+                // the user's own keystroke (parity EditorWebView.swift:203). Without this, fast
+                // typing can shove a stale snapshot back and drop characters / jump the caret.
+                @JavascriptInterface fun onChange(s: String) { main.post { lastContent = s; onChangeS.value.invoke(s) } }
                 @JavascriptInterface fun onSave() { main.post { onSaveS.value.invoke() } }
+                // A user zoom (pinch/keyboard) in the WebView: the editor already applied
+                // it live; keep our copy in sync and persist it (no rebuild).
+                @JavascriptInterface fun onFontSize(px: Int) {
+                    main.post {
+                        currentFontSize = px.coerceIn(10, 24)
+                        onFontSizeS.value.invoke(currentFontSize)
+                    }
+                }
                 @JavascriptInterface fun onReady() {
                     main.post {
                         ready = true
@@ -160,7 +213,7 @@ class EditorEngine(
                     // is already JSON.stringify({serverId,message}); forward it verbatim.
                     view?.evaluateJavascript(LSP_BRIDGE_SHIM, null)
                     view?.evaluateJavascript(
-                        "cmInit(${q(lastContent)}, ${q(lastFilename)}, $lineWrap, $fontSize)",
+                        "cmInit(${q(lastContent)}, ${q(lastFilename)}, $lineWrap, $currentFontSize)",
                     ) { r -> Log.d("EditorEngine", "cmInit returned: $r") }
                 }
                 override fun onReceivedError(
@@ -190,7 +243,7 @@ class EditorEngine(
         view.evaluateJavascript("cmSetContent(${q(content)})", null)
         view.evaluateJavascript("cmSetLanguage(${q(filename)})", null)
         view.evaluateJavascript("cmSetLineWrap($lineWrap)", null)
-        view.evaluateJavascript("cmSetFontSize($fontSize)", null)
+        view.evaluateJavascript("cmSetFontSize($currentFontSize)", null)
         view.evaluateJavascript("cmSetScrollTop($scrollTop)", null)
         flushReveal()
     }
@@ -237,15 +290,21 @@ fun rememberEditorEngine(
     onChange: (String) -> Unit,
     onSave: () -> Unit,
     onLspOut: (String) -> Unit = {},
+    onFontSize: (Int) -> Unit = {},
 ): EditorEngine {
     val context = androidx.compose.ui.platform.LocalContext.current
     val onChangeS = rememberUpdatedState(onChange)
     val onSaveS = rememberUpdatedState(onSave)
     val onLspOutS = rememberUpdatedState(onLspOut)
-    val engine = remember(lineWrap, fontSize) {
-        EditorEngine(context, lineWrap, fontSize, onChangeS.value, onSaveS.value, onLspOutS.value)
+    val onFontSizeS = rememberUpdatedState(onFontSize)
+    // NOT keyed on fontSize: a zoom pushes the size in place (engine.setFontSize)
+    // rather than rebuilding the WebView, so a pinch/shortcut never reloads the file.
+    val engine = remember(lineWrap) {
+        EditorEngine(context, lineWrap, fontSize, onChangeS.value, onSaveS.value, onLspOutS.value, onFontSizeS.value)
     }
-    engine.updateCallbacks(onChangeS.value, onSaveS.value, onLspOutS.value)
+    engine.updateCallbacks(onChangeS.value, onSaveS.value, onLspOutS.value, onFontSizeS.value)
+    // Push settings-driven size changes to the live editor (initial size comes from cmInit).
+    LaunchedEffect(engine, fontSize) { engine.setFontSize(fontSize) }
     DisposableEffect(engine) {
         onDispose { engine.destroy() }
     }
@@ -262,8 +321,13 @@ fun EditorWebViewHost(
 
     AndroidView(
         modifier = modifier,
-        factory = { engine.obtainWebView() },
-        update = { /* WebView instance is stable; content pushed via engine.setDocument */ },
+        // Keep the WebView INVISIBLE until cm6 has first-painted (`ready`). A WebView draws its
+        // raw surface WHITE for the first frames of a fresh load — before the page's own dark
+        // background applies — which no setBackgroundColor reliably prevents. While invisible the
+        // dark backing Box behind shows through, so the first open of each session reads as the
+        // editor's dark, not a white flash; we reveal only once it's already painted dark.
+        factory = { engine.obtainWebView().also { it.visibility = if (engine.ready) View.VISIBLE else View.INVISIBLE } },
+        update = { it.visibility = if (engine.ready) View.VISIBLE else View.INVISIBLE },
         onRelease = { /* destroyed with engine */ },
     )
 }

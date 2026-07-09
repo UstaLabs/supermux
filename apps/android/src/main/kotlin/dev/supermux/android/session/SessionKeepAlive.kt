@@ -164,6 +164,18 @@ fun SessionKeepAlivePhoneHost(
                         loadProjects = { vm.listProjects() },
                         validatePath = { vm.validatePath(it) },
                         onNavigate = onNavigate,
+                        // Long-press row actions were never wired on the phone list host, so
+                        // Kill/Rename/Mute opened their dialogs but the confirm was a no-op
+                        // (SessionListScreen defaults these to {}). Mirror the tablet host +
+                        // MainActivity wiring; kill also prunes the kept-alive layer.
+                        onRename = { id, name -> vm.rename(id, name) },
+                        onKill = { id ->
+                            vm.kill(id) {
+                                onRemoveVisited(id)
+                                if (selected == id) onClearSelected()
+                            }
+                        },
+                        onMute = { id, m -> vm.setMute(id, m) },
                         sharedScope = this@SharedTransitionLayout,
                         animScope = this,
                     )
@@ -268,6 +280,10 @@ private fun SessionChatLayer(
     val finishJobs by vm.finishJobs.collectAsState()
     val finishJob = finishJobs[session.id]
 
+    // Background tasks (bg shells / subagents / workflows) for the chips row + waiting state.
+    val bgTasksAll by vm.bgTasks.collectAsState()
+    val bgTasks = bgTasksAll[session.id] ?: emptyList()
+
     // Exposed proxy links for this session (iOS parity) — loaded on open, filtered by session name.
     var sessionLinks by remember(session.id) { mutableStateOf<List<ProxyDto>>(emptyList()) }
     LaunchedEffect(session.id) { sessionLinks = vm.proxies().filter { it.sessionName == session.name } }
@@ -309,6 +325,7 @@ private fun SessionChatLayer(
                 messages = messages,
                 activity = activity,
                 agent = agent,
+                bgTasks = bgTasks,
                 sending = sending,
                 layout = ws,
                 onSendWith = { text, atts -> vm.sendWith(session.id, text, atts) },
@@ -387,6 +404,7 @@ private fun SessionChatLayer(
             messages = messages,
             activity = activity,
             agent = agent,
+            bgTasks = bgTasks,
             sending = sending,
             onBack = onBack,
             onSendWith = { text, atts -> vm.sendWith(session.id, text, atts) },

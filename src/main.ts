@@ -93,7 +93,7 @@ import { join, dirname, resolve, isAbsolute } from "path"
 import { fileURLToPath } from "url"
 import { ClaudeCodeAdapter } from "./core/agents/claude/index"
 import { wireClaudeStateEvents } from "./core/agents/claude/state-projection"
-import { writeClaudeHooksSettings, writePersistedHookSecret, CLAUDE_HOOKS_SETTINGS_PATH } from "./core/agents/claude/hooks-settings"
+import { writeClaudeHooksSettings, resolveInternalHookSecret, CLAUDE_HOOKS_SETTINGS_PATH } from "./core/agents/claude/hooks-settings"
 import type { AgentAdapter } from "./core/agents/types"
 import { resolveCodexAuth } from "./core/agents/codex/auth"
 import { spawnCodexAppServer, type CodexSpawnHandle } from "./core/agents/codex/spawn"
@@ -121,7 +121,9 @@ import { scanRepos } from "./core/editor/repo-scanner"
 import { ActivityStore } from "./core/session-manager/activity-store"
 import { AgentStateStore } from "./core/session-manager/agent-state-store"
 import { toAgentStateFrame } from "./core/session-manager/agent-state-frame"
+import { BackgroundTaskStore } from "./core/session-manager/background-task-store"
 import { TranscriptTailer } from "./core/agents/claude/transcript-tailer"
+import { BgTaskDetector } from "./core/agents/claude/bg-task-detector"
 import { claudeTranscriptPath } from "./core/agents/claude/transcript-path"
 import { renderTranscript } from "./core/search/transcript-render"
 import { normalizeToolName } from "./core/agents/tool-normalize"
@@ -333,6 +335,7 @@ messageLog.on("append", (sessionId: string, entry: any) => {
 })
 const activityStore = new ActivityStore()
 const agentStateStore = new AgentStateStore()
+const bgTaskStore = new BackgroundTaskStore()
 
 function resolveGitDirs(workdir: string): { gitDir: string; commonDir: string } | null {
   try {
@@ -369,14 +372,24 @@ function gitServiceSessions(): ServiceSession[] {
 }
 
 const tailers = new Map<string, TranscriptTailer>()  // keyed by session UUID
+const bgDetectors = new Map<string, BgTaskDetector>()  // keyed by session UUID
 
 function ensureClaudeTailer(sessionUuid: string, _name: string, workdir: string, seekToEnd = false): void {
   const session = registry.get(sessionUuid)
   if (!session || (session.agent ?? "claude") !== "claude") return
   const claudeSid = session.agent_session_id
   if (!claudeSid || tailers.has(sessionUuid)) return
+  const detector = new BgTaskDetector({
+    onOpen: (t) => bgTaskStore.upsertOpen(sessionUuid, t),
+    onClose: (c) => bgTaskStore.close(sessionUuid, c),
+    // Notification delivery = the harness waking claude; reflect it immediately
+    // (same transcript-as-signal channel as interrupt detection).
+    onWake: () => agentStateStore.applyEvent(sessionUuid, "turn-start"),
+  })
+  bgDetectors.set(sessionUuid, detector)
   const tailer = new TranscriptTailer({
     path: claudeTranscriptPath(workdir, claudeSid),
+    onLine: (line) => bgDetectors.get(sessionUuid)?.feedLine(line),
     onEvent: (event) => {
       // The transcript interrupt marker is the SOLE interrupt signal (no hook fires
       // on ESC) — and it catches terminal-direct ESC too. It is state, not activity.
@@ -392,7 +405,9 @@ function ensureClaudeTailer(sessionUuid: string, _name: string, workdir: string,
 function stopClaudeTailer(sessionUuid: string): void {
   tailers.get(sessionUuid)?.stop()
   tailers.delete(sessionUuid)
+  bgDetectors.delete(sessionUuid)
   activityStore.clear(sessionUuid)
+  bgTaskStore.clear(sessionUuid)
 }
 
 const modelCache = new ModelCache()
@@ -638,6 +653,7 @@ function unregisterSession(id: string): void {
   if (s) deleteRuntime(s.id)
   commandRegistry.remove(id)
   agentStateStore.clear(id)  // drop any lingering working/dead state for the now-archived session
+  bgTaskStore.clear(id)      // archived sessions cannot be "waiting"
   // NOTE: do NOT delete agent_home here — archived sessions are resumable, so
   // their home (cursor runtime symlink + per-session state/history) must
   // survive. Truly orphaned dirs (no registry entry) are reclaimed by the
@@ -950,9 +966,12 @@ function spawnLoginProc(kind: string) {
   }
 }
 
-// Per-boot secret gating the localhost-only /internal/agent-hook endpoint
-// (embedded in the Claude hook curl URLs). In-memory; rotates every restart.
-const INTERNAL_SECRET = randomBytes(24).toString("hex")
+// Secret gating the localhost-only /internal/agent-hook endpoint (embedded in
+// the Claude hook curl URLs). Stable across restarts — Claude Code snapshots
+// hook config at CLI startup, so rotating this per boot would silently 403 the
+// hooks of every session that outlives a restart, freezing their status at
+// "idle". Generated once, persisted next to the hooks file it's embedded in.
+const INTERNAL_SECRET = resolveInternalHookSecret(() => randomBytes(24).toString("hex"))
 
 // In-app update checker. Kill switch MUX_UPDATE_CHECK=0 → no checker at all
 // (the web routes then report disabled). Otherwise it polls versions.json on a
@@ -1069,8 +1088,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getSessionAgentState: (id) => {
       const s = registry.get(id)
       const st = s ? agentStateStore.get(s.id) : { phase: "idle" as const, since: 0 }
-      const { type: _type, session: _session, ...payload } = toAgentStateFrame(s?.id ?? id, st)
+      const { type: _type, session: _session, ...payload } = toAgentStateFrame(s?.id ?? id, st, bgTaskStore.openCount(s?.id ?? id))
       return payload
+    },
+    getSessionBgTasks: (id) => {
+      const s = registry.get(id)
+      return s ? bgTaskStore.get(s.id) : []
     },
     getSessionCommands: (id) => {
       const s = registry.get(id)
@@ -1155,6 +1178,11 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const s = registry.get(id)
       if (!s) return { ok: false, error: "session not found" }
       return switchSessionReasoningLevel(s.id, reasoningLevel, { applyNow })
+    },
+    getReasoningLevels: (agent, model) => {
+      const models = lookupModels(agent)
+      const visible = shouldShowReasoningControl(agent, models, model)
+      return { agent, levels: visible ? supportedReasoningLevels(agent, models, model) : [], visible }
     },
     getSessionAgent: (id) => {
       const s = registry.get(id)
@@ -1541,7 +1569,6 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     onChange: (kind, st) => webChannel?.broadcastToAll({ type: "agent_login_state", kind, state: st }),
   })
   channels.web = webChannel as Channel
-  writePersistedHookSecret(INTERNAL_SECRET)
   writeClaudeHooksSettings(MUX_WEB_PORT, INTERNAL_SECRET)
 } else {
   try { rmSync(CLAUDE_HOOKS_SETTINGS_PATH, { force: true }) } catch {}
@@ -1586,7 +1613,7 @@ async function killSession(id: string) {
     if (runtime?.kind === AgentKind.OpenCode) runtime.handle.kill()
   }
   deleteRuntime(s.id)
-  stopClaudeTailer(s.id)
+  stopClaudeTailer(s.id)   // also clears the session's background tasks
   agentStateStore.clear(s.id)
   recentInboundIds.clear(s.id)
   pendingReapply.clear(s.id)
@@ -1901,6 +1928,7 @@ const server = await startSocketServer({
       agentStateStore.applyEvent(session_id, "connected")          // revives a dead session; no-op otherwise
     } else if (s && s.status !== "suspended") {
       agentStateStore.applyEvent(session_id, "dead")               // crash/shim-gone — but NOT an intentional suspend
+      bgTaskStore.clear(session_id)  // a dead harness can never deliver its wakes — no fake "waiting"
     }
   },
   // Safety net: a queued inbound that can't reach a live channel shim within the
@@ -2361,6 +2389,11 @@ function deliverInbound(sessionId: string, text: string, meta: any): Promise<Inb
     isClaude: (id) => (registry.get(id)?.agent ?? "claude") === "claude",
     sendInboundSocket: (id, payload) => server.sendInbound(id, payload),
     seen: recentInboundIds,
+    // Re-broadcast the session's CURRENT agent_state on a successful hand-off so clients clear
+    // their local "Sending…" bubble even when the turn-start UserPromptSubmit hook is dropped
+    // (fire-and-forget curl) and the turn emits no other state change. Mutates nothing — it just
+    // re-emits the same frame the change-listener would send (keeps delivery a pure reflector).
+    onDelivered: (id) => webChannel?.broadcastToAll(toAgentStateFrame(id, agentStateStore.get(id), bgTaskStore.openCount(id))),
   }, sessionId, text, meta)
 }
 
@@ -2931,8 +2964,13 @@ messageLog.on("append", (sessionId, entry) => {
 activityStore.on("append", (sessionId: string, event) => {
   webChannel?.broadcastToAll({ type: "activity_append", session: sessionId, event })
 })
+bgTaskStore.on("change", (sessionId: string) => {
+  webChannel?.broadcastToAll({ type: "bg_tasks", session: sessionId, tasks: bgTaskStore.get(sessionId) })
+  // waiting/bgOpen live on agent_state — re-derive whenever tasks move.
+  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgTaskStore.openCount(sessionId)))
+})
 agentStateStore.on("change", (sessionId: string, state) => {
-  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, state))
+  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, state, bgTaskStore.openCount(sessionId)))
   if (state.phase === "idle" && pendingReapply.has(sessionId)) {
     const olds = pendingReapply.take(sessionId)!
     void reapplySessionAgentConfig(sessionId).then((r) => {

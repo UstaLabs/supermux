@@ -34,6 +34,15 @@ test("ingest skips malformed lines without throwing", () => {
   expect(got).toEqual(["Bash: ok"])
 })
 
+test("onLine receives every complete raw line before parsing", () => {
+  const lines: string[] = []
+  const t = new TranscriptTailer({ path: "/x", onEvent: () => {}, onLine: (l) => lines.push(l) })
+  t.ingest('{"type":"user","message":{"content":"<task-notification>x</task-notification>"}}\npartial')
+  expect(lines).toEqual(['{"type":"user","message":{"content":"<task-notification>x</task-notification>"}}'])
+  t.ingest(" tail\n")
+  expect(lines).toHaveLength(2)
+})
+
 test("readDelta reads incrementally, then handles truncation/rotation", () => {
   const dir = mkdtempSync(join(tmpdir(), "tailer-"))
   const path = join(dir, "t.jsonl")

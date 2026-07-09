@@ -47,6 +47,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.runtime.Composable
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
@@ -129,7 +132,8 @@ class MainActivity : ComponentActivity() {
                 )
             }
             var dynamicColor by remember { mutableStateOf(prefs.getBoolean("dynamicColor", ThemeDefaults.DYNAMIC_COLOR_ENABLED)) }
-            SupermuxTheme(appearance = appearance, dynamicEnabled = dynamicColor) {
+            var textScale by remember { mutableStateOf(prefs.getFloat("textScale", 1f)) }
+            SupermuxTheme(appearance = appearance, dynamicEnabled = dynamicColor, textScale = textScale) {
                 val store = remember { SecureTokenStore() }
                 // Debug-only: seed token+baseUrl on debuggable builds so the already-paired
                 // emulator boots past the gate (no-op on release / when DEBUG_TOKEN is empty).
@@ -177,7 +181,39 @@ class MainActivity : ComponentActivity() {
                 // transcript would be empty until the next snapshot/restart. Seed it whenever a chat
                 // is opened — a no-op for sessions the snapshot already populated. (iOS parity:
                 // ChatPane.loadPane → BrokerSession.ensureMessagesLoaded.)
-                LaunchedEffect(selected) { selected?.let { vm.ensureMessagesLoaded(it) } }
+                LaunchedEffect(selected) {
+                    selected?.let {
+                        vm.ensureMessagesLoaded(it)
+                        // Opening a chat clears its (grouped) notifications — parity with iOS.
+                        SupermuxMessagingService.cancelForSession(applicationContext, it)
+                    }
+                }
+                // A tapped push carries the chat id — open that chat (parity with iOS PushRouter);
+                // the clear-on-open effect above then wipes its notifications. Keyed on the intent so
+                // a fresh tap while foregrounded (onNewIntent swaps intentState) re-opens it.
+                LaunchedEffect(currentIntent) {
+                    currentIntent?.getStringExtra(SupermuxMessagingService.EXTRA_SESSION_ID)
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { selected = it }
+                }
+                // Report which chat is foreground so the broker suppresses a push for the chat
+                // you're looking at (parity with iOS/web). Visible = the activity is ≥ STARTED.
+                val lifecycleOwner = LocalLifecycleOwner.current
+                var appVisible by remember {
+                    mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+                }
+                DisposableEffect(lifecycleOwner) {
+                    val obs = LifecycleEventObserver { _, event ->
+                        when (event) {
+                            Lifecycle.Event.ON_START -> appVisible = true
+                            Lifecycle.Event.ON_STOP -> appVisible = false
+                            else -> {}
+                        }
+                    }
+                    lifecycleOwner.lifecycle.addObserver(obs)
+                    onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+                }
+                LaunchedEffect(selected, appVisible) { vm.updateViewing(selected, appVisible) }
 
                 // Wide = available width ≥600dp (the shared isWorkspaceWidth predicate /
                 // WORKSPACE_MIN_WIDTH_DP). ">=600" (not only Expanded ≥840) means the unfolded
@@ -387,7 +423,9 @@ class MainActivity : ComponentActivity() {
                                         loadProjects = { vm.listProjects() },
                                         validatePath = { vm.validatePath(it) },
                                         loadModels = { vm.launcherModels(it) },
+                                        loadReasoningLevels = { ag, md -> vm.launcherReasoning(ag, md) },
                                         loadRepoInfo = { vm.launcherRepoInfo(it) },
+                                        loadCommands = { ag, wd -> vm.launcherCommands(ag, wd) },
                                         loadForges = { vm.listForges() },
                                         searchForge = { vm.searchForge(it) },
                                         cloneForge = { cid, owner, name -> vm.cloneForge(cid, owner, name) },
@@ -400,8 +438,8 @@ class MainActivity : ComponentActivity() {
                                         onLauncherPrefsChange = { vm.saveLauncherPrefs(it) },
                                         loadLauncherDraft = { vm.loadLauncherDraft() },
                                         onLauncherDraftChange = { vm.saveLauncherDraft(it) },
-                                        onSubmit = { wd, ag, md, msg, wt, base ->
-                                            vm.createSessionWithFirstMessage(wd, ag, md, msg, worktree = wt, baseBranch = base)
+                                        onSubmit = { wd, ag, md, rl, msg, wt, base, staged ->
+                                            vm.createSessionWithFirstMessage(wd, ag, md, msg, staged, worktree = wt, baseBranch = base, reasoningLevel = rl)
                                         },
                                         onOpenSession = { selected = it; navController.popBackStack() },
                                     )
@@ -415,7 +453,9 @@ class MainActivity : ComponentActivity() {
                                 loadProjects = { vm.listProjects() },
                                 validatePath = { vm.validatePath(it) },
                                 loadModels = { vm.launcherModels(it) },
+                                loadReasoningLevels = { ag, md -> vm.launcherReasoning(ag, md) },
                                 loadRepoInfo = { vm.launcherRepoInfo(it) },
+                                loadCommands = { ag, wd -> vm.launcherCommands(ag, wd) },
                                 loadForges = { vm.listForges() },
                                 searchForge = { vm.searchForge(it) },
                                 cloneForge = { cid, owner, name -> vm.cloneForge(cid, owner, name) },
@@ -428,8 +468,8 @@ class MainActivity : ComponentActivity() {
                                 onLauncherPrefsChange = { vm.saveLauncherPrefs(it) },
                                 loadLauncherDraft = { vm.loadLauncherDraft() },
                                 onLauncherDraftChange = { vm.saveLauncherDraft(it) },
-                                onSubmit = { wd, ag, md, msg, wt, base ->
-                                    vm.createSessionWithFirstMessage(wd, ag, md, msg, worktree = wt, baseBranch = base)
+                                onSubmit = { wd, ag, md, rl, msg, wt, base, staged ->
+                                    vm.createSessionWithFirstMessage(wd, ag, md, msg, staged, worktree = wt, baseBranch = base, reasoningLevel = rl)
                                 },
                                 onOpenSession = { selected = it; navController.popBackStack() },
                             )
@@ -530,6 +570,7 @@ class MainActivity : ComponentActivity() {
                         AppearanceSettingsPage(
                             appearance = appearance,
                             dynamicColor = dynamicColor,
+                            textScale = textScale,
                             onAppearanceChange = {
                                 appearance = it
                                 prefs.edit().putString("appearance", it.name).apply()
@@ -537,6 +578,10 @@ class MainActivity : ComponentActivity() {
                             onDynamicChange = {
                                 dynamicColor = it
                                 prefs.edit().putBoolean("dynamicColor", it).apply()
+                            },
+                            onTextScaleChange = {
+                                textScale = it
+                                prefs.edit().putFloat("textScale", it).apply()
                             },
                             onBack = { navController.popBackStack() },
                         )

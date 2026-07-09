@@ -14,6 +14,8 @@ struct SessionInfo: Decodable, Identifiable {
     // Watch session-list enrichment (GET /sessions; see watch-session-row.ts):
     var phase: String?
     var tool: String?
+    var waiting: Bool?      // idle but background tasks still open (turn will resume)
+    var bgOpen: Int?        // open background-task count
     var lastText: String?
     var lastTs: String?
     var lastFrom: String?
@@ -21,7 +23,7 @@ struct SessionInfo: Decodable, Identifiable {
     var git: GitLite?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, agent, status, connected, mute, phase, tool, lastText, lastTs, lastFrom, unread, git
+        case id, name, agent, status, connected, mute, phase, tool, waiting, bgOpen, lastText, lastTs, lastFrom, unread, git
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -34,6 +36,8 @@ struct SessionInfo: Decodable, Identifiable {
         self.mute = try? c.decode(Bool.self, forKey: .mute)
         self.phase = try? c.decode(String.self, forKey: .phase)
         self.tool = try? c.decode(String.self, forKey: .tool)
+        self.waiting = try? c.decode(Bool.self, forKey: .waiting)
+        self.bgOpen = try? c.decode(Int.self, forKey: .bgOpen)
         self.lastText = try? c.decode(String.self, forKey: .lastText)
         self.lastTs = try? c.decode(String.self, forKey: .lastTs)
         self.lastFrom = try? c.decode(String.self, forKey: .lastFrom)

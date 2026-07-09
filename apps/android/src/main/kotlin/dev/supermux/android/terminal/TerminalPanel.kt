@@ -5,9 +5,13 @@ import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -40,11 +44,14 @@ import dev.supermux.android.theme.LocalPanes
 import dev.supermux.android.theme.Radii
 import dev.supermux.android.theme.Space
 import dev.supermux.net.DEFAULT_CONFIG
+import dev.supermux.net.Mods
 import dev.supermux.net.PredictionEngine
 import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalStatus
 import dev.supermux.net.decodeInput
 import dev.supermux.net.linesFromPixels
+import dev.supermux.net.printableSequence
+import dev.supermux.net.specialKeySequence
 import dev.supermux.net.wheelEventsFromLines
 import kotlin.math.abs
 import kotlinx.coroutines.launch
@@ -56,10 +63,15 @@ import org.connectbot.terminal.TerminalEmulatorFactory
  * Native terminal panel backed by ConnectBot termlib (libvterm).
  * I/O stays on the broker websocket via [TerminalClient].
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TerminalPanel(
     connect: () -> TerminalClient,
     modifier: Modifier = Modifier,
+    // Whether this terminal is the foreground pane. Drives soft-keyboard focus: a background
+    // (kept-alive) pane must never hold the IME. Defaults true for hosts that mount/unmount the
+    // pane instead of keeping it alive (the tablet workspace).
+    active: Boolean = true,
     // Fires once when the session ends (CONNECTED → DISCONNECTED). The agent-PTY ("Native")
     // tab uses this to fall back to Chat on agent exit (iOS onExit parity). Null = no-op.
     onExit: (() -> Unit)? = null,
@@ -73,6 +85,14 @@ fun TerminalPanel(
     // reach an engine/adapter built AFTER the emulator exists. Mirrors iOS TerminalCoordinator.
     val pred = remember(client) { PredictionPipeline() }
 
+    // Sticky Ctrl/Alt modifiers from the key bar (tri-state, like iOS Shift). Declared BEFORE the
+    // emulator so its onKeyboardInput closure (fixed at create time) can read them: an armed
+    // modifier transforms the NEXT real-keyboard keystroke too (Ctrl then `c` = Ctrl-C), matching
+    // the web PWA (TerminalPane.vue). Mutations here are on the main thread — termlib posts
+    // onKeyboardInput to the main looper — so touching Compose state is safe.
+    var ctrlState by remember(client) { mutableStateOf(ModState.OFF) }
+    var altState by remember(client) { mutableStateOf(ModState.OFF) }
+
     val emulator: TerminalEmulator = remember(client) {
         TerminalEmulatorFactory.create(
             initialRows = 24,
@@ -80,8 +100,20 @@ fun TerminalPanel(
             defaultForeground = Color(c.terminalForeground),
             defaultBackground = Color(c.terminal),
             onKeyboardInput = { data ->
-                pred.handleInput(data) // predictive echo BEFORE the send (web/iOS parity)
-                scope.launch { client.sendInput(data) }
+                val ch = singlePrintableChar(data)
+                val armed = ctrlState != ModState.OFF || altState != ModState.OFF
+                if (armed && ch != null) {
+                    // Apply the armed modifier to this keystroke and send it directly. Control codes
+                    // aren't printable, so skip predictive echo (web parity). Consume `once`.
+                    val bytes = printableSequence(ch, Mods(ctrl = ctrlState != ModState.OFF, alt = altState != ModState.OFF))
+                        .encodeToByteArray()
+                    if (ctrlState == ModState.ONCE) ctrlState = ModState.OFF
+                    if (altState == ModState.ONCE) altState = ModState.OFF
+                    scope.launch { client.sendInput(bytes) }
+                } else {
+                    pred.handleInput(data) // predictive echo BEFORE the send (web/iOS parity)
+                    scope.launch { client.sendInput(data) }
+                }
             },
             onResize = { dims ->
                 scope.launch { client.resize(dims.columns, dims.rows) }
@@ -126,6 +158,53 @@ fun TerminalPanel(
     // Pixel height of the laid-out terminal viewport, for converting drag pixels → rows.
     var boxHeightPx by remember { mutableStateOf(0) }
 
+    // ── Soft-keyboard focus (iOS TerminalPane parity) ─────────────────────────────────────────
+    // The terminal must NOT grab focus on appear — in the tablet workspace that steals the IME
+    // from another visible pane, and on a phone tab it pops the keyboard over output you may only
+    // want to read. termlib shows the keyboard purely from `showSoftKeyboard` (it has no built-in
+    // tap→IME path), so we drive that flag from a tap: tapping the terminal focuses it. The request
+    // is cleared when the pane leaves the foreground (a kept-alive background terminal must never
+    // hold the IME) and when the platform IME is dismissed (back button) — termlib can't observe a
+    // system dismissal, so we watch WindowInsets.ime for it — so the next tap re-shows the keyboard.
+    var wantKeyboard by remember { mutableStateOf(false) }
+    var imeWasVisible by remember { mutableStateOf(false) }
+    val imeVisible = WindowInsets.isImeVisible
+    LaunchedEffect(active) { if (!active) { wantKeyboard = false; imeWasVisible = false } }
+    LaunchedEffect(imeVisible) {
+        if (imeVisible) imeWasVisible = true
+        else if (imeWasVisible) { imeWasVisible = false; wantKeyboard = false }
+    }
+
+    // Key-bar press handler: modifier keys cycle their tri-state; every other key builds its byte
+    // sequence with the current modifiers (appCursor=false — termlib doesn't expose DECCKM) and
+    // sends it, then consumes any `once` modifier. Mirrors TerminalPane.vue's onKeyPress.
+    fun onKeyPress(press: KeyPress) {
+        when (press) {
+            is KeyPress.Mod -> {
+                fun next(s: ModState) = when (s) {
+                    ModState.OFF -> ModState.ONCE
+                    ModState.ONCE -> ModState.LOCKED
+                    ModState.LOCKED -> ModState.OFF
+                }
+                if (press.key == ModKey.CTRL) ctrlState = next(ctrlState) else altState = next(altState)
+                return
+            }
+            is KeyPress.Special -> {
+                val mods = Mods(ctrl = ctrlState != ModState.OFF, alt = altState != ModState.OFF)
+                val seq = specialKeySequence(press.key, mods, appCursor = false)
+                if (seq.isNotEmpty()) { val b = seq.encodeToByteArray(); scope.launch { client.sendInput(b) } }
+            }
+            is KeyPress.Printable -> {
+                val mods = Mods(ctrl = ctrlState != ModState.OFF, alt = altState != ModState.OFF)
+                val b = printableSequence(press.ch, mods).encodeToByteArray()
+                scope.launch { client.sendInput(b) }
+            }
+        }
+        // Consume `once` modifiers after they've modified a key (leave `locked` armed).
+        if (ctrlState == ModState.ONCE) ctrlState = ModState.OFF
+        if (altState == ModState.ONCE) altState = ModState.OFF
+    }
+
     // Shrink the terminal above the soft keyboard (and nav bar) under edge-to-edge — mirrors the
     // chat composer's inset handling. Resizing the view makes termlib recompute its grid and emit a
     // pty resize, so the shell reflows to the visible rows/cols instead of the cursor line hiding
@@ -134,8 +213,16 @@ fun TerminalPanel(
         modifier
             .fillMaxSize()
             .background(Color(c.terminal))
-            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
-            .onSizeChanged { boxHeightPx = it.height }
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+    ) {
+      Column(Modifier.fillMaxSize()) {
+        // The terminal viewport takes the space above the key bar; boxHeightPx measures THIS inner
+        // box (not the bar) so the drag→row math stays correct.
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .onSizeChanged { boxHeightPx = it.height }
             // Touch-drag → tmux scroll, mirroring the web PWA (src/web-app/.../touch-scroll.ts).
             // termlib's own drag only scrolls its LOCAL scrollback — empty under tmux's alternate
             // screen — and it exposes no mouse-forwarding, so we translate a vertical drag into SGR
@@ -230,10 +317,10 @@ fun TerminalPanel(
             backgroundColor = Color(c.terminal),
             foregroundColor = Color(c.terminalForeground),
             keyboardEnabled = true,
-            // Don't grab focus + pop the keyboard the moment the pane appears — in the tablet
-            // workspace that steals focus from wherever the user was. Taps fall through to termlib
-            // (see the drag handler above), so tapping the terminal still focuses it.
-            showSoftKeyboard = false,
+            // No auto-focus on appear (see the wantKeyboard note above); a tap requests the
+            // keyboard. termlib has no built-in tap→IME path, so onTerminalTap drives the flag.
+            showSoftKeyboard = active && wantKeyboard,
+            onTerminalTap = { wantKeyboard = true },
         )
         StatusChip(
             status = status,
@@ -241,6 +328,19 @@ fun TerminalPanel(
                 .align(Alignment.TopEnd)
                 .padding(Space.sm),
         )
+        }
+
+        // Key-accessory bar pinned above the soft keyboard. Foreground pane only — a kept-alive
+        // background terminal must not show it. (Android is always touch, so no pointer gate.)
+        if (active) {
+            TerminalKeyBar(
+                ctrl = ctrlState,
+                alt = altState,
+                onPress = { onKeyPress(it) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+      }
     }
 }
 
@@ -266,6 +366,17 @@ private fun StatusChip(status: TerminalStatus, modifier: Modifier = Modifier) {
         )
         Text(label, color = cs.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp))
     }
+}
+
+/**
+ * A single printable ASCII char (0x20–0x7e) from a keystroke's bytes, or null. This is the only
+ * input an armed bar modifier transforms (Ctrl/Alt + letter/punct); control keys, Enter, and
+ * multi-byte/IME input pass through untouched. Mirrors TerminalPane.vue's isSinglePrintable.
+ */
+private fun singlePrintableChar(data: ByteArray): Char? {
+    if (data.size != 1) return null
+    val b = data[0].toInt() and 0xff
+    return if (b in 0x20..0x7e) b.toChar() else null
 }
 
 /**

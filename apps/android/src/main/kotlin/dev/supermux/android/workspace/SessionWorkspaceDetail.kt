@@ -62,7 +62,10 @@ import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
+import dev.supermux.proto.GitBadgeKind
+import dev.supermux.proto.gitBadge
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.session.inferHomeDir
@@ -91,6 +94,7 @@ fun SessionWorkspaceDetail(
     messages: List<LogEntry>,
     activity: List<ActivityEvent>,
     agent: AgentStatus?,
+    bgTasks: List<ServerFrame.BgTask> = emptyList(),
     sending: Boolean,
     layout: WorkspaceLayout,
     onSendWith: (text: String, attachments: List<String>) -> Unit,
@@ -275,6 +279,7 @@ fun SessionWorkspaceDetail(
                 messages = messages,
                 activity = activity,
                 agent = agent,
+                bgTasks = bgTasks,
                 sending = sending,
                 activePanel = SessionPanel.Chat,
                 onSendWith = onSendWith,
@@ -382,14 +387,27 @@ fun SessionWorkspaceDetail(
             // git/sync status + working spinner (mirrors ChatScreen; git comes off SessionInfo).
             SessionStatusRail(git = session.git, working = agent?.working == true)
             Spacer(Modifier.width(Space.xs))
-            Text(
-                text = session.name,
-                style = MaterialTheme.typography.titleLarge,
-                color = cs.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = session.name,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = cs.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                // Git counts live in the session view (list is icon-only): compareRef + ahead/behind/dirty.
+                gitBadge(session.git)?.let { badge ->
+                    val label = if (badge.kind == GitBadgeKind.BASE && badge.compareRef.isNotEmpty())
+                        "${badge.compareRef} ${badge.text}" else badge.text
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = cs.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
             Spacer(Modifier.width(Space.sm))
 
             // Exposed proxy links (iOS sessionLinksMenu parity): a link icon dropping a menu of the

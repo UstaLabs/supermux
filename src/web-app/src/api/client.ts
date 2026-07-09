@@ -134,6 +134,13 @@ export const api = {
     request("GET", `/models?agent=${encodeURIComponent(agent)}`) as Promise<{
       models: { id: string; displayName: string }[]
     }>,
+  // Reasoning ("thinking") levels an agent+model offers before any session exists
+  // (New Session launcher). Codex's are per-model; Claude's are static; Cursor/
+  // OpenCode return none. `visible` is false when there's no real choice (≤1).
+  getReasoningLevels: (agent: string, model?: string) =>
+    request("GET", `/reasoning-levels?agent=${encodeURIComponent(agent)}${model ? `&model=${encodeURIComponent(model)}` : ""}`) as Promise<{
+      agent: string; levels: { id: string; description?: string }[]; visible: boolean
+    }>,
   validatePath: (path: string) =>
     request("POST", "/paths/validate", { path }) as Promise<{ ok: boolean; path?: string; error?: string }>,
   getRepoInfo: (path: string, opts?: { fetch?: boolean }) =>
@@ -152,7 +159,7 @@ export const api = {
     role?: "personal_assistant" | "worker"
     isDefault?: boolean
   }>>,
-  createSession: (args: { name?: string; workdir: string; agent?: string; model?: string; worktree?: boolean; baseBranch?: string }) =>
+  createSession: (args: { name?: string; workdir: string; agent?: string; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string }) =>
     request("POST", "/sessions", args),
   getSessionMessages: (id: string) =>
     request("GET", `/sessions/${encodeURIComponent(id)}/messages`),
