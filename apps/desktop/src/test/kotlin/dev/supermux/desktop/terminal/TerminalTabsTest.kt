@@ -25,6 +25,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -50,15 +51,8 @@ import kotlin.test.assertTrue
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
 class TerminalTabsTest {
 
-    /** BrokerApi whose /api/term/list returns exactly [terminalListJson] (deterministic ids). */
-    private fun appWithTerminals(terminalListJson: String): DesktopAppState {
-        val engine = MockEngine { _ ->
-            respond(
-                content = ByteReadChannel(terminalListJson),
-                status = HttpStatusCode.OK,
-                headers = headersOf(HttpHeaders.ContentType, "application/json"),
-            )
-        }
+    /** DesktopAppState over a given MockEngine (no WS / no real broker). */
+    private fun appWithEngine(engine: MockEngine): DesktopAppState {
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
         return DesktopAppState(
             baseUrl = "ws://test:9898",
@@ -68,6 +62,16 @@ class TerminalTabsTest {
             apiOverride = api,
         )
     }
+
+    /** BrokerApi whose /api/term/list returns exactly [terminalListJson] (deterministic ids). */
+    private fun appWithTerminals(terminalListJson: String): DesktopAppState =
+        appWithEngine(MockEngine { _ ->
+            respond(
+                content = ByteReadChannel(terminalListJson),
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        })
 
     /** Panel-slot fake: appends its tabId on mount and on dispose so tests can count instances. */
     private fun recordingPanel(
@@ -174,6 +178,38 @@ class TerminalTabsTest {
         onNodeWithTag("term-tab-t2").performClick()
         waitUntil(timeoutMillis = 5_000) { mounts.size == 2 }
         assertEquals(listOf("main", "t2"), mounts)
+    }
+
+    @Test
+    fun tab_added_during_hydration_survives_the_merge() = runComposeUiTest {
+        val mounts = mutableListOf<String>()
+        val disposals = mutableListOf<String>()
+        // Gate the /api/term/list response so we can act while hydration is still in flight.
+        val gate = CompletableDeferred<Unit>()
+        val app = appWithEngine(MockEngine { _ ->
+            gate.await()
+            respond(
+                content = ByteReadChannel("""{"terminals":[{"id":"main","createdAt":1}]}"""),
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        })
+        setContent { host(app, mounts, disposals) }
+
+        // Pre-hydration the strip is just the live `+` — click it while the fetch is suspended.
+        onNodeWithTag("term-tab-add").performClick()
+        waitUntil(timeoutMillis = 5_000) { mounts.size == 1 }
+        val localId = mounts[0]
+
+        gate.complete(Unit)
+        waitForTag("term-tab-main")
+
+        // The locally-added tab survived hydration (MERGED, not clobbered): still in the strip,
+        // still the active tab, and its panel instance was never disposed. `main` (fetched,
+        // inactive) is listed but not mounted.
+        onNodeWithTag("term-tab-$localId").assertIsDisplayed()
+        assertEquals(emptyList(), disposals, "local tab's panel must survive hydration")
+        assertEquals(listOf(localId), mounts, "only the (still-active) local tab is mounted")
     }
 
     @Test

@@ -24,11 +24,14 @@ import dev.supermux.proto.SlashCommand
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.websocket.WebSockets
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -108,6 +111,31 @@ class DesktopAppState(
     internal fun guarded(op: String, block: () -> Unit) {
         runCatching(block).onFailure { e -> println("[DesktopAppState] $op error: $e") }
     }
+
+    /**
+     * Run a suspending broker call, logging any failure and returning null — EXCEPT a real
+     * cancellation, which must propagate. A bare `runCatching { suspend call }` (the previous
+     * pattern here) swallows the CancellationException a cancelled [stateScope] injects mid-call,
+     * letting the coroutine "complete normally" after cancellation — a structured-concurrency trap.
+     *
+     * SUBTLETY: rethrowing every CancellationException would be wrong too. [BrokerApi.decode]
+     * deliberately surfaces HTTP / decode / transport failures AS CancellationException (its SKIE
+     * graceful-degradation contract — see its KDoc), so e.g. a 404 from /api/term/list arrives
+     * here as a CancellationException that does NOT mean "cancelled". `ensureActive()`
+     * discriminates: it rethrows only when THIS coroutine's job was actually cancelled; the
+     * BrokerApi sentinel falls through to the log-and-null path (graceful degradation preserved).
+     */
+    private suspend fun <T> runApi(op: String, block: suspend () -> T): T? =
+        try {
+            block()
+        } catch (c: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            println("[DesktopAppState] $op failed: ${c.message}")
+            null
+        } catch (e: Throwable) {
+            println("[DesktopAppState] $op failed: $e")
+            null
+        }
 
     // ── ServerFrame reducer (ported subset of AppViewModel's when(frame)) ──────────
 
@@ -215,8 +243,7 @@ class DesktopAppState(
         if (lastSentViewing == next) return
         lastSentViewing = next
         stateScope.launch {
-            runCatching { sendFrame(ClientFrame.Viewing(viewingSession, viewingVisible)) }
-                .onFailure { e -> println("[DesktopAppState] viewing send failed: $e") }
+            runApi("viewing send") { sendFrame(ClientFrame.Viewing(viewingSession, viewingVisible)) }
         }
     }
 
@@ -228,8 +255,7 @@ class DesktopAppState(
             while (isActive) {
                 delay(60_000)
                 if (viewingVisible) {
-                    runCatching { sendFrame(ClientFrame.Viewing(viewingSession, true)) }
-                        .onFailure { e -> println("[DesktopAppState] viewing heartbeat failed: $e") }
+                    runApi("viewing heartbeat") { sendFrame(ClientFrame.Viewing(viewingSession, true)) }
                 }
             }
         }
@@ -268,10 +294,10 @@ class DesktopAppState(
         if (text.isBlank() && attachments.isEmpty()) return
         appendLocalEcho(sessionId, text.trim())
         stateScope.launch {
-            runCatching {
+            runApi("sendMessage") {
                 sendFrame(ClientFrame.Send(sessionId, args = SendArgs(text, attachments.ifEmpty { null })))
                 markPendingSend(sessionId)
-            }.onFailure { e -> println("[DesktopAppState] sendMessage failed: $e") }
+            }
         }
     }
 
@@ -279,32 +305,23 @@ class DesktopAppState(
 
     /** Soft-stop the running agent (POST /sessions/<id>/interrupt). */
     fun interrupt(id: String) {
-        stateScope.launch {
-            runCatching { api.interrupt(id) }
-                .onFailure { e -> println("[DesktopAppState] interrupt failed: $e") }
-        }
+        stateScope.launch { runApi("interrupt") { api.interrupt(id) } }
     }
 
     fun rename(id: String, name: String) {
-        stateScope.launch {
-            runCatching { api.rename(id, name) }
-                .onFailure { e -> println("[DesktopAppState] rename failed: $e") }
-        }
+        stateScope.launch { runApi("rename") { api.rename(id, name) } }
     }
 
     fun setMute(id: String, muted: Boolean) {
-        stateScope.launch {
-            runCatching { api.setMute(id, muted) }
-                .onFailure { e -> println("[DesktopAppState] setMute failed: $e") }
-        }
+        stateScope.launch { runApi("setMute") { api.setMute(id, muted) } }
     }
 
     /** [onDone] fires even when the DELETE fails — mirrors Android AppViewModel.kill, which
-     *  invokes the callback unconditionally after the runCatching. */
+     *  invokes the callback unconditionally after the guarded call. (On a REAL scope cancellation
+     *  the coroutine dies before onDone — acceptable: the whole app state is being torn down.) */
     fun kill(id: String, onDone: () -> Unit = {}) {
         stateScope.launch {
-            runCatching { api.kill(id) }
-                .onFailure { e -> println("[DesktopAppState] kill failed: $e") }
+            runApi("kill") { api.kill(id) }
             onDone()
         }
     }
@@ -323,28 +340,22 @@ class DesktopAppState(
         TerminalClient(baseUrl, token, http, sessionId, kind = "agent")
 
     /** GET /api/term/list — the session's persisted scratch terminals (source of truth = tmux),
-     *  used to rebuild the tab strip on open. Never throws: any failure logs and yields []. */
+     *  used to rebuild the tab strip on open. Never throws (except real cancellation): any
+     *  failure logs and yields []. */
     suspend fun listTerminals(sessionId: String): List<TerminalSummary> =
-        runCatching { api.listTerminals(sessionId) }
-            .onFailure { e -> println("[DesktopAppState] listTerminals failed: $e") }
-            .getOrNull() ?: emptyList()
+        runApi("listTerminals") { api.listTerminals(sessionId) } ?: emptyList()
 
     /** POST /api/term/close — destroy one scratch terminal (its tmux session + viewers).
      *  Fire-and-forget; the tab is removed locally regardless of the outcome (best-effort, web
      *  parity: the tmux session may already be gone). */
     fun closeTerminal(sessionId: String, terminalId: String) {
-        stateScope.launch {
-            runCatching { api.closeTerminal(sessionId, terminalId) }
-                .onFailure { e -> println("[DesktopAppState] closeTerminal failed: $e") }
-        }
+        stateScope.launch { runApi("closeTerminal") { api.closeTerminal(sessionId, terminalId) } }
     }
 
     // ── Lazy transcript load ─────────────────────────────────────────────────────────
 
     private suspend fun archivedLogs(sessionId: String): List<LogEntry> =
-        runCatching { api.archivedLogs(sessionId) }
-            .onFailure { e -> println("[DesktopAppState] archivedLogs failed: $e") }
-            .getOrNull() ?: emptyList()
+        runApi("archivedLogs") { api.archivedLogs(sessionId) } ?: emptyList()
 
     /**
      * Lazily fetch a session's transcript when we don't already have it. The WS Snapshot seeds

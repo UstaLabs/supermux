@@ -112,17 +112,25 @@ fun TerminalTabs(
 
     // Rebuild the tab set from the broker (live tmux) on first show for this session. Empty / failed
     // list → start with one DEFAULT_TERMINAL_ID tab so the pane is immediately usable (web parity).
+    //
+    // MERGE, don't clobber: the `+` button is live BEFORE this fetch resolves (no dead UI while
+    // hydrating), so a tab added mid-round-trip is not yet in the broker's list — a plain rebuild
+    // would wipe it, disposing its panel and orphaning the freshly created tmux terminal until the
+    // next hydration. Retain any locally-present ids missing from the fetch (appended after the
+    // fetched set, local order preserved) and keep the current active tab whenever it survives.
     LaunchedEffect(sessionId) {
-        val ids = app.listTerminals(sessionId).map { it.id } // broker returns them sorted by createdAt asc
+        // Defensive: sort by createdAt ourselves (the broker sorts ascending, but don't rely on it).
+        val fetched = app.listTerminals(sessionId).sortedBy { it.createdAt }.map { it.id }
+        val merged = fetched + tabs.filter { it !in fetched }
         tabs.clear()
-        if (ids.isEmpty()) {
+        if (merged.isEmpty()) {
             tabs.add(DEFAULT_TERMINAL_ID)
             activeId = DEFAULT_TERMINAL_ID
         } else {
-            tabs.addAll(ids)
-            activeId = ids.first()
+            tabs.addAll(merged)
+            if (activeId.isEmpty() || activeId !in merged) activeId = merged.first()
         }
-        lastActiveId = null
+        if (lastActiveId != null && lastActiveId !in tabs) lastActiveId = null
         hydrated = true
     }
 
@@ -170,12 +178,14 @@ fun TerminalTabs(
             horizontalArrangement = Arrangement.spacedBy(3.dp),
         ) {
             tabs.forEach { id ->
-                TerminalTabChip(
-                    id = id,
-                    selected = id == activeId,
-                    onSelect = { selectTab(id) },
-                    onClose = { closeTab(id) },
-                )
+                key(id) {
+                    TerminalTabChip(
+                        id = id,
+                        selected = id == activeId,
+                        onSelect = { selectTab(id) },
+                        onClose = { closeTab(id) },
+                    )
+                }
             }
             // + : new terminal
             Box(
@@ -205,8 +215,13 @@ fun TerminalTabs(
                 // Bounded keep-alive: only the active + most-recently-active tabs stay composed; the
                 // rest are not emitted here → disposed. key(id) ties each remembered client to its
                 // tab (see the KEY ISOLATION note above).
-                if (id == activeId || id == lastActiveId) {
-                    key(id) {
+                //
+                // key(id) must wrap the WHOLE iteration body — `if` OUTSIDE key would make the
+                // conditional groups positional siblings, so a list shift (hydration prepending
+                // fetched ids, or closing an earlier tab) would dispose + recreate a later tab's
+                // panel instead of relocating it (keyed matching only works among sibling groups).
+                key(id) {
+                    if (id == activeId || id == lastActiveId) {
                         KeepAlivePanel(visible = id == activeId) {
                             panelContent(id, { app.connectTerminal(sessionId, id) }, id == activeId && active)
                         }
