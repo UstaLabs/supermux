@@ -153,7 +153,12 @@ fun DesktopTerminalPanel(
     // Agent-PTY exit: the broker's explicit exit/error frame (web-parity trigger). A dropped
     // socket does NOT land here — the client's reconnect loop handles that silently.
     LaunchedEffect(client) {
-        client.exit.collect { onExit?.invoke() }
+        client.exit.collect {
+            // Notable lifecycle event (the PTY ended server-side) — log for observability so an
+            // agent exit / Native→Chat fallback is traceable in run logs.
+            println("[DesktopTerminalPanel] pty exit frame received → onExit")
+            onExit?.invoke()
+        }
     }
 
     // SwingPanel is a HEAVYWEIGHT AWT child: without the experimental interop blending
