@@ -13,6 +13,50 @@ export interface RepoDiff {
 // git's well-known empty-tree object SHA — constant across all repos
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
+export type DiffBaseSpec =
+  | { kind: "session-start" }
+  | { kind: "head" }
+  | { kind: "commit"; sha: string }
+  | { kind: "branch"; name: string }
+
+// A git ref-name safe enough to hand to execFileSync (no leading dash → no option injection).
+function safeRefName(name: string): boolean {
+  return /^[\w][\w./-]*$/.test(name)
+}
+
+export function parseBaseSpec(spec: string | undefined | null): DiffBaseSpec {
+  if (!spec || spec === "session-start") return { kind: "session-start" }
+  if (spec === "head") return { kind: "head" }
+  if (spec.startsWith("commit:")) return { kind: "commit", sha: spec.slice(7) }
+  if (spec.startsWith("branch:")) return { kind: "branch", name: spec.slice(7) }
+  return { kind: "session-start" }
+}
+
+export interface RepoRefs {
+  repo: string
+  branches: string[]
+  commits: Array<{ sha: string; subject: string }>
+}
+
+export function listRepoRefs(workdir: string): RepoRefs[] {
+  const out: RepoRefs[] = []
+  for (const r of scanRepos(workdir)) {
+    let branches: string[] = []
+    let commits: Array<{ sha: string; subject: string }> = []
+    try {
+      branches = runGit(r.absPath, ["branch", "--format=%(refname:short)"])
+        .split("\n").map((s) => s.trim()).filter(Boolean)
+    } catch { /* no branches yet */ }
+    try {
+      commits = runGit(r.absPath, ["log", "-30", "--format=%h%x00%s"])
+        .split("\n").filter(Boolean)
+        .map((l) => { const i = l.indexOf("\0"); return { sha: l.slice(0, i), subject: l.slice(i + 1) } })
+    } catch { /* no history */ }
+    out.push({ repo: r.relPath, branches, commits })
+  }
+  return out
+}
+
 // Dirs we should never descend into when doing extra sub-repo scanning
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", ".nuxt", "out", "vendor", "target"])
 
@@ -38,6 +82,42 @@ function resolveBase(repoAbs: string, stored: string | undefined, createdAt?: st
     }
   }
   return EMPTY_TREE
+}
+
+// Resolve a user-chosen base spec into an effective base commit for one repo.
+// Any spec that can't be resolved in THIS repo falls back to session-start.
+function resolveSpecBase(
+  repoAbs: string,
+  spec: DiffBaseSpec,
+  stored: string | undefined,
+  createdAt?: string,
+): string {
+  switch (spec.kind) {
+    case "session-start":
+      return resolveBase(repoAbs, stored, createdAt)
+    case "head":
+      try {
+        const sha = runGit(repoAbs, ["rev-parse", "--verify", "HEAD"]).trim()
+        if (/^[0-9a-f]{7,40}$/i.test(sha)) return sha
+      } catch { /* no HEAD */ }
+      return EMPTY_TREE
+    case "commit": {
+      if (!/^[0-9a-f]{4,40}$/i.test(spec.sha)) return resolveBase(repoAbs, stored, createdAt)
+      try {
+        const sha = runGit(repoAbs, ["rev-parse", "--verify", `${spec.sha}^{commit}`]).trim()
+        if (/^[0-9a-f]{7,40}$/i.test(sha)) return sha
+      } catch { /* commit not in this repo */ }
+      return resolveBase(repoAbs, stored, createdAt)
+    }
+    case "branch": {
+      if (!safeRefName(spec.name)) return resolveBase(repoAbs, stored, createdAt)
+      try {
+        const mb = runGit(repoAbs, ["merge-base", spec.name, "HEAD"]).trim()
+        if (/^[0-9a-f]{7,40}$/i.test(mb)) return mb
+      } catch { /* branch missing here */ }
+      return resolveBase(repoAbs, stored, createdAt)
+    }
+  }
 }
 
 function trackedDiff(repoAbs: string, base: string): DiffEntry[] {
@@ -150,6 +230,7 @@ export async function computeWorkdirDiff(
   workdir: string,
   baseCommits: Record<string, string>,
   createdAt?: string,
+  baseSpec?: string,
 ): Promise<RepoDiff[]> {
   let workdirReal: string
   try {
@@ -169,9 +250,10 @@ export async function computeWorkdirDiff(
   const allRepos = [...primaryRepos, ...nestedRepos]
 
   const result: RepoDiff[] = []
+  const spec = parseBaseSpec(baseSpec)
 
   for (const repo of allRepos) {
-    const effectiveBase = resolveBase(repo.absPath, baseCommits[repo.relPath], createdAt)
+    const effectiveBase = resolveSpecBase(repo.absPath, spec, baseCommits[repo.relPath], createdAt)
     const files = [
       ...trackedDiff(repo.absPath, effectiveBase),
       ...untrackedDiff(repo.absPath),

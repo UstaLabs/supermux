@@ -11,7 +11,7 @@ import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOver
 import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
 import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOriginOk } from "./cookies"
 import { FsService } from "../../core/editor/fs-service"
-import { computeWorkdirDiff } from "../../core/editor/workdir-diff"
+import { computeWorkdirDiff, listRepoRefs } from "../../core/editor/workdir-diff"
 import { reanchor } from "../../core/review/anchor"
 import { FsWatcher } from "../../core/editor/fs-watcher"
 import { LspConnection } from "../../core/lsp/bridge"
@@ -1760,7 +1760,8 @@ export class WebChannel implements Channel {
       if (!workdir) return this.json({ error: "session not found" }, 404)
       const baseCommits = this.opts.getSessionBaseCommits?.(id) ?? {}
       const createdAt = this.opts.getSessionCreatedAt?.(id)
-      const repos = await computeWorkdirDiff(workdir, baseCommits, createdAt)
+      const baseSpec = url.searchParams.get("base") ?? undefined
+      const repos = await computeWorkdirDiff(workdir, baseCommits, createdAt, baseSpec)
       const comments = (this.opts.reviewList?.(id) ?? []).map((c) => {
         const sess = this.opts.reviewSession?.(id)
         const repoAbs = c.repo ? join(sess?.workdir ?? workdir, c.repo) : (sess?.workdir ?? workdir)
@@ -1768,6 +1769,12 @@ export class WebChannel implements Channel {
         return { ...c, currentLine, outdated }
       })
       return this.json({ repos, comments })
+    }
+    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/fs\/refs$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getSessionWorkdir?.(id)
+      if (!workdir) return this.json({ error: "session not found" }, 404)
+      return this.json({ repos: listRepoRefs(workdir) })
     }
 
     if (method === "GET" && path === "/sessions") {
