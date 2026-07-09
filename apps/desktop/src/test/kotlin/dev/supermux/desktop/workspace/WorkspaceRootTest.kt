@@ -7,6 +7,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.withKeyDown
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.input.key.Key
 import dev.supermux.desktop.session.LauncherStore
@@ -188,5 +189,28 @@ class WorkspaceRootTest {
         assertTrue(sent.filterIsInstance<ClientFrame.Send>().isEmpty())
         // The dispose-flush (T4) persists the in-progress text on the way out.
         assertEquals("a draft in progress", launcherStore.loadDraft().text)
+    }
+
+    @Test fun workspace_shortcuts_are_gated_off_while_the_launcher_overlay_is_up() = runComposeUiTest {
+        // The overlay is modal — a pane/sidebar chord (Ctrl+B) it leaves unhandled must NOT bubble
+        // to workspaceShortcuts and silently mutate the layout behind it. Ctrl+B typed while the
+        // launcher's message field is focused should be a no-op on ui.layout.sidebarCollapsed.
+        val app = appFor(mutableListOf())
+        val ui = WorkspaceUiState().apply { launcherOpen = true } // sidebarCollapsed defaults false
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                WorkspaceRoot(app, ui, WorkspaceStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+            }
+        }
+        waitForIdle()
+        assertFalse(ui.layout.sidebarCollapsed) // precondition
+
+        // Focus a node inside the overlay, then send Ctrl+B — it bubbles up to the root Box, where
+        // workspaceShortcuts is gated OFF (…else Modifier) while launcherOpen.
+        onNodeWithTag("launcher_message").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.B) } }
+        waitForIdle()
+
+        assertFalse(ui.layout.sidebarCollapsed) // NOT toggled — the chord never reached the layout
+        assertTrue(ui.launcherOpen)             // ...and the overlay stayed up
     }
 }

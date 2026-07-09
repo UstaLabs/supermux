@@ -197,7 +197,12 @@ fun WorkspaceRoot(
                 .fillMaxSize()
                 .focusRequester(rootFocus)
                 .focusable()
-                .workspaceShortcuts(layout, ui.selectedId, onNewSession),
+                // Gate the pane/sidebar shortcuts (Ctrl+B/L/E/T/D) OFF while the launcher overlay is
+                // up: it's modal, so a chord it leaves unhandled must NOT bubble here and silently
+                // mutate the layout behind it (sidebar collapse / pane toggles the user can't see).
+                // The overlay handles its own Escape; Ctrl+N is idempotent and reopening an already-
+                // open launcher is a no-op, so dropping it here too costs nothing.
+                .then(if (ui.launcherOpen) Modifier else Modifier.workspaceShortcuts(layout, ui.selectedId, onNewSession)),
         ) {
             Row(Modifier.fillMaxSize()) {
                 // ── Sidebar: collapsed rail, or the full list + a drag-resize gutter ──
