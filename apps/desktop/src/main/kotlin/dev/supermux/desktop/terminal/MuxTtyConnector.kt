@@ -28,7 +28,9 @@ class MuxTtyConnector(
     private val name: String = "supermux",
 ) : TtyConnector {
 
-    /** Pre-send tap for the predictive-echo pipeline (installed in Task 5); null = no prediction. */
+    /** Pre-send tap for the predictive-echo pipeline (installed in Task 5); null = no prediction.
+     *  @Volatile: installed from a coroutine after start, read in [write] on the UI/EDT thread. */
+    @Volatile
     var onUserInput: ((ByteArray) -> Unit)? = null
 
     // FIFO of raw byte chunks (server output + injected prediction escapes, ordered). A unique
@@ -39,6 +41,9 @@ class MuxTtyConnector(
 
     // Streaming UTF-8 decode: one stateful decoder + a carry of undecoded trailing bytes (an
     // incomplete multi-byte sequence at a chunk boundary) prepended to the next chunk.
+    // ⚠️ SINGLE-READER CONTRACT: decoder/carry/pending are touched ONLY inside read()/decode(),
+    // which JediTerm's TerminalStarter drives from ONE dedicated emulator thread. read() is NOT
+    // reentrant or thread-safe — producers must use offerServerBytes/injectDisplayBytes only.
     private val decoder: CharsetDecoder = StandardCharsets.UTF_8.newDecoder()
         .onMalformedInput(CodingErrorAction.REPLACE)
         .onUnmappableCharacter(CodingErrorAction.REPLACE)
