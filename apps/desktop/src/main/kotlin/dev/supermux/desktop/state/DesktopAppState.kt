@@ -10,10 +10,18 @@
 // reducer stays a faithful subset of AppViewModel's `when (frame)`.
 package dev.supermux.desktop.state
 
+import dev.supermux.desktop.session.StagedUpload
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.BrokerClient
+import dev.supermux.net.ChunkSource
 import dev.supermux.net.FsEntry
 import dev.supermux.net.FsSearchResult
+import dev.supermux.net.ModelInfo
+import dev.supermux.net.PathValidation
+import dev.supermux.net.ReasoningResponse
+import dev.supermux.net.RepoInfo
+import dev.supermux.net.SpawnRequest
+import dev.supermux.net.SpawnResponse
 import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalSummary
 import dev.supermux.proto.ActivityEvent
@@ -450,6 +458,147 @@ class DesktopAppState(
         }
     }
 
+    // ── New-session launcher + spawn (M4a; mirrors AppViewModel.launcher* +
+    //    createSessionWithFirstMessage) ────────────────────────────────────────────────
+    // These back the SessionLauncherScreen (M4a Task 4/5). All go through [runApi] and
+    // getOrNull-degrade like Android's launcher helpers — a broker hiccup yields an empty/null
+    // result, never an exception the launcher UI has to catch.
+
+    /** GET /projects → known project working directories (absolute paths). Empty on any failure. */
+    suspend fun listProjects(): List<String> =
+        runApi("listProjects") { api.listProjects() } ?: emptyList()
+
+    /** POST /paths/validate → {ok, path?, error?} (resolves ~, checks existence). Null on any
+     *  transport/decode failure; an *invalid* path is still a non-null PathValidation(ok=false). */
+    suspend fun validatePath(path: String): PathValidation? =
+        runApi("validatePath") { api.validatePath(path) }
+
+    /** GET /models?agent= → models pickable in the launcher (no session yet). Empty on failure. */
+    suspend fun launcherModels(agent: String): List<ModelInfo> =
+        runApi("launcherModels") { api.listModels(agent).models } ?: emptyList()
+
+    /** GET /reasoning-levels?agent=&model= → thinking levels for the launcher. Null on failure. */
+    suspend fun launcherReasoning(agent: String, model: String? = null): ReasoningResponse? =
+        runApi("launcherReasoning") { api.getReasoningLevels(agent, model) }
+
+    /** GET /repos/info?path= → git status for the launcher's worktree picker. Null on failure. */
+    suspend fun launcherRepoInfo(workdir: String): RepoInfo? =
+        runApi("launcherRepoInfo") { api.getRepoInfo(workdir) }
+
+    /** GET /commands/preview?agent=&workdir= → the agent's slash commands for the launcher (no
+     *  session yet). Empty on failure OR a blank workdir (AppViewModel.launcherCommands parity —
+     *  a blank workdir would 4xx, so short-circuit it). */
+    suspend fun launcherCommands(agent: String, workdir: String): List<SlashCommand> =
+        if (workdir.isBlank()) emptyList()
+        else runApi("launcherCommands") { api.previewCommands(agent, workdir).commands } ?: emptyList()
+
+    /**
+     * Resumable/chunked upload from a [ChunkSource] (bounded RAM), reporting absolute progress
+     * `(bytesAcked, total)`. Returns the finalized file_id, or null on any failure.
+     *
+     * DELIBERATELY THROUGH [runApi] (unlike [fsRead], which bypasses it to preserve the FsException
+     * message for the editor's error UI): the launcher only needs the id-or-null result, never the
+     * failure message — a failed upload just drops that attachment chip. runApi's log-and-null +
+     * cancellation discipline is exactly right (Android's AppViewModel.uploadResumable does the
+     * same via `runCatching{…}.getOrNull()`).
+     */
+    suspend fun uploadResumable(
+        session: String,
+        source: ChunkSource,
+        name: String,
+        mime: String,
+        kind: String? = null,
+        onProgress: (Long, Long) -> Unit,
+    ): String? =
+        runApi("uploadResumable") {
+            api.uploadResumable(session, source, name, mime, kind, onProgress).file_id
+        }
+
+    /** The uploaded attachment file_ids from the most recent [createSessionWithFirstMessage],
+     *  keyed by the new session id, awaiting the caller's first-message send. See that method's
+     *  KDoc for why the desktop handoff is a consumable holder (not Android's setPendingFirst). */
+    private var firstUploads: Pair<String, List<String>>? = null
+
+    /**
+     * Take (and clear) the attachment file_ids that [createSessionWithFirstMessage] uploaded for
+     * [sessionId], for the caller to pass into [sendMessage] as the first message's attachments.
+     * Returns [] when nothing was staged for this session (or it was already consumed). Single-slot
+     * by design — only one launcher submit is ever in flight. Mirrors the *shape* of Android's
+     * consumePendingFirst, but carries ONLY the file_ids (the first-message TEXT stays with the
+     * caller on desktop — see [createSessionWithFirstMessage]'s divergence note).
+     */
+    fun consumeFirstUploads(sessionId: String): List<String> {
+        val entry = firstUploads ?: return emptyList()
+        if (entry.first != sessionId) return emptyList()
+        firstUploads = null
+        return entry.second
+    }
+
+    /**
+     * Create a new session and stage its first message's attachments; returns the new session id,
+     * or null when the workdir is invalid or the spawn fails.
+     *
+     * Flow (Android AppViewModel.createSessionWithFirstMessage parity): validate the workdir
+     * (POST /paths/validate) and resolve the real path → POST /sessions with the launcher's
+     * agent / model / reasoning / worktree / baseBranch → resolve the (possibly-BLANK) spawn id
+     * against the live session list ([resolveSpawnId]) → upload each staged file post-spawn
+     * (uploads need a session id) via [uploadResumable]. A staged file that fails to upload is
+     * skipped — session creation never blocks on an attachment. [worktree]/[baseBranch] are only
+     * honored when the workdir is an eligible git repo (the broker ignores them otherwise);
+     * baseBranch null → cut from the repo's current branch.
+     *
+     * DIVERGENCE FROM ANDROID: Android queues the first message via `setPendingFirst` and lets
+     * `ChatScreen` send it on open. Desktop has no pending-first plumbing — this method deliberately
+     * does NOT send [text]. The caller (the launcher, M4a Task 5) selects the returned session and
+     * sends the first message itself via [sendMessage] (the SM_SMOKE_SEND path), passing the
+     * uploaded attachment ids it takes from [consumeFirstUploads]. [text] is accepted here only so
+     * the launcher's onSubmit signature stays aligned with Android's; it is neither sent nor stored.
+     *
+     * The whole body runs through [runApi]: any broker failure (invalid path, spawn 4xx, transport)
+     * logs and yields null, so the launcher can surface "couldn't create session" without a catch.
+     */
+    suspend fun createSessionWithFirstMessage(
+        workdir: String,
+        agent: String,
+        model: String?,
+        reasoningLevel: String?,
+        text: String,
+        staged: List<StagedUpload>,
+        worktree: Boolean,
+        baseBranch: String?,
+    ): String? = runApi("createSessionWithFirstMessage") {
+        val validation = api.validatePath(workdir)
+        val resolvedPath = validation.path
+        if (!validation.ok || resolvedPath.isNullOrBlank()) {
+            println("[DesktopAppState] createSessionWithFirstMessage: invalid workdir '$workdir': " +
+                (validation.error ?: "unknown"))
+            return@runApi null
+        }
+        val resp = api.spawn(
+            SpawnRequest(
+                workdir = resolvedPath,
+                agent = agent,
+                model = model?.ifBlank { null },
+                worktree = if (worktree) true else null,
+                baseBranch = baseBranch?.ifBlank { null },
+                reasoningLevel = reasoningLevel?.ifBlank { null },
+            ),
+        )
+        val sessionId = resolveSpawnId(resp, _sessions.value)
+        if (sessionId == null) {
+            println("[DesktopAppState] createSessionWithFirstMessage: spawn ok but id unavailable " +
+                "(name='${resp.name}')")
+            return@runApi null
+        }
+        // Attachments need a session id, so they upload *after* spawn (mirrors iOS
+        // NewSessionView.spawn() and the web launcher). A file that fails to upload is skipped.
+        val attachmentIds = staged.mapNotNull { s ->
+            uploadResumable(sessionId, s.source, s.name, s.mime, s.kind) { _, _ -> }
+        }
+        firstUploads = sessionId to attachmentIds
+        sessionId
+    }
+
     /** Stop all owned coroutines (collector, WS run-loop, heartbeat, in-flight ops) and release
      *  the shared HttpClient (WS + HTTP). Counterpart of AppViewModel.onCleared, plus the explicit
      *  scope cancel a plain (non-ViewModel) class needs. */
@@ -458,3 +607,14 @@ class DesktopAppState(
         http.close()
     }
 }
+
+/**
+ * Resolve the session id from a [SpawnResponse]. The broker sometimes returns a BLANK id on the
+ * early (pre-register) session_added, so fall back to matching the response name against the known
+ * session list (Android AppViewModel:593 pattern) — returns null when neither yields an id yet.
+ *
+ * Pure + top-level (no [DesktopAppState] state captured) so it's unit-testable without a broker.
+ */
+internal fun resolveSpawnId(resp: SpawnResponse, sessions: List<SessionInfo>): String? =
+    if (resp.id.isNotBlank()) resp.id
+    else sessions.firstOrNull { it.name == resp.name }?.id

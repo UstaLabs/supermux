@@ -15,12 +15,25 @@
 package dev.supermux.desktop.session
 
 import dev.supermux.desktop.auth.DesktopTokenStore
+import dev.supermux.net.ChunkSource
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+
+/** A file staged in the launcher before any session exists (so it can't be uploaded yet).
+ *  [dev.supermux.desktop.state.DesktopAppState.createSessionWithFirstMessage] uploads these right
+ *  after spawn, once there's a session id to upload against (mirrors iOS NewSessionView.spawn() and
+ *  the web launcher). Desktop copy of `dev.supermux.android.session.StagedUpload`. NOT serializable:
+ *  the [ChunkSource] streams live file bytes (a desktop [dev.supermux.desktop.upload.FileChunkSource]). */
+data class StagedUpload(
+    val source: ChunkSource,
+    val name: String,
+    val mime: String,
+    val kind: String? = null,
+)
 
 /** Sticky New Session launcher preferences — the agent + its last-used model, keyed per agent.
  *  Desktop copy of `dev.supermux.android.session.LauncherPrefs`. */
