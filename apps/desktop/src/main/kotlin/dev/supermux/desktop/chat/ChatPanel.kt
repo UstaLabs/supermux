@@ -76,6 +76,11 @@ fun ChatPanel(
     draft: String,
     onDraftChange: (String) -> Unit,
     modifier: Modifier = Modifier,
+    // When embedded in the workspace SessionDetail (M1 Task 9), that composable owns the identity
+    // header (name + status rail + pane toggles), so the chat pane suppresses its own name header
+    // to avoid a duplicate title bar. The dead banner is always shown regardless. Defaults to true
+    // for standalone use.
+    showHeader: Boolean = true,
 ) {
     val cs = MaterialTheme.colorScheme
     val sem = LocalSemantics.current
@@ -139,26 +144,28 @@ fun ChatPanel(
     val statusColor = if (agent?.waiting == true && !working && !sending) sem.warning else cs.primary
 
     Column(modifier.fillMaxSize().background(cs.surfaceContainerLow)) {
-        // Header
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .background(cs.surface)
-                .padding(horizontal = Space.lg, vertical = Space.md),
-        ) {
-            Text(
-                text = session.name,
-                style = MaterialTheme.typography.titleLarge, // Geist SemiBold
-                color = cs.onSurface,
-            )
-            if (statusText != null) {
+        // Header (suppressed when embedded in the workspace SessionDetail, which owns the identity bar).
+        if (showHeader) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(cs.surface)
+                    .padding(horizontal = Space.lg, vertical = Space.md),
+            ) {
                 Text(
-                    text = statusText,
-                    fontFamily = MonoFontFamily,
-                    fontSize = 12.sp,
-                    color = statusColor,
-                    modifier = Modifier.padding(top = 2.dp),
+                    text = session.name,
+                    style = MaterialTheme.typography.titleLarge, // Geist SemiBold
+                    color = cs.onSurface,
                 )
+                if (statusText != null) {
+                    Text(
+                        text = statusText,
+                        fontFamily = MonoFontFamily,
+                        fontSize = 12.sp,
+                        color = statusColor,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
             }
         }
         // "Not responding" dead banner (error-tinted strip; mirrors Android's dead banner).

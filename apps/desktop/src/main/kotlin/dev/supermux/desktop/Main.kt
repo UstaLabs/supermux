@@ -1,5 +1,8 @@
 package dev.supermux.desktop
 
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -8,7 +11,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyShortcut
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
@@ -19,6 +25,8 @@ import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.desktop.workspace.WorkspaceRoot
+import dev.supermux.desktop.workspace.WorkspaceStateStore
+import dev.supermux.desktop.workspace.WorkspaceUiState
 
 fun main() {
     val store = DesktopTokenStore()
@@ -48,11 +56,58 @@ fun main() {
             title = "supermux",
             state = rememberWindowState(width = 1440.dp, height = 900.dp),
         ) {
+            // Paired flag + workspace UI state are hoisted to the Window (FrameWindowScope) so the
+            // native MenuBar — which must be called on this scope, not inside a nested @Composable —
+            // can reach the same WorkspaceLayout/selection the shortcuts drive.
+            var paired by remember {
+                mutableStateOf(!store.load().isNullOrBlank() && !store.loadBaseUrl().isNullOrBlank())
+            }
+            val uiStore = remember { WorkspaceStateStore() }
+            // Hydrate the layout + last selection from ui-state.json (the selection is re-validated
+            // against live sessions inside WorkspaceRoot once the first snapshot lands).
+            val ui = remember {
+                WorkspaceUiState().apply {
+                    val persisted = uiStore.load()
+                    persisted.layout?.let { layout.restore(it) }
+                    selectedId = persisted.selectedId
+                }
+            }
+            var showUnpairConfirm by remember { mutableStateOf(false) }
+
+            // Menu bar (paired only). DEDUPE DECISION: the View toggle items are clickable-only —
+            // they carry NO KeyShortcut, because the in-app `Modifier.workspaceShortcuts` already
+            // owns Ctrl/Cmd+B/E/T/D; registering the same accelerator on the menu would risk a
+            // double-toggle (menu action + the key event still bubbling to the modifier). File ▸
+            // New Session keeps its conventional Ctrl+N accelerator — its action is a harmless
+            // TODO(M4) no-op in M1, so even a double-fire is inconsequential.
+            if (paired) {
+                MenuBar {
+                    Menu("File", mnemonic = 'F') {
+                        Item("New Session", shortcut = KeyShortcut(Key.N, ctrl = true)) {
+                            println("[menu] New Session (TODO M4 launcher)")
+                        }
+                        Separator()
+                        Item("Unpair…") { showUnpairConfirm = true }
+                    }
+                    Menu("View", mnemonic = 'V') {
+                        CheckboxItem("Show Sidebar", checked = !ui.layout.sidebarCollapsed) {
+                            ui.layout.sidebarCollapsed = !ui.layout.sidebarCollapsed
+                        }
+                        CheckboxItem("Editor", checked = ui.selectedId?.let { ui.layout.panesFor(it).editor } == true) {
+                            ui.selectedId?.let { ui.layout.toggleEditor(it) }
+                        }
+                        CheckboxItem("Terminal", checked = ui.selectedId?.let { ui.layout.panesFor(it).terminal } == true) {
+                            ui.selectedId?.let { ui.layout.toggleTerminal(it) }
+                        }
+                        CheckboxItem("Display", checked = ui.selectedId?.let { ui.layout.panesFor(it).display } == true) {
+                            ui.selectedId?.let { ui.layout.toggleDisplay(it) }
+                        }
+                    }
+                }
+            }
+
             // TODO(M4): drive from Settings/Appearance instead of a hardcoded default.
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                var paired by remember {
-                    mutableStateOf(!store.load().isNullOrBlank() && !store.loadBaseUrl().isNullOrBlank())
-                }
                 if (!paired) {
                     val scope = rememberCoroutineScope()
                     val pairing = remember { PairingState(store, scope) }
@@ -97,7 +152,27 @@ fun main() {
                         }
                     }
 
-                    WorkspaceRoot(app)
+                    WorkspaceRoot(app, ui, uiStore)
+
+                    // Unpair confirmation (File ▸ Unpair…): clears the credential store and flips
+                    // back to onboarding, which disposes `app` (DisposableEffect above).
+                    if (showUnpairConfirm) {
+                        AlertDialog(
+                            onDismissRequest = { showUnpairConfirm = false },
+                            title = { Text("Unpair this device?") },
+                            text = { Text("This removes the saved pairing credentials and returns to the onboarding screen. Your sessions on the broker are untouched.") },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    store.clear()
+                                    showUnpairConfirm = false
+                                    paired = false
+                                }) { Text("Unpair") }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showUnpairConfirm = false }) { Text("Cancel") }
+                            },
+                        )
+                    }
                 }
             }
         }
