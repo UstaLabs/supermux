@@ -202,6 +202,9 @@ class DesktopEditorEngine(
             failedUrl: String?,
         ) {
             if (frame?.isMain != true) return
+            // ERR_ABORTED fires for superseded navigations and dispose-time force-close — not a
+            // renderer loss (classic CEF false positive; load-bearing once a reload/retry exists).
+            if (errorCode == CefLoadHandler.ErrorCode.ERR_ABORTED) return
             rendererLost("onLoadError $errorCode $errorText @$failedUrl")
         }
     }
