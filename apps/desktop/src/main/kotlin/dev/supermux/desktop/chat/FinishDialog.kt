@@ -116,7 +116,7 @@ fun FinishButton(
                     .padding(top = 6.dp, end = 4.dp)
                     .size(8.dp)
                     .clip(CircleShape)
-                    .background(if (finishJob?.status == "failed") cs.error else cs.primary)
+                    .background(if (finishDotIsError(finishJob)) cs.error else cs.primary)
                     .testTag("finish_unacked_dot"),
             )
         }

@@ -105,6 +105,32 @@ class DesktopFinishTest {
         assertFalse(s.finishJobs.value.containsKey("s1"))
     }
 
+    // ── Ack state (header unacked dot; lives in app state so it survives session switches) ─────────
+
+    @Test fun ack_finish_persists_and_survives_a_simulated_session_switch() {
+        val s = state()
+        // A failed job the user opens (acks) — record its startedAt.
+        s.ackFinish("s1", startedAt = 42.0)
+        assertTrue(s.isFinishAcked("s1", 42.0))
+        assertEquals(mapOf("s1" to 42.0), s.ackedFinish.value)
+        // "Switching" A→B→A is just re-reading the same app-state map — the ack is unchanged, so the
+        // dot stays hidden (the desktop-specific bug the per-composable state caused). A DIFFERENT
+        // startedAt (a new job) is not acked.
+        assertTrue(s.isFinishAcked("s1", 42.0))
+        assertFalse(s.isFinishAcked("s1", 99.0))
+    }
+
+    @Test fun clear_finish_job_also_clears_the_ack_entry() {
+        val s = state()
+        s.reduce(ServerFrame.Snapshot(sessions = listOf(session("s1", finishJob = job("s1")))))
+        s.ackFinish("s1", startedAt = 7.0)
+        assertTrue(s.isFinishAcked("s1", 7.0))
+        s.clearFinishJob("s1")
+        // Card gone → ack forgotten too (no stale acked-startedAt lingering).
+        assertFalse(s.isFinishAcked("s1", 7.0))
+        assertTrue(s.ackedFinish.value.isEmpty())
+    }
+
     // ── Reducer: session_git ─────────────────────────────────────────────────────────
 
     @Test fun session_git_frame_updates_the_session_git_badge() {

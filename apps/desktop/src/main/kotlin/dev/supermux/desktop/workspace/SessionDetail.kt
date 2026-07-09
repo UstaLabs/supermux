@@ -50,6 +50,7 @@ import androidx.compose.ui.platform.testTag
 import dev.supermux.desktop.chat.ChatPanel
 import dev.supermux.desktop.chat.FinishButton
 import dev.supermux.desktop.chat.FinishDialog
+import dev.supermux.desktop.chat.isFinishUnacked
 import dev.supermux.desktop.editor.EditorPanel
 import dev.supermux.desktop.editor.EditorPrefsStore
 import dev.supermux.desktop.editor.PendingEditorOpen
@@ -366,17 +367,19 @@ fun SessionDetail(
             if (session.session_branch != null) {
                 val finishScope = rememberCoroutineScope()
                 val finishJobs by app.finishJobs.collectAsState()
+                val ackedFinish by app.ackedFinish.collectAsState()
                 val finishJob = finishJobs[session.id]
                 var showFinishDialog by remember(session.id) { mutableStateOf(false) }
-                var ackedStartedAt by remember(session.id) { mutableStateOf(0.0) }
-                val isUnacked = finishJob != null &&
-                    finishJob.status != "running" &&
-                    finishJob.startedAt != ackedStartedAt
+                // Ack state lives in DesktopAppState (see its KDoc): desktop reuses ONE SessionDetail
+                // across session selections, so per-composable ack state would reset on A→B→A and
+                // wrongly re-show A's already-seen dot. Derive "acked" from the app flow instead.
+                val acked = finishJob != null && ackedFinish[session.id] == finishJob.startedAt
+                val isUnacked = isFinishUnacked(finishJob, acked)
                 FinishButton(
                     finishJob = finishJob,
                     isUnacked = isUnacked,
                     onClick = {
-                        ackedStartedAt = finishJob?.startedAt ?: ackedStartedAt
+                        finishJob?.let { app.ackFinish(session.id, it.startedAt) }
                         showFinishDialog = true
                     },
                 )

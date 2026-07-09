@@ -122,6 +122,15 @@ class DesktopAppState(
     private val _finishJobs = MutableStateFlow<Map<String, FinishJobDto>>(emptyMap())
     val finishJobs: StateFlow<Map<String, FinishJobDto>> = _finishJobs
 
+    // Which finish result the user has "seen" (acked), per session id → the job's startedAt. The
+    // header's unacked dot derives from this vs the live finishJobs entry. It lives HERE (not as
+    // SessionDetail Compose state) because desktop reuses ONE SessionDetail across session
+    // selections (WorkspaceRoot renders it without key(session.id)), so a switch A→B→A would reset
+    // per-composable ack state and wrongly re-show A's already-seen dot. Android sidesteps this via
+    // its NavHost backstack; on desktop the ack must survive the switch — so it's app state.
+    private val _ackedFinish = MutableStateFlow<Map<String, Double>>(emptyMap())
+    val ackedFinish: StateFlow<Map<String, Double>> = _ackedFinish
+
     // ── Editor file-watch (M3) ─────────────────────────────────────────────────────
     // The reducer folds inbound fs_changed frames into this app-wide SharedFlow (mirrors Android's
     // AppViewModel.fsChanges). Each EditorPanel collects it and calls its EditorState.markChanged
@@ -440,8 +449,21 @@ class DesktopAppState(
         runApi("verifySave") { api.verifySave(id, content) }
 
     /** Dismiss a finished/failed job's card (client-side only; mirrors web `finishJob.clear(id)`).
-     *  The broker keeps its record — this only drops the local overlay so the dialog closes. */
-    fun clearFinishJob(id: String) { _finishJobs.update { it - id } }
+     *  The broker keeps its record — this only drops the local overlay so the dialog closes. Also
+     *  drops the ack entry: the card is gone, so its acked-startedAt no longer needs remembering. */
+    fun clearFinishJob(id: String) {
+        _finishJobs.update { it - id }
+        _ackedFinish.update { it - id }
+    }
+
+    /** Record that the user has SEEN (acked) the finish result for [id] at [startedAt] — bumped on
+     *  the FinishButton click. Survives session switches (unlike per-composable state). */
+    fun ackFinish(id: String, startedAt: Double) {
+        _ackedFinish.update { it + (id to startedAt) }
+    }
+
+    /** Whether the finish result for [id] at [startedAt] has been acked (its dot is "seen"). */
+    fun isFinishAcked(id: String, startedAt: Double): Boolean = _ackedFinish.value[id] == startedAt
 
     // ── Scratch / agent terminals (Android AppViewModel:439-444 parity) ──────────────
 

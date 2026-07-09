@@ -15,7 +15,6 @@ import dev.supermux.proto.SessionInfo
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -232,22 +231,23 @@ class FinishDialogTest {
         onNodeWithTag("finish_unacked_dot").assertDoesNotExist()
     }
 
-    // ── isUnacked derivation (Android SessionWorkspaceDetail parity) ────────────────────────────────
+    // ── isFinishUnacked / finishDotIsError (the REAL production helpers, not a copy) ─────────────────
 
-    @Test fun is_unacked_derivation_matches_android() {
-        // running → never unacked
-        assertFalse(isUnacked(FinishJobDto(status = "running", startedAt = 5.0), ackedStartedAt = 0.0))
-        // terminal + not-yet-acked startedAt → unacked
-        assertTrue(isUnacked(FinishJobDto(status = "failed", startedAt = 5.0), ackedStartedAt = 0.0))
-        // terminal + acked startedAt → acked
-        assertFalse(isUnacked(FinishJobDto(status = "done", startedAt = 5.0), ackedStartedAt = 5.0))
+    @Test fun is_finish_unacked_derivation() {
+        // running → never unacked (even when not acked)
+        assertFalse(isFinishUnacked(FinishJobDto(status = "running"), acked = false))
+        // terminal + not-yet-acked → unacked
+        assertTrue(isFinishUnacked(FinishJobDto(status = "failed"), acked = false))
+        assertTrue(isFinishUnacked(FinishJobDto(status = "done"), acked = false))
+        // terminal + acked → acked (dot hidden)
+        assertFalse(isFinishUnacked(FinishJobDto(status = "done"), acked = true))
         // no job → not unacked
-        assertNull(null as FinishJobDto?)
-        assertFalse(isUnacked(null, ackedStartedAt = 0.0))
+        assertFalse(isFinishUnacked(null, acked = false))
+    }
+
+    @Test fun finish_dot_is_error_only_for_failed() {
+        assertTrue(finishDotIsError(FinishJobDto(status = "failed")))
+        assertFalse(finishDotIsError(FinishJobDto(status = "done")))
+        assertFalse(finishDotIsError(null))
     }
 }
-
-/** Mirrors the inline isUnacked derivation wired into SessionDetail's header (Android parity):
- *  a terminal (non-running) job whose startedAt the user hasn't opened/acked yet. Test-local. */
-private fun isUnacked(job: FinishJobDto?, ackedStartedAt: Double): Boolean =
-    job != null && job.status != "running" && job.startedAt != ackedStartedAt
