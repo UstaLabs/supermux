@@ -25,6 +25,7 @@ dependencies {
     implementation(libs.ktor.client.websockets)
     implementation(libs.jediterm.core) // both jediterm modules: dual LGPLv3/Apache-2.0 — used under Apache-2.0
     implementation(libs.jediterm.ui)
+    implementation(libs.kcef) // M3 editor: embedded Chromium (JCEF) hosting the shared cm6 bundle (jogamp repo above)
 
     testImplementation(libs.coroutines.test)
     testImplementation(kotlin("test"))
@@ -36,9 +37,30 @@ dependencies {
 
 kotlin { jvmToolchain(17) }
 
+// M3 editor: ship the SAME committed CodeMirror bundle the mobile apps use (single source of
+// truth: apps/android/src/main/assets/editor/) into desktop resources under editor/. KCEF loads
+// the page from an extracted file:// path at runtime (see EditorWebAssets), but the bundle rides
+// the classpath so it's packaged by jpackage. apps/ is the gradle root → rootProject.projectDir
+// resolves to .../apps, so android/... below is correct. `from`+`into` on processResources IS the
+// Copy — build/resources/main/editor/{index.html,cm6.js} after the task runs.
+tasks.named<Copy>("processResources") {
+    from("${rootProject.projectDir}/android/src/main/assets/editor") {
+        include("index.html", "cm6.js")
+        into("editor")
+    }
+}
+
 compose.desktop {
     application {
         mainClass = "dev.supermux.desktop.MainKt"
+        // KCEF (JCEF) reflects into java.desktop AWT internals to embed the heavyweight Chromium
+        // child; JDK-17 module encapsulation needs these opened or init throws
+        // InaccessibleObjectException. Applies to :desktop:run AND the jpackage image — NOT unit
+        // tests (which never start CEF). See KcefRuntime.
+        jvmArgs += listOf(
+            "--add-opens", "java.desktop/sun.awt=ALL-UNNAMED",
+            "--add-opens", "java.desktop/java.awt.peer=ALL-UNNAMED",
+        )
         nativeDistributions {
             targetFormats(TargetFormat.Deb, TargetFormat.Msi, TargetFormat.AppImage)
             packageName = "supermux"
