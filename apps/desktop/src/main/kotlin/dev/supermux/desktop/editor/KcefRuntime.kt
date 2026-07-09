@@ -92,6 +92,14 @@ object KcefRuntime {
      */
     fun ensureInit(scope: CoroutineScope) {
         if (!started.compareAndSet(false, true)) return
+        // Off-by-default verification hook (M3): SMX_KCEF_FORCE_ERROR=1 short-circuits init straight
+        // to the TERMINAL Error state WITHOUT booting Chromium, so the editor's native BasicTextField
+        // fallback (WebCodeEditor.NativeCodeEditor) can be exercised headlessly. Harmless in
+        // production (unset by default); mirrors the SMX_KCEF_EXTRA_ARGS headless seam above.
+        if (System.getenv("SMX_KCEF_FORCE_ERROR") == "1") {
+            _state.value = KcefState.Error("forced via SMX_KCEF_FORCE_ERROR (verification)")
+            return
+        }
         val install = installDir()
         val cache = cacheDir()
         scope.launch(Dispatchers.IO) {

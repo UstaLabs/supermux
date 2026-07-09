@@ -48,8 +48,10 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -163,6 +165,28 @@ fun EditorPanel(
         pendingOpen?.let {
             revealFile(it.path, it.line, it.endLine)
             onPendingOpenConsumed()
+        }
+    }
+
+    // Off-by-default headless save-verification hook (M3): SM_EDITOR_SAVE_TEST="<marker>" — once a
+    // file is open, appends the marker line to the active tab through the SAME sink cm6's onChange
+    // uses (EditorState.updateContent) and calls the SAME save path the header button drives
+    // (EditorState.saveActive → fsWrite → broker PUT), so the editor→disk round-trip can be proven
+    // under Xvfb where the save button can't be clicked (no xdotool). Fires ONCE per panel. Harmless
+    // in production (unset by default).
+    val saveTestMarker = remember { System.getenv("SM_EDITOR_SAVE_TEST")?.takeIf { it.isNotBlank() } }
+    if (saveTestMarker != null) {
+        var fired by remember(sessionId) { mutableStateOf(false) }
+        LaunchedEffect(editor.activeTab?.path) {
+            val tab = editor.activeTab
+            if (!fired && tab != null) {
+                delay(1_000) // let cm6 settle so the dirty→saved lifecycle is observable
+                editor.updateContent(tab.path, tab.content + "\n// SM_EDITOR_SAVE_TEST: $saveTestMarker\n")
+                delay(500)
+                editor.saveActive()
+                fired = true
+                println("[editorsave] appended marker + saved '${tab.path}' for session $sessionId")
+            }
         }
     }
 
