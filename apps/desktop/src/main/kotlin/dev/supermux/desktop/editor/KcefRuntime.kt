@@ -181,9 +181,18 @@ object KcefRuntime {
      * shutdown on the AWT/main thread before the process exits, and onCloseRequest runs there while
      * the Compose window still exists. Without this, closing the window orphans the Chromium
      * subprocess (helper + GPU + renderer) — it lingers until the OS reaps it. Blocking.
+     *
+     * MID-DOWNLOAD GUARD: if init is still Downloading, log + SKIP disposeBlocking rather than block
+     * window-close behind (or race) a ~360MB in-flight download. A torn download is harmless: the
+     * init-once CAS is per-PROCESS, so the next launch re-runs KCEF.init, which re-verifies/re-heals
+     * the installDir. Killing the process mid-download was already the pre-M3 reality.
      */
     fun dispose() {
         if (!started.get()) return
+        if (_state.value is KcefState.Downloading) {
+            println("[KcefRuntime] dispose() skipped mid-download — next launch re-heals the installDir")
+            return
+        }
         KCEF.disposeBlocking()
     }
 }

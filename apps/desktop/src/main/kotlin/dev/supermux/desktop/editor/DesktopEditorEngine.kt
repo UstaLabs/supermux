@@ -43,8 +43,11 @@ import org.cef.browser.CefFrame
 import org.cef.browser.CefMessageRouter
 import org.cef.callback.CefQueryCallback
 import org.cef.handler.CefDisplayHandlerAdapter
+import org.cef.handler.CefLoadHandler
 import org.cef.handler.CefLoadHandlerAdapter
 import org.cef.handler.CefMessageRouterHandlerAdapter
+import org.cef.handler.CefRequestHandler
+import org.cef.handler.CefRequestHandlerAdapter
 import java.awt.Component
 import javax.swing.SwingUtilities
 
@@ -67,6 +70,8 @@ class DesktopEditorEngine(
     val ready: StateFlow<Boolean> = _ready.asStateFlow()
 
     // Callbacks — settable (Compose updates them per recomposition, like Android's updateCallbacks).
+    // EDT-CONFINED BY CONVENTION: written from composition (the EDT) and invoked only on the EDT
+    // (every CEF callback marshals via [onEdt] first) — no @Volatile/synchronization needed.
     var onChange: (String) -> Unit = {}
     var onSave: () -> Unit = {}
     var onReady: () -> Unit = {}
@@ -98,6 +103,7 @@ class DesktopEditorEngine(
         c.addMessageRouter(r)
         c.addLoadHandler(loadHandler)
         c.addDisplayHandler(consoleHandler)
+        c.addRequestHandler(crashHandler)
         client = c
         router = r
         browser = c.createBrowser(indexUrl)
@@ -139,7 +145,9 @@ class DesktopEditorEngine(
             "cmGetScrollTop()",
             object : KCEFFrame.EvaluateJavascriptCallback {
                 override fun invoke(value: String?) {
-                    val n = value?.trim()?.toDoubleOrNull()?.toInt() ?: 0
+                    // Defensive trim('"'): a number normally arrives bare, but Android saw the JS
+                    // eval result arrive quoted (EditorEngine.kt:96) — strip either shape.
+                    val n = value?.trim()?.trim('"')?.toDoubleOrNull()?.toInt() ?: 0
                     onEdt { cb(n) }
                 }
             },
@@ -147,14 +155,15 @@ class DesktopEditorEngine(
     }
 
     /**
-     * Dispose the browser and the whole client (router + handlers die with it). KCEF teardown order:
-     * detach + dispose the router, dispose the browser (KCEFBrowser.dispose does the force-close),
-     * then dispose the client. Idempotent — every field is nulled so a second call is a no-op.
+     * Dispose the browser and the whole client. Teardown order: browser FIRST (KCEFBrowser.dispose
+     * force-closes it, stopping the renderer — so no more page JS can post queries into a router
+     * we're about to tear down), THEN detach + dispose the router, THEN dispose the client that
+     * owned both. Idempotent — every field is nulled so a second call is a no-op.
      */
     fun dispose() {
         _ready.value = false
-        router?.let { r -> client?.removeMessageRouter(r); r.dispose() }
         browser?.dispose()
+        router?.let { r -> client?.removeMessageRouter(r); r.dispose() }
         client?.dispose()
         browser = null
         router = null
@@ -166,16 +175,59 @@ class DesktopEditorEngine(
     private val loadHandler = object : CefLoadHandlerAdapter() {
         override fun onLoadEnd(browser: CefBrowser?, frame: CefFrame?, httpStatusCode: Int) {
             if (frame?.isMain != true) return // ignore subframe loads
-            // Inject the bridge shim + cmInit in ONE eval so the shim's window.AndroidEditor exists
-            // before cmInit synchronously calls onReady (see initScript's timing note).
-            val script = initScript(
-                QUERY_FN,
-                planner.initContent(),
-                planner.initFilename(),
-                planner.lineWrap,
-                planner.fontSize,
-            )
-            browser?.executeJavaScript(script, browser.url ?: "", 0)
+            // Marshal to the EDT BEFORE reading planner state (the every-callback-marshals
+            // invariant — the planner is EDT-confined). executeJavaScript is safe to call from the
+            // EDT: CEF posts it internally to the renderer, from any thread. The hop can't reorder
+            // against load timing either — nothing else executes page JS until this init script has
+            // run and cmInit fires onReady (all pushes queue in the planner until then).
+            onEdt {
+                // Inject the bridge shim + cmInit in ONE eval so the shim's window.AndroidEditor
+                // exists before cmInit synchronously calls onReady (see initScript's timing note).
+                val script = initScript(
+                    QUERY_FN,
+                    planner.initContent(),
+                    planner.initFilename(),
+                    planner.lineWrap,
+                    planner.fontSize,
+                )
+                browser?.executeJavaScript(script, browser.url ?: "", 0)
+            }
+        }
+
+        override fun onLoadError(
+            browser: CefBrowser?,
+            frame: CefFrame?,
+            errorCode: CefLoadHandler.ErrorCode?,
+            errorText: String?,
+            failedUrl: String?,
+        ) {
+            if (frame?.isMain != true) return
+            rendererLost("onLoadError $errorCode $errorText @$failedUrl")
+        }
+    }
+
+    /**
+     * Renderer-crash detection (Android parity: EditorEngine.kt:222-227 onRenderProcessGone). CEF's
+     * hook is CefRequestHandler.onRenderProcessTerminated. Recovery is NOT automatic: [_ready] and
+     * the planner flip back to not-ready so the pane's ready-gate stops lying over a dead renderer
+     * (pushes queue again, the pane can show its fallback). A future retry affordance would need a
+     * fresh [load]/reload — see [EditorPushPlanner.onRendererLost] for the scroll/reveal caveats.
+     */
+    private val crashHandler = object : CefRequestHandlerAdapter() {
+        override fun onRenderProcessTerminated(
+            browser: CefBrowser?,
+            status: CefRequestHandler.TerminationStatus?,
+        ) {
+            rendererLost("onRenderProcessTerminated $status")
+        }
+    }
+
+    /** Mark the renderer dead (on the EDT): un-ready the flow + planner, log — do NOT auto-reload. */
+    private fun rendererLost(why: String) {
+        println("[DesktopEditorEngine] renderer lost: $why")
+        onEdt {
+            _ready.value = false
+            planner.onRendererLost()
         }
     }
 

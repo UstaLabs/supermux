@@ -127,4 +127,21 @@ class EditorPushPlannerTest {
         p.onReady()
         assertEquals(listOf("cmSetScrollTop(250)"), p.setScrollTop(250))
     }
+
+    @Test
+    fun renderer_lost_queues_pushes_again_and_a_fresh_ready_restores_the_document() {
+        val p = planner(wrap = true, size = 15)
+        p.setDocument("v1", "a.kt")
+        p.onReady()
+        p.recordEcho("v1-edited")
+
+        p.onRendererLost()
+        assertTrue(!p.ready)
+        // Dead renderer: pushes queue instead of hitting a corpse.
+        assertEquals(emptyList(), p.setScrollTop(99))
+        // A fresh page's onReady restores the last-known document (content survives the crash).
+        val js = p.onReady()
+        assertEquals("cmSetContent(\"v1-edited\")", js.first())
+        assertTrue(js.contains("cmSetLineWrap(true)"))
+    }
 }

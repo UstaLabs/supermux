@@ -199,6 +199,18 @@ internal class EditorPushPlanner(
         return pushToView(lastContent, lastFilename, lastScrollTop)
     }
 
+    /**
+     * The renderer died or the page failed to load: stop claiming ready so every push queues again
+     * until a fresh page fires [onReady]. State (content/filename/wrap/font) is KEPT so a reload can
+     * restore the document. KNOWN LIMITATION: the restore pushes [lastScrollTop] — the last
+     * PROGRAMMATIC scroll, not wherever the user had scrolled to — and a pendingReveal consumed
+     * before the crash is not re-fired. Good enough for a crash path; a future retry affordance that
+     * wants exact restoration must snapshot cmGetScrollTop live before the renderer dies.
+     */
+    fun onRendererLost() {
+        ready = false
+    }
+
     /** Echo-skip: record an inbound onChange as last-known BEFORE it round-trips back through Compose
      *  state, so the resulting [setDocument] sees `content == lastContent` and skips the re-push
      *  (parity EditorEngine.kt:175). Without this, fast typing can shove a stale snapshot back. */
