@@ -141,6 +141,67 @@ class EditorPanelTest {
         assertFalse(consumed) // still pending — delivered when the engine arrives
     }
 
+    // ── pendingOpen (M3-T5, chat-tap → editor-at-line) ─────────────────────────────────
+    // SessionDetail hands EditorPanel a [PendingEditorOpen] via this seam; EditorPanel's own
+    // LaunchedEffect(pendingOpen) (Android EditorScreen:223 parity) must reveal the file and consume
+    // the request via [onPendingOpenConsumed] exactly once — never re-firing on a later, unrelated
+    // recomposition (verified by an extra `waitForIdle()` pass after the initial delivery).
+
+    @Test
+    fun pending_open_opens_a_tab_for_the_delivered_path_and_is_consumed_exactly_once() = runComposeUiTest {
+        val kcef = MutableStateFlow<KcefState>(KcefState.Idle)
+        var consumedCount = 0
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                EditorPanel(
+                    sessionId = "s1",
+                    workdir = "/w/s1",
+                    fsList = { tree },
+                    fsRead = { path -> Result.success("hello // $path") },
+                    fsWrite = { _, _ -> true },
+                    fsSearch = { emptyList<FsSearchResult>() },
+                    kcefStateFlow = kcef,
+                    onEnsureInit = {},
+                    pendingOpen = PendingEditorOpen("README.md", 3, null),
+                    onPendingOpenConsumed = { consumedCount++ },
+                )
+            }
+        }
+        onNodeWithTag("editor_empty").assertDoesNotExist() // a tab opened, not the empty prompt
+        onNodeWithText("README.md").assertIsDisplayed() // the tab chip for the delivered path
+        assertEquals(1, consumedCount)
+
+        // A later idle pass (no pendingOpen change) must NOT re-fire the consume callback — the
+        // LaunchedEffect is keyed on `pendingOpen`, which hasn't changed.
+        waitForIdle()
+        assertEquals(1, consumedCount)
+    }
+
+    @Test
+    fun a_null_pendingOpen_never_calls_onPendingOpenConsumed() = runComposeUiTest {
+        val kcef = MutableStateFlow<KcefState>(KcefState.Idle)
+        var consumedCount = 0
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                EditorPanel(
+                    sessionId = "s1",
+                    workdir = "/w/s1",
+                    fsList = { tree },
+                    fsRead = { path -> Result.success("hello // $path") },
+                    fsWrite = { _, _ -> true },
+                    fsSearch = { emptyList<FsSearchResult>() },
+                    kcefStateFlow = kcef,
+                    onEnsureInit = {},
+                    pendingOpen = null,
+                    onPendingOpenConsumed = { consumedCount++ },
+                )
+            }
+        }
+        waitForIdle()
+        assertEquals(0, consumedCount)
+        onNodeWithTag("editor_empty").assertIsDisplayed() // nothing opened
+    }
+
     // Tab-switch scroll capture wiring (Android EditorScreen:406-408/:216 parity): opening a second
     // file (reveal path) and clicking a tab chip (select path) must each read the outgoing scroll
     // through the injected EditorScrollReader seam.

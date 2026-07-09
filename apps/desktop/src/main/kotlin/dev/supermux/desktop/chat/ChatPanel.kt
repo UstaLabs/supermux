@@ -81,6 +81,10 @@ fun ChatPanel(
     // to avoid a duplicate title bar. The dead banner is always shown regardless. Defaults to true
     // for standalone use.
     showHeader: Boolean = true,
+    // Threaded since M1-T7 but wired to a no-op until M3-T5: SessionDetail now passes its real
+    // chat-tap → editor-at-line handler (Android ChatScreen:221 parity). Defaults to {} so
+    // standalone/preview uses of ChatPanel keep compiling.
+    onOpenFile: (FilePathRef) -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val sem = LocalSemantics.current
@@ -202,7 +206,7 @@ fun ChatPanel(
                     TimelineItemRow(
                         item = item,
                         loadBytes = { null }, // M4: attachment bytes fetch (chip-only for now)
-                        onOpenFile = { _: FilePathRef -> /* TODO(M3): open file in the workspace editor */ },
+                        onOpenFile = onOpenFile,
                     )
                 }
             }

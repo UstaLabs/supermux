@@ -48,6 +48,7 @@ import androidx.compose.ui.platform.testTag
 import dev.supermux.desktop.chat.ChatPanel
 import dev.supermux.desktop.editor.EditorPanel
 import dev.supermux.desktop.editor.EditorPrefsStore
+import dev.supermux.desktop.editor.PendingEditorOpen
 import dev.supermux.desktop.session.SessionAvatar
 import dev.supermux.desktop.session.SessionStatusRail
 import dev.supermux.desktop.state.DesktopAppState
@@ -60,6 +61,9 @@ import dev.supermux.desktop.ui.keepAlivePanel
 import dev.supermux.net.TerminalClient
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.SessionInfo
+import dev.supermux.session.inferHomeDir
+import dev.supermux.ui.FilePathRef
+import dev.supermux.ui.toWorkdirRelativePath
 
 /**
  * Placeholder for a pane whose real surface lands in a later milestone: a centered title + an
@@ -97,7 +101,15 @@ fun ComingSoonPane(title: String, milestone: String, testTagName: String, modifi
  * stays disk-free and runComposeUiTest-able; this wrapper is the seam SessionDetail defaults to.
  */
 @Composable
-fun DesktopEditorPanel(app: DesktopAppState, session: SessionInfo, modifier: Modifier = Modifier) {
+fun DesktopEditorPanel(
+    app: DesktopAppState,
+    session: SessionInfo,
+    // Chat-tap → editor-at-line handoff (M3-T5): SessionDetail owns the pendingOpen state (it also
+    // decides the pane-flip), this wrapper just forwards it straight through to [EditorPanel].
+    pendingOpen: PendingEditorOpen? = null,
+    onPendingOpenConsumed: () -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
     val prefsStore = remember { EditorPrefsStore() }
     var prefs by remember { mutableStateOf(prefsStore.load()) }
     EditorPanel(
@@ -110,9 +122,14 @@ fun DesktopEditorPanel(app: DesktopAppState, session: SessionInfo, modifier: Mod
         fsChanges = app.fsChanges,
         editorOpen = { app.editorOpen(session) },
         editorClose = { app.editorClose(session) },
+        pendingOpen = pendingOpen,
+        onPendingOpenConsumed = onPendingOpenConsumed,
         prefs = prefs,
         onFontSize = { px ->
             // The engine already applied the zoom live; persist it so it survives reopen/relaunch.
+            // NOTE: this writeback does NOT touch `sessionId`/content — EditorSurface's engine is
+            // keyed only on `kcefReady` (WebCodeEditor.kt), so a zoom change never re-keys or
+            // reloads the browser; only cmSetFontSize is pushed (EditorPushPlanner parity).
             val next = prefs.copy(fontSize = px).clamped()
             prefs = next
             prefsStore.save(next)
@@ -140,12 +157,40 @@ fun SessionDetail(
     // Injectable seam for the Editor panel — defaults to the real KCEF-backed [DesktopEditorPanel].
     // Same reason as nativePanelContent: KCEF (embedded Chromium) can't boot under runComposeUiTest,
     // and even constructing the real panel touches the on-disk EditorPrefsStore — so SessionDetail's
-    // tests inject a pure-Compose fake tagged `pane_editor`.
-    editorPanelContent: @Composable () -> Unit = {
-        DesktopEditorPanel(app = app, session = session, modifier = Modifier.fillMaxSize().testTag("pane_editor"))
+    // tests inject a pure-Compose fake tagged `pane_editor`. Extended in M3-T5 to carry the
+    // chat-tap pendingOpen handoff through to the real panel (see [pendingEditorOpen] below); a test's
+    // fake can capture the args to assert delivery/consumption without touching KCEF.
+    editorPanelContent: @Composable (pendingOpen: PendingEditorOpen?, onPendingOpenConsumed: () -> Unit) -> Unit = {
+        pendingOpen, onConsumed ->
+        DesktopEditorPanel(
+            app = app,
+            session = session,
+            pendingOpen = pendingOpen,
+            onPendingOpenConsumed = onConsumed,
+            modifier = Modifier.fillMaxSize().testTag("pane_editor"),
+        )
     },
 ) {
     val cs = MaterialTheme.colorScheme
+
+    // Chat-tap → editor-at-line (Android ChatScreen:221 / SessionWorkspaceDetail:174 parity): a tap
+    // on a file-path ref in the transcript converts to a workdir-relative [PendingEditorOpen], flips
+    // the editor pane on, and hands the target to EditorPanel via the seam above. `remember(session.id)`
+    // so a session switch starts with a clean slate (no stale reveal leaking into the new session).
+    var pendingEditorOpen by remember(session.id) { mutableStateOf<PendingEditorOpen?>(null) }
+    val onOpenFile: (FilePathRef) -> Unit = remember(session.id) {
+        { ref ->
+            val rel = toWorkdirRelativePath(ref.path, session.workdir, inferHomeDir(session.workdir))
+            if (rel == null) {
+                // No toast surface on desktop yet (TODO(M4): a snackbar host) — log-and-drop, same
+                // intent as Android's Toast (a path outside the session's project is not openable).
+                println("[SessionDetail] onOpenFile: '${ref.path}' is outside session workdir '${session.workdir}' — dropped")
+            } else {
+                pendingEditorOpen = PendingEditorOpen(rel, ref.line, ref.endLine)
+                layout.setPanes(session.id, layout.panesFor(session.id).copy(editor = true))
+            }
+        }
+    }
 
     // ── individual panes (each fills its split slot) ──
     // Chat/Native slot: defined ONCE and always rendered through the same split slot, so toggling a
@@ -180,6 +225,7 @@ fun SessionDetail(
                 onDraftChange = onDraftChange,
                 modifier = Modifier.keepAlivePanel(visible = !native).testTag("pane_chat"),
                 showHeader = false, // this SessionDetail owns the identity header
+                onOpenFile = onOpenFile,
             )
             if (nativeOpened) {
                 key(session.id) {
@@ -203,7 +249,9 @@ fun SessionDetail(
             }
         }
     }
-    val editorPane: @Composable () -> Unit = editorPanelContent
+    val editorPane: @Composable () -> Unit = {
+        editorPanelContent(pendingEditorOpen) { pendingEditorOpen = null }
+    }
     // Real scratch terminal with web-parity tabs (list/add/close). One strip per session.
     val terminalPane: @Composable () -> Unit = {
         // Only ever composed when the terminal pane is on (the split slot is null otherwise), so

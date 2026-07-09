@@ -8,16 +8,23 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
+import dev.supermux.desktop.editor.PendingEditorOpen
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.net.TerminalClient
+import dev.supermux.proto.LogEntry
+import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
@@ -49,10 +56,27 @@ class SessionDetailTest {
 
     // The real editor pane embeds KCEF (embedded Chromium) which can't boot under runComposeUiTest —
     // and even constructing it touches the on-disk EditorPrefsStore — so inject a pure-Compose fake
-    // via SessionDetail's `editorPanelContent` seam, tagged `pane_editor` like the real panel.
-    private val fakeEditor: @Composable () -> Unit = {
+    // via SessionDetail's `editorPanelContent` seam, tagged `pane_editor` like the real panel. Ignores
+    // the pendingOpen/onPendingOpenConsumed args — tests that care about the T5 handoff use
+    // [fakeEditorCapturingPendingOpen] instead.
+    private val fakeEditor: @Composable (PendingEditorOpen?, () -> Unit) -> Unit = { _, _ ->
         Box(Modifier.fillMaxSize().testTag("pane_editor"))
     }
+
+    // Records every pendingOpen the seam was invoked with (across recompositions) and exposes the
+    // onPendingOpenConsumed callback so a test can drive the "consumed exactly once" assertion.
+    private class PendingOpenLedger {
+        val seen = mutableListOf<PendingEditorOpen?>()
+        var consumeCalls = 0
+        var lastConsume: (() -> Unit)? = null
+    }
+
+    private fun fakeEditorCapturingPendingOpen(ledger: PendingOpenLedger): @Composable (PendingEditorOpen?, () -> Unit) -> Unit =
+        { pendingOpen, onConsumed ->
+            ledger.seen.add(pendingOpen)
+            ledger.lastConsume = { ledger.consumeCalls++; onConsumed() }
+            Box(Modifier.fillMaxSize().testTag("pane_editor"))
+        }
 
     @Test
     fun togglingWorkPanesMountsPanes() = runComposeUiTest {
@@ -95,6 +119,122 @@ class SessionDetailTest {
         runOnIdle { layout.toggleChat("s1") }
         onNodeWithTag("pane_chat").assertDoesNotExist()
         onNodeWithTag("pane_editor").assertIsDisplayed()
+    }
+
+    // ── Chat-tap → editor-at-line (M3-T5) ──────────────────────────────────────────────
+    //
+    // A file-path ref rendered in the transcript (AssistantMessage/mdAnnotated, linkify=true) carries
+    // a `LinkAnnotation.Clickable` over its character range — driven end-to-end through the REAL
+    // ChatPanel rather than a seam (there is no seam for the timeline itself). Each seeded message
+    // body IS the ref (nothing else on the line) so the link's range is knowable ahead of time; a
+    // plain `performClick()` lands at the NODE's center, which — because the row is `fillMaxWidth()`
+    // — is usually past the short link's actual glyphs and misses the click-annotation hit-test, so
+    // these click near the text's top-left instead (`performTouchInput { click(Offset(4f, 4f)) }`).
+    //
+    // NOTE: `runOnIdle { ... }` around a plain (non-gesture) state write did NOT reliably force a
+    // recomposition in this Skiko/JUnit4 test harness (verified empirically) — invoke such writes
+    // directly, then call `waitForIdle()` afterward, as [chatTapOpensTheEditorPaneAndDeliversAWorkdirRelativePendingOpen]
+    // does for its `ledger.lastConsume` simulation below.
+
+    private fun seedFileRefMessage(app: DesktopAppState, sessionId: String, id: String, text: String) {
+        app.reduce(
+            ServerFrame.MessageAppend(
+                session = sessionId,
+                entry = LogEntry(id = id, ts = "2026-07-09T00:00:00Z", direction = "outbound", text = text),
+            ),
+        )
+    }
+
+    @Test
+    fun chatTapOpensTheEditorPaneAndDeliversAWorkdirRelativePendingOpen() = runComposeUiTest {
+        val layout = WorkspaceLayout()
+        val theApp = app()
+        seedFileRefMessage(theApp, "s1", "m1", "src/main.kt:42")
+        val ledger = PendingOpenLedger()
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                SessionDetail(
+                    app = theApp, session = session, agent = null, layout = layout,
+                    draft = "", onDraftChange = {},
+                    editorPanelContent = fakeEditorCapturingPendingOpen(ledger),
+                )
+            }
+        }
+        onNodeWithTag("pane_editor").assertDoesNotExist()
+        assertEquals(emptyList<PendingEditorOpen?>(), ledger.seen) // not mounted yet: pane off
+
+        onNodeWithText("src/main.kt:42").performTouchInput { click(Offset(4f, 4f)) }
+        waitForIdle()
+
+        // Pane flips on (Android SessionWorkspaceDetail:174 parity: layout.setPanes(... editor = true)).
+        assertEquals(true, layout.panesFor("s1").editor)
+        onNodeWithTag("pane_editor").assertIsDisplayed()
+        // ...and the target is workdir-relative (session.workdir = "/w/s1"), with the parsed line.
+        assertEquals(PendingEditorOpen("src/main.kt", 42, null), ledger.seen.last())
+
+        // The real EditorPanel would consume it after revealing the file; simulate that ack and
+        // confirm the seam is re-invoked with pendingOpen == null exactly once (T5 deliverable:
+        // "consumed exactly once").
+        ledger.lastConsume?.invoke()
+        waitForIdle()
+        assertEquals(1, ledger.consumeCalls)
+        assertEquals(null, ledger.seen.last())
+    }
+
+    @Test
+    fun aTapWhileThePaneIsAlreadyOpenUpdatesThePendingOpen() = runComposeUiTest {
+        val layout = WorkspaceLayout()
+        layout.toggleEditor("s1") // pane already open BEFORE any tap
+        val theApp = app()
+        seedFileRefMessage(theApp, "s1", "m1", "src/a.kt:1")
+        seedFileRefMessage(theApp, "s1", "m2", "src/b.kt:9")
+        val ledger = PendingOpenLedger()
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                SessionDetail(
+                    app = theApp, session = session, agent = null, layout = layout,
+                    draft = "", onDraftChange = {},
+                    editorPanelContent = fakeEditorCapturingPendingOpen(ledger),
+                )
+            }
+        }
+        onNodeWithTag("pane_editor").assertIsDisplayed() // already open pre-tap
+
+        onNodeWithText("src/a.kt:1").performTouchInput { click(Offset(4f, 4f)) }
+        waitForIdle()
+        assertEquals(PendingEditorOpen("src/a.kt", 1, null), ledger.seen.last())
+        assertEquals(true, layout.panesFor("s1").editor) // stays open, no double-toggle-off
+
+        // A second tap — WITHOUT the first ever being consumed — overwrites the pending target
+        // rather than queuing/ignoring it (Android has no queue: the state is a single slot).
+        onNodeWithText("src/b.kt:9").performTouchInput { click(Offset(4f, 4f)) }
+        waitForIdle()
+        assertEquals(PendingEditorOpen("src/b.kt", 9, null), ledger.seen.last())
+        assertEquals(true, layout.panesFor("s1").editor)
+    }
+
+    @Test
+    fun aTapOnAPathOutsideTheWorkdirIsDroppedWithoutOpeningThePane() = runComposeUiTest {
+        val layout = WorkspaceLayout()
+        val theApp = app()
+        seedFileRefMessage(theApp, "s1", "m1", "/etc/motd.txt:5")
+        val ledger = PendingOpenLedger()
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                SessionDetail(
+                    app = theApp, session = session, agent = null, layout = layout,
+                    draft = "", onDraftChange = {},
+                    editorPanelContent = fakeEditorCapturingPendingOpen(ledger),
+                )
+            }
+        }
+        onNodeWithText("/etc/motd.txt:5").performTouchInput { click(Offset(4f, 4f)) }
+        waitForIdle()
+
+        assertEquals(false, layout.panesFor("s1").editor)
+        // The pane never mounts (never toggled on) — the editorPanelContent seam is never invoked.
+        onNodeWithTag("pane_editor").assertDoesNotExist()
+        assertTrue(ledger.seen.isEmpty())
     }
 
     // ── Chat|Native toggle (Task 7) ──────────────────────────────────────────────────
