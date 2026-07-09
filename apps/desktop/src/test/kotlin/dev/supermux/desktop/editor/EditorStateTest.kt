@@ -3,6 +3,7 @@ package dev.supermux.desktop.editor
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -439,6 +440,126 @@ class EditorStateTest {
         assertEquals("b.kt", s.activeTabPath)
         assertEquals(setOf("a.kt", "b.kt"), s.tabs.map { it.path }.toSet())
         assertNull(s.loadingPath)
+    }
+
+    // reload only clears its OWN loading gate: a concurrent openFile(B) completing after the reload
+    // must still activate B (an unconditional loadingPath=null in reload used to stomp B's gate).
+    @Test fun reload_completion_does_not_stomp_a_concurrent_opens_loading_gate() = runTest {
+        val gateReload = CompletableDeferred<Unit>()
+        val gateB = CompletableDeferred<Unit>()
+        val s = EditorState(
+            fsRead = { path -> if (path == "b.kt") gateB.await(); Result.success("body:$path") },
+            fsWrite = { _, _ -> true },
+            scope = this,
+        )
+        s.openFile("a.txt")
+        advanceUntilIdle() // a.txt open
+
+        val reloadJob = launch { s.reload("a.txt") { gateReload.await(); Result.success("fresh") } }
+        advanceUntilIdle() // reload in flight; loadingPath = a.txt
+        assertEquals("a.txt", s.loadingPath)
+
+        s.openFile("b.kt") // takes over the gate
+        assertEquals("b.kt", s.loadingPath)
+
+        gateReload.complete(Unit)
+        advanceUntilIdle()
+        // reload finished but must NOT have cleared b.kt's gate…
+        assertEquals("b.kt", s.loadingPath)
+        assertEquals("fresh", s.tabs.find { it.path == "a.txt" }?.content)
+
+        gateB.complete(Unit)
+        advanceUntilIdle()
+        // …so b.kt still activates on completion.
+        assertEquals("b.kt", s.activeTabPath)
+        assertNull(s.loadingPath)
+        reloadJob.join()
+    }
+
+    // closeTab during an in-flight reload: the reload's completion consumes the cancel marker and
+    // DROPS the result (the tab is gone — its stale flag must not be cleared off a ghost).
+    @Test fun close_tab_during_reload_consumes_the_cancel_and_drops_the_result() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val s = EditorState(
+            fsRead = { path -> Result.success("body:$path") },
+            fsWrite = { _, _ -> true },
+            scope = this,
+        )
+        s.openFile("a.txt")
+        advanceUntilIdle()
+        s.markChanged(listOf("a.txt"))
+
+        val reloadJob = launch { s.reload("a.txt") { gate.await(); Result.success("fresh") } }
+        advanceUntilIdle() // reload in flight; loadingPath = a.txt
+        s.closeTab("a.txt") // cancels the reload (loadingPath == path branch)
+        assertNull(s.loadingPath)
+        assertTrue(s.tabs.isEmpty())
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+        reloadJob.join()
+        // Result dropped: no tab resurrected, stale flag untouched, no error, no leaked gate…
+        assertTrue(s.tabs.isEmpty())
+        assertTrue(s.isStale("a.txt"))
+        assertNull(s.loadError)
+        assertNull(s.loadingPath)
+        // …and the cancel marker was CONSUMED: a fresh open of the same path loads normally.
+        s.openFile("a.txt")
+        advanceUntilIdle()
+        assertEquals("a.txt", s.activeTabPath)
+    }
+
+    // Fix: a superseded-but-successful load activates its tab when nothing is selected (open A,
+    // open B, close B mid-load → A's completion must not leave a bare surface with no active tab).
+    @Test fun open_a_open_b_close_b_mid_load_still_activates_a() = runTest {
+        val gateA = CompletableDeferred<Unit>()
+        val gateB = CompletableDeferred<Unit>()
+        val s = EditorState(
+            fsRead = { path ->
+                when (path) { "a.kt" -> gateA.await(); "b.kt" -> gateB.await() }
+                Result.success("body:$path")
+            },
+            fsWrite = { _, _ -> true },
+            scope = this,
+        )
+        s.openFile("a.kt") // slow
+        s.openFile("b.kt") // takes the gate
+        s.closeTab("b.kt") // cancel B mid-load → gate cleared, nothing selected
+
+        gateA.complete(Unit)
+        gateB.complete(Unit)
+        advanceUntilIdle()
+        // A completed while the gate was gone — it must still activate (activeTabPath was null).
+        assertEquals(listOf("a.kt"), s.tabs.map { it.path })
+        assertEquals("a.kt", s.activeTabPath)
+    }
+
+    // ── captureOutgoingScroll — the tab-switch scroll capture (Android EditorScreen:406-408 parity
+    //    with the async-attribution fix; see WebCodeEditor.kt's KDoc). ─────────────────────────────
+
+    @Test fun capture_outgoing_scroll_lands_on_the_tab_that_was_active_at_call_time() {
+        val s = state()
+        s.openFile("a.txt")
+        s.openFile("b.txt") // b active (the outgoing tab)
+        // A reader whose callback is LATE (fires after the tab switch) — the Android-pattern race.
+        var pending: ((Int) -> Unit)? = null
+        val reader = EditorScrollReader().apply { read = { cb -> pending = cb } }
+
+        captureOutgoingScroll(s, reader)
+        s.selectTab("a.txt") // switch BEFORE the async read returns
+        pending!!.invoke(99) // late callback
+
+        // The offset lands on b (outgoing at call time), NOT the now-active a.
+        assertEquals(99, s.tabs.find { it.path == "b.txt" }?.scrollTop)
+        assertEquals(0, s.tabs.find { it.path == "a.txt" }?.scrollTop)
+    }
+
+    @Test fun capture_outgoing_scroll_is_a_no_op_with_no_active_tab() {
+        val s = state()
+        var reads = 0
+        val reader = EditorScrollReader().apply { read = { reads++; it(42) } }
+        captureOutgoingScroll(s, reader)
+        assertEquals(0, reads) // no outgoing tab → the reader is never even invoked
     }
 
     // Obligation 2: a superseded pending-reveal poll is dropped; the newest reveal wins.

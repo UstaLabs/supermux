@@ -30,6 +30,7 @@ import io.ktor.client.plugins.websocket.WebSockets
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
@@ -104,9 +105,14 @@ class DesktopAppState(
     // The reducer folds inbound fs_changed frames into this app-wide SharedFlow (mirrors Android's
     // AppViewModel.fsChanges). Each EditorPanel collects it and calls its EditorState.markChanged
     // FILTERED to its own session — the stale-on-disk banner is dead without this stream. A replay
-    // of 0 (transient signal, not state) + a generous extraBufferCapacity so tryEmit from the
-    // synchronous reducer never drops a change or suspends.
-    private val _fsChanges = MutableSharedFlow<ServerFrame.FsChanged>(extraBufferCapacity = 64)
+    // of 0 (transient signal, not state) + a 64-deep buffer with DROP_OLDEST: the default overflow
+    // policy (SUSPEND) makes tryEmit fail on a full buffer, dropping the NEWEST pulse — exactly the
+    // one the banner needs. DROP_OLDEST keeps the freshest change flowing instead (trivially better
+    // than Android's default-policy flow — backport candidate).
+    private val _fsChanges = MutableSharedFlow<ServerFrame.FsChanged>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
     val fsChanges: SharedFlow<ServerFrame.FsChanged> = _fsChanges.asSharedFlow()
 
     /** Whether the client has a fresh snapshot from the broker (i.e. we're synced/connected). */

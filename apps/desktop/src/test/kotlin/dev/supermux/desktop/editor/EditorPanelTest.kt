@@ -14,6 +14,8 @@ import dev.supermux.proto.ServerFrame
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 
 /**
  * Compose UI tests for [EditorPanel] via the KCEF-free seams: [kcefStateFlow] is a MutableStateFlow
@@ -110,5 +112,67 @@ class EditorPanelTest {
         setContent(ComposeContent(kcef, MutableSharedFlow()))
 
         onNodeWithTag("editor_downloading").assertIsDisplayed()
+    }
+
+    // A pending reveal must SURVIVE the engine-less window (T5's chat-tap open typically arrives
+    // before KCEF is Ready): consuming it with engine == null would silently drop the line jump.
+    @Test
+    fun reveal_is_not_consumed_while_the_engine_is_absent() = runComposeUiTest {
+        var consumed = false
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                EditorSurface(
+                    kcefState = KcefState.Idle, // no engine will ever exist in this test
+                    content = "text",
+                    filename = "a.kt",
+                    lineWrap = true,
+                    fontSize = 13,
+                    scrollTop = 0,
+                    revealLine = 5 to null,
+                    onChange = {},
+                    onSave = {},
+                    onRevealConsumed = { consumed = true },
+                    onFontSize = {},
+                    onEnsureInit = {},
+                )
+            }
+        }
+        waitForIdle()
+        assertFalse(consumed) // still pending — delivered when the engine arrives
+    }
+
+    // Tab-switch scroll capture wiring (Android EditorScreen:406-408/:216 parity): opening a second
+    // file (reveal path) and clicking a tab chip (select path) must each read the outgoing scroll
+    // through the injected EditorScrollReader seam.
+    @Test
+    fun switching_files_captures_the_outgoing_scroll_via_the_reader_seam() = runComposeUiTest {
+        var reads = 0
+        val reader = EditorScrollReader().apply { read = { reads++; it(42) } }
+        val kcef = MutableStateFlow<KcefState>(KcefState.Idle)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                EditorPanel(
+                    sessionId = "s1",
+                    workdir = "/w/s1",
+                    fsList = { tree + FsEntry(name = "README.md", type = "file") },
+                    fsRead = { path -> Result.success("body // $path") },
+                    fsWrite = { _, _ -> true },
+                    fsSearch = { emptyList<FsSearchResult>() },
+                    kcefStateFlow = kcef,
+                    onEnsureInit = {},
+                    scrollReader = reader,
+                )
+            }
+        }
+        onNodeWithText("notes.txt").performClick() // first open: no outgoing tab → no read
+        assertEquals(0, reads)
+
+        onNodeWithText("README.md").performClick() // reveal path: captures notes.txt's scroll
+        assertEquals(1, reads)
+
+        // Hide the tree so the tab chip is the only "notes.txt" text node, then select it.
+        onNodeWithTag("editor_tree_toggle").performClick()
+        onNodeWithText("notes.txt").performClick() // select path: captures README.md's scroll
+        assertEquals(2, reads)
     }
 }

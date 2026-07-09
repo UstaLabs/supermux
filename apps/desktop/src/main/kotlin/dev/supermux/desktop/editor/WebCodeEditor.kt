@@ -77,12 +77,37 @@ private val EDITOR_FG = Color(0xFFABB2BF)
 private const val READY_MISS_MS = 8_000L
 
 /**
+ * Seam letting the panel read the live editor's scroll offset without owning the engine (which is
+ * encapsulated in [EditorSurface]): the surface installs the real reader once its engine exists; the
+ * default fires 0 so callers degrade to "no capture" before then. Used via [captureOutgoingScroll]
+ * right before a tab switch / reveal (Android EditorScreen.kt:406-408 + :216 parity).
+ */
+class EditorScrollReader {
+    internal var read: ((Int) -> Unit) -> Unit = { it(0) }
+    operator fun invoke(cb: (Int) -> Unit) = read(cb)
+}
+
+/**
+ * Capture the CURRENT (outgoing) tab's scroll before a tab switch/reveal. DELIBERATE divergence from
+ * Android's `engine.readScrollTop { editor.captureActiveScroll(it) }`: the read is async, so by the
+ * time its callback lands `selectTab` has already flipped `activeTab` and captureActiveScroll would
+ * mis-attribute the offset to the INCOMING tab. Snapshotting the outgoing tab at call time makes the
+ * late callback always land on the right tab (backport candidate).
+ */
+internal fun captureOutgoingScroll(editor: EditorState, reader: EditorScrollReader) {
+    val outgoing = editor.activeTab ?: return
+    reader { scroll -> outgoing.scrollTop = scroll }
+}
+
+/**
  * The editing surface for the active tab. Builds + drives a [DesktopEditorEngine] once KCEF is
  * [KcefState.Ready], and falls back to a native editor on a terminal KCEF error or an 8s ready-miss.
  *
  * @param onEnsureInit kicks the (idempotent) KCEF init on first mount. Injected so tests pass `{}`.
  * @param indexUrlProvider `file://…/index.html` for the extracted bundle; only called once Ready.
  * @param engineFactory builds the engine (seam for tests; never invoked unless Ready).
+ * @param scrollReader when non-null, receives this surface's live scroll reader so the panel can
+ *   capture the outgoing tab's offset before a switch (see [captureOutgoingScroll]).
  */
 @Composable
 fun EditorSurface(
@@ -103,6 +128,7 @@ fun EditorSurface(
     engineFactory: (String, Boolean, Int) -> DesktopEditorEngine = { url, lw, fs ->
         DesktopEditorEngine(url, lw, fs)
     },
+    scrollReader: EditorScrollReader? = null,
 ) {
     val scope = rememberCoroutineScope()
     // Idempotent: only the first editor pane ever mounted actually starts KCEF (started CAS in the
@@ -123,11 +149,18 @@ fun EditorSurface(
     // window; creating it in a detached/0-size effect leaves the load deferred forever.
     DisposableEffect(engine) { onDispose { engine?.dispose() } }
 
-    // Engine callbacks are plain EDT-confined vars — keep them current each recomposition.
+    // Engine callbacks are plain EDT-confined vars — keep them current each recomposition. The
+    // scroll-reader seam is bound the same way, but ONLY once an engine exists: before that the
+    // reader keeps whatever it holds (the default fires 0 — a no-op capture; a test's injected fake
+    // must not be clobbered by an engine-less rebind). A read against a later-disposed engine is
+    // safe: getScrollTop fires 0 when the browser is gone.
     SideEffect {
-        engine?.onChange = onChange
-        engine?.onSave = onSave
-        engine?.onFontSize = onFontSize
+        if (engine != null) {
+            engine.onChange = onChange
+            engine.onSave = onSave
+            engine.onFontSize = onFontSize
+            scrollReader?.read = { cb -> engine.getScrollTop(cb) }
+        }
     }
 
     val engineReady by (engine?.ready ?: remember { MutableStateFlow(false) }).collectAsState()
@@ -137,8 +170,12 @@ fun EditorSurface(
         engine?.setDocument(filename, content, scrollTop)
     }
     LaunchedEffect(engine, revealLine) {
-        revealLine?.let {
-            engine?.revealLine(it.first, it.second)
+        // Consume the reveal ONLY once an engine exists to receive it: consuming while engine == null
+        // (pre-Ready — where T5's chat-tap open typically lands) would silently drop the reveal.
+        // Leaving it pending lets this effect re-run when the engine arrives (engine is a key) and
+        // deliver it then; the engine's planner queues it further until cm6 first-paints.
+        if (engine != null && revealLine != null) {
+            engine.revealLine(revealLine.first, revealLine.second)
             onRevealConsumed() // one-shot: returning to this tab restores scroll instead of re-jumping
         }
     }
@@ -183,8 +220,11 @@ fun EditorSurface(
             // detached trap. Thereafter it is kept composed and merely laid out at 0×0 (KeepAlivePanel)
             // when there's no active tab, so the Compose empty-state prompt underneath shows instead
             // (a heavyweight child would otherwise occlude it), and the browser + its document survive.
+            // `engine` keys BOTH the remember and the effect so the latch and its setter reset/relaunch
+            // together on an engine swap — keying the effect on hasDoc alone would rely on a non-local
+            // invariant (that hasDoc happens to change across the swap) to re-arm the latch.
             var shownOnce by remember(engine) { mutableStateOf(false) }
-            LaunchedEffect(hasDoc) { if (hasDoc) shownOnce = true }
+            LaunchedEffect(engine, hasDoc) { if (hasDoc) shownOnce = true }
             Box(modifier.fillMaxSize().background(EDITOR_BG).testTag("editor_web_area")) {
                 if (engine != null && shownOnce) {
                     KeepAlivePanel(visible = hasDoc) {

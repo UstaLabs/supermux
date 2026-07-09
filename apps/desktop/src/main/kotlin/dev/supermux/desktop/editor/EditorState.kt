@@ -123,6 +123,11 @@ class EditorState(
                     if (loadingPath == path) {
                         activeTabPath = path
                         loadingPath = null
+                    } else if (activeTabPath == null) {
+                        // The gate moved on (e.g. a newer open was closed mid-load, clearing it) and
+                        // nothing is selected: a superseded-but-successful load should still show its
+                        // tab rather than leaving a bare surface under an unselected tab strip.
+                        activeTabPath = path
                     }
                 }
                 .onFailure { err ->
@@ -223,17 +228,32 @@ class EditorState(
 
     private fun normPath(p: String): String = p.removePrefix("/")
 
-    /** Re-read a tab from disk and clear its stale flag (parity EditorState.swift:130-144). */
+    /**
+     * Re-read a tab from disk and clear its stale flag (parity EditorState.swift:130-144).
+     *
+     * Same networked-read discipline as [openFile] (M3-T4): the completion only clears
+     * [loadingPath] when it still owns the gate — an unconditional clear would stomp a concurrent
+     * `openFile(B)`'s gate and leave B's tab added-but-never-activated. And a [closeTab] during the
+     * reload marks the path cancelled; the completion consumes that marker and DROPS the result
+     * (the tab is gone), so the stale entry can't leak into [cancelledPaths] forever.
+     */
     suspend fun reload(path: String, fsRead: suspend (String) -> Result<String>) {
         val tab = tabs.find { it.path == path } ?: return
         loadingPath = path
-        fsRead(path)
+        val result = fsRead(path)
+        // closeTab-during-reload: consume the cancel marker and drop the result — the tab was
+        // removed, so applying content/clearing the stale flag would act on a ghost.
+        if (cancelledPaths.remove(path)) {
+            if (loadingPath == path) loadingPath = null
+            return
+        }
+        result
             .onSuccess { content ->
                 tab.content = content
                 tab.savedContent = content
                 changedPaths = changedPaths - normPath(path)
             }
             .onFailure { err -> loadError = err.message ?: "Could not reload file" }
-        loadingPath = null
+        if (loadingPath == path) loadingPath = null
     }
 }

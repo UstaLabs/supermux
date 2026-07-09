@@ -102,6 +102,9 @@ fun EditorPanel(
     onFontSize: (Int) -> Unit = {},
     kcefStateFlow: StateFlow<KcefState> = KcefRuntime.state,
     onEnsureInit: (CoroutineScope) -> Unit = { KcefRuntime.ensureInit(it) },
+    // Test seam: inject a fake reader to drive/observe the tab-switch scroll capture; defaults to a
+    // panel-owned reader that EditorSurface wires to the live engine's getScrollTop.
+    scrollReader: EditorScrollReader? = null,
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -113,6 +116,10 @@ fun EditorPanel(
     // lambdas, which capture the whole session and re-instance on every background pulse; keying on
     // them would wipe open tabs + unsaved edits on each pulse — Android EditorScreen:118-126).
     val editor = remember(sessionId) { EditorState(fsRead, fsWrite, scope) }
+
+    // The scroll-capture seam: EditorSurface installs the live engine reader into this; the panel
+    // reads it right before a tab switch/reveal (Android EditorScreen:406-408/:216 parity).
+    val reader = scrollReader ?: remember { EditorScrollReader() }
 
     val kcefState by kcefStateFlow.collectAsState()
 
@@ -145,6 +152,8 @@ fun EditorPanel(
 
     fun revealFile(path: String, line: Int? = null, endLine: Int? = null) {
         focusManager.clearFocus()
+        // Capture the outgoing tab's scroll before the switch (Android EditorScreen:216 parity).
+        captureOutgoingScroll(editor, reader)
         editor.openFileAtLine(path, line, endLine)
         editor.searchQuery = ""
         searchResults.clear()
@@ -235,7 +244,12 @@ fun EditorPanel(
                             activeTabPath = editor.activeTabPath,
                             loadingPath = if (loadingNew) editor.loadingPath else null,
                             isDirty = editor::isDirty,
-                            onSelect = { path -> editor.selectTab(path) },
+                            onSelect = { path ->
+                                // Capture the outgoing tab's scroll before switching (Android
+                                // EditorScreen:406-408 parity, via the EditorScrollReader seam).
+                                captureOutgoingScroll(editor, reader)
+                                editor.selectTab(path)
+                            },
                             onClose = editor::closeTab,
                         )
                         HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
@@ -285,6 +299,7 @@ fun EditorPanel(
                                     onRevealConsumed = { activeTab?.revealLine = null },
                                     onFontSize = onFontSize,
                                     onEnsureInit = onEnsureInit,
+                                    scrollReader = reader,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                             }
