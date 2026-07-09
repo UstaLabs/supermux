@@ -4,8 +4,8 @@
 //
 // Live surfaces: Chat (M1), Terminal — scratch tabs + the Native agent PTY (M2), and Editor (M3, the
 // KCEF-backed code editor). Display remains a ComingSoonPane placeholder (it arrives in M5).
-// Deliberately SKIPPED for M1 (present in the Android original, all TODO(M4) here): git badge menus,
-// Finish button, the session-links menu, and the overflow (⋮) management menu. The AgentViewToggle
+// The Finish button (worktree-backed sessions) lands in M4b; still TODO(M4c) from the Android
+// original: git badge menus, the session-links menu, and the overflow (⋮) management menu. The AgentViewToggle
 // (Chat⇄Native) was pulled forward into M2 (terminal UX) — see the chatOrNative slot below.
 //
 // The split structure and the "chat stays in the same composition slot" discipline are copied
@@ -35,8 +35,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,6 +48,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.testTag
 import dev.supermux.desktop.chat.ChatPanel
+import dev.supermux.desktop.chat.FinishButton
+import dev.supermux.desktop.chat.FinishDialog
 import dev.supermux.desktop.editor.EditorPanel
 import dev.supermux.desktop.editor.EditorPrefsStore
 import dev.supermux.desktop.editor.PendingEditorOpen
@@ -64,6 +68,7 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.session.inferHomeDir
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.toWorkdirRelativePath
+import kotlinx.coroutines.launch
 
 /**
  * Placeholder for a pane whose real surface lands in a later milestone: a centered title + an
@@ -354,8 +359,51 @@ fun SessionDetail(
                 )
                 Spacer(Modifier.width(Space.xs))
             }
-            // TODO(M4): git badge menu, Finish button, session-links menu, and the overflow (⋮)
-            // management menu — all present in the Android original.
+            // Finish — worktree-backed sessions only (same gate/badge as Android's header). The
+            // button opens a FinishDialog driven by the live finishJobs[session.id]; the unacked dot
+            // shows a background result the user hasn't opened yet (Android SessionWorkspaceDetail
+            // parity — ackedStartedAt latches "seen" per session).
+            if (session.session_branch != null) {
+                val finishScope = rememberCoroutineScope()
+                val finishJobs by app.finishJobs.collectAsState()
+                val finishJob = finishJobs[session.id]
+                var showFinishDialog by remember(session.id) { mutableStateOf(false) }
+                var ackedStartedAt by remember(session.id) { mutableStateOf(0.0) }
+                val isUnacked = finishJob != null &&
+                    finishJob.status != "running" &&
+                    finishJob.startedAt != ackedStartedAt
+                FinishButton(
+                    finishJob = finishJob,
+                    isUnacked = isUnacked,
+                    onClick = {
+                        ackedStartedAt = finishJob?.startedAt ?: ackedStartedAt
+                        showFinishDialog = true
+                    },
+                )
+                if (showFinishDialog) {
+                    FinishDialog(
+                        session = session,
+                        finishJob = finishJob,
+                        onReadiness = { app.finishReadiness(session.id) },
+                        onFinish = { action, skipVerify, commitFirst, commitMessage, onKickoff ->
+                            finishScope.launch {
+                                val ok = app.finish(
+                                    session.id, action, skipVerify, commitFirst, commitMessage,
+                                )
+                                onKickoff(ok)
+                            }
+                        },
+                        onClearJob = { app.clearFinishJob(session.id) },
+                        onVerifySuggest = { app.verifySuggest(session.id) },
+                        onVerifySave = { content -> app.verifySave(session.id, content) },
+                        onSendToAgent = { msg -> app.sendMessage(session.id, msg) },
+                        onDismiss = { showFinishDialog = false },
+                    )
+                }
+                Spacer(Modifier.width(Space.xs))
+            }
+            // TODO(M4c): git badge menu, session-links menu, and the overflow (⋮) management menu —
+            // all present in the Android original.
             PaneToggleCluster(layout = layout, sessionId = session.id)
         }
         Box(
