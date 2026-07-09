@@ -50,6 +50,12 @@ fun WorkspaceRoot(app: DesktopAppState) {
         app.updateViewing(selectedId, focused)
     }
 
+    // A session removed externally (killed from another client, agent exit) must drop the local
+    // selection, otherwise updateViewing keeps asserting a dead session id.
+    LaunchedEffect(sessions) {
+        if (selectedId != null && sessions.none { it.id == selectedId }) selectedId = null
+    }
+
     val home = remember(sessions) {
         inferHomeDir(sessions.firstOrNull()?.workdir) ?: System.getProperty("user.home").orEmpty()
     }
