@@ -2,8 +2,8 @@
 // the wide-screen detail for ONE session: a minimal identity header + the nested, drag-resizable
 // split tree of live panes driven by [layout].panesFor([session].id).
 //
-// M1 scope: only the Chat pane is a real surface (the desktop ChatPanel). Editor / Terminal /
-// Display are ComingSoonPane placeholders (they arrive in M3 / M2 / M5). Deliberately SKIPPED for
+// Live surfaces: Chat (M1) and Terminal — scratch tabs + the Native agent PTY (M2). Editor /
+// Display remain ComingSoonPane placeholders (they arrive in M3 / M5). Deliberately SKIPPED for
 // M1 (present in the Android original, all TODO(M4) here): git badge menus, Finish button, the
 // session-links menu, and the overflow (⋮) management menu. The AgentViewToggle (Chat⇄Native) was
 // pulled forward into M2 (terminal UX) — see the chatOrNative slot below.
