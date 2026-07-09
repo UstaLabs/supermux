@@ -358,8 +358,11 @@ onUnmounted(() => {
           :repos="editor.diffRepos.value"
           :comments="editor.diffComments.value"
           :session-id="props.sessionName"
+          :base="editor.diffBase.value"
+          :refs="editor.diffRefs.value"
           @close="editor.showDiff.value = false"
           @reload="editor.reloadDiff()"
+          @set-base="editor.setDiffBase($event)"
         />
 
         <template v-else-if="editor.activeTab.value">
