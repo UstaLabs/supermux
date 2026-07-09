@@ -41,6 +41,7 @@ import dev.supermux.desktop.chat.ChatPanel
 import dev.supermux.desktop.session.SessionAvatar
 import dev.supermux.desktop.session.SessionStatusRail
 import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.desktop.terminal.TerminalTabs
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Space
 import dev.supermux.proto.AgentStatus
@@ -100,7 +101,17 @@ fun SessionDetail(
         )
     }
     val editorPane: @Composable () -> Unit = { ComingSoonPane("Editor", "M3", "pane_editor") }
-    val terminalPane: @Composable () -> Unit = { ComingSoonPane("Terminal", "M2", "pane_terminal") }
+    // Real scratch terminal with web-parity tabs (list/add/close). One strip per session.
+    val terminalPane: @Composable () -> Unit = {
+        // Only ever composed when the terminal pane is on (the split slot is null otherwise), so
+        // active=true here; the intra-strip active/inactive tab distinction is handled inside.
+        TerminalTabs(
+            app = app,
+            sessionId = session.id,
+            active = true,
+            modifier = Modifier.fillMaxSize().testTag("pane_terminal"),
+        )
+    }
     val displayPane: @Composable () -> Unit = { ComingSoonPane("Display", "M5", "pane_display") }
 
     // Editor and/or Terminal stacked vertically (the "work" column).

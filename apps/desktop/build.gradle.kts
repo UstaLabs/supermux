@@ -28,6 +28,7 @@ dependencies {
 
     testImplementation(libs.coroutines.test)
     testImplementation(kotlin("test"))
+    testImplementation(libs.ktor.client.mock) // seed BrokerApi responses (e.g. terminal-tab list) in UI tests
     @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
     testImplementation(compose.desktop.uiTestJUnit4)
     testImplementation(compose.desktop.currentOs)

@@ -11,6 +11,8 @@ package dev.supermux.desktop.state
 
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.BrokerClient
+import dev.supermux.net.TerminalClient
+import dev.supermux.net.TerminalSummary
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.ClientFrame
@@ -47,7 +49,7 @@ import java.time.Instant
  */
 class DesktopAppState(
     val baseUrl: String,
-    token: String,
+    private val token: String,
     scope: CoroutineScope,
     connectOnInit: Boolean = true,
     sendFrameOverride: (suspend (ClientFrame) -> Unit)? = null,
@@ -304,6 +306,36 @@ class DesktopAppState(
             runCatching { api.kill(id) }
                 .onFailure { e -> println("[DesktopAppState] kill failed: $e") }
             onDone()
+        }
+    }
+
+    // ── Scratch / agent terminals (Android AppViewModel:439-444 parity) ──────────────
+
+    /** Factory for a scratch (shell) terminal client bound to one tmux terminal id. Called once
+     *  per tab and remembered by [dev.supermux.desktop.terminal.DesktopTerminalPanel]; the broker
+     *  defaults [terminalId] to "main" when connecting a scratch kind. */
+    fun connectTerminal(sessionId: String, terminalId: String): TerminalClient =
+        TerminalClient(baseUrl, token, http, sessionId, terminalId = terminalId)
+
+    /** Factory for the raw agent-PTY terminal (kind="agent") behind the Native tab; the scratch
+     *  tabs use [connectTerminal]. */
+    fun connectAgentTerminal(sessionId: String): TerminalClient =
+        TerminalClient(baseUrl, token, http, sessionId, kind = "agent")
+
+    /** GET /api/term/list — the session's persisted scratch terminals (source of truth = tmux),
+     *  used to rebuild the tab strip on open. Never throws: any failure logs and yields []. */
+    suspend fun listTerminals(sessionId: String): List<TerminalSummary> =
+        runCatching { api.listTerminals(sessionId) }
+            .onFailure { e -> println("[DesktopAppState] listTerminals failed: $e") }
+            .getOrNull() ?: emptyList()
+
+    /** POST /api/term/close — destroy one scratch terminal (its tmux session + viewers).
+     *  Fire-and-forget; the tab is removed locally regardless of the outcome (best-effort, web
+     *  parity: the tmux session may already be gone). */
+    fun closeTerminal(sessionId: String, terminalId: String) {
+        stateScope.launch {
+            runCatching { api.closeTerminal(sessionId, terminalId) }
+                .onFailure { e -> println("[DesktopAppState] closeTerminal failed: $e") }
         }
     }
 
