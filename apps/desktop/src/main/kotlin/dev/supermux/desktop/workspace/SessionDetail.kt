@@ -63,6 +63,7 @@ import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.ui.KeepAlivePanel
 import dev.supermux.desktop.ui.keepAlivePanel
+import dev.supermux.net.ProxyDto
 import dev.supermux.net.TerminalClient
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.SessionInfo
@@ -187,6 +188,12 @@ fun SessionDetail(
             modifier = Modifier.fillMaxSize().testTag("pane_editor"),
         )
     },
+    // Injectable seam for the session-links menu's proxy load — defaults to the real broker fetch.
+    // The header needs to know which proxies belong to this session to decide whether to show the
+    // globe menu. The reducer does NOT fold any proxy_* frame (proxies aren't in the WS snapshot),
+    // so this is a plain load-on-open (re-run on session change); a live proxy stream is a later
+    // milestone. Tests inject a pure list to exercise the menu without a network.
+    loadProxies: suspend () -> List<ProxyDto> = { app.proxies() },
 ) {
     val cs = MaterialTheme.colorScheme
 
@@ -208,6 +215,12 @@ fun SessionDetail(
             }
         }
     }
+
+    // Exposed proxies for this session's links menu — loaded on open and whenever the session
+    // changes (no proxy WS frame is reduced; see the loadProxies seam KDoc). getOrNull-degraded
+    // upstream, so a broker hiccup just leaves the list empty and the globe menu hidden.
+    var proxies by remember { mutableStateOf<List<ProxyDto>>(emptyList()) }
+    LaunchedEffect(session.id) { proxies = loadProxies() }
 
     // SM_OPEN_FILE headless hook delivery: feed an external open request through the exact same
     // onOpenFile chain a chat file-path tap uses (toWorkdirRelativePath → pendingEditorOpen + editor
@@ -355,6 +368,19 @@ fun SessionDetail(
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(Space.sm))
+            // Git badge counts + op menu (Fetch/Pull/Publish-or-Push) — shown only for repo sessions
+            // (gated internally on gitBadge(session.git) != null). Desktop-only fuller badge; the
+            // sidebar keeps the icon-only SessionStatusRail above.
+            GitBadgeMenu(
+                session = session,
+                onFetch = { app.gitFetch(session.id) },
+                onPull = { app.gitPull(session.id) },
+                onPush = { app.gitPush(session.id) },
+                onPublish = { app.gitPublish(session.id) },
+            )
+            // Exposed proxy links (hidden when this session has none).
+            SessionLinksMenu(session = session, proxies = proxies)
+            Spacer(Modifier.width(Space.xs))
             // Chat ⇄ Native (raw agent PTY) toggle — claude only, and only while the Chat pane is
             // visible (it flips ChatPanel ⇄ agent-PTY inside that pane; see chatOrNative above).
             // Pulled forward from M4 because it is terminal UX.
@@ -421,9 +447,17 @@ fun SessionDetail(
                 }
                 Spacer(Modifier.width(Space.xs))
             }
-            // TODO(M4c): git badge menu, session-links menu, and the overflow (⋮) management menu —
-            // all present in the Android original.
             PaneToggleCluster(layout = layout, sessionId = session.id)
+            // Overflow (⋮): session-scoped Rename / Mute / Kill (header parity with the session
+            // list's right-click). The Android original also carried management-nav rows
+            // (Settings/Usage/Devices/Proxies/Archived) — omitted here until those screens exist
+            // on desktop (Usage=M4f, Archived=M4e, the rest later); no dead nav.
+            OverflowMenu(
+                session = session,
+                onRename = { newName -> app.rename(session.id, newName) },
+                onToggleMute = { muted -> app.setMute(session.id, muted) },
+                onKill = { app.kill(session.id) },
+            )
         }
         Box(
             Modifier
