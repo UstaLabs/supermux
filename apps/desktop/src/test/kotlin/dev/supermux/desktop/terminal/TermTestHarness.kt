@@ -45,7 +45,11 @@ internal class TermTestHarness(cols: Int = 80, rows: Int = 24) {
     val buffer = TerminalTextBuffer(cols, rows, styleState, 1000)
     val terminal = JediTerminal(NoOpDisplay(), buffer, styleState)
 
-    /** User-input bytes the connector forwarded (the `sendInput` sink), for pre-send-tap assertions. */
+    /** User-input bytes the connector forwarded (the `sendInput` sink), for pre-send-tap assertions.
+     *  Plain (unsynchronized) list — TEST-THREAD-ONLY BY INVARIANT: only connector.write() appends,
+     *  and tests invoke write()/handleInput on the test thread (production's JediTerm write-executor
+     *  thread doesn't exist in this harness). The pipeline stress test hammers handleInput from its
+     *  own thread but never routes user input through connector.write(), so the invariant holds. */
     val sent = mutableListOf<ByteArray>()
 
     val connector = MuxTtyConnector(

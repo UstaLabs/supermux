@@ -1,9 +1,13 @@
 package dev.supermux.desktop.terminal
 
 import dev.supermux.net.DisplayOp
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -91,5 +95,90 @@ class PredictionPipelineTest {
         pipeline.handleOutput("hi".toByteArray()) { fallbacks++ }
         assertEquals(1, fallbacks)
         assertTrue(pipeline.peekLastKeyAt() == 0L)
+    }
+
+    /**
+     * Reproduces the REAL production interleave the pipeline's monitor exists for: in production
+     * [PredictionPipeline.handleInput] runs on JediTerm's write-executor thread while
+     * [PredictionPipeline.handleOutput] runs on the EDT (see the pipeline's THREADING KDoc), so
+     * typing-while-echoing mutates the non-thread-safe engine from two threads. Two threads hammer
+     * the two entry points for ~200ms with an always-active engine (each nowMs() call advances a
+     * shared clock by 50ms, keeping the >=40ms latency gate open so predictions genuinely mutate
+     * pending/snapshot state).
+     *
+     * Deterministic corruption assertions aren't feasible for a race, so the achievable bar
+     * (documented, per review) is: (a) NO exception escapes handleInput — pre-fix, an engine
+     * exception there propagates out of connector.write() and DROPS the keystroke; (b) NO fallback
+     * fires in handleOutput — pre-fix, silent corruption surfaced as runCatching-swallowed
+     * exceptions, i.e. fallback calls; (c) the pipeline + terminal stay functional afterward.
+     */
+    @Test
+    fun concurrent_input_and_output_do_not_corrupt_the_pipeline() {
+        val clock = AtomicLong(0)
+        val pipeline = PredictionPipeline(nowMs = { clock.addAndGet(50) })
+        pipeline.attachAdapter(PredictionAdapter(h.terminal, h.buffer, h.connector))
+
+        val inputError = AtomicReference<Throwable?>(null)
+        val outputError = AtomicReference<Throwable?>(null)
+        val fallbacks = AtomicInteger(0)
+        val deadline = System.currentTimeMillis() + 200
+
+        val inputThread = Thread {
+            try {
+                while (System.currentTimeMillis() < deadline) {
+                    pipeline.handleInput("a".toByteArray()) // decodable single char → CharInput
+                }
+            } catch (t: Throwable) {
+                inputError.set(t)
+            }
+        }
+        val outputThread = Thread {
+            try {
+                while (System.currentTimeMillis() < deadline) {
+                    pipeline.handleOutput("a".toByteArray()) { fallbacks.incrementAndGet() }
+                }
+            } catch (t: Throwable) {
+                outputError.set(t)
+            }
+        }
+        inputThread.start()
+        outputThread.start()
+        inputThread.join(5000)
+        outputThread.join(5000)
+
+        // (a) unguarded handleInput never threw (pre-fix: dropped keystrokes).
+        assertNull(inputError.get(), "handleInput threw: ${inputError.get()}")
+        assertNull(outputError.get(), "handleOutput threw: ${outputError.get()}")
+        // (b) handleOutput never hit the fallback — an engine/adapter exception under the race
+        // would surface here via runCatching.onFailure.
+        assertEquals(0, fallbacks.get())
+
+        // (c) post-run sanity: the pipeline still routes cleanly. Re-attach (fresh engine — the
+        // stressed one may legitimately sit in cooldown/pending states that reposition the caret),
+        // home + clear the screen, and check a passthrough renders at the expected cell.
+        pipeline.teardown()
+        pipeline.attachAdapter(PredictionAdapter(h.terminal, h.buffer, h.connector))
+        h.connector.injectDisplayBytes("[2J[H".toByteArray())
+        awaitCursorHome()
+        var postFallbacks = 0
+        pipeline.handleOutput("ok".toByteArray()) { postFallbacks++ }
+        assertEquals('o', h.awaitChar(0, 0, 'o'))
+        assertEquals('k', h.awaitChar(1, 0, 'k'))
+        assertEquals(0, postFallbacks)
+    }
+
+    /** Poll until the drain thread has parsed the queued home escape (cursor back at 1,1). */
+    private fun awaitCursorHome(timeoutMs: Long = 2000) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            h.buffer.lock()
+            val home = try {
+                h.terminal.cursorX == 1 && h.terminal.cursorY == 1
+            } finally {
+                h.buffer.unlock()
+            }
+            if (home) return
+            Thread.sleep(5)
+        }
     }
 }

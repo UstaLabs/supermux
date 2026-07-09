@@ -29,7 +29,13 @@ class MuxTtyConnector(
 ) : TtyConnector {
 
     /** Pre-send tap for the predictive-echo pipeline (installed in Task 5); null = no prediction.
-     *  @Volatile: installed from a coroutine after start, read in [write] on the UI/EDT thread. */
+     *  ⚠️ THREADING: the callback fires on JediTerm's dedicated WRITE-EXECUTOR thread, NOT the EDT —
+     *  TerminalPanel's key/paste handlers go `TerminalStarter.sendBytes` →
+     *  `mySingleThreadScheduledExecutor.execute` → `myTtyConnector.write` → this tap (3.73
+     *  bytecode: `TerminalStarter.lambda$sendBytes$2`). The installed pipeline serializes
+     *  internally against its EDT-side entry points (see PredictionPipeline's THREADING KDoc).
+     *  @Volatile: installed from composition (EDT) after start, read in [write] on that
+     *  write-executor thread. */
     @Volatile
     var onUserInput: ((ByteArray) -> Unit)? = null
 

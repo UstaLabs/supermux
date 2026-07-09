@@ -119,6 +119,9 @@ fun DesktopTerminalPanel(
         pred.attach(widget, connector)
         // Pre-send tap: JediTerm routes user input through connector.write() → onUserInput → sendInput.
         // handleInput renders the predicted ops BEFORE the bytes leave, mirroring Android's ordering.
+        // NB: this tap fires on JediTerm's WRITE-EXECUTOR thread (not the EDT) while handleOutput
+        // runs on the EDT — the pipeline serializes the two internally on one monitor (see
+        // PredictionPipeline's THREADING KDoc).
         connector.onUserInput = { pred.handleInput(it) }
         onDispose {
             connector.onUserInput = null
