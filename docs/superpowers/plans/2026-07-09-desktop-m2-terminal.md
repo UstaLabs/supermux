@@ -95,13 +95,9 @@ Read Android's `terminal/TerminalPanel.kt` first — mirror its structure where 
 
 ### Task 4: Wheel→tmux scroll bridge
 
-**Files:**
-- Modify: `apps/desktop/src/main/kotlin/dev/supermux/desktop/terminal/DesktopTerminalPanel.kt`
-- Create: `apps/desktop/src/test/kotlin/dev/supermux/desktop/terminal/TerminalWheelTest.kt`
+**RESOLVED to JediTerm-native mouse reporting (Option B) — no custom bridge.** The task's original premise ("JediTerm's own wheel handling scrolls LOCAL scrollback — inert under tmux") was DISPROVED by an empirical headless probe: JediTerm 3.73 natively forwards wheel (SGR buttons 64/65) AND click/drag mouse reports to the `TtyConnector` once tmux's `mouse on` DECSET is parsed, gated on `SettingsProvider.enableMouseReporting()` (default `true`) — bytecode refs `TerminalPanel.lambda$addTerminalMouseListener$4` and `TerminalPanel$7.mousePressed`. That matches the web parity reference (xterm.js forwards clicks + wheel natively); Android/iOS's wheel-only shared `TerminalScroll` path is a touch-platform constraint, not a design choice, and stays untouched for those platforms. A first cut (custom `WheelAccumulator` bridge + `enableMouseReporting()=false`, commit f71ec08) was reverted after design review because the override silently killed click/drag/copy-mode/TUI-mouse. The full finding, plus the surgical fallback if trackpad feel ever demands the shared accumulator on desktop (remove only JediTerm's own wheel listener, keep the flag true), is recorded in a mouse-reporting note in `SupermuxTermSettings.kt` — read it before re-adding any wheel listener.
 
-- [ ] **Step 1:** JediTerm's own wheel handling scrolls LOCAL scrollback — inert under tmux alt-screen + `mouse on` (same as SwiftTerm-mac and termlib; verified pattern). Attach a `java.awt.event.MouseWheelListener` to the widget's terminal panel component that: computes cell height from the widget's char size, accumulates `e.preciseWheelRotation * scrollAmount` px (or rotation→lines directly via `linesFromPixels` with the carry pattern), maps via shared `wheelEventsFromLines(lines, cols/2, rows/2)`, and `client.sendInput(bytes)` — consuming the event so JediTerm's local scroll doesn't also fire. Extract the accumulate+emit logic into a pure `WheelAccumulator` class for testing.
-- [ ] **Step 2:** Tests on `WheelAccumulator`: sub-line accumulation carries; one SGR up/down sequence per line with correct sign; center-cell coordinates; zero on non-finite. (The shared math is already parity-tested — these tests cover the desktop glue only.)
-- [ ] **Step 3:** Commit `feat(desktop): terminal wheel→tmux SGR scroll bridge (shared TerminalScroll math)`.
+- [x] **Steps 1-3:** Superseded per above; desktop terminal wheel/click under tmux works via JediTerm's built-in reporting with zero supermux bridge code. Suite stays at the Task-3 baseline (109).
 
 ---
 

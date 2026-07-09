@@ -36,8 +36,6 @@ import dev.supermux.desktop.theme.Radii
 import dev.supermux.desktop.theme.Space
 import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalStatus
-import java.awt.event.MouseWheelEvent
-import java.awt.event.MouseWheelListener
 import kotlinx.coroutines.launch
 
 /**
@@ -103,46 +101,11 @@ fun DesktopTerminalPanel(
         }
     }
 
-    // Wheel → tmux SGR mouse-wheel bridge. JediTerm's OWN wheel handling is neutralized by
-    // SupermuxTermSettings.enableMouseReporting() = false (see its KDoc: 3.73 has a built-in
-    // remote-mouse listener that would otherwise double-forward every notch, and its local-scroll
-    // fallback only ever touches the invisible alt-screen scrollback — see the tmux `mouse on`
-    // comment in dev.supermux.net.TerminalScroll). [WheelAccumulator] is therefore the SOLE path:
-    // it turns AWT wheel deltas into whole-row SGR-1006 escapes via the shared TerminalScroll math
-    // (same math/format Android's touch-drag path uses), and every event is consumed regardless of
-    // outcome so JediTerm never gets a shot at its own (now-inert, but still registered) handlers.
-    //
-    // Delta formula: `preciseWheelRotation * scrollAmount * cellHeightPx`. `scrollAmount` is the
-    // OS-configured "units to scroll per notch" (`MouseWheelEvent.getScrollAmount()`), so this
-    // converts a wheel/trackpad event into the SAME pixel space Android's touch-drag path feeds
-    // `linesFromPixels` — one shared accumulate-with-carry code path instead of a second,
-    // notch-counting one, and smooth sub-notch handling for high-resolution trackpads. Cell height
-    // is `terminalPanel.pixelHeight / rows` — JediTerm 3.73's `getPixelHeight()` is bytecode-
-    // confirmed to be exactly `myCharSize.height * myTermSize.rows` (javap), i.e. the real per-row
-    // pixel height with no protected-field access needed. No sign flip is needed (see
-    // WheelAccumulator's KDoc): AWT's positive-rotation convention already matches
-    // linesFromPixels' "positive scrolls toward newer output" sense.
-    DisposableEffect(widget) {
-        val panel = widget.terminalPanel
-        val accumulator = WheelAccumulator()
-        val listener = MouseWheelListener { e: MouseWheelEvent ->
-            e.consume()
-            if (client.status.value == TerminalStatus.CONNECTED) {
-                val rows = widget.terminal.terminalHeight
-                val cols = widget.terminal.terminalWidth
-                val cellHeightPx = if (rows > 0) panel.pixelHeight.toDouble() / rows else 0.0
-                val pixelDelta = e.preciseWheelRotation * e.scrollAmount * cellHeightPx
-                // Center-cell pointer coords (Android-parity clamp; wheelEventsFromLines clamps
-                // too, so this is belt-and-suspenders, not load-bearing).
-                val col = if (cols > 1) cols / 2 else 1
-                val row = if (rows > 1) rows / 2 else 1
-                val bytes = accumulator.accumulate(pixelDelta, cellHeightPx, col, row)
-                if (bytes.isNotEmpty()) client.sendInput(bytes)
-            }
-        }
-        panel.addMouseWheelListener(listener)
-        onDispose { panel.removeMouseWheelListener(listener) }
-    }
+    // Wheel/mouse → tmux: NO custom bridge on desktop. JediTerm 3.73 natively forwards wheel AND
+    // click/drag as SGR mouse reports to the TtyConnector once tmux negotiates mouse tracking
+    // (`mouse on` — always the case for supermux terminals), matching the web client's xterm.js
+    // behaviour. See the mouse-reporting note on [SupermuxTermSettings] for the empirical
+    // verification and the fallback plan — read it BEFORE adding any wheel listener here.
 
     LaunchedEffect(client) { client.run() }
 

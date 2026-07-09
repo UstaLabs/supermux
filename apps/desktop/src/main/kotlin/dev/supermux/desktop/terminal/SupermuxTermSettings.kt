@@ -54,34 +54,42 @@ class SupermuxTermSettings(
 
     override fun audibleBell(): Boolean = false
 
-    /**
-     * JediTerm's own SGR mouse-report forwarding OFF — [WheelAccumulator] via
-     * [DesktopTerminalPanel]'s wheel listener is the sole path for wheel→tmux bytes.
-     *
-     * `DefaultSettingsProvider.enableMouseReporting()` is `true` by default, and 3.73's
-     * `TerminalPanel` has its OWN built-in remote-mouse listener (`JediTerminal`, registered via
-     * `TerminalPanel.addTerminalMouseListener` inside `JediTermWidget`'s constructor) that, when
-     * this flag is on AND the emulator has parsed a mouse-tracking DECSET from the pty (exactly
-     * what tmux's `mouse on` sends on attach — `JediEmulator` DOES implement `?1000`/`?1002`/
-     * `?1003`/`?1006` parsing), sends its OWN SGR wheel-button (64/65) bytes to the `TtyConnector`
-     * automatically. Confirmed empirically (headless probe: construct a `JediTermWidget`, force
-     * both the model's and display's negotiated `MouseMode`/`MouseFormat` the way the real DECSET
-     * parse would, dispatch a synthetic `MouseWheelEvent` at `TerminalPanel`, and observe
-     * `sendInput`): with this flag left at its `true` default, JediTerm's own listener sends one
-     * `"[<65;...M"` sequence *before* any listener added afterwards (ours, added once the
-     * widget already exists) even runs — `MouseWheelEvent.consume()` does NOT stop sibling
-     * `MouseWheelListener`s registered on the same component (`AWTEventMulticaster` invokes all of
-     * them unconditionally), so a second, our own, forward on top would double every wheel notch.
-     * Flipping this to `false` disables ONLY that remote byte-send path (confirmed via the same
-     * probe: zero `sendInput` calls once this returns `false`); it does not resurrect JediTerm's
-     * LOCAL scrollback scroll, which is independently gated on the terminal's negotiated
-     * `MouseMode` (see `TerminalPanel.isLocalMouseAction`), not on this setting, and is a no-op
-     * under our tmux alt-screen sessions regardless (same "inert" story as SwiftTerm-mac/termlib).
-     * Click/drag mouse-report forwarding is not part of this milestone on ANY supermux client
-     * (Android/iOS are touch-only and don't attempt it either), so losing JediTerm's built-in
-     * version of it here is scope-consistent, not a regression.
-     */
-    override fun enableMouseReporting(): Boolean = false
+    // ── Mouse reporting: DELIBERATELY LEFT AT THE DEFAULT (`enableMouseReporting()` == true) ──
+    //
+    // Do NOT add a custom wheel→tmux bridge to DesktopTerminalPanel, and do NOT override
+    // `enableMouseReporting()` — JediTerm 3.73 already does the whole job natively, unlike the
+    // touch-only terminal libs (SwiftTerm-iOS, ConnectBot termlib) that forced Android/iOS to
+    // build the shared `dev.supermux.net.TerminalScroll` bridge. Task 4 established this
+    // empirically:
+    //
+    // - `TerminalPanel` registers the `JediTerminal` itself as a built-in `TerminalMouseListener`
+    //   (via `TerminalPanel.addTerminalMouseListener`, called from `JediTermWidget`'s
+    //   constructor). Gated on `SettingsProvider.enableMouseReporting()` (default `true`) AND the
+    //   terminal having negotiated a mouse-tracking mode from the pty — which tmux's `mouse on`
+    //   always sends on attach (`JediEmulator` parses the `?1000`/`?1002`/`?1003`/`?1006`
+    //   DECSETs, `?1006` → SGR format).
+    // - Under that gate it forwards WHEEL as SGR wheel-button (64/65) reports — bytecode refs:
+    //   `TerminalPanel.lambda$addTerminalMouseListener$4` → `JediTerminal.mouseWheelMoved` →
+    //   `mousePressed` → `mouseReport`/`sendBytes` — AND click/drag/release the same way
+    //   (`TerminalPanel$7.mousePressed` etc., gated on the same flag). This matches the web
+    //   client (the parity reference), where xterm.js forwards clicks and wheel natively under
+    //   tmux mouse-on; Android/iOS being wheel-only is a touch-platform constraint, not a design
+    //   choice.
+    // - Verified with a headless probe (since deleted): a real `JediTermWidget` with negotiated
+    //   SGR mouse mode dispatched a synthetic `MouseWheelEvent`, and JediTerm's own listener sent
+    //   exactly one correct `ESC [<65;...M` to the `TtyConnector`. With `enableMouseReporting()`
+    //   overridden to `false`, zero bytes were sent — and click reporting would have died with it,
+    //   which is why Task 4's first cut (custom wheel bridge + `false` override) was reverted: it
+    //   silently killed click/drag/copy-mode/TUI-mouse to replace a path JediTerm already had.
+    //
+    // For anyone tempted to re-add a bridge anyway: an extra `MouseWheelListener` on
+    // `TerminalPanel` DOUBLE-FORWARDS every notch, because `MouseWheelEvent.consume()` does not
+    // stop sibling listeners already registered on the same component (`AWTEventMulticaster`
+    // invokes all of them unconditionally). If trackpad feel ever demands the shared
+    // `TerminalScroll` accumulator on desktop (sub-notch smoothing), the surgical path is to
+    // remove ONLY JediTerm's own wheel listener and reinstate a pure accumulator (see this file's
+    // git history at Task 4 for the reverted `WheelAccumulator`), keeping `enableMouseReporting()`
+    // true so clicks keep working. Premature now.
 
     companion object {
         /** Dark pane tones (shared Theme.kt `supermuxDark`) — defaults only; production passes
