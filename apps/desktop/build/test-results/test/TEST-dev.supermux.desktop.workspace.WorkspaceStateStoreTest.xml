@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="dev.supermux.desktop.workspace.WorkspaceStateStoreTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-07-09T20:00:08.180Z" hostname="ustalabs" time="0.019">
-  <properties/>
-  <testcase name="missingFileLoadsEmptyDefault" classname="dev.supermux.desktop.workspace.WorkspaceStateStoreTest" time="0.005"/>
-  <testcase name="snapshotAndSelectionRoundTrip" classname="dev.supermux.desktop.workspace.WorkspaceStateStoreTest" time="0.014"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

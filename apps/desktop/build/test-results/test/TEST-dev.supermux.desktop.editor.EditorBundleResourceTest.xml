@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="dev.supermux.desktop.editor.EditorBundleResourceTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-07-09T20:00:00.174Z" hostname="ustalabs" time="0.024">
-  <properties/>
-  <testcase name="index_html_is_on_the_classpath" classname="dev.supermux.desktop.editor.EditorBundleResourceTest" time="0.012"/>
-  <testcase name="cm6_bundle_is_on_the_classpath_and_over_1mb" classname="dev.supermux.desktop.editor.EditorBundleResourceTest" time="0.01"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

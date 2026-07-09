@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="dev.supermux.desktop.workspace.WorkspaceUiStateTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-07-09T20:00:08.206Z" hostname="ustalabs" time="0.005">
-  <properties/>
-  <testcase name="reconcileKeepsLiveSelectionAndPanes" classname="dev.supermux.desktop.workspace.WorkspaceUiStateTest" time="0.001"/>
-  <testcase name="emptyReconcilePreservesHydratedState" classname="dev.supermux.desktop.workspace.WorkspaceUiStateTest" time="0.003"/>
-  <testcase name="nonEmptyReconcilePrunesDeadSessionsAndSelection" classname="dev.supermux.desktop.workspace.WorkspaceUiStateTest" time="0.001"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

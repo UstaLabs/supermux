@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="dev.supermux.desktop.ui.KeepAlivePanelTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-07-09T20:00:06.345Z" hostname="ustalabs" time="0.211">
-  <properties/>
-  <testcase name="content_survives_hide_show_without_remount_or_disposal" classname="dev.supermux.desktop.ui.KeepAlivePanelTest" time="0.071"/>
-  <testcase name="hidden_panel_is_laid_out_at_zero_size" classname="dev.supermux.desktop.ui.KeepAlivePanelTest" time="0.089"/>
-  <testcase name="reshown_panel_returns_to_full_size" classname="dev.supermux.desktop.ui.KeepAlivePanelTest" time="0.051"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>
