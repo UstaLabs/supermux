@@ -295,6 +295,12 @@ fun DesktopComposer(
     // transferable and maps each `java.io.File` to `file.toURI().toString()`, so
     // [composerFilesFromDragData] parses those URIs back to Files. Gated on `onUpload != null` — the
     // same rule as the Attach button: a text-only composer (no upload seam bound) doesn't accept drops.
+    // Note: this anonymous target has no equals(), so dragAndDropTarget's DropTargetElement rebuilds
+    // the underlying delegate node on every recomposition (a minor churn, not a swap-in-place). It's
+    // safe: the AWT DropTarget is owned at the scene root and dispatches per-event by live tree
+    // traversal, and onDrop closes over the same remember(sessionKey)-scoped state regardless of which
+    // instance is live — so no in-flight drag is lost and no cross-session leak. (A remember(sessionKey)
+    // wrap + rememberUpdatedState callback would remove the churn — a cheap future tidy.)
     val dropTarget = object : DragAndDropTarget {
         override fun onEntered(event: DragAndDropEvent) {
             dragOver = true
