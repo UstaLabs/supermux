@@ -68,9 +68,19 @@ applyClaudeLiveSwitch(windowId, { model?, effort? }) → { ok } | { ok:false, er
    `❯ ` input line) and require the absence of known dialog/menu markers
    ("Enter to confirm", "Bypass Permissions mode", "Resume from summary",
    numbered `❯ 1.` select menus). Retry briefly (~2s) if unsafe, then fail.
-2. **Clear draft** — send `C-u`.
-3. **Type command** — `send-keys -l '/model <id>'`, short delay (~500ms, lets
-   the slash-autocomplete settle; verified cadence), then `Enter`.
+2. **Clear draft** — send `C-u`, then prove the composer is empty via an
+   **escape-preserving capture** (`tmux capture-pane -e`): Claude renders a
+   **ghost autosuggestion** (dim, SGR 2) in idle composers that a plain capture
+   cannot distinguish from a real draft — it is NOT real input (C-u can't clear
+   it; typing replaces it), so dim spans are stripped before the emptiness
+   check. (Field bug found 2026-07-10: the original plain-capture emptiness
+   check refused half the fleet's idle panes.)
+3. **Type command** — `send-keys -l '/model <id>'`, then **verify the composer
+   shows exactly the typed command** (ghost-stripped, whitespace-collapsed,
+   wrapped lines joined; up to 4 checks ~500ms apart) **before** sending
+   `Enter`. On mismatch: `C-u` cleanup + explicit failure — a garbage submit is
+   structurally impossible. First check delay doubles as the autocomplete
+   settle.
 4. **Verify by polling** capture every 500ms up to 10s:
    - success marker seen (`Set model to` / `Set effort level to`) → done;
    - effort confirm menu (`Change effort level?`) → send `Enter` (default is
