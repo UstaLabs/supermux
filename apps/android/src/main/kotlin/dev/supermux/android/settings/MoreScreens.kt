@@ -3,6 +3,7 @@ package dev.supermux.android.settings
 import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
@@ -41,6 +43,7 @@ import dev.supermux.android.theme.LocalPanes
 import dev.supermux.android.theme.TEXT_SCALE_MAX
 import dev.supermux.android.theme.TEXT_SCALE_MIN
 import kotlin.math.roundToInt
+import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
 import dev.supermux.net.ArchivedDto
@@ -1237,14 +1240,17 @@ private fun CursorUsageCard(cursor: CursorUsageData?, error: String?) {
 fun DevicesScreen(
     onBack: () -> Unit,
     onLoad: suspend () -> List<DeviceDto>,
+    onAdd: suspend (String) -> AddDeviceResponse?,
     onRevoke: (String) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     var devices by remember { mutableStateOf<List<DeviceDto>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var revokeTarget by remember { mutableStateOf<String?>(null) }
+    var showAdd by remember { mutableStateOf(false) }
+    var reloadKey by remember { mutableStateOf(0) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(reloadKey) {
         devices = onLoad()
         loading = false
     }
@@ -1266,6 +1272,15 @@ fun DevicesScreen(
                     containerColor = cs.surfaceContainerHigh,
                 ),
             )
+        },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { showAdd = true },
+                containerColor = cs.primary,
+                contentColor = cs.onPrimary,
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = "Add device")
+            }
         },
         containerColor = cs.background,
     ) { padding ->
@@ -1311,7 +1326,144 @@ fun DevicesScreen(
             },
         )
     }
+
+    // Add-device dialog: name → one-time pairing link with QR + copy.
+    if (showAdd) {
+        AddDeviceDialog(
+            onAdd = onAdd,
+            onDismiss = { minted ->
+                showAdd = false
+                if (minted) reloadKey++
+            },
+        )
+    }
 }
+
+@Composable
+private fun AddDeviceDialog(
+    onAdd: suspend (String) -> AddDeviceResponse?,
+    onDismiss: (minted: Boolean) -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var name by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var result by remember { mutableStateOf<AddDeviceResponse?>(null) }
+    var copied by remember { mutableStateOf(false) }
+    val minted = result != null
+
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss(minted) },
+        title = { Text(if (minted) "Pairing link" else "Add device") },
+        text = {
+            if (result == null) {
+                Column {
+                    Text(
+                        "Give the new device a name. You'll get a one-time link to open on it.",
+                        color = cs.onSurfaceVariant,
+                        fontSize = 13.sp,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it; error = null },
+                        singleLine = true,
+                        placeholder = { Text("e.g. Work laptop") },
+                        isError = error != null,
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    error?.let {
+                        Spacer(Modifier.height(6.dp))
+                        Text(it, color = cs.error, fontSize = 12.sp)
+                    }
+                }
+            } else {
+                val url = result!!.url
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        "Open this link on the new device, or scan it:",
+                        color = cs.onSurfaceVariant,
+                        fontSize = 13.sp,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    val qr = remember(url) { qrBitmap(url) }
+                    if (qr != null) {
+                        Image(
+                            bitmap = qr,
+                            contentDescription = "Pairing QR code",
+                            modifier = Modifier
+                                .size(200.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color.White)
+                                .padding(8.dp),
+                        )
+                        Spacer(Modifier.height(12.dp))
+                    }
+                    Text(
+                        url,
+                        color = cs.onSurface,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(cs.surfaceContainerHigh)
+                            .padding(8.dp),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Treat this link like a password — anyone who opens it gets access until you revoke the device.",
+                        color = cs.onSurfaceVariant,
+                        fontSize = 11.sp,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (result == null) {
+                TextButton(
+                    enabled = !busy && name.isNotBlank(),
+                    onClick = {
+                        val trimmed = name.trim()
+                        if (trimmed.isEmpty()) return@TextButton
+                        busy = true
+                        error = null
+                        scope.launch {
+                            val r = onAdd(trimmed)
+                            busy = false
+                            if (r == null) error = "Couldn't create the device. Try again."
+                            else result = r
+                        }
+                    },
+                ) {
+                    if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = cs.primary, strokeWidth = 2.dp)
+                    else Text("Create")
+                }
+            } else {
+                TextButton(onClick = {
+                    copyToClipboard(context, "pairing link", result!!.url)
+                    copied = true
+                }) { Text(if (copied) "Copied" else "Copy link") }
+            }
+        },
+        dismissButton = {
+            TextButton(enabled = !busy, onClick = { onDismiss(minted) }) {
+                Text(if (minted) "Done" else "Cancel")
+            }
+        },
+    )
+}
+
+/** Render a URL as a black-on-white QR bitmap for Compose; null if encoding fails. */
+private fun qrBitmap(content: String): androidx.compose.ui.graphics.ImageBitmap? =
+    runCatching {
+        com.journeyapps.barcodescanner.BarcodeEncoder()
+            .encodeBitmap(content, com.google.zxing.BarcodeFormat.QR_CODE, 512, 512)
+            .asImageBitmap()
+    }.getOrNull()
 
 @Composable
 private fun DeviceRow(device: DeviceDto, onRevoke: () -> Unit) {
