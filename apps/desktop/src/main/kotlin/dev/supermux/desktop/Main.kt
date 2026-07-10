@@ -1,5 +1,7 @@
 package dev.supermux.desktop
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -12,14 +14,20 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyShortcut
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.MenuBar
+import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
+import androidx.compose.ui.window.isTraySupported
+import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.rememberWindowState
 import dev.supermux.desktop.auth.DesktopTokenStore
+import dev.supermux.desktop.notify.NotificationController
+import dev.supermux.desktop.notify.TrayNotificationManager
 import dev.supermux.desktop.pairing.OnboardingScreen
 import dev.supermux.desktop.pairing.PairingState
 import dev.supermux.desktop.state.DesktopAppState
@@ -134,6 +142,50 @@ fun main() {
         println("[Main] ignoring partial SM_PAIR_* env — both SM_PAIR_TOKEN and SM_PAIR_BASE must be set")
     }
     application {
+        // M5-3: TrayState + NotificationController are hoisted ABOVE Window because Tray(...) is
+        // an ApplicationScope-receiver composable (confirmed via javap: Tray_desktopKt.Tray's
+        // first parameter is ApplicationScope) — it can only be called directly inside
+        // `application { }`'s body, never nested inside Window's content (whose implicit
+        // receiver is FrameWindowScope). windowState is hoisted alongside it — a plain val, not
+        // receiver-bound — purely so the tray icon's click handler can un-minimize the SAME
+        // WindowState instance passed to Window below.
+        val windowState = rememberWindowState(width = 1440.dp, height = 900.dp)
+        val trayState = rememberTrayState()
+        // Published once pairing completes (below, inside Window's content) so the tray icon's
+        // click handler can select a session on the live WorkspaceUiState. null before pairing
+        // and after unpair, when there is no workspace to select into — the click handler
+        // no-ops in that case (see onAction below).
+        var pairedUi by remember { mutableStateOf<WorkspaceUiState?>(null) }
+        val notificationController = remember {
+            NotificationController(TrayNotificationManager(trayState))
+        }
+
+        if (isTraySupported) {
+            Tray(
+                icon = rememberVectorPainter(Icons.Filled.Terminal),
+                state = trayState,
+                tooltip = "supermux",
+                onAction = {
+                    // Best-effort "bring the app forward": un-minimizing is portable; actually
+                    // RAISING the window above others is window-manager-dependent (especially
+                    // under a bare Xvfb with no WM) and not attempted further. Compose's
+                    // Notification carries no per-toast click callback/id (confirmed via javap)
+                    // — only the tray ICON has one (this onAction) — so a click can only jump to
+                    // the LAST-notified session, not necessarily the specific toast the user
+                    // meant if several stacked up. See this plan's Goal, scoping decision 3.
+                    windowState.isMinimized = false
+                    notificationController.lastNotifiedSession?.let { sid -> pairedUi?.selectedId = sid }
+                },
+            )
+        } else {
+            // Expected under a bare Xvfb with no tray-hosting panel — see this plan's Ground
+            // rules. Desktop notifications are simply disabled; nothing else degrades.
+            println(
+                "[Main] system tray not supported on this platform/session " +
+                    "(java.awt.SystemTray.isSupported()==false) — desktop notifications are disabled",
+            )
+        }
+
         Window(
             // Dispose the shared KCEF (embedded Chromium) runtime BEFORE the process exits, on this
             // (main/AWT) thread while the window still exists — CEF wants an orderly shutdown here,
@@ -149,7 +201,7 @@ fun main() {
                 }
             },
             title = "supermux",
-            state = rememberWindowState(width = 1440.dp, height = 900.dp),
+            state = windowState,
         ) {
             // Paired flag + workspace UI state are hoisted to the Window (FrameWindowScope) so the
             // native MenuBar — which must be called on this scope, not inside a nested @Composable —
@@ -167,6 +219,13 @@ fun main() {
                     persisted.layout?.let { layout.restore(it) }
                     selectedId = persisted.selectedId
                 }
+            }
+            // M5-3: publish this pairing's WorkspaceUiState up to the tray icon's onAction
+            // handler (declared above, outside Window) so a click can select the last-notified
+            // session. Cleared on dispose (unpair / window teardown) so a stale ui never lingers.
+            DisposableEffect(ui) {
+                pairedUi = ui
+                onDispose { pairedUi = null }
             }
             var showUnpairConfirm by remember { mutableStateOf(false) }
 
