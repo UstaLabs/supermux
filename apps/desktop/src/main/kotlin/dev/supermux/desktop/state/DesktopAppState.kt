@@ -98,18 +98,21 @@ class DesktopAppState(
     private val stateScope =
         CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
 
+    private val http = HttpClient(CIO) { install(WebSockets) }
+    val client = BrokerClient(baseUrl, token, http)
+    val api = apiOverride ?: BrokerApi(baseUrl, token, http)
+
     // CIO's default per-request timeout is 15s — too short for the mic-dictation POST (M5-1): the
     // broker's whisper /transcribe is a real ASR job that routinely runs 20-30s (longer on a
     // GPU-less host / cold model load), so a 15s ceiling would time the dictation out before any
-    // text comes back. Raise the endpoint request timeout to 120s (still bounded, so a genuinely
-    // hung request eventually fails rather than hanging forever); the persistent WebSocket is
-    // unaffected. Uploads (also potentially long) benefit too.
-    private val http = HttpClient(CIO) {
-        install(WebSockets)
-        engine { requestTimeout = 120_000 }
-    }
-    val client = BrokerClient(baseUrl, token, http)
-    val api = apiOverride ?: BrokerApi(baseUrl, token, http)
+    // text comes back. Rather than raise the timeout for EVERY desktop HTTP call — which would let
+    // a genuinely hung fs/git/usage/session endpoint block the UI for 120s instead of failing fast
+    // at 15s — [transcribeAudio] gets its own [HttpClient]/[BrokerApi] pair with a longer, still-
+    // bounded 120s timeout; every other call keeps [api]'s snappy CIO default. In tests, [apiOverride]
+    // (a MockEngine-backed BrokerApi) backs BOTH [api] and [apiDictate] so a single fake covers the
+    // whole surface, same as before this split.
+    private val httpDictate = HttpClient(CIO) { engine { requestTimeout = 120_000 } }
+    private val apiDictate = apiOverride ?: BrokerApi(baseUrl, token, httpDictate)
     private val sendFrame: suspend (ClientFrame) -> Unit = sendFrameOverride ?: { client.send(it) }
 
     // ── Viewing presence (mirrors iOS BrokerSession / web useViewing) ──────────────
@@ -849,7 +852,7 @@ class DesktopAppState(
         filename: String,
         mime: String = "audio/wav",
     ): TranscribeResponse? =
-        runApi("transcribeAudio") { api.transcribeAudio(sessionId, bytes, filename, mime) }
+        runApi("transcribeAudio") { apiDictate.transcribeAudio(sessionId, bytes, filename, mime) }
 
     /**
      * Resumable/chunked upload from a [ChunkSource] (bounded RAM), reporting absolute progress
@@ -959,11 +962,12 @@ class DesktopAppState(
     }
 
     /** Stop all owned coroutines (collector, WS run-loop, heartbeat, in-flight ops) and release
-     *  the shared HttpClient (WS + HTTP). Counterpart of AppViewModel.onCleared, plus the explicit
-     *  scope cancel a plain (non-ViewModel) class needs. */
+     *  the shared HttpClients (WS + HTTP, and the dictation-only long-timeout client). Counterpart
+     *  of AppViewModel.onCleared, plus the explicit scope cancel a plain (non-ViewModel) class needs. */
     fun close() {
         stateScope.cancel()
         http.close()
+        httpDictate.close()
     }
 }
 
