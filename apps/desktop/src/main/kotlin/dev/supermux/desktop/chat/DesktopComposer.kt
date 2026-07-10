@@ -46,6 +46,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
@@ -73,6 +74,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.upload.FileChunkSource
 import dev.supermux.net.ChunkSource
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.awt.FileDialog
 import java.awt.Frame
@@ -119,6 +121,16 @@ data class ComposerAttachment(
     val kind: String? = null,
     val runSeq: Long = 0L,
 )
+
+/**
+ * One-shot "attach this file then send" request for [DesktopComposer] (M4d-T3), delivered from
+ * outside the composer's own state (WorkspaceUiState.externalAttach → SessionDetail → ChatPanel).
+ * Drives the SAME `stageFiles`/`sendWith` funnel the Attach dialog + Send button use — see
+ * [DesktopComposer]'s `externalAttach` param KDoc. Set by the off-by-default `SM_CHAT_ATTACH`
+ * headless hook in Main.kt so the attach→upload→send round-trip can be proven under Xvfb with no
+ * pointer/keyboard input.
+ */
+data class ComposerExternalAttach(val filePath: String, val text: String)
 
 /** Best-effort MIME for a path (java.nio Files.probeContentType), octet-stream when unknown. Pure —
  *  mirrors the launcher's `probeMime` so chat + launcher guess identically. */
@@ -180,6 +192,14 @@ internal fun composerPickFiles(): List<File> {
  *   the Attach affordance is hidden (text-only composer). [ChatPanel] binds this to
  *   `app.uploadResumable(session.id, …)`; tests inject a fake so they don't hit the network.
  * @param pickFiles the file-picker seam (default = the real AWT dialog); tests inject a fake.
+ * @param externalAttach a one-shot "stage this file then send" request (M4d-T3), delivered from
+ *   outside the composer's own click-driven state (see [ComposerExternalAttach] KDoc — the
+ *   off-by-default `SM_CHAT_ATTACH` headless hook). Routed through the SAME `stageFiles`/`sendWith`
+ *   funnel the Attach dialog + Send button use — never a parallel path. Applied once, then
+ *   [onExternalAttachConsumed] clears the source (mirrors [ChatPanel]'s `externalOpen` pattern).
+ * @param onExternalAttachConsumed fired once [externalAttach] has been staged, uploaded to a
+ *   terminal state, and (on success) sent — or dropped (missing file / no [onUpload] bound / upload
+ *   failed) — so the caller's one-shot holder resets.
  */
 @OptIn(ExperimentalComposeUiApi::class) // DragData / dragData() (external-file drop payload) — see
 // the drop-target comment below for what was checked before opting in.
@@ -201,6 +221,8 @@ fun DesktopComposer(
         onProgress: (Long, Long) -> Unit,
     ) -> String?)? = null,
     pickFiles: () -> List<File> = ::composerPickFiles,
+    externalAttach: ComposerExternalAttach? = null,
+    onExternalAttachConsumed: () -> Unit = {},
 ) {
     // Attachment state is SCOPED to [sessionKey]: ChatPanel deliberately stays composed across
     // session switches (no key(session.id) wrapper), so a bare remember{} would leak session A's
@@ -275,12 +297,63 @@ fun DesktopComposer(
     }
 
     val canSend = canSendComposer(draft, attachments, sending)
-    val doSend = {
-        if (canSendComposer(draft, attachments, sending)) {
+    // Gather-and-send for an ARBITRARY [text] (not just the hoisted [draft]) — same gating +
+    // file_id-gather + chip-clear the Send button/Enter key use. Parameterized so
+    // [externalAttach]'s LaunchedEffect below can send its own text without racing the hoisted
+    // draft's recomposition (see that effect's comment for why draft-then-doSend() doesn't work).
+    fun sendWith(text: String) {
+        if (canSendComposer(text, attachments, sending)) {
             val fileIds = attachments.mapNotNull { (it.state as? UploadState.Done)?.fileId }
-            onSend(draft.trim(), fileIds)
+            onSend(text.trim(), fileIds)
             attachments.clear()
         }
+    }
+    val doSend = { sendWith(draft) }
+
+    // SM_CHAT_ATTACH headless hook delivery (M4d-T3): stage the requested file through the SAME
+    // [stageFiles] funnel the Attach dialog/drop target use, poll (no completion callback exists on
+    // the upload seam to suspend on directly) until that chip reaches a TERMINAL state, then —  on
+    // success — [sendWith] the requested text through the SAME gather-and-send path the Send button
+    // uses. Deliberately does NOT go through onDraftChange+doSend(): draft is hoisted OUTSIDE this
+    // composable (WorkspaceRoot's draft map), so writing it here and immediately calling the
+    // (stale-closure) doSend would race the recomposition that updates `draft` — sendWith(text)
+    // sidesteps that entirely. Keyed on [externalAttach] (not Unit) so a new request re-runs.
+    LaunchedEffect(externalAttach) {
+        val request = externalAttach ?: return@LaunchedEffect
+        if (onUpload == null) {
+            println("[composer] SM_CHAT_ATTACH ignored — no upload seam bound (text-only composer)")
+            onExternalAttachConsumed()
+            return@LaunchedEffect
+        }
+        val file = File(request.filePath)
+        if (!file.isFile) {
+            println("[composer] SM_CHAT_ATTACH path is not a file: ${request.filePath}")
+            onExternalAttachConsumed()
+            return@LaunchedEffect
+        }
+        val beforeIds = attachments.map { it.id }.toSet()
+        stageFiles(listOf(file))
+        val newId = attachments.map { it.id }.firstOrNull { it !in beforeIds }
+        if (newId == null) {
+            println("[composer] SM_CHAT_ATTACH staging produced no chip: ${request.filePath}")
+            onExternalAttachConsumed()
+            return@LaunchedEffect
+        }
+        // Poll (200ms) for the new chip to leave Uploading — up to 60s (a resumable upload chunk
+        // loop, not a single request; generous so a slow/large file doesn't false-time-out).
+        val deadline = System.currentTimeMillis() + 60_000
+        var current = attachments.firstOrNull { it.id == newId }
+        while (current != null && current.state is UploadState.Uploading && System.currentTimeMillis() < deadline) {
+            delay(200)
+            current = attachments.firstOrNull { it.id == newId }
+        }
+        if (current?.state is UploadState.Done) {
+            sendWith(request.text)
+            println("[composer] SM_CHAT_ATTACH sent '${request.filePath}' + text to the session")
+        } else {
+            println("[composer] SM_CHAT_ATTACH upload did not finish Done (state=${current?.state}): ${request.filePath}")
+        }
+        onExternalAttachConsumed()
     }
 
     // Drag-over highlight — purely visual, reset defensively on both onExited (pointer left this

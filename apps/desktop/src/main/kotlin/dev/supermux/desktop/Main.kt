@@ -45,6 +45,9 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //                                  GitMenuForceOp KDoc)                                   [main]
 //   SM_LINKS_MENU=<session-name>  — force-open the header session-links (proxies) menu (M4c) [main]
 //   SM_OVERFLOW_MENU=<session-name> — force-open the header ⋮ overflow menu (M4c)          [main]
+//   SM_CHAT_ATTACH="<session-name>|<file-path>|<text>" — stage+upload a file into the chat
+//                                  composer via the SAME stage()/stageFiles() path, wait for the
+//                                  chip to reach Done, then send with <text> (M4d)             [main]
 //   SMX_KCEF_FORCE_ERROR=1        — force KcefState.Error (native-fallback editor, M3)   [KcefRuntime]
 //   SM_EDITOR_SAVE_TEST           — drive the editor save path (M3)                      [EditorPanel]
 //   SMX_KCEF_EXTRA_ARGS="…"       — extra CEF switches for headless CI                   [KcefRuntime]
@@ -489,6 +492,47 @@ fun main() {
                             ui.selectedId = t.id
                             ui.forceOverflowFor = t.id
                             println("[overflowmenu] forced overflow menu for ${t.name} (${t.id})")
+                        }
+                    }
+
+                    // Headless chat-attach-verification hook (M4d): SM_CHAT_ATTACH=
+                    // "<session-name>|<file-path>|<text>" resolves the named session after the first
+                    // snapshot, SELECTS it, and hands (filePath, text) to the matching ChatPanel via
+                    // WorkspaceUiState.externalAttach — DesktopComposer's LaunchedEffect(externalAttach)
+                    // then stages the file through the SAME stageFiles() funnel the Attach dialog and
+                    // drag-drop use (so the chip uploads through the real uploadResumable seam), polls
+                    // until that chip reaches a terminal state, and — on Done — sends through the SAME
+                    // gather-and-send path the Send button uses (send-gated, chips cleared after). A
+                    // failed upload (or a missing/blank path) is logged and dropped — no send fires.
+                    // PIPE-delimited (not colon) so <text> may contain colons/spaces. This drives a
+                    // REAL upload + REAL send against the named session's chat — point it at a
+                    // throwaway/idle session, never a busy one. Off by default.
+                    val chatAttach = System.getenv("SM_CHAT_ATTACH")?.takeIf { it.isNotBlank() }
+                    if (chatAttach != null) {
+                        LaunchedEffect(app) {
+                            val parts = chatAttach.split("|", limit = 3)
+                            if (parts.size < 3) {
+                                println("[chatattach] bad SM_CHAT_ATTACH (expected <session-name>|<file-path>|<text>)")
+                                return@LaunchedEffect
+                            }
+                            val name = parts[0]
+                            val filePath = parts[1]
+                            val text = parts[2]
+                            // Wait (≤30s) for the snapshot to carry the named session.
+                            var target = app.sessions.value.firstOrNull { it.name == name }
+                            val deadline = System.currentTimeMillis() + 30_000
+                            while (target == null && System.currentTimeMillis() < deadline) {
+                                delay(500)
+                                target = app.sessions.value.firstOrNull { it.name == name }
+                            }
+                            val t = target
+                            if (t == null) {
+                                println("[chatattach] session '$name' not found in snapshot after 30s")
+                                return@LaunchedEffect
+                            }
+                            ui.selectedId = t.id
+                            ui.externalAttach = t.id to dev.supermux.desktop.chat.ComposerExternalAttach(filePath, text)
+                            println("[chatattach] requested attach '$filePath' + send for ${t.name} (${t.id})")
                         }
                     }
 

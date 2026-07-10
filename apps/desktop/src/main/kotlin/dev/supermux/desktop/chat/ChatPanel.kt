@@ -85,6 +85,11 @@ fun ChatPanel(
     // chat-tap → editor-at-line handler (Android ChatScreen:221 parity). Defaults to {} so
     // standalone/preview uses of ChatPanel keep compiling.
     onOpenFile: (FilePathRef) -> Unit = {},
+    // Off-by-default headless hook (SM_CHAT_ATTACH, Main.kt) delivery: a one-shot "stage this file
+    // then send" request routed straight through to [DesktopComposer]'s `externalAttach` — see its
+    // KDoc for the funnel. Null in normal operation.
+    externalAttach: ComposerExternalAttach? = null,
+    onExternalAttachConsumed: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val sem = LocalSemantics.current
@@ -233,6 +238,8 @@ fun ChatPanel(
                 onUpload = { source, name, mime, kind, onProgress ->
                     app.uploadResumable(session.id, source, name, mime, kind, onProgress)
                 },
+                externalAttach = externalAttach,
+                onExternalAttachConsumed = onExternalAttachConsumed,
                 modifier = Modifier
                     .widthIn(max = CONTENT_MAX_WIDTH)
                     .padding(horizontal = Space.lg, vertical = Space.md),

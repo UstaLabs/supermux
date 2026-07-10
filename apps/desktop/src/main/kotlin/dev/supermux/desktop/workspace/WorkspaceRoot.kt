@@ -113,6 +113,17 @@ class WorkspaceUiState {
     var forceOverflowFor by mutableStateOf<String?>(null)
 
     /**
+     * One-shot "stage this file into the chat composer, upload it, then send" request (session id +
+     * [dev.supermux.desktop.chat.ComposerExternalAttach]), consumed by the matching [SessionDetail] →
+     * [dev.supermux.desktop.chat.ChatPanel] → `DesktopComposer`'s `externalAttach` — the SAME
+     * `stageFiles`/`sendWith` funnel the Attach dialog and Send button use (see
+     * `ComposerExternalAttach`'s KDoc). Set by the off-by-default `SM_CHAT_ATTACH` headless hook in
+     * Main.kt; null in normal operation. Cleared once the matching composer consumes it (after the
+     * chip reaches a terminal state and — on success — the send fires).
+     */
+    var externalAttach by mutableStateOf<Pair<String, dev.supermux.desktop.chat.ComposerExternalAttach>?>(null)
+
+    /**
      * Reconciles the hydrated UI state against the [live] session-id set: drops a selection whose
      * session vanished (killed elsewhere / agent exit) and prunes the layout's per-session pane
      * state.
@@ -306,6 +317,10 @@ fun WorkspaceRoot(
                         onForceLinksMenuConsumed = { ui.forceLinksMenuFor = null },
                         forceOverflowMenu = ui.forceOverflowFor == session.id,
                         onForceOverflowMenuConsumed = { ui.forceOverflowFor = null },
+                        // SM_CHAT_ATTACH hook (Main.kt) delivery: hand the pending external
+                        // attach+send request to the SessionDetail whose id matches.
+                        externalAttach = ui.externalAttach?.takeIf { it.first == session.id }?.second,
+                        onExternalAttachConsumed = { ui.externalAttach = null },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

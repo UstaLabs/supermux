@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -344,6 +345,87 @@ class DesktopComposerAttachTest {
         waitForIdle()
         onNodeWithText("note.txt").assertExists()       // still Done (not "note.txt · 100%")
         onNodeWithTag("composer-send").assertIsEnabled()
+    }
+
+    // ── externalAttach (M4d-T3, the SM_CHAT_ATTACH headless hook's wiring) ──────
+    // Delivering a ComposerExternalAttach drives the SAME stageFiles()+sendWith() funnel a human
+    // Attach-then-Send would: a chip appears (Uploading → Done), then the requested text is sent with
+    // the finalized file_id, chips clear, and the caller's one-shot holder is consumed exactly once.
+    @Test fun externalAttach_stagesUploadsAndSends_thenConsumes() = runComposeUiTest {
+        var sentText: String? = null
+        var sentIds: List<String>? = null
+        var consumedCount = 0
+        val tmp = tempFile("report.txt")
+        var request by mutableStateOf<ComposerExternalAttach?>(
+            ComposerExternalAttach(tmp.absolutePath, "check this file"),
+        )
+        setContent {
+            DesktopComposer(
+                draft = "",
+                onDraftChange = {},
+                sending = false,
+                agentWorking = false,
+                onSend = { t, ids -> sentText = t; sentIds = ids },
+                onInterrupt = {},
+                onUpload = { _, _, _, _, _ -> "file-ext-1" },
+                externalAttach = request,
+                onExternalAttachConsumed = { consumedCount++; request = null },
+            )
+        }
+        waitUntil(timeoutMillis = 5_000L) { sentText != null }
+        assertEquals("check this file", sentText)
+        assertEquals(listOf("file-ext-1"), sentIds)
+        assertEquals(1, consumedCount)
+        // Sent chip is cleared (mirrors a click-driven send).
+        onAllNodesWithTag("composer-chip").assertCountEquals(0)
+    }
+
+    // A failed upload never sends — the request is still consumed (so a caller's one-shot holder
+    // doesn't wedge), but onSend is never called.
+    @Test fun externalAttach_failedUpload_neverSends_butStillConsumes() = runComposeUiTest {
+        var sendCalls = 0
+        var consumed = false
+        val tmp = tempFile("report.txt")
+        setContent {
+            DesktopComposer(
+                draft = "",
+                onDraftChange = {},
+                sending = false,
+                agentWorking = false,
+                onSend = { _, _ -> sendCalls++ },
+                onInterrupt = {},
+                onUpload = { _, _, _, _, _ -> null }, // upload gives up → Failed
+                externalAttach = ComposerExternalAttach(tmp.absolutePath, "hi"),
+                onExternalAttachConsumed = { consumed = true },
+            )
+        }
+        waitUntil(timeoutMillis = 5_000L) { consumed }
+        assertEquals(0, sendCalls)
+        // The failed chip stays (Retry affordance) — never silently dropped.
+        onNodeWithText("report.txt · Retry").assertExists()
+    }
+
+    // A path that isn't a real file (a stale/typo'd SM_CHAT_ATTACH arg) is dropped without ever
+    // staging a chip or touching onUpload.
+    @Test fun externalAttach_missingFile_dropsWithoutStaging() = runComposeUiTest {
+        var uploadCalls = 0
+        var consumed = false
+        setContent {
+            DesktopComposer(
+                draft = "",
+                onDraftChange = {},
+                sending = false,
+                agentWorking = false,
+                onSend = { _, _ -> },
+                onInterrupt = {},
+                onUpload = { _, _, _, _, _ -> uploadCalls++; "file-x" },
+                externalAttach = ComposerExternalAttach("/nonexistent/path/nope.txt", "hi"),
+                onExternalAttachConsumed = { consumed = true },
+            )
+        }
+        waitUntil(timeoutMillis = 5_000L) { consumed }
+        assertEquals(0, uploadCalls)
+        onAllNodesWithTag("composer-chip").assertCountEquals(0)
     }
 
     private fun tempFile(name: String): File {

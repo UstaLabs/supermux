@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.testTag
 import dev.supermux.desktop.chat.ChatPanel
+import dev.supermux.desktop.chat.ComposerExternalAttach
 import dev.supermux.desktop.chat.FinishButton
 import dev.supermux.desktop.chat.FinishDialog
 import dev.supermux.desktop.chat.isFinishUnacked
@@ -175,6 +176,11 @@ fun SessionDetail(
     onForceLinksMenuConsumed: () -> Unit = {},
     forceOverflowMenu: Boolean = false,
     onForceOverflowMenuConsumed: () -> Unit = {},
+    // Off-by-default headless hook (SM_CHAT_ATTACH, Main.kt) delivery: a one-shot "stage this file
+    // then send" request routed straight through to the chat pane's [DesktopComposer] — see its
+    // `externalAttach` KDoc for the funnel. Null in normal operation.
+    externalAttach: ComposerExternalAttach? = null,
+    onExternalAttachConsumed: () -> Unit = {},
     // Injectable seam for the Native (agent-PTY) panel — defaults to the real [DesktopTerminalPanel].
     // Its SwingPanel cannot be hosted under `runComposeUiTest` (no real AWT window), so the UI tests
     // inject a lightweight pure-Compose fake to exercise the toggle + keep-alive + onExit wiring.
@@ -281,6 +287,8 @@ fun SessionDetail(
                 modifier = Modifier.keepAlivePanel(visible = !native).testTag("pane_chat"),
                 showHeader = false, // this SessionDetail owns the identity header
                 onOpenFile = onOpenFile,
+                externalAttach = externalAttach,
+                onExternalAttachConsumed = onExternalAttachConsumed,
             )
             if (nativeOpened) {
                 key(session.id) {
