@@ -71,6 +71,22 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //                                  (M4f). Read-only — never calls redeemCodexReset() (that burns a
 //                                  real banked Codex reset; the redeem path stays UI-test-covered
 //                                  only). Off by default.                                    [main]
+//   SM_DIFF="<session-name>"      — select the session + flip its editor pane on; EditorPanel's own
+//                                  env read (SM_EDITOR_SAVE_TEST precedent) then fires the SAME
+//                                  editor.loadDiff(fsDiff) the "View changes" button drives (a real
+//                                  GET /fs/diff) once the panel mounts, so the rendered DiffView
+//                                  (repo/file grouping + +/- diff rows) can be screenshotted
+//                                  headlessly (M4g-2). Off by default.              [main, EditorPanel]
+//   SM_DIFF_COMMENT=1             — paired with SM_DIFF: once the diff has loaded, ALSO fires a real
+//                                  POST /review/comments on the diff's first addable line (the SAME
+//                                  onReviewAddComment the +-gutter composer drives), then reloads so
+//                                  the resulting comment thread renders — never touches
+//                                  reviewSubmit (M4g-2). Off by default.                [EditorPanel]
+//   SM_DIFF_EXPAND=1              — paired with SM_DIFF: DiffView's `autoExpandAll` starts every
+//                                  file expanded instead of collapsed, so a headless screenshot
+//                                  shows diff +/- lines with no pointer/xdotool available (M4g-2;
+//                                  desktop-only verification convenience, not an Android field).
+//                                  Off by default.                                      [EditorPanel]
 //   SMX_KCEF_FORCE_ERROR=1        — force KcefState.Error (native-fallback editor, M3)   [KcefRuntime]
 //   SM_EDITOR_SAVE_TEST           — drive the editor save path (M3)                      [EditorPanel]
 //   SMX_KCEF_EXTRA_ARGS="…"       — extra CEF switches for headless CI                   [KcefRuntime]
@@ -358,6 +374,31 @@ fun main() {
                             ui.layout.setPanes(t.id, ui.layout.panesFor(t.id).copy(editor = true))
                             ui.externalOpen = t.id to dev.supermux.ui.FilePathRef(path, null)
                             println("[editorpreview] requested '$path' in ${t.name} (${t.id}) — EditorPanel flips previewMode on once it's active")
+                        }
+                    }
+
+                    // Headless diff-verification hook (M4g-2): SM_DIFF="<session-name>" resolves +
+                    // selects the named session and flips its editor pane on; EditorPanel's own env
+                    // read (SM_EDITOR_SAVE_TEST precedent) fires editor.loadDiff(fsDiff) once the
+                    // panel mounts — this side just gets the right session showing. Off by default.
+                    val diffTest = System.getenv("SM_DIFF")?.takeIf { it.isNotBlank() }
+                    if (diffTest != null) {
+                        LaunchedEffect(app) {
+                            val name = diffTest
+                            var target = app.sessions.value.firstOrNull { it.name == name }
+                            val deadline = System.currentTimeMillis() + 30_000
+                            while (target == null && System.currentTimeMillis() < deadline) {
+                                delay(500)
+                                target = app.sessions.value.firstOrNull { it.name == name }
+                            }
+                            val t = target
+                            if (t == null) {
+                                println("[diff] session '$name' not found in snapshot after 30s")
+                                return@LaunchedEffect
+                            }
+                            ui.selectedId = t.id
+                            ui.layout.setPanes(t.id, ui.layout.panesFor(t.id).copy(editor = true))
+                            println("[diff] selected ${t.name} (${t.id}) — EditorPanel fires loadDiff once mounted")
                         }
                     }
 

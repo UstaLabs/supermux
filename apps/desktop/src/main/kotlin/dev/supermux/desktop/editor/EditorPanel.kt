@@ -8,9 +8,13 @@
 //     showPreview is true, and the rendered MarkdownBody column takes its place — see the swap's
 //     call-site comment further down for why (KCEF's heavyweight AWT SwingPanel always paints above
 //     lightweight Compose siblings, so an overlay is invisible on this platform whenever KCEF is the
-//     live surface; confirmed via a headless live-KCEF capture). Diff view + inline code-review
-//     remain OMITTED — TODO(M4g-2). The preview gate therefore does NOT AND in `!showDiff` (Android
-//     EditorScreen.kt:178 has it); M4g-2 adds that clause back once EditorState grows a showDiff flag.
+//     live surface; confirmed via a headless live-KCEF capture).
+//   - Diff view + inline code-review landed in M4g-2 (DiffView.kt): "diff is a MODE of the panel"
+//     (Android EditorScreen.kt:255-282 parity) — the SAME swap discipline as the preview toggle
+//     above, but at the OUTER Box level: `if (editor.showDiff) { DiffView(...); return@Box }` before
+//     the Column composes at all, so the tabs/tree/header AND EditorSurface (and its KCEF engine)
+//     are never composed while a diff is showing. The preview gate now ANDs in `!showDiff` (Android
+//     EditorScreen.kt:177-178 parity, restored — see [editorPreviewGate]'s `showDiff` param).
 //   - LSP is OMITTED (M4). No AndroidLspBridge / lsp* wiring; the engine's lspOut is log-and-dropped.
 //   - The WebView surface is a KCEF engine ([EditorSurface] in WebCodeEditor.kt) with a native
 //     BasicTextField fallback. The engine is built ONLY once KCEF is Ready and is NEVER created
@@ -41,6 +45,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Difference
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -75,8 +80,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.key
 import dev.supermux.desktop.theme.LocalPanes
 import dev.supermux.desktop.theme.Space
+import dev.supermux.net.AddCommentBody
+import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
 import dev.supermux.net.FsSearchResult
+import dev.supermux.net.ReviewComment
+import dev.supermux.net.ReviewSubmitResult
 import dev.supermux.proto.ServerFrame
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -105,6 +114,11 @@ fun EditorPanel(
     fsRead: suspend (String) -> Result<String>,
     fsWrite: suspend (String, String) -> Boolean,
     fsSearch: suspend (String) -> List<FsSearchResult>,
+    // M4g-2 — diff + inline code-review (pure HTTP; Android EditorScreen.kt:90-93 parity).
+    fsDiff: suspend () -> FsDiffResult? = { null },
+    onReviewAddComment: suspend (AddCommentBody) -> ReviewComment? = { null },
+    onReviewResolve: suspend (String) -> Boolean = { false },
+    onReviewSubmit: suspend () -> ReviewSubmitResult? = { null },
     fsChanges: SharedFlow<ServerFrame.FsChanged> = MutableSharedFlow(),
     editorOpen: (String) -> Unit = {},
     editorClose: (String) -> Unit = {},
@@ -220,15 +234,101 @@ fun EditorPanel(
         }
     }
 
+    // Off-by-default headless diff-verification hook (M4g-2): SM_DIFF="<session-name>" is resolved+
+    // selected in Main.kt (the SAME session-select chain SM_EDITOR_PREVIEW uses); THIS side fires
+    // the SAME editor.loadDiff(fsDiff) the "View changes" button drives — a real GET /fs/diff — ONCE
+    // per panel mount, so the rendered DiffView can be screenshotted headlessly (no xdotool).
+    // Harmless in production (unset by default). Mirrors the SM_EDITOR_SAVE_TEST hook above.
+    val diffTestOn = System.getenv("SM_DIFF")?.isNotBlank() == true
+    if (diffTestOn) {
+        var diffFired by remember(sessionId) { mutableStateOf(false) }
+        LaunchedEffect(sessionId) {
+            if (!diffFired) {
+                diffFired = true
+                editor.loadDiff(fsDiff)
+                println("[editordiff] loadDiff fired for session $sessionId")
+            }
+        }
+    }
+
+    // Off-by-default headless review-comment hook (M4g-2): SM_DIFF_COMMENT=1, paired with SM_DIFF,
+    // fires a real POST /review/comments (the SAME onReviewAddComment the +-gutter composer drives)
+    // on the loaded diff's first addable line, then reloads so the resulting comment thread renders
+    // — never touches reviewSubmit. Harmless in production (unset by default; also no-ops without
+    // SM_DIFF, since editor.diffRepos never populates otherwise).
+    val diffCommentTestOn = System.getenv("SM_DIFF_COMMENT")?.isNotBlank() == true
+    if (diffTestOn && diffCommentTestOn) {
+        var commentFired by remember(sessionId) { mutableStateOf(false) }
+        LaunchedEffect(editor.diffRepos) {
+            if (commentFired) return@LaunchedEffect
+            val repoWithFile = editor.diffRepos.firstOrNull { it.files.isNotEmpty() } ?: return@LaunchedEffect
+            val file = repoWithFile.files.first()
+            val lines = parseDiffLines(file.diff)
+            val addLine = lines.firstOrNull { it.type == DiffLineType.Add && it.newLine != null } ?: return@LaunchedEffect
+            val hunk = lines.take(lines.indexOf(addLine)).lastOrNull { it.type == DiffLineType.Hunk }?.content ?: ""
+            commentFired = true
+            onReviewAddComment(
+                AddCommentBody(
+                    repo = repoWithFile.repo,
+                    path = file.path,
+                    side = "RIGHT",
+                    anchorLine = addLine.newLine!!,
+                    anchorContext = addLine.content,
+                    body = "SM_DIFF_COMMENT verification comment",
+                    diffHunkHeader = hunk,
+                ),
+            )
+            editor.reloadDiff(fsDiff)
+            println("[editordiff] SM_DIFF_COMMENT fired on ${file.path}:${addLine.newLine}")
+        }
+    }
+
     val activeTab = editor.activeTab
     val loadingNew = editor.loadingPath?.let { path -> editor.tabs.none { it.path == path } } == true
-    val previewGate = editorPreviewGate(activeTab?.path, editor.previewMode)
+    val previewGate = editorPreviewGate(activeTab?.path, editor.previewMode, editor.showDiff)
     val showPreviewToggle = previewGate.showPreviewToggle
     val showPreview = previewGate.showPreview
 
     Box(modifier.fillMaxSize()) {
+        // Diff is a MODE of the panel (parity EditorScreen.kt:255-282 / EditorPane.swift:44): when
+        // showDiff, DiffView swaps the WHOLE panel — header/tabs/tree/editor — never composing the
+        // Column below at all. This is a full SWAP, not an overlay: the same discipline the M4g-1
+        // markdown-preview fix adopted (see the "WHY NOT AN OVERLAY" note further down) — KCEF's
+        // heavyweight AWT SwingPanel (inside EditorSurface, reached via the Column) always paints
+        // above any lightweight Compose sibling, so an overlay would be invisible whenever KCEF is
+        // the live surface. Returning early here means EditorSurface (and its KCEF engine) is never
+        // composed while a diff is showing, sidestepping the z-order limitation entirely.
+        if (editor.showDiff) {
+            DiffView(
+                repos = editor.diffRepos,
+                comments = editor.diffComments,
+                onAddComment = { repo, path, anchorLine, anchorContext, hunkHeader, body ->
+                    onReviewAddComment(
+                        AddCommentBody(
+                            repo = repo,
+                            path = path,
+                            side = "RIGHT",
+                            anchorLine = anchorLine,
+                            anchorContext = anchorContext,
+                            body = body,
+                            diffHunkHeader = hunkHeader,
+                        ),
+                    )
+                    Unit
+                },
+                onResolve = { commentId -> onReviewResolve(commentId); Unit },
+                onSubmit = { onReviewSubmit(); Unit },
+                onReload = { scope.launch { editor.reloadDiff(fsDiff) } },
+                onClose = { editor.showDiff = false },
+                // Off-by-default headless hook (M4g-2), paired with SM_DIFF: SM_DIFF_EXPAND=1 auto-
+                // expands every file so a live screenshot shows diff lines with no pointer/xdotool.
+                autoExpandAll = System.getenv("SM_DIFF_EXPAND")?.isNotBlank() == true,
+                modifier = Modifier.fillMaxSize(),
+            )
+            return@Box
+        }
         Column(Modifier.fillMaxSize()) {
-            // ── Header: tree toggle · search · save (diff/preview OMITTED — TODO(M4)) ──
+            // ── Header: tree toggle · search · preview toggle · view-changes · save ──
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -270,7 +370,25 @@ fun EditorPanel(
                         )
                     }
                 }
-                // TODO(M4g-2): "View changes" diff button (Android has it next to preview).
+                // "View changes" (diff) — opens the DiffView mode (M4g-2; Android EditorScreen
+                // .kt:327-348 parity). A spinner replaces the button while the fetch is in flight.
+                if (editor.diffLoading) {
+                    Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = cs.primary)
+                    }
+                } else {
+                    IconButton(
+                        onClick = { scope.launch { editor.loadDiff(fsDiff) } },
+                        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).testTag("editor_view_changes"),
+                    ) {
+                        Icon(
+                            Icons.Filled.Difference,
+                            contentDescription = "View changes",
+                            tint = cs.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
                 if (editor.saving) {
                     Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = cs.primary)
@@ -481,12 +599,14 @@ internal fun isMarkdownPath(path: String): Boolean =
  *  itself just calls this at composition time; see EditorPanel body). */
 internal data class EditorPreviewGate(val showPreviewToggle: Boolean, val showPreview: Boolean)
 
-internal fun editorPreviewGate(activePath: String?, previewMode: Boolean): EditorPreviewGate {
+/** M4g-2: restores the `&& !showDiff` clauses Android EditorScreen.kt:177-178 has and M4g-1
+ *  deliberately omitted (diff mode didn't exist yet on desktop) — full Android parity now that
+ *  [EditorState.showDiff] exists. Diff mode fully replaces the column (see the swap gate in
+ *  [EditorPanel]'s body), so the preview toggle/overlay must never show alongside it. */
+internal fun editorPreviewGate(activePath: String?, previewMode: Boolean, showDiff: Boolean = false): EditorPreviewGate {
     val activeIsMarkdown = activePath?.let(::isMarkdownPath) == true
-    // TODO(M4g-2): AND in `!showDiff` once EditorState grows a diff-view mode (Android EditorScreen
-    // .kt:177-178 parity) — diff view doesn't exist yet on desktop, so it's omitted here.
     return EditorPreviewGate(
-        showPreviewToggle = activeIsMarkdown,
-        showPreview = previewMode && activeIsMarkdown,
+        showPreviewToggle = activeIsMarkdown && !showDiff,
+        showPreview = previewMode && activeIsMarkdown && !showDiff,
     )
 }

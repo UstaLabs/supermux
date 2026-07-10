@@ -4,9 +4,8 @@
 // Desktop adaptations vs. the Android source:
 //   - previewMode (markdown preview toggle) landed in M4g-1 (single flag, not per-tab — Android
 //     EditorState.kt:41 parity). The Diff/inline-code-review state + methods (showDiff, diffRepos,
-//     diffComments, diffLoading, loadDiff, reloadDiff — and their FsDiffResult/RepoDiff/ReviewComment
-//     imports) remain OMITTED — TODO(M4g-2): port DiffView once the desktop diff pane lands; it's
-//     cleanly separable from tabs/tree/search/reload, so left out rather than kept inert.
+//     diffComments, diffLoading, loadDiff, reloadDiff) landed in M4g-2 — verbatim port of Android
+//     EditorState.kt:44-47,138-155.
 //   - Everything else — tabs, tree UI state, search, changedPaths/markChanged/isStale/reload,
 //     openFile/openFileAtLine/closeTab/selectTab/updateContent/saveActive — mirrors Android 1:1,
 //     EXCEPT for three DELIBERATE M3-T4 divergences hardened for the over-the-network fsRead (Android
@@ -37,6 +36,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import dev.supermux.net.FsDiffResult
+import dev.supermux.net.RepoDiff
+import dev.supermux.net.ReviewComment
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -72,6 +74,13 @@ class EditorState(
      *  EditorState.kt:41 parity). Only takes effect on the active tab when it's a `.md`/`.markdown`
      *  path (see [isMarkdownPath] / the showPreview gate in EditorPanel.kt). */
     var previewMode by mutableStateOf(false)
+
+    // Diff / inline code-review state (M4g-2) — per-session, survives panel switches like the
+    // tree (Android EditorState.kt:44-47 parity).
+    var showDiff by mutableStateOf(false)
+    var diffRepos by mutableStateOf<List<RepoDiff>>(emptyList())
+    var diffComments by mutableStateOf<List<ReviewComment>>(emptyList())
+    var diffLoading by mutableStateOf(false)
 
     /** Workdir-relative paths the broker reported changed on disk (fs_changed) → reload banner. */
     var changedPaths by mutableStateOf(setOf<String>())
@@ -220,6 +229,27 @@ class EditorState(
             }
             saving = false
         }
+    }
+
+    // ── Diff / inline code-review (ports Android EditorState.kt:138-155, itself EditorState.swift:61-77) ──
+
+    /** Fetch the diff; only flip [showDiff] on a non-null result so a failed fetch never opens
+     *  an empty pane (parity EditorState.swift:67). */
+    suspend fun loadDiff(fsDiff: suspend () -> FsDiffResult?) {
+        diffLoading = true
+        val res = fsDiff()
+        diffLoading = false
+        if (res == null) return
+        diffRepos = res.repos
+        diffComments = res.comments
+        showDiff = true
+    }
+
+    /** Re-fetch the diff in place (after add/resolve/submit) — does not toggle [showDiff]. */
+    suspend fun reloadDiff(fsDiff: suspend () -> FsDiffResult?) {
+        val res = fsDiff() ?: return
+        diffRepos = res.repos
+        diffComments = res.comments
     }
 
     // ── Live file-watch reload (ports EditorState.swift:79-84, 130-144) ─────────

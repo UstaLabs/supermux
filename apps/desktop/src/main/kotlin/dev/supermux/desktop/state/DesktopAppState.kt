@@ -12,11 +12,13 @@
 package dev.supermux.desktop.state
 
 import dev.supermux.desktop.session.StagedUpload
+import dev.supermux.net.AddCommentBody
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.BrokerClient
 import dev.supermux.net.ChunkSource
 import dev.supermux.net.FinishReadiness
+import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
 import dev.supermux.net.FsSearchResult
 import dev.supermux.net.GitOpResult
@@ -26,10 +28,13 @@ import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RepoInfo
 import dev.supermux.net.CodexResetResult
+import dev.supermux.net.ReviewComment
+import dev.supermux.net.ReviewSubmitResult
 import dev.supermux.net.SpawnRequest
 import dev.supermux.net.SpawnResponse
 import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalSummary
+import dev.supermux.net.UpdateCommentBody
 import dev.supermux.net.UsageResponse
 import dev.supermux.net.VerifySaveResult
 import dev.supermux.net.VerifySuggestResult
@@ -561,6 +566,32 @@ class DesktopAppState(
     /** GET /sessions/<id>/fs/search → filename matches. Empty on any failure. */
     suspend fun fsSearch(session: SessionInfo, q: String): List<FsSearchResult> =
         runApi("fsSearch") { api.fsSearch(session.id, q) } ?: emptyList()
+
+    // ── Diff + inline code-review (M4g-2; mirrors AppViewModel.fsDiff/reviewAddComment/
+    //    reviewResolve/reviewSubmit:805-819) ────────────────────────────────────────────
+    // Pure HTTP, like fsList/fsRead/fsWrite/fsSearch above — no ServerFrame/reduce()/WS
+    // involvement. All four take a [SessionInfo] (the DiffView call site in
+    // SessionDetail.DesktopEditorPanel already has it in hand), degrading through [runApi]
+    // exactly like the fs* wrappers.
+
+    /** GET /sessions/<id>/fs/diff → repos + existing review comments. Null on any failure. */
+    suspend fun fsDiff(session: SessionInfo): FsDiffResult? =
+        runApi("fsDiff") { api.fsDiff(session.id) }
+
+    /** POST /sessions/<id>/review/comments → the created comment. Null on any failure. */
+    suspend fun reviewAddComment(session: SessionInfo, body: AddCommentBody): ReviewComment? =
+        runApi("reviewAddComment") { api.reviewAddComment(session.id, body) }
+
+    /** PATCH a comment to status="resolved" (iOS/Android reviewResolve parity). False on any failure. */
+    suspend fun reviewResolve(session: SessionInfo, commentId: String): Boolean =
+        runApi("reviewResolve") { api.reviewUpdateComment(session.id, commentId, UpdateCommentBody(status = "resolved")) }
+            ?: false
+
+    /** POST /sessions/<id>/review/submit → delivers open comments to the agent. Null on any
+     *  failure. DANGER: this is the one remote-MUTATING op in this group — callers must never
+     *  fire it outside an explicit user "Submit review" click (see DiffView's submit bar). */
+    suspend fun reviewSubmit(session: SessionInfo): ReviewSubmitResult? =
+        runApi("reviewSubmit") { api.reviewSubmit(session.id) }
 
     /** Start the broker fs-watcher for this session (so fs_changed fires → the stale banner works).
      *  Sent on EditorPanel mount; the [editorClose] counterpart stops it on dispose. */

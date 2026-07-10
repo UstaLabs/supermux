@@ -1,5 +1,9 @@
 package dev.supermux.desktop.editor
 
+import dev.supermux.net.DiffFile
+import dev.supermux.net.FsDiffResult
+import dev.supermux.net.RepoDiff
+import dev.supermux.net.ReviewComment
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -579,5 +583,87 @@ class EditorStateTest {
         assertNotNull(tab)
         assertEquals(99 to null, tab.revealLine) // newest wins; the stale nonce-1 reveal was dropped
         assertEquals(1, s.tabs.size)
+    }
+
+    // ── Diff / inline code-review (M4g-2 Task 2; ports Android EditorState.kt:138-155) ──────
+
+    private val fakeDiff = FsDiffResult(
+        repos = listOf(
+            RepoDiff(repo = "", files = listOf(DiffFile(path = "a.txt", status = "modified", diff = "@@ -1 +1 @@\n-old\n+new\n"))),
+        ),
+        comments = listOf(
+            ReviewComment(id = "c1", repo = "", path = "a.txt", side = "RIGHT", anchorLine = 1, body = "hey", status = "open"),
+        ),
+    )
+
+    @Test fun load_diff_with_a_non_null_result_shows_the_diff_and_populates_repos_and_comments() = runTest {
+        val s = state()
+
+        s.loadDiff { fakeDiff }
+
+        assertTrue(s.showDiff)
+        assertEquals(fakeDiff.repos, s.diffRepos)
+        assertEquals(fakeDiff.comments, s.diffComments)
+        assertFalse(s.diffLoading)
+    }
+
+    @Test fun load_diff_with_a_null_result_never_shows_the_diff() = runTest {
+        val s = state()
+
+        s.loadDiff { null }
+
+        assertFalse(s.showDiff)
+        assertTrue(s.diffRepos.isEmpty())
+        assertTrue(s.diffComments.isEmpty())
+        assertFalse(s.diffLoading)
+    }
+
+    @Test fun load_diff_sets_diff_loading_while_the_fetch_is_in_flight() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val s = state(scope = this)
+
+        val job = launch { s.loadDiff { gate.await(); fakeDiff } }
+        advanceUntilIdle() // fetch in flight, parked on gate.await()
+        assertTrue(s.diffLoading)
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+        job.join()
+        assertFalse(s.diffLoading)
+        assertTrue(s.showDiff)
+    }
+
+    @Test fun reload_diff_updates_repos_and_comments_without_toggling_show_diff() = runTest {
+        val s = state()
+        s.loadDiff { fakeDiff }
+        assertTrue(s.showDiff)
+
+        val updated = fakeDiff.copy(comments = emptyList())
+        s.reloadDiff { updated }
+
+        assertTrue(s.showDiff) // still true — reloadDiff never flips it
+        assertEquals(updated.repos, s.diffRepos)
+        assertTrue(s.diffComments.isEmpty())
+    }
+
+    @Test fun reload_diff_with_a_null_result_leaves_the_prior_repos_and_comments_in_place() = runTest {
+        val s = state()
+        s.loadDiff { fakeDiff }
+
+        s.reloadDiff { null }
+
+        assertTrue(s.showDiff)
+        assertEquals(fakeDiff.repos, s.diffRepos)
+        assertEquals(fakeDiff.comments, s.diffComments)
+    }
+
+    @Test fun reload_diff_does_not_flip_show_diff_on_even_when_it_starts_false() = runTest {
+        val s = state()
+        assertFalse(s.showDiff)
+
+        s.reloadDiff { fakeDiff }
+
+        assertFalse(s.showDiff) // reloadDiff is an in-place refresh, never an opener
+        assertEquals(fakeDiff.repos, s.diffRepos)
     }
 }

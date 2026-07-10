@@ -77,4 +77,18 @@ class EditorPanelMarkdownTest {
     @Test fun preview_is_hidden_on_a_non_markdown_tab_even_when_preview_mode_is_on() {
         assertFalse(editorPreviewGate(activePath = "notes.txt", previewMode = true).showPreview)
     }
+
+    // ── showDiff clause (M4g-2 — restores Android EditorScreen.kt:177-178 parity) ──────────
+
+    @Test fun preview_toggle_is_hidden_while_diff_mode_is_active_even_on_markdown() {
+        assertFalse(editorPreviewGate(activePath = "notes.md", previewMode = false, showDiff = true).showPreviewToggle)
+    }
+
+    @Test fun preview_is_hidden_while_diff_mode_is_active_even_when_preview_mode_is_on() {
+        assertFalse(editorPreviewGate(activePath = "notes.md", previewMode = true, showDiff = true).showPreview)
+    }
+
+    @Test fun preview_toggle_is_shown_when_diff_mode_is_off_and_markdown_is_active() {
+        assertTrue(editorPreviewGate(activePath = "notes.md", previewMode = false, showDiff = false).showPreviewToggle)
+    }
 }
