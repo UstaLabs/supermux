@@ -2,8 +2,8 @@
 // the wide-screen detail for ONE session: a minimal identity header + the nested, drag-resizable
 // split tree of live panes driven by [layout].panesFor([session].id).
 //
-// Live surfaces: Chat (M1), Terminal — scratch tabs + the Native agent PTY (M2), and Editor (M3, the
-// KCEF-backed code editor). Display remains a ComingSoonPane placeholder (it arrives in M5).
+// Live surfaces: Chat (M1), Terminal — scratch tabs + the Native agent PTY (M2), Editor (M3, the
+// KCEF-backed code editor), and Display — a real VNC viewer (M5-2, see DisplayPanel.kt).
 // The Finish button (worktree-backed sessions) lands in M4b; the git-badge count menu, the
 // session-links (proxies) menu, and the overflow (⋮) Rename/Mute/Kill menu land in M4c (see
 // SessionHeaderMenus.kt). The AgentViewToggle (Chat⇄Native) was pulled forward into M2 (terminal
@@ -356,7 +356,17 @@ fun SessionDetail(
             modifier = Modifier.fillMaxSize().testTag("pane_terminal"),
         )
     }
-    val displayPane: @Composable () -> Unit = { ComingSoonPane("Display", "M5", "pane_display") }
+    // Real VNC display (M5-2). No injectable seam (unlike editorPanelContent/nativePanelContent):
+    // DisplayPanel's default (no running stream) state is pure Compose with no heavyweight native
+    // child, so it's safe to run un-faked under runComposeUiTest — same precedent terminalPane
+    // already established (see M5-2's plan Task 4 research note).
+    val displayPane: @Composable () -> Unit = {
+        dev.supermux.desktop.display.DisplayPanel(
+            app = app,
+            session = session,
+            modifier = Modifier.fillMaxSize().testTag("pane_display"),
+        )
+    }
 
     // Editor and/or Terminal stacked vertically (the "work" column).
     val workColumn: @Composable () -> Unit = {
