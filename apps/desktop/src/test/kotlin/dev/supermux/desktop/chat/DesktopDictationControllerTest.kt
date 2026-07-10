@@ -1,11 +1,15 @@
 package dev.supermux.desktop.chat
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private class FakeMicCapture(
@@ -122,5 +126,47 @@ class DesktopDictationControllerTest {
         ctrl.startMic() // already recording — must not re-open the line
 
         assertEquals(1, fake.startCalls)
+    }
+
+    /**
+     * REGRESSION (cross-session dictation leak): a transcription still in flight when the composer
+     * switches sessions must NOT resolve into the new session's draft. On a session switch,
+     * `rememberDesktopDictation`'s `DisposableEffect(resetKey)` disposes the OUTGOING controller by
+     * calling [DesktopDictationController.cancelMic] — which must cancel the pending whisper POST,
+     * not just guard `recording`. Otherwise session A's ~20-30s POST resolves after the composer has
+     * rebound `onAppend` to session B and appends A's text into B (the M4d attachment-leak class).
+     *
+     * Uses a [StandardTestDispatcher] (NOT the Unconfined one the other tests use) + a gated
+     * [CompletableDeferred] so the transcribe coroutine genuinely SUSPENDS mid-flight — the only way
+     * to model "user switched sessions before the POST came back". Without the [cancelMic] fix this
+     * fails: the deferred resumes, `pastAwait` flips true, and `appended` receives A's text.
+     */
+    @Test fun cancel_mic_cancels_an_in_flight_transcription_so_it_never_appends_after_a_session_switch() = runTest {
+        val scope = TestScope(StandardTestDispatcher(testScheduler))
+        val ctrl = DesktopDictationController(FakeMicCapture(wavOnStop = byteArrayOf(1, 2, 3)), scope)
+
+        val gate = CompletableDeferred<Unit>()
+        var pastAwait = false
+        var appended: String? = null
+        // Session A's binding: a transcribe that hangs until the (fake) POST resolves.
+        ctrl.transcribeAudio = { _, _ -> gate.await(); pastAwait = true; "session A dictation" }
+        ctrl.onAppend = { appended = it }
+
+        ctrl.startMic()
+        ctrl.stopMic() // launches the transcribe coroutine
+        scope.testScheduler.runCurrent() // let it reach `gate.await()` and suspend there
+
+        // Session switch: the DisposableEffect(resetKey) onDispose fires cancelMic() on this
+        // (outgoing) controller while the POST is still in flight.
+        ctrl.cancelMic()
+
+        // The POST finally resolves — but the coroutine was cancelled at the await, so nothing past
+        // it runs.
+        gate.complete(Unit)
+        scope.testScheduler.advanceUntilIdle()
+
+        assertFalse(pastAwait, "cancelled transcription must not run past its suspension point")
+        assertNull(appended, "a cancelled session's dictation must never append")
+        assertFalse(ctrl.transcribing)
     }
 }

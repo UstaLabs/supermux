@@ -50,6 +50,7 @@ import javax.sound.sampled.LineUnavailableException
 import javax.sound.sampled.TargetDataLine
 import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /** Desktop mic dictation format: 16kHz mono 16-bit signed little-endian PCM — the standard input
@@ -184,6 +185,12 @@ internal class DesktopDictationController(
     var transcribeAudio: suspend (bytes: ByteArray, filename: String) -> String? = { _, _ -> null }
     var onAppend: (String) -> Unit = {}
 
+    /** The in-flight transcribe coroutine (whisper POST + append), or null when idle. Tracked so
+     *  [cancelMic] can cancel a PENDING transcription on a session switch — otherwise a ~20-30s POST
+     *  launched under session A could resolve after the composer rebinds to session B and land A's
+     *  text (or its stale [onAppend]/[errorMessage] writes) in B. See [cancelMic]. */
+    private var transcribeJob: Job? = null
+
     fun startMic() {
         if (recording || transcribing) return
         errorMessage = null
@@ -200,7 +207,7 @@ internal class DesktopDictationController(
             errorMessage = "Didn't catch that"
             return
         }
-        scope.launch {
+        transcribeJob = scope.launch {
             transcribing = true
             try {
                 val cleaned = transcribeAudio(wav, "dictation-${System.currentTimeMillis()}.wav")?.trim()
@@ -214,13 +221,30 @@ internal class DesktopDictationController(
     fun cancelMic() {
         val wasRecording = recording
         recording = false
+        // Cancel a pending transcription too (not just a live recording): on a session switch the
+        // composer's DisposableEffect(resetKey) disposes THIS controller, and a still-in-flight POST
+        // must not resolve into the next session's draft (the M4d cross-session-leak class of bug).
+        // Cancel a pending transcription too (not just a live recording): on a session switch the
+        // composer's DisposableEffect(resetKey) disposes THIS controller, and a still-in-flight POST
+        // must not resolve into the next session's draft (the M4d cross-session-leak class of bug).
+        transcribeJob?.cancel()
+        transcribeJob = null
         if (wasRecording) recorder.cancel()
     }
 }
 
 /** Remembers a [DesktopDictationController], rebinds its session-scoped closures every
- *  recomposition, and cancels any in-flight recording when [resetKey] changes (session switch in
- *  chat; a constant in the launcher — mirrors Android's `rememberDictation`'s KDoc guidance). */
+ *  recomposition, and cancels any in-flight recording OR transcription when [resetKey] changes
+ *  (session switch in chat; a constant in the launcher — mirrors Android's `rememberDictation`'s
+ *  KDoc guidance).
+ *
+ *  The controller itself is `remember(resetKey)`-SCOPED (not a bare `remember{}`): [DesktopComposer]
+ *  deliberately stays composed across session switches (no `key(session.id)` wrapper — see its
+ *  `remember(sessionKey)` attachment-state comment), so a single shared controller whose
+ *  `onAppend`/`transcribeAudio` vars get repointed on recomposition would leak session A's in-flight
+ *  dictation into session B (the M4d attachment-leak bug class). Rekeying gives each session a fresh
+ *  controller; the `DisposableEffect(resetKey) { onDispose { cancelMic() } }` on the OUTGOING
+ *  controller then cancels A's pending POST so it can never resolve into B's draft. */
 @Composable
 internal fun rememberDesktopDictation(
     resetKey: Any,
@@ -229,7 +253,7 @@ internal fun rememberDesktopDictation(
     recorderFactory: () -> MicCapture = { MicRecorder() },
 ): DesktopDictationController {
     val scope = rememberCoroutineScope()
-    val controller = remember { DesktopDictationController(recorderFactory(), scope) }
+    val controller = remember(resetKey) { DesktopDictationController(recorderFactory(), scope) }
     controller.transcribeAudio = transcribeAudio
     controller.onAppend = onAppend
     DisposableEffect(resetKey) { onDispose { controller.cancelMic() } }
