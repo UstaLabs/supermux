@@ -5,7 +5,9 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.supermux.net.FsDiffResult
+import dev.supermux.net.FsRefsResult
 import dev.supermux.net.RepoDiff
+import dev.supermux.net.RepoRefs
 import dev.supermux.net.ReviewComment
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -45,6 +47,12 @@ class EditorState(
     var diffRepos by mutableStateOf<List<RepoDiff>>(emptyList())
     var diffComments by mutableStateOf<List<ReviewComment>>(emptyList())
     var diffLoading by mutableStateOf(false)
+
+    /** Selected diff-base spec passed to fs/diff ("session-start"/"head"/"commit:<sha>"/
+     *  "branch:<name>"). Target is always the working tree (parity web DiffView base picker). */
+    var diffBase by mutableStateOf("session-start")
+    /** Branches + recent commits per repo for the base picker (parity fsRefs). */
+    var diffRefs by mutableStateOf<List<RepoRefs>>(emptyList())
 
     /** Workdir-relative paths the broker reported changed on disk (fs_changed) → reload banner. */
     var changedPaths by mutableStateOf(setOf<String>())
@@ -135,11 +143,13 @@ class EditorState(
 
     // ── Diff / inline code-review (ports EditorState.swift:61-77) ───────────────
 
-    /** Fetch the diff; only flip [showDiff] on a non-null result so a failed fetch never
-     *  opens an empty pane (parity EditorState.swift:67). */
-    suspend fun loadDiff(fsDiff: suspend () -> FsDiffResult?) {
+    /** Fetch the diff for the current [diffBase] + the ref list for the base picker; only flip
+     *  [showDiff] on a non-null diff so a failed fetch never opens an empty pane (parity
+     *  EditorState.swift:67). */
+    suspend fun loadDiff(fsDiff: suspend (String) -> FsDiffResult?, fsRefs: suspend () -> FsRefsResult?) {
         diffLoading = true
-        val res = fsDiff()
+        val res = fsDiff(diffBase)
+        diffRefs = fsRefs()?.repos ?: emptyList()
         diffLoading = false
         if (res == null) return
         diffRepos = res.repos
@@ -147,11 +157,18 @@ class EditorState(
         showDiff = true
     }
 
-    /** Re-fetch the diff in place (after add/resolve/submit) — does not toggle [showDiff]. */
-    suspend fun reloadDiff(fsDiff: suspend () -> FsDiffResult?) {
-        val res = fsDiff() ?: return
+    /** Re-fetch the diff in place for [diffBase] (after add/resolve/submit or a base change) —
+     *  does not toggle [showDiff]. */
+    suspend fun reloadDiff(fsDiff: suspend (String) -> FsDiffResult?) {
+        val res = fsDiff(diffBase) ?: return
         diffRepos = res.repos
         diffComments = res.comments
+    }
+
+    /** Switch the diff base and re-fetch in place (parity web setBase). */
+    suspend fun setDiffBase(base: String, fsDiff: suspend (String) -> FsDiffResult?) {
+        diffBase = base
+        reloadDiff(fsDiff)
     }
 
     // ── Live file-watch reload (ports EditorState.swift:79-84, 130-144) ─────────

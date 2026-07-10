@@ -167,7 +167,8 @@ fun ChatScreen(
     fsWrite: suspend (String, String) -> Boolean = { _, _ -> false },
     fsSearch: suspend (String) -> List<dev.supermux.net.FsSearchResult> = { emptyList() },
     // Editor diff + inline code-review (bound to session.id in SessionKeepAlive).
-    fsDiff: suspend () -> dev.supermux.net.FsDiffResult? = { null },
+    fsDiff: suspend (String) -> dev.supermux.net.FsDiffResult? = { null },
+    fsRefs: suspend () -> dev.supermux.net.FsRefsResult? = { null },
     reviewAddComment: suspend (dev.supermux.net.AddCommentBody) -> dev.supermux.net.ReviewComment? = { null },
     reviewResolve: suspend (String) -> Boolean = { false },
     reviewSubmit: suspend () -> dev.supermux.net.ReviewSubmitResult? = { null },
@@ -602,6 +603,7 @@ fun ChatScreen(
                     fsWrite = fsWrite,
                     fsSearch = fsSearch,
                     fsDiff = fsDiff,
+                    fsRefs = fsRefs,
                     reviewAddComment = reviewAddComment,
                     reviewResolve = reviewResolve,
                     reviewSubmit = reviewSubmit,
