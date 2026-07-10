@@ -21,6 +21,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -41,6 +42,7 @@ import androidx.compose.ui.platform.testTag
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.session.SessionLauncherScreen
@@ -67,6 +69,24 @@ class WorkspaceUiState {
      * composition — can open it too, the same reason [selectedId] lives here.
      */
     var launcherOpen by mutableStateOf(false)
+
+    /**
+     * Whether the Archived-sessions overlay (M4e Task 2) is showing. Flipped on by the File ▸
+     * "Archived…" menu item in Main.kt (which reaches this shared state the same way New-Session
+     * does); flipped off by the screen's back/escape or a Resume. Lives here (not local to
+     * [WorkspaceRoot]) for the SAME reason as [launcherOpen] — Main's MenuBar renders outside
+     * WorkspaceRoot's composition but must open it.
+     */
+    var archivedOpen by mutableStateOf(false)
+
+    /**
+     * Any full-pane modal overlay ([launcherOpen] or [archivedOpen]) is up. The workspace
+     * pane/sidebar shortcuts (Ctrl+B/L/E/T/D) are gated OFF while this is true, so a chord an
+     * overlay leaves unhandled can't bubble to [workspaceShortcuts] and silently mutate the layout
+     * behind it. One gate for every overlay, so new overlays don't each have to remember to extend
+     * the guard.
+     */
+    val overlayOpen: Boolean get() = launcherOpen || archivedOpen
 
     /**
      * One-shot external "open this file" request (sessionId → ref), consumed by [SessionDetail] and
@@ -166,6 +186,10 @@ fun WorkspaceRoot(
     // the SAME overlay via ui.launcherOpen.
     val onNewSession: () -> Unit = { ui.launcherOpen = true }
 
+    // Scope for fire-and-forget overlay actions (e.g. the archived Resume POST) that must outlive
+    // the overlay's composition — it closes the instant Resume is tapped.
+    val overlayScope = rememberCoroutineScope()
+
     // Per-session composer drafts, hoisted here so switching sessions preserves each draft.
     // In-memory only for M1 — broker-side draft sync is M4.
     val drafts = remember { mutableStateMapOf<String, String>() }
@@ -244,12 +268,13 @@ fun WorkspaceRoot(
                 .fillMaxSize()
                 .focusRequester(rootFocus)
                 .focusable()
-                // Gate the pane/sidebar shortcuts (Ctrl+B/L/E/T/D) OFF while the launcher overlay is
-                // up: it's modal, so a chord it leaves unhandled must NOT bubble here and silently
-                // mutate the layout behind it (sidebar collapse / pane toggles the user can't see).
-                // The overlay handles its own Escape; Ctrl+N is idempotent and reopening an already-
-                // open launcher is a no-op, so dropping it here too costs nothing.
-                .then(if (ui.launcherOpen) Modifier else Modifier.workspaceShortcuts(layout, ui.selectedId, onNewSession)),
+                // Gate the pane/sidebar shortcuts (Ctrl+B/L/E/T/D) OFF while ANY full-pane overlay
+                // (launcher or archived) is up: it's modal, so a chord it leaves unhandled must NOT
+                // bubble here and silently mutate the layout behind it (sidebar collapse / pane
+                // toggles the user can't see). Each overlay handles its own Escape; Ctrl+N is
+                // idempotent and reopening an already-open launcher is a no-op, so dropping it here
+                // too costs nothing. `ui.overlayOpen` is the single gate for every overlay.
+                .then(if (ui.overlayOpen) Modifier else Modifier.workspaceShortcuts(layout, ui.selectedId, onNewSession)),
         ) {
             Row(Modifier.fillMaxSize()) {
                 // ── Sidebar: collapsed rail, or the full list + a drag-resize gutter ──
@@ -378,6 +403,35 @@ fun WorkspaceRoot(
                             app.sendMessage(id, text, app.consumeFirstUploads(id))
                             ui.launcherOpen = false
                         },
+                    )
+                }
+            }
+
+            // ── Archived-sessions: a FULL-PANE overlay above the workspace (M4e Task 2) ──
+            // Same shape as the launcher overlay (a Box drawn last, over the still-mounted
+            // workspace). The list is loaded from `app.archived()` each time the overlay opens
+            // (not kept live — an archived list is a point-in-time snapshot); reset to empty on
+            // close so a re-open always re-fetches. Escape / back / Resume close it via onBack;
+            // Resume additionally kicks the un-archive (the resumed session returns live via a WS
+            // frame — no snackbar, the M4-polish gap).
+            var archivedList by remember { mutableStateOf<List<dev.supermux.net.ArchivedDto>>(emptyList()) }
+            LaunchedEffect(ui.archivedOpen) {
+                archivedList = if (ui.archivedOpen) app.archived() else emptyList()
+            }
+            if (ui.archivedOpen) {
+                Box(Modifier.fillMaxSize().testTag("archived_overlay")) {
+                    dev.supermux.desktop.session.ArchivedScreen(
+                        archived = archivedList,
+                        home = home,
+                        onBack = { ui.archivedOpen = false },
+                        onResume = { id ->
+                            // Fire-and-forget: kick the un-archive POST (its Boolean return is
+                            // irrelevant to the UI — the resumed session returns via a WS frame),
+                            // then close the overlay immediately.
+                            overlayScope.launch { app.resume(id) }
+                            ui.archivedOpen = false
+                        },
+                        loadLogs = { app.archivedLogs(it) },
                     )
                 }
             }

@@ -123,6 +123,9 @@ fun main() {
                         Item("New Session", shortcut = KeyShortcut(Key.N, ctrl = true)) {
                             ui.launcherOpen = true
                         }
+                        Item("Archived…") {
+                            ui.archivedOpen = true
+                        }
                         Separator()
                         Item("Unpair…") { showUnpairConfirm = true }
                     }
