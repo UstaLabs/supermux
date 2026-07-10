@@ -9,10 +9,22 @@
 // (Uploading(pct) → Done(fileId) | Failed), not a launcher-style StagedUpload. Send is gated while
 // any chip is still Uploading OR Failed (the "any upload failure blocks the send" rule, ported from
 // Android's ChatPanel composer) so a message is never sent minus its attachment.
+//
+// M4d-T2 adds external-file drag-and-drop via `androidx.compose.foundation.draganddrop.dragAndDropTarget`
+// (compose-multiplatform 1.11.1). The Modifier itself is STABLE; the payload type it hands back —
+// `androidx.compose.ui.draganddrop.DragData` / the `DragAndDropEvent.dragData()` accessor — is marked
+// `@ExperimentalComposeUiApi` in this release (confirmed by decompiling the shipped jars: no marker on
+// `dragAndDropTarget`, but `DragData` and `dragData()` both carry it), hence the file-level `@OptIn`
+// below. Compose Desktop surfaces an OS file drop as `DragData.FilesList` (java.awt's
+// DataFlavor.javaFileListFlavor under the hood); each entry is a `file:` URI string, converted back to
+// a File and funneled through the SAME `stageFiles` path the Attach dialog uses, so a dropped file
+// gets an identical ComposerAttachment + upload + progress.
 package dev.supermux.desktop.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -34,12 +46,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draganddrop.DragAndDropEvent
+import androidx.compose.ui.draganddrop.DragAndDropTarget
+import androidx.compose.ui.draganddrop.DragData
+import androidx.compose.ui.draganddrop.dragData
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
@@ -57,6 +77,7 @@ import kotlinx.coroutines.launch
 import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
+import java.net.URI
 import java.nio.file.Files
 import kotlin.math.roundToInt
 
@@ -108,6 +129,19 @@ internal fun composerMime(path: java.nio.file.Path): String =
 internal fun composerKind(mime: String): String? =
     if (mime.startsWith("audio")) "voice" else null
 
+/** Filters picked/dropped files to ones that still exist as a regular file on disk — pure so the
+ *  filtering is unit-testable without AWT or Compose. Silently drops entries that vanished between
+ *  the OS drop/dialog and staging (a stale symlink target, a file deleted mid-drag) rather than
+ *  letting a missing file crash [FileChunkSource]. */
+internal fun filterExistingFiles(files: List<File>): List<File> = files.filter { it.isFile }
+
+/** Converts the file-URI strings from `DragData.FilesList.readFiles()` back into [File]s. Compose
+ *  Desktop's drag source encodes each dropped OS file as `File.toURI().toString()` (a `file:` URI),
+ *  not a raw path — pure so the URI parsing is unit-testable without an actual AWT drag session. An
+ *  entry that fails to parse (malformed/non-file URI) is dropped rather than throwing. */
+internal fun composerFilesFromDragData(uris: List<String>): List<File> =
+    uris.mapNotNull { runCatching { File(URI(it)) }.getOrNull() }
+
 /**
  * Send-gating predicate: something to send (text OR at least one attachment) AND no chip is still
  * Uploading or Failed AND not already sending. Pure so the gating matrix is unit-testable without a
@@ -147,6 +181,8 @@ internal fun composerPickFiles(): List<File> {
  *   `app.uploadResumable(session.id, …)`; tests inject a fake so they don't hit the network.
  * @param pickFiles the file-picker seam (default = the real AWT dialog); tests inject a fake.
  */
+@OptIn(ExperimentalComposeUiApi::class) // DragData / dragData() (external-file drop payload) — see
+// the drop-target comment below for what was checked before opting in.
 @Composable
 fun DesktopComposer(
     draft: String,
@@ -231,6 +267,13 @@ fun DesktopComposer(
         launchUpload(id)
     }
 
+    // Funnels a BATCH of files — from the Attach dialog OR an external OS drag-drop — through [stage]
+    // after filtering to files that still exist. The single funnel means a dropped file gets an
+    // IDENTICAL ComposerAttachment + upload + progress to a FileDialog-picked one (no parallel path).
+    fun stageFiles(files: List<File>) {
+        filterExistingFiles(files).forEach { stage(it) }
+    }
+
     val canSend = canSendComposer(draft, attachments, sending)
     val doSend = {
         if (canSendComposer(draft, attachments, sending)) {
@@ -240,7 +283,60 @@ fun DesktopComposer(
         }
     }
 
-    Column(modifier.fillMaxWidth()) {
+    // Drag-over highlight — purely visual, reset defensively on both onExited (pointer left this
+    // target's bounds) and onEnded (the whole OS drag session finished, e.g. dropped elsewhere).
+    var dragOver by remember(sessionKey) { mutableStateOf(false) }
+
+    // External-file drop target. `androidx.compose.foundation.draganddrop.dragAndDropTarget` (the
+    // Modifier attached below) is STABLE — no ExperimentalFoundationApi marker on it. Reading the
+    // dropped payload as `DragData` DOES need the file-level `@OptIn(ExperimentalComposeUiApi::class)`
+    // above (see the file header). On desktop, an external OS file drop arrives as `DragData.FilesList`
+    // — decompiling `DragDataFilesListImpl` shows it reads `DataFlavor.javaFileListFlavor` off the AWT
+    // transferable and maps each `java.io.File` to `file.toURI().toString()`, so
+    // [composerFilesFromDragData] parses those URIs back to Files. Gated on `onUpload != null` — the
+    // same rule as the Attach button: a text-only composer (no upload seam bound) doesn't accept drops.
+    val dropTarget = object : DragAndDropTarget {
+        override fun onEntered(event: DragAndDropEvent) {
+            dragOver = true
+        }
+
+        override fun onExited(event: DragAndDropEvent) {
+            dragOver = false
+        }
+
+        override fun onEnded(event: DragAndDropEvent) {
+            dragOver = false
+        }
+
+        override fun onDrop(event: DragAndDropEvent): Boolean {
+            val files = (event.dragData() as? DragData.FilesList)
+                ?.readFiles()
+                ?.let(::composerFilesFromDragData)
+                ?: return false
+            if (files.isEmpty()) return false
+            stageFiles(files)
+            return true
+        }
+    }
+
+    Column(
+        modifier
+            .fillMaxWidth()
+            .then(
+                if (onUpload != null) {
+                    Modifier.dragAndDropTarget(shouldStartDragAndDrop = { true }, target = dropTarget)
+                } else {
+                    Modifier
+                },
+            )
+            .then(
+                if (dragOver) {
+                    Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp))
+                } else {
+                    Modifier
+                },
+            ),
+    ) {
         if (attachments.isNotEmpty()) {
             Row(
                 modifier = Modifier
@@ -282,7 +378,7 @@ fun DesktopComposer(
             leadingIcon = if (onUpload != null) {
                 {
                     IconButton(
-                        onClick = { pickFiles().forEach { stage(it) } },
+                        onClick = { stageFiles(pickFiles()) },
                         modifier = Modifier.testTag("composer-attach"),
                     ) {
                         Icon(Icons.Filled.Add, contentDescription = "Attach")
