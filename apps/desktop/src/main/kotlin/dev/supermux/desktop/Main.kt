@@ -72,6 +72,22 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //                                  (M4f). Read-only — never calls redeemCodexReset() (that burns a
 //                                  real banked Codex reset; the redeem path stays UI-test-covered
 //                                  only). Off by default.                                    [main]
+//   SM_LSP_SETTINGS=1             — open the LSP settings overlay (File ▸ "Editor / LSP…"'s SAME
+//                                  ui.openLspSettings()) on start, loading the real app.lspLoad()
+//                                  (GET /settings/editor, read-only) (M4g-4). Read-only — never
+//                                  calls lspInstall/lspToggle/lspAddCustom/lspRemoveCustom. Off by
+//                                  default.                                                 [main]
+//   SM_LSP_TOGGLE=<serverId>      — ALSO opens the overlay, then flips <serverId>'s enabled state,
+//                                  holds for 5s (screenshot window), then flips it BACK to its
+//                                  original value before exiting — a real, but self-restoring,
+//                                  PUT /settings/editor (M4g-4). Mutates broker-global state shared
+//                                  with web/iOS/Android for the duration of the hold. Off by
+//                                  default; point it at a low-stakes server.                [main]
+//   SM_LSP_ADD_REMOVE=1           — ALSO opens the overlay, adds a throwaway custom server
+//                                  (id "m4g4-live-check"), holds for 5s (screenshot window), then
+//                                  removes it again — a real, but self-cleaning, POST+DELETE
+//                                  /settings/editor/lsp/custom round trip (M4g-4). Off by default.
+//                                  NEVER combine with SM_LSP_TOGGLE in the same run.         [main]
 //   SM_DIFF="<session-name>"      — select the session + flip its editor pane on; EditorPanel's own
 //                                  env read (SM_EDITOR_SAVE_TEST precedent) then fires the SAME
 //                                  editor.loadDiff(fsDiff) the "View changes" button drives (a real
@@ -763,6 +779,56 @@ fun main() {
                             delay(3_000)
                             ui.openUsage()
                             println("[usage] opened the Usage overlay")
+                        }
+                    }
+
+                    // Headless LSP-settings verification hooks (M4g-4). SM_LSP_SETTINGS is
+                    // strictly read-only (open + load); SM_LSP_TOGGLE/SM_LSP_ADD_REMOVE are real,
+                    // self-restoring/self-cleaning broker-global mutations — see this plan's Ground
+                    // rules DANGER block before touching either. lspInstall is NEVER fired from a
+                    // hook (a real `bun install -g` on the broker host) — it stays UI-test-covered
+                    // only, mirroring how M4c never auto-fired Push/Publish.
+                    val lspSettingsHook = System.getenv("SM_LSP_SETTINGS") == "1"
+                    if (lspSettingsHook) {
+                        LaunchedEffect(app) {
+                            delay(3_000)
+                            ui.openLspSettings()
+                            println("[lsp-settings] opened the LSP settings overlay")
+                        }
+                    }
+
+                    val lspToggleTarget = System.getenv("SM_LSP_TOGGLE")?.takeIf { it.isNotBlank() }
+                    if (lspToggleTarget != null) {
+                        LaunchedEffect(app) {
+                            delay(3_000)
+                            ui.openLspSettings()
+                            val before = app.lspLoad().firstOrNull { it.id == lspToggleTarget }
+                            if (before == null) {
+                                println("[lsp-toggle] server '$lspToggleTarget' not found in lspLoad()")
+                            } else {
+                                val original = before.enabled
+                                println("[lsp-toggle] '$lspToggleTarget' original enabled=$original — flipping to ${!original}")
+                                app.lspToggle(lspToggleTarget, !original)
+                                delay(5_000) // screenshot window
+                                app.lspToggle(lspToggleTarget, original)
+                                println("[lsp-toggle] restored '$lspToggleTarget' to enabled=$original")
+                            }
+                        }
+                    }
+
+                    val lspAddRemoveHook = System.getenv("SM_LSP_ADD_REMOVE") == "1"
+                    if (lspAddRemoveHook) {
+                        LaunchedEffect(app) {
+                            delay(3_000)
+                            ui.openLspSettings()
+                            val added = app.lspAddCustom(
+                                id = "m4g4-live-check", label = "M4g-4 Live Check", command = "true",
+                                extensions = listOf(".m4g4livecheck"),
+                            )
+                            println("[lsp-add-remove] added throwaway server: ok=${added?.ok}")
+                            delay(5_000) // screenshot window
+                            val removed = app.lspRemoveCustom("m4g4-live-check")
+                            println("[lsp-add-remove] removed throwaway server: ok=${removed?.ok}")
                         }
                     }
 
