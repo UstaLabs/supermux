@@ -52,6 +52,8 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //                                  GitMenuForceOp KDoc)                                   [main]
 //   SM_LINKS_MENU=<session-name>  — force-open the header session-links (proxies) menu (M4c) [main]
 //   SM_OVERFLOW_MENU=<session-name> — force-open the header ⋮ overflow menu (M4c)          [main]
+//   SM_DICTATE="<session-name>|<wav-path>" — feed a pre-recorded WAV through the real mic-dictation
+//                                  transcribe->append path (no mic under Xvfb) (M5-1)              [main]
 //   SM_CHAT_ATTACH="<session-name>|<file-path>|<text>" — stage+upload a file into the chat
 //                                  composer via the SAME stage()/stageFiles() path, wait for the
 //                                  chip to reach Done, then send with <text> (M4d)             [main]
@@ -698,6 +700,44 @@ fun main() {
                             ui.selectedId = t.id
                             ui.externalAttach = t.id to dev.supermux.desktop.chat.ComposerExternalAttach(filePath, text)
                             println("[chatattach] requested attach '$filePath' + send for ${t.name} (${t.id})")
+                        }
+                    }
+
+                    // Headless dictation-verification hook (M5-1): SM_DICTATE=
+                    // "<session-name>|<wav-path>" resolves the named session after the first
+                    // snapshot, SELECTS it, and hands <wav-path> to the matching ChatPanel via
+                    // WorkspaceUiState.externalDictate — DesktopComposer's LaunchedEffect(externalDictate)
+                    // reads the WAV bytes off disk and feeds them through the SAME onTranscribeAudio
+                    // seam the mic button uses (app.transcribeAudio(session.id, bytes, filename) -> a
+                    // REAL POST to the broker's whisper endpoint), then appends the cleaned text to
+                    // the composer draft — proving the full record(*)->POST->append round-trip with
+                    // no real mic (there is none under Xvfb). PIPE-delimited (not colon) so
+                    // <wav-path> stays simple. Off by default; drives a REAL transcription job —
+                    // point it at a throwaway/idle session, never a busy one.
+                    val dictateTest = System.getenv("SM_DICTATE")?.takeIf { it.isNotBlank() }
+                    if (dictateTest != null) {
+                        LaunchedEffect(app) {
+                            val parts = dictateTest.split("|", limit = 2)
+                            if (parts.size < 2) {
+                                println("[dictate] bad SM_DICTATE (expected <session-name>|<wav-path>)")
+                                return@LaunchedEffect
+                            }
+                            val name = parts[0]
+                            val wavPath = parts[1]
+                            var target = app.sessions.value.firstOrNull { it.name == name }
+                            val deadline = System.currentTimeMillis() + 30_000
+                            while (target == null && System.currentTimeMillis() < deadline) {
+                                delay(500)
+                                target = app.sessions.value.firstOrNull { it.name == name }
+                            }
+                            val t = target
+                            if (t == null) {
+                                println("[dictate] session '$name' not found in snapshot after 30s")
+                                return@LaunchedEffect
+                            }
+                            ui.selectedId = t.id
+                            ui.externalDictate = t.id to dev.supermux.desktop.chat.ComposerExternalDictate(wavPath)
+                            println("[dictate] requested transcribe '$wavPath' for ${t.name} (${t.id})")
                         }
                     }
 

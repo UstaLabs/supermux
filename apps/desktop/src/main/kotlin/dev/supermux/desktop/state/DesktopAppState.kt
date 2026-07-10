@@ -98,7 +98,16 @@ class DesktopAppState(
     private val stateScope =
         CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
 
-    private val http = HttpClient(CIO) { install(WebSockets) }
+    // CIO's default per-request timeout is 15s — too short for the mic-dictation POST (M5-1): the
+    // broker's whisper /transcribe is a real ASR job that routinely runs 20-30s (longer on a
+    // GPU-less host / cold model load), so a 15s ceiling would time the dictation out before any
+    // text comes back. Raise the endpoint request timeout to 120s (still bounded, so a genuinely
+    // hung request eventually fails rather than hanging forever); the persistent WebSocket is
+    // unaffected. Uploads (also potentially long) benefit too.
+    private val http = HttpClient(CIO) {
+        install(WebSockets)
+        engine { requestTimeout = 120_000 }
+    }
     val client = BrokerClient(baseUrl, token, http)
     val api = apiOverride ?: BrokerApi(baseUrl, token, http)
     private val sendFrame: suspend (ClientFrame) -> Unit = sendFrameOverride ?: { client.send(it) }
