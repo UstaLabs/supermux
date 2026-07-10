@@ -67,6 +67,17 @@ compose.desktop {
             packageVersion = "1.0.0"
             description = "supermux desktop"
             vendor = "UstaLabs"
+            // jdeps auto-detection only sees STATIC bytecode edges, so it misses the JDK modules
+            // pulled in by reflection at runtime — JCEF reflects into java.desktop, and
+            // ktor/coroutines reach java.naming / java.management / jdk.unsupported. Those gaps
+            // surface ONLY in the jlinked installer runtime (a missing-module / NoClassDefFoundError
+            // crash), never in :desktop:run. Bundling every module trades image size for correctness.
+            includeAllModules = true
+            linux {
+                debMaintainer = "supermux"
+                menuGroup = "Development"
+                appCategory = "Development"
+            }
         }
     }
 }
