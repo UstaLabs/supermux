@@ -37,6 +37,7 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //   SM_SMOKE_SEND="name:text"     — send a chat message to a session                    [main]
 //   SM_TERM_INPUT="name:text"     — type into a session's scratch terminal (M2)         [main]
 //   SM_OPEN_FILE="name:path[:ln]" — open a file in the editor at a line (M3)            [main]
+//   SM_LSP="name|path"            — open a file and let the real LSP connect flow run (M4g-3) [main]
 //   SM_EDITOR_PREVIEW="name|md-path" — select the session, flip its editor pane on, open <md-path>
 //                                  via the SAME externalOpen chain SM_OPEN_FILE uses, then (once
 //                                  that path is the active tab) flip previewMode=true so the
@@ -374,6 +375,47 @@ fun main() {
                             ui.layout.setPanes(t.id, ui.layout.panesFor(t.id).copy(editor = true))
                             ui.externalOpen = t.id to dev.supermux.ui.FilePathRef(path, null)
                             println("[editorpreview] requested '$path' in ${t.name} (${t.id}) — EditorPanel flips previewMode on once it's active")
+                        }
+                    }
+
+                    // Headless LSP-connect verification hook (M4g-3): SM_LSP="<session-name>|<file-path>"
+                    // resolves the named session, SELECTS it, flips its editor pane on, and opens
+                    // <file-path> via the SAME externalOpen chain SM_OPEN_FILE/SM_EDITOR_PREVIEW use
+                    // above. Opening the file is enough — EditorPanel's OWN connect-sequencing
+                    // LaunchedEffect (Task 5) then drives the real lsp_status_query → lsp_open →
+                    // cmLspConnect round trip against the broker's live language server once the file
+                    // becomes the active tab and the KCEF engine reports ready; no further driving is
+                    // needed from here. Point <file-path> at a file extension the broker's LSP config
+                    // covers (GET /settings/editor lists supported extensions per server, e.g. the
+                    // typescript server covers .ts/.tsx/.js/...). Off by default; harmless in production.
+                    val lspTest = System.getenv("SM_LSP")?.takeIf { it.isNotBlank() }
+                    if (lspTest != null) {
+                        LaunchedEffect(app) {
+                            val sep = lspTest.indexOf('|')
+                            if (sep <= 0) {
+                                println("[lsp] bad SM_LSP (expected <session-name>|<file-path>)")
+                                return@LaunchedEffect
+                            }
+                            val name = lspTest.substring(0, sep)
+                            val path = lspTest.substring(sep + 1)
+                            var target = app.sessions.value.firstOrNull { it.name == name }
+                            val deadline = System.currentTimeMillis() + 30_000
+                            while (target == null && System.currentTimeMillis() < deadline) {
+                                delay(500)
+                                target = app.sessions.value.firstOrNull { it.name == name }
+                            }
+                            val t = target
+                            if (t == null) {
+                                println("[lsp] session '$name' not found in snapshot after 30s")
+                                return@LaunchedEffect
+                            }
+                            ui.selectedId = t.id
+                            ui.layout.setPanes(t.id, ui.layout.panesFor(t.id).copy(editor = true))
+                            ui.externalOpen = t.id to dev.supermux.ui.FilePathRef(path, null)
+                            println(
+                                "[lsp] requested '$path' in ${t.name} (${t.id}) — " +
+                                    "EditorPanel's connect effect drives the LSP round trip from here",
+                            )
                         }
                     }
 
