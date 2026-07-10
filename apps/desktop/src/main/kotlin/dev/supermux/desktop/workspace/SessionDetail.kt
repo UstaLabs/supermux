@@ -133,6 +133,16 @@ fun DesktopEditorPanel(
         onReviewResolve = { commentId -> app.reviewResolve(session, commentId) },
         onReviewSubmit = { app.reviewSubmit(session) },
         fsChanges = app.fsChanges,
+        // LSP (M4g-3): the panel builds its own DesktopLspBridge from these — see EditorPanel's
+        // lspStatus/lspRpc/lspStatusQuery/... params. The sessionId argument these lambdas receive
+        // is always this same `session.id` (DesktopLspBridge echoes its own constructor sessionId
+        // back through them, mirroring Android's AndroidLspBridge) — ignored here since `session`
+        // is already captured.
+        lspStatus = app.lspStatus,
+        lspRpc = app.lspRpc,
+        lspStatusQuery = { _, path -> app.lspStatusQuery(session, path) },
+        lspOpen = { _, serverId -> app.lspOpen(session, serverId) },
+        lspRpcOut = { _, serverId, message -> app.lspRpcOut(session, serverId, message) },
         editorOpen = { app.editorOpen(session) },
         editorClose = { app.editorClose(session) },
         pendingOpen = pendingOpen,

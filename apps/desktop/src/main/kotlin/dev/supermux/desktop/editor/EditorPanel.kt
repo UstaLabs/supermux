@@ -90,6 +90,7 @@ import dev.supermux.proto.ServerFrame
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -102,14 +103,13 @@ data class PendingEditorOpen(val path: String, val line: Int?, val endLine: Int?
  * Code editor panel: inline lazy file tree, multi-tab editing, filename search, save + stale banner,
  * and the KCEF-backed editing surface with a native fallback.
  *
- * @param workdir the session's absolute workdir. RESERVED — currently unused (kept for signature
- *   parity with the Android EditorScreen port); M4 LSP will use it to build the root/file `file://`
- *   URIs, exactly as Android's EditorScreen does (dirUri/pathToUri).
+ * @param workdir the session's absolute workdir — used by the M4g-3 LSP connect flow to build the
+ *   root/file `file://` URIs, exactly as Android's EditorScreen does (dirUri/pathToUri).
  */
 @Composable
 fun EditorPanel(
     sessionId: String,
-    @Suppress("unused") workdir: String,
+    workdir: String,
     fsList: suspend (String) -> List<FsEntry>,
     fsRead: suspend (String) -> Result<String>,
     fsWrite: suspend (String, String) -> Boolean,
@@ -120,6 +120,14 @@ fun EditorPanel(
     onReviewResolve: suspend (String) -> Boolean = { false },
     onReviewSubmit: suspend () -> ReviewSubmitResult? = { null },
     fsChanges: SharedFlow<ServerFrame.FsChanged> = MutableSharedFlow(),
+    // LSP (M4g-3) — app-wide flows + outbound senders, mirrors Android EditorScreen.kt:94-103.
+    // EditorPanel builds its own DesktopLspBridge from these (same non-owning-the-flows shape as
+    // fsChanges above); DesktopEditorPanel/SessionDetail wires the real DesktopAppState.lsp*.
+    lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>> = MutableStateFlow(emptyMap()),
+    lspRpc: SharedFlow<ServerFrame.LspRpcIn> = MutableSharedFlow(),
+    lspStatusQuery: (String, String) -> Unit = { _, _ -> },
+    lspOpen: (String, String) -> Unit = { _, _ -> },
+    lspRpcOut: (String, String, String) -> Unit = { _, _, _ -> },
     editorOpen: (String) -> Unit = {},
     editorClose: (String) -> Unit = {},
     pendingOpen: PendingEditorOpen? = null,
@@ -146,6 +154,22 @@ fun EditorPanel(
     // The scroll-capture seam: EditorSurface installs the live engine reader into this; the panel
     // reads it right before a tab switch/reveal (Android EditorScreen:406-408/:216 parity).
     val reader = scrollReader ?: remember { EditorScrollReader() }
+
+    // LSP (M4g-3): the bridge drives the control-plane flows; the handle is EditorSurface's
+    // non-owning seam for pushing lspConnect/lspMessage/lspDisconnect into the live engine
+    // (mirrors `reader` above); engineReady mirrors the live engine's cm6-first-paint gate.
+    val bridge = remember(sessionId, lspStatus, lspRpc) {
+        DesktopLspBridge(
+            sessionId = sessionId,
+            lspStatus = lspStatus,
+            lspRpc = lspRpc,
+            lspStatusQuery = lspStatusQuery,
+            lspOpen = lspOpen,
+            lspRpcOut = lspRpcOut,
+        )
+    }
+    val lspHandle = remember(sessionId) { EditorLspHandle() }
+    var engineReady by remember(sessionId) { mutableStateOf(false) }
 
     val kcefState by kcefStateFlow.collectAsState()
 
@@ -288,6 +312,51 @@ fun EditorPanel(
     val previewGate = editorPreviewGate(activeTab?.path, editor.previewMode, editor.showDiff)
     val showPreviewToggle = previewGate.showPreviewToggle
     val showPreview = previewGate.showPreview
+
+    // LSP connect sequencing (M4g-3; port of Android EditorScreen.kt:192-212). Re-runs whenever the
+    // session, active file, preview/diff mode, or the live engine's ready-gate changes; LaunchedEffect
+    // cancellation tears down the prior connection on a fast tab switch — same pattern as Android's
+    // engine.failed re-key.
+    // NOTE — `sessionId` MUST be in the key list. Desktop reuses ONE SessionDetail/EditorPanel across
+    // session switches (WorkspaceRoot renders SessionDetail WITHOUT key(session.id) — see
+    // DesktopAppState.kt:130-135's comment), unlike Android which recreates EditorScreen via NavHost.
+    // Without `sessionId` here, two sessions whose (activeTabPath, showPreview, showDiff, engineReady)
+    // tuple coincides across a switch (realistic: same relative path, both no-tab, or both mid-load
+    // with engineReady=false — which it ALWAYS is right after a switch) would NOT relaunch the effect,
+    // so the coroutine keeps running with the previous session's stale bridge/lspHandle/workdir
+    // closures and drives LSP for the wrong session. `bridge`/`lspHandle` are already remember(sessionId)
+    // {} for the same reason; the effect key must match. (Android's EditorScreen.kt:195 omits it only
+    // because its NavHost lifecycle makes it structurally unnecessary there.)
+    LaunchedEffect(sessionId, editor.activeTabPath, showPreview, editor.showDiff, engineReady) {
+        lspHandle.disconnect()
+        val tab = editor.activeTab
+        if (showPreview || editor.showDiff || tab == null || workdir.isEmpty() || !engineReady) {
+            return@LaunchedEffect
+        }
+        val status = bridge.queryStatus(tab.path)
+        val serverId = status.serverId
+        // Status.isReady: supported && serverId != null && state == "ready" (LspBridge.swift:18 /
+        // AndroidLspBridge parity).
+        if (!status.supported || serverId == null || status.state != "ready") {
+            println("[lsp] '${tab.path}' not ready for LSP (state=${status.state}, supported=${status.supported})")
+            return@LaunchedEffect
+        }
+        // Pump inbound RPC for this server in a child coroutine (cancelled with this effect).
+        launch {
+            bridge.pumpRpcIn(serverId) { sid, msg ->
+                println("[lsp] rpc_in $sid ${msg.take(120)}")
+                lspHandle.message(sid, msg)
+            }
+        }
+        if (!bridge.open(serverId)) {
+            println("[lsp] open($serverId) failed for '${tab.path}'")
+            return@LaunchedEffect
+        }
+        val rootUri = dirUri(workdir)
+        val fileUri = pathToUri(joinPath(workdir, tab.path))
+        println("[lsp] connecting $serverId root=$rootUri file=$fileUri lang=${status.languageId}")
+        lspHandle.connect(serverId, rootUri, fileUri, status.languageId ?: "")
+    }
 
     Box(modifier.fillMaxSize()) {
         // Diff is a MODE of the panel (parity EditorScreen.kt:255-282 / EditorPane.swift:44): when
@@ -524,6 +593,9 @@ fun EditorPanel(
                                         onFontSize = onFontSize,
                                         onEnsureInit = onEnsureInit,
                                         scrollReader = reader,
+                                        onLspOut = { serverId, message -> bridge.rpcOut(serverId, message) },
+                                        onEngineReadyChange = { engineReady = it },
+                                        lspHandle = lspHandle,
                                         modifier = Modifier.fillMaxSize(),
                                     )
                                 }
@@ -610,3 +682,28 @@ internal fun editorPreviewGate(activePath: String?, previewMode: Boolean, showDi
         showPreview = previewMode && activeIsMarkdown && !showDiff,
     )
 }
+
+// ─── LSP file:// URI helpers (M4g-3; port of Android EditorScreen.kt:595-603) ─────────────────
+
+/** Join a directory and a workdir-relative path with exactly one '/' between them. */
+internal fun joinPath(dir: String, rel: String): String {
+    val d = dir.removeSuffix("/")
+    val r = rel.removePrefix("/")
+    return "$d/$r"
+}
+
+/**
+ * `file://` URI for an absolute path, percent-encoding every path SEGMENT except the `/`
+ * separators — the JVM equivalent of Android's `android.net.Uri.encode(abs, "/")`
+ * (`EditorScreen.kt:601`). [java.net.URLEncoder] is form-encoding (encodes space as `+`, not
+ * `%20`), so each segment is encoded individually and `+` is repaired to `%20` before rejoining.
+ */
+internal fun pathToUri(abs: String): String {
+    val encoded = abs.split("/").joinToString("/") { segment ->
+        java.net.URLEncoder.encode(segment, "UTF-8").replace("+", "%20")
+    }
+    return "file://$encoded"
+}
+
+/** Directory URI for a workdir — always trailing-slash (Android `EditorScreen.kt:603` parity). */
+internal fun dirUri(workdir: String): String = pathToUri(workdir.removeSuffix("/")) + "/"
