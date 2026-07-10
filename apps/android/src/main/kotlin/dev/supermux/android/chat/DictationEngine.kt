@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -15,11 +17,25 @@ enum class DictationStart { STARTED, DENIED, UNAVAILABLE }
 /**
  * Thin wrapper over [android.speech.SpeechRecognizer]'s on-device recognizer, exposing a small
  * state surface for Compose. This is the *nice-to-have* live-transcript path, gated behind
- * [dev.supermux.android.DevConfig.ENABLE_ONDEVICE_STT] (off by default). It only ever yields a
- * fallback raw draft — the real transcription is always the whisper audio POST (see ChatScreen).
+ * [dev.supermux.android.DevConfig.ENABLE_ONDEVICE_STT]. It only ever yields a fallback raw draft —
+ * the real transcription is always the whisper audio POST (see ChatScreen).
  *
- * [SpeechRecognizer] callbacks fire on the main thread, so [transcript]/[onPartial] updates are
- * marshaled straight to state with no extra dispatch.
+ * ## Keeping the mic open across pauses (the load-bearing behavior)
+ * [SpeechRecognizer] is single-utterance: it treats the first stretch of silence as *end of
+ * speech*, fires `onResults` (or `onError(ERROR_NO_MATCH/ERROR_SPEECH_TIMEOUT)` if it heard
+ * nothing) and stops. Taken literally that freezes the live transcript the instant the speaker
+ * pauses to think, and everything said after the pause is lost — the exact bug users hit ("it
+ * stops when I pause").
+ *
+ * So this engine runs a **restart loop**: each recognizer session covers one utterance; when a
+ * session ends on a pause we append its final text to an accumulated draft and immediately start a
+ * new session on the same recognizer, so the mic stays open. Recognition only ends when the user
+ * taps stop ([stop]/[cancel]) or a non-silence error occurs. [transcript]/[onPartial] always carry
+ * the *full running transcript* (committed segments + the current session's live partial).
+ *
+ * [SpeechRecognizer] callbacks fire on the main thread; the restart is posted to the main looper so
+ * it never runs re-entrantly from inside a callback (which some devices reject with
+ * ERROR_RECOGNIZER_BUSY).
  */
 class DictationEngine(private val context: Context) {
     /** Live transcript updates (delivered on the main thread). */
@@ -35,6 +51,15 @@ class DictationEngine(private val context: Context) {
 
     private var recognizer: SpeechRecognizer? = null
 
+    /** Finalized text from segments already ended by a pause; the live partial is layered on top. */
+    private val committed = StringBuilder()
+
+    /** Glossary biasing captured at [start], reused verbatim on every restart. */
+    private var contextualStrings: List<String> = emptyList()
+
+    /** Restarts are posted here so they never fire re-entrantly from a recognizer callback. */
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     /** Start continuous on-device recognition biased by [contextualStrings] (glossary).
      *  Returns UNAVAILABLE when on-device recognition isn't usable so the caller falls back. */
     fun start(contextualStrings: List<String> = emptyList()): DictationStart {
@@ -48,7 +73,58 @@ class DictationEngine(private val context: Context) {
             return DictationStart.UNAVAILABLE
         }
 
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+        this.contextualStrings = contextualStrings
+        committed.setLength(0)
+
+        rec.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) {}
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+
+            override fun onError(error: Int) {
+                if (listening && isRecoverableSttError(error)) {
+                    // Silence / transient hiccup — keep the mic open across the pause.
+                    scheduleRestart()
+                } else {
+                    // Real failure: finalize quietly; stop()/the composer keep what we have.
+                    listening = false
+                }
+            }
+
+            override fun onPartialResults(partialResults: Bundle?) {
+                firstResult(partialResults)?.let { update(joinSttSegments(committed.toString(), it)) }
+            }
+
+            override fun onResults(results: Bundle?) {
+                // A pause ended this segment. Commit its final text and keep listening — do NOT stop.
+                firstResult(results)?.let { seg ->
+                    val joined = joinSttSegments(committed.toString(), seg)
+                    committed.setLength(0)
+                    committed.append(joined)
+                }
+                update(committed.toString())
+                scheduleRestart()
+            }
+
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+        })
+
+        return try {
+            rec.startListening(buildIntent())
+            recognizer = rec
+            listening = true
+            transcript = ""
+            DictationStart.STARTED
+        } catch (_: Throwable) {
+            runCatching { rec.destroy() }
+            DictationStart.UNAVAILABLE
+        }
+    }
+
+    private fun buildIntent(): Intent =
+        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             // Glossary biasing (API 33+, best-effort; ignored where unsupported). The constant
@@ -59,43 +135,28 @@ class DictationEngine(private val context: Context) {
                     ArrayList(contextualStrings),
                 )
             }
+            // Silence-tolerance hints: stretch how long a within-utterance pause can run before the
+            // engine calls the segment complete. Only *hints* (the on-device engine often
+            // ignores/caps them), so they merely reduce how often the restart loop kicks in — the
+            // loop is what actually keeps the mic open across pauses.
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 4000L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 3000L)
             // Device locale; nothing hardcoded.
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
         }
 
-        rec.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {}
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
-
-            override fun onError(error: Int) {
-                // Finalize quietly; stop()/the composer keep whatever transcript we have.
+    /** Post a fresh recognizer session to the next main-loop tick (never re-entrant). */
+    private fun scheduleRestart() {
+        if (!listening) return
+        mainHandler.post {
+            if (!listening) return@post
+            val rec = recognizer ?: return@post
+            try {
+                rec.startListening(buildIntent())
+            } catch (_: Throwable) {
+                // Couldn't restart — finalize with whatever we've committed.
                 listening = false
             }
-
-            override fun onPartialResults(partialResults: Bundle?) {
-                firstResult(partialResults)?.let { update(it) }
-            }
-
-            override fun onResults(results: Bundle?) {
-                firstResult(results)?.let { update(it) }
-                listening = false
-            }
-
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-        })
-
-        return try {
-            rec.startListening(intent)
-            recognizer = rec
-            listening = true
-            transcript = ""
-            DictationStart.STARTED
-        } catch (_: Throwable) {
-            runCatching { rec.destroy() }
-            DictationStart.UNAVAILABLE
         }
     }
 
@@ -109,12 +170,15 @@ class DictationEngine(private val context: Context) {
 
     /** Stop and return the accumulated transcript (best-effort). */
     fun stop(): String {
-        runCatching { recognizer?.stopListening() }
         listening = false
+        mainHandler.removeCallbacksAndMessages(null)  // drop any pending restart
+        runCatching { recognizer?.stopListening() }
         return transcript.trim()
     }
 
     fun cancel() {
+        listening = false
+        mainHandler.removeCallbacksAndMessages(null)
         runCatching { recognizer?.cancel() }
         teardown()
     }
@@ -124,4 +188,33 @@ class DictationEngine(private val context: Context) {
         recognizer = null
         listening = false
     }
+}
+
+/**
+ * Stitches a newly-finalized [segment] onto the already-[committed] transcript with a single
+ * separating space, tolerating empty/whitespace-only inputs on either side (no leading/trailing/
+ * double spaces). Used both to fold a completed segment into the running draft and to render the
+ * live "committed + current partial" view.
+ */
+fun joinSttSegments(committed: String, segment: String): String {
+    val left = committed.trim()
+    val right = segment.trim()
+    return when {
+        left.isEmpty() -> right
+        right.isEmpty() -> left
+        else -> "$left $right"
+    }
+}
+
+/**
+ * Whether a [SpeechRecognizer] error code means "keep waiting" (a pause with no speech, or a
+ * transient busy state) rather than a real failure. Recoverable errors restart the recognizer so
+ * the mic stays open across pauses; everything else (audio, permissions, network, server, client
+ * teardown) ends the session.
+ */
+fun isRecoverableSttError(error: Int): Boolean = when (error) {
+    SpeechRecognizer.ERROR_NO_MATCH,
+    SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
+    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> true
+    else -> false
 }

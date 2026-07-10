@@ -12,6 +12,11 @@
 //  the system's default title/body, so this view owns everything below the notification's
 //  app-name/time header.
 //
+//  Sizing: the hosting controller keeps its own `preferredContentSize` in sync with the
+//  SwiftUI content (`sizingOptions = .preferredContentSize`, iOS 16+) and we forward that up
+//  as this extension's size via `preferredContentSizeDidChange`. (An earlier hand-rolled
+//  `sizeThatFits` pass left the expanded view zero-height / blank — that's what this replaces.)
+//
 
 import UIKit
 import SwiftUI
@@ -19,52 +24,60 @@ import UserNotifications
 import UserNotificationsUI
 
 class NotificationViewController: UIViewController, UNNotificationContentExtension {
-    private var host: UIHostingController<ExpandedNotificationView>?
-    private var lastLayoutWidth: CGFloat = 0
+    private var hosting: UIHostingController<ExpandedNotificationView>?
+
+    // A programmatic content extension (NSExtensionPrincipalClass, no storyboard) MUST establish
+    // its own view in loadView(). The default UIViewController.loadView() tries to load a nib named
+    // after the class, finds none, and leaves the extension's view effectively unrendered → the
+    // whole expanded notification comes up totally blank. (Apple DevForums thread 93596.) This was
+    // the actual cause of the blank; the sizing work below is the correct-but-secondary fix.
+    override func loadView() {
+        let root = UIView()
+        root.backgroundColor = .clear   // let the system notification material show behind SwiftUI
+        view = root
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        NSLog("[supermux CE] viewDidLoad bounds=%.0fx%.0f", view.bounds.width, view.bounds.height)
+    }
 
     func didReceive(_ notification: UNNotification) {
         let model = Self.parse(notification)
+        NSLog("[supermux CE] didReceive title=%{public}@ count=%d msgs=%d",
+              model.title, model.count, model.messages.count)
+        let root = ExpandedNotificationView(model: model)
 
-        // Rebuild the hosted SwiftUI view for this notification's content.
-        if let host {
-            host.willMove(toParent: nil)
-            host.view.removeFromSuperview()
-            host.removeFromParent()
+        // Reuse the hosting controller across updates — just swap its root view.
+        if let hosting {
+            hosting.rootView = root
+            return
         }
-        let hosting = UIHostingController(rootView: ExpandedNotificationView(model: model))
-        hosting.view.backgroundColor = .clear   // let the system notification material show through
-        addChild(hosting)
-        hosting.view.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(hosting.view)
+
+        let controller = UIHostingController(rootView: root)
+        controller.view.backgroundColor = .clear
+        controller.sizingOptions = .preferredContentSize
+        addChild(controller)
+        controller.view.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(controller.view)
         NSLayoutConstraint.activate([
-            hosting.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            hosting.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            hosting.view.topAnchor.constraint(equalTo: view.topAnchor),
-            hosting.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            controller.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            controller.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            controller.view.topAnchor.constraint(equalTo: view.topAnchor),
+            controller.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
-        hosting.didMove(toParent: self)
-        host = hosting
-        updatePreferredContentSize()
+        controller.didMove(toParent: self)
+        hosting = controller
     }
 
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        // Recompute the height once the real width is known — guarded on a width change so
-        // setting preferredContentSize can't feed back into an endless layout loop.
-        if abs(view.bounds.width - lastLayoutWidth) > 0.5 {
-            updatePreferredContentSize()
-        }
-    }
-
-    /// Size the extension to the SwiftUI content's natural height for the available width.
-    private func updatePreferredContentSize() {
-        guard let host else { return }
-        let width = view.bounds.width > 0 ? view.bounds.width : preferredContentSize.width
-        lastLayoutWidth = view.bounds.width
-        let fitting = host.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude))
-        if fitting.height > 0 {
-            preferredContentSize = CGSize(width: width, height: ceil(fitting.height))
-        }
+    /// The hosted SwiftUI controller reports its ideal size here (driven by `sizingOptions`);
+    /// forward it as this content extension's own size so the expanded notification is tall
+    /// enough to show the whole transcript.
+    override func preferredContentSizeDidChange(forChildContentContainer container: UIContentContainer) {
+        super.preferredContentSizeDidChange(forChildContentContainer: container)
+        preferredContentSize = container.preferredContentSize
+        NSLog("[supermux CE] childSize=%.0fx%.0f",
+              container.preferredContentSize.width, container.preferredContentSize.height)
     }
 
     // MARK: - Parse the notification's userInfo into the view model

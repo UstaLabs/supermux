@@ -246,7 +246,10 @@ struct EditorPane: View {
             onResolve: { commentId in await broker.reviewResolve(session.id, commentId) },
             onSubmit: { _ = await broker.reviewSubmit(session.id) },
             onReload: { Task { await state.reloadDiff() } },
-            onClose: { state.showDiff = false }
+            onClose: { state.showDiff = false },
+            base: state.diffBase,
+            refs: state.diffRefs,
+            onSetBase: { spec in Task { await state.setDiffBase(spec) } }
         )
     }
 

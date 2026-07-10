@@ -33,6 +33,8 @@ export function useEditor(sessionName: MaybeRefOrGetter<string>) {
   const diffComments = ref<ReviewComment[]>([])
   const showDiff = ref(false)
   const changedPaths = ref<Set<string>>(new Set())
+  const diffBase = ref<string>("session-start")
+  const diffRefs = ref<import("@/api/client").RepoRefs[]>([])
 
   const ws = useWS()
 
@@ -98,9 +100,13 @@ export function useEditor(sessionName: MaybeRefOrGetter<string>) {
 
   async function loadDiff() {
     try {
-      const res = await api.fsDiff(sessionId.value)
+      const [res, refs] = await Promise.all([
+        api.fsDiff(sessionId.value, diffBase.value),
+        api.fsRefs(sessionId.value).catch(() => ({ repos: [] })),
+      ])
       diffRepos.value = res.repos
       diffComments.value = res.comments
+      diffRefs.value = refs.repos
       showDiff.value = true
     } catch (err: any) {
       toast.error("Failed to load diff", { description: err?.message ?? String(err) })
@@ -109,12 +115,17 @@ export function useEditor(sessionName: MaybeRefOrGetter<string>) {
 
   async function reloadDiff() {
     try {
-      const res = await api.fsDiff(sessionId.value)
+      const res = await api.fsDiff(sessionId.value, diffBase.value)
       diffRepos.value = res.repos
       diffComments.value = res.comments
     } catch (err: any) {
       toast.error("Failed to reload diff", { description: err?.message ?? String(err) })
     }
+  }
+
+  async function setDiffBase(base: string) {
+    diffBase.value = base
+    await reloadDiff()
   }
 
   function handleFsChanged(paths: string[]) {
@@ -155,8 +166,8 @@ export function useEditor(sessionName: MaybeRefOrGetter<string>) {
 
   return {
     tabs, activeTabPath, activeTab, dirtyTabs, loading,
-    diffRepos, diffComments, showDiff, changedPaths,
+    diffRepos, diffComments, showDiff, changedPaths, diffBase, diffRefs,
     openFile, closeTab, updateContent, saveFile,
-    loadDiff, reloadDiff, startWatching, stopWatching, reloadFile,
+    loadDiff, reloadDiff, setDiffBase, startWatching, stopWatching, reloadFile,
   }
 }

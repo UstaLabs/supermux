@@ -421,10 +421,11 @@ const modelDiscoverers: ModelDiscoverers = {
 
 // The model cache is otherwise frozen at boot. If discovery fails transiently
 // at startup (OAuth token not yet refreshed, network not ready), the picker
-// would stay empty until the next broker restart. Re-discover Claude on a
-// timer to recover. Only Claude is polled: it is the only agent fetched over
-// the network; the CLI-based discoverers use blocking execSync and their
-// availability does not change without a restart.
+// would stay empty until the next broker restart. Re-discover every agent on a
+// timer to recover, and to pick up newly-installed/updated CLIs (e.g. a new
+// Codex model) without a restart. All discoverers are async (Claude over the
+// network; the CLI-based ones via non-blocking exec), so polling never stalls
+// the event loop.
 const MODEL_REFRESH_INTERVAL_MS = 15 * 60_000
 
 function refreshModels(discoverers: ModelDiscoverers = modelDiscoverers): Promise<void> {
@@ -3280,7 +3281,7 @@ if (webChannel) await webChannel.start()
 proxyLivenessMonitor.start()
 refreshModels().catch((err) => log.warn("model_cache_init_failed", { err: String(err) }))
 const modelRefreshInterval = setInterval(() => {
-  refreshModels({ [AgentKind.Claude]: discoverClaudeModels })
+  refreshModels()
     .catch((err) => log.warn("model_refresh_failed", { err: String(err) }))
 }, MODEL_REFRESH_INTERVAL_MS)
 // --- Nightly knowledge curator ---------------------------------------------

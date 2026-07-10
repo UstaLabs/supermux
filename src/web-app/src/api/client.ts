@@ -51,6 +51,11 @@ export interface RemoteRepo {
   updatedAt?: string; cloneUrl: string; webUrl: string
 }
 export interface ClonedRepo { path: string; host: string; owner: string; name: string; fullName: string; sizeBytes: number }
+export interface RepoRefs {
+  repo: string
+  branches: string[]
+  commits: Array<{ sha: string; subject: string }>
+}
 export interface ForgeAddInput { kind: string; host?: string; apiBase?: string; token: string; source: "pat" | "cli"; transport?: "https" | "ssh" }
 export interface InstallJob { state: "running" | "done" | "failed"; log: string; exitCode: number | null }
 export interface FinishReadiness {
@@ -228,8 +233,10 @@ export const api = {
   },
   fsSearch: (sessionId: string, q: string) =>
     request("GET", `/sessions/${encodeURIComponent(sessionId)}/fs/search?q=${encodeURIComponent(q)}`),
-  fsDiff: (sessionId: string) =>
-    request("GET", `/sessions/${encodeURIComponent(sessionId)}/fs/diff`) as Promise<{ repos: import("@/composables/useEditor").RepoDiff[]; comments: ReviewComment[] }>,
+  fsDiff: (sessionId: string, base?: string) =>
+    request("GET", `/sessions/${encodeURIComponent(sessionId)}/fs/diff${base ? `?base=${encodeURIComponent(base)}` : ""}`) as Promise<{ repos: import("@/composables/useEditor").RepoDiff[]; comments: ReviewComment[] }>,
+  fsRefs: (sessionId: string) =>
+    request("GET", `/sessions/${encodeURIComponent(sessionId)}/fs/refs`) as Promise<{ repos: RepoRefs[] }>,
   reviewAddComment: (id: string, c: { repo: string; path: string; side: "RIGHT" | "LEFT"; anchorLine: number; anchorContext: string; body: string; diffHunkHeader?: string }) =>
     request("POST", `/sessions/${encodeURIComponent(id)}/review/comments`, c) as Promise<ReviewComment>,
   reviewUpdateComment: (id: string, commentId: string, patch: { status?: string; body?: string; resolvedBy?: string }) =>

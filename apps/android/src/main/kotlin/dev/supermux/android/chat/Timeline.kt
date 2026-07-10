@@ -109,6 +109,8 @@ import dev.supermux.android.theme.Radii
 import dev.supermux.android.theme.Space
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.LogEntry
+import coil3.compose.AsyncImage
+import dev.supermux.ui.ColumnAlign
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.MdBlock
 import dev.supermux.ui.SpanStyleKind
@@ -209,16 +211,29 @@ fun mdAnnotated(
                             fontWeight = FontWeight.Normal,
                         )
                     ) { append(s.text) }
+                    SpanStyleKind.STRIKE -> withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) { append(s.text) }
                     SpanStyleKind.LINK -> {
+                        val url = s.url
                         val ref = s.ref
-                        if (ref == null || !linkify) append(s.text) else withLink(
-                            LinkAnnotation.Clickable(
-                                tag = "file:${ref.path}",
-                                styles = TextLinkStyles(
-                                    style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)
+                        when {
+                            // Web links from `[label](url)` are always tappable (open the browser).
+                            url != null -> withLink(
+                                LinkAnnotation.Url(
+                                    url,
+                                    TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
                                 ),
-                            ) { onOpenFile(ref) }
-                        ) { append(s.text) }
+                            ) { append(s.text) }
+                            // File paths only become editor links in agent messages (linkify).
+                            ref != null && linkify -> withLink(
+                                LinkAnnotation.Clickable(
+                                    tag = "file:${ref.path}",
+                                    styles = TextLinkStyles(
+                                        style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)
+                                    ),
+                                ) { onOpenFile(ref) }
+                            ) { append(s.text) }
+                            else -> append(s.text)
+                        }
                     }
                     SpanStyleKind.PLAIN -> appendLinkified(s.text, linkColor)
                 }
@@ -393,7 +408,13 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier, onOpenFile: (FileP
                     verticalAlignment = Alignment.Top,
                     horizontalArrangement = Arrangement.spacedBy(Space.sm),
                 ) {
-                    Text("•", color = cs.onSurfaceVariant, style = typography.bodyLarge)
+                    // Task-list items show a checkbox glyph (display-only); plain bullets keep the dot.
+                    val marker = when (block.task) {
+                        true -> "☑"
+                        false -> "☐"
+                        null -> "•"
+                    }
+                    Text(marker, color = cs.onSurfaceVariant, style = typography.bodyLarge)
                     Text(
                         text = mdAnnotated(block.text, onOpenFile, linkify = linkify),
                         color = cs.onSurface,
@@ -413,8 +434,107 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier, onOpenFile: (FileP
                         modifier = Modifier.weight(1f),
                     )
                 }
+                is MdBlock.Table -> MarkdownTable(block, onOpenFile, linkify)
+                is MdBlock.Image -> MarkdownImage(block)
             }
         }
+    }
+}
+
+/**
+ * GFM table as a bordered, horizontally-scrollable grid (iOS MarkdownTableView parity).
+ * Laid out column-major: each column is a `Column(width = IntrinsicSize.Max)` so every cell in
+ * it shares the widest cell's width, and single-line (no-wrap) cells mean wide tables scroll
+ * instead of squishing. Cells keep inline formatting and per-column alignment.
+ */
+@Composable
+fun MarkdownTable(table: MdBlock.Table, onOpenFile: (FilePathRef) -> Unit, linkify: Boolean) {
+    val cs = MaterialTheme.colorScheme
+    val cols = table.headers.size
+    if (cols == 0) return
+    Row(
+        Modifier
+            .horizontalScroll(rememberScrollState())
+            .height(IntrinsicSize.Min)
+            .clip(RoundedCornerShape(Radii.sm))
+            .border(1.dp, cs.outlineVariant, RoundedCornerShape(Radii.sm)),
+    ) {
+        for (c in 0 until cols) {
+            if (c > 0) Box(Modifier.width(1.dp).fillMaxHeight().background(cs.outlineVariant))
+            Column(Modifier.width(IntrinsicSize.Max)) {
+                MarkdownTableCell(table.headers.getOrElse(c) { "" }, table.aligns.getOrElse(c) { ColumnAlign.LEFT }, header = true, onOpenFile, linkify)
+                for (row in table.rows) {
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outlineVariant))
+                    MarkdownTableCell(row.getOrElse(c) { "" }, table.aligns.getOrElse(c) { ColumnAlign.LEFT }, header = false, onOpenFile, linkify)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownTableCell(
+    text: String,
+    align: ColumnAlign,
+    header: Boolean,
+    onOpenFile: (FilePathRef) -> Unit,
+    linkify: Boolean,
+) {
+    val cs = MaterialTheme.colorScheme
+    val alignment = when (align) {
+        ColumnAlign.LEFT -> Alignment.CenterStart
+        ColumnAlign.CENTER -> Alignment.Center
+        ColumnAlign.RIGHT -> Alignment.CenterEnd
+    }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .background(if (header) cs.surfaceContainerLow else Color.Transparent)
+            .padding(horizontal = Space.sm + Space.xs, vertical = Space.sm),
+        contentAlignment = alignment,
+    ) {
+        Text(
+            text = mdAnnotated(text, onOpenFile, linkify = linkify),
+            color = cs.onSurface,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (header) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * Standalone markdown image `![alt](url)`. Only `https://` URLs are loaded (a message-content
+ * image is a tracking-pixel / IP-leak vector); anything else renders as a tappable link line.
+ */
+@Composable
+fun MarkdownImage(image: MdBlock.Image) {
+    val cs = MaterialTheme.colorScheme
+    if (image.url.startsWith("https://")) {
+        AsyncImage(
+            model = image.url,
+            contentDescription = image.alt.ifEmpty { null },
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 280.dp)
+                .clip(RoundedCornerShape(Radii.sm)),
+            contentScale = ContentScale.Fit,
+        )
+    } else {
+        val linkColor = cs.primary
+        Text(
+            text = buildAnnotatedString {
+                withLink(
+                    LinkAnnotation.Url(
+                        image.url,
+                        TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
+                    ),
+                ) { append(image.alt.ifEmpty { image.url }) }
+            },
+            style = MaterialTheme.typography.bodyLarge,
+        )
     }
 }
 

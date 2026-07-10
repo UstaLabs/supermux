@@ -18,6 +18,12 @@ struct DiffView: View {
     let onSubmit: () async -> Void
     let onReload: () -> Void
     let onClose: () -> Void
+    // Adjustable diff base (global, primary-repo refs — web parity): the current spec string
+    // (session-start | head | commit:<sha> | branch:<name>), the refs feeding the commit/branch
+    // submenus, and the setter. Target is always the working tree.
+    let base: String
+    let refs: [RepoRefs]
+    let onSetBase: (String) -> Void
 
     // Repos expand by default; files collapse by default. Keys are stable strings so the
     // sets survive re-renders (matches the Vue Set<string> approach).
@@ -74,6 +80,7 @@ struct DiffView: View {
             Text("\(totalFiles) changed file\(totalFiles == 1 ? "" : "s")")
                 .font(.subheadline.weight(.medium))
             Spacer(minLength: 8)
+            baseSelector
             Button {
                 SMHaptics.selection()
                 wrap.toggle()
@@ -104,6 +111,74 @@ struct DiffView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 2)
         .background(.regularMaterial)
+    }
+
+    // MARK: - Diff base selector (global; primary-repo refs — parity with the web DiffView)
+
+    /// Native `Menu` showing `Base: <label>`, with direct base buttons plus nested submenus
+    /// for a previous commit / another branch (populated from the first repo's refs).
+    private var baseSelector: some View {
+        Menu {
+            baseButton("Session start", "session-start")
+            baseButton("Uncommitted (HEAD)", "head")
+            Menu("Previous commit") {
+                if primaryRefs?.commits.isEmpty ?? true {
+                    Button("None") {}.disabled(true)
+                } else {
+                    ForEach(primaryRefs?.commits ?? [], id: \.sha) { c in
+                        baseButton("\(shortSha(c.sha)) \(c.subject)", "commit:\(c.sha)")
+                    }
+                }
+            }
+            Menu("Another branch") {
+                if primaryRefs?.branches.isEmpty ?? true {
+                    Button("None") {}.disabled(true)
+                } else {
+                    ForEach(primaryRefs?.branches ?? [], id: \.self) { b in
+                        baseButton(b, "branch:\(b)")
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text("Base: \(baseLabel)")
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2.weight(.semibold))
+            }
+            .foregroundStyle(.secondary)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Diff base")
+        .accessibilityValue(baseLabel)
+    }
+
+    /// One base option — a checkmark marks the active base (native selected-menu-item look).
+    private func baseButton(_ label: String, _ spec: String) -> some View {
+        Button {
+            SMHaptics.selection()
+            onSetBase(spec)
+        } label: {
+            if base == spec { Label(label, systemImage: "checkmark") }
+            else { Text(label) }
+        }
+    }
+
+    /// Submenus use the first repo's refs (global selector, primary-repo refs — matches web).
+    private var primaryRefs: RepoRefs? { refs.first }
+
+    private func shortSha(_ sha: String) -> String { String(sha.prefix(7)) }
+
+    /// Human label for the current base spec (Session start / Uncommitted / short sha / branch).
+    private var baseLabel: String {
+        if base == "session-start" { return "Session start" }
+        if base == "head" { return "Uncommitted" }
+        if base.hasPrefix("commit:") { return shortSha(String(base.dropFirst("commit:".count))) }
+        if base.hasPrefix("branch:") { return String(base.dropFirst("branch:".count)) }
+        return base
     }
 
     // MARK: - Body

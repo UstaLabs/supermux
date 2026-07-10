@@ -22,6 +22,8 @@ media3 = "1.7.1"
 composeMultiplatform = "1.11.1"
 jediterm = "3.73"
 kcef = "2025.03.23"
+markdown = "0.7.6"
+coil = "3.5.0"
 
 [libraries]
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -61,6 +63,12 @@ coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", 
 jediterm-core = { module = "org.jetbrains.jediterm:jediterm-core", version.ref = "jediterm" }
 jediterm-ui = { module = "org.jetbrains.jediterm:jediterm-ui", version.ref = "jediterm" }
 kcef = { module = "dev.datlag:kcef", version.ref = "kcef" }
+# GFM markdown parser (multiplatform). Used by the Android + desktop chat renderers; iOS uses its
+# own native MarkdownView, so Kotlin/Native dead-code-strips this from the Apple framework.
+markdown = { module = "org.jetbrains:markdown", version.ref = "markdown" }
+# Async image loading for inline markdown images (Android). ktor3 backend matches our ktor client.
+coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
+coil-network-ktor3 = { module = "io.coil-kt.coil3:coil-network-ktor3", version.ref = "coil" }
 
 [plugins]
 multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
