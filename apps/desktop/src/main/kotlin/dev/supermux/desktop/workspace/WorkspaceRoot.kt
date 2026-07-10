@@ -475,6 +475,7 @@ fun WorkspaceRoot(
                         loadModels = { app.launcherModels(it) },
                         loadReasoningLevels = { a, m -> app.launcherReasoning(a, m) },
                         loadRepoInfo = { app.launcherRepoInfo(it) },
+                        transcribeAudio = { bytes, name -> app.transcribeAudio(null, bytes, name)?.text },
                         loadPrefs = { launcherStore.loadPrefs() },
                         onPrefsChange = { launcherStore.savePrefs(it) },
                         loadDraft = { launcherStore.loadDraft() },

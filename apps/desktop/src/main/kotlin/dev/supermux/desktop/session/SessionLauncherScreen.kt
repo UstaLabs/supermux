@@ -8,10 +8,11 @@
 //     [dev.supermux.desktop.upload.FileChunkSource]s; the MIME is guessed via Files.probeContentType.
 //   - Brand agent logos (Android drawables) → a letter tile ([AgentLetterTile]); desktop ships no
 //     per-agent brand assets.
-//   - OMITTED (deliberate, tracked): voice/MicButton (TODO(M5) — dictation is an M5 surface), the
-//     slash-command "/" menu (no loadCommands seam on this screen), the Forge omnibox clone/create
-//     UI (TODO(M4-forge) — local projects + a typed-and-validated path only). Drag-and-drop staging
-//     is a TODO too (the Attach button covers the must-ship path).
+//   - Voice dictation (M5-1): the SAME MicButton/DesktopDictationController the chat composer uses
+//     (dev.supermux.desktop.chat.Dictation.kt), wired to the id-less /transcribe path (no session
+//     yet). The slash-command "/" menu (no loadCommands seam on this screen) and the Forge omnibox
+//     clone/create UI (TODO(M4-forge)) are still omitted. Drag-and-drop staging is a TODO too (the
+//     Attach button covers the must-ship path).
 //
 // THE SUBTLE PART (ported 1:1 from Android): the [launcherRestoring] gate plus lastSeenAgent /
 // lastSeenWorkdir (NOT one-shot "armed" booleans) distinguish a draft-restore SETTLING from a
@@ -101,6 +102,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import dev.supermux.desktop.chat.MicButton
+import dev.supermux.desktop.chat.MicCapture
+import dev.supermux.desktop.chat.MicRecorder
+import dev.supermux.desktop.chat.rememberDesktopDictation
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.upload.FileChunkSource
 import dev.supermux.net.ChunkSource
@@ -220,6 +225,8 @@ fun SessionLauncherScreen(
         worktree: Boolean,
         baseBranch: String?,
     ) -> Unit,
+    transcribeAudio: suspend (bytes: ByteArray, filename: String) -> String? = { _, _ -> null },
+    micRecorderFactory: () -> MicCapture = { MicRecorder() },
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -369,6 +376,21 @@ fun SessionLauncherScreen(
         label = "send_scale",
     )
     val canSend = workdir.isNotBlank() && (message.text.isNotBlank() || staged.isNotEmpty())
+
+    // Mic dictation (M5-1): the pre-spawn launcher has no live session yet, so [transcribeAudio]
+    // always routes through the id-less `/transcribe` path (bound by the caller —
+    // WorkspaceRoot binds this to `app.transcribeAudio(null, bytes, name)`). resetKey = Unit since
+    // there's only ever one launcher instance (no per-session scoping needed here).
+    val dictation = rememberDesktopDictation(
+        resetKey = Unit,
+        transcribeAudio = transcribeAudio,
+        onAppend = { cleaned ->
+            val sep = if (message.text.isBlank()) "" else " "
+            val newText = message.text + sep + cleaned
+            message = TextFieldValue(newText, TextRange(newText.length))
+        },
+        recorderFactory = micRecorderFactory,
+    )
 
     // Spawn → (upload staged files) → send first message. onSubmit does the broker work; success
     // clears the draft (leaving local state — the caller closes this screen right after).
@@ -649,6 +671,16 @@ fun SessionLauncherScreen(
                     }
                 }
 
+                Spacer(Modifier.width(Space.xs))
+
+                MicButton(
+                    recording = dictation.recording,
+                    transcribing = dictation.transcribing,
+                    micUnavailable = dictation.micUnavailable,
+                    onClick = { if (dictation.recording) dictation.stopMic() else dictation.startMic() },
+                    modifier = Modifier.testTag("launcher_mic"),
+                )
+
                 Spacer(Modifier.weight(1f))
 
                 IconButton(
@@ -676,6 +708,9 @@ fun SessionLauncherScreen(
         }
 
         error?.let { Text(it, color = cs.error, fontSize = 12.sp, modifier = Modifier.testTag("launcher_error")) }
+        dictation.errorMessage?.let {
+            Text(it, color = cs.error, fontSize = 12.sp, modifier = Modifier.testTag("launcher_mic_error"))
+        }
 
         // Folder caption — a calm restatement of the resolved workdir.
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
