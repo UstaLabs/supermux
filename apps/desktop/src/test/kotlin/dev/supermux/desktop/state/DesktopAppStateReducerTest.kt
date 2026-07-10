@@ -156,4 +156,82 @@ class DesktopAppStateReducerTest {
         assertEquals(1, sent.filterIsInstance<ClientFrame.Viewing>().size)
         assertTrue(sent.none { it is ClientFrame.Send })
     }
+
+    // ── M4g-3 LSP: reducer fold + outbound control-plane senders ──────────────────────────
+    @Test fun lsp_status_frame_is_folded_by_session_and_path() {
+        val s = state()
+        s.reduce(
+            ServerFrame.LspStatus(
+                session = "s1", path = "src/a.ts", supported = true, serverId = "ts", state = "ready",
+            ),
+        )
+        val entry = s.lspStatus.value["s1|src/a.ts"]
+        assertEquals("ready", entry?.state)
+        assertEquals("ts", entry?.serverId)
+    }
+
+    @Test fun lsp_ready_flips_matching_entries_to_ready() {
+        val s = state()
+        s.reduce(
+            ServerFrame.LspStatus(
+                session = "s1", path = "src/a.ts", supported = true, serverId = "ts", state = "installing",
+            ),
+        )
+        s.reduce(ServerFrame.LspReady(session = "s1", serverId = "ts"))
+        assertEquals("ready", s.lspStatus.value["s1|src/a.ts"]?.state)
+    }
+
+    @Test fun lsp_error_sets_state_and_error_message_on_matching_entries_only() {
+        val s = state()
+        s.reduce(ServerFrame.LspStatus(session = "s1", path = "src/a.ts", supported = true, serverId = "ts", state = "ready"))
+        s.reduce(ServerFrame.LspStatus(session = "s1", path = "src/b.js", supported = true, serverId = "bash", state = "ready"))
+        s.reduce(ServerFrame.LspError(session = "s1", serverId = "ts", error = "spawn failed"))
+        val ts = s.lspStatus.value["s1|src/a.ts"]
+        val bash = s.lspStatus.value["s1|src/b.js"]
+        assertEquals("error", ts?.state)
+        assertEquals("spawn failed", ts?.error)
+        assertEquals("ready", bash?.state) // a different serverId must not be touched
+    }
+
+    @Test fun lsp_exit_marks_state_exited() {
+        val s = state()
+        s.reduce(ServerFrame.LspStatus(session = "s1", path = "src/a.ts", supported = true, serverId = "ts", state = "ready"))
+        s.reduce(ServerFrame.LspExit(session = "s1", serverId = "ts"))
+        assertEquals("exited", s.lspStatus.value["s1|src/a.ts"]?.state)
+    }
+
+    @Test fun lsp_rpc_in_frame_is_broadcast_on_the_lsp_rpc_flow() {
+        val s = state()
+        val received = mutableListOf<ServerFrame.LspRpcIn>()
+        // UnconfinedTestDispatcher runs the collector eagerly → it subscribes before the reduce.
+        val job = kotlinx.coroutines.CoroutineScope(UnconfinedTestDispatcher()).launch {
+            s.lspRpc.collect { received.add(it) }
+        }
+        s.reduce(ServerFrame.LspRpcIn(session = "s1", serverId = "ts", message = "{\"id\":1}"))
+        assertEquals(1, received.size)
+        assertEquals("ts", received.first().serverId)
+        assertEquals("{\"id\":1}", received.first().message)
+        job.cancel()
+    }
+
+    @Test fun lsp_control_plane_senders_send_the_right_frames() {
+        val s = state()
+        val sess = session("s1")
+        s.lspStatusQuery(sess, "src/a.ts")
+        s.lspOpen(sess, "ts")
+        s.lspRpcOut(sess, "ts", "{\"id\":2}")
+        s.lspClose(sess, "ts")
+        assertEquals(
+            listOf(
+                ClientFrame.LspStatusQuery("s1", "src/a.ts"),
+                ClientFrame.LspOpen("s1", "ts"),
+                ClientFrame.LspRpcOut("s1", "ts", "{\"id\":2}"),
+                ClientFrame.LspClose("s1", "ts"),
+            ),
+            sent.filter {
+                it is ClientFrame.LspStatusQuery || it is ClientFrame.LspOpen ||
+                    it is ClientFrame.LspRpcOut || it is ClientFrame.LspClose
+            },
+        )
+    }
 }

@@ -155,6 +155,16 @@ class DesktopAppState(
     )
     val fsChanges: SharedFlow<ServerFrame.FsChanged> = _fsChanges.asSharedFlow()
 
+    // ── LSP (M4g-3) ─────────────────────────────────────────────────────────────────
+    // lsp_status keyed "session|path" (mirrors AppViewModel:163-166); lsp_ready/lsp_error/lsp_exit
+    // patch matching entries via [markLspState] since they only carry session+serverId. lsp_rpc
+    // (inbound) is a raw relay SharedFlow — DesktopLspBridge (Task 2) filters it by session+serverId.
+    private val _lspStatus = MutableStateFlow<Map<String, ServerFrame.LspStatus>>(emptyMap())
+    val lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>> = _lspStatus
+
+    private val _lspRpc = MutableSharedFlow<ServerFrame.LspRpcIn>(extraBufferCapacity = 256)
+    val lspRpc: SharedFlow<ServerFrame.LspRpcIn> = _lspRpc.asSharedFlow()
+
     /** Whether the client has a fresh snapshot from the broker (i.e. we're synced/connected). */
     val connected: Boolean get() = client.sync.synced
 
@@ -315,9 +325,33 @@ class DesktopAppState(
                     current.map { s -> if (s.id == frame.session) s.copy(git = frame.git) else s }
                 }
             }
-            // Out of M1/M3/M4b scope — reduced in later milestones: agent_error, display_*, lsp_*
+            is ServerFrame.LspStatus ->
+                _lspStatus.update { it + ("${frame.session}|${frame.path}" to frame) }
+            is ServerFrame.LspReady -> markLspState(frame.session, frame.serverId, "ready")
+            is ServerFrame.LspError -> markLspState(frame.session, frame.serverId, "error", frame.error)
+            is ServerFrame.LspRpcIn -> _lspRpc.tryEmit(frame)
+            is ServerFrame.LspExit -> markLspState(frame.session, frame.serverId, "exited")
+            // Out of scope here (M4g-4 LSP settings screen owns install progress/results):
+            // lsp_install_progress, lsp_install_done. Still fall through to `else` below.
+            // Out of M1/M3/M4b scope — reduced in later milestones: agent_error, display_*
             // (see AppViewModel for the full reducer). Deferred to M4g/M5; they must still not crash.
             else -> {}
+        }
+    }
+
+    /** Patch the `state` (and optionally `error`) of every [ServerFrame.LspStatus] entry matching
+     *  [session] + [serverId]; used by the lsp_ready/lsp_error/lsp_exit frames, which only carry
+     *  session+serverId while [_lspStatus] is keyed by "session|path" (AppViewModel:345-359 port). */
+    private fun markLspState(session: String?, serverId: String?, state: String, error: String? = null) {
+        if (serverId == null) return
+        _lspStatus.update { map ->
+            map.mapValues { (_, status) ->
+                if (status.session == session && status.serverId == serverId) {
+                    status.copy(state = state, error = error ?: status.error)
+                } else {
+                    status
+                }
+            }
         }
     }
 
@@ -601,6 +635,28 @@ class DesktopAppState(
 
     fun editorClose(session: SessionInfo) {
         stateScope.launch { runApi("editorClose") { sendFrame(ClientFrame.EditorClose(session.id)) } }
+    }
+
+    // ── LSP control-plane senders (M4g-3; mirrors AppViewModel.lspStatusQuery/lspOpen/lspRpcOut/
+    //    lspClose:832-843) ───────────────────────────────────────────────────────────────────────
+    // lspClose is threaded for parity but NOT called by the connect flow in this milestone (Android
+    // doesn't call it either — EditorScreen only ever calls engine.lspDisconnect() on the JS side);
+    // reserved for a future explicit-teardown / settings-screen path.
+
+    fun lspStatusQuery(session: SessionInfo, path: String) {
+        stateScope.launch { runApi("lspStatusQuery") { sendFrame(ClientFrame.LspStatusQuery(session.id, path)) } }
+    }
+
+    fun lspOpen(session: SessionInfo, serverId: String) {
+        stateScope.launch { runApi("lspOpen") { sendFrame(ClientFrame.LspOpen(session.id, serverId)) } }
+    }
+
+    fun lspRpcOut(session: SessionInfo, serverId: String, message: String) {
+        stateScope.launch { runApi("lspRpcOut") { sendFrame(ClientFrame.LspRpcOut(session.id, serverId, message)) } }
+    }
+
+    fun lspClose(session: SessionInfo, serverId: String) {
+        stateScope.launch { runApi("lspClose") { sendFrame(ClientFrame.LspClose(session.id, serverId)) } }
     }
 
     // ── Archived sessions (M4e; mirrors AppViewModel.archived/resume:677-678) ─────────
