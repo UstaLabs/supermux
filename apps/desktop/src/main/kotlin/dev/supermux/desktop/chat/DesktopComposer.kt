@@ -34,8 +34,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,7 +58,6 @@ import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
 import java.nio.file.Files
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.roundToInt
 
 /**
@@ -156,6 +156,7 @@ fun DesktopComposer(
     onSend: (String, List<String>) -> Unit,
     onInterrupt: () -> Unit,
     modifier: Modifier = Modifier,
+    sessionKey: String = "",
     onUpload: (suspend (
         source: ChunkSource,
         name: String,
@@ -165,9 +166,13 @@ fun DesktopComposer(
     ) -> String?)? = null,
     pickFiles: () -> List<File> = ::composerPickFiles,
 ) {
-    val attachments = remember { mutableStateListOf<ComposerAttachment>() }
-    val idGen = remember { AtomicLong(0L) }
-    val seqGen = remember { AtomicLong(0L) }
+    // Attachment state is SCOPED to [sessionKey]: ChatPanel deliberately stays composed across
+    // session switches (no key(session.id) wrapper), so a bare remember{} would leak session A's
+    // uploaded chips into session B and gather A's file_ids into B's send. remember(sessionKey)
+    // re-inits the list + id counters on switch (matches ChatPanel's prevSize/autoFollow pattern).
+    val attachments = remember(sessionKey) { mutableStateListOf<ComposerAttachment>() }
+    // Plain-var counters (single Main-thread dispatcher — no atomics needed); one holder per session.
+    val ids = remember(sessionKey) { object { var nextId = 0L; var nextSeq = 0L } }
     val scope = rememberCoroutineScope()
 
     // Guarded update: apply only when the chip STILL exists AND belongs to the run identified by
@@ -184,15 +189,24 @@ fun DesktopComposer(
         val up = onUpload ?: return
         val idx = attachments.indexOfFirst { it.id == id }
         if (idx < 0) return
-        val seq = seqGen.incrementAndGet()
+        val seq = ++ids.nextSeq
         val att = attachments[idx].copy(state = UploadState.Uploading(0f), runSeq = seq)
         attachments[idx] = att
         scope.launch {
             val fileId = up(att.source, att.name, att.mime, att.kind) { sent, total ->
                 val pct = if (total > 0) (sent.toFloat() / total).coerceIn(0f, 1f) else 0f
                 // Progress may arrive off the Main thread (uploadResumable runs its IO internally);
-                // marshal the state write back onto the composer scope's dispatcher.
-                scope.launch { updateAtt(id, seq) { it.copy(state = UploadState.Uploading(pct)) } }
+                // marshal the state write back onto the composer scope's dispatcher. Guard against a
+                // TERMINAL clobber: uploadResumable fires a final onProgress(total,total) right before
+                // returning, and that marshaled write is QUEUED — it lands AFTER the synchronous
+                // Done/Failed write below. Only apply while the chip is still Uploading, so the queued
+                // final progress can't resurrect a settled chip to Uploading(1.0) (a stuck dead-end:
+                // Uploading blocks send AND hides the × remove).
+                scope.launch {
+                    updateAtt(id, seq) {
+                        if (it.state is UploadState.Uploading) it.copy(state = UploadState.Uploading(pct)) else it
+                    }
+                }
             }
             updateAtt(id, seq) {
                 if (fileId != null) it.copy(state = UploadState.Done(fileId))
@@ -203,7 +217,7 @@ fun DesktopComposer(
 
     fun stage(file: File) {
         val mime = composerMime(file.toPath())
-        val id = idGen.incrementAndGet().toString()
+        val id = (++ids.nextId).toString()
         attachments.add(
             ComposerAttachment(
                 id = id,
@@ -236,11 +250,13 @@ fun DesktopComposer(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 attachments.forEach { att ->
-                    ComposerChip(
-                        att = att,
-                        onRemove = { attachments.removeAll { it.id == att.id } },
-                        onRetry = { launchUpload(att.id) },
-                    )
+                    key(att.id) {
+                        ComposerChip(
+                            att = att,
+                            onRemove = { attachments.removeAll { it.id == att.id } },
+                            onRetry = { launchUpload(att.id) },
+                        )
+                    }
                 }
             }
         }

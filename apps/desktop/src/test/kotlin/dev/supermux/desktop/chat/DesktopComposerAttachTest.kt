@@ -1,5 +1,8 @@
 package dev.supermux.desktop.chat
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -196,6 +199,64 @@ class DesktopComposerAttachTest {
         // chips cleared after send
         waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isEmpty() }
         onNodeWithTag("composer-send").assertIsNotEnabled()
+    }
+
+    // ── session switch drops the previous session's chips (no cross-session leak) ─
+    @Test fun sessionSwitch_clearsChips() = runComposeUiTest {
+        val tmp = tempFile("note.txt")
+        var key by mutableStateOf("A")
+        setContent {
+            DesktopComposer(
+                draft = "",
+                onDraftChange = {},
+                sending = false,
+                agentWorking = false,
+                onSend = { _, _ -> },
+                onInterrupt = {},
+                sessionKey = key,
+                onUpload = { _, _, _, _, _ -> "file-ok" },
+                pickFiles = { listOf(tmp) },
+            )
+        }
+        onNodeWithTag("composer-attach").performClick()
+        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithTag("composer-send").assertIsEnabled()
+
+        // Switch sessions — the composer stays composed (as in ChatPanel), so the A-scoped chip
+        // MUST NOT survive into B (else B's send would gather A's file_id).
+        key = "B"
+        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isEmpty() }
+        onNodeWithTag("composer-send").assertIsNotEnabled()
+    }
+
+    // ── a late (queued) progress callback must not clobber a settled Done chip ───
+    @Test fun lateProgressAfterDone_doesNotResurrectUploading() = runComposeUiTest {
+        var captured: ((Long, Long) -> Unit)? = null
+        val tmp = tempFile("note.txt")
+        setContent {
+            DesktopComposer(
+                draft = "",
+                onDraftChange = {},
+                sending = false,
+                agentWorking = false,
+                onSend = { _, _ -> },
+                onInterrupt = {},
+                onUpload = { _, _, _, _, onProgress -> captured = onProgress; "file-ok" },
+                pickFiles = { listOf(tmp) },
+            )
+        }
+        onNodeWithTag("composer-attach").performClick()
+        // Chip settles to Done (label = bare name).
+        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithText("note.txt").fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithTag("composer-send").assertIsEnabled()
+
+        // Simulate uploadResumable's final onProgress(total,total) arriving AFTER the Done write.
+        // Without the terminal-state guard this flips the chip back to Uploading(1.0) → send disabled
+        // forever + × hidden (a stuck dead-end). With the guard it stays Done.
+        captured!!.invoke(100, 100)
+        waitForIdle()
+        onNodeWithText("note.txt").assertExists()       // still Done (not "note.txt · 100%")
+        onNodeWithTag("composer-send").assertIsEnabled()
     }
 
     private fun tempFile(name: String): File {

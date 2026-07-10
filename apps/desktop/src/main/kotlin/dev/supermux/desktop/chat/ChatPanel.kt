@@ -219,6 +219,10 @@ fun ChatPanel(
                 onDraftChange = onDraftChange,
                 sending = sending,
                 agentWorking = working,
+                // Scope the composer's staged-attachment state to this session — ChatPanel stays
+                // composed across session switches, so without this a chip staged against session A
+                // would leak into B (and its file_id gathered into B's send).
+                sessionKey = session.id,
                 onSend = { text, fileIds ->
                     app.sendMessage(session.id, text, fileIds)
                     onDraftChange("")
