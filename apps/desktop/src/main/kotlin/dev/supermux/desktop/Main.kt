@@ -60,6 +60,11 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //                                  ArchivedScreen's Resume button uses: app.resume(id) fire-and-
 //                                  forget + close the overlay (M4e). SPAWNS/UN-ARCHIVES a real
 //                                  session — point it at a throwaway you archived yourself.  [main]
+//   SM_USAGE=1                    — open the Usage overlay (File ▸ "Usage…"'s SAME ui.openUsage())
+//                                  on start, loading the real app.usage() (GET /usage, read-only)
+//                                  (M4f). Read-only — never calls redeemCodexReset() (that burns a
+//                                  real banked Codex reset; the redeem path stays UI-test-covered
+//                                  only). Off by default.                                    [main]
 //   SMX_KCEF_FORCE_ERROR=1        — force KcefState.Error (native-fallback editor, M3)   [KcefRuntime]
 //   SM_EDITOR_SAVE_TEST           — drive the editor save path (M3)                      [EditorPanel]
 //   SMX_KCEF_EXTRA_ARGS="…"       — extra CEF switches for headless CI                   [KcefRuntime]
@@ -612,6 +617,26 @@ fun main() {
                                     println("[archived] resumed '$archivedResumeName' (${t.id}) and closed the overlay")
                                 }
                             }
+                        }
+                    }
+
+                    // Headless Usage-panel verification hook (M4f): SM_USAGE=1 opens the Usage
+                    // overlay on start via the SAME `ui.openUsage()` the File ▸ "Usage…" menu item
+                    // calls, so WorkspaceRoot's own LaunchedEffect(ui.usageOpen) loads the real
+                    // `app.usage()` (GET /usage) and the provider cards render under Xvfb without a
+                    // menu click. Read-only by construction: this hook NEVER calls
+                    // app.redeemCodexReset() — that burns a real banked Codex reset (irreversible);
+                    // the redeem path stays UI-test-covered only (mirrors how M4c never auto-fired
+                    // Push/Publish). Off by default; harmless in production.
+                    val usageHook = System.getenv("SM_USAGE") == "1"
+                    if (usageHook) {
+                        LaunchedEffect(app) {
+                            // Let the first WS snapshot land, same settle window as the other hooks
+                            // (usage() itself doesn't need the snapshot, but this keeps the hook's
+                            // timing consistent/predictable alongside the others when combined).
+                            delay(3_000)
+                            ui.openUsage()
+                            println("[usage] opened the Usage overlay")
                         }
                     }
 
