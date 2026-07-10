@@ -15,6 +15,7 @@ import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.proto.ClientFrame
+import dev.supermux.proto.ServerFrame
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -212,5 +213,84 @@ class WorkspaceRootTest {
 
         assertFalse(ui.layout.sidebarCollapsed) // NOT toggled — the chord never reached the layout
         assertTrue(ui.launcherOpen)             // ...and the overlay stayed up
+    }
+
+    // ── M5-3 notifications ──────────────────────────────────────────────────────────────────
+    // Deliberately does NOT assert on the "selected AND focused → suppressed" case here — this
+    // Compose test harness's `LocalWindowInfo.current.isWindowFocused` value under
+    // `runComposeUiTest` isn't a documented guarantee, and asserting on it would make the test
+    // environment-fragile. That exact interaction is exhaustively covered by NotifyDecisionTest
+    // (Task 1) with a fully-controlled `windowFocused` boolean; these two tests only assert on
+    // conditions that hold true REGARDLESS of the test harness's focus reporting: an unviewed
+    // session's reply notifies, and mute suppresses unconditionally.
+
+    private class RecordingNotificationManager : dev.supermux.desktop.notify.NotificationManager {
+        val calls = mutableListOf<Triple<String, String, String>>()
+        override fun notify(sessionId: String, title: String, message: String) {
+            calls.add(Triple(sessionId, title, message))
+        }
+    }
+
+    @Test fun an_unviewed_sessions_agent_reply_notifies_via_the_injected_manager() = runComposeUiTest {
+        val app = appFor(mutableListOf())
+        app.reduce(
+            ServerFrame.Snapshot(
+                sessions = listOf(dev.supermux.proto.SessionInfo(id = "s1", name = "worker-1", workdir = "/w", agent = "claude")),
+            ),
+        )
+        val ui = WorkspaceUiState().apply { selectedId = "other-session" } // s1 is NOT selected
+        val fakeManager = RecordingNotificationManager()
+        val notify = dev.supermux.desktop.notify.NotificationController(fakeManager)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                WorkspaceRoot(app, ui, WorkspaceStateStore(tempPath("state")), LauncherStore(tempPath("launcher")), notify)
+            }
+        }
+        waitForIdle()
+
+        app.reduce(
+            ServerFrame.MessageAppend(
+                session = "s1",
+                entry = dev.supermux.proto.LogEntry(
+                    id = "m1", ts = "2026-07-10T00:00:00Z", direction = "outbound", op = "reply", text = "all done",
+                ),
+            ),
+        )
+        waitForIdle()
+
+        assertEquals(1, fakeManager.calls.size)
+        assertEquals(Triple("s1", "worker-1", "all done"), fakeManager.calls.single())
+    }
+
+    @Test fun a_muted_sessions_reply_does_not_notify_even_when_unviewed() = runComposeUiTest {
+        val app = appFor(mutableListOf())
+        app.reduce(
+            ServerFrame.Snapshot(
+                sessions = listOf(
+                    dev.supermux.proto.SessionInfo(id = "s1", name = "worker-1", workdir = "/w", agent = "claude", mute = true),
+                ),
+            ),
+        )
+        val ui = WorkspaceUiState().apply { selectedId = "other-session" }
+        val fakeManager = RecordingNotificationManager()
+        val notify = dev.supermux.desktop.notify.NotificationController(fakeManager)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                WorkspaceRoot(app, ui, WorkspaceStateStore(tempPath("state")), LauncherStore(tempPath("launcher")), notify)
+            }
+        }
+        waitForIdle()
+
+        app.reduce(
+            ServerFrame.MessageAppend(
+                session = "s1",
+                entry = dev.supermux.proto.LogEntry(
+                    id = "m2", ts = "2026-07-10T00:00:01Z", direction = "outbound", op = "reply", text = "muted work",
+                ),
+            ),
+        )
+        waitForIdle()
+
+        assertTrue(fakeManager.calls.isEmpty())
     }
 }

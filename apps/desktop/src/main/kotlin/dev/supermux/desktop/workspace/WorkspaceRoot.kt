@@ -44,6 +44,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import dev.supermux.desktop.notify.NoopNotificationManager
+import dev.supermux.desktop.notify.NotificationController
 import dev.supermux.desktop.session.ArchivedScreen
 import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.session.SessionLauncherScreen
@@ -256,6 +258,10 @@ fun WorkspaceRoot(
     // constructs the real default-path file, while tests pass a temp path so they never touch the
     // developer's real ~/.config/supermux-desktop/launcher-state.json.
     launcherStore: LauncherStore,
+    // M5-3: injectable so production (Main.kt) passes the real Tray-backed controller while the
+    // existing WorkspaceRootTest suite (and any other caller that doesn't care about
+    // notifications) keeps compiling unmodified with the null-object default.
+    notify: NotificationController = NotificationController(NoopNotificationManager),
 ) {
     val layout = ui.layout
     val sessions by app.sessions.collectAsState()
@@ -312,9 +318,34 @@ fun WorkspaceRoot(
     }
 
     // Re-assert viewing presence whenever the selection or window focus changes (broker per-device
-    // "viewing" tracker keys off (session id, visible)).
+    // "viewing" tracker keys off (session id, visible)). ALSO clears this session's notification
+    // cooldown (M5-3) the moment it becomes actively viewed (selected AND focused), so the NEXT
+    // reply after the user looks away again notifies immediately rather than waiting out a stale
+    // dedup window from before they opened it.
     LaunchedEffect(ui.selectedId, focused) {
         app.updateViewing(ui.selectedId, focused)
+        val sid = ui.selectedId
+        if (sid != null && focused) notify.onSessionFocused(sid)
+    }
+
+    // M5-3: observe live agent replies and decide whether to raise a tray notification. Keyed on
+    // [focused] (not Unit) so the collector RELAUNCHES with a freshly captured `focused` whenever
+    // it changes — `LocalWindowInfo.current` cannot be re-read from inside a plain suspend
+    // `collect{}` body (it needs an active Composer). `ui.selectedId`/`app.sessions.value` don't
+    // have that problem (plain State/StateFlow reads valid from anywhere) so those ARE read live,
+    // fresh per event, from inside the long-running collector below.
+    LaunchedEffect(focused) {
+        app.agentReplies.collect { event ->
+            val target = app.sessions.value.firstOrNull { it.id == event.session }
+            notify.onAgentReply(
+                entry = event.entry,
+                session = event.session,
+                sessionName = target?.name ?: event.session,
+                selectedId = ui.selectedId,
+                windowFocused = focused,
+                muted = target?.mute ?: false,
+            )
+        }
     }
 
     // Sessions changed: reconcile selection + pane state against the live set (empty-guarded — see

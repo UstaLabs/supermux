@@ -11,6 +11,7 @@
 // reducer stays a faithful subset of AppViewModel's `when (frame)`.
 package dev.supermux.desktop.state
 
+import dev.supermux.desktop.notify.AgentReplyEvent
 import dev.supermux.desktop.session.StagedUpload
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.ArchivedDto
@@ -173,6 +174,20 @@ class DesktopAppState(
     )
     val fsChanges: SharedFlow<ServerFrame.FsChanged> = _fsChanges.asSharedFlow()
 
+    // ── Notifications (M5-3) ────────────────────────────────────────────────────────
+    // Raw agent-reply pulses (direction="outbound", op="reply" MessageAppend entries only),
+    // folded by [reduce] and consumed by WorkspaceRoot's NotificationController — see
+    // NotifyDecision.kt for the PURE viewed/muted decision this flow feeds. Same replay-0 +
+    // bounded-buffer shape as [fsChanges]: DROP_OLDEST keeps the freshest reply flowing rather
+    // than suspending the reducer on a full buffer — a burst of replies while the collector is
+    // briefly busy shouldn't block message delivery, and NotificationDedup coalesces the burst
+    // into one toast regardless.
+    private val _agentReplies = MutableSharedFlow<AgentReplyEvent>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val agentReplies: SharedFlow<AgentReplyEvent> = _agentReplies.asSharedFlow()
+
     // ── LSP (M4g-3/M4g-4) ───────────────────────────────────────────────────────────
     // lsp_status keyed "session|path" (mirrors AppViewModel:163-166); lsp_ready/lsp_error/lsp_exit
     // patch matching entries via [markLspState] since they only carry session+serverId. lsp_rpc
@@ -307,6 +322,14 @@ class DesktopAppState(
                         prev.filterNot { it.id.startsWith("local-") && it.text == frame.entry.text }
                     } else prev
                     current + (frame.session to (pruned + frame.entry))
+                }
+                // M5-3: broadcast AGENT REPLIES ONLY (direction="outbound", op="reply" — mirrors
+                // the broker's push/hook.ts firePushForReply guard) so WorkspaceRoot's
+                // NotificationController can decide whether to raise a tray toast. The user's own
+                // echoed message (direction="inbound") and non-reply outbound entries
+                // (op="react"/"edit_message") never reach this flow.
+                if (frame.entry.direction == "outbound" && frame.entry.op == "reply") {
+                    _agentReplies.tryEmit(AgentReplyEvent(frame.session, frame.entry))
                 }
             }
             is ServerFrame.ActivityAppend -> {

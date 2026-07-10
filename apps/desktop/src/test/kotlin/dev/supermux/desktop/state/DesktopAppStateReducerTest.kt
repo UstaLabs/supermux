@@ -117,6 +117,59 @@ class DesktopAppStateReducerTest {
         assertEquals(listOf("s1"), s.sessions.value.map { it.id })
     }
 
+    // ── M5-3 notifications: agent-reply broadcast ──────────────────────────────────────────
+    @Test fun message_append_with_an_outbound_reply_is_broadcast_on_the_agent_replies_flow() {
+        val s = state()
+        val received = mutableListOf<dev.supermux.desktop.notify.AgentReplyEvent>()
+        // UnconfinedTestDispatcher runs the collector eagerly → it subscribes before the reduce,
+        // so the replay-0 SharedFlow delivers the pulse (same pattern as fs_changed's test).
+        val job = kotlinx.coroutines.CoroutineScope(UnconfinedTestDispatcher()).launch {
+            s.agentReplies.collect { received.add(it) }
+        }
+        s.reduce(
+            ServerFrame.MessageAppend(
+                session = "s1",
+                entry = LogEntry(id = "m1", ts = "2026-07-10T00:00:00Z", direction = "outbound", op = "reply", text = "done"),
+            ),
+        )
+        assertEquals(1, received.size)
+        assertEquals("s1", received.first().session)
+        assertEquals("done", received.first().entry.text)
+        job.cancel()
+    }
+
+    @Test fun message_append_with_a_user_echo_is_not_broadcast_on_the_agent_replies_flow() {
+        val s = state()
+        val received = mutableListOf<dev.supermux.desktop.notify.AgentReplyEvent>()
+        val job = kotlinx.coroutines.CoroutineScope(UnconfinedTestDispatcher()).launch {
+            s.agentReplies.collect { received.add(it) }
+        }
+        s.reduce(
+            ServerFrame.MessageAppend(
+                session = "s1",
+                entry = LogEntry(id = "m2", ts = "2026-07-10T00:00:01Z", direction = "inbound", text = "hello"),
+            ),
+        )
+        assertEquals(0, received.size)
+        job.cancel()
+    }
+
+    @Test fun message_append_with_a_non_reply_outbound_op_is_not_broadcast_on_the_agent_replies_flow() {
+        val s = state()
+        val received = mutableListOf<dev.supermux.desktop.notify.AgentReplyEvent>()
+        val job = kotlinx.coroutines.CoroutineScope(UnconfinedTestDispatcher()).launch {
+            s.agentReplies.collect { received.add(it) }
+        }
+        s.reduce(
+            ServerFrame.MessageAppend(
+                session = "s1",
+                entry = LogEntry(id = "m3", ts = "2026-07-10T00:00:02Z", direction = "outbound", op = "react", text = null),
+            ),
+        )
+        assertEquals(0, received.size)
+        job.cancel()
+    }
+
     // ── M3 editor: fs_changed fold + editor lifecycle senders ─────────────────────────────
     @Test fun fs_changed_frame_is_broadcast_on_the_fs_changes_flow() {
         val s = state()

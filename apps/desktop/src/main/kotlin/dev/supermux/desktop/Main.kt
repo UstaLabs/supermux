@@ -972,7 +972,7 @@ fun main() {
                         }
                     }
 
-                    WorkspaceRoot(app, ui, uiStore, launcherStore)
+                    WorkspaceRoot(app, ui, uiStore, launcherStore, notificationController)
 
                     // Unpair confirmation (File ▸ Unpair…): clears the credential store and flips
                     // back to onboarding, which disposes `app` (DisposableEffect above).
