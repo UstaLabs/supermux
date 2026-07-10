@@ -21,6 +21,7 @@ import dev.supermux.net.GitOpResult
 import dev.supermux.net.CuratorSettingsResponse
 import dev.supermux.net.BrokerClient
 import dev.supermux.net.CodexResetResult
+import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.DeviceDto
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
@@ -674,6 +675,8 @@ class AppViewModel(
         runCatching { api.saveCuratorSettings(enabled, hour, minute) }.getOrNull()
     suspend fun runCuratorNow() { runCatching { api.runCuratorNow() } }
     suspend fun devices(): List<DeviceDto> = runCatching { api.devices() }.getOrNull() ?: emptyList()
+    /** Mint a one-time pairing link for a new device; null on failure. */
+    suspend fun addDevice(name: String): AddDeviceResponse? = runCatching { api.addDevice(name) }.getOrNull()
     fun revoke(n: String) { viewModelScope.launch { runCatching { api.revokeDevice(n) } } }
     suspend fun archived(): List<ArchivedDto> = runCatching { api.archived() }.getOrNull() ?: emptyList()
     fun resume(id: String) { viewModelScope.launch { runCatching { api.resume(id) } } }
