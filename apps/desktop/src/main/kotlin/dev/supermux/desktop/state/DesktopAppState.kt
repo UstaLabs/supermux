@@ -12,6 +12,7 @@
 package dev.supermux.desktop.state
 
 import dev.supermux.desktop.session.StagedUpload
+import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.BrokerClient
 import dev.supermux.net.ChunkSource
@@ -569,9 +570,35 @@ class DesktopAppState(
         stateScope.launch { runApi("editorClose") { sendFrame(ClientFrame.EditorClose(session.id)) } }
     }
 
+    // ── Archived sessions (M4e; mirrors AppViewModel.archived/resume:677-678) ─────────
+    // Backs the ArchivedScreen (M4e Task 2): a searchable, project-filtered list of archived
+    // sessions with a read-only transcript (via [archivedLogs] below) + resume.
+
+    /** GET /archived-sessions — every killed/archived session. Empty on any failure. */
+    suspend fun archived(): List<ArchivedDto> =
+        runApi("archived") { api.archived() } ?: emptyList()
+
+    /**
+     * Kick off a resume for an archived session. Fire-and-forget like [finish]: returns only
+     * whether the POST completed — the resumed session itself arrives live via a
+     * session_added/snapshot frame on the WS ([reduce]), not in this response. Mirrors Android's
+     * `runCatching{api.resume}` (there fire-and-forget with no return; here surfaced as a Boolean
+     * so the desktop ArchivedScreen can decide whether to close the overlay).
+     *
+     * NOTE unlike [finish]/[gitFetch]/etc, [BrokerApi.resume] is a bare `http.post` with no
+     * [BrokerApi.decode]/status check, so a 4xx/5xx from the broker does NOT throw — this only
+     * degrades to false on a genuine transport failure (connection refused, timeout, ...), not on
+     * an HTTP error status. See DesktopArchivedTest for both cases.
+     */
+    suspend fun resume(id: String): Boolean =
+        runCatching { api.resume(id) }.isSuccess
+
     // ── Lazy transcript load ─────────────────────────────────────────────────────────
 
-    private suspend fun archivedLogs(sessionId: String): List<LogEntry> =
+    /** GET /sessions/<id>/messages — a (possibly archived) session's transcript. Empty on any
+     *  failure. Public: also backs the ArchivedScreen's read-only chat view (M4e Task 2), not
+     *  just [ensureMessagesLoaded] below. */
+    suspend fun archivedLogs(sessionId: String): List<LogEntry> =
         runApi("archivedLogs") { api.archivedLogs(sessionId) } ?: emptyList()
 
     /**
