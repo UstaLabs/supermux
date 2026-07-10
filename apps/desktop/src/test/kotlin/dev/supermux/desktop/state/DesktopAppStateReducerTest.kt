@@ -234,4 +234,32 @@ class DesktopAppStateReducerTest {
             },
         )
     }
+
+    // ── M4g-4 LSP settings: install-progress/install-done reducer fold ────────────────────
+    @Test fun lsp_install_progress_appends_lines_in_order_for_the_matching_server() {
+        val s = state()
+        s.reduce(ServerFrame.LspInstallProgress(serverId = "pyright", line = "Fetching pyright…"))
+        s.reduce(ServerFrame.LspInstallProgress(serverId = "pyright", line = "npm install -g pyright"))
+        assertEquals(
+            listOf("Fetching pyright…", "npm install -g pyright"),
+            s.lspInstallLog.value["pyright"],
+        )
+    }
+
+    @Test fun lsp_install_progress_for_one_server_does_not_touch_anothers_log() {
+        val s = state()
+        s.reduce(ServerFrame.LspInstallProgress(serverId = "pyright", line = "a"))
+        s.reduce(ServerFrame.LspInstallProgress(serverId = "bash", line = "b"))
+        assertEquals(listOf("a"), s.lspInstallLog.value["pyright"])
+        assertEquals(listOf("b"), s.lspInstallLog.value["bash"])
+    }
+
+    @Test fun lsp_install_done_is_recorded_by_server_id_ok_and_error() {
+        val s = state()
+        s.reduce(ServerFrame.LspInstallDone(serverId = "pyright", ok = true))
+        s.reduce(ServerFrame.LspInstallDone(serverId = "bash", ok = false, error = "not found"))
+        assertEquals(true, s.lspInstallDone.value["pyright"]?.ok)
+        assertEquals(false, s.lspInstallDone.value["bash"]?.ok)
+        assertEquals("not found", s.lspInstallDone.value["bash"]?.error)
+    }
 }

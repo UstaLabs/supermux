@@ -22,6 +22,9 @@ import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
 import dev.supermux.net.FsSearchResult
 import dev.supermux.net.GitOpResult
+import dev.supermux.net.LspInstallResult
+import dev.supermux.net.LspMutationResult
+import dev.supermux.net.LspServer
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ProxyDto
@@ -155,7 +158,7 @@ class DesktopAppState(
     )
     val fsChanges: SharedFlow<ServerFrame.FsChanged> = _fsChanges.asSharedFlow()
 
-    // ── LSP (M4g-3) ─────────────────────────────────────────────────────────────────
+    // ── LSP (M4g-3/M4g-4) ───────────────────────────────────────────────────────────
     // lsp_status keyed "session|path" (mirrors AppViewModel:163-166); lsp_ready/lsp_error/lsp_exit
     // patch matching entries via [markLspState] since they only carry session+serverId. lsp_rpc
     // (inbound) is a raw relay SharedFlow — DesktopLspBridge (Task 2) filters it by session+serverId.
@@ -164,6 +167,14 @@ class DesktopAppState(
 
     private val _lspRpc = MutableSharedFlow<ServerFrame.LspRpcIn>(extraBufferCapacity = 256)
     val lspRpc: SharedFlow<ServerFrame.LspRpcIn> = _lspRpc.asSharedFlow()
+
+    // Live install progress/result per LSP serverId (M4g-4). Drives LspSettingsScreen's streamed
+    // install log + terminal result row — mirrors AppViewModel:173-180.
+    private val _lspInstallLog = MutableStateFlow<Map<String, List<String>>>(emptyMap())
+    val lspInstallLog: StateFlow<Map<String, List<String>>> = _lspInstallLog
+
+    private val _lspInstallDone = MutableStateFlow<Map<String, ServerFrame.LspInstallDone>>(emptyMap())
+    val lspInstallDone: StateFlow<Map<String, ServerFrame.LspInstallDone>> = _lspInstallDone
 
     /** Whether the client has a fresh snapshot from the broker (i.e. we're synced/connected). */
     val connected: Boolean get() = client.sync.synced
@@ -331,8 +342,9 @@ class DesktopAppState(
             is ServerFrame.LspError -> markLspState(frame.session, frame.serverId, "error", frame.error)
             is ServerFrame.LspRpcIn -> _lspRpc.tryEmit(frame)
             is ServerFrame.LspExit -> markLspState(frame.session, frame.serverId, "exited")
-            // Out of scope here (M4g-4 LSP settings screen owns install progress/results):
-            // lsp_install_progress, lsp_install_done. Still fall through to `else` below.
+            is ServerFrame.LspInstallProgress ->
+                _lspInstallLog.update { it + (frame.serverId to ((it[frame.serverId] ?: emptyList()) + frame.line)) }
+            is ServerFrame.LspInstallDone -> _lspInstallDone.update { it + (frame.serverId to frame) }
             // Out of M1/M3/M4b scope — reduced in later milestones: agent_error, display_*
             // (see AppViewModel for the full reducer). Deferred to M4g/M5; they must still not crash.
             else -> {}
@@ -726,6 +738,55 @@ class DesktopAppState(
      *  Codex usage so the card can update in place. Null on any failure. */
     suspend fun redeemCodexReset(): CodexResetResult? =
         runApi("redeemCodexReset") { api.redeemCodexReset() }
+
+    // ── LSP settings (M4g-4 Task 1) ────────────────────────────────────────────────────
+    // Backs the LspSettingsScreen overlay (M4g-4 Task 2/3): enable/disable + install + add/remove
+    // custom language servers. [lspInstallLog]/[lspInstallDone] (above) already stream the live
+    // install progress/result via lsp_install_progress/lsp_install_done frames; these wrappers are
+    // the HTTP half — mirrors AppViewModel.lspLoad/lspToggle/lspInstall/lspAddCustom/
+    // lspRemoveCustom:736-747.
+
+    /** GET /settings/editor → the server list. Empty (not null) on any failure, mirroring
+     *  Android's `?: emptyList()` — a load failure shows an empty list rather than an error
+     *  banner, since this is the FIRST load and there is no prior state to preserve. */
+    suspend fun lspLoad(): List<LspServer> =
+        runApi("lspLoad") { api.getEditorSettings().lsp.servers } ?: emptyList()
+
+    /** PUT /settings/editor {lsp:{servers:{id:{enabled}}}} → the updated server list. Null (not a
+     *  fallback list) on failure — the caller leaves the row exactly as it was rather than
+     *  guessing at the new state. */
+    suspend fun lspToggle(id: String, enabled: Boolean): List<LspServer>? =
+        runApi("lspToggle") { api.setLspEnabled(id, enabled).lsp.servers }
+
+    /** POST /settings/editor/lsp/<id>/install → {ok, lines}. The LIVE install log/result the
+     *  caller actually renders arrives over the WS as lsp_install_progress/lsp_install_done
+     *  ([lspInstallLog]/[lspInstallDone] above); this response only signals the HTTP round-trip
+     *  finished so the caller can reload the server list (mirrors AppViewModel.lspInstall +
+     *  EditorLspSection's `lspInstall(id); reload()` idiom). DANGER: runs a REAL install command
+     *  on the broker host — see this plan's Ground rules. */
+    suspend fun lspInstall(id: String): LspInstallResult? =
+        runApi("lspInstall") { api.installEditorLsp(id) }
+
+    /** POST /settings/editor/lsp/custom → {ok, error?, lsp?}. Null only on a transport failure —
+     *  a validation rejection from the broker still decodes 2xx with ok=false + error (see
+     *  BrokerApi.addCustomEditorLsp), which [runApi] does NOT swallow; the caller surfaces
+     *  `.error` in the add-form. */
+    suspend fun lspAddCustom(
+        id: String,
+        label: String,
+        command: String,
+        extensions: List<String>,
+        args: List<String> = emptyList(),
+        languageId: String? = null,
+        installCmd: String? = null,
+    ): LspMutationResult? =
+        runApi("lspAddCustom") {
+            api.addCustomEditorLsp(id, label, command, extensions, args, languageId, installCmd)
+        }
+
+    /** DELETE /settings/editor/lsp/custom/<id> → {ok, error?, lsp?}. */
+    suspend fun lspRemoveCustom(id: String): LspMutationResult? =
+        runApi("lspRemoveCustom") { api.removeCustomEditorLsp(id) }
 
     // ── New-session launcher + spawn (M4a; mirrors AppViewModel.launcher* +
     //    createSessionWithFirstMessage) ────────────────────────────────────────────────
