@@ -29,6 +29,7 @@
 package dev.supermux.desktop.usage
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -156,6 +157,7 @@ fun UsageCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(Radii.md))
             .background(cs.surfaceContainer.copy(alpha = alpha))
+            .border(1.dp, cs.outline.copy(alpha = alpha), RoundedCornerShape(Radii.md))
             .padding(Space.lg),
     ) {
         Row(
@@ -188,7 +190,7 @@ fun UsageWindowRow(label: String, usedPct: Double, resetLine: String) {
         LinearProgressIndicator(
             progress = { (pct / 100.0).toFloat().coerceIn(0f, 1f) },
             modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
-            color = barColor(usedPct),
+            color = barColor(pct),
             trackColor = cs.surfaceVariant,
         )
         if (resetLine.isNotEmpty()) {
