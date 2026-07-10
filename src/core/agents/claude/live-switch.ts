@@ -1,4 +1,4 @@
-import { sendKeysToWindowId, capturePaneById } from "../../session-manager/tmux"
+import { sendKeysToWindowId, capturePaneById, capturePaneRawById } from "../../session-manager/tmux"
 import { makeLogger } from "../../../shared/log"
 
 const log = makeLogger("claude-live-switch")
@@ -22,8 +22,11 @@ const MENU_POINTER_RE = /^\s+❯ \d+\./m
 // their pointer, so /^❯/ can't false-positive on them; old composer echoes in
 // scrollback can't either because safety only looks at the capture TAIL.
 const COMPOSER_RE = /^❯/m
-const EMPTY_COMPOSER_RE = /^❯\s*$/m
 const TAIL_LINES = 15
+// How many times to re-check the composer for the typed command before
+// declaring a mismatch (each check is one typeDelay apart — covers Ink
+// repaint lag on a loaded host).
+const TYPED_VERIFY_ATTEMPTS = 4
 
 export type LiveSwitchTarget = { model?: string; effort?: string }
 
@@ -35,6 +38,8 @@ export type LiveSwitchSeams = {
   menuRetryMs?: number
   sendKeysFn?: (windowId: string, keys: string[]) => Promise<void>
   capturePane?: (windowId: string) => Promise<string | null>
+  /** Escape-preserving capture (tmux -e) for composer checks; falls back to capturePane in tests. */
+  capturePaneRaw?: (windowId: string) => Promise<string | null>
 }
 
 type Result = { ok: true } | { ok: false; error: string }
@@ -47,14 +52,68 @@ function tail(text: string): string {
 }
 
 function paneIsSafe(text: string): boolean {
-  const t = tail(text)
-  if (UNSAFE_MARKERS.some((m) => t.includes(m))) return false
-  if (MENU_POINTER_RE.test(t)) return false
-  return COMPOSER_RE.test(t)
+  return paneUnsafeReason(text) === null
 }
 
-function composerEmpty(text: string): boolean {
-  return EMPTY_COMPOSER_RE.test(tail(text))
+function paneUnsafeReason(text: string): string | null {
+  const t = tail(text)
+  const marker = UNSAFE_MARKERS.find((m) => t.includes(m))
+  if (marker) return `marker: ${marker}`
+  if (MENU_POINTER_RE.test(t)) return "menu pointer"
+  if (!COMPOSER_RE.test(t)) return "no composer prompt"
+  return null
+}
+
+// Strip ANSI escapes from one captured (-e) line. With dropDim, characters
+// styled dim (SGR 2) are removed too — that's how Claude renders the ghost
+// autosuggestion in the composer, which is NOT real input (C-u can't clear it,
+// typing replaces it) yet is indistinguishable from a draft in a plain capture.
+function stripLine(line: string, opts: { dropDim: boolean }): string {
+  let out = ""
+  let dim = false
+  let i = 0
+  while (i < line.length) {
+    if (line[i] === "\x1b") {
+      const m = /^\x1b\[([0-9;]*)([A-Za-z])/.exec(line.slice(i))
+      if (m) {
+        if (m[2] === "m") {
+          const params = m[1] === "" ? ["0"] : m[1]!.split(";")
+          for (const p of params) {
+            if (p === "0" || p === "") dim = false
+            else if (p === "2") dim = true
+            else if (p === "22") dim = false
+          }
+        }
+        i += m[0].length
+        continue
+      }
+      i++ // lone/unknown ESC: drop it
+      continue
+    }
+    if (!(opts.dropDim && dim)) out += line[i]
+    i++
+  }
+  return out
+}
+
+// The composer's REAL content from an escape-preserving capture: the last
+// unindented ❯ line in the tail plus wrapped continuation lines (until the
+// next border rule), ghost text dropped, ALL whitespace removed. "❯" = empty.
+function composerContent(rawText: string): string | null {
+  const lines = rawText.split("\n")
+  const tailStart = Math.max(0, lines.length - TAIL_LINES)
+  let idx = -1
+  for (let i = lines.length - 1; i >= tailStart; i--) {
+    if (stripLine(lines[i]!, { dropDim: false }).startsWith("❯")) { idx = i; break }
+  }
+  if (idx < 0) return null
+  let joined = stripLine(lines[idx]!, { dropDim: true })
+  for (let i = idx + 1; i < Math.min(lines.length, idx + 4); i++) {
+    const visible = stripLine(lines[i]!, { dropDim: false })
+    if (visible.startsWith("─") || visible.startsWith("━")) break
+    joined += stripLine(lines[i]!, { dropDim: true })
+  }
+  return joined.replace(/[\s ]+/g, "")
 }
 
 function count(haystack: string, needle: string): number {
@@ -103,6 +162,7 @@ async function typeAndVerify(
   const menuRetry = seams?.menuRetryMs ?? MENU_RETRY_MS
   const send = seams?.sendKeysFn ?? sendKeysToWindowId
   const capture = seams?.capturePane ?? capturePaneById
+  const captureRaw = seams?.capturePaneRaw ?? seams?.capturePane ?? capturePaneRawById
 
   // 1. Pane safety gate: composer visible, no dialog/menu. Poll briefly — a
   //    transient repaint can hide the prompt for a frame.
@@ -113,26 +173,54 @@ async function typeAndVerify(
     if (text === null) return { ok: false, error: "session window gone (no pane to capture)" }
     if (paneIsSafe(text)) break
     if (Date.now() >= safetyDeadline) {
+      // Log the evidence — "why was it unsafe" must be answerable from the log.
+      log.warn("live_switch_pane_unsafe", {
+        windowId,
+        part: part.label,
+        reason: paneUnsafeReason(text),
+        tail: tail(text).slice(-500),
+      })
       return { ok: false, error: `pane not ready for ${part.label} switch (dialog or menu open)` }
     }
     await sleep(poll)
   }
 
-  // 2. Clear any stray composer draft, and PROVE it's empty before typing —
-  //    a leftover draft would turn our command into a chat message.
+  // 2. Clear any stray composer draft and PROVE the composer is empty before
+  //    typing — a leftover draft would turn our command into a chat message.
+  //    Uses the escape-preserving capture so a dim ghost autosuggestion (not
+  //    real input; C-u can't clear it, typing replaces it) counts as empty.
   const baseline = count(text, part.marker)
   for (let attempt = 0; ; attempt++) {
     await send(windowId, ["C-u"])
-    const after = await capture(windowId)
+    const after = await captureRaw(windowId)
     if (after === null) return { ok: false, error: "session window gone (no pane to capture)" }
-    if (composerEmpty(after)) break
-    if (attempt >= 1) return { ok: false, error: "composer draft could not be cleared; switch aborted" }
+    const cc = composerContent(after)
+    if (cc === "❯") break
+    if (attempt >= 1) {
+      log.warn("live_switch_composer_not_empty", { windowId, part: part.label, composer: (cc ?? "<none>").slice(0, 120) })
+      return { ok: false, error: "composer draft could not be cleared; switch aborted" }
+    }
     await sleep(poll)
   }
 
-  // 3. Type the command literally, let autocomplete settle, submit.
+  // 3. Type the command literally, then VERIFY the composer shows exactly the
+  //    typed command before submitting — makes a garbage submit impossible no
+  //    matter what unknown TUI state we're in. First wait doubles as the
+  //    slash-autocomplete settle delay.
   await send(windowId, ["-l", part.command])
-  await sleep(typeDelay)
+  const want = "❯" + part.command.replace(/\s+/g, "")
+  let verified = false
+  for (let attempt = 0; attempt < TYPED_VERIFY_ATTEMPTS; attempt++) {
+    await sleep(typeDelay)
+    const afterType = await captureRaw(windowId)
+    if (afterType === null) return { ok: false, error: "session window gone (no pane to capture)" }
+    if (composerContent(afterType) === want) { verified = true; break }
+  }
+  if (!verified) {
+    await send(windowId, ["C-u"])
+    log.warn("live_switch_composer_mismatch", { windowId, part: part.label, wanted: part.command })
+    return { ok: false, error: `composer did not show the typed ${part.label} command; aborted before submit` }
+  }
   await send(windowId, ["Enter"])
 
   // 4. Verify by marker-count delta; confirm the effort menu if it appears.

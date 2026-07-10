@@ -124,6 +124,13 @@ export function createTmuxClient(run: TmuxRunner = runTmux, runRaw: CmdRunner = 
     return r.code === 0 ? r.stdout : null
   }
 
+  /** Like capturePaneById but escape-preserving (-e), so styling like the dim
+   * ghost autosuggestion in Claude's composer is detectable by callers. */
+  async function capturePaneRawById(windowId: string): Promise<string | null> {
+    const r = await run(["capture-pane", "-t", windowId, "-p", "-e", "-S", "-150"])
+    return r.code === 0 ? r.stdout : null
+  }
+
   /** Resolve a tmux window's id (@N) from its name within a session; null if no window matches. */
   async function resolveWindowIdByName(session: string, name: string): Promise<string | null> {
     const r = await run(["list-windows", "-t", session, "-F", "#{window_id}\t#{window_name}"])
@@ -138,7 +145,7 @@ export function createTmuxClient(run: TmuxRunner = runTmux, runRaw: CmdRunner = 
     return null
   }
 
-  return { spawnSessionWindow, killWindowById, listSessionWindows, livePanePid, sendKeysToWindowId, capturePaneById, resolveWindowIdByName }
+  return { spawnSessionWindow, killWindowById, listSessionWindows, livePanePid, sendKeysToWindowId, capturePaneById, capturePaneRawById, resolveWindowIdByName }
 }
 
 export const {
@@ -148,5 +155,6 @@ export const {
   livePanePid,
   sendKeysToWindowId,
   capturePaneById,
+  capturePaneRawById,
   resolveWindowIdByName,
 } = createTmuxClient()
