@@ -2,9 +2,11 @@
 // the DESKTOP TABLET arrangement (inline 192dp file-tree sidebar; no phone slide-over drawer).
 //
 // Desktop adaptations / deferrals vs. the Android source:
-//   - Diff view + inline code-review and the markdown-preview toggle are OMITTED — TODO(M4). The
-//     header therefore carries only { tree-toggle, search field, save } (Android also has the
-//     preview + diff buttons). EditorState mirrors this (no showDiff/previewMode on desktop).
+//   - The markdown-preview toggle landed in M4g-1: the header gets a preview/edit IconButton on
+//     `.md`/`.markdown` tabs, and an opaque MarkdownBody overlay paints over the (still-warm)
+//     EditorSurface when on. Diff view + inline code-review remain OMITTED — TODO(M4g-2). The
+//     preview gate therefore does NOT AND in `!showDiff` (Android EditorScreen.kt:178 has it); M4g-2
+//     adds that clause back once EditorState grows a showDiff flag.
 //   - LSP is OMITTED (M4). No AndroidLspBridge / lsp* wiring; the engine's lspOut is log-and-dropped.
 //   - The WebView surface is a KCEF engine ([EditorSurface] in WebCodeEditor.kt) with a native
 //     BasicTextField fallback. The engine is built ONLY once KCEF is Ready and is NEVER created
@@ -31,10 +33,14 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
@@ -190,8 +196,31 @@ fun EditorPanel(
         }
     }
 
+    // Off-by-default headless markdown-preview verification hook (M4g-1): SM_EDITOR_PREVIEW=
+    // "<session-name>|<md-path>" is resolved+opened in Main.kt (the SAME externalOpen chain
+    // SM_OPEN_FILE uses); THIS side only watches for <md-path> (the part after the last '|') to
+    // become the active tab and flips editor.previewMode = true ONCE, so the rendered preview
+    // overlay can be screenshotted headlessly (no xdotool). Harmless in production (unset by
+    // default) and safe to run alongside a plain SM_OPEN_FILE (this hook no-ops unless its own env
+    // var is set). Mirrors the SM_EDITOR_SAVE_TEST hook above.
+    val previewTestPath = System.getenv("SM_EDITOR_PREVIEW")?.substringAfterLast('|')?.takeIf { it.isNotBlank() }
+    if (previewTestPath != null) {
+        var previewFired by remember(sessionId) { mutableStateOf(false) }
+        LaunchedEffect(editor.activeTab?.path) {
+            if (!previewFired && editor.activeTab?.path == previewTestPath) {
+                delay(500) // let the tab/content settle before flipping the overlay on
+                editor.previewMode = true
+                previewFired = true
+                println("[editorpreview] previewMode=true for '$previewTestPath' in session $sessionId")
+            }
+        }
+    }
+
     val activeTab = editor.activeTab
     val loadingNew = editor.loadingPath?.let { path -> editor.tabs.none { it.path == path } } == true
+    val previewGate = editorPreviewGate(activeTab?.path, editor.previewMode)
+    val showPreviewToggle = previewGate.showPreviewToggle
+    val showPreview = previewGate.showPreview
 
     Box(modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -224,7 +253,20 @@ fun EditorPanel(
                     onQueryChange = { editor.searchQuery = it },
                     modifier = Modifier.weight(1f).padding(horizontal = Space.xs),
                 )
-                // TODO(M4): markdown-preview toggle + "View changes" diff button (Android has both).
+                if (showPreviewToggle) {
+                    IconButton(
+                        onClick = { editor.previewMode = !editor.previewMode },
+                        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).testTag("editor_preview_toggle"),
+                    ) {
+                        Icon(
+                            imageVector = if (editor.previewMode) Icons.Filled.Edit else Icons.Filled.Visibility,
+                            contentDescription = if (editor.previewMode) "Edit" else "Preview",
+                            tint = if (editor.previewMode) cs.primary else cs.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+                // TODO(M4g-2): "View changes" diff button (Android has it next to preview).
                 if (editor.saving) {
                     Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = cs.primary)
@@ -328,6 +370,41 @@ fun EditorPanel(
                                 )
                             }
 
+                            // Markdown preview overlay — covers (but keeps warm) the KCEF surface
+                            // when toggled on a .md tab (Android EditorScreen.kt:462-475 parity).
+                            // Opaque so the editor underneath is hidden; EditorSurface stays composed
+                            // (and its engine alive) in the sibling above.
+                            //
+                            // KNOWN DESKTOP LIMITATION (not specific to this overlay — DesktopTerminalPanel
+                            // .kt:164-166 documents the SAME root cause for the terminal panel): while KCEF
+                            // is actively rendering, EditorSurface hosts it via a heavyweight AWT
+                            // [androidx.compose.ui.awt.SwingPanel] (WebCodeEditor.kt), which by default
+                            // paints ABOVE all lightweight Compose siblings regardless of composition
+                            // order — so this overlay may be visually occluded by a live KCEF view even
+                            // though it's correctly composed on top. The real fix is Compose's
+                            // experimental `compose.interop.blending` system property, but it is GPU-only
+                            // (no Software-renderer support on any platform, confirmed against JetBrains'
+                            // compose-multiplatform docs/issue #4941) and would apply app-wide (including
+                            // the terminal's SwingPanel) — too broad a change to land unverified inside
+                            // this small milestone, so it's deliberately NOT flipped here. It renders
+                            // correctly today whenever KCEF is NOT the active surface (KcefState.Error/
+                            // RestartRequired/the 8s ready-miss → NativeCodeEditor, a plain Compose
+                            // BasicTextField with no interop component) — see EditorPanelTest's
+                            // KCEF-free toggle coverage. TODO(M4g-2 or a dedicated infra task): evaluate
+                            // enabling compose.interop.blending app-wide on a real GPU-accelerated run.
+                            if (showPreview && activeTab != null) {
+                                Column(
+                                    Modifier
+                                        .fillMaxSize()
+                                        .background(Color(c.code))
+                                        .verticalScroll(rememberScrollState())
+                                        .padding(Space.lg)
+                                        .testTag("editor_preview"),
+                                ) {
+                                    dev.supermux.desktop.chat.MarkdownBody(activeTab.content)
+                                }
+                            }
+
                             // Empty-state prompt over the (warm) surface until a file is opened.
                             if (editor.tabs.isEmpty() && editor.loadingPath == null && editor.loadError == null) {
                                 Box(
@@ -383,4 +460,27 @@ fun EditorPanel(
             )
         }
     }
+}
+
+// ─── Markdown-preview toggle (M4g-1) ───────────────────────────────────────
+
+/** `.md` / `.markdown` → markdown preview eligible (verbatim port of Android
+ *  EditorScreen.kt:582-583). `internal` (not `private`) so [EditorPanelMarkdownTest] can drive it
+ *  directly — the pure/testable-seam discipline this module uses for KCEF-adjacent logic. */
+internal fun isMarkdownPath(path: String): Boolean =
+    path.lowercase().let { it.endsWith(".md") || it.endsWith(".markdown") }
+
+/** Pure derivation of the preview toggle/overlay visibility from the active tab's path and
+ *  [EditorState.previewMode] — extracted so it's unit-testable without hosting Compose (the panel
+ *  itself just calls this at composition time; see EditorPanel body). */
+internal data class EditorPreviewGate(val showPreviewToggle: Boolean, val showPreview: Boolean)
+
+internal fun editorPreviewGate(activePath: String?, previewMode: Boolean): EditorPreviewGate {
+    val activeIsMarkdown = activePath?.let(::isMarkdownPath) == true
+    // TODO(M4g-2): AND in `!showDiff` once EditorState grows a diff-view mode (Android EditorScreen
+    // .kt:177-178 parity) — diff view doesn't exist yet on desktop, so it's omitted here.
+    return EditorPreviewGate(
+        showPreviewToggle = activeIsMarkdown,
+        showPreview = previewMode && activeIsMarkdown,
+    )
 }

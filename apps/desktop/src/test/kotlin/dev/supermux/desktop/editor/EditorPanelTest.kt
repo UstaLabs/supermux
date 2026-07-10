@@ -236,4 +236,70 @@ class EditorPanelTest {
         onNodeWithText("notes.txt").performClick() // select path: captures README.md's scroll
         assertEquals(2, reads)
     }
+
+    // ── Markdown preview toggle (M4g-1) ─────────────────────────────────────────────────
+    // The pure isMarkdownPath/showPreview derivation is unit-tested directly in
+    // EditorPanelMarkdownTest; these exercise the toggle + overlay wired into the hosted panel
+    // (still KCEF-free: kcefStateFlow stays Idle so EditorSurface never builds a browser).
+
+    @Test
+    fun a_text_tab_does_not_show_the_preview_toggle() = runComposeUiTest {
+        val kcef = MutableStateFlow<KcefState>(KcefState.Idle)
+        setContent(ComposeContent(kcef, MutableSharedFlow()))
+
+        onNodeWithText("notes.txt").performClick() // active tab is notes.txt (not markdown)
+        onNodeWithTag("editor_preview_toggle").assertDoesNotExist()
+    }
+
+    @Test
+    fun a_markdown_tab_shows_the_preview_toggle() = runComposeUiTest {
+        val kcef = MutableStateFlow<KcefState>(KcefState.Idle)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                EditorPanel(
+                    sessionId = "s1",
+                    workdir = "/w/s1",
+                    fsList = { tree + FsEntry(name = "README.md", type = "file") },
+                    fsRead = { path -> Result.success("# Heading\n\nBody text.") },
+                    fsWrite = { _, _ -> true },
+                    fsSearch = { emptyList<FsSearchResult>() },
+                    kcefStateFlow = kcef,
+                    onEnsureInit = {},
+                )
+            }
+        }
+
+        onNodeWithText("README.md").performClick() // active tab is README.md (markdown)
+        onNodeWithTag("editor_preview_toggle").assertIsDisplayed()
+    }
+
+    @Test
+    fun toggling_preview_on_a_markdown_tab_shows_the_rendered_overlay_then_hides_it_again() = runComposeUiTest {
+        val kcef = MutableStateFlow<KcefState>(KcefState.Idle)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                EditorPanel(
+                    sessionId = "s1",
+                    workdir = "/w/s1",
+                    fsList = { tree + FsEntry(name = "README.md", type = "file") },
+                    fsRead = { path -> Result.success("# Heading\n\nBody text.") },
+                    fsWrite = { _, _ -> true },
+                    fsSearch = { emptyList<FsSearchResult>() },
+                    kcefStateFlow = kcef,
+                    onEnsureInit = {},
+                )
+            }
+        }
+
+        onNodeWithText("README.md").performClick()
+        onNodeWithTag("editor_preview").assertDoesNotExist() // off by default
+
+        onNodeWithTag("editor_preview_toggle").performClick()
+        onNodeWithTag("editor_preview").assertIsDisplayed()
+        onNodeWithText("Heading").assertIsDisplayed() // MarkdownBody rendered the heading block
+        onNodeWithText("Body text.").assertIsDisplayed() // ...and the prose block
+
+        onNodeWithTag("editor_preview_toggle").performClick() // toggle back off
+        onNodeWithTag("editor_preview").assertDoesNotExist()
+    }
 }

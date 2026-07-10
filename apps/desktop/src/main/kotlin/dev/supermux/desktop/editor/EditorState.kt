@@ -2,11 +2,11 @@
 // sync until a shared UI module exists.
 //
 // Desktop adaptations vs. the Android source:
-//   - previewMode (markdown preview toggle) and the Diff/inline-code-review state + methods
-//     (showDiff, diffRepos, diffComments, diffLoading, loadDiff, reloadDiff — and their FsDiffResult/
-//     RepoDiff/ReviewComment imports) are OMITTED entirely — TODO(M4): port DiffView + markdown
-//     preview once the desktop diff pane lands (plan Task 3 scope trims say "prefer OUT (YAGNI)");
-//     both are cleanly separable from tabs/tree/search/reload, so left out rather than kept inert.
+//   - previewMode (markdown preview toggle) landed in M4g-1 (single flag, not per-tab — Android
+//     EditorState.kt:41 parity). The Diff/inline-code-review state + methods (showDiff, diffRepos,
+//     diffComments, diffLoading, loadDiff, reloadDiff — and their FsDiffResult/RepoDiff/ReviewComment
+//     imports) remain OMITTED — TODO(M4g-2): port DiffView once the desktop diff pane lands; it's
+//     cleanly separable from tabs/tree/search/reload, so left out rather than kept inert.
 //   - Everything else — tabs, tree UI state, search, changedPaths/markChanged/isStale/reload,
 //     openFile/openFileAtLine/closeTab/selectTab/updateContent/saveActive — mirrors Android 1:1,
 //     EXCEPT for three DELIBERATE M3-T4 divergences hardened for the over-the-network fsRead (Android
@@ -67,6 +67,11 @@ class EditorState(
     var treeLoadingPaths by mutableStateOf(setOf<String>())
     var treeVisible by mutableStateOf<Boolean?>(null)
     var searchQuery by mutableStateOf("")
+
+    /** Markdown-preview toggle (M4g-1) — a single flag for the whole panel, not per-tab (Android
+     *  EditorState.kt:41 parity). Only takes effect on the active tab when it's a `.md`/`.markdown`
+     *  path (see [isMarkdownPath] / the showPreview gate in EditorPanel.kt). */
+    var previewMode by mutableStateOf(false)
 
     /** Workdir-relative paths the broker reported changed on disk (fs_changed) → reload banner. */
     var changedPaths by mutableStateOf(setOf<String>())

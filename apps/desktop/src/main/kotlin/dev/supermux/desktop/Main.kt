@@ -37,6 +37,12 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //   SM_SMOKE_SEND="name:text"     — send a chat message to a session                    [main]
 //   SM_TERM_INPUT="name:text"     — type into a session's scratch terminal (M2)         [main]
 //   SM_OPEN_FILE="name:path[:ln]" — open a file in the editor at a line (M3)            [main]
+//   SM_EDITOR_PREVIEW="name|md-path" — select the session, flip its editor pane on, open <md-path>
+//                                  via the SAME externalOpen chain SM_OPEN_FILE uses, then (once
+//                                  that path is the active tab) flip previewMode=true so the
+//                                  rendered markdown preview overlay can be screenshotted headlessly
+//                                  (M4g-1). The previewMode flip is EditorPanel's own env read
+//                                  (SM_EDITOR_SAVE_TEST precedent) — not driven from here.  [main, EditorPanel]
 //   SM_LAUNCH_TEST="wd|agent|msg[|attach]" — drive the launcher spawn→first-msg chain (M4a) [main]
 //   SM_LAUNCH_PAUSE_MS=<ms>       — hold the launcher OPEN this long before submitting (M4a) [main]
 //   SM_FINISH_TEST=<session-name> — select the session + open its Finish dialog (menu, M4b) [main]
@@ -318,6 +324,40 @@ fun main() {
                             ui.layout.setPanes(t.id, ui.layout.panesFor(t.id).copy(editor = true))
                             ui.externalOpen = t.id to dev.supermux.ui.FilePathRef(path, line)
                             println("[openfile] requested '$path'${line?.let { ":$it" } ?: ""} in ${t.name} (${t.id})")
+                        }
+                    }
+
+                    // Headless markdown-preview verification hook (M4g-1): SM_EDITOR_PREVIEW=
+                    // "<session-name>|<md-path>" resolves the named session, selects it, flips its
+                    // editor pane on, and opens <md-path> via the SAME externalOpen chain SM_OPEN_FILE
+                    // uses above. The previewMode=true flip itself happens on the OTHER side (EditorPanel's
+                    // own env read, SM_EDITOR_SAVE_TEST precedent) once <md-path> becomes the active tab —
+                    // this block only gets the file open. Off by default.
+                    val editorPreview = System.getenv("SM_EDITOR_PREVIEW")?.takeIf { it.isNotBlank() }
+                    if (editorPreview != null) {
+                        LaunchedEffect(app) {
+                            val sep = editorPreview.indexOf('|')
+                            if (sep <= 0) {
+                                println("[editorpreview] bad SM_EDITOR_PREVIEW (expected <session-name>|<md-path>)")
+                                return@LaunchedEffect
+                            }
+                            val name = editorPreview.substring(0, sep)
+                            val path = editorPreview.substring(sep + 1)
+                            var target = app.sessions.value.firstOrNull { it.name == name }
+                            val deadline = System.currentTimeMillis() + 30_000
+                            while (target == null && System.currentTimeMillis() < deadline) {
+                                delay(500)
+                                target = app.sessions.value.firstOrNull { it.name == name }
+                            }
+                            val t = target
+                            if (t == null) {
+                                println("[editorpreview] session '$name' not found in snapshot after 30s")
+                                return@LaunchedEffect
+                            }
+                            ui.selectedId = t.id
+                            ui.layout.setPanes(t.id, ui.layout.panesFor(t.id).copy(editor = true))
+                            ui.externalOpen = t.id to dev.supermux.ui.FilePathRef(path, null)
+                            println("[editorpreview] requested '$path' in ${t.name} (${t.id}) — EditorPanel flips previewMode on once it's active")
                         }
                     }
 
