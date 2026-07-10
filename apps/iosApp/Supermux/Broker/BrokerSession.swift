@@ -732,7 +732,11 @@ final class BrokerSession {
     func fsSearch(_ id: String, _ q: String) async -> [FsSearchResult] { (try? await api.fsSearch(sessionId: id, q: q)) ?? [] }
 
     // MARK: - Editor diff + code review (workdir-relative paths)
-    func fsDiff(_ id: String) async -> FsDiffResult? { try? await api.fsDiff(sessionId: id) }
+    /// `base` is the adjustable diff base spec (session-start | head | commit:<sha> | branch:<name>);
+    /// nil = the broker's default (session-start). Target is always the working tree (web parity).
+    func fsDiff(_ id: String, base: String? = nil) async -> FsDiffResult? { try? await api.fsDiff(sessionId: id, base: base) }
+    /// Branches + recent commits per repo, for the diff base selector (web parity).
+    func fsRefs(_ id: String) async -> FsRefsResult? { try? await api.fsRefs(sessionId: id) }
     func reviewAddComment(_ id: String, _ body: AddCommentBody) async { _ = try? await api.reviewAddComment(sessionId: id, body: body) }
     func reviewResolve(_ id: String, _ commentId: String) async {
         _ = try? await api.reviewUpdateComment(sessionId: id, commentId: commentId,
@@ -785,9 +789,13 @@ final class BrokerSession {
                 guard let self else { return false }
                 return await self.fsWrite(sessionId, path, content)
             },
-            fsDiff: { [weak self] in
+            fsDiff: { [weak self] base in
                 guard let self else { return nil }
-                return await self.fsDiff(sessionId)
+                return await self.fsDiff(sessionId, base: base)
+            },
+            fsRefs: { [weak self] in
+                guard let self else { return nil }
+                return await self.fsRefs(sessionId)
             }
         )
         editorStates[sessionId] = state

@@ -10,22 +10,29 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -35,6 +42,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -48,6 +56,7 @@ import dev.supermux.android.theme.Space
 import dev.supermux.android.theme.rememberHaptics
 import dev.supermux.net.DiffFile
 import dev.supermux.net.RepoDiff
+import dev.supermux.net.RepoRefs
 import dev.supermux.net.ReviewComment
 import kotlinx.coroutines.launch
 
@@ -69,10 +78,17 @@ private val Amber = Color(red = 0.98f, green = 0.75f, blue = 0.14f)
  * Pure Compose state; all mutations go through the injected suspend lambdas, and the
  * parent re-supplies [repos]/[comments] after [onReload].
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DiffView(
     repos: List<RepoDiff>,
     comments: List<ReviewComment>,
+    /** Selected diff-base spec ("session-start"/"head"/"commit:<sha>"/"branch:<name>"). */
+    base: String,
+    /** Branches + recent commits per repo for the base picker (primary repo is used). */
+    refs: List<RepoRefs>,
+    /** Pick a new base spec — parent re-fetches the diff for it. */
+    onSetBase: (String) -> Unit,
     /** repo, path, anchorLine (new-side), anchorContext (line text), hunkHeader (@@ line), body. */
     onAddComment: suspend (repo: String, path: String, anchorLine: Int, anchorContext: String, hunkHeader: String, body: String) -> Unit,
     onResolve: suspend (commentId: String) -> Unit,
@@ -93,6 +109,7 @@ fun DiffView(
     var draft by remember { mutableStateOf("") }
     var submitting by remember { mutableStateOf(false) }
     var wrap by remember { mutableStateOf(true) }
+    var showBaseSheet by remember { mutableStateOf(false) }
 
     // Seed expansion to every repo, re-seeding when the repo set itself changes (parity
     // with the iOS seedRepos + onChange(of: repos.map(\.repo)) — DiffView.swift:61-69).
@@ -130,6 +147,33 @@ fun DiffView(
                 color = cs.onSurface,
             )
             Box(Modifier.weight(1f))
+            // Adjustable diff base (target stays the working tree) — parity web DiffView base
+            // picker. A ModalBottomSheet, not a menu, because the commit list can be 30+ rows.
+            Row(
+                Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { haptic(HapticKind.Tick); showBaseSheet = true }
+                    .background(cs.surfaceContainerHighest)
+                    .padding(horizontal = Space.sm, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Base: ",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = cs.onSurfaceVariant,
+                )
+                Text(
+                    baseLabel(base),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = cs.primary,
+                    fontWeight = FontWeight.Medium,
+                    fontFamily = if (base.startsWith("commit:") || base.startsWith("branch:")) MonoFontFamily else null,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 140.dp),
+                )
+            }
+            Spacer(Modifier.width(Space.xs))
             TextButton(onClick = { haptic(HapticKind.Tick); wrap = !wrap }) {
                 Text(
                     "Wrap",
@@ -246,6 +290,193 @@ fun DiffView(
                     Text("Submit review", fontWeight = FontWeight.SemiBold)
                 }
             }
+        }
+    }
+
+    if (showBaseSheet) {
+        BaseSelectorSheet(
+            base = base,
+            refs = refs.firstOrNull(),
+            onSelect = { spec -> onSetBase(spec); showBaseSheet = false },
+            onDismiss = { showBaseSheet = false },
+        )
+    }
+}
+
+// ── Adjustable diff-base picker (parity web DiffView base menu) ─────────────────
+
+/** Human label for a base spec, mirroring the header chip in DiffView.vue. */
+private fun baseLabel(base: String): String = when {
+    base == "session-start" -> "Session start"
+    base == "head" -> "Uncommitted"
+    base.startsWith("commit:") -> base.removePrefix("commit:").take(7)
+    base.startsWith("branch:") -> base.removePrefix("branch:")
+    else -> base
+}
+
+/**
+ * Bottom sheet (not a dropdown — the commit list can be 30+ rows) listing the four base
+ * families: Session start, Uncommitted (HEAD), previous commits, and branches. [refs] is
+ * the primary repo's refs (global selector, primary-repo refs — matches web).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BaseSelectorSheet(
+    base: String,
+    refs: RepoRefs?,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val haptic = rememberHaptics()
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val commits = refs?.commits ?: emptyList()
+    val branches = refs?.branches ?: emptyList()
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = cs.surfaceContainerLow,
+        contentColor = cs.onSurface,
+    ) {
+        LazyColumn(
+            Modifier.fillMaxWidth().heightIn(max = 480.dp).padding(bottom = 24.dp),
+        ) {
+            item(key = "hdr") {
+                Text(
+                    "Diff base",
+                    color = cs.onSurface,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 15.sp,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                )
+            }
+            item(key = "session-start") {
+                BaseRow("Session start", selected = base == "session-start") {
+                    haptic(HapticKind.Tick); onSelect("session-start")
+                }
+            }
+            item(key = "head") {
+                BaseRow("Uncommitted (HEAD)", selected = base == "head") {
+                    haptic(HapticKind.Tick); onSelect("head")
+                }
+            }
+
+            item(key = "hdr-commits") { SectionHeader("Previous commit") }
+            if (commits.isEmpty()) {
+                item(key = "commits-none") { NoneRow() }
+            } else {
+                items(commits, key = { "commit:${it.sha}" }) { c ->
+                    val spec = "commit:${c.sha}"
+                    BaseRow(
+                        label = c.subject,
+                        mono = c.sha.take(7),
+                        selected = base == spec,
+                    ) { haptic(HapticKind.Tick); onSelect(spec) }
+                }
+            }
+
+            item(key = "hdr-branches") { SectionHeader("Another branch") }
+            if (branches.isEmpty()) {
+                item(key = "branches-none") { NoneRow() }
+            } else {
+                items(branches, key = { "branch:$it" }) { b ->
+                    val spec = "branch:$b"
+                    BaseRow(monoLabel = b, selected = base == spec) {
+                        haptic(HapticKind.Tick); onSelect(spec)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionHeader(text: String) {
+    Text(
+        text,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 4.dp),
+    )
+}
+
+@Composable
+private fun NoneRow() {
+    Text(
+        "None",
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+        fontSize = 13.sp,
+        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+    )
+}
+
+/**
+ * A selectable base row. Renders (in order of precedence) either a plain [monoLabel] (branch),
+ * a [mono] short-sha + [label] subject (commit), or a plain [label] (session-start / head).
+ */
+@Composable
+private fun BaseRow(
+    label: String = "",
+    mono: String? = null,
+    monoLabel: String? = null,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .background(if (selected) cs.primary.copy(alpha = 0.10f) else Color.Transparent)
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        when {
+            monoLabel != null -> Text(
+                monoLabel,
+                fontFamily = MonoFontFamily,
+                fontSize = 13.sp,
+                color = if (selected) cs.primary else cs.onSurface,
+                fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            mono != null -> {
+                Text(
+                    mono,
+                    fontFamily = MonoFontFamily,
+                    fontSize = 12.sp,
+                    color = if (selected) cs.primary else cs.onSurfaceVariant,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    label,
+                    fontSize = 13.sp,
+                    color = if (selected) cs.primary else cs.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(start = Space.sm),
+                )
+            }
+            else -> Text(
+                label,
+                fontSize = 14.sp,
+                color = if (selected) cs.primary else cs.onSurface,
+                fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        if (selected) {
+            Spacer(Modifier.width(8.dp))
+            Icon(
+                painter = painterResource(R.drawable.ic_check),
+                contentDescription = null,
+                tint = cs.primary,
+                modifier = Modifier.size(16.dp),
+            )
         }
     }
 }

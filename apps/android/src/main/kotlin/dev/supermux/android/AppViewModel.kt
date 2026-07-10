@@ -28,6 +28,7 @@ import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeConnectionsResponse
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
+import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
 import dev.supermux.net.LspInstallResult
 import dev.supermux.net.LspMutationResult
@@ -801,9 +802,15 @@ class AppViewModel(
     // HTTP wrappers (parity with iOS BrokerSession review*); the DiffView pane drives
     // these via the lambdas threaded through ChatScreen → EditorPanel.
 
-    /** GET /sessions/<id>/fs/diff → repos + existing review comments (null on failure). */
-    suspend fun fsDiff(sessionId: String): FsDiffResult? =
-        runCatching { api.fsDiff(sessionId) }.getOrNull()
+    /** GET /sessions/<id>/fs/diff → repos + existing review comments (null on failure).
+     *  [base] is the diff-base spec ("session-start"/"head"/"commit:<sha>"/"branch:<name>";
+     *  null = broker default). */
+    suspend fun fsDiff(sessionId: String, base: String? = null): FsDiffResult? =
+        runCatching { api.fsDiff(sessionId, base) }.getOrNull()
+
+    /** GET /sessions/<id>/fs/refs → branches + recent commits per repo (null on failure). */
+    suspend fun fsRefs(sessionId: String): FsRefsResult? =
+        runCatching { api.fsRefs(sessionId) }.getOrNull()
 
     /** POST a new inline review comment → the created comment (null on failure). */
     suspend fun reviewAddComment(sessionId: String, body: AddCommentBody): ReviewComment? =

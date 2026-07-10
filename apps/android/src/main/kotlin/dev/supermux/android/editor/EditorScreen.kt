@@ -59,6 +59,7 @@ import dev.supermux.android.theme.rememberHaptics
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
+import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.ReviewSubmitResult
@@ -86,8 +87,10 @@ fun EditorPanel(
     fsRead: suspend (String) -> Result<String>,
     fsWrite: suspend (String, String) -> Boolean,
     fsSearch: suspend (String) -> List<FsSearchResult>,
-    // Phase 2 — diff + inline code-review.
-    fsDiff: suspend () -> FsDiffResult? = { null },
+    // Phase 2 — diff + inline code-review. fsDiff takes the base spec; fsRefs lists refs
+    // for the adjustable diff-base picker.
+    fsDiff: suspend (String) -> FsDiffResult? = { null },
+    fsRefs: suspend () -> FsRefsResult? = { null },
     reviewAddComment: suspend (AddCommentBody) -> ReviewComment? = { null },
     reviewResolve: suspend (String) -> Boolean = { false },
     reviewSubmit: suspend () -> ReviewSubmitResult? = { null },
@@ -258,6 +261,9 @@ fun EditorPanel(
             DiffView(
                 repos = editor.diffRepos,
                 comments = editor.diffComments,
+                base = editor.diffBase,
+                refs = editor.diffRefs,
+                onSetBase = { base -> scope.launch { editor.setDiffBase(base, fsDiff) } },
                 onAddComment = { repo, path, anchorLine, anchorContext, hunkHeader, body ->
                     reviewAddComment(
                         AddCommentBody(
@@ -337,7 +343,7 @@ fun EditorPanel(
                     IconButton(onClick = {
                         haptic(HapticKind.Tick)
                         focusManager.clearFocus()
-                        scope.launch { editor.loadDiff(fsDiff) }
+                        scope.launch { editor.loadDiff(fsDiff, fsRefs) }
                     }) {
                         Icon(
                             painter = painterResource(R.drawable.ic_diff),
