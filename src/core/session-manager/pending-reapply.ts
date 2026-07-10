@@ -36,3 +36,16 @@ export class PendingReapply {
 export function shouldDeferReapply(phase: AgentPhase, applyNow: boolean): boolean {
   return phase !== "idle" && !applyNow
 }
+
+// Diff the pre-change values against the session's CURRENT stored values so the
+// apply path can touch only what the user actually changed. Stored (not
+// effective/resolved) values on both sides — consistent comparison.
+export function changedSince(
+  olds: PreChangeConfig,
+  current: { model?: string; reasoningLevel?: string },
+): { model: boolean; effort: boolean } {
+  return {
+    model: olds.oldModel !== current.model,
+    effort: olds.oldReasoningLevel !== current.reasoningLevel,
+  }
+}
