@@ -169,6 +169,9 @@ fun main() {
                         Item("Usage…") {
                             ui.openUsage()
                         }
+                        Item("Editor / LSP…") {
+                            ui.openLspSettings()
+                        }
                         Separator()
                         Item("Unpair…") { showUnpairConfirm = true }
                     }

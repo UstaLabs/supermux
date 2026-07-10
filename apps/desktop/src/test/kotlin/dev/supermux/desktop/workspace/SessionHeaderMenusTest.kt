@@ -385,6 +385,26 @@ class SessionHeaderMenusTest {
     }
 
     @Test
+    fun overflow_lsp_settings_row_fires_on_lsp_settings() = runComposeUiTest {
+        var opened = false
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                OverflowMenu(
+                    session = baseSession,
+                    onRename = {},
+                    onToggleMute = {},
+                    onKill = {},
+                    onLspSettings = { opened = true },
+                )
+            }
+        }
+        onNodeWithTag("workspace_overflow").performClick()
+        onNodeWithTag("overflow_lsp_settings").assertIsDisplayed()
+        onNodeWithTag("overflow_lsp_settings").performClick()
+        assertTrue(opened)
+    }
+
+    @Test
     fun overflowRenameOpensDialogAndFiresOnRename() = runComposeUiTest {
         var renamed: String? = null
         setContent {

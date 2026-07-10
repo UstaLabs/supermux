@@ -48,6 +48,7 @@ import dev.supermux.desktop.session.ArchivedScreen
 import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.session.SessionLauncherScreen
 import dev.supermux.desktop.session.SessionListPanel
+import dev.supermux.desktop.settings.LspSettingsScreen
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.usage.UsageScreen
 import dev.supermux.net.ArchivedDto
@@ -93,13 +94,23 @@ class WorkspaceUiState {
     var usageOpen by mutableStateOf(false)
 
     /**
-     * Any full-pane modal overlay ([launcherOpen], [archivedOpen], or [usageOpen]) is up. The
-     * workspace pane/sidebar shortcuts (Ctrl+B/L/E/T/D) are gated OFF while this is true, so a
-     * chord an overlay leaves unhandled can't bubble to [workspaceShortcuts] and silently mutate
-     * the layout behind it. One gate for every overlay, so new overlays don't each have to
-     * remember to extend the guard.
+     * Whether the LSP settings overlay (M4g-4) is showing. Flipped on by the File ▸
+     * "Editor / LSP…" menu item in Main.kt and the SessionDetail overflow ⋮ row (both reach this
+     * shared state the same way New-Session/Archived/Usage do); flipped off by the screen's own
+     * back button or Escape. Lives here (not local to [WorkspaceRoot]) for the SAME reason as
+     * [launcherOpen]/[archivedOpen]/[usageOpen] — Main's MenuBar renders outside WorkspaceRoot's
+     * composition but must open it.
      */
-    val overlayOpen: Boolean get() = launcherOpen || archivedOpen || usageOpen
+    var lspSettingsOpen by mutableStateOf(false)
+
+    /**
+     * Any full-pane modal overlay ([launcherOpen], [archivedOpen], [usageOpen], or
+     * [lspSettingsOpen]) is up. The workspace pane/sidebar shortcuts (Ctrl+B/L/E/T/D) are gated
+     * OFF while this is true, so a chord an overlay leaves unhandled can't bubble to
+     * [workspaceShortcuts] and silently mutate the layout behind it. One gate for every overlay,
+     * so new overlays don't each have to remember to extend the guard.
+     */
+    val overlayOpen: Boolean get() = launcherOpen || archivedOpen || usageOpen || lspSettingsOpen
 
     /**
      * Open the New-Session launcher, enforcing the "at most one overlay" invariant (closes the
@@ -112,6 +123,7 @@ class WorkspaceUiState {
         launcherOpen = true
         archivedOpen = false
         usageOpen = false
+        lspSettingsOpen = false
     }
 
     /** Open the Archived-sessions overlay; the "at most one overlay" mirror of [openLauncher]. */
@@ -119,6 +131,7 @@ class WorkspaceUiState {
         archivedOpen = true
         launcherOpen = false
         usageOpen = false
+        lspSettingsOpen = false
     }
 
     /** Open the Usage overlay; the "at most one overlay" mirror of [openLauncher]/[openArchived]. */
@@ -126,6 +139,16 @@ class WorkspaceUiState {
         usageOpen = true
         launcherOpen = false
         archivedOpen = false
+        lspSettingsOpen = false
+    }
+
+    /** Open the LSP settings overlay; the "at most one overlay" mirror of [openLauncher]/
+     *  [openArchived]/[openUsage]. */
+    fun openLspSettings() {
+        lspSettingsOpen = true
+        launcherOpen = false
+        archivedOpen = false
+        usageOpen = false
     }
 
     /**
@@ -401,6 +424,9 @@ fun WorkspaceRoot(
                         // Overflow ⋮ "Usage" row (M4f): the SAME ui.openUsage() the File ▸
                         // "Usage…" menu item calls.
                         onUsage = { ui.openUsage() },
+                        // Overflow ⋮ "Editor / LSP…" row (M4g-4): the SAME ui.openLspSettings()
+                        // the File ▸ "Editor / LSP…" menu item calls.
+                        onLspSettings = { ui.openLspSettings() },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -558,6 +584,52 @@ fun WorkspaceRoot(
                             }
                             r
                         },
+                    )
+                }
+            }
+
+            // ── LSP settings: a FULL-PANE overlay above the workspace (M4g-4 Task 3) ──
+            // Same shape as the launcher/archived/usage overlays, but UNLIKE them the SCREEN itself
+            // owns its server-list load/toggle/install/add/remove state (LspSettingsScreen's own
+            // LaunchedEffect(Unit) — mirrors Android's EditorLspSection, since toggle/install/add/
+            // remove all need to mutate the list in place, unlike Usage's single redeem-swap).
+            // WorkspaceRoot only supplies the app.lsp* lambdas + the live app.lspInstallLog/
+            // app.lspInstallDone StateFlows (folded from lsp_install_progress/lsp_install_done
+            // frames by DesktopAppState) — because the composable is torn down + rebuilt each time
+            // ui.lspSettingsOpen flips off/on, a re-open always re-fetches (same net effect as
+            // Usage's explicit reset-to-null-on-close).
+            if (ui.lspSettingsOpen) {
+                // Self-focusing (mirrors the Usage overlay, NOT the launcher/archived Boxes): this
+                // screen has no text field a user would naturally focus first when it opens, so
+                // Escape needs a focus owner from frame one.
+                val lspFocus = remember { FocusRequester() }
+                LaunchedEffect(Unit) { runCatching { lspFocus.requestFocus() } }
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .testTag("lsp_settings_overlay")
+                        .focusRequester(lspFocus)
+                        .focusable()
+                        .onPreviewKeyEvent { e ->
+                            if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                                ui.lspSettingsOpen = false
+                                true
+                            } else {
+                                false
+                            }
+                        },
+                ) {
+                    LspSettingsScreen(
+                        lspLoad = { app.lspLoad() },
+                        lspToggle = { id, enabled -> app.lspToggle(id, enabled) },
+                        lspInstall = { id -> app.lspInstall(id) },
+                        lspInstallLog = app.lspInstallLog,
+                        lspInstallDone = app.lspInstallDone,
+                        lspAddCustom = { args ->
+                            app.lspAddCustom(args.id, args.label, args.command, args.extensions, args.args, args.languageId, args.installCmd)
+                        },
+                        lspRemoveCustom = { id -> app.lspRemoveCustom(id) },
+                        onBack = { ui.lspSettingsOpen = false },
                     )
                 }
             }

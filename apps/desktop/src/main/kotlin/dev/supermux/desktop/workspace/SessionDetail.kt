@@ -194,6 +194,10 @@ fun SessionDetail(
     // OverflowMenu "Usage" row (M4f). Defaults to a no-op so existing callers/tests that don't
     // exercise it keep compiling.
     onUsage: () -> Unit = {},
+    // Opens the LSP settings overlay (WorkspaceUiState.openLspSettings()) — threaded down to the
+    // header's OverflowMenu "Editor / LSP…" row (M4g-4). Defaults to a no-op so existing callers/
+    // tests that don't exercise it keep compiling.
+    onLspSettings: () -> Unit = {},
     // Off-by-default headless hook (SM_CHAT_ATTACH, Main.kt) delivery: a one-shot "stage this file
     // then send" request routed straight through to the chat pane's [DesktopComposer] — see its
     // `externalAttach` KDoc for the funnel. Null in normal operation.
@@ -496,16 +500,17 @@ fun SessionDetail(
                 Spacer(Modifier.width(Space.xs))
             }
             PaneToggleCluster(layout = layout, sessionId = session.id)
-            // Overflow (⋮): the Usage management-nav row (M4f) + session-scoped Rename / Mute /
-            // Kill (header parity with the session list's right-click). The rest of Android's
-            // management-nav rows (Settings/Devices/Proxies/Appearance) stay omitted until those
-            // screens exist on desktop; no dead nav.
+            // Overflow (⋮): the Usage + Editor/LSP management-nav rows (M4f/M4g-4) + session-scoped
+            // Rename / Mute / Kill (header parity with the session list's right-click). The rest of
+            // Android's management-nav rows (Settings/Devices/Proxies/Appearance) stay omitted
+            // until those screens exist on desktop; no dead nav.
             OverflowMenu(
                 session = session,
                 onRename = { newName -> app.rename(session.id, newName) },
                 onToggleMute = { muted -> app.setMute(session.id, muted) },
                 onKill = { app.kill(session.id) },
                 onUsage = onUsage,
+                onLspSettings = onLspSettings,
                 forceOpen = forceOverflowMenu,
                 onForceOpenConsumed = onForceOverflowMenuConsumed,
             )

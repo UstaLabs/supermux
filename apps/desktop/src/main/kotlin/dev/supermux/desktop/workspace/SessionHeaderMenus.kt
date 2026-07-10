@@ -300,7 +300,8 @@ fun SessionLinksMenu(
  * resolved) plus session-scoped Rename / Mute-Unmute / Kill (header parity with the session list's
  * right-click). Rename opens an [AlertDialog]+[OutlinedTextField] and Kill a confirm dialog — both
  * copy the session-list pattern. The REST of Android's management-nav rows (Settings/Devices/
- * Proxies/Appearance) are still omitted — those screens don't exist on desktop yet.
+ * Proxies/Appearance) are still omitted — those screens don't exist on desktop yet. Editor/LSP
+ * is no longer one of them (M4g-4).
  *
  * [onToggleMute] receives the DESIRED next mute state (Android passes `!(session.mute ?: false)`).
  * [onUsage] opens the Usage overlay (WorkspaceUiState.openUsage()); defaults to a no-op so
@@ -313,6 +314,10 @@ fun OverflowMenu(
     onToggleMute: (Boolean) -> Unit,
     onKill: () -> Unit,
     onUsage: () -> Unit = {},
+    // Opens the LSP settings overlay (WorkspaceUiState.openLspSettings()) — threaded down to the
+    // header's OverflowMenu "Editor / LSP…" row (M4g-4). Defaults to a no-op so existing callers/
+    // tests that don't exercise it keep compiling.
+    onLspSettings: () -> Unit = {},
     modifier: Modifier = Modifier,
     // Off-by-default headless hook (SM_OVERFLOW_MENU, Main.kt) delivery: force-expands the
     // dropdown only — NEVER auto-clicks Rename/Mute/Kill (those are destructive-ish/user-facing,
@@ -346,6 +351,11 @@ fun OverflowMenu(
                 text = { Text("Usage") },
                 modifier = Modifier.testTag("overflow_usage"),
                 onClick = { expanded = false; onUsage() },
+            )
+            DropdownMenuItem(
+                text = { Text("Editor / LSP…") },
+                modifier = Modifier.testTag("overflow_lsp_settings"),
+                onClick = { expanded = false; onLspSettings() },
             )
             DropdownMenuItem(
                 text = { Text("Rename") },
