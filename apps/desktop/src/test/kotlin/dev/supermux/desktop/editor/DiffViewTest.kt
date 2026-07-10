@@ -12,7 +12,9 @@ import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.DiffFile
+import dev.supermux.net.RefCommit
 import dev.supermux.net.RepoDiff
+import dev.supermux.net.RepoRefs
 import dev.supermux.net.ReviewComment
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -44,6 +46,9 @@ class DiffViewTest {
     private fun host(
         repos: List<RepoDiff>,
         comments: List<ReviewComment> = emptyList(),
+        base: String = "session-start",
+        refs: List<RepoRefs> = emptyList(),
+        onSetBase: (String) -> Unit = {},
         onAddComment: suspend (String, String, Int, String, String, String) -> Unit = { _, _, _, _, _, _ -> },
         onResolve: suspend (String) -> Unit = {},
         onSubmit: suspend () -> Unit = {},
@@ -55,6 +60,9 @@ class DiffViewTest {
             DiffView(
                 repos = repos,
                 comments = comments,
+                base = base,
+                refs = refs,
+                onSetBase = onSetBase,
                 onAddComment = onAddComment,
                 onResolve = onResolve,
                 onSubmit = onSubmit,
@@ -63,6 +71,91 @@ class DiffViewTest {
                 autoExpandAll = autoExpandAll,
             )
         }
+    }
+
+    // ── Diff-base selector (DropdownMenu, desktop convention — NOT a bottom sheet) ─────
+
+    private fun refsWith() = listOf(
+        RepoRefs(
+            repo = "",
+            branches = listOf("main", "feature/x"),
+            commits = listOf(
+                RefCommit(sha = "abc1234def", subject = "first commit"),
+                RefCommit(sha = "9998887ccc", subject = "second commit"),
+            ),
+        ),
+    )
+
+    @Test
+    fun the_base_chip_shows_the_current_base_label() = runComposeUiTest {
+        setContent(host(oneRepoDiff(), base = "session-start"))
+
+        onNodeWithTag("diff_base_chip").assertIsDisplayed()
+        onNodeWithText("Session start").assertIsDisplayed()
+    }
+
+    @Test
+    fun the_base_chip_shows_a_short_sha_for_a_commit_base() = runComposeUiTest {
+        setContent(host(oneRepoDiff(), base = "commit:abc1234def567"))
+
+        onNodeWithText("abc1234").assertIsDisplayed() // baseLabel take(7)
+    }
+
+    @Test
+    fun opening_the_menu_lists_the_four_base_kinds_from_the_refs() = runComposeUiTest {
+        setContent(host(oneRepoDiff(), refs = refsWith()))
+
+        onNodeWithTag("diff_base_chip").performClick()
+
+        onNodeWithTag("diff_base_menu").assertIsDisplayed()
+        onNodeWithTag("diff_base_option_session-start").assertIsDisplayed()
+        onNodeWithTag("diff_base_option_head").assertIsDisplayed()
+        onNodeWithTag("diff_base_option_commit:abc1234def").assertIsDisplayed()
+        onNodeWithTag("diff_base_option_branch:feature/x").assertIsDisplayed()
+    }
+
+    @Test
+    fun picking_uncommitted_fires_on_set_base_with_head() = runComposeUiTest {
+        var picked: String? = null
+        setContent(host(oneRepoDiff(), refs = refsWith(), onSetBase = { picked = it }))
+
+        onNodeWithTag("diff_base_chip").performClick()
+        onNodeWithTag("diff_base_option_head").performClick()
+
+        assertEquals("head", picked)
+    }
+
+    @Test
+    fun picking_a_commit_fires_on_set_base_with_the_commit_spec() = runComposeUiTest {
+        var picked: String? = null
+        setContent(host(oneRepoDiff(), refs = refsWith(), onSetBase = { picked = it }))
+
+        onNodeWithTag("diff_base_chip").performClick()
+        onNodeWithTag("diff_base_option_commit:9998887ccc").performClick()
+
+        assertEquals("commit:9998887ccc", picked)
+    }
+
+    @Test
+    fun picking_a_branch_fires_on_set_base_with_the_branch_spec() = runComposeUiTest {
+        var picked: String? = null
+        setContent(host(oneRepoDiff(), refs = refsWith(), onSetBase = { picked = it }))
+
+        onNodeWithTag("diff_base_chip").performClick()
+        onNodeWithTag("diff_base_option_branch:main").performClick()
+
+        assertEquals("branch:main", picked)
+    }
+
+    @Test
+    fun picking_session_start_fires_on_set_base_with_session_start() = runComposeUiTest {
+        var picked: String? = null
+        setContent(host(oneRepoDiff(), base = "head", refs = refsWith(), onSetBase = { picked = it }))
+
+        onNodeWithTag("diff_base_chip").performClick()
+        onNodeWithTag("diff_base_option_session-start").performClick()
+
+        assertEquals("session-start", picked)
     }
 
     // ── Repo grouping ────────────────────────────────────────────────────────────────

@@ -36,14 +36,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -61,6 +67,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -71,6 +78,7 @@ import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Space
 import dev.supermux.net.DiffFile
 import dev.supermux.net.RepoDiff
+import dev.supermux.net.RepoRefs
 import dev.supermux.net.ReviewComment
 import kotlinx.coroutines.launch
 
@@ -98,6 +106,13 @@ private val Amber = Color(red = 0.98f, green = 0.75f, blue = 0.14f)
 fun DiffView(
     repos: List<RepoDiff>,
     comments: List<ReviewComment>,
+    /** Selected diff-base spec ("session-start"/"head"/"commit:<sha>"/"branch:<name>"). The compare
+     *  target always stays the working tree (parity web/Android DiffView base picker). */
+    base: String = "session-start",
+    /** Branches + recent commits per repo for the base picker (primary repo is used). */
+    refs: List<RepoRefs> = emptyList(),
+    /** Pick a new base spec — the parent re-fetches the diff for it. */
+    onSetBase: (String) -> Unit = {},
     /** repo, path, anchorLine (new-side), anchorContext (line text), hunkHeader (@@ line), body. */
     onAddComment: suspend (repo: String, path: String, anchorLine: Int, anchorContext: String, hunkHeader: String, body: String) -> Unit,
     onResolve: suspend (commentId: String) -> Unit,
@@ -122,6 +137,7 @@ fun DiffView(
     var draft by remember { mutableStateOf("") }
     var submitting by remember { mutableStateOf(false) }
     var wrap by remember { mutableStateOf(true) }
+    var showBaseMenu by remember { mutableStateOf(false) }
 
     // Seed expansion to every repo, re-seeding when the repo set itself changes (parity with the
     // iOS seedRepos + onChange(of: repos.map(\.repo)) — DiffView.swift:61-69). [autoExpandAll] ALSO
@@ -163,6 +179,18 @@ fun DiffView(
                 color = cs.onSurface,
             )
             Box(Modifier.weight(1f))
+            // Adjustable diff base (the compare target stays the working tree) — parity with the
+            // web/Android/iOS DiffView base picker. Desktop uses a DropdownMenu (a real pointer),
+            // not the mobile ModalBottomSheet, matching the launcher/SessionHeaderMenus convention.
+            BaseSelector(
+                base = base,
+                refs = refs.firstOrNull(),
+                expanded = showBaseMenu,
+                onExpand = { showBaseMenu = true },
+                onDismiss = { showBaseMenu = false },
+                onSelect = { spec -> showBaseMenu = false; onSetBase(spec) },
+            )
+            Spacer(Modifier.width(Space.xs))
             TextButton(onClick = { wrap = !wrap }, modifier = Modifier.testTag("diff_wrap_toggle")) {
                 Text(
                     "Wrap",
@@ -279,6 +307,172 @@ fun DiffView(
             }
         }
     }
+}
+
+// ── Adjustable diff-base picker (parity web/Android/iOS DiffView base menu) ─────────────
+
+/** Human label for a base spec, ported verbatim from Android DiffView.kt:305-311 (mirrors the web
+ *  DiffView chip). Public for the pure-mapping unit test. */
+fun baseLabel(base: String): String = when {
+    base == "session-start" -> "Session start"
+    base == "head" -> "Uncommitted"
+    base.startsWith("commit:") -> base.removePrefix("commit:").take(7)
+    base.startsWith("branch:") -> base.removePrefix("branch:")
+    else -> base
+}
+
+/**
+ * The "Base: <label>" chip in the diff header and the [DropdownMenu] it opens. Desktop deliberately
+ * diverges from Android's ModalBottomSheet (the mobile source) to a DropdownMenu: the desktop has a
+ * real pointer, so a menu matches the launcher + SessionHeaderMenus convention. The menu lists the
+ * four base families — Session start, Uncommitted (HEAD), a "Previous commit" section (recent
+ * commits → `commit:<sha>`), and an "Another branch" section (branches → `branch:<name>`) — with a
+ * check on the current selection. [refs] is the PRIMARY repo's refs (global selector, primary-repo
+ * refs — matches web/Android).
+ */
+@Composable
+private fun BaseSelector(
+    base: String,
+    refs: RepoRefs?,
+    expanded: Boolean,
+    onExpand: () -> Unit,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val isRef = base.startsWith("commit:") || base.startsWith("branch:")
+    Box {
+        Row(
+            Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onExpand)
+                .background(cs.surfaceContainerHighest)
+                .padding(horizontal = Space.sm, vertical = 4.dp)
+                .testTag("diff_base_chip"),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Base: ", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+            Text(
+                baseLabel(base),
+                style = MaterialTheme.typography.labelMedium,
+                color = cs.primary,
+                fontWeight = FontWeight.Medium,
+                fontFamily = if (isRef) MonoFontFamily else null,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 160.dp),
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = onDismiss,
+            modifier = Modifier.testTag("diff_base_menu"),
+        ) {
+            BaseOption("Session start", spec = "session-start", selected = base == "session-start", onSelect = onSelect)
+            BaseOption("Uncommitted (HEAD)", spec = "head", selected = base == "head", onSelect = onSelect)
+
+            BaseSectionHeader("Previous commit")
+            val commits = refs?.commits ?: emptyList()
+            if (commits.isEmpty()) {
+                BaseNoneRow()
+            } else {
+                commits.forEach { c ->
+                    val spec = "commit:${c.sha}"
+                    BaseOption(
+                        label = c.subject.ifEmpty { c.sha.take(7) },
+                        spec = spec,
+                        selected = base == spec,
+                        mono = c.sha.take(7),
+                        onSelect = onSelect,
+                    )
+                }
+            }
+
+            BaseSectionHeader("Another branch")
+            val branches = refs?.branches ?: emptyList()
+            if (branches.isEmpty()) {
+                BaseNoneRow()
+            } else {
+                branches.forEach { b ->
+                    val spec = "branch:$b"
+                    BaseOption(label = b, spec = spec, selected = base == spec, monoLabel = true, onSelect = onSelect)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BaseSectionHeader(text: String) {
+    Text(
+        text,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier.padding(start = Space.md, end = Space.md, top = Space.sm, bottom = 2.dp),
+    )
+}
+
+@Composable
+private fun BaseNoneRow() {
+    Text(
+        "None",
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+        fontSize = 12.sp,
+        modifier = Modifier.padding(horizontal = Space.md, vertical = Space.sm),
+    )
+}
+
+/** One selectable base row in the dropdown. [mono] (a short-sha prefix for commits) and [monoLabel]
+ *  (branch names render mono) drive the same monospace styling Android's BaseRow uses. */
+@Composable
+private fun BaseOption(
+    label: String,
+    spec: String,
+    selected: Boolean,
+    onSelect: (String) -> Unit,
+    mono: String? = null,
+    monoLabel: Boolean = false,
+) {
+    val cs = MaterialTheme.colorScheme
+    DropdownMenuItem(
+        modifier = Modifier.testTag("diff_base_option_$spec"),
+        onClick = { onSelect(spec) },
+        text = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (mono != null) {
+                    Text(
+                        mono,
+                        fontFamily = MonoFontFamily,
+                        fontSize = 12.sp,
+                        color = if (selected) cs.primary else cs.onSurfaceVariant,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(end = Space.sm),
+                    )
+                }
+                Text(
+                    label,
+                    fontSize = 13.sp,
+                    fontFamily = if (monoLabel) MonoFontFamily else null,
+                    color = if (selected) cs.primary else cs.onSurface,
+                    fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 240.dp),
+                )
+            }
+        },
+        trailingIcon = if (selected) {
+            {
+                Icon(
+                    Icons.Filled.Check,
+                    contentDescription = null,
+                    tint = cs.primary,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        } else null,
+    )
 }
 
 // ── Repo group header (only when >1 repo) ──────────────────────────────────────

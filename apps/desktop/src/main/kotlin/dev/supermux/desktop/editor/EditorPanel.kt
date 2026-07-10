@@ -87,6 +87,7 @@ import dev.supermux.desktop.theme.Space
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
+import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.ReviewSubmitResult
@@ -119,7 +120,10 @@ fun EditorPanel(
     fsWrite: suspend (String, String) -> Boolean,
     fsSearch: suspend (String) -> List<FsSearchResult>,
     // M4g-2 — diff + inline code-review (pure HTTP; Android EditorScreen.kt:90-93 parity).
-    fsDiff: suspend () -> FsDiffResult? = { null },
+    // fsDiff takes the diff-base spec (session-start/head/commit:<sha>/branch:<name>); fsRefs feeds
+    // the base picker's commit/branch submenus (diff-base selector — Android EditorScreen parity).
+    fsDiff: suspend (String) -> FsDiffResult? = { null },
+    fsRefs: suspend () -> FsRefsResult? = { null },
     onReviewAddComment: suspend (AddCommentBody) -> ReviewComment? = { null },
     onReviewResolve: suspend (String) -> Boolean = { false },
     onReviewSubmit: suspend () -> ReviewSubmitResult? = { null },
@@ -273,7 +277,7 @@ fun EditorPanel(
         LaunchedEffect(sessionId) {
             if (!diffFired) {
                 diffFired = true
-                editor.loadDiff(fsDiff)
+                editor.loadDiff(fsDiff, fsRefs)
                 println("[editordiff] loadDiff fired for session $sessionId")
             }
         }
@@ -375,6 +379,9 @@ fun EditorPanel(
             DiffView(
                 repos = editor.diffRepos,
                 comments = editor.diffComments,
+                base = editor.diffBase,
+                refs = editor.diffRefs,
+                onSetBase = { spec -> scope.launch { editor.setDiffBase(spec, fsDiff) } },
                 onAddComment = { repo, path, anchorLine, anchorContext, hunkHeader, body ->
                     onReviewAddComment(
                         AddCommentBody(
@@ -451,7 +458,7 @@ fun EditorPanel(
                     }
                 } else {
                     IconButton(
-                        onClick = { scope.launch { editor.loadDiff(fsDiff) } },
+                        onClick = { scope.launch { editor.loadDiff(fsDiff, fsRefs) } },
                         modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).testTag("editor_view_changes"),
                     ) {
                         Icon(

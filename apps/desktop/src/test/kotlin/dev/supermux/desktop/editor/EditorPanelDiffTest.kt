@@ -39,7 +39,7 @@ class EditorPanelDiffTest {
     )
 
     private fun ComposeContent(
-        fsDiff: suspend () -> FsDiffResult? = { fakeDiff },
+        fsDiff: suspend (String) -> FsDiffResult? = { fakeDiff },
     ): @androidx.compose.runtime.Composable () -> Unit = {
         SupermuxTheme(appearance = AppearanceMode.DARK) {
             EditorPanel(

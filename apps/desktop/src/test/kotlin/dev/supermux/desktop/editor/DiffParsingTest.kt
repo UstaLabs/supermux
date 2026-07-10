@@ -97,4 +97,26 @@ class DiffParsingTest {
     @Test fun diff_stats_on_a_diff_with_no_changes_is_zero_zero() {
         assertEquals(0 to 0, diffStats("@@ -1 +1 @@\n context\n"))
     }
+
+    // ── baseLabel — the diff-base chip text, ported verbatim from Android DiffView.kt:305-311 ──
+
+    @Test fun base_label_maps_session_start_to_a_human_label() {
+        assertEquals("Session start", baseLabel("session-start"))
+    }
+
+    @Test fun base_label_maps_head_to_uncommitted() {
+        assertEquals("Uncommitted", baseLabel("head"))
+    }
+
+    @Test fun base_label_shortens_a_commit_sha_to_seven_chars() {
+        assertEquals("abc1234", baseLabel("commit:abc1234def567"))
+    }
+
+    @Test fun base_label_strips_the_branch_prefix() {
+        assertEquals("feature/x", baseLabel("branch:feature/x"))
+    }
+
+    @Test fun base_label_falls_back_to_the_raw_spec_when_unknown() {
+        assertEquals("weird", baseLabel("weird"))
+    }
 }

@@ -22,6 +22,7 @@ import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
+import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
 import dev.supermux.net.GitOpResult
 import dev.supermux.net.LspInstallResult
@@ -709,9 +710,16 @@ class DesktopAppState(
     // SessionDetail.DesktopEditorPanel already has it in hand), degrading through [runApi]
     // exactly like the fs* wrappers.
 
-    /** GET /sessions/<id>/fs/diff → repos + existing review comments. Null on any failure. */
-    suspend fun fsDiff(session: SessionInfo): FsDiffResult? =
-        runApi("fsDiff") { api.fsDiff(session.id) }
+    /** GET /sessions/<id>/fs/diff?base=<spec> → repos + existing review comments. [base] is the
+     *  diff-base spec (null/"session-start" default · "head" · "commit:<sha>" · "branch:<name>"); the
+     *  compare target always stays the working tree. Null on any failure. */
+    suspend fun fsDiff(session: SessionInfo, base: String? = null): FsDiffResult? =
+        runApi("fsDiff") { api.fsDiff(session.id, base) }
+
+    /** GET /sessions/<id>/fs/refs → branches + recent commits per repo, for the diff-base picker's
+     *  "Previous commit…" / "Another branch…" submenus. Null on any failure. */
+    suspend fun fsRefs(session: SessionInfo): FsRefsResult? =
+        runApi("fsRefs") { api.fsRefs(session.id) }
 
     /** POST /sessions/<id>/review/comments → the created comment. Null on any failure. */
     suspend fun reviewAddComment(session: SessionInfo, body: AddCommentBody): ReviewComment? =

@@ -2,7 +2,10 @@ package dev.supermux.desktop.editor
 
 import dev.supermux.net.DiffFile
 import dev.supermux.net.FsDiffResult
+import dev.supermux.net.FsRefsResult
+import dev.supermux.net.RefCommit
 import dev.supermux.net.RepoDiff
+import dev.supermux.net.RepoRefs
 import dev.supermux.net.ReviewComment
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -599,7 +602,7 @@ class EditorStateTest {
     @Test fun load_diff_with_a_non_null_result_shows_the_diff_and_populates_repos_and_comments() = runTest {
         val s = state()
 
-        s.loadDiff { fakeDiff }
+        s.loadDiff({ fakeDiff }, { null })
 
         assertTrue(s.showDiff)
         assertEquals(fakeDiff.repos, s.diffRepos)
@@ -610,7 +613,7 @@ class EditorStateTest {
     @Test fun load_diff_with_a_null_result_never_shows_the_diff() = runTest {
         val s = state()
 
-        s.loadDiff { null }
+        s.loadDiff({ null }, { null })
 
         assertFalse(s.showDiff)
         assertTrue(s.diffRepos.isEmpty())
@@ -622,7 +625,7 @@ class EditorStateTest {
         val gate = CompletableDeferred<Unit>()
         val s = state(scope = this)
 
-        val job = launch { s.loadDiff { gate.await(); fakeDiff } }
+        val job = launch { s.loadDiff({ gate.await(); fakeDiff }, { null }) }
         advanceUntilIdle() // fetch in flight, parked on gate.await()
         assertTrue(s.diffLoading)
 
@@ -635,7 +638,7 @@ class EditorStateTest {
 
     @Test fun reload_diff_updates_repos_and_comments_without_toggling_show_diff() = runTest {
         val s = state()
-        s.loadDiff { fakeDiff }
+        s.loadDiff({ fakeDiff }, { null })
         assertTrue(s.showDiff)
 
         val updated = fakeDiff.copy(comments = emptyList())
@@ -648,7 +651,7 @@ class EditorStateTest {
 
     @Test fun reload_diff_with_a_null_result_leaves_the_prior_repos_and_comments_in_place() = runTest {
         val s = state()
-        s.loadDiff { fakeDiff }
+        s.loadDiff({ fakeDiff }, { null })
 
         s.reloadDiff { null }
 
@@ -665,5 +668,74 @@ class EditorStateTest {
 
         assertFalse(s.showDiff) // reloadDiff is an in-place refresh, never an opener
         assertEquals(fakeDiff.repos, s.diffRepos)
+    }
+
+    // ── Diff-base selector (Android EditorState.kt:51-56,146-172 parity) ─────────────────────
+
+    private val fakeRefs = FsRefsResult(
+        repos = listOf(
+            RepoRefs(
+                repo = "",
+                branches = listOf("main", "dev"),
+                commits = listOf(RefCommit(sha = "abc1234", subject = "first")),
+            ),
+        ),
+    )
+
+    @Test fun diff_base_defaults_to_session_start_with_no_refs() {
+        val s = state()
+        assertEquals("session-start", s.diffBase)
+        assertTrue(s.diffRefs.isEmpty())
+    }
+
+    @Test fun load_diff_passes_the_current_base_to_fs_diff_and_populates_refs() = runTest {
+        val s = state()
+        var seenBase: String? = null
+
+        s.loadDiff({ base -> seenBase = base; fakeDiff }, { fakeRefs })
+
+        assertEquals("session-start", seenBase) // the default base is threaded into the fetch
+        assertEquals(fakeRefs.repos, s.diffRefs)
+        assertTrue(s.showDiff)
+    }
+
+    @Test fun set_diff_base_updates_the_base_and_refetches_in_place() = runTest {
+        val s = state()
+        s.loadDiff({ fakeDiff }, { fakeRefs })
+        var seenBase: String? = null
+        val rebased = fakeDiff.copy(comments = emptyList())
+
+        s.setDiffBase("head") { base -> seenBase = base; rebased }
+
+        assertEquals("head", s.diffBase)      // the new base is retained
+        assertEquals("head", seenBase)        // …and passed to the in-place re-fetch
+        assertEquals(rebased.repos, s.diffRepos)
+        assertTrue(s.diffComments.isEmpty())
+        assertTrue(s.showDiff)                // setDiffBase never toggles showDiff (reloadDiff path)
+    }
+
+    @Test fun set_diff_base_round_trips_the_four_base_specs() = runTest {
+        val s = state()
+        val seen = mutableListOf<String>()
+        val fetch: suspend (String) -> FsDiffResult? = { base -> seen.add(base); fakeDiff }
+
+        s.setDiffBase("head", fetch)
+        s.setDiffBase("commit:abc1234", fetch)
+        s.setDiffBase("branch:feature/x", fetch)
+        s.setDiffBase("session-start", fetch)
+
+        assertEquals(listOf("head", "commit:abc1234", "branch:feature/x", "session-start"), seen)
+        assertEquals("session-start", s.diffBase)
+    }
+
+    @Test fun reload_diff_uses_the_current_base_after_a_base_switch() = runTest {
+        val s = state()
+        s.loadDiff({ fakeDiff }, { null })
+        s.setDiffBase("commit:abc1234") { fakeDiff }
+        var seenBase: String? = null
+
+        s.reloadDiff { base -> seenBase = base; fakeDiff }
+
+        assertEquals("commit:abc1234", seenBase) // reloadDiff re-uses the selected base, not the default
     }
 }
