@@ -27,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -38,8 +39,11 @@ import dev.supermux.desktop.theme.LocalSemantics
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.net.ModelsResponse
+import dev.supermux.net.ReasoningResponse
 import dev.supermux.proto.SessionInfo
 import dev.supermux.ui.FilePathRef
+import kotlinx.coroutines.launch
 
 /** Reading-width cap for the timeline + composer so long lines wrap at a comfortable measure on a
  *  1440-wide window instead of stretching edge-to-edge (obligation 2). Content is centered under
@@ -111,6 +115,17 @@ fun ChatPanel(
 
     // Lazily fetch the transcript on open (archive-resumed sessions have no snapshot history).
     LaunchedEffect(session.id) { app.ensureMessagesLoaded(session.id) }
+
+    // ── In-composer model + reasoning selection (M-uxfix) ──────────────────────────────────────
+    // ChatPanel owns the catalog state so it can fetch-on-open, optimistically update `current`
+    // after a switch, and refetch reasoning when the model changes (effort visibility is
+    // model-dependent). remember(session.id) resets on session switch so a stale catalog never
+    // flashes; the LaunchedEffects then refill it.
+    val scope = rememberCoroutineScope()
+    var modelsData by remember(session.id) { mutableStateOf<ModelsResponse?>(null) }
+    var reasoningData by remember(session.id) { mutableStateOf<ReasoningResponse?>(null) }
+    LaunchedEffect(session.id) { modelsData = app.sessionModels(session.id) }
+    LaunchedEffect(session.id) { reasoningData = app.sessionReasoning(session.id) }
 
     val timelineItems = remember(messagesMap, activityMap, session.id) {
         mergeTimeline(messagesMap[session.id].orEmpty(), activityMap[session.id].orEmpty())
@@ -248,6 +263,28 @@ fun ChatPanel(
                 onExternalAttachConsumed = onExternalAttachConsumed,
                 externalDictate = externalDictate,
                 onExternalDictateConsumed = onExternalDictateConsumed,
+                // Model + reasoning pills live IN the composer (above the input). The current model
+                // falls back to session.model until the catalog loads. Picking optimistically updates
+                // the shown `current`; a model change also refetches reasoning since effort
+                // visibility is model-dependent.
+                models = modelsData,
+                reasoning = reasoningData,
+                sessionModel = session.model,
+                onPickModel = { model ->
+                    scope.launch {
+                        if (app.switchModel(session.id, model)) {
+                            modelsData = modelsData?.copy(current = model.ifBlank { null })
+                            reasoningData = app.sessionReasoning(session.id)
+                        }
+                    }
+                },
+                onPickReasoning = { level ->
+                    scope.launch {
+                        if (app.switchReasoning(session.id, level)) {
+                            reasoningData = reasoningData?.copy(current = level)
+                        }
+                    }
+                },
                 modifier = Modifier
                     .widthIn(max = CONTENT_MAX_WIDTH)
                     .padding(horizontal = Space.lg, vertical = Space.md),

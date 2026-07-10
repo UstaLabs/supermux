@@ -28,6 +28,7 @@ import dev.supermux.net.LspInstallResult
 import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
 import dev.supermux.net.ModelInfo
+import dev.supermux.net.ModelsResponse
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
@@ -909,6 +910,31 @@ class DesktopAppState(
     suspend fun launcherCommands(agent: String, workdir: String): List<SlashCommand> =
         if (workdir.isBlank()) emptyList()
         else runApi("launcherCommands") { api.previewCommands(agent, workdir).commands } ?: emptyList()
+
+    // ── In-session model + reasoning selection (mirrors AppViewModel's per-session model/reasoning
+    //    helpers) ─────────────────────────────────────────────────────────────────────────────────
+    // Back DesktopComposer's model/reasoning pills. All go through [runApi] and degrade to
+    // null/false so a broker hiccup just leaves the pills showing their last-known state.
+
+    /** GET /sessions/<id>/models → the session's pickable models + current selection. Null on
+     *  failure. */
+    suspend fun sessionModels(id: String): ModelsResponse? =
+        runApi("sessionModels") { api.models(id) }
+
+    /** GET /sessions/<id>/reasoning-levels → the session's thinking levels + current + visibility.
+     *  Null on failure. */
+    suspend fun sessionReasoning(id: String): ReasoningResponse? =
+        runApi("sessionReasoning") { api.reasoningLevels(id) }
+
+    /** POST /sessions/<id>/model {"model"} — switch the session's model (persists broker-side).
+     *  Returns true on success, false on any failure. */
+    suspend fun switchModel(id: String, model: String): Boolean =
+        runApi("switchModel") { api.switchModel(id, model); true } ?: false
+
+    /** POST /sessions/<id>/reasoning-level {"reasoningLevel"} — switch the session's thinking level.
+     *  Returns true on success, false on any failure. */
+    suspend fun switchReasoning(id: String, level: String): Boolean =
+        runApi("switchReasoning") { api.switchReasoning(id, level); true } ?: false
 
     // ── Voice dictation (M5-1) ──────────────────────────────────────────────────────────────
     // Backs DesktopComposer's MicButton (chat) and SessionLauncherScreen's MicButton (launcher,

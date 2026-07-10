@@ -27,6 +27,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -37,9 +38,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -62,6 +67,8 @@ import androidx.compose.ui.draganddrop.DragAndDropTarget
 import androidx.compose.ui.draganddrop.DragData
 import androidx.compose.ui.draganddrop.dragData
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -72,8 +79,13 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.desktop.session.DEFAULT_MODEL_ID
+import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.upload.FileChunkSource
 import dev.supermux.net.ChunkSource
+import dev.supermux.net.ModelInfo
+import dev.supermux.net.ModelsResponse
+import dev.supermux.net.ReasoningResponse
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.awt.FileDialog
@@ -178,6 +190,22 @@ internal fun canSendComposer(
         attachments.none { it.state is UploadState.Uploading || it.state is UploadState.Failed } &&
         !sending
 
+/**
+ * Display label for the composer's model pill: the [ModelInfo.displayName] of the current model id,
+ * the raw id when it isn't in the catalog, or "Default" when the session has no explicit model (a
+ * null/blank current). Pure so the current→label mapping is unit-testable. Mirrors the launcher's
+ * DEFAULT_MODEL_ID handling so a null model round-trips to "Default" in both surfaces.
+ */
+internal fun composerModelLabel(current: String?, models: List<ModelInfo>): String {
+    val id = current?.takeIf { it.isNotBlank() } ?: return "Default"
+    return models.firstOrNull { it.id == id }?.displayName ?: id
+}
+
+/** The picker-option id that matches [current] (so it gets the check): the raw model id, or the
+ *  [DEFAULT_MODEL_ID] sentinel when the session has no explicit model (null/blank). Pure. */
+internal fun composerModelSelectedId(current: String?): String =
+    current?.takeIf { it.isNotBlank() } ?: DEFAULT_MODEL_ID
+
 /** Blocking AWT multi-select file picker (modal on the EDT by AWT contract — fine, Compose Desktop
  *  Main == EDT). The default [DesktopComposer.pickFiles] seam; tests inject a fake. */
 internal fun composerPickFiles(): List<File> {
@@ -218,6 +246,19 @@ internal fun composerPickFiles(): List<File> {
  *   from outside the composer's own click-driven state — see [ComposerExternalDictate]'s KDoc.
  * @param onExternalDictateConsumed fired once [externalDictate] has been read and its cleaned text
  *   (if any) appended, so the caller's one-shot holder resets.
+ * @param models the session's model catalog + current selection (GET /sessions/<id>/models). When
+ *   non-null (or [sessionModel] is set) a model pill renders above the field; picking a model fires
+ *   [onPickModel]. [ChatPanel] owns this state (fetch-on-open + optimistic update after a pick).
+ * @param reasoning the session's reasoning/thinking levels + current + visibility
+ *   (GET /sessions/<id>/reasoning-levels). The reasoning pill renders ONLY when `visible` is true
+ *   AND there is more than one level (matching Android's `effortVisible`); picking fires
+ *   [onPickReasoning].
+ * @param sessionModel the session's last-known model from [dev.supermux.proto.SessionInfo] — the
+ *   fallback for the pill's current label until [models] loads (`models?.current ?: sessionModel`).
+ * @param onPickModel fired with the picked model id — the empty string for the "Default" (no
+ *   explicit model) row. [ChatPanel] binds this to `app.switchModel(session.id, …)`.
+ * @param onPickReasoning fired with the picked reasoning-level id. [ChatPanel] binds this to
+ *   `app.switchReasoning(session.id, …)`.
  */
 @OptIn(ExperimentalComposeUiApi::class) // DragData / dragData() (external-file drop payload) — see
 // the drop-target comment below for what was checked before opting in.
@@ -245,6 +286,11 @@ fun DesktopComposer(
     micRecorderFactory: () -> MicCapture = { MicRecorder() },
     externalDictate: ComposerExternalDictate? = null,
     onExternalDictateConsumed: () -> Unit = {},
+    models: ModelsResponse? = null,
+    reasoning: ReasoningResponse? = null,
+    sessionModel: String? = null,
+    onPickModel: (String) -> Unit = {},
+    onPickReasoning: (String) -> Unit = {},
 ) {
     // Attachment state is SCOPED to [sessionKey]: ChatPanel deliberately stays composed across
     // session switches (no key(session.id) wrapper), so a bare remember{} would leak session A's
@@ -491,6 +537,81 @@ fun DesktopComposer(
             }
         }
 
+        // ── Model + reasoning pills (M-uxfix): compact chips ABOVE the input that switch the
+        //    session's model / thinking level via the desktop DropdownMenu convention (not Android's
+        //    ModalBottomSheet). The model pill shows whenever a catalog or a known session model is
+        //    available; the reasoning pill is gated on `visible && levels > 1` (Android parity). ──
+        val cs = MaterialTheme.colorScheme
+        var modelMenu by remember { mutableStateOf(false) }
+        var reasoningMenu by remember { mutableStateOf(false) }
+        val modelCurrent = models?.current ?: sessionModel
+        val showModelPill = models != null || !sessionModel.isNullOrBlank()
+        val r = reasoning
+        val showReasoningPill = r != null && r.visible && r.levels.size > 1
+        if (showModelPill || showReasoningPill) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Space.sm),
+            ) {
+                if (showModelPill) {
+                    Box(Modifier.testTag("composer-model-picker")) {
+                        ComposerPill(
+                            label = composerModelLabel(modelCurrent, models?.models ?: emptyList()),
+                            testTag = "composer-model-pill",
+                            onClick = { modelMenu = true },
+                        )
+                        DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
+                            val selectedId = composerModelSelectedId(modelCurrent)
+                            val opts = listOf(DEFAULT_MODEL_ID to "Default") +
+                                (models?.models?.map { it.id to it.displayName } ?: emptyList())
+                            opts.forEach { (id, label) ->
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    trailingIcon = {
+                                        if (id == selectedId) {
+                                            Icon(Icons.Filled.Check, null, Modifier.size(16.dp), tint = cs.primary)
+                                        }
+                                    },
+                                    modifier = Modifier.testTag("composer-model-$id"),
+                                    onClick = {
+                                        modelMenu = false
+                                        onPickModel(if (id == DEFAULT_MODEL_ID) "" else id)
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+                if (r != null && r.visible && r.levels.size > 1) {
+                    Box(Modifier.testTag("composer-reasoning-picker")) {
+                        ComposerPill(
+                            label = r.current?.replaceFirstChar { it.uppercase() } ?: "Effort",
+                            testTag = "composer-reasoning-pill",
+                            onClick = { reasoningMenu = true },
+                        )
+                        DropdownMenu(expanded = reasoningMenu, onDismissRequest = { reasoningMenu = false }) {
+                            r.levels.forEach { level ->
+                                DropdownMenuItem(
+                                    text = { Text(level.description ?: level.id) },
+                                    trailingIcon = {
+                                        if (level.id == r.current) {
+                                            Icon(Icons.Filled.Check, null, Modifier.size(16.dp), tint = cs.primary)
+                                        }
+                                    },
+                                    modifier = Modifier.testTag("composer-reasoning-${level.id}"),
+                                    onClick = {
+                                        reasoningMenu = false
+                                        onPickReasoning(level.id)
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         OutlinedTextField(
             value = draft,
             onValueChange = onDraftChange,
@@ -622,5 +743,28 @@ private fun ComposerChip(
                     .testTag("composer-chip-remove"),
             )
         }
+    }
+}
+
+/** A compact rounded chip (label + chevron) that opens a [DropdownMenu] — the desktop model/reasoning
+ *  pill. Mirrors the launcher's `LauncherPill` look (surfaceContainer + outline + chevron) plus a
+ *  hand hover cursor, so the in-composer pickers read the same as the launcher's. */
+@Composable
+private fun ComposerPill(label: String, testTag: String, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .testTag(testTag)
+            .clip(RoundedCornerShape(20.dp))
+            .background(cs.surfaceContainer)
+            .border(1.dp, cs.outline, RoundedCornerShape(20.dp))
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(label.take(20), color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 1)
+        Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
     }
 }
