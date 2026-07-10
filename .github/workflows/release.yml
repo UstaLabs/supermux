@@ -123,9 +123,75 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  build-android:
+    # Signed release APK for the native Android app (apps/android). Runs on tag
+    # pushes AND workflow_dispatch dry runs (builds + uploads the artifact,
+    # publishes nothing) — mirroring build-binaries. The signing key and Firebase
+    # config come from repo secrets; when a secret is absent the build gracefully
+    # falls back to the debug key / committed placeholder google-services.json, so
+    # it still assembles (but push won't work and installs can't upgrade across
+    # releases). The app carries its OWN versionName (independent of the v* tag),
+    # so the asset has a stable name: supermux-android.apk.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - name: Install SDK packages
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Firebase config
+        env:
+          GS: ${{ secrets.ANDROID_GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GS" ]; then
+            printf '%s' "$GS" | base64 -d > android/google-services.json
+            echo "Using real google-services.json from secret"
+          else
+            cp android/google-services.json.example android/google-services.json
+            echo "::warning::ANDROID_GOOGLE_SERVICES_JSON not set — using placeholder Firebase config; push notifications will not work in this APK"
+          fi
+      - name: Signing config
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KS" ]; then
+            printf '%s' "$KS" | base64 -d > android/upload-keystore.jks
+            {
+              echo "storeFile=upload-keystore.jks"
+              echo "storePassword=$KS_PASS"
+              echo "keyAlias=$KEY_ALIAS"
+              echo "keyPassword=$KEY_PASS"
+            } > android/keystore.properties
+            echo "Release signing configured (keystore.properties written)"
+          else
+            echo "::warning::ANDROID_KEYSTORE_BASE64 not set — release APK will be debug-signed and NOT upgradable across releases"
+          fi
+      - name: Assemble release APK
+        run: ./gradlew :android:assembleRelease --console=plain --no-daemon
+      - name: Stage APK + checksum
+        run: |
+          mkdir -p ../dist
+          cp android/build/outputs/apk/release/android-release.apk ../dist/supermux-android.apk
+          cd ../dist
+          sha256sum supermux-android.apk > supermux-android.apk.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: supermux-android
+          path: dist/*
+          if-no-files-found: error
+
   release:
     if: github.ref_type == 'tag'
-    needs: [build-binaries, docker]
+    needs: [build-binaries, docker, build-android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -134,13 +200,13 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: supermux-*-*
+          pattern: supermux-*
           merge-multiple: true
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          assets="dist/supermux-linux-x64 dist/supermux-linux-x64.sha256 dist/supermux-linux-arm64 dist/supermux-linux-arm64.sha256 dist/supermux-darwin-arm64 dist/supermux-darwin-arm64.sha256"
+          assets="dist/supermux-linux-x64 dist/supermux-linux-x64.sha256 dist/supermux-linux-arm64 dist/supermux-linux-arm64.sha256 dist/supermux-darwin-arm64 dist/supermux-darwin-arm64.sha256 dist/supermux-android.apk dist/supermux-android.apk.sha256"
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 \
             && gh release upload "${GITHUB_REF_NAME}" --clobber $assets \
             || gh release create "${GITHUB_REF_NAME}" --generate-notes $assets
@@ -155,7 +221,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: supermux-*-*
+          pattern: supermux-*
           merge-multiple: true
       - name: Check website token
         id: tok
@@ -174,8 +240,9 @@ jobs:
           SHA_LINUX_X64=$(cut -d' ' -f1 dist/supermux-linux-x64.sha256)
           SHA_LINUX_ARM64=$(cut -d' ' -f1 dist/supermux-linux-arm64.sha256)
           SHA_DARWIN_ARM64=$(cut -d' ' -f1 dist/supermux-darwin-arm64.sha256)
+          SHA_ANDROID=$(cut -d' ' -f1 dist/supermux-android.apk.sha256)
           git clone "https://x-access-token:${TOKEN}@github.com/AhmetHuseyinDOK/supermux-website.git" site
-          bun scripts/generate-versions-json.ts "$V" "$SHA_LINUX_X64" "$SHA_LINUX_ARM64" "$SHA_DARWIN_ARM64" > site/versions.json
+          bun scripts/generate-versions-json.ts "$V" "$SHA_LINUX_X64" "$SHA_LINUX_ARM64" "$SHA_DARWIN_ARM64" "$SHA_ANDROID" > site/versions.json
           sed "s|__SUPERMUX_TAG__|v${V}|" .github/release-assets/docker-compose.release.yml > site/docker-compose.yml
           cd site
           git config user.name "supermux-release"
