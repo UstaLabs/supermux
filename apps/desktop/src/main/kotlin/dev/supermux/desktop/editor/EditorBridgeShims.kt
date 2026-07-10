@@ -120,6 +120,42 @@ internal fun parseBridgeEvent(request: String): BridgeEvent? {
 @kotlinx.serialization.Serializable
 private data class BridgePayload(val fn: String = "", val arg: String = "")
 
+/**
+ * Parse cm6's outbound `{serverId,message}` JSON payload (posted via the shim's `lspOut` hook — see
+ * [bridgeShimJs]) → (serverId, message). Uses kotlinx.serialization (NOT `org.json`, unlike Android's
+ * `parseLspOut` in `EditorScreen.kt:586-591` — desktop convention throughout this module). Returns
+ * null for malformed JSON or a missing/blank `serverId`; a missing `message` defaults to "".
+ */
+internal fun parseLspOut(payload: String): Pair<String, String>? {
+    val parsed = try {
+        bridgeJson.decodeFromString<LspOutPayload>(payload)
+    } catch (_: SerializationException) {
+        return null
+    } catch (_: IllegalArgumentException) {
+        return null
+    }
+    return if (parsed.serverId.isEmpty()) null else parsed.serverId to parsed.message
+}
+
+@kotlinx.serialization.Serializable
+private data class LspOutPayload(val serverId: String = "", val message: String = "")
+
+// ── LSP JS-statement builders (pure — mirrors EditorPushPlanner's cmSet* builders; the engine
+//    forwards these strings verbatim to `browser.executeJavaScript`) ──────────────────────────
+
+/** JS to connect cm6's LSP client for the active file (port of Android EditorEngine.kt:247-252). */
+internal fun lspConnectJs(serverId: String, rootUri: String, fileUri: String, languageId: String): String =
+    "window.cmLspConnect(${jsQuote(serverId)},${jsQuote(rootUri)},${jsQuote(fileUri)},${jsQuote(languageId)})"
+
+/** JS to deliver an inbound JSON-RPC message string to the cm6 LSP client for [serverId]. */
+internal fun lspMessageJs(serverId: String, message: String): String =
+    "window.cmLspMessage(${jsQuote(serverId)},${jsQuote(message)})"
+
+/** JS to tear down all cm6 LSP connections and revert to a plain editor. Guarded (`&&`) exactly
+ *  like Android's `EditorEngine.lspDisconnect` — `window.cmLspDisconnect` may not exist if cm6
+ *  never finished booting the LSP client machinery. */
+internal fun lspDisconnectJs(): String = "window.cmLspDisconnect && window.cmLspDisconnect()"
+
 // ── Push ordering / echo-skip / reveal-queue (pure state machine) ─────────────
 
 /**

@@ -76,6 +76,8 @@ class DesktopEditorEngine(
     var onSave: () -> Unit = {}
     var onReady: () -> Unit = {}
     var onFontSize: (Int) -> Unit = {}
+    /** Outbound LSP JSON-RPC from cm6's `LSPClient`, parsed to (serverId, message). */
+    var onLspOut: (serverId: String, message: String) -> Unit = { _, _ -> }
 
     private val planner = EditorPushPlanner(lineWrap, fontSize)
 
@@ -152,6 +154,28 @@ class DesktopEditorEngine(
                 }
             },
         )
+    }
+
+    // ── LSP bridge (mirrors setDocument/revealLine — drives the cm6 LSP client over the shim) ────
+
+    /** Connect the cm6 LSP client for the active file (port of Android EditorEngine.kt:247-252).
+     *  A no-op before the browser exists; cm6's own `window.cmLspConnect` guards against running
+     *  before its init (cm6-entry.mjs), so it's safe to call even before [ready]. */
+    fun lspConnect(serverId: String, rootUri: String, fileUri: String, languageId: String) {
+        val b = browser ?: return
+        b.executeJavaScript(lspConnectJs(serverId, rootUri, fileUri, languageId), b.url ?: "", 0)
+    }
+
+    /** Deliver an inbound JSON-RPC message string to the cm6 LSP client for [serverId]. */
+    fun lspMessage(serverId: String, message: String) {
+        val b = browser ?: return
+        b.executeJavaScript(lspMessageJs(serverId, message), b.url ?: "", 0)
+    }
+
+    /** Tear down all cm6 LSP connections and revert to a plain editor. */
+    fun lspDisconnect() {
+        val b = browser ?: return
+        b.executeJavaScript(lspDisconnectJs(), b.url ?: "", 0)
     }
 
     /**
@@ -284,9 +308,15 @@ class DesktopEditorEngine(
             }
             // The user zoom already applied in-page; keep our copy in sync + persist (no loop-back).
             is BridgeEvent.FontSize -> onFontSize(planner.recordUserFontSize(event.px))
-            // TODO(M4): route to the LSP transport. For now log-and-drop with a marker.
-            is BridgeEvent.LspOut ->
-                println("[DesktopEditorEngine] TODO(M4) drop lspOut (${event.payload.length} chars)")
+            // Outbound LSP JSON-RPC — parse {serverId,message} and forward to the bridge (M4g-3).
+            is BridgeEvent.LspOut -> {
+                val parsed = parseLspOut(event.payload)
+                if (parsed == null) {
+                    println("[DesktopEditorEngine] ignoring malformed lspOut payload (${event.payload.take(200)})")
+                } else {
+                    onLspOut(parsed.first, parsed.second)
+                }
+            }
         }
     }
 

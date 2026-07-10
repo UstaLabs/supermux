@@ -127,4 +127,62 @@ class EditorBridgeShimsTest {
         )
         assertEquals(BridgeEvent.Change(content), parseBridgeEvent(request))
     }
+
+    // ── parseLspOut (M4g-3) ──────────────────────────────────────────────────
+
+    @Test
+    fun parse_lsp_out_extracts_server_id_and_message() {
+        val payload = """{"serverId":"ts","message":"{\"jsonrpc\":\"2.0\",\"id\":1}"}"""
+        val (serverId, message) = parseLspOut(payload) ?: error("expected a parsed pair")
+        assertEquals("ts", serverId)
+        assertEquals("{\"jsonrpc\":\"2.0\",\"id\":1}", message)
+    }
+
+    @Test
+    fun parse_lsp_out_returns_null_for_malformed_json() {
+        assertNull(parseLspOut("not json"))
+        assertNull(parseLspOut("{"))
+    }
+
+    @Test
+    fun parse_lsp_out_returns_null_when_server_id_is_missing_or_blank() {
+        assertNull(parseLspOut("""{"message":"hi"}"""))
+        assertNull(parseLspOut("""{"serverId":"","message":"hi"}"""))
+    }
+
+    @Test
+    fun parse_lsp_out_defaults_a_missing_message_to_empty_string() {
+        val (serverId, message) = parseLspOut("""{"serverId":"ts"}""") ?: error("expected a parsed pair")
+        assertEquals("ts", serverId)
+        assertEquals("", message)
+    }
+
+    // ── LSP JS-statement builders (M4g-3; pure — mirrors EditorPushPlanner's cmSet* builders) ──
+
+    @Test
+    fun lsp_connect_js_quotes_all_four_arguments() {
+        val js = lspConnectJs("ts", "file:///root/", "file:///root/a.ts", "typescript")
+        assertEquals(
+            "window.cmLspConnect(\"ts\",\"file:///root/\",\"file:///root/a.ts\",\"typescript\")",
+            js,
+        )
+    }
+
+    @Test
+    fun lsp_connect_js_escapes_a_uri_containing_quotes_or_spaces() {
+        val js = lspConnectJs("ts", "file:///my project/", "file:///my \"weird\" file.ts", "typescript")
+        assertTrue(js.contains("\\\"weird\\\""), "interior quote not escaped: $js")
+        assertTrue(js.contains("my project"))
+    }
+
+    @Test
+    fun lsp_message_js_quotes_both_arguments() {
+        val js = lspMessageJs("ts", "{\"id\":1}")
+        assertEquals("window.cmLspMessage(\"ts\",\"{\\\"id\\\":1}\")", js)
+    }
+
+    @Test
+    fun lsp_disconnect_js_is_a_guarded_call() {
+        assertEquals("window.cmLspDisconnect && window.cmLspDisconnect()", lspDisconnectJs())
+    }
 }
