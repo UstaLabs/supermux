@@ -582,8 +582,9 @@ class DesktopAppState(
      * Kick off a resume for an archived session. Fire-and-forget like [finish]: returns only
      * whether the POST completed — the resumed session itself arrives live via a
      * session_added/snapshot frame on the WS ([reduce]), not in this response. Mirrors Android's
-     * `runCatching{api.resume}` (there fire-and-forget with no return; here surfaced as a Boolean
-     * so the desktop ArchivedScreen can decide whether to close the overlay).
+     * `runCatching{api.resume}` (fire-and-forget, no return). The desktop ArchivedScreen closes the
+     * overlay unconditionally on tap (matching Android — it never waits on this Boolean); the return
+     * is surfaced only so callers/tests that DO care can observe transport success.
      *
      * NOTE unlike [finish]/[gitFetch]/etc, [BrokerApi.resume] is a bare `http.post` with no
      * [BrokerApi.decode]/status check, so a 4xx/5xx from the broker does NOT throw — this only

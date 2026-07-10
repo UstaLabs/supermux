@@ -110,6 +110,10 @@ fun ArchivedScreen(
     onBack: () -> Unit,
     onResume: (String) -> Unit,
     loadLogs: suspend (String) -> List<LogEntry>,
+    // True while the caller's `app.archived()` fetch is still in flight — the list shows a spinner
+    // (not the "No archived sessions." empty text) until it resolves, so a slow fetch never flashes
+    // an empty state (mirrors Android's `loading` flag + ArchivedChatView's own spinner).
+    loading: Boolean = false,
 ) {
     val cs = MaterialTheme.colorScheme
     // Internal nav: tapping a row opens a read-only chat view of that session.
@@ -160,6 +164,7 @@ fun ArchivedScreen(
         } else {
             ArchivedList(
                 archived = archived,
+                loading = loading,
                 projects = projects,
                 home = home,
                 selectedProject = selectedProject,
@@ -177,6 +182,7 @@ fun ArchivedScreen(
 @Composable
 private fun ArchivedList(
     archived: List<ArchivedDto>,
+    loading: Boolean,
     projects: List<ArchivedProject>,
     home: String,
     selectedProject: String?,
@@ -272,6 +278,10 @@ private fun ArchivedList(
         // ── The list ──
         Box(Modifier.fillMaxSize()) {
             when {
+                loading -> CircularProgressIndicator(
+                    color = cs.primary,
+                    modifier = Modifier.align(Alignment.Center),
+                )
                 archived.isEmpty() -> Text(
                     "No archived sessions.",
                     color = cs.onSurfaceVariant,

@@ -44,4 +44,24 @@ class WorkspaceUiStateTest {
         assertTrue(ui.layout.panesFor("s1").editor)
         assertTrue(ui.layout.panesFor("s2").terminal)
     }
+
+    // ── "at most one overlay" invariant (M4e Task 2) ──────────────────────────────────────────────
+    // The two full-pane overlays draw opaquely over one another; both being open would leave a
+    // stale one surfacing when the other closes. openLauncher()/openArchived() enforce exclusivity.
+
+    @Test fun openLauncherClosesTheArchivedOverlay() {
+        val ui = WorkspaceUiState().apply { archivedOpen = true }
+        ui.openLauncher()
+        assertTrue(ui.launcherOpen)
+        assertFalse(ui.archivedOpen)
+        assertTrue(ui.overlayOpen)
+    }
+
+    @Test fun openArchivedClosesTheLauncherOverlay() {
+        val ui = WorkspaceUiState().apply { launcherOpen = true }
+        ui.openArchived()
+        assertTrue(ui.archivedOpen)
+        assertFalse(ui.launcherOpen)
+        assertTrue(ui.overlayOpen)
+    }
 }

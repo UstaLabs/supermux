@@ -133,6 +133,68 @@ class ArchivedScreenTest {
         onNodeWithTag("archived_row_b1").assertDoesNotExist()
     }
 
+    @Test fun loading_shows_a_spinner_not_the_empty_text() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ArchivedScreen(emptyList(), home, onBack = {}, onResume = {}, loadLogs = { emptyList() }, loading = true)
+            }
+        }
+        waitForIdle()
+        // While the fetch is in flight the empty text must NOT flash…
+        onNodeWithText("No archived sessions.").assertDoesNotExist()
+        onNodeWithText("No matches.").assertDoesNotExist()
+    }
+
+    @Test fun resolved_empty_shows_the_no_archived_sessions_text() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ArchivedScreen(emptyList(), home, onBack = {}, onResume = {}, loadLogs = { emptyList() }, loading = false)
+            }
+        }
+        waitForIdle()
+        onNodeWithText("No archived sessions.").assertIsDisplayed()
+    }
+
+    @Test fun resolved_nonempty_shows_rows_not_the_empty_text() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ArchivedScreen(fakeArchived, home, onBack = {}, onResume = {}, loadLogs = { emptyList() }, loading = false)
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("archived_row_a1").assertIsDisplayed()
+        onNodeWithText("No archived sessions.").assertDoesNotExist()
+    }
+
+    @Test fun filtered_empty_shows_no_matches_not_no_archived_sessions() = runComposeUiTest {
+        // A non-empty archived list but a search that matches nothing → "No matches." (there ARE
+        // archived sessions, just none in view), distinct from the truly-empty "No archived sessions."
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ArchivedScreen(fakeArchived, home, onBack = {}, onResume = {}, loadLogs = { emptyList() })
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("archived_search").performTextInput("nonesuch-zzz")
+        waitForIdle()
+        onNodeWithText("No matches.").assertIsDisplayed()
+        onNodeWithText("No archived sessions.").assertDoesNotExist()
+    }
+
+    @Test fun escape_from_the_list_closes_the_overlay_via_on_back() = runComposeUiTest {
+        var backCalled = false
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ArchivedScreen(fakeArchived, home, onBack = { backCalled = true }, onResume = {}, loadLogs = { emptyList() })
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("archived_screen").assertIsDisplayed()
+        onNodeWithTag("archived_root").performKeyInput { pressKey(Key.Escape) }
+        waitForIdle()
+        assertTrue(backCalled)
+    }
+
     // ── (2b) the read-only transcript + resume ────────────────────────────────────────────────────
 
     @Test fun tapping_a_row_opens_the_read_only_transcript_with_no_composer() = runComposeUiTest {

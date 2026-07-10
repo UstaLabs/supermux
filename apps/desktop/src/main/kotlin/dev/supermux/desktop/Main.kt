@@ -121,10 +121,10 @@ fun main() {
                 MenuBar {
                     Menu("File", mnemonic = 'F') {
                         Item("New Session", shortcut = KeyShortcut(Key.N, ctrl = true)) {
-                            ui.launcherOpen = true
+                            ui.openLauncher()
                         }
                         Item("Archived…") {
-                            ui.archivedOpen = true
+                            ui.openArchived()
                         }
                         Separator()
                         Item("Unpair…") { showUnpairConfirm = true }
@@ -328,7 +328,7 @@ fun main() {
                             // Let the first WS snapshot land so the session list is populated before a
                             // (possibly blank-id) spawn has to resolve its id against it.
                             delay(3_000)
-                            ui.launcherOpen = true
+                            ui.openLauncher()
                             // Optional hold so a screenshot can capture the OPEN launcher (composer card
                             // / a pre-written restored draft) before the spawn submit runs.
                             val pauseMs = System.getenv("SM_LAUNCH_PAUSE_MS")?.toLongOrNull() ?: 0L

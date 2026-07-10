@@ -44,10 +44,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import dev.supermux.desktop.session.ArchivedScreen
 import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.session.SessionLauncherScreen
 import dev.supermux.desktop.session.SessionListPanel
 import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.net.ArchivedDto
 import dev.supermux.session.inferHomeDir
 
 /**
@@ -87,6 +89,24 @@ class WorkspaceUiState {
      * the guard.
      */
     val overlayOpen: Boolean get() = launcherOpen || archivedOpen
+
+    /**
+     * Open the New-Session launcher, enforcing the "at most one overlay" invariant (closes the
+     * archived overlay if it was up). ALL launcher open sites route through here (Ctrl+N /
+     * File ▸ New Session / the rail `+`) so the two full-pane overlays can never both be open — the
+     * archived overlay draws opaquely over the launcher, and a stale one surfacing when the other
+     * closes would be a confusing back-stack. Every future overlay adds a matching openX().
+     */
+    fun openLauncher() {
+        launcherOpen = true
+        archivedOpen = false
+    }
+
+    /** Open the Archived-sessions overlay; the "at most one overlay" mirror of [openLauncher]. */
+    fun openArchived() {
+        archivedOpen = true
+        launcherOpen = false
+    }
 
     /**
      * One-shot external "open this file" request (sessionId → ref), consumed by [SessionDetail] and
@@ -184,7 +204,7 @@ fun WorkspaceRoot(
     // (SessionsRail/SessionListPanel — already wired to onNewSession) and Main's File menu item
     // (which flips ui.launcherOpen directly, since WorkspaceUiState is shared with Main) all reach
     // the SAME overlay via ui.launcherOpen.
-    val onNewSession: () -> Unit = { ui.launcherOpen = true }
+    val onNewSession: () -> Unit = { ui.openLauncher() }
 
     // Scope for fire-and-forget overlay actions (e.g. the archived Resume POST) that must outlive
     // the overlay's composition — it closes the instant Resume is tapped.
@@ -411,17 +431,28 @@ fun WorkspaceRoot(
             // Same shape as the launcher overlay (a Box drawn last, over the still-mounted
             // workspace). The list is loaded from `app.archived()` each time the overlay opens
             // (not kept live — an archived list is a point-in-time snapshot); reset to empty on
-            // close so a re-open always re-fetches. Escape / back / Resume close it via onBack;
-            // Resume additionally kicks the un-archive (the resumed session returns live via a WS
-            // frame — no snackbar, the M4-polish gap).
-            var archivedList by remember { mutableStateOf<List<dev.supermux.net.ArchivedDto>>(emptyList()) }
+            // close so a re-open always re-fetches. `archivedLoading` distinguishes "still fetching"
+            // (spinner) from "resolved empty" (empty text), so a slow fetch never flashes the empty
+            // state. Escape / back / Resume close it via onBack; Resume additionally kicks the
+            // un-archive (the resumed session returns live via a WS frame — no snackbar, the
+            // M4-polish gap).
+            var archivedList by remember { mutableStateOf<List<ArchivedDto>>(emptyList()) }
+            var archivedLoading by remember { mutableStateOf(false) }
             LaunchedEffect(ui.archivedOpen) {
-                archivedList = if (ui.archivedOpen) app.archived() else emptyList()
+                if (ui.archivedOpen) {
+                    archivedLoading = true
+                    archivedList = app.archived()
+                    archivedLoading = false
+                } else {
+                    archivedList = emptyList()
+                    archivedLoading = false
+                }
             }
             if (ui.archivedOpen) {
                 Box(Modifier.fillMaxSize().testTag("archived_overlay")) {
-                    dev.supermux.desktop.session.ArchivedScreen(
+                    ArchivedScreen(
                         archived = archivedList,
+                        loading = archivedLoading,
                         home = home,
                         onBack = { ui.archivedOpen = false },
                         onResume = { id ->
