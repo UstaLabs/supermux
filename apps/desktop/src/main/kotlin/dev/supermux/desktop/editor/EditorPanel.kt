@@ -15,7 +15,11 @@
 //     the Column composes at all, so the tabs/tree/header AND EditorSurface (and its KCEF engine)
 //     are never composed while a diff is showing. The preview gate now ANDs in `!showDiff` (Android
 //     EditorScreen.kt:177-178 parity, restored — see [editorPreviewGate]'s `showDiff` param).
-//   - LSP is OMITTED (M4). No AndroidLspBridge / lsp* wiring; the engine's lspOut is log-and-dropped.
+//   - LSP landed in M4g-3: the engine's `lspOut` is parsed + forwarded to a [DesktopLspBridge]
+//     (port of AndroidLspBridge) via the [EditorLspHandle] seam, and the connect-sequencing
+//     LaunchedEffect (keyed on sessionId — desktop reuses one SessionDetail, unlike Android's NavHost)
+//     drives queryStatus → open → pumpRpcIn → lspConnect against the broker's LSP transport. The LSP
+//     install/settings screen is the separate M4g-4 milestone (not wired here).
 //   - The WebView surface is a KCEF engine ([EditorSurface] in WebCodeEditor.kt) with a native
 //     BasicTextField fallback. The engine is built ONLY once KCEF is Ready and is NEVER created
 //     optimistically; it is disposed when the surface leaves the composition.

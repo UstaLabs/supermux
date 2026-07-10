@@ -88,7 +88,8 @@ internal sealed interface BridgeEvent {
     /** User zoom (keyboard/pinch) already applied in-page; [px] is the new size to persist. */
     data class FontSize(val px: Int) : BridgeEvent
 
-    /** Outbound LSP JSON-RPC — TODO(M4). The engine logs-and-drops these for now. */
+    /** Outbound LSP JSON-RPC (`{serverId,message}`); parsed by [parseLspOut] and forwarded to the
+     *  DesktopLspBridge via the engine's `onLspOut` callback (M4g-3). */
     data class LspOut(val payload: String) : BridgeEvent
 }
 
