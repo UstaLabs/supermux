@@ -35,6 +35,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -52,6 +53,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -332,6 +335,7 @@ fun SessionListPanel(
     onRename: (String, String) -> Unit = { _, _ -> },
     onKill: (String) -> Unit = {},
     onMute: (String, Boolean) -> Unit = { _, _ -> },
+    onNewSession: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -348,16 +352,24 @@ fun SessionListPanel(
     var killTarget by remember { mutableStateOf<SessionInfo?>(null) }
 
     Box(modifier.background(cs.surfaceContainerHigh)) {
-        if (groups.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No sessions", color = cs.onSurfaceVariant)
-            }
-        } else {
-            LazyColumn(
-                Modifier
-                    .testTag("sessions_list")
-                    .fillMaxSize(),
-            ) {
+        // The "Start a new session" row is always the first item so session creation is reachable
+        // from both the populated list and the zero-session empty state (Android parity).
+        LazyColumn(
+            Modifier
+                .testTag("sessions_list")
+                .fillMaxSize(),
+        ) {
+            item(key = "new_session_row") { NewSessionListRow(onClick = onNewSession) }
+            if (groups.isEmpty()) {
+                item(key = "empty_hint") {
+                    Text(
+                        "No sessions yet",
+                        color = cs.onSurfaceVariant,
+                        fontSize = 12.sp,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.md),
+                    )
+                }
+            } else {
                 groups.forEach { g ->
                     item(key = "h:${g.workdir}") { PathGroupHeader(g.label, g.sessions.size) }
                     items(g.sessions, key = { it.id.ifEmpty { it.name } }) { s ->
@@ -374,8 +386,8 @@ fun SessionListPanel(
                         )
                     }
                 }
-                item(key = "bottom_spacer") { Spacer(Modifier.height(Space.lg)) }
             }
+            item(key = "bottom_spacer") { Spacer(Modifier.height(Space.lg)) }
         }
     }
 
@@ -402,5 +414,52 @@ fun SessionListPanel(
             },
             dismissButton = { TextButton(onClick = { killTarget = null }) { Text("Cancel") } },
         )
+    }
+}
+
+/**
+ * Full-width "Start a new session" row — the desktop port of Android's `NewSessionListRow`
+ * (surfaceContainer card, a plus tile at primary@12% alpha, title + subtitle). Uses desktop idioms:
+ * an [Icons.Filled.Add] vector (no bundled drawable) and a hand hover cursor. `testTag` is
+ * "new_session_row"; clicking it fires [onClick] (wired to the launcher).
+ */
+@Composable
+fun NewSessionListRow(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        modifier
+            .testTag("new_session_row")
+            .fillMaxWidth()
+            .padding(horizontal = Space.md, vertical = Space.xs)
+            .clip(RoundedCornerShape(Radii.md))
+            .clickable(onClick = onClick)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .background(cs.surfaceContainer)
+            .padding(horizontal = Space.md, vertical = Space.md),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Space.md),
+    ) {
+        Box(
+            Modifier
+                .size(36.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(cs.primary.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Add,
+                contentDescription = null,
+                tint = cs.primary,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        Column(Modifier.weight(1f)) {
+            Text("Start a new session", color = cs.onSurface, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+            Text(
+                "Pick a project and send your first message",
+                color = cs.onSurfaceVariant,
+                fontSize = 11.sp,
+            )
+        }
     }
 }

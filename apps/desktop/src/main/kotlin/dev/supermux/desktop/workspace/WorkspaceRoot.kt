@@ -414,6 +414,7 @@ fun WorkspaceRoot(
                         onRename = { id, name -> app.rename(id, name) },
                         onKill = { id -> app.kill(id) { if (ui.selectedId == id) ui.selectedId = null } },
                         onMute = { id, muted -> app.setMute(id, muted) },
+                        onNewSession = onNewSession,
                         modifier = Modifier.width(layout.sidebarWidth).fillMaxHeight(),
                     )
                     SidebarDivider(
