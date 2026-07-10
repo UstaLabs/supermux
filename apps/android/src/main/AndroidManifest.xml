@@ -18,8 +18,12 @@
             <action android:name="android.speech.RecognitionService" />
         </intent>
     </queries>
+    <!-- allowBackup=false: pairing lives in EncryptedSharedPreferences; a cloud restore
+         copies the prefs but NOT the Keystore master key, so the restored blob is
+         undecryptable (crashed at launch before SecureTokenStore learned to reset). -->
     <application
         android:name=".SupermuxApplication"
+        android:allowBackup="false"
         android:label="supermux"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
