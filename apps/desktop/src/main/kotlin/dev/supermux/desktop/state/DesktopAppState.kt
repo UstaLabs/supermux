@@ -25,10 +25,12 @@ import dev.supermux.net.PathValidation
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RepoInfo
+import dev.supermux.net.CodexResetResult
 import dev.supermux.net.SpawnRequest
 import dev.supermux.net.SpawnResponse
 import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalSummary
+import dev.supermux.net.UsageResponse
 import dev.supermux.net.VerifySaveResult
 import dev.supermux.net.VerifySuggestResult
 import dev.supermux.proto.ActivityEvent
@@ -621,6 +623,22 @@ class DesktopAppState(
             }
         }
     }
+
+    // ── Usage panel (M4f Task 1) ───────────────────────────────────────────────────────
+    // Backs the header's Usage overlay (M4f Task 2): per-provider rate-limit windows +
+    // the banked Codex reset redemption. Both go through [runApi] and getOrNull-degrade like
+    // [archived]/[finishReadiness] — BrokerApi.usage/redeemCodexReset decode a typed body and
+    // throw (SKIE-safe) on a non-2xx, so a broker hiccup here yields null, not an exception.
+
+    /** GET /usage — per-provider usage (Claude / Codex / Cursor / opencode) + partial-failure
+     *  [UsageResponse.errors]. Null on any transport/decode failure. */
+    suspend fun usage(): UsageResponse? =
+        runApi("usage") { api.usage() }
+
+    /** POST /usage/codex/reset — redeem one banked Codex rate-limit reset; returns the refreshed
+     *  Codex usage so the card can update in place. Null on any failure. */
+    suspend fun redeemCodexReset(): CodexResetResult? =
+        runApi("redeemCodexReset") { api.redeemCodexReset() }
 
     // ── New-session launcher + spawn (M4a; mirrors AppViewModel.launcher* +
     //    createSessionWithFirstMessage) ────────────────────────────────────────────────
