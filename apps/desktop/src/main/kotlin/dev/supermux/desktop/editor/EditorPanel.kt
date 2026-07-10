@@ -3,10 +3,14 @@
 //
 // Desktop adaptations / deferrals vs. the Android source:
 //   - The markdown-preview toggle landed in M4g-1: the header gets a preview/edit IconButton on
-//     `.md`/`.markdown` tabs, and an opaque MarkdownBody overlay paints over the (still-warm)
-//     EditorSurface when on. Diff view + inline code-review remain OMITTED — TODO(M4g-2). The
-//     preview gate therefore does NOT AND in `!showDiff` (Android EditorScreen.kt:178 has it); M4g-2
-//     adds that clause back once EditorState grows a showDiff flag.
+//     `.md`/`.markdown` tabs. UNLIKE Android (a same-parent-Box overlay works fine there),
+//     toggling preview on desktop is a CONDITIONAL SWAP: EditorSurface is not composed at all while
+//     showPreview is true, and the rendered MarkdownBody column takes its place — see the swap's
+//     call-site comment further down for why (KCEF's heavyweight AWT SwingPanel always paints above
+//     lightweight Compose siblings, so an overlay is invisible on this platform whenever KCEF is the
+//     live surface; confirmed via a headless live-KCEF capture). Diff view + inline code-review
+//     remain OMITTED — TODO(M4g-2). The preview gate therefore does NOT AND in `!showDiff` (Android
+//     EditorScreen.kt:178 has it); M4g-2 adds that clause back once EditorState grows a showDiff flag.
 //   - LSP is OMITTED (M4). No AndroidLspBridge / lsp* wiring; the engine's lspOut is log-and-dropped.
 //   - The WebView surface is a KCEF engine ([EditorSurface] in WebCodeEditor.kt) with a native
 //     BasicTextField fallback. The engine is built ONLY once KCEF is Ready and is NEVER created
@@ -347,51 +351,29 @@ fun EditorPanel(
                         }
 
                         Box(Modifier.weight(1f).fillMaxWidth()) {
-                            // The engine surface stays composed (pre-warmed) for the session; keyed on
-                            // sessionId so a session switch rebuilds the engine rather than binding the
-                            // wrong session's browser into this slot (obligation: key the unkeyed
-                            // engine remember).
-                            key(sessionId) {
-                                EditorSurface(
-                                    kcefState = kcefState,
-                                    content = activeTab?.content ?: "",
-                                    filename = activeTab?.path ?: "",
-                                    lineWrap = prefs.lineWrap,
-                                    fontSize = prefs.fontSize,
-                                    scrollTop = activeTab?.scrollTop ?: 0,
-                                    revealLine = activeTab?.revealLine,
-                                    onChange = { content -> activeTab?.path?.let { editor.updateContent(it, content) } },
-                                    onSave = { editor.saveActive() },
-                                    onRevealConsumed = { activeTab?.revealLine = null },
-                                    onFontSize = onFontSize,
-                                    onEnsureInit = onEnsureInit,
-                                    scrollReader = reader,
-                                    modifier = Modifier.fillMaxSize(),
-                                )
-                            }
-
-                            // Markdown preview overlay — covers (but keeps warm) the KCEF surface
-                            // when toggled on a .md tab (Android EditorScreen.kt:462-475 parity).
-                            // Opaque so the editor underneath is hidden; EditorSurface stays composed
-                            // (and its engine alive) in the sibling above.
+                            // Markdown preview is a CONDITIONAL SWAP, not an overlay (M4g-1 revision —
+                            // see the "KNOWN DESKTOP LIMITATION" note this replaces, below). While
+                            // showPreview is true, EditorSurface is NOT composed at all; the rendered
+                            // MarkdownBody column takes its place. When toggled back off, EditorSurface
+                            // recomposes from scratch (fresh KCEF engine init — the "keep it warm"
+                            // optimization is traded away here) but no content is lost: activeTab.content
+                            // lives in EditorState (remembered at the panel level, independent of
+                            // EditorSurface's composition), so a preview→edit round-trip round-trips the
+                            // same in-memory (possibly still-unsaved/dirty) text back into cm6's onChange
+                            // sink — see EditorPanelTest's round-trip coverage.
                             //
-                            // KNOWN DESKTOP LIMITATION (not specific to this overlay — DesktopTerminalPanel
-                            // .kt:164-166 documents the SAME root cause for the terminal panel): while KCEF
-                            // is actively rendering, EditorSurface hosts it via a heavyweight AWT
-                            // [androidx.compose.ui.awt.SwingPanel] (WebCodeEditor.kt), which by default
-                            // paints ABOVE all lightweight Compose siblings regardless of composition
-                            // order — so this overlay may be visually occluded by a live KCEF view even
-                            // though it's correctly composed on top. The real fix is Compose's
-                            // experimental `compose.interop.blending` system property, but it is GPU-only
-                            // (no Software-renderer support on any platform, confirmed against JetBrains'
-                            // compose-multiplatform docs/issue #4941) and would apply app-wide (including
-                            // the terminal's SwingPanel) — too broad a change to land unverified inside
-                            // this small milestone, so it's deliberately NOT flipped here. It renders
-                            // correctly today whenever KCEF is NOT the active surface (KcefState.Error/
-                            // RestartRequired/the 8s ready-miss → NativeCodeEditor, a plain Compose
-                            // BasicTextField with no interop component) — see EditorPanelTest's
-                            // KCEF-free toggle coverage. TODO(M4g-2 or a dedicated infra task): evaluate
-                            // enabling compose.interop.blending app-wide on a real GPU-accelerated run.
+                            // WHY NOT AN OVERLAY (the original M4g-1 design): DesktopTerminalPanel.kt
+                            // :164-166 documents the same root cause — while KCEF is the active surface,
+                            // EditorSurface hosts it via a heavyweight AWT [androidx.compose.ui.awt.
+                            // SwingPanel] (WebCodeEditor.kt), which Compose Desktop paints ABOVE every
+                            // lightweight Compose sibling regardless of composition order, with no
+                            // Software-renderer workaround (`compose.interop.blending` is GPU-only).
+                            // A same-parent-Box overlay is therefore invisible whenever KCEF is the live
+                            // surface — confirmed by a headless Xvfb capture with a real (non-forced-
+                            // error) KCEF session: the overlay never painted over the CodeMirror view.
+                            // Swapping instead of overlaying sidesteps the z-order limitation entirely
+                            // (there is no sibling to be occluded by), so the preview is visible on ANY
+                            // renderer, not just a hypothetical future GPU-blending build.
                             if (showPreview && activeTab != null) {
                                 Column(
                                     Modifier
@@ -402,6 +384,30 @@ fun EditorPanel(
                                         .testTag("editor_preview"),
                                 ) {
                                     dev.supermux.desktop.chat.MarkdownBody(activeTab.content)
+                                }
+                            } else {
+                                // The engine surface stays composed (pre-warmed) for the session; keyed
+                                // on sessionId so a session switch rebuilds the engine rather than
+                                // binding the wrong session's browser into this slot (obligation: key the
+                                // unkeyed engine remember). NOT composed while showPreview is true (see
+                                // above) — toggling preview off rebuilds it.
+                                key(sessionId) {
+                                    EditorSurface(
+                                        kcefState = kcefState,
+                                        content = activeTab?.content ?: "",
+                                        filename = activeTab?.path ?: "",
+                                        lineWrap = prefs.lineWrap,
+                                        fontSize = prefs.fontSize,
+                                        scrollTop = activeTab?.scrollTop ?: 0,
+                                        revealLine = activeTab?.revealLine,
+                                        onChange = { content -> activeTab?.path?.let { editor.updateContent(it, content) } },
+                                        onSave = { editor.saveActive() },
+                                        onRevealConsumed = { activeTab?.revealLine = null },
+                                        onFontSize = onFontSize,
+                                        onEnsureInit = onEnsureInit,
+                                        scrollReader = reader,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
                                 }
                             }
 

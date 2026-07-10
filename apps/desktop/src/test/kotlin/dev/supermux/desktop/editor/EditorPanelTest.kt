@@ -2,9 +2,12 @@ package dev.supermux.desktop.editor
 
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
@@ -239,8 +242,10 @@ class EditorPanelTest {
 
     // ── Markdown preview toggle (M4g-1) ─────────────────────────────────────────────────
     // The pure isMarkdownPath/showPreview derivation is unit-tested directly in
-    // EditorPanelMarkdownTest; these exercise the toggle + overlay wired into the hosted panel
-    // (still KCEF-free: kcefStateFlow stays Idle so EditorSurface never builds a browser).
+    // EditorPanelMarkdownTest; these exercise the toggle + the conditional SWAP (EditorSurface is not
+    // composed while previewing — see EditorPanel.kt's call-site comment for why an overlay doesn't
+    // work on this platform) wired into the hosted panel (still KCEF-free: kcefStateFlow stays Idle
+    // so EditorSurface never builds a browser).
 
     @Test
     fun a_text_tab_does_not_show_the_preview_toggle() = runComposeUiTest {
@@ -301,5 +306,76 @@ class EditorPanelTest {
 
         onNodeWithTag("editor_preview_toggle").performClick() // toggle back off
         onNodeWithTag("editor_preview").assertDoesNotExist()
+    }
+
+    @Test
+    fun preview_mode_swaps_the_editor_surface_out_instead_of_overlaying_it() = runComposeUiTest {
+        // The whole point of the swap (vs. the original overlay) is that EditorSurface is not
+        // composed at all while previewing — an overlay would leave "editor_web_area" composed
+        // (just visually covered), which is exactly what made the KCEF SwingPanel occlude it on a
+        // live renderer. Idle KCEF state still routes through the `else` (web-area) branch of
+        // EditorSurface's `when`, so its testTag is the right thing to assert absent here.
+        val kcef = MutableStateFlow<KcefState>(KcefState.Idle)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                EditorPanel(
+                    sessionId = "s1",
+                    workdir = "/w/s1",
+                    fsList = { tree + FsEntry(name = "README.md", type = "file") },
+                    fsRead = { path -> Result.success("# Heading\n\nBody text.") },
+                    fsWrite = { _, _ -> true },
+                    fsSearch = { emptyList<FsSearchResult>() },
+                    kcefStateFlow = kcef,
+                    onEnsureInit = {},
+                )
+            }
+        }
+
+        onNodeWithText("README.md").performClick()
+        onNodeWithTag("editor_web_area").assertIsDisplayed() // editing: the surface is composed
+
+        onNodeWithTag("editor_preview_toggle").performClick()
+        onNodeWithTag("editor_web_area").assertDoesNotExist() // previewing: swapped out, not just covered
+        onNodeWithTag("editor_preview").assertIsDisplayed()
+
+        onNodeWithTag("editor_preview_toggle").performClick()
+        onNodeWithTag("editor_web_area").assertIsDisplayed() // back to editing: surface recomposed
+    }
+
+    @Test
+    fun an_unsaved_edit_survives_a_preview_then_edit_round_trip() = runComposeUiTest {
+        // The swap trades away "keep KCEF warm" for correctness — this proves that trade doesn't
+        // also cost the user their in-progress edit. activeTab.content lives in EditorState (panel-
+        // level remember, independent of EditorSurface's composition), so it must still be there,
+        // still dirty, after EditorSurface is torn down and rebuilt around the preview toggle. KCEF
+        // itself isn't drivable headlessly in a unit test, so this exercises the SAME onChange sink
+        // (BasicTextField.onValueChange -> EditorState.updateContent) via the native-fallback path
+        // (KcefState.Error), which cm6's onChange feeds identically in production.
+        val kcef = MutableStateFlow<KcefState>(KcefState.Error("boom"))
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                EditorPanel(
+                    sessionId = "s1",
+                    workdir = "/w/s1",
+                    fsList = { tree + FsEntry(name = "README.md", type = "file") },
+                    fsRead = { path -> Result.success("# Heading\n\nBody text.") },
+                    fsWrite = { _, _ -> true },
+                    fsSearch = { emptyList<FsSearchResult>() },
+                    kcefStateFlow = kcef,
+                    onEnsureInit = {},
+                )
+            }
+        }
+
+        onNodeWithText("README.md").performClick()
+        onNodeWithTag("editor_native_input").performTextReplacement("# Heading\n\nEDITED body text.")
+        onNodeWithTag("editor_save").assertIsEnabled() // dirty: the edit hasn't been saved
+
+        onNodeWithTag("editor_preview_toggle").performClick() // preview: rendered from the EDITED content
+        onNodeWithText("EDITED body text.").assertIsDisplayed()
+
+        onNodeWithTag("editor_preview_toggle").performClick() // back to editing
+        onNodeWithTag("editor_native_input").assertTextContains("EDITED body text.", substring = true)
+        onNodeWithTag("editor_save").assertIsEnabled() // still dirty — the edit was never lost or auto-saved
     }
 }

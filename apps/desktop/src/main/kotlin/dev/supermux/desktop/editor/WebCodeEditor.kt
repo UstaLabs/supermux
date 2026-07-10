@@ -318,6 +318,7 @@ private fun NativeCodeEditor(
                 .fillMaxSize()
                 .verticalScroll(scroll)
                 .padding(Space.md)
+                .testTag("editor_native_input")
                 .onPreviewKeyEvent { e ->
                     if (e.type == KeyEventType.KeyDown && e.key == Key.S &&
                         (e.isCtrlPressed || e.isMetaPressed)
