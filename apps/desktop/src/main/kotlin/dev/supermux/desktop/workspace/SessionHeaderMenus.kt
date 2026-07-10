@@ -11,9 +11,12 @@
 //     to the badge (cleared on the next menu-open). A proper snackbar host is a documented M4-polish
 //     follow-up.
 //   • Management-nav rows (Settings/Usage/Devices/Proxies/Archived): those screens don't exist on
-//     desktop yet (Usage=M4f, Archived=M4e, the rest later) — OMITTED here rather than adding dead
-//     nav. The overflow keeps only the session-scoped Rename/Mute/Kill (parity with the session
-//     list's right-click menu).
+//     desktop yet (Settings/Devices/Proxies/Appearance later) — OMITTED here rather than adding
+//     dead nav. Usage (M4f) and Archived (M4e) now DO exist as desktop overlays, so those two rows
+//     are wired: the overflow's "Usage" item + the SAME File ▸ "Archived…" menu item's
+//     ui.openArchived() (Archived isn't itself an overflow row — File-menu only, matching how it
+//     shipped in M4e). The overflow otherwise keeps the session-scoped Rename/Mute/Kill (parity
+//     with the session list's right-click menu).
 //   • Link opening: Android uses LocalUriHandler.openUri; desktop opens via the shared
 //     ui.openInBrowser (java.awt.Desktop.browse on a daemon thread) — injected as onOpenUrl so tests
 //     can capture the URL without spawning a browser.
@@ -293,11 +296,15 @@ fun SessionLinksMenu(
 // ── OverflowMenu ───────────────────────────────────────────────────────────────────────
 
 /**
- * The ⋮ overflow: session-scoped Rename / Mute-Unmute / Kill (header parity with the session list's
+ * The ⋮ overflow: the Usage management-nav row (M4f — see file header, "Usage=M4f" is now
+ * resolved) plus session-scoped Rename / Mute-Unmute / Kill (header parity with the session list's
  * right-click). Rename opens an [AlertDialog]+[OutlinedTextField] and Kill a confirm dialog — both
- * copy the session-list pattern. Management-nav rows are intentionally omitted (see file header).
+ * copy the session-list pattern. The REST of Android's management-nav rows (Settings/Devices/
+ * Proxies/Appearance) are still omitted — those screens don't exist on desktop yet.
  *
  * [onToggleMute] receives the DESIRED next mute state (Android passes `!(session.mute ?: false)`).
+ * [onUsage] opens the Usage overlay (WorkspaceUiState.openUsage()); defaults to a no-op so
+ * existing call sites/tests that don't care about it keep compiling.
  */
 @Composable
 fun OverflowMenu(
@@ -305,6 +312,7 @@ fun OverflowMenu(
     onRename: (String) -> Unit,
     onToggleMute: (Boolean) -> Unit,
     onKill: () -> Unit,
+    onUsage: () -> Unit = {},
     modifier: Modifier = Modifier,
     // Off-by-default headless hook (SM_OVERFLOW_MENU, Main.kt) delivery: force-expands the
     // dropdown only — NEVER auto-clicks Rename/Mute/Kill (those are destructive-ish/user-facing,
@@ -334,6 +342,11 @@ fun OverflowMenu(
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Usage") },
+                modifier = Modifier.testTag("overflow_usage"),
+                onClick = { expanded = false; onUsage() },
+            )
             DropdownMenuItem(
                 text = { Text("Rename") },
                 modifier = Modifier.testTag("overflow_rename"),

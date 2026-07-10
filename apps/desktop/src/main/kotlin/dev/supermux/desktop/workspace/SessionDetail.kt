@@ -176,6 +176,10 @@ fun SessionDetail(
     onForceLinksMenuConsumed: () -> Unit = {},
     forceOverflowMenu: Boolean = false,
     onForceOverflowMenuConsumed: () -> Unit = {},
+    // Opens the Usage overlay (WorkspaceUiState.openUsage()) — threaded down to the header's
+    // OverflowMenu "Usage" row (M4f). Defaults to a no-op so existing callers/tests that don't
+    // exercise it keep compiling.
+    onUsage: () -> Unit = {},
     // Off-by-default headless hook (SM_CHAT_ATTACH, Main.kt) delivery: a one-shot "stage this file
     // then send" request routed straight through to the chat pane's [DesktopComposer] — see its
     // `externalAttach` KDoc for the funnel. Null in normal operation.
@@ -478,15 +482,16 @@ fun SessionDetail(
                 Spacer(Modifier.width(Space.xs))
             }
             PaneToggleCluster(layout = layout, sessionId = session.id)
-            // Overflow (⋮): session-scoped Rename / Mute / Kill (header parity with the session
-            // list's right-click). The Android original also carried management-nav rows
-            // (Settings/Usage/Devices/Proxies/Archived) — omitted here until those screens exist
-            // on desktop (Usage=M4f, Archived=M4e, the rest later); no dead nav.
+            // Overflow (⋮): the Usage management-nav row (M4f) + session-scoped Rename / Mute /
+            // Kill (header parity with the session list's right-click). The rest of Android's
+            // management-nav rows (Settings/Devices/Proxies/Appearance) stay omitted until those
+            // screens exist on desktop; no dead nav.
             OverflowMenu(
                 session = session,
                 onRename = { newName -> app.rename(session.id, newName) },
                 onToggleMute = { muted -> app.setMute(session.id, muted) },
                 onKill = { app.kill(session.id) },
+                onUsage = onUsage,
                 forceOpen = forceOverflowMenu,
                 onForceOpenConsumed = onForceOverflowMenuConsumed,
             )

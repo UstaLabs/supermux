@@ -64,4 +64,36 @@ class WorkspaceUiStateTest {
         assertFalse(ui.launcherOpen)
         assertTrue(ui.overlayOpen)
     }
+
+    // ── Usage overlay (M4f Task 2) — the same "at most one overlay" invariant, three-way now ────────
+
+    @Test fun openUsageClosesTheLauncherAndArchivedOverlays() {
+        val ui = WorkspaceUiState().apply { launcherOpen = true }
+        ui.openUsage()
+        assertTrue(ui.usageOpen)
+        assertFalse(ui.launcherOpen)
+        assertFalse(ui.archivedOpen)
+        assertTrue(ui.overlayOpen)
+
+        val ui2 = WorkspaceUiState().apply { archivedOpen = true }
+        ui2.openUsage()
+        assertTrue(ui2.usageOpen)
+        assertFalse(ui2.archivedOpen)
+    }
+
+    @Test fun openLauncherClosesTheUsageOverlay() {
+        val ui = WorkspaceUiState().apply { usageOpen = true }
+        ui.openLauncher()
+        assertTrue(ui.launcherOpen)
+        assertFalse(ui.usageOpen)
+        assertTrue(ui.overlayOpen)
+    }
+
+    @Test fun openArchivedClosesTheUsageOverlay() {
+        val ui = WorkspaceUiState().apply { usageOpen = true }
+        ui.openArchived()
+        assertTrue(ui.archivedOpen)
+        assertFalse(ui.usageOpen)
+        assertTrue(ui.overlayOpen)
+    }
 }

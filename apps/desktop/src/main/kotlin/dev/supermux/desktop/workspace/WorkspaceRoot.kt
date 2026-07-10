@@ -49,7 +49,9 @@ import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.session.SessionLauncherScreen
 import dev.supermux.desktop.session.SessionListPanel
 import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.desktop.usage.UsageScreen
 import dev.supermux.net.ArchivedDto
+import dev.supermux.net.UsageResponse
 import dev.supermux.session.inferHomeDir
 
 /**
@@ -82,30 +84,48 @@ class WorkspaceUiState {
     var archivedOpen by mutableStateOf(false)
 
     /**
-     * Any full-pane modal overlay ([launcherOpen] or [archivedOpen]) is up. The workspace
-     * pane/sidebar shortcuts (Ctrl+B/L/E/T/D) are gated OFF while this is true, so a chord an
-     * overlay leaves unhandled can't bubble to [workspaceShortcuts] and silently mutate the layout
-     * behind it. One gate for every overlay, so new overlays don't each have to remember to extend
-     * the guard.
+     * Whether the Usage overlay (M4f Task 2) is showing. Flipped on by the File ▸ "Usage…" menu
+     * item in Main.kt and the SessionDetail overflow ⋮ "Usage" row (both reach this shared state
+     * the same way New-Session/Archived do); flipped off by the screen's back/escape. Lives here
+     * (not local to [WorkspaceRoot]) for the SAME reason as [launcherOpen]/[archivedOpen] — Main's
+     * MenuBar renders outside WorkspaceRoot's composition but must open it.
      */
-    val overlayOpen: Boolean get() = launcherOpen || archivedOpen
+    var usageOpen by mutableStateOf(false)
+
+    /**
+     * Any full-pane modal overlay ([launcherOpen], [archivedOpen], or [usageOpen]) is up. The
+     * workspace pane/sidebar shortcuts (Ctrl+B/L/E/T/D) are gated OFF while this is true, so a
+     * chord an overlay leaves unhandled can't bubble to [workspaceShortcuts] and silently mutate
+     * the layout behind it. One gate for every overlay, so new overlays don't each have to
+     * remember to extend the guard.
+     */
+    val overlayOpen: Boolean get() = launcherOpen || archivedOpen || usageOpen
 
     /**
      * Open the New-Session launcher, enforcing the "at most one overlay" invariant (closes the
-     * archived overlay if it was up). ALL launcher open sites route through here (Ctrl+N /
-     * File ▸ New Session / the rail `+`) so the two full-pane overlays can never both be open — the
-     * archived overlay draws opaquely over the launcher, and a stale one surfacing when the other
-     * closes would be a confusing back-stack. Every future overlay adds a matching openX().
+     * other overlays if they were up). ALL launcher open sites route through here (Ctrl+N /
+     * File ▸ New Session / the rail `+`) so the full-pane overlays can never both be open — each
+     * draws opaquely over the others, and a stale one surfacing when another closes would be a
+     * confusing back-stack. Every future overlay adds a matching openX().
      */
     fun openLauncher() {
         launcherOpen = true
         archivedOpen = false
+        usageOpen = false
     }
 
     /** Open the Archived-sessions overlay; the "at most one overlay" mirror of [openLauncher]. */
     fun openArchived() {
         archivedOpen = true
         launcherOpen = false
+        usageOpen = false
+    }
+
+    /** Open the Usage overlay; the "at most one overlay" mirror of [openLauncher]/[openArchived]. */
+    fun openUsage() {
+        usageOpen = true
+        launcherOpen = false
+        archivedOpen = false
     }
 
     /**
@@ -378,6 +398,9 @@ fun WorkspaceRoot(
                         // attach+send request to the SessionDetail whose id matches.
                         externalAttach = ui.externalAttach?.takeIf { it.first == session.id }?.second,
                         onExternalAttachConsumed = { ui.externalAttach = null },
+                        // Overflow ⋮ "Usage" row (M4f): the SAME ui.openUsage() the File ▸
+                        // "Usage…" menu item calls.
+                        onUsage = { ui.openUsage() },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -477,6 +500,64 @@ fun WorkspaceRoot(
                         loadLogs = { app.archivedLogs(it) },
                         forceOpenId = ui.forceArchivedOpenFor,
                         onForceOpenConsumed = { ui.forceArchivedOpenFor = null },
+                    )
+                }
+            }
+
+            // ── Usage: a FULL-PANE overlay above the workspace (M4f Task 2) ──
+            // Same shape as the launcher/archived overlays. `app.usage()` is loaded fresh each time
+            // the overlay opens (a point-in-time snapshot, not kept live) and reset to null on
+            // close so a re-open always re-fetches; `usageLoading` distinguishes "still fetching"
+            // from "resolved null" the same way `archivedLoading` does. A successful redeem
+            // (`code == "reset"`) swaps the codex slice in place so the card's numbers move without
+            // a full re-fetch; any other code just surfaces CodexUsageCard's own inline note.
+            var usageData by remember { mutableStateOf<UsageResponse?>(null) }
+            var usageLoading by remember { mutableStateOf(false) }
+            LaunchedEffect(ui.usageOpen) {
+                if (ui.usageOpen) {
+                    usageLoading = true
+                    usageData = app.usage()
+                    usageLoading = false
+                } else {
+                    usageData = null
+                    usageLoading = false
+                }
+            }
+            if (ui.usageOpen) {
+                // Self-focusing (unlike the launcher/archived overlay Boxes, which rely on an inner
+                // field grabbing focus): UsageScreen has no text field a user would naturally focus
+                // first, and Compose's onPreviewKeyEvent only fires along the path to whatever node
+                // currently holds focus. Claiming focus on THIS Box on open makes it that path's
+                // leaf, so Escape works the instant the overlay opens — not just after some other
+                // interaction happens to move focus into it.
+                val usageFocus = remember { FocusRequester() }
+                LaunchedEffect(Unit) { runCatching { usageFocus.requestFocus() } }
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .testTag("usage_overlay")
+                        .focusRequester(usageFocus)
+                        .focusable()
+                        .onPreviewKeyEvent { e ->
+                            if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                                ui.usageOpen = false
+                                true
+                            } else {
+                                false
+                            }
+                        },
+                ) {
+                    UsageScreen(
+                        usage = usageData,
+                        loading = usageLoading,
+                        onBack = { ui.usageOpen = false },
+                        onRedeem = {
+                            val r = app.redeemCodexReset()
+                            if (r?.code == "reset" && r.codex != null) {
+                                usageData = usageData?.copy(codex = r.codex)
+                            }
+                            r
+                        },
                     )
                 }
             }

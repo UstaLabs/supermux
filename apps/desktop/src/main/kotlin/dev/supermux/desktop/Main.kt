@@ -138,6 +138,9 @@ fun main() {
                         Item("Archived…") {
                             ui.openArchived()
                         }
+                        Item("Usage…") {
+                            ui.openUsage()
+                        }
                         Separator()
                         Item("Unpair…") { showUnpairConfirm = true }
                     }

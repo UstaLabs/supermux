@@ -365,6 +365,26 @@ class SessionHeaderMenusTest {
     // ── OverflowMenu ───────────────────────────────────────────────────────────────────
 
     @Test
+    fun overflowUsageRowFiresOnUsage() = runComposeUiTest {
+        var usageOpened = false
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                OverflowMenu(
+                    session = baseSession,
+                    onRename = {},
+                    onToggleMute = {},
+                    onKill = {},
+                    onUsage = { usageOpened = true },
+                )
+            }
+        }
+        onNodeWithTag("workspace_overflow").performClick()
+        onNodeWithTag("overflow_usage").assertIsDisplayed()
+        onNodeWithTag("overflow_usage").performClick()
+        assertTrue(usageOpened)
+    }
+
+    @Test
     fun overflowRenameOpensDialogAndFiresOnRename() = runComposeUiTest {
         var renamed: String? = null
         setContent {
