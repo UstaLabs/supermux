@@ -548,6 +548,26 @@ data class DiffFile(
     val modeChange: Boolean = false,
 )
 
+/** GET /sessions/<id>/fs/refs → branches + recent commits per repo, to populate the
+ *  diff base picker's "Previous commit…" / "Another branch…" submenus. */
+@Serializable
+data class FsRefsResult(
+    val repos: List<RepoRefs> = emptyList(),
+)
+
+@Serializable
+data class RepoRefs(
+    val repo: String,
+    val branches: List<String> = emptyList(),
+    val commits: List<RefCommit> = emptyList(),
+)
+
+@Serializable
+data class RefCommit(
+    val sha: String,
+    val subject: String = "",
+)
+
 @Serializable
 data class ReviewComment(
     val id: String,
@@ -1645,9 +1665,14 @@ class BrokerApi(
     suspend fun fsSearch(sessionId: String, q: String): List<FsSearchResult> =
         getJson("$httpBase/sessions/$sessionId/fs/search?q=${urlEncode(q)}")
 
-    /** GET /sessions/<id>/fs/diff → { repos: RepoDiff[], comments: ReviewComment[] }. */
-    suspend fun fsDiff(sessionId: String): FsDiffResult =
-        getJson("$httpBase/sessions/$sessionId/fs/diff")
+    /** GET /sessions/<id>/fs/diff?base=<spec> → { repos: RepoDiff[], comments: ReviewComment[] }.
+     *  [base] is the diff-base spec: null/"session-start" (default) · "head" · "commit:<sha>" · "branch:<name>". */
+    suspend fun fsDiff(sessionId: String, base: String? = null): FsDiffResult =
+        getJson("$httpBase/sessions/$sessionId/fs/diff" + if (base != null) "?base=${urlEncode(base)}" else "")
+
+    /** GET /sessions/<id>/fs/refs → { repos: RepoRefs[] } (branches + recent commits per repo). */
+    suspend fun fsRefs(sessionId: String): FsRefsResult =
+        getJson("$httpBase/sessions/$sessionId/fs/refs")
 
     /** POST /sessions/<id>/review/comments {repo,path,side,anchorLine,anchorContext,body,diffHunkHeader?} → the created comment. */
     suspend fun reviewAddComment(sessionId: String, body: AddCommentBody): ReviewComment =

@@ -47,6 +47,10 @@ final class EditorState {
     private(set) var diffRepos: [RepoDiff] = []
     private(set) var diffComments: [ReviewComment] = []
     private(set) var diffLoading = false
+    // Adjustable diff base (session-start | head | commit:<sha> | branch:<name>); target is
+    // always the working tree. `diffRefs` feeds the base selector's commit/branch submenus.
+    var diffBase = "session-start"
+    private(set) var diffRefs: [RepoRefs] = []
 
     // Paths the broker reported changed on disk (fs_changed) → drives a reload banner.
     private(set) var changedPaths: Set<String> = []
@@ -59,36 +63,46 @@ final class EditorState {
     let sessionId: String
     private let fsRead: (String) async throws -> String
     private let fsWrite: (String, String) async -> Bool
-    private let fsDiff: (() async -> FsDiffResult?)?
+    private let fsDiff: ((String) async -> FsDiffResult?)?
+    private let fsRefs: (() async -> FsRefsResult?)?
 
     var activeTab: Tab? { tabs.first { $0.path == activeTabPath } }
 
     init(sessionId: String,
          fsRead: @escaping (String) async throws -> String,
          fsWrite: @escaping (String, String) async -> Bool,
-         fsDiff: (() async -> FsDiffResult?)? = nil) {
+         fsDiff: ((String) async -> FsDiffResult?)? = nil,
+         fsRefs: (() async -> FsRefsResult?)? = nil) {
         self.sessionId = sessionId
         self.fsRead = fsRead
         self.fsWrite = fsWrite
         self.fsDiff = fsDiff
+        self.fsRefs = fsRefs
     }
 
     func loadDiff() async {
         guard let fsDiff else { return }
         diffLoading = true
-        let res = await fsDiff()
+        let res = await fsDiff(diffBase)
         diffLoading = false
         // Only open the diff pane on success — never show an empty/stale diff for a failed fetch.
         guard let res else { return }
         diffRepos = res.repos
         diffComments = res.comments
+        diffRefs = await fsRefs?()?.repos ?? []
         showDiff = true
     }
 
     func reloadDiff() async {
-        guard let fsDiff, let res = await fsDiff() else { return }
+        guard let fsDiff, let res = await fsDiff(diffBase) else { return }
         diffRepos = res.repos
         diffComments = res.comments
+    }
+
+    /// Switch the diff base (from the selector) and re-run the diff against it (web parity).
+    func setDiffBase(_ base: String) async {
+        diffBase = base
+        await reloadDiff()
     }
 
     /// Record disk-change notifications (workdir-relative paths, leading slash optional).
