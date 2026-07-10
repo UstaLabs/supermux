@@ -53,7 +53,7 @@ import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
 import { resolveDownloadAttachment } from "./core/session-manager/download"
 import { runInterrupt } from "./core/session-manager/interrupt"
 import { RecentInboundIds } from "./core/session-manager/recent-inbound-ids"
-import { PendingReapply, shouldDeferReapply } from "./core/session-manager/pending-reapply"
+import { PendingReapply, shouldDeferReapply, changedSince } from "./core/session-manager/pending-reapply"
 import { deliverInbound as deliverInboundCore, type InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
 import { buildMenuEntries } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
@@ -93,6 +93,7 @@ import { join, dirname, resolve, isAbsolute } from "path"
 import { fileURLToPath } from "url"
 import { ClaudeCodeAdapter } from "./core/agents/claude/index"
 import { wireClaudeStateEvents } from "./core/agents/claude/state-projection"
+import { applyClaudeLiveSwitch } from "./core/agents/claude/live-switch"
 import { writeClaudeHooksSettings, resolveInternalHookSecret, CLAUDE_HOOKS_SETTINGS_PATH } from "./core/agents/claude/hooks-settings"
 import type { AgentAdapter } from "./core/agents/types"
 import { resolveCodexAuth } from "./core/agents/codex/auth"
@@ -2568,46 +2569,31 @@ async function spawnSession(args: { workdir: string; requestedName?: string; age
   return r
 }
 
-async function reapplySessionAgentConfig(sessionId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+async function reapplySessionAgentConfig(sessionId: string, changed?: { model: boolean; effort: boolean }): Promise<{ ok: true } | { ok: false; error: string }> {
   const session = registry.get(sessionId)
   if (!session) return { ok: false, error: `no such session: ${sessionId}` }
 
   const effort = sessionEffort(session)
 
   if (session.agent === "claude") {
-    try {
-      await ensureSessionWorktree(session)
-      stopClaudeTailer(session.id)
-      const wid = await widOf(session)
-      if (wid) await killWindowById(wid)
-      deleteRuntime(session.id)
-      await server.bind(session.id)
-      const cmd = buildClaudeSpawnCommand({
-        name: session.name,
-        model: session.model,
-        effort,
-        sessionId: session.id,
-        claudeSessionId: session.agent_session_id,
-        resume: !!session.agent_session_id,
-        workdir: session.workdir,
-      })
-      const tmuxWindow = await spawnSessionWindow({
-        session: TMUX_SESSION,
-        window: session.name,
-        workdir: session.workdir,
-        command: cmd,
-      })
-      if (tmuxWindow.windowId) registry.sessions.setTmuxWindowId(session.id, tmuxWindow.windowId)
-      webChannel?.broadcastToAll({
-        type: "session_state",
-        session: session.id,
-        model: session.model,
-        reasoningLevel: effort,
-      })
-      return { ok: true }
-    } catch (err: any) {
-      return { ok: false, error: `agent config apply failed: ${err?.message ?? String(err)}` }
-    }
+    // Live switch: type /model and/or /effort into the running TUI — never a
+    // kill+respawn (user decision 2026-07-10). Failure is an explicit error;
+    // callers roll the registry back. `changed` narrows to what the user
+    // actually touched so a model-only switch doesn't re-type /effort.
+    const wid = await widOf(session)
+    if (!wid) return { ok: false, error: "session window not found" }
+    const result = await applyClaudeLiveSwitch(wid, {
+      model: changed?.model === false ? undefined : session.model,
+      effort: changed?.effort === false ? undefined : effort,
+    })
+    if (!result.ok) return result
+    webChannel?.broadcastToAll({
+      type: "session_state",
+      session: session.id,
+      model: session.model,
+      reasoningLevel: effort,
+    })
+    return { ok: true }
   }
 
   if (session.agent === "codex") {
@@ -2677,7 +2663,8 @@ async function applyOrDeferReapply(
     pendingReapply.mark(sessionId, olds)
     return { ok: true, status: "queued" }
   }
-  const result = await reapplySessionAgentConfig(sessionId)
+  const current = registry.get(sessionId)
+  const result = await reapplySessionAgentConfig(sessionId, current ? changedSince(olds, current) : undefined)
   if (!result.ok) {
     registry.setModel(sessionId, olds.oldModel)
     registry.setReasoningLevel(sessionId, olds.oldReasoningLevel)
@@ -2712,7 +2699,10 @@ async function switchSessionModel(sessionId: string, newModel: string, opts?: { 
     return { ok: true, status: "applied" }
   }
 
-  return applyOrDeferReapply(sessionId, { oldModel, oldReasoningLevel }, opts?.applyNow ?? false)
+  // Claude switches are typed into the TUI, which is only safe on an idle
+  // composer — force queue-until-idle (user decision: never type mid-turn).
+  const applyNow = session.agent === "claude" ? false : opts?.applyNow ?? false
+  return applyOrDeferReapply(sessionId, { oldModel, oldReasoningLevel }, applyNow)
 }
 
 async function switchSessionReasoningLevel(sessionId: string, newLevel: string, opts?: { applyNow?: boolean }): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
@@ -2732,7 +2722,9 @@ async function switchSessionReasoningLevel(sessionId: string, newLevel: string, 
   const oldReasoningLevel = session.reasoningLevel
   registry.setReasoningLevel(sessionId, newLevel)
 
-  return applyOrDeferReapply(sessionId, { oldModel: session.model, oldReasoningLevel }, opts?.applyNow ?? false)
+  // Same queue-until-idle rule as switchSessionModel for claude (typed /effort).
+  const applyNow = session.agent === "claude" ? false : opts?.applyNow ?? false
+  return applyOrDeferReapply(sessionId, { oldModel: session.model, oldReasoningLevel }, applyNow)
 }
 
 // Wire telegram inbound through routing
@@ -2974,7 +2966,8 @@ agentStateStore.on("change", (sessionId: string, state) => {
   webChannel?.broadcastToAll(toAgentStateFrame(sessionId, state, bgTaskStore.openCount(sessionId)))
   if (state.phase === "idle" && pendingReapply.has(sessionId)) {
     const olds = pendingReapply.take(sessionId)!
-    void reapplySessionAgentConfig(sessionId).then((r) => {
+    const drainSession = registry.get(sessionId)
+    void reapplySessionAgentConfig(sessionId, drainSession ? changedSince(olds, drainSession) : undefined).then((r) => {
       if (!r.ok) {
         registry.setModel(sessionId, olds.oldModel)
         registry.setReasoningLevel(sessionId, olds.oldReasoningLevel)
