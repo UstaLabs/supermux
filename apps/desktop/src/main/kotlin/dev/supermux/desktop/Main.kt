@@ -48,6 +48,14 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //   SM_CHAT_ATTACH="<session-name>|<file-path>|<text>" — stage+upload a file into the chat
 //                                  composer via the SAME stage()/stageFiles() path, wait for the
 //                                  chip to reach Done, then send with <text> (M4d)             [main]
+//   SM_ARCHIVED=1                 — open the Archived-sessions overlay (File ▸ Archived…'s SAME
+//                                  ui.openArchived()) on start, loading the real app.archived()
+//                                  list (M4e)                                                  [main]
+//   SM_ARCHIVED_RESUME=<name>     — ALSO opens the overlay, then resolves <name> in the real
+//                                  app.archived() list and drives the SAME resume path the
+//                                  ArchivedScreen's Resume button uses: app.resume(id) fire-and-
+//                                  forget + close the overlay (M4e). SPAWNS/UN-ARCHIVES a real
+//                                  session — point it at a throwaway you archived yourself.  [main]
 //   SMX_KCEF_FORCE_ERROR=1        — force KcefState.Error (native-fallback editor, M3)   [KcefRuntime]
 //   SM_EDITOR_SAVE_TEST           — drive the editor save path (M3)                      [EditorPanel]
 //   SMX_KCEF_EXTRA_ARGS="…"       — extra CEF switches for headless CI                   [KcefRuntime]
@@ -536,6 +544,47 @@ fun main() {
                             ui.selectedId = t.id
                             ui.externalAttach = t.id to dev.supermux.desktop.chat.ComposerExternalAttach(filePath, text)
                             println("[chatattach] requested attach '$filePath' + send for ${t.name} (${t.id})")
+                        }
+                    }
+
+                    // Headless Archived-sessions verification hook (M4e): SM_ARCHIVED=1 opens the
+                    // Archived overlay on start via the SAME `ui.openArchived()` the File ▸
+                    // "Archived…" menu item calls, so `WorkspaceRoot`'s own LaunchedEffect(ui.archivedOpen)
+                    // loads the real `app.archived()` list and the screen renders under Xvfb without a
+                    // menu click. SM_ARCHIVED_RESUME=<archived-session-name> ALSO opens the overlay,
+                    // then independently resolves <name> against `app.archived()` (polled — the archived
+                    // list is a separate fetch from WorkspaceRoot's, avoiding a race with its own
+                    // LaunchedEffect) and drives the SAME resume path `ArchivedScreen`'s onResume callback
+                    // uses in WorkspaceRoot: a fire-and-forget `app.resume(id)` immediately followed by
+                    // closing the overlay (`ui.archivedOpen = false`) — the resumed session then arrives
+                    // back in the live sidebar via a WS frame, same as a real click. This SPAWNS/UN-
+                    // ARCHIVES a real session — only point it at a throwaway you archived yourself, never
+                    // a real archived session. Off by default; harmless in production.
+                    val archivedHook = System.getenv("SM_ARCHIVED") == "1"
+                    val archivedResumeName = System.getenv("SM_ARCHIVED_RESUME")?.takeIf { it.isNotBlank() }
+                    if (archivedHook || archivedResumeName != null) {
+                        LaunchedEffect(app) {
+                            // Let the first WS snapshot land, same settle window as the other hooks.
+                            delay(3_000)
+                            ui.openArchived()
+                            println("[archived] opened the Archived overlay")
+                            if (archivedResumeName != null) {
+                                // Wait (≤30s) for the named session to show up in a fresh archived() fetch.
+                                var target = app.archived().firstOrNull { it.name == archivedResumeName }
+                                val deadline = System.currentTimeMillis() + 30_000
+                                while (target == null && System.currentTimeMillis() < deadline) {
+                                    delay(1_000)
+                                    target = app.archived().firstOrNull { it.name == archivedResumeName }
+                                }
+                                val t = target
+                                if (t == null) {
+                                    println("[archived] SM_ARCHIVED_RESUME session '$archivedResumeName' not found in archived() after 30s")
+                                } else {
+                                    app.resume(t.id)
+                                    ui.archivedOpen = false
+                                    println("[archived] resumed '$archivedResumeName' (${t.id}) and closed the overlay")
+                                }
+                            }
                         }
                     }
 
