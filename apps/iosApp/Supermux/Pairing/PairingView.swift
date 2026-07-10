@@ -9,7 +9,7 @@ struct PairingView: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(colors: [Color(.systemBackground), Theme.teal.opacity(0.06)],
+            LinearGradient(colors: [Color.smBackground, Theme.teal.opacity(0.06)],
                            startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
 
@@ -37,7 +37,7 @@ struct PairingView: View {
                         .padding(14)
                         .glassSurface(cornerRadius: 14)
                         .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
+                        .smNoAutocapitalization()
                         .onChange(of: input) { _, _ in error = nil }
 
                     Button(action: pair) {

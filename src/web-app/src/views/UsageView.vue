@@ -6,7 +6,7 @@ import { codexResetNote } from "@/lib/codex-reset"
 
 interface UsageWindow { used: number; resetsAt: string | number | null }
 interface ClaudeExtraUsage { enabled: boolean; monthlyLimit: number; usedCredits: number; currency: string }
-interface ClaudeUsage { fiveHour: UsageWindow; sevenDay: UsageWindow; sevenDaySonnet: UsageWindow; extraUsage: ClaudeExtraUsage | null }
+interface ClaudeUsage { fiveHour: UsageWindow; sevenDay: UsageWindow; sevenDaySonnet: UsageWindow | null; sevenDayFable: UsageWindow | null; extraUsage: ClaudeExtraUsage | null }
 interface CodexUsage { plan: string; primaryWindow: UsageWindow; secondaryWindow: UsageWindow; credits: { hasCredits: boolean; balance: string } | null; limitReached: boolean; resetCredits: number }
 interface CursorUsage { totalPercentUsed: number; totalSpendCents: number; includedCents: number; limitCents: number; billingCycleStart: string; billingCycleEnd: string }
 interface OpenCodeUsage { sessions: number; messages: number; totalCostUsd: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
@@ -69,6 +69,9 @@ function formatReset(resetsAt: string | number | null, kind: "claude" | "codex" 
 }
 
 const claude = computed(() => data.value?.claude ?? null)
+// Per-model weekly caps — null when Anthropic returns none, so the row is hidden.
+const claudeSonnet = computed(() => claude.value?.sevenDaySonnet ?? null)
+const claudeFable = computed(() => claude.value?.sevenDayFable ?? null)
 const codex = computed(() => data.value?.codex ?? null)
 const cursor = computed(() => data.value?.cursor ?? null)
 const opencode = computed(() => data.value?.opencode ?? null)
@@ -162,16 +165,27 @@ async function useReset() {
               </div>
               <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(claude.sevenDay.resetsAt, 'claude') }}</p>
             </div>
-            <!-- 7-day Sonnet -->
-            <div class="mb-3">
+            <!-- 7-day Sonnet (per-model weekly cap; hidden when Anthropic returns none) -->
+            <div v-if="claudeSonnet" class="mb-3">
               <div class="flex items-center justify-between text-xs mb-1">
                 <span class="text-muted-foreground">7-day Sonnet</span>
-                <span>{{ Math.round(claude.sevenDaySonnet.used) }}% used</span>
+                <span>{{ Math.round(claudeSonnet.used) }}% used</span>
               </div>
               <div class="h-2 rounded-full bg-muted overflow-hidden">
-                <div :class="barColor(claude.sevenDaySonnet.used)" class="h-full rounded-full transition-all" :style="{ width: clamp(claude.sevenDaySonnet.used) + '%' }" />
+                <div :class="barColor(claudeSonnet.used)" class="h-full rounded-full transition-all" :style="{ width: clamp(claudeSonnet.used) + '%' }" />
               </div>
-              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(claude.sevenDaySonnet.resetsAt, 'claude') }}</p>
+              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(claudeSonnet.resetsAt, 'claude') }}</p>
+            </div>
+            <!-- 7-day Fable (per-model weekly cap; hidden when Anthropic returns none) -->
+            <div v-if="claudeFable" class="mb-3">
+              <div class="flex items-center justify-between text-xs mb-1">
+                <span class="text-muted-foreground">7-day Fable</span>
+                <span>{{ Math.round(claudeFable.used) }}% used</span>
+              </div>
+              <div class="h-2 rounded-full bg-muted overflow-hidden">
+                <div :class="barColor(claudeFable.used)" class="h-full rounded-full transition-all" :style="{ width: clamp(claudeFable.used) + '%' }" />
+              </div>
+              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(claudeFable.resetsAt, 'claude') }}</p>
             </div>
             <!-- Extra usage -->
             <div v-if="claude.extraUsage && claude.extraUsage.enabled" class="pt-2 border-t border-border">

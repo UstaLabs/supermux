@@ -4,5 +4,7 @@
   "phase": "working",
   "tool": "Bash",
   "since": 1717200000000,
-  "workingSince": 1717200005000
+  "workingSince": 1717200005000,
+  "waiting": false,
+  "bgOpen": 1
 }

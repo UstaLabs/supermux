@@ -10,6 +10,7 @@ options:
   deploymentTarget:
     iOS: "26.0"
     watchOS: "10.0"
+    macOS: "26.0"
   createIntermediateGroups: true
 
 settings:
@@ -66,6 +67,9 @@ targets:
       # Notification Service Extension (decrypts sealed pushes on-device). Embedded
       # in the app bundle under PlugIns/.
       - target: SupermuxPushNSE
+        embed: true
+      # Notification Content Extension: the custom expanded (long-press) view. iOS-only.
+      - target: SupermuxNotifContent
         embed: true
     info:
       path: Supermux/Info.plist
@@ -172,6 +176,7 @@ targets:
       # the keypair from the shared Keychain group and opens the blob with the same code.
       - path: Supermux/Push/PushCrypto.swift
       - path: Supermux/Push/PushKeypair.swift
+      - path: Supermux/Push/PushGroupState.swift
     info:
       path: SupermuxPushNSE/Info.plist
       properties:
@@ -193,6 +198,139 @@ targets:
           CODE_SIGN_IDENTITY: "Apple Distribution"
           "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
 
+  SupermuxNotifContent:
+    # Notification Content Extension: draws the custom expanded (long-press) view — a mini
+    # transcript of the chat's recent messages. iOS-only (macOS has no content extensions).
+    # Reads everything from the notification userInfo the NSE sets (no App Group / network).
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: SupermuxNotifContent
+    info:
+      path: SupermuxNotifContent/Info.plist
+      properties:
+        CFBundleDisplayName: SupermuxNotifContent
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.content-extension
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationViewController
+          NSExtensionAttributes:
+            UNNotificationExtensionCategory: supermux.chat
+            UNNotificationExtensionInitialContentSizeRatio: 0.7
+            UNNotificationExtensionDefaultContentHidden: true
+            UNNotificationExtensionUserInteractionEnabled: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app.notif-content
+        APPLICATION_EXTENSION_API_ONLY: "YES"
+      configs:
+        Release:
+          PROVISIONING_PROFILE_SPECIFIER: "Supermux Notif Content App Store"
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
+
+  SupermuxMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: Supermux
+        excludes:
+          - "EditorWeb/**"
+          - "Watch/**"            # WatchConnectivity does not exist on macOS
+      - path: Supermux/EditorWeb
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - package: SwiftTerm
+      - target: SupermuxMacPushNSE
+        embed: true
+    info:
+      path: Supermux/InfoMac.plist
+      properties:
+        CFBundleDisplayName: supermux
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        LSApplicationCategoryType: public.app-category.developer-tools
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.supermux.connect
+            CFBundleURLSchemes:
+              - supermux
+        NSMicrophoneUsageDescription: supermux records voice messages you send to your agents.
+        NSSpeechRecognitionUsageDescription: supermux uses on-device speech recognition to turn your voice into editable text.
+        NSLocalNetworkUsageDescription: Supermux connects to the broker server running on your own computer when you reach it by its LAN address (for example 192.168.1.50). It does not scan or collect information about other devices on your network.
+        ITSAppUsesNonExemptEncryption: false
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app
+        PRODUCT_NAME: Supermux
+        PRODUCT_MODULE_NAME: Supermux
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        ARCHS: arm64
+        EXCLUDED_ARCHS: x86_64
+        # Brand the SYSTEM accent (sidebar selection, focus rings, default buttons) teal on
+        # the Mac — AppKit's List/NSTableView selection follows the app accent color asset,
+        # not SwiftUI `.tint`. Mac-only setting: iOS keeps its explicit `.tint(Theme.teal)`.
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        CODE_SIGN_ENTITLEMENTS: Supermux/SupermuxMac.entitlements
+        FRAMEWORK_SEARCH_PATHS:
+          - $(inherited)
+          - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
+        OTHER_LDFLAGS:
+          - $(inherited)
+          - -framework
+          - Shared
+        LD_RUNPATH_SEARCH_PATHS:
+          - $(inherited)
+          - "@executable_path/../Frameworks"
+      configs:
+        Release:
+          PROVISIONING_PROFILE_SPECIFIER: "Supermux Mac App Store"
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+    preBuildScripts:
+      - name: Build Kotlin Shared.framework (embed and sign)
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          source ~/ios-build-env.sh 2>/dev/null || true
+          export JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home -v 17 2>/dev/null || /usr/libexec/java_home)}"
+          cd "$SRCROOT/.."
+          ./gradlew --no-daemon :shared:embedAndSignAppleFrameworkForXcode
+
+  SupermuxMacPushNSE:
+    # macOS twin of SupermuxPushNSE: same principal class, same shared crypto
+    # sources (CryptoKit is cross-platform), its own platform + entitlements.
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: SupermuxPushNSE/NotificationService.swift
+      - path: Supermux/Push/PushCrypto.swift
+      - path: Supermux/Push/PushKeypair.swift
+      - path: Supermux/Push/PushGroupState.swift
+    info:
+      path: SupermuxPushNSE/InfoMac.plist
+      properties:
+        CFBundleDisplayName: SupermuxMacPushNSE
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app.mac-push-nse
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        ARCHS: arm64
+        EXCLUDED_ARCHS: x86_64
+        CODE_SIGN_ENTITLEMENTS: SupermuxPushNSE/SupermuxMacPushNSE.entitlements
+        APPLICATION_EXTENSION_API_ONLY: "YES"
+      configs:
+        Release:
+          PROVISIONING_PROFILE_SPECIFIER: "Supermux Mac NSE App Store"
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+
   SupermuxTests:
     type: bundle.unit-test
     platform: iOS
@@ -206,6 +344,66 @@ targets:
         FRAMEWORK_SEARCH_PATHS:
           - $(inherited)
           - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
+
+  SupermuxMacTests:
+    # Mac twin of SupermuxTests: same suite, same @testable import Supermux (SupermuxMac's
+    # module name is also "Supermux" — see its PRODUCT_MODULE_NAME), minus the files below.
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: SupermuxTests
+        excludes:
+          # Depend on Watch-only wire types (RelayEnvelope, BrokerTransport/BrokerRoute,
+          # WatchSessionStatus's sessionStatus/isWorking/GitLite) or the phone-side relay
+          # handler (BrokerRelay) built from them. All of these are compiled into the iOS
+          # `Supermux` target only via its three standalone SupermuxWatch/Watch/*.swift
+          # source entries — SupermuxMac's sources never add them (and separately excludes
+          # `Watch/**` from Supermux/ — WatchConnectivity doesn't exist on macOS), so these
+          # symbols don't exist in the SupermuxMac module for the tests to link against.
+          - "WatchSessionStatusTests.swift"
+          - "RelayEnvelopeTests.swift"
+          - "BrokerRelayTests.swift"
+          - "RoutingTransportTests.swift"
+    dependencies:
+      - target: SupermuxMac
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        ARCHS: arm64
+        EXCLUDED_ARCHS: x86_64
+        # XcodeGen guesses TEST_HOST from the dependency's TARGET name ("SupermuxMac"), but that
+        # target overrides PRODUCT_NAME to "Supermux" (so @testable import Supermux / the shared
+        # module name work) — the real built app is Supermux.app, not SupermuxMac.app. Without
+        # this override xcodebuild fails immediately with "Could not find test host" because the
+        # guessed path can never exist.
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Supermux.app/Contents/MacOS/Supermux"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        FRAMEWORK_SEARCH_PATHS:
+          - $(inherited)
+          - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
+
+  SupermuxMacUITests:
+    # XCUITest smoke: drives the built SupermuxMac.app as a separate host process
+    # (not injected like SupermuxMacTests) — TEST_TARGET_NAME identifies the app
+    # target to launch. Verified empirically (Task 16): this is the XcodeGen TARGET
+    # name ("SupermuxMac", the key below/above), NOT the PRODUCT_NAME override
+    # ("Supermux") that SupermuxMacTests' TEST_HOST override exists to work around —
+    # XcodeGen resolves TEST_TARGET_NAME against the project's target list and wires
+    # the pbxproj TestTargetID reference itself, so no analogous override is needed here.
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: SupermuxMacUITests
+    dependencies:
+      - target: SupermuxMac
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        ARCHS: arm64
+        EXCLUDED_ARCHS: x86_64
+        TEST_TARGET_NAME: SupermuxMac
 
 schemes:
   SupermuxWatch:
@@ -223,6 +421,21 @@ schemes:
       config: Debug
       targets:
         - SupermuxTests
+    run:
+      config: Debug
+    archive:
+      config: Release
+  SupermuxMac:
+    build:
+      targets:
+        SupermuxMac: all
+        SupermuxMacTests: [test]
+        SupermuxMacUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - SupermuxMacTests
+        - SupermuxMacUITests
     run:
       config: Debug
     archive:

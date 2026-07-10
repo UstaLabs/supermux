@@ -1,6 +1,6 @@
 // src/core/files/store.ts
 import { randomBytes } from "crypto"
-import { closeSync, fsyncSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from "fs"
+import { closeSync, fsyncSync, mkdirSync, openSync, renameSync, statSync, unlinkSync, writeSync } from "fs"
 import { join } from "path"
 import type { Db } from "../storage/db"
 import { makeLogger } from "../../shared/log"
@@ -8,6 +8,12 @@ import { extFromMime } from "./mime"
 import type { AttachmentKind } from "./kinds"
 
 const log = makeLogger("core/files/store")
+
+/** Server-dictated chunk size for resumable uploads (echoed to clients in the
+ *  init response so the server owns the knob). Default 5 MB. */
+export function chunkBytes(): number {
+  return Number(process.env.MUX_UPLOAD_CHUNK_MB ?? 5) * 1024 * 1024
+}
 
 // Re-export so existing `import { AttachmentKind } from "core/files/store"`
 // call sites (e.g. channels/telegram/inbound.ts) keep working. New code
@@ -58,6 +64,37 @@ export class EmptyUploadError extends Error {
   constructor(message = "empty upload") {
     super(message)
     this.name = "EmptyUploadError"
+  }
+}
+
+/** Thrown by appendChunk/finalizePending/pendingOffset when the upload_id is
+ *  unknown (never created, or already GC'd/finalized). → HTTP 404. */
+export class UploadNotFoundError extends Error {
+  readonly code = "UPLOAD_NOT_FOUND" as const
+  constructor(message = "upload not found") {
+    super(message)
+    this.name = "UploadNotFoundError"
+  }
+}
+
+/** Thrown by appendChunk when the client's declared offset doesn't match the
+ *  bytes the server actually holds. Carries the true `offset` so the caller can
+ *  echo it back (HTTP 409 + Upload-Offset) and the client can resume. */
+export class OffsetConflictError extends Error {
+  readonly code = "OFFSET_CONFLICT" as const
+  constructor(readonly offset: number, message = "offset conflict") {
+    super(message)
+    this.name = "OffsetConflictError"
+  }
+}
+
+/** Thrown by appendChunk when a chunk would push the stored total past the
+ *  declared total_size. → HTTP 400. */
+export class UploadOverflowError extends Error {
+  readonly code = "UPLOAD_OVERFLOW" as const
+  constructor(message = "chunk exceeds declared total size") {
+    super(message)
+    this.name = "UploadOverflowError"
   }
 }
 
@@ -206,6 +243,157 @@ export class FileStore {
     }
 
     return { file_id, size: total }
+  }
+
+  // ── Resumable / chunked uploads ────────────────────────────────────────────
+  // A large upload is init'd (createPending → empty <upload_id>.part + row),
+  // filled chunk-by-chunk (appendChunk, offset-validated against the on-disk
+  // size so it survives a broker restart), then finalized (finalizePending →
+  // fsync + rename to <upload_id>.<ext> + attachments row). The upload_id IS the
+  // eventual file_id. gcPendingOnce reaps abandoned partials past their TTL.
+
+  /** Begin a resumable upload: create an empty <upload_id>.part and a
+   *  pending_uploads row. The upload_id becomes the final file_id on finalize. */
+  async createPending(input: {
+    session: string
+    kind: AttachmentKind
+    mime?: string
+    name?: string
+    totalSize: number
+    device?: string
+    origin: AttachmentOrigin
+  }): Promise<{ upload_id: string; chunk_size: number }> {
+    const upload_id = randomBytes(16).toString("hex")
+    const shard = upload_id.slice(0, 2)
+    const shardDir = join(this.rootDir, shard)
+    mkdirSync(shardDir, { recursive: true, mode: 0o700 })
+    // The .part is keyed by upload_id only; finalize derives the final extension
+    // from mime at rename time (so we don't store ext here).
+    const partPath = join(shardDir, `${upload_id}.part`)
+    // Create the empty part file (0600) so appendChunk can stat + append it.
+    closeSync(openSync(partPath, "w", 0o600))
+    try {
+      this.db.prepare(`
+        INSERT INTO pending_uploads (upload_id, session, kind, mime, name, total_size, received, path, origin, device, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, datetime('now'))
+      `).run(
+        upload_id, input.session, input.kind, input.mime ?? null, input.name ?? null,
+        input.totalSize, partPath, input.origin, input.device ?? null,
+      )
+    } catch (err) {
+      try { unlinkSync(partPath) } catch { /* best-effort */ }
+      throw err
+    }
+    return { upload_id, chunk_size: chunkBytes() }
+  }
+
+  /** Append one chunk at `offset`, which MUST equal the bytes already stored
+   *  (filesystem size is the source of truth, so this survives a broker restart).
+   *  Returns the new byte total and whether the upload is now complete. */
+  async appendChunk(
+    upload_id: string,
+    offset: number,
+    chunk: Uint8Array | Buffer,
+  ): Promise<{ received: number; done: boolean }> {
+    const row = this.db.prepare(
+      "SELECT path, total_size FROM pending_uploads WHERE upload_id = ?",
+    ).get(upload_id) as { path: string; total_size: number } | undefined
+    if (!row) throw new UploadNotFoundError()
+
+    const cur = statSync(row.path).size
+    if (offset !== cur) throw new OffsetConflictError(cur)
+
+    const buf = chunk instanceof Buffer
+      ? chunk
+      : Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+    if (cur + buf.length > row.total_size) throw new UploadOverflowError()
+
+    // Append at EOF ("a"), fsync per chunk so a resumable offset is durable.
+    const fd = openSync(row.path, "a")
+    try {
+      writeSync(fd, buf, 0, buf.length)
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+
+    const received = cur + buf.length
+    this.db.prepare("UPDATE pending_uploads SET received = ? WHERE upload_id = ?").run(received, upload_id)
+    return { received, done: received === row.total_size }
+  }
+
+  /** Current stored byte count for an in-flight upload (the resume offset), or
+   *  null if the upload_id is unknown. Reads the filesystem size as the truth. */
+  async pendingOffset(upload_id: string): Promise<number | null> {
+    const row = this.db.prepare(
+      "SELECT path FROM pending_uploads WHERE upload_id = ?",
+    ).get(upload_id) as { path: string } | undefined
+    if (!row) return null
+    try { return statSync(row.path).size } catch { return null }
+  }
+
+  /** Complete an upload whose bytes are fully received: fsync the .part, rename it
+   *  to <upload_id>.<ext>, insert the attachments row (file_id = upload_id), and
+   *  delete the pending row. Mirrors put()/putStream() durability + cleanup. */
+  async finalizePending(upload_id: string): Promise<{
+    file_id: string; size: number; mime?: string; name?: string; kind: AttachmentKind
+  }> {
+    const row = this.db.prepare(`
+      SELECT session, kind, mime, name, path, origin, device FROM pending_uploads WHERE upload_id = ?
+    `).get(upload_id) as {
+      session: string; kind: AttachmentKind; mime: string | null; name: string | null
+      path: string; origin: string; device: string | null
+    } | undefined
+    if (!row) throw new UploadNotFoundError()
+
+    const size = statSync(row.path).size
+    const ext = extFromMime(row.mime ?? undefined)
+    const finalPath = row.path.replace(/\.part$/, `.${ext}`)
+
+    // Each chunk already fsync'd in appendChunk; re-fsync (r+ so fsync is valid on
+    // every platform, not just Linux read-only fds) before exposing via rename.
+    const fd = openSync(row.path, "r+")
+    try { fsyncSync(fd) } finally { closeSync(fd) }
+    renameSync(row.path, finalPath)
+
+    try {
+      this.db.prepare(`
+        INSERT INTO attachments (file_id, kind, mime, size, name, path, origin, session, device, created_at, ref_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), 0)
+      `).run(upload_id, row.kind, row.mime, size, row.name, finalPath, row.origin, row.session, row.device)
+    } catch (err) {
+      try { unlinkSync(finalPath) } catch { /* best-effort */ }
+      throw err
+    }
+    this.db.prepare("DELETE FROM pending_uploads WHERE upload_id = ?").run(upload_id)
+    return { file_id: upload_id, size, mime: row.mime ?? undefined, name: row.name ?? undefined, kind: row.kind }
+  }
+
+  /** Delete abandoned in-flight uploads (.part file + row) older than ttlHours.
+   *  On an unlink error other than ENOENT, leave the row so a later sweep retries. */
+  async gcPendingOnce(opts: { ttlHours: number }): Promise<number> {
+    const rows = this.db.prepare(`
+      SELECT upload_id, path FROM pending_uploads
+      WHERE created_at < datetime('now', ?)
+    `).all(`-${opts.ttlHours} hours`) as Array<{ upload_id: string; path: string }>
+
+    for (const r of rows) {
+      let unlinkOk = true
+      try {
+        unlinkSync(r.path)
+      } catch (e: any) {
+        if (e?.code === "ENOENT") {
+          log.warn("filestore_gc_pending_enoent", { upload_id: r.upload_id, path: r.path })
+        } else {
+          log.warn("filestore_gc_pending_failed", { upload_id: r.upload_id, path: r.path, err: e?.message ?? String(e) })
+          unlinkOk = false
+        }
+      }
+      if (unlinkOk) {
+        this.db.prepare("DELETE FROM pending_uploads WHERE upload_id = ?").run(r.upload_id)
+      }
+    }
+    return rows.length
   }
 
   async get(file_id: string): Promise<FileMeta | null> {

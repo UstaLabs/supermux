@@ -1,7 +1,9 @@
 import SwiftUI
 import Shared
 import SwiftTerm
+#if canImport(UIKit)
 import UIKit
+#endif
 
 /// One terminal: a SwiftTerm view + a connection status chip. The live state (websocket
 /// + emulator scrollback) lives in a `TerminalHost` cached in `BrokerSession`, so toggling
@@ -15,7 +17,9 @@ struct TerminalPane: View {
     var onExit: () -> Void = {}
 
     @State private var ended = false
+    #if os(iOS)
     @State private var keyboardHeight: CGFloat = 0
+    #endif
 
     // The cached, persistent terminal (live connection + scrollback). Computed, but always
     // returns the SAME instance for this (session, kind, terminalId) — the cache owns it.
@@ -35,11 +39,15 @@ struct TerminalPane: View {
                     .padding(8)
             }
         }
+        #if os(iOS)
+        // Software-keyboard dismiss affordance — meaningless on a hardware-keyboard Mac
+        // (the whole subsystem: state + notifications + overlay is iOS-only, matching EditorPane).
         .overlay(alignment: .bottom) { keyboardDismissOverlay }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
             if let f = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect { keyboardHeight = f.height }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardHeight = 0 }
+        #endif
         .onAppear {
             // The cache owns the connection lifecycle (created + started on first access).
             // We only (re)point onExit at THIS mount's callback — the host outlives remounts.
@@ -56,13 +64,17 @@ struct TerminalPane: View {
     // SwiftUI tap/scroll dismissal and the global resignFirstResponder don't reach it — we
     // resign the cached TerminalView directly. Placed just above the keyboard via its frame
     // height. SM_KBD=1 fakes a height for headless screenshot verification.
+    // iOS-only: a Mac always has a hardware keyboard, so there is nothing to dismiss.
+    #if os(iOS)
     private var effectiveKbHeight: CGFloat {
         keyboardHeight > 0 ? keyboardHeight : (ProcessInfo.processInfo.environment["SM_KBD"] == "1" ? 320 : 0)
     }
     @ViewBuilder private var keyboardDismissOverlay: some View {
         if effectiveKbHeight > 0 && !ended {
             GeometryReader { geo in
-                Button { host.view.resignFirstResponder() } label: {
+                Button {
+                    host.view.resignFirstResponder()
+                } label: {
                     Image(systemName: "keyboard.chevron.compact.down")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Theme.teal)
@@ -80,6 +92,7 @@ struct TerminalPane: View {
             .ignoresSafeArea(.keyboard)
         }
     }
+    #endif
 
     private var endedState: some View {
         VStack(spacing: 10) {

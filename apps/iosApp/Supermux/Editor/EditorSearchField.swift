@@ -15,7 +15,6 @@ struct EditorSearchField: View {
 
     @State private var query = ""
     @State private var results: [FsSearchResult] = []
-    private let selection = UISelectionFeedbackGenerator()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -41,7 +40,7 @@ struct EditorSearchField: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             TextField("Search files…", text: $query)
-                .textInputAutocapitalization(.never)
+                .smNoAutocapitalization()
                 .autocorrectionDisabled()
                 .font(.callout)
                 .submitLabel(.search)
@@ -67,7 +66,7 @@ struct EditorSearchField: View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(results, id: \.path) { result in
                     Button {
-                        selection.selectionChanged()
+                        SMHaptics.selection()
                         onOpen(result.path)
                         query = ""
                         results = []
@@ -92,7 +91,7 @@ struct EditorSearchField: View {
             }
         }
         .frame(maxHeight: 240)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 1)
         )

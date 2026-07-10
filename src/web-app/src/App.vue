@@ -8,6 +8,7 @@ import { api } from "./api/client"
 import { useIsDesktop } from "./composables/useIsDesktop"
 import { usePanelResize } from "./composables/usePanelResize"
 import { useViewing } from "./composables/useViewing"
+import { useClearNotificationsOnOpen } from "./composables/useClearNotificationsOnOpen"
 import { useReadTracker } from "./composables/useReadTracker"
 import { useWorkspaceShortcuts } from "./composables/useWorkspaceShortcuts"
 import { useLayout, SIDEBAR, SIDEBAR_RAIL } from "./stores/layout"
@@ -34,6 +35,7 @@ watch(
 )
 const ws = useWS()
 useViewing()
+useClearNotificationsOnOpen()
 useReadTracker()
 useWorkspaceShortcuts()
 const isDesktop = useIsDesktop()

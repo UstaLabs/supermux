@@ -37,56 +37,120 @@ class NotificationService: UNNotificationServiceExtension {
 
         // The relay puts the sealed blob under `data` (apns.ts). Anything else → fallback.
         guard let blob = request.content.userInfo["data"] as? String else {
-            contentHandler(best)
+            deliver(best)
             return
         }
 
         do {
             let key = PushKeypair.shared.privateKey
             let plaintext = try openSealedPush(blob, privateKey: key)
-            if let note = Self.parseNotification(plaintext) {
-                best.title = note.title
-                best.body = note.body
-                // Carry the session id through to the TAP handler so the app opens the
-                // right chat — the original userInfo only holds the encrypted blob.
-                if let sid = note.sessionId, !sid.isEmpty {
-                    var info = best.userInfo
-                    info["sm_session_id"] = sid
-                    best.userInfo = info
-                }
-                NSLog("[supermux NSE] decrypted ok — title=%{public}@ body=%{public}@", note.title, note.body)
-                // Record the last decrypted notification in the shared App Group container
-                // so the host app can read what was delivered (and so the decrypt can be
-                // verified deterministically on the simulator).
-                Self.recordLastDelivered(title: note.title, body: note.body)
+            guard let note = Self.parseNotification(plaintext) else { deliver(best); return }
+
+            // Carry the session id through to the TAP handler so the app opens the right
+            // chat — the original userInfo only holds the encrypted blob.
+            if let sid = note.sessionId, !sid.isEmpty {
+                var info = best.userInfo
+                info["sm_session_id"] = sid
+
+                // iMessage-style SINGLE card per chat: fold this message into the chat's
+                // running summary (unread count + recent messages), then remove the chat's
+                // previously-delivered alert and deliver this updated one in its place — so
+                // the chat shows ONE self-updating notification instead of a growing stack.
+                // `threadIdentifier` keys the removal here and in `PushManager.clearDelivered`
+                // when the chat is opened.
+                best.threadIdentifier = sid
+                let group = PushGroupState.recordIncoming(sessionId: sid, title: note.title, body: note.body)
+                best.title = group.rendered.title
+                best.subtitle = group.rendered.subtitle
+                best.body = group.rendered.body
+
+                // Route a long-press / pull-down to the custom expanded content extension
+                // (SupermuxNotifContent) and carry the transcript it renders — the recent
+                // messages (text + time) + unread count — inside the notification itself.
+                best.categoryIdentifier = PushGroupState.chatCategory
+                info["sm_title"] = note.title
+                info["sm_count"] = group.count
+                info["sm_items"] = group.items
+                best.userInfo = info
+
+                NSLog("[supermux NSE] decrypted ok — %{public}@ / %{public}@", group.rendered.title,
+                      group.rendered.subtitle.isEmpty ? group.rendered.body : group.rendered.subtitle)
+                // Record for the simulator's deterministic-decrypt verification (iOS only).
+                Self.recordLastDelivered(title: group.rendered.title, body: group.rendered.body)
+                collapseAndDeliver(sessionId: sid, content: best)
+                return
             }
+
+            // No session id (defensive — real pushes always carry one): a single ungrouped
+            // alert, no badge/grouping bookkeeping.
+            best.title = note.title
+            best.body = note.body
+            NSLog("[supermux NSE] decrypted ok (ungrouped) — title=%{public}@", note.title)
+            Self.recordLastDelivered(title: note.title, body: note.body)
         } catch {
             NSLog("[supermux NSE] decrypt failed: %@", error.localizedDescription)
             // fall through to deliver the generic fallback unchanged
         }
-        contentHandler(best)
+        deliver(best)
     }
 
     override func serviceExtensionTimeWillExpire() {
         // System is about to kill us — deliver whatever we have.
-        if let contentHandler, let bestAttemptContent {
-            contentHandler(bestAttemptContent)
+        if let bestAttemptContent { deliver(bestAttemptContent) }
+    }
+
+    // MARK: - Delivery + collapse
+
+    /// Deliver exactly once — guards against the timeout path (`serviceExtensionTimeWillExpire`)
+    /// and the async `getDeliveredNotifications` completion both firing.
+    private func deliver(_ content: UNNotificationContent) {
+        guard let handler = contentHandler else { return }
+        contentHandler = nil
+        handler(content)
+    }
+
+    /// Remove the chat's previously-delivered alert, set the badge to the total unread, then
+    /// deliver `content` in its place — leaving a single notification per chat.
+    private func collapseAndDeliver(sessionId: String, content: UNMutableNotificationContent) {
+        let center = UNUserNotificationCenter.current()
+        center.getDeliveredNotifications { delivered in
+            let stale = delivered
+                .filter { $0.request.content.threadIdentifier == sessionId }
+                .map { $0.request.identifier }
+            if !stale.isEmpty { center.removeDeliveredNotifications(withIdentifiers: stale) }
+            content.badge = NSNumber(value: Self.badgeCount(sessionId: sessionId, delivered: delivered))
+            self.deliver(content)
         }
+    }
+
+    /// Total-unread badge. iOS reads the App Group message count; the mac extension (no App
+    /// Group) falls back to the number of distinct chats currently on screen (this one
+    /// included), since it can't keep a cross-process counter.
+    private static func badgeCount(sessionId: String, delivered: [UNNotification]) -> Int {
+        if PushGroupState.hasStore { return PushGroupState.totalUnread() }
+        let otherChats = Set(delivered
+            .map { $0.request.content.threadIdentifier }
+            .filter { !$0.isEmpty && $0 != sessionId })
+        return otherChats.count + 1
     }
 
     // MARK: - Shared App Group record (host app can read the last delivered push)
 
-    private static let appGroup = "group.dev.supermux.app"
-
     /// Persist the last decrypted notification to the shared App Group container as JSON.
     /// The host app shares this group; on the simulator the file is readable via
-    /// `simctl get_app_container <app> group.dev.supermux.app`.
+    /// `simctl get_app_container <app> group.dev.supermux.app`. iOS-only: the mac NSE
+    /// entitlements deliberately omit the app group, so `containerURL(...)` would return
+    /// nil there anyway — this whole hook only serves the iOS Simulator `simctl`
+    /// verification story, hence the explicit `#if` rather than relying on the implicit
+    /// nil-guard no-op.
     private static func recordLastDelivered(title: String, body: String) {
-        guard let dir = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup) else { return }
+        #if os(iOS)
+        guard let dir = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: PushGroupState.appGroup) else { return }
         let payload: [String: Any] = ["title": title, "body": body, "ts": ISO8601DateFormatter().string(from: Date())]
         if let data = try? JSONSerialization.data(withJSONObject: payload) {
             try? data.write(to: dir.appendingPathComponent("last_push.json"))
         }
+        #endif
     }
 
     // MARK: - Payload parsing (mirrors Android `PushRouter.parseNotification`)

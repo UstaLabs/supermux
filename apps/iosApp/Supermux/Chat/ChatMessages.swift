@@ -1,6 +1,10 @@
 import SwiftUI
 import Shared
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import QuickLook
 import UniformTypeIdentifiers
 import AVKit
@@ -39,7 +43,7 @@ struct MessageRow: View {
 struct AttachmentView: View {
     let att: Attachment
     let broker: BrokerSession
-    @State private var image: UIImage?
+    @State private var image: PlatformImage?
     @State private var imageData: Data?
     @State private var previewURL: URL?
     @State private var fileURL: URL?
@@ -59,7 +63,7 @@ struct AttachmentView: View {
         .task {
             if isImage, image == nil, let data = await broker.loadFile(att.file_id) {
                 imageData = data
-                image = UIImage(data: data)
+                image = PlatformImage(data: data)
             }
         }
     }
@@ -79,7 +83,7 @@ struct AttachmentView: View {
             } label: {
                 ZStack {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color(.secondarySystemBackground)).frame(height: 200)
+                        .fill(Color.smSecondaryBackground).frame(height: 200)
                     if downloading {
                         VStack(spacing: 8) {
                             ProgressView(value: progress).progressViewStyle(.linear).frame(width: 120)
@@ -110,7 +114,7 @@ struct AttachmentView: View {
                     previewURL = tmpURL(data, name: imageFileName)
                 }
             } label: {
-                Image(uiImage: image).resizable().scaledToFit()
+                Image(platform: image).resizable().scaledToFit()
                     .frame(maxWidth: .infinity, maxHeight: 240, alignment: .leading)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
@@ -118,7 +122,7 @@ struct AttachmentView: View {
             .quickLookPreview($previewURL)
         } else {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(.secondarySystemBackground)).frame(height: 140).overlay(ProgressView())
+                .fill(Color.smSecondaryBackground).frame(height: 140).overlay(ProgressView())
         }
     }
 
@@ -158,7 +162,7 @@ struct AttachmentView: View {
                 }
             }
             .padding(10)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+            .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
         .quickLookPreview($previewURL)
@@ -210,6 +214,7 @@ struct AttachmentView: View {
     }
 }
 
+#if os(iOS)
 /// Camera capture → still image or recorded movie (device only; needs NSCameraUsageDescription
 /// + NSMicrophoneUsageDescription for video, both already declared in project.yml). `mode`
 /// selects the media. The Simulator has no camera, so it falls back to the photo library
@@ -250,3 +255,4 @@ struct CameraPicker: UIViewControllerRepresentable {
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { parent.dismiss() }
     }
 }
+#endif

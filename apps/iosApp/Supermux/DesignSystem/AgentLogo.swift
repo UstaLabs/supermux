@@ -19,7 +19,7 @@ struct AgentLogo: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
         shape
-            .fill(Color(.secondarySystemBackground))
+            .fill(Color.smSecondaryBackground)
             .overlay(shape.strokeBorder(Theme.hairline, lineWidth: 1))
             .frame(width: size, height: size)
             .overlay {

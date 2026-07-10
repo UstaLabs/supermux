@@ -34,7 +34,7 @@ struct SettingsView: View {
                     CuratorSettingsView(broker: broker)
                 } label: {
                     SettingsRow(
-                        symbol: "sparkles",
+                        symbol: "moon.stars",
                         title: "Curator",
                         subtitle: "Nightly knowledge curation schedule"
                     )

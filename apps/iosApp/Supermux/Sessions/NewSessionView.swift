@@ -15,6 +15,12 @@ struct NewSessionView: View {
     @State private var agent: String
     @State private var model: String?
     @State private var models: [ModelInfo] = []
+    // Thinking-level picker (web LauncherEffortPicker parity) — levels come from the broker's
+    // session-less /reasoning-levels, refetched on agent/model change; hidden when the agent
+    // offers no real choice. `reasoningLevel` is what spawn() sends.
+    @State private var reasoningLevels: [ReasoningLevel] = []
+    @State private var reasoningLevel: String?
+    @State private var reasoningVisible = false
     @State private var projectSearch = false
     @State private var launcherCommands: [SlashCommand] = []
     @State private var spawning = false
@@ -72,6 +78,7 @@ struct NewSessionView: View {
         _launcherState = State(initialValue: store)
         _agent = State(initialValue: resolvedAgent)
         _model = State(initialValue: store.prefs.models[resolvedAgent])
+        _reasoningLevel = State(initialValue: store.prefs.reasoningLevels[resolvedAgent])
         _workdir = State(initialValue: store.draft.workdir ?? "")
         _useWorktree = State(initialValue: store.draft.useWorktree)
         _baseBranch = State(initialValue: store.draft.baseBranch)
@@ -99,7 +106,7 @@ struct NewSessionView: View {
             }
             .padding(20).frame(maxWidth: .infinity)
         }
-        .navigationTitle("New session").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("New session").smInlineNavigationTitle()
         .tint(Theme.teal)
         .task {
             // No session yet (pre-spawn launcher): the broker's id-less /transcribe cleans the
@@ -144,6 +151,18 @@ struct NewSessionView: View {
             }
             lastSeenAgent = agent
         }
+        // Thinking levels depend on the agent and (for Codex) the chosen model. Idempotent — it
+        // resolves from the sticky per-agent choice each run, so a duplicate .task(id:) re-invocation
+        // is harmless (nothing to reset, unlike the model task above).
+        .task(id: "\(agent)|\(model ?? "")") {
+            let resp = await broker.reasoningLevels(agent, model)
+            let levels = resp?.levels ?? []
+            reasoningLevels = levels
+            reasoningVisible = (resp?.visible ?? false) && ReasoningLevelsKt.showReasoningPicker(levels: levels)
+            reasoningLevel = reasoningVisible
+                ? ReasoningLevelsKt.resolveReasoningLevel(levels: levels, stored: launcherState.prefs.reasoningLevels[agent])
+                : nil
+        }
         // Agent slash commands depend on both the agent and the chosen project.
         .task(id: "\(agent)|\(workdir)") {
             launcherCommands = workdir.isEmpty ? [] : await broker.previewCommands(agent, workdir)
@@ -173,7 +192,7 @@ struct NewSessionView: View {
                 branches: repoInfo?.branches, currentBranch: repoInfo?.currentBranch,
                 loading: worktreeFetching, onAppearRefresh: onWorktreeRefresh
             )
-            .presentationDetents([.medium, .large])
+            .smPresentationDetents([.medium, .large])
         }
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
@@ -181,8 +200,10 @@ struct NewSessionView: View {
         }
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .any(of: [.images, .videos]))
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { composer.handleFiles($0) }
-        .fullScreenCover(isPresented: $showCamera) { CameraPicker(mode: .photo, onImage: { composer.addCameraImage($0) }) }
-        .fullScreenCover(isPresented: $showVideoCamera) { CameraPicker(mode: .video, onVideo: { composer.addCameraVideo($0) }) }
+        #if os(iOS)
+        .smFullScreenCover(isPresented: $showCamera) { CameraPicker(mode: .photo, onImage: { composer.addCameraImage($0) }) }
+        .smFullScreenCover(isPresented: $showVideoCamera) { CameraPicker(mode: .video, onVideo: { composer.addCameraVideo($0) }) }
+        #endif
         .onChange(of: composer.refocusToken) { _, _ in composing = true }
         .onChange(of: workdir) { _, new in
             launcherState.draft.workdir = new.isEmpty ? nil : new
@@ -215,6 +236,7 @@ struct NewSessionView: View {
                 Image(systemName: "chevron.down").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
             }
         }
+        .smMacPlainButton()
     }
     private var modelLabel: String {
         guard let model else { return "Default" }
@@ -239,8 +261,9 @@ struct NewSessionView: View {
             }
             .foregroundStyle(useWorktree ? AnyShapeStyle(Theme.teal) : AnyShapeStyle(.secondary))
             .padding(.horizontal, 11).padding(.vertical, 5)
-            .background(Color(.secondarySystemBackground), in: Capsule())
+            .background(Color.smSecondaryBackground, in: Capsule())
         }
+        .smMacPlainButton()
     }
 
     /// Fetch origin once per repo when the worktree sheet opens, so the branch
@@ -277,6 +300,9 @@ struct NewSessionView: View {
                              onCancel: { composer.cancelMic() })
             }
             TextField("What should the agent do?", text: $composer.draft, axis: .vertical)
+                // Plain style: the card is the field's chrome — without this, macOS wraps it
+                // in a bezel + blue focus ring (iOS already renders it plain here).
+                .textFieldStyle(.plain)
                 .lineLimit(3...8).focused($composing)
                 .composerHardwareKeyboardSubmit(canSubmit: canSpawn && !spawning) { spawn() }
             if !matches.isEmpty {
@@ -286,6 +312,25 @@ struct NewSessionView: View {
             // into vertical letter-columns (the action buttons used to share this row and
             // overflow it on a narrow iPhone).
             HStack(spacing: 12) {
+                #if os(macOS)
+                // The logo sits OUTSIDE the Menu label on the Mac: AppKit flattens custom
+                // menu-button labels and draws asset images at intrinsic size — a giant
+                // unscaled logo. iOS below keeps the logo inside the tap target, unchanged.
+                HStack(spacing: 5) {
+                    AgentLogo(agent: agent, size: 18)
+                    Menu {
+                        ForEach(agents, id: \.self) { a in
+                            Button(a.capitalized) { agent = a; launcherState.prefs.agent = a }
+                        }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Text(agent.capitalized).font(.subheadline.weight(.medium)).lineLimit(1)
+                            Image(systemName: "chevron.down").font(.caption2)
+                        }.foregroundStyle(.primary)
+                    }
+                    .smMacBorderlessMenu()
+                }
+                #else
                 Menu {
                     ForEach(agents, id: \.self) { a in
                         Button(a.capitalized) { agent = a; launcherState.prefs.agent = a }
@@ -297,6 +342,7 @@ struct NewSessionView: View {
                         Image(systemName: "chevron.down").font(.caption2)
                     }.foregroundStyle(.primary)
                 }
+                #endif
                 // Always show the model menu (web LauncherModelPicker parity). Hiding it
                 // when the list is empty made cursor/opencode look model-less after a
                 // transient /models miss or before the cache warmed.
@@ -316,6 +362,26 @@ struct NewSessionView: View {
                         Text(modelLabel).font(.subheadline.weight(.medium)).lineLimit(1)
                         Image(systemName: "chevron.down").font(.caption2)
                     }.foregroundStyle(.secondary)
+                }
+                .smMacBorderlessMenu()
+                // Thinking-level menu (web LauncherEffortPicker parity) — only when the agent offers
+                // a real choice. Mirrors the model menu's style.
+                if reasoningVisible {
+                    Menu {
+                        ForEach(reasoningLevels, id: \.id) { l in
+                            Button(l.id.capitalized) {
+                                reasoningLevel = l.id
+                                launcherState.prefs.reasoningLevels[agent] = l.id
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "brain").font(.caption2)
+                            Text((reasoningLevel ?? "").capitalized).font(.subheadline.weight(.medium)).lineLimit(1)
+                            Image(systemName: "chevron.down").font(.caption2)
+                        }.foregroundStyle(.secondary)
+                    }
+                    .smMacBorderlessMenu()
                 }
                 Spacer(minLength: 0)
             }
@@ -338,11 +404,12 @@ struct NewSessionView: View {
                             .background(canSpawn ? Theme.teal : Color.gray.opacity(0.5), in: Circle())
                     }
                 }
+                .smMacPlainButton()
                 .disabled(!canSpawn || spawning)
             }
         }
         .padding(16)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .smCardSurface(cornerRadius: 20)
     }
 
     private var canSpawn: Bool { !workdir.isEmpty }
@@ -357,7 +424,7 @@ struct NewSessionView: View {
         let base = (eligible && useWorktree && !baseBranch.isEmpty) ? baseBranch : nil
         Task {
             let id = await broker.spawn(workdir: workdir, agent: agent, name: nil, model: model,
-                                        worktree: wantsWorktree, baseBranch: base)
+                                        worktree: wantsWorktree, baseBranch: base, reasoningLevel: reasoningLevel)
             if let id, !id.isEmpty {
                 // Attachments need a session id, so upload after spawn (like the first message).
                 var ids: [String] = []
@@ -365,9 +432,17 @@ struct NewSessionView: View {
                     // Audio clips → "voice"; images and videos stay nil so the broker infers the kind
                     // from the MIME (video/* → "video" server-side). Never mislabel a video as audio.
                     let kind = p.mime.hasPrefix("audio") ? "voice" : nil
-                    if let fid = await broker.upload(id, data: p.data, filename: p.filename, mime: p.mime, kind: kind) {
-                        ids.append(fid)
+                    let fid: String?
+                    if let url = p.fileURL {
+                        // Video/large: stream from the file URL (chunked, bounded RAM).
+                        fid = await broker.uploadResumable(id, source: NSFileHandleChunkSource(path: url.path),
+                            filename: p.filename, mime: p.mime, kind: kind) { _, _ in }
+                    } else if let data = p.data {
+                        fid = await broker.upload(id, data: data, filename: p.filename, mime: p.mime, kind: kind)
+                    } else {
+                        fid = nil
                     }
+                    if let fid { ids.append(fid) }
                 }
                 if !firstMsg.isEmpty || !ids.isEmpty {
                     broker.send(id, firstMsg, attachments: ids.isEmpty ? nil : ids)
@@ -489,10 +564,10 @@ private struct ProjectPickerSheet: View {
                     }
                 }
             }
-            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always),
+            .searchable(text: $search, placement: .smNavDrawerAlways,
                         prompt: "Search projects, repos, or type a path")
-            .navigationTitle("Project").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() } } }
+            .navigationTitle("Project").smInlineNavigationTitle()
+            .toolbar { ToolbarItem(placement: .smTopTrailing) { Button("Cancel") { dismiss() } } }
             .overlay {
                 if resolving {
                     ZStack {
@@ -616,9 +691,9 @@ private struct WorktreeSheet: View {
                     }
                 }
             }
-            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search branches")
-            .navigationTitle("Worktree").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .searchable(text: $search, placement: .smNavDrawerAlways, prompt: "Search branches")
+            .navigationTitle("Worktree").smInlineNavigationTitle()
+            .toolbar { ToolbarItem(placement: .smTopTrailing) { Button("Done") { dismiss() } } }
         }
         .tint(Theme.teal)
         .task { await onAppearRefresh() }

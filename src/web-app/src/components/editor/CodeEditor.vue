@@ -15,9 +15,12 @@ import { languages } from "@codemirror/language-data"
 import type { Extension } from "@codemirror/state"
 
 import { useEditorSettings } from "@/stores/editorSettings"
+import { FONT_SIZE, stepFont, pinchFont } from "@/lib/editor-font-zoom"
 import { useWS } from "@/api/ws"
 import { lspDebug } from "@/lib/lsp-debug"
 import { lspPositionToOffset } from "@/lib/lsp-symbol-navigation"
+
+defineOptions({ inheritAttrs: false })
 
 const props = defineProps<{
   content: string
@@ -42,6 +45,69 @@ const fontCompartment = new Compartment()
 const langCompartment = new Compartment()
 
 let langToken = 0
+
+// ── Font zoom: Cmd/Ctrl +/−/0 and two-finger pinch (also trackpad ctrl+wheel) ──
+// Applies through the shared editorSettings store (clamps + persists); the
+// existing watch(fontSize) reconfigures the theme. A small badge flashes the size.
+const zoomBadge = ref("")
+const zoomBadgeVisible = ref(false)
+let zoomBadgeTimer: ReturnType<typeof setTimeout> | undefined
+let pinchBaseDist = 0
+let pinchBaseFont = FONT_SIZE.default
+let wheelZoomAccum = 0
+const WHEEL_ZOOM_STEP = 30
+
+function flashFont(px: number) {
+  settings.setFontSize(px)
+  zoomBadge.value = `${settings.state.fontSize}px`
+  zoomBadgeVisible.value = true
+  clearTimeout(zoomBadgeTimer)
+  zoomBadgeTimer = setTimeout(() => { zoomBadgeVisible.value = false }, 900)
+}
+function bumpFont(delta: number) { flashFont(stepFont(settings.state.fontSize, delta)) }
+function resetFont() { flashFont(FONT_SIZE.default) }
+
+function touchDist(touches: TouchList): number {
+  const a = touches[0], b = touches[1]
+  return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
+}
+function onEditorTouchStart(e: TouchEvent) {
+  if (e.touches.length === 2) {
+    pinchBaseDist = touchDist(e.touches)
+    pinchBaseFont = settings.state.fontSize
+  }
+}
+function onEditorTouchMove(e: TouchEvent) {
+  if (e.touches.length === 2 && pinchBaseDist > 0) {
+    e.preventDefault() // don't scroll/select or let the page zoom
+    flashFont(pinchFont(pinchBaseFont, pinchBaseDist, touchDist(e.touches)))
+  }
+}
+function onEditorTouchEnd(e: TouchEvent) {
+  if (e.touches.length < 2) pinchBaseDist = 0
+}
+// Trackpad pinch arrives as ctrl+wheel (the browser's pinch-zoom convention).
+function onEditorWheel(e: WheelEvent) {
+  if (!e.ctrlKey) return
+  e.preventDefault()
+  wheelZoomAccum += e.deltaY
+  while (wheelZoomAccum <= -WHEEL_ZOOM_STEP) { bumpFont(1); wheelZoomAccum += WHEEL_ZOOM_STEP }
+  while (wheelZoomAccum >= WHEEL_ZOOM_STEP) { bumpFont(-1); wheelZoomAccum -= WHEEL_ZOOM_STEP }
+}
+function attachZoomGestures(el: HTMLElement) {
+  el.addEventListener("touchstart", onEditorTouchStart, { passive: true })
+  el.addEventListener("touchmove", onEditorTouchMove, { passive: false })
+  el.addEventListener("touchend", onEditorTouchEnd, { passive: true })
+  el.addEventListener("touchcancel", onEditorTouchEnd, { passive: true })
+  el.addEventListener("wheel", onEditorWheel, { passive: false })
+}
+function detachZoomGestures(el: HTMLElement) {
+  el.removeEventListener("touchstart", onEditorTouchStart)
+  el.removeEventListener("touchmove", onEditorTouchMove)
+  el.removeEventListener("touchend", onEditorTouchEnd)
+  el.removeEventListener("touchcancel", onEditorTouchEnd)
+  el.removeEventListener("wheel", onEditorWheel)
+}
 
 function report(kind: string, err: unknown) {
   const e = err as Error | undefined
@@ -128,6 +194,11 @@ function createState(content: string): EditorState {
         ...historyKeymap,
         indentWithTab,
         { key: "Mod-s", run: () => { emit("save"); return true } },
+        { key: "Mod-=", run: () => { bumpFont(1); return true } },
+        { key: "Mod-+", run: () => { bumpFont(1); return true } },
+        { key: "Shift-Mod-=", run: () => { bumpFont(1); return true } },
+        { key: "Mod--", run: () => { bumpFont(-1); return true } },
+        { key: "Mod-0", run: () => { resetFont(); return true } },
       ]),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
@@ -204,6 +275,7 @@ onMounted(() => {
       state: createState(props.content),
       parent: containerRef.value,
     })
+    attachZoomGestures(containerRef.value)
     applyLanguage(props.path)
     revealRequestedPosition()
     listPluginState("mounted")
@@ -215,6 +287,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (containerRef.value) detachZoomGestures(containerRef.value)
+  clearTimeout(zoomBadgeTimer)
   view?.destroy()
   view = null
 })
@@ -251,5 +325,20 @@ watch(() => settings.state.fontSize, () => {
 </script>
 
 <template>
-  <div ref="containerRef" class="w-full h-full overflow-hidden bg-[var(--cmux-code)] text-foreground" v-bind="$attrs" />
+  <div class="relative h-full w-full" v-bind="$attrs">
+    <div ref="containerRef" class="h-full w-full overflow-hidden bg-[var(--cmux-code)] text-foreground" />
+    <Transition name="cm-font-badge">
+      <div
+        v-if="zoomBadgeVisible"
+        class="pointer-events-none absolute right-3 top-3 z-10 rounded-md bg-black/70 px-2 py-1 text-xs font-medium tabular-nums text-white shadow-sm"
+      >{{ zoomBadge }}</div>
+    </Transition>
+  </div>
 </template>
+
+<style scoped>
+.cm-font-badge-enter-active,
+.cm-font-badge-leave-active { transition: opacity 150ms ease; }
+.cm-font-badge-enter-from,
+.cm-font-badge-leave-to { opacity: 0; }
+</style>

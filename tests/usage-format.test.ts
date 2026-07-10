@@ -7,6 +7,7 @@ function makeClaude(): ClaudeUsage {
     fiveHour: { used: 44, resetsAt: new Date(Date.now() + 2.5 * 3_600_000).toISOString() },
     sevenDay: { used: 4, resetsAt: new Date(Date.now() + 7 * 24 * 3_600_000).toISOString() },
     sevenDaySonnet: { used: 1, resetsAt: new Date(Date.now() + 7 * 24 * 3_600_000).toISOString() },
+    sevenDayFable: { used: 9, resetsAt: new Date(Date.now() + 7 * 24 * 3_600_000).toISOString() },
     extraUsage: { enabled: true, monthlyLimit: 5000, usedCredits: 27, currency: "usd" },
   }
 }
@@ -53,11 +54,21 @@ test("formatUsageTelegram renders all three providers", () => {
   const out = formatUsageTelegram(data)
   expect(out).toContain("Claude")
   expect(out).toContain("44% used")
+  expect(out).toContain("7d Sonnet: 1% used")
+  expect(out).toContain("7d Fable: 9% used")
   expect(out).toContain("Codex (plus)")
   expect(out).toContain("2% used")
   expect(out).toContain("Cursor")
   expect(out).toContain("85% used")
   expect(out).toContain("$27")
+})
+
+test("formatUsageTelegram omits per-model rows when the caps are null", () => {
+  const claude: ClaudeUsage = { ...makeClaude(), sevenDaySonnet: null, sevenDayFable: null }
+  const out = formatUsageTelegram({ claude, codex: null, cursor: null, opencode: null, errors: {} })
+  expect(out).toContain("Claude")
+  expect(out).not.toContain("Sonnet")
+  expect(out).not.toContain("Fable")
 })
 
 test("formatUsageTelegram omits null providers", () => {

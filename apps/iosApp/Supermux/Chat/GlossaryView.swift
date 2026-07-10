@@ -29,9 +29,9 @@ struct GlossaryView: View {
                 }
             }
             .navigationTitle("Voice glossary")
-            .navigationBarTitleDisplayMode(.inline)
+            .smInlineNavigationTitle()
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .smTopTrailing) {
                     Button("Done") { dismiss() }
                 }
             }
@@ -46,7 +46,7 @@ struct GlossaryView: View {
                     TextField("Add a term (e.g. Supermux)", text: $newTerm)
                         .focused($addFocused)
                         .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
+                        .smNoAutocapitalization()
                         .onSubmit { add() }
                     Button { add() } label: { Image(systemName: "plus.circle.fill") }
                         .disabled(trimmedNew.isEmpty)

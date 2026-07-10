@@ -61,7 +61,11 @@ fun WebCodeEditor(
         return
     }
 
-    EditorWebViewHost(engine = engine, modifier = modifier)
+    // Dark backing so the WebView doesn't flash white while it attaches / first-paints when the
+    // editor pane opens.
+    Box(modifier.background(Color(0xFF282C34))) {
+        EditorWebViewHost(engine = engine, modifier = Modifier.fillMaxSize())
+    }
 }
 
 @Composable

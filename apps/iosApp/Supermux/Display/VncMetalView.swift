@@ -1,4 +1,8 @@
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import Shared
 import Metal
 import QuartzCore
@@ -18,12 +22,17 @@ import simd
 /// update, so allocation no longer rides a SwiftUI `updateUIView`.
 enum VncMetalView {
 
-    // MARK: - Backing UIView (its layer IS a CAMetalLayer)
+    // MARK: - Backing view (its layer IS a CAMetalLayer)
 
-    final class MetalLayerView: UIView {
+    final class MetalLayerView: PlatformView {
+        #if canImport(UIKit)
         override class var layerClass: AnyClass { CAMetalLayer.self }
+        #endif
+        // On UIKit `layer` is non-optional; on AppKit the layer-hosting setup below installs
+        // the `CAMetalLayer` before this is ever read, so the force-cast is safe on both.
         var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
 
+        #if canImport(UIKit)
         override func layoutSubviews() {
             super.layoutSubviews()
             // Keep the drawable backing store in sync with the view's pixel size.
@@ -35,6 +44,53 @@ enum VncMetalView {
             metalLayer.drawableSize = CGSize(width: bounds.width * scale,
                                              height: bounds.height * scale)
         }
+        #else
+        // AppKit has no `layerClass`: make the view layer-hosting by installing the
+        // CAMetalLayer BEFORE `wantsLayer` (Apple's documented order for a custom layer).
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            layer = CAMetalLayer()
+            wantsLayer = true
+        }
+        required init?(coder: NSCoder) {
+            super.init(coder: coder)
+            layer = CAMetalLayer()
+            wantsLayer = true
+        }
+
+        // `layout()` is the mac analog of `layoutSubviews` (fires on resize); pair it with
+        // `viewDidMoveToWindow` so the scale is re-read once a real window (and its
+        // backingScaleFactor) is known.
+        override func layout() {
+            super.layout()
+            updateDrawableSize()
+        }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            updateDrawableSize()
+        }
+        // Fires when the window's backing scale changes (e.g. dragged between a Retina and
+        // a non-Retina display) — without it contentsScale/drawableSize would go stale.
+        override func viewDidChangeBackingProperties() {
+            super.viewDidChangeBackingProperties()
+            updateDrawableSize()
+        }
+        // Live-resize insurance: guarantees the drawable tracks the frame even if a SwiftUI
+        // resize path ever skips `layout()`.
+        override func setFrameSize(_ newSize: NSSize) {
+            super.setFrameSize(newSize)
+            updateDrawableSize()
+        }
+
+        private func updateDrawableSize() {
+            // NSView has no `traitCollection`; the backing scale comes from the window (or the
+            // main screen before the view is placed), same fallback-to-2 as the iOS path.
+            let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+            metalLayer.contentsScale = scale
+            metalLayer.drawableSize = CGSize(width: bounds.width * scale,
+                                             height: bounds.height * scale)
+        }
+        #endif
     }
 
     // MARK: - Renderer

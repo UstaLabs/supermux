@@ -13,9 +13,16 @@ struct EditorPane: View {
     @State private var settings = EditorSettingsStore()
     @State private var showSettings = false
     @State private var webView: WKWebView?
+    #if os(iOS)
     @State private var keyboardHeight: CGFloat = 0
+    #endif
     @State private var previewMode = false
+    #if os(macOS)
+    private let isRegularWidth = true   // the Mac is always the wide multi-pane workspace
+    #else
     @Environment(\.horizontalSizeClass) private var hSize
+    private var isRegularWidth: Bool { hSize == .regular }
+    #endif
 
     /// Cached per-session — same instance every lookup, so returning to a session
     /// restores its open tabs/tree (the dictionary lives on the broker, app-lifetime).
@@ -24,7 +31,7 @@ struct EditorPane: View {
     /// loaded page + open document survive editor-pane toggles / remounts (no white flash).
     private var host: EditorHost { broker.editorHost(for: session.id) }
     /// iPad / wide → tree is a side column; iPhone → full-screen overlay.
-    private var isRegular: Bool { hSize == .regular }
+    private var isRegular: Bool { isRegularWidth }
 
     // ── Markdown preview (parity with the PWA's Eye/Pencil toggle) ──────────────
     private func isMarkdown(_ path: String) -> Bool {
@@ -57,18 +64,22 @@ struct EditorPane: View {
                 bodyContent
             }
         }
-        .background(Color(.systemBackground))
+        .background(Color.smBackground)
         .onAppear { broker.editorOpen(session.id) }
         .onDisappear { broker.editorClose(session.id) }
         .onChange(of: session.id) { old, new in
             broker.editorClose(old)
             broker.editorOpen(new)
         }
+        #if os(iOS)
+        // Software-keyboard dismiss affordance — meaningless on a hardware-keyboard Mac
+        // (the whole subsystem: state + notifications + overlay + endEditing is iOS-only).
         .overlay(alignment: .bottom) { keyboardDismissOverlay }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
             if let f = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect { keyboardHeight = f.height }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardHeight = 0 }
+        #endif
         .sheet(isPresented: $showSettings) { EditorSettingsView(settings: settings) }
         .task(id: session.id) {
             // Headless test hook: open a file by workdir-relative path on launch.
@@ -150,6 +161,7 @@ struct EditorPane: View {
                     .foregroundStyle(state.treeVisible ? Theme.teal : .secondary)
                     .frame(width: 36, height: 36)
             }
+            .smMacPlainButton()
             .accessibilityLabel(state.treeVisible ? "Hide files" : "Show files")
 
             EditorSearchField(search: { await broker.fsSearch(session.id, $0) },
@@ -162,6 +174,7 @@ struct EditorPane: View {
                         .foregroundStyle(previewMode ? Theme.teal : .secondary)
                         .frame(width: 36, height: 36)
                 }
+                .smMacPlainButton()
                 .accessibilityLabel(previewMode ? "Edit" : "Preview")
             }
 
@@ -177,6 +190,7 @@ struct EditorPane: View {
                 }
                 .frame(width: 36, height: 36)
             }
+            .smMacPlainButton()
             .accessibilityLabel("View changes")
 
             Button { showSettings = true } label: {
@@ -184,6 +198,7 @@ struct EditorPane: View {
                     .font(.body).foregroundStyle(.secondary)
                     .frame(width: 36, height: 36)
             }
+            .smMacPlainButton()
             .accessibilityLabel("Editor settings")
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
@@ -195,7 +210,7 @@ struct EditorPane: View {
                 if state.treeVisible {
                     fileTree
                         .frame(width: 260)
-                        .background(Color(.secondarySystemBackground))
+                        .background(Color.smSecondaryBackground)
                     Divider()
                 }
                 editorOrEmpty.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -205,7 +220,7 @@ struct EditorPane: View {
                 editorOrEmpty
                 if state.treeVisible {
                     fileTree
-                        .background(Color(.systemBackground))
+                        .background(Color.smBackground)
                         .transition(.move(edge: .leading).combined(with: .opacity))
                 }
             }
@@ -254,7 +269,8 @@ struct EditorPane: View {
                               onMakeView: { webView = $0 },
                               onLspOut: { serverId, message in
                                   broker.lspBridge(for: session.id).rpcOut(serverId, message)
-                              })
+                              },
+                              onFontSize: { settings.fontSize = $0 })
                     .background(Color(red: 40/255, green: 44/255, blue: 52/255)) // #282c34, matches cm6 one-dark
                     .ignoresSafeArea(.container, edges: .bottom)
             }
@@ -292,6 +308,8 @@ struct EditorPane: View {
     // The WKWebView owns a UIKit keyboard SwiftUI's tap/scroll dismissal can't reach,
     // so we hold the view and `endEditing` it via a floating glass button just above the
     // keyboard (mirrors TerminalPane). SM_KBD=1 fakes a height for headless screenshots.
+    // iOS-only: a Mac always has a hardware keyboard, so there is nothing to dismiss.
+    #if os(iOS)
     private var effectiveKbHeight: CGFloat {
         keyboardHeight > 0 ? keyboardHeight : (ProcessInfo.processInfo.environment["SM_KBD"] == "1" ? 320 : 0)
     }
@@ -313,4 +331,5 @@ struct EditorPane: View {
             .ignoresSafeArea(.keyboard)
         }
     }
+    #endif
 }

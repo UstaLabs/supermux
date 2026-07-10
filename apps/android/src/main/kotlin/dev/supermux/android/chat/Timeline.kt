@@ -3,10 +3,16 @@ package dev.supermux.android.chat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,6 +28,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -40,6 +47,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -77,6 +85,9 @@ import android.view.ViewGroup
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import java.io.File
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
@@ -89,6 +100,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
@@ -97,6 +109,8 @@ import dev.supermux.android.theme.Radii
 import dev.supermux.android.theme.Space
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.LogEntry
+import coil3.compose.AsyncImage
+import dev.supermux.ui.ColumnAlign
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.MdBlock
 import dev.supermux.ui.SpanStyleKind
@@ -116,7 +130,6 @@ sealed interface TimelineItem {
         val status: ToolStatus,
         val output: String? = null,   // detail from the matching tool_result event (iOS folds as Output)
     ) : TimelineItem
-    data class Act(val event: ActivityEvent) : TimelineItem
 }
 
 /**
@@ -126,7 +139,8 @@ sealed interface TimelineItem {
  * event and later a separate `tool_result` (phase=completed|failed) event with the same
  * callId. We resolve a single status per call and render ONE [TimelineItem.Tool] row —
  * the result event is not shown on its own (otherwise completed tools look stuck running).
- * Other activity kinds (thinking…) pass through as [TimelineItem.Act].
+ * Non-tool activity (notably "thinking" → "Thought for Ns") is dropped here: thinking is
+ * surfaced only as a live status indicator, never as a persistent history row (matches web).
  */
 fun mergeTimeline(
     messages: List<LogEntry>,
@@ -152,14 +166,15 @@ fun mergeTimeline(
                 items.add(TimelineItem.Tool(e, status, output))
             }
             "tool_result" -> { /* folded into the matching tool row above */ }
-            else -> items.add(TimelineItem.Act(e))
+            // "thinking" (and any other non-tool kind) is intentionally dropped — thinking
+            // shows as a live indicator, not a persistent "Thought for Ns" history row.
+            else -> { /* dropped */ }
         }
     }
     return items.sortedBy { item ->
         when (item) {
             is TimelineItem.Msg -> item.entry.ts
             is TimelineItem.Tool -> item.event.ts
-            is TimelineItem.Act -> item.event.ts
         }
     }
 }
@@ -192,26 +207,60 @@ fun mdAnnotated(
                     SpanStyleKind.CODE -> withStyle(
                         SpanStyle(
                             fontFamily = MonoFontFamily,
-                            fontSize = 12.sp,
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Normal,
                         )
                     ) { append(s.text) }
+                    SpanStyleKind.STRIKE -> withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) { append(s.text) }
                     SpanStyleKind.LINK -> {
+                        val url = s.url
                         val ref = s.ref
-                        if (ref == null || !linkify) append(s.text) else withLink(
-                            LinkAnnotation.Clickable(
-                                tag = "file:${ref.path}",
-                                styles = TextLinkStyles(
-                                    style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)
+                        when {
+                            // Web links from `[label](url)` are always tappable (open the browser).
+                            url != null -> withLink(
+                                LinkAnnotation.Url(
+                                    url,
+                                    TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
                                 ),
-                            ) { onOpenFile(ref) }
-                        ) { append(s.text) }
+                            ) { append(s.text) }
+                            // File paths only become editor links in agent messages (linkify).
+                            ref != null && linkify -> withLink(
+                                LinkAnnotation.Clickable(
+                                    tag = "file:${ref.path}",
+                                    styles = TextLinkStyles(
+                                        style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)
+                                    ),
+                                ) { onOpenFile(ref) }
+                            ) { append(s.text) }
+                            else -> append(s.text)
+                        }
                     }
-                    SpanStyleKind.PLAIN -> append(s.text)
+                    SpanStyleKind.PLAIN -> appendLinkified(s.text, linkColor)
                 }
             }
         }
     }
+}
+
+private val urlRegex = Regex("""https?://[^\s<>"'\])]+""")
+
+/** Append [text], turning bare http(s) URLs into tappable, underlined links (opens the browser). */
+private fun AnnotatedString.Builder.appendLinkified(text: String, linkColor: Color) {
+    var last = 0
+    for (m in urlRegex.findAll(text)) {
+        var url = m.value
+        var trail = ""
+        // A URL at the end of a sentence often swallows trailing punctuation — hand it back as plain text.
+        while (url.isNotEmpty() && url.last() in ".,);:!?") { trail = url.last() + trail; url = url.dropLast(1) }
+        if (url.isEmpty()) continue
+        if (m.range.first > last) append(text.substring(last, m.range.first))
+        withLink(
+            LinkAnnotation.Url(url, TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))),
+        ) { append(url) }
+        if (trail.isNotEmpty()) append(trail)
+        last = m.range.last + 1
+    }
+    if (last < text.length) append(text.substring(last))
 }
 
 /**
@@ -249,8 +298,8 @@ fun FencedCodeBlock(code: String) {
                 Text(
                     text = code,
                     fontFamily = MonoFontFamily,
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp,
+                    fontSize = 13.sp,
+                    lineHeight = 19.5.sp,
                     color = cs.onSurface.copy(alpha = 0.9f),
                 )
             }
@@ -288,14 +337,15 @@ fun FencedCodeBlock(code: String) {
  */
 @Composable
 fun AssistantMessage(text: String, onOpenFile: (FilePathRef) -> Unit = {}) {
-    MarkdownBody(
-        text = text,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = Space.xs),
-        onOpenFile = onOpenFile,
-        linkify = true,
-    )
+    // SelectionContainer makes the prose selectable/copyable; links inside stay tappable.
+    SelectionContainer {
+        MarkdownBody(
+            text = text,
+            modifier = Modifier.fillMaxWidth(),
+            onOpenFile = onOpenFile,
+            linkify = true,
+        )
+    }
 }
 
 /**
@@ -358,7 +408,13 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier, onOpenFile: (FileP
                     verticalAlignment = Alignment.Top,
                     horizontalArrangement = Arrangement.spacedBy(Space.sm),
                 ) {
-                    Text("•", color = cs.onSurfaceVariant, style = typography.bodyLarge)
+                    // Task-list items show a checkbox glyph (display-only); plain bullets keep the dot.
+                    val marker = when (block.task) {
+                        true -> "☑"
+                        false -> "☐"
+                        null -> "•"
+                    }
+                    Text(marker, color = cs.onSurfaceVariant, style = typography.bodyLarge)
                     Text(
                         text = mdAnnotated(block.text, onOpenFile, linkify = linkify),
                         color = cs.onSurface,
@@ -378,8 +434,107 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier, onOpenFile: (FileP
                         modifier = Modifier.weight(1f),
                     )
                 }
+                is MdBlock.Table -> MarkdownTable(block, onOpenFile, linkify)
+                is MdBlock.Image -> MarkdownImage(block)
             }
         }
+    }
+}
+
+/**
+ * GFM table as a bordered, horizontally-scrollable grid (iOS MarkdownTableView parity).
+ * Laid out column-major: each column is a `Column(width = IntrinsicSize.Max)` so every cell in
+ * it shares the widest cell's width, and single-line (no-wrap) cells mean wide tables scroll
+ * instead of squishing. Cells keep inline formatting and per-column alignment.
+ */
+@Composable
+fun MarkdownTable(table: MdBlock.Table, onOpenFile: (FilePathRef) -> Unit, linkify: Boolean) {
+    val cs = MaterialTheme.colorScheme
+    val cols = table.headers.size
+    if (cols == 0) return
+    Row(
+        Modifier
+            .horizontalScroll(rememberScrollState())
+            .height(IntrinsicSize.Min)
+            .clip(RoundedCornerShape(Radii.sm))
+            .border(1.dp, cs.outlineVariant, RoundedCornerShape(Radii.sm)),
+    ) {
+        for (c in 0 until cols) {
+            if (c > 0) Box(Modifier.width(1.dp).fillMaxHeight().background(cs.outlineVariant))
+            Column(Modifier.width(IntrinsicSize.Max)) {
+                MarkdownTableCell(table.headers.getOrElse(c) { "" }, table.aligns.getOrElse(c) { ColumnAlign.LEFT }, header = true, onOpenFile, linkify)
+                for (row in table.rows) {
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outlineVariant))
+                    MarkdownTableCell(row.getOrElse(c) { "" }, table.aligns.getOrElse(c) { ColumnAlign.LEFT }, header = false, onOpenFile, linkify)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownTableCell(
+    text: String,
+    align: ColumnAlign,
+    header: Boolean,
+    onOpenFile: (FilePathRef) -> Unit,
+    linkify: Boolean,
+) {
+    val cs = MaterialTheme.colorScheme
+    val alignment = when (align) {
+        ColumnAlign.LEFT -> Alignment.CenterStart
+        ColumnAlign.CENTER -> Alignment.Center
+        ColumnAlign.RIGHT -> Alignment.CenterEnd
+    }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .background(if (header) cs.surfaceContainerLow else Color.Transparent)
+            .padding(horizontal = Space.sm + Space.xs, vertical = Space.sm),
+        contentAlignment = alignment,
+    ) {
+        Text(
+            text = mdAnnotated(text, onOpenFile, linkify = linkify),
+            color = cs.onSurface,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (header) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * Standalone markdown image `![alt](url)`. Only `https://` URLs are loaded (a message-content
+ * image is a tracking-pixel / IP-leak vector); anything else renders as a tappable link line.
+ */
+@Composable
+fun MarkdownImage(image: MdBlock.Image) {
+    val cs = MaterialTheme.colorScheme
+    if (image.url.startsWith("https://")) {
+        AsyncImage(
+            model = image.url,
+            contentDescription = image.alt.ifEmpty { null },
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 280.dp)
+                .clip(RoundedCornerShape(Radii.sm)),
+            contentScale = ContentScale.Fit,
+        )
+    } else {
+        val linkColor = cs.primary
+        Text(
+            text = buildAnnotatedString {
+                withLink(
+                    LinkAnnotation.Url(
+                        image.url,
+                        TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
+                    ),
+                ) { append(image.alt.ifEmpty { image.url }) }
+            },
+            style = MaterialTheme.typography.bodyLarge,
+        )
     }
 }
 
@@ -391,22 +546,31 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier, onOpenFile: (FileP
 @Composable
 fun UserMessage(text: String) {
     val cs = MaterialTheme.colorScheme
+    // Inbound entry in the session log: left-aligned, a mono "you" label, a tightened
+    // leading corner so it reads as the human's turn on the thread.
     val bubbleShape = RoundedCornerShape(
-        topStart = Radii.lg,
-        topEnd = Radii.lg,
-        bottomStart = Radii.lg,
-        bottomEnd = 4.dp,   // tightened trailing corner
+        topStart = 4.dp,
+        topEnd = Radii.md,
+        bottomStart = Radii.md,
+        bottomEnd = Radii.md,
     )
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-        Box(
-            Modifier
-                .fillMaxWidth(0.84f)
-                .wrapContentWidth(Alignment.End)
-                .clip(bubbleShape)
-                .background(cs.surfaceContainer.copy(alpha = 0.85f))
-                .border(1.dp, cs.outline, bubbleShape)
-                .padding(horizontal = Space.md, vertical = Space.sm + Space.xs),
-        ) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(bubbleShape)
+            .background(cs.surfaceContainer.copy(alpha = 0.9f))
+            .border(1.dp, cs.outlineVariant, bubbleShape)
+            .padding(horizontal = Space.md, vertical = Space.sm),
+    ) {
+        Text(
+            text = "you",
+            color = cs.primary,
+            fontFamily = MonoFontFamily,
+            fontSize = 10.sp,
+            letterSpacing = 1.2.sp,
+            modifier = Modifier.padding(bottom = 2.dp),
+        )
+        SelectionContainer {
             Text(
                 text = mdAnnotated(text),
                 color = cs.onSurface,
@@ -442,77 +606,53 @@ private fun toolLabel(tool: String): String =
 @Composable
 fun ToolCard(event: ActivityEvent, status: ToolStatus, output: String? = null) {
     val cs = MaterialTheme.colorScheme
-    val isRunning = status == ToolStatus.RUNNING
-    val isError = status == ToolStatus.ERROR
-    val accentColor = if (isError) cs.error else cs.primary
-    val accentAlpha = if (isRunning) 1f else 0.4f
     var expanded by remember { mutableStateOf(false) }
 
     val input = event.detail
     val hasContent = !input.isNullOrBlank() || !output.isNullOrBlank()
-    val toolName = event.tool ?: "tool"
+    val verb = toolLabel(event.tool ?: "tool").lowercase()
+    // Strip a leading "<Tool>: " label — Claude puts it in the title; other agents
+    // (codex/cursor/opencode) emit the bare command/path, so this is a no-op for them.
+    val arg = event.title?.let { t -> event.tool?.let { t.removePrefix("$it: ") } ?: t }
 
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .testTag("tool_card")
-            .clickable(enabled = hasContent) { expanded = !expanded }
-            .padding(vertical = Space.xs),
-    ) {
+    Column(Modifier.fillMaxWidth().testTag("tool_card")) {
+        // Terminal-style operation line: ▸ verb · arg … status. A sunken surface, mono
+        // throughout, so a tool call reads as an executed command, not a chat card.
         Row(
-            Modifier.fillMaxWidth(),
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(Radii.sm))
+                .background(cs.surfaceContainerLowest)
+                .clickable(enabled = hasContent) { expanded = !expanded }
+                .padding(horizontal = Space.sm + Space.xs, vertical = Space.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Per-tool leading icon
-            Icon(
-                painter = painterResource(toolIcon(toolName)),
-                contentDescription = null,
-                tint = cs.onSurfaceVariant,
-                modifier = Modifier.size(14.dp),
-            )
+            Text("▸", color = cs.primary, fontFamily = MonoFontFamily, fontSize = 13.sp)
             Spacer(Modifier.width(Space.sm))
-
-            // 2dp vertical accent rail (running-emphasis)
-            Box(
-                Modifier
-                    .width(2.dp)
-                    .height(Space.lg)
-                    .clip(RoundedCornerShape(1.dp))
-                    .background(accentColor.copy(alpha = accentAlpha)),
-            )
-            Spacer(Modifier.width(Space.sm))
-
-            // Tool label (labelLarge), mcp__…__ stripped to last segment
             Text(
-                text = toolLabel(toolName),
+                text = verb,
                 color = cs.onSurface,
-                style = MaterialTheme.typography.labelLarge,
+                fontFamily = MonoFontFamily,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
             )
-
-            Spacer(Modifier.width(Space.sm))
-
-            // Mono summary — ellipsis, flex
-            val titleText = event.title
-            if (titleText != null) {
+            if (arg != null) {
                 Text(
-                    text = titleText,
+                    text = arg,
                     color = cs.onSurfaceVariant,
                     fontFamily = MonoFontFamily,
-                    fontSize = 11.5.sp,
+                    fontSize = 12.5.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).padding(start = Space.sm),
                 )
             } else {
                 Spacer(Modifier.weight(1f))
             }
-
             Spacer(Modifier.width(Space.sm))
-
-            // Trailing status: spinner (running) · faint check (done) · red ✕ (error)
             when (status) {
                 ToolStatus.RUNNING -> CircularProgressIndicator(
-                    modifier = Modifier.size(12.dp),
+                    modifier = Modifier.size(11.dp),
                     color = cs.primary,
                     strokeWidth = 1.5.dp,
                 )
@@ -520,32 +660,74 @@ fun ToolCard(event: ActivityEvent, status: ToolStatus, output: String? = null) {
                     painter = painterResource(R.drawable.ic_check),
                     contentDescription = null,
                     tint = cs.onSurfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.size(14.dp),
+                    modifier = Modifier.size(13.dp),
                 )
                 ToolStatus.ERROR -> Icon(
                     painter = painterResource(R.drawable.ic_x),
                     contentDescription = null,
                     tint = cs.error,
-                    modifier = Modifier.size(14.dp),
+                    modifier = Modifier.size(13.dp),
                 )
             }
         }
 
-        // Expandable Input + Output blocks (iOS ioBlock parity)
+        // Expandable Input + Output (mono; a diff renders with semantic add/remove).
         AnimatedVisibility(
             visible = expanded,
             enter = expandVertically(),
             exit = shrinkVertically(),
         ) {
             Column(
-                Modifier.padding(start = Space.md, top = Space.xs),
-                verticalArrangement = Arrangement.spacedBy(Space.sm),
+                Modifier.padding(top = Space.xs),
+                verticalArrangement = Arrangement.spacedBy(Space.xs),
             ) {
-                input?.takeIf { it.isNotBlank() }?.let { ioBlock("Input", it, error = false) }
+                input?.takeIf { it.isNotBlank() }?.let { ioBlock("input", it, error = false) }
                 output?.takeIf { it.isNotBlank() }?.let {
-                    ioBlock("Output", it, error = status == ToolStatus.ERROR)
+                    if (looksLikeDiff(it)) InlineDiff(it)
+                    else ioBlock("output", it, error = status == ToolStatus.ERROR)
                 }
             }
+        }
+    }
+}
+
+/** True when [text] reads as a unified diff (hunk header or several ± lines). */
+private fun looksLikeDiff(text: String): Boolean {
+    val lines = text.lineSequence().take(40).toList()
+    if (lines.any { it.startsWith("@@ ") || it.startsWith("diff --git") }) return true
+    val pm = lines.count { (it.startsWith("+") && !it.startsWith("+++")) || (it.startsWith("-") && !it.startsWith("---")) }
+    return pm >= 3
+}
+
+/** Inline unified-diff renderer: mono, semantic add/remove tints, horizontal scroll. */
+@Composable
+private fun InlineDiff(text: String) {
+    val cs = MaterialTheme.colorScheme
+    val sem = dev.supermux.android.theme.LocalSemantics.current
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radii.sm))
+            .background(cs.surfaceContainerLowest)
+            .heightIn(max = 240.dp)
+            .verticalScroll(rememberScrollState())
+            .horizontalScroll(rememberScrollState())
+            .padding(vertical = Space.xs),
+    ) {
+        text.lineSequence().forEach { line ->
+            val add = line.startsWith("+") && !line.startsWith("+++")
+            val del = line.startsWith("-") && !line.startsWith("---")
+            val hunk = line.startsWith("@@")
+            val fg = when { add -> sem.success; del -> sem.danger; hunk -> cs.primary; else -> cs.onSurfaceVariant }
+            val bg = when { add -> sem.success.copy(alpha = 0.10f); del -> sem.danger.copy(alpha = 0.10f); else -> Color.Transparent }
+            Text(
+                text = line.ifEmpty { " " },
+                fontFamily = MonoFontFamily,
+                fontSize = 12.5.sp,
+                lineHeight = 18.5.sp,
+                color = fg,
+                modifier = Modifier.fillMaxWidth().background(bg).padding(horizontal = Space.md, vertical = 0.5.dp),
+            )
         }
     }
 }
@@ -572,73 +754,89 @@ private fun ioBlock(label: String, text: String, error: Boolean) {
             Text(
                 text = text,
                 fontFamily = MonoFontFamily,
-                fontSize = 12.sp,
-                lineHeight = 18.sp,
+                fontSize = 13.sp,
+                lineHeight = 19.5.sp,
                 color = if (error) cs.error else cs.onSurface.copy(alpha = 0.9f),
             )
         }
     }
 }
 
-/**
- * Calm Premium — reasoning/thinking activity.
- * Collapsed by default: a faint "✦ Thought for Ns" row (labelMedium, italic,
- * mutedForeground @70%) with a tiny chevron. Tapping expands detail if present.
- * Feels like a faint timestamp, not a card.
- */
+// ---------------------------------------------------------------------------
+// Session-log stream layout — a mono gutter (time + status node, threaded by a
+// hairline spine) beside each entry. Consecutive spine rows join into one thread.
+// ---------------------------------------------------------------------------
+
+/** Status marker drawn in a stream row's gutter. */
+enum class StreamNode { NONE, RUNNING, DONE, ERROR, USER }
+
+private val gutterFmt: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+
+/** ISO-8601 ts → local `HH:mm` for the gutter (null if unparseable). */
+private fun gutterTime(ts: String?): String? =
+    ts?.let { runCatching { Instant.parse(it).atZone(ZoneId.systemDefault()).format(gutterFmt) }.getOrNull() }
+
 @Composable
-fun ReasoningLine(event: ActivityEvent) {
+private fun NodeDot(node: StreamNode, modifier: Modifier) {
     val cs = MaterialTheme.colorScheme
-    val hasDetail = !event.detail.isNullOrBlank()
-    var expanded by remember { mutableStateOf(false) }
-
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clickable(enabled = hasDetail) { expanded = !expanded }
-            .padding(vertical = Space.xs),
-    ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "✦ ${event.title ?: "Thought"}",
-                color = cs.onSurfaceVariant.copy(alpha = 0.7f),
-                style = MaterialTheme.typography.labelMedium,
-                fontStyle = FontStyle.Italic,
-            )
-            if (hasDetail) {
-                Spacer(Modifier.width(Space.xs))
-                Text(
-                    text = if (expanded) "∧" else "∨",
-                    color = cs.onSurfaceVariant.copy(alpha = 0.5f),
-                    fontSize = 9.sp,
-                )
-            }
-        }
-
-        AnimatedVisibility(
-            visible = expanded,
-            enter = expandVertically(),
-            exit = shrinkVertically(),
-        ) {
-            val detail = event.detail
-            if (detail != null) {
-                Box(Modifier.padding(top = Space.xs)) {
-                    Text(
-                        text = detail,
-                        color = cs.onSurfaceVariant.copy(alpha = 0.7f),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontStyle = FontStyle.Italic,
-                    )
-                }
-            }
-        }
+    when (node) {
+        StreamNode.NONE -> Box(modifier.size(7.dp))
+        StreamNode.USER -> Text("▸", color = cs.primary, fontFamily = MonoFontFamily, fontSize = 11.sp, modifier = modifier)
+        StreamNode.DONE -> Box(modifier.size(7.dp).clip(CircleShape).background(cs.primary))
+        StreamNode.ERROR -> Box(modifier.size(7.dp).clip(CircleShape).background(cs.error))
+        StreamNode.RUNNING -> Box(modifier.size(7.dp).clip(CircleShape).background(cs.surface).border(1.5.dp, cs.primary, CircleShape))
     }
 }
 
-/** Dispatches a single TimelineItem to the correct composable. */
+/** A softly breathing dot — the live pulse of a running/thinking agent. Respects the theme accent. */
+@Composable
+fun BreathingDot(color: Color, modifier: Modifier = Modifier, size: Dp = 7.dp) {
+    val transition = rememberInfiniteTransition(label = "breathe")
+    val alpha by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.32f,
+        animationSpec = infiniteRepeatable(tween(1100), RepeatMode.Reverse),
+        label = "alpha",
+    )
+    Box(modifier.size(size).clip(CircleShape).background(color.copy(alpha = alpha)))
+}
+
+/**
+ * One entry in the session log: a 44dp mono gutter (time + status [node]) beside [content],
+ * with a hairline [spine] drawn full-height via drawBehind so consecutive spine rows join into
+ * one continuous thread. drawBehind (not IntrinsicSize) keeps it safe with video/scroll content.
+ */
+@Composable
+fun StreamRow(node: StreamNode, spine: Boolean, time: String?, content: @Composable () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val lineColor = cs.outlineVariant
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .drawBehind {
+                if (spine) {
+                    val x = 33.dp.toPx()
+                    drawLine(lineColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.5.dp.toPx())
+                }
+            },
+    ) {
+        Box(Modifier.width(44.dp)) {
+            if (time != null) {
+                Text(
+                    text = time,
+                    fontFamily = MonoFontFamily,
+                    fontSize = 10.sp,
+                    color = if (node == StreamNode.USER) cs.primary else cs.onSurfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.align(Alignment.TopStart).padding(start = 2.dp, top = 12.dp),
+                )
+            }
+            NodeDot(node, Modifier.align(Alignment.TopEnd).padding(end = 6.dp, top = 11.dp))
+        }
+        Box(Modifier.weight(1f).padding(top = 7.dp, bottom = 7.dp)) { content() }
+    }
+}
+
+/** Dispatches a single TimelineItem to a gutter-threaded stream row. */
 @Composable
 fun TimelineItemRow(
     item: TimelineItem,
@@ -647,27 +845,32 @@ fun TimelineItemRow(
 ) {
     when (item) {
         is TimelineItem.Msg -> {
-            // Local vals avoid cross-module smart-cast restriction on nullable fields
             val text = item.entry.text
             val atts = item.entry.attachments
             val isUser = item.entry.direction == "inbound"
             if (!text.isNullOrBlank() || !atts.isNullOrEmpty()) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
+                StreamRow(
+                    node = if (isUser) StreamNode.USER else StreamNode.DONE,
+                    spine = !isUser,
+                    time = if (isUser) gutterTime(item.entry.ts) else null,
                 ) {
-                    if (!text.isNullOrBlank()) {
-                        if (isUser) UserMessage(text) else AssistantMessage(text, onOpenFile)
+                    Column {
+                        if (!text.isNullOrBlank()) {
+                            if (isUser) UserMessage(text) else AssistantMessage(text, onOpenFile)
+                        }
+                        if (!atts.isNullOrEmpty()) AttachmentList(atts, alignEnd = false, loadBytes = loadBytes)
                     }
-                    if (!atts.isNullOrEmpty()) AttachmentList(atts, isUser, loadBytes)
                 }
             }
         }
-        is TimelineItem.Tool -> ToolCard(item.event, item.status, item.output)
-        is TimelineItem.Act -> {
-            when (item.event.kind) {
-                "thinking" -> ReasoningLine(item.event)
-                // other kinds: no-op
+        is TimelineItem.Tool -> {
+            val node = when (item.status) {
+                ToolStatus.RUNNING -> StreamNode.RUNNING
+                ToolStatus.ERROR -> StreamNode.ERROR
+                ToolStatus.DONE -> StreamNode.DONE
+            }
+            StreamRow(node = node, spine = true, time = gutterTime(item.event.ts)) {
+                ToolCard(item.event, item.status, item.output)
             }
         }
     }
@@ -953,7 +1156,7 @@ private fun AttachmentChip(
         Text(
             text = label,
             color = cs.onSurface,
-            fontSize = 12.sp,
+            fontSize = 13.sp,
             fontFamily = MonoFontFamily,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,

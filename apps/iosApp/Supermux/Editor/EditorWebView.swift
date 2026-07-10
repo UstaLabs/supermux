@@ -15,7 +15,7 @@ import WebKit
 /// `window.AndroidEditor.{onChange,onSave,onReady}`. SwiftUI re-creates the
 /// representable whenever a prop changes, so the props are plain `let`/closures and
 /// deltas are pushed in `updateUIView`.
-struct EditorWebView: UIViewRepresentable {
+struct EditorWebView: PlatformViewRepresentable {
     /// The persistent webview + coordinator, owned by `BrokerSession`'s editor cache.
     let host: EditorHost
     let content: String
@@ -37,30 +37,34 @@ struct EditorWebView: UIViewRepresentable {
     /// JS->Swift LSP relay: the webview's CodeMirror LSP client posts outbound
     /// JSON-RPC `{serverId, message}` here; the parent forwards it to the broker.
     var onLspOut: (_ serverId: String, _ message: String) -> Void = { _, _ in }
+    /// JS->Swift font zoom: the webview posts the new size after a pinch / keyboard
+    /// zoom; the parent persists it (EditorSettingsStore) so it survives reopen.
+    var onFontSize: (_ px: Int) -> Void = { _ in }
 
     /// Reuse the host's long-lived coordinator (the bridge target + nav delegate +
     /// ready/lastPath/lastContent state), so remounts don't reset the handshake.
     func makeCoordinator() -> Coordinator { host.coordinator }
 
-    func makeUIView(context: Context) -> WKWebView {
+    func makePlatformView(context: Context) -> WKWebView {
         // Detach from any prior mount before SwiftUI re-parents this cached, reused
         // webview. Only one mount of a given editor exists at a time, so this is
         // normally a no-op; it guards the toggle transition (split ⇄ standalone) from
         // a "view already has a superview" assertion when the old container hasn't been
-        // torn down yet (mirrors `SwiftTermView.makeUIView`). NO construction here —
+        // torn down yet (mirrors `SwiftTermView.makePlatformView`). NO construction here —
         // the `EditorHost` built the webview + bridge + handlers + file:// load once.
         host.webView.removeFromSuperview()
         DispatchQueue.main.async { onMakeView(host.webView) }
         return host.webView
     }
 
-    func updateUIView(_ webView: WKWebView, context: Context) {
+    func updatePlatformView(_ webView: WKWebView, context: Context) {
         let coordinator = context.coordinator
         // Keep the live callbacks current — SwiftUI hands fresh closures on each
         // re-make; the long-lived coordinator must call the latest ones.
         coordinator.onChange = onChange
         coordinator.onSave = onSave
         coordinator.onLspOut = onLspOut
+        coordinator.onFontSize = onFontSize
 
         let newFilename = filename(from: path)
         let pathChanged = coordinator.lastPath != path
@@ -109,6 +113,14 @@ struct EditorWebView: UIViewRepresentable {
         // retain cycle) are removed by `EditorHost.stop()` when the SESSION is removed.
     }
 
+    #if os(macOS)
+    static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
+        // No-op (macOS twin of dismantleUIView): the webview + coordinator are owned by the
+        // `EditorHost` cached in `BrokerSession` and MUST outlive this mount, so toggling the
+        // editor pane off doesn't reload the page. Kept greppable on both platforms.
+    }
+    #endif
+
     /// `cm6.js` keys the language off the file's basename (extension), so we only
     /// ever hand it the last path component.
     private func filename(from path: String) -> String {
@@ -119,6 +131,7 @@ struct EditorWebView: UIViewRepresentable {
         var onChange: (String) -> Void
         var onSave: () -> Void
         var onLspOut: (String, String) -> Void
+        var onFontSize: (Int) -> Void
 
         /// Held so the parent can resign the keyboard and so we can reload after a
         /// renderer crash. Not owned (WebKit/SwiftUI own the view).
@@ -139,10 +152,12 @@ struct EditorWebView: UIViewRepresentable {
         var pendingReveal: (Int, Int?)?
 
         init(onChange: @escaping (String) -> Void, onSave: @escaping () -> Void,
-             onLspOut: @escaping (String, String) -> Void) {
+             onLspOut: @escaping (String, String) -> Void,
+             onFontSize: @escaping (Int) -> Void = { _ in }) {
             self.onChange = onChange
             self.onSave = onSave
             self.onLspOut = onLspOut
+            self.onFontSize = onFontSize
         }
 
         func cache(content: String, filename: String, scrollTop: Int) {
@@ -189,6 +204,8 @@ struct EditorWebView: UIViewRepresentable {
                 onChange(s)
             case "save":
                 onSave()
+            case "font":
+                if let px = body["px"] as? NSNumber { onFontSize(px.intValue) }
             case "ready":
                 ready = true
                 pushCachedDocument()
@@ -251,11 +268,14 @@ struct EditorWebView: UIViewRepresentable {
             }
         }
 
+        #if os(iOS)
         /// Resign the web content's keyboard. The parent calls this from its own
         /// dismiss affordance (mirrors `TerminalPane` resigning the TerminalView).
+        /// iOS-only: a Mac always has a hardware keyboard, so there is nothing to dismiss.
         func dismissKeyboard() {
             webView?.endEditing(true)
         }
+        #endif
 
         private func evaluate(_ js: String) {
             webView?.evaluateJavaScript(js, completionHandler: nil)

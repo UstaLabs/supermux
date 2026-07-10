@@ -23,8 +23,11 @@ struct AttachMenu: View {
             }
             Button { showPhotos = true } label: { Label("Photos", systemImage: "photo") }
             Button { showFiles = true } label: { Label("Files", systemImage: "folder") }
+            #if os(iOS)
+            // The Mac offers no camera capture (CameraPicker + its covers are iOS-only).
             Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
             Button { showVideoCamera = true } label: { Label("Record video", systemImage: "video") }
+            #endif
         } label: {
             Image(systemName: "plus")
                 .font(.body.weight(.medium))
@@ -32,5 +35,6 @@ struct AttachMenu: View {
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
+        .smMacBorderlessMenu()
     }
 }

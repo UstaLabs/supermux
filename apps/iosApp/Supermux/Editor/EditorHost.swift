@@ -15,15 +15,15 @@ final class EditorHost {
 
     /// CodeMirror's one-dark canvas color (#282c34). Painted on the web view and its
     /// scroll view so the file:// page doesn't flash white before first paint.
-    private static let editorBackground = UIColor(
+    private static let editorBackground = PlatformColor(
         red: 0x28 / 255.0, green: 0x2c / 255.0, blue: 0x34 / 255.0, alpha: 1
     )
 
     init() {
         // Coordinator is the bridge target + nav delegate; it outlives every mount so the
         // ready handshake and the live `editor`/`lsp` message handlers survive remounts.
-        // The closures are placeholders here — `EditorWebView.updateUIView` refreshes them
-        // to the current SwiftUI props on every (re)make.
+        // The closures are placeholders here — `EditorWebView.updatePlatformView` refreshes
+        // them to the current SwiftUI props on every (re)make.
         let coordinator = EditorWebView.Coordinator(
             onChange: { _ in }, onSave: {}, onLspOut: { _, _ in }
         )
@@ -36,7 +36,8 @@ final class EditorHost {
         window.AndroidEditor = {
           onChange: (s) => window.webkit.messageHandlers.editor.postMessage({ t: 'change', s: s }),
           onSave: () => window.webkit.messageHandlers.editor.postMessage({ t: 'save' }),
-          onReady: () => window.webkit.messageHandlers.editor.postMessage({ t: 'ready' })
+          onReady: () => window.webkit.messageHandlers.editor.postMessage({ t: 'ready' }),
+          onFontSize: (px) => window.webkit.messageHandlers.editor.postMessage({ t: 'font', px: px })
         };
         """
         let userScript = WKUserScript(
@@ -52,12 +53,20 @@ final class EditorHost {
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = coordinator
+        #if os(iOS)
         webView.isOpaque = false
         webView.backgroundColor = Self.editorBackground
         webView.scrollView.backgroundColor = Self.editorBackground
         webView.scrollView.contentInsetAdjustmentBehavior = .never
+        #else
+        // macOS: WKWebView is an NSView — no `isOpaque`/`backgroundColor`/`scrollView`.
+        // The public `underPageBackgroundColor` paints the same one-dark canvas
+        // around the page, and EditorPane's SwiftUI `.background(#282c34)` sits behind
+        // the view so there's no white flash before CodeMirror first paints.
+        webView.underPageBackgroundColor = Self.editorBackground
+        #endif
         #if DEBUG
-        if #available(iOS 16.4, *) { webView.isInspectable = true }
+        if #available(iOS 16.4, macOS 13.3, *) { webView.isInspectable = true }
         #endif
         self.webView = webView
         coordinator.webView = webView

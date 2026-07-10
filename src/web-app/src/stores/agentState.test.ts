@@ -35,6 +35,14 @@ test("isAgentWorking(undefined) is false", () => {
   expect(isAgentWorking(undefined)).toBe(false)
 })
 
+test("waiting/bgOpen are preserved on set", () => {
+  const a = useAgentState()
+  a.set("s1", { state: "idle", working: false, since: 9, waiting: true, bgOpen: 2 })
+  expect(a.get("s1").waiting).toBe(true)
+  expect(a.get("s1").bgOpen).toBe(2)
+  expect(isAgentWorking(a.get("s1"))).toBe(false)   // waiting is NOT working
+})
+
 test("isSending is false before markSending is ever called", () => {
   const a = useAgentState()
   expect(a.isSending("s1")).toBe(false)

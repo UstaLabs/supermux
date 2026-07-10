@@ -47,31 +47,43 @@ struct PaneToggleCluster: View {
         HStack(spacing: 2) {
             ForEach(panes) { pane in
                 let open = pane.isOpen(v)
-                Button {
-                    pane.command.apply(to: layout, session: sessionId)
-                } label: {
-                    Image(systemName: pane.icon)
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(width: 30, height: 28)
-                        .foregroundStyle(open ? Color.white : Color.secondary)
-                        .background {
-                            if open {
-                                RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.teal)
-                            }
+                let locked = pane.id == "chat" && chatToggleDisabled
+                Group {
+                    if locked {
+                        // Chat is the last visible pane: not toggleable, but it must still
+                        // read as OPEN — `.disabled` dims the teal to gray, which looks broken.
+                        chip(pane, open: open)
+                    } else {
+                        Button {
+                            pane.command.apply(to: layout, session: sessionId)
+                        } label: {
+                            chip(pane, open: open)
                         }
-                        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .buttonStyle(.plain)
+                        .smHoverHighlight()
+                    }
                 }
-                .buttonStyle(.plain)
-                .disabled(pane.id == "chat" && chatToggleDisabled)
-                .hoverEffect(.highlight)
                 .accessibilityLabel(pane.id == "chat" ? "Toggle chat" : "Toggle \(pane.label.lowercased())")
                 .accessibilityValue(open ? "Shown" : "Hidden")
             }
         }
         .padding(2)
         .background(
-            RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color(.tertiarySystemFill))
+            RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.smTertiaryFill)
         )
         .animation(.snappy(duration: 0.2), value: v)
+    }
+
+    private func chip(_ pane: Pane, open: Bool) -> some View {
+        Image(systemName: pane.icon)
+            .font(.system(size: 14, weight: .semibold))
+            .frame(width: 30, height: 28)
+            .foregroundStyle(open ? Color.white : Color.secondary)
+            .background {
+                if open {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.teal)
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 }

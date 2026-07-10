@@ -51,6 +51,11 @@ export interface RemoteRepo {
   updatedAt?: string; cloneUrl: string; webUrl: string
 }
 export interface ClonedRepo { path: string; host: string; owner: string; name: string; fullName: string; sizeBytes: number }
+export interface RepoRefs {
+  repo: string
+  branches: string[]
+  commits: Array<{ sha: string; subject: string }>
+}
 export interface ForgeAddInput { kind: string; host?: string; apiBase?: string; token: string; source: "pat" | "cli"; transport?: "https" | "ssh" }
 export interface InstallJob { state: "running" | "done" | "failed"; log: string; exitCode: number | null }
 export interface FinishReadiness {
@@ -134,6 +139,13 @@ export const api = {
     request("GET", `/models?agent=${encodeURIComponent(agent)}`) as Promise<{
       models: { id: string; displayName: string }[]
     }>,
+  // Reasoning ("thinking") levels an agent+model offers before any session exists
+  // (New Session launcher). Codex's are per-model; Claude's are static; Cursor/
+  // OpenCode return none. `visible` is false when there's no real choice (≤1).
+  getReasoningLevels: (agent: string, model?: string) =>
+    request("GET", `/reasoning-levels?agent=${encodeURIComponent(agent)}${model ? `&model=${encodeURIComponent(model)}` : ""}`) as Promise<{
+      agent: string; levels: { id: string; description?: string }[]; visible: boolean
+    }>,
   validatePath: (path: string) =>
     request("POST", "/paths/validate", { path }) as Promise<{ ok: boolean; path?: string; error?: string }>,
   getRepoInfo: (path: string, opts?: { fetch?: boolean }) =>
@@ -152,7 +164,7 @@ export const api = {
     role?: "personal_assistant" | "worker"
     isDefault?: boolean
   }>>,
-  createSession: (args: { name?: string; workdir: string; agent?: string; model?: string; worktree?: boolean; baseBranch?: string }) =>
+  createSession: (args: { name?: string; workdir: string; agent?: string; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string }) =>
     request("POST", "/sessions", args),
   getSessionMessages: (id: string) =>
     request("GET", `/sessions/${encodeURIComponent(id)}/messages`),
@@ -221,8 +233,10 @@ export const api = {
   },
   fsSearch: (sessionId: string, q: string) =>
     request("GET", `/sessions/${encodeURIComponent(sessionId)}/fs/search?q=${encodeURIComponent(q)}`),
-  fsDiff: (sessionId: string) =>
-    request("GET", `/sessions/${encodeURIComponent(sessionId)}/fs/diff`) as Promise<{ repos: import("@/composables/useEditor").RepoDiff[]; comments: ReviewComment[] }>,
+  fsDiff: (sessionId: string, base?: string) =>
+    request("GET", `/sessions/${encodeURIComponent(sessionId)}/fs/diff${base ? `?base=${encodeURIComponent(base)}` : ""}`) as Promise<{ repos: import("@/composables/useEditor").RepoDiff[]; comments: ReviewComment[] }>,
+  fsRefs: (sessionId: string) =>
+    request("GET", `/sessions/${encodeURIComponent(sessionId)}/fs/refs`) as Promise<{ repos: RepoRefs[] }>,
   reviewAddComment: (id: string, c: { repo: string; path: string; side: "RIGHT" | "LEFT"; anchorLine: number; anchorContext: string; body: string; diffHunkHeader?: string }) =>
     request("POST", `/sessions/${encodeURIComponent(id)}/review/comments`, c) as Promise<ReviewComment>,
   reviewUpdateComment: (id: string, commentId: string, patch: { status?: string; body?: string; resolvedBy?: string }) =>

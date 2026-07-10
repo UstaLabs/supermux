@@ -34,6 +34,20 @@ class BrokerApiTest {
     }
 
     @Test
+    fun claude_usage_parses_per_model_caps_and_tolerates_absence() {
+        val u = json.decodeFromString<ClaudeUsage>(
+            """{"fiveHour":{"used":12.0},"sevenDay":{"used":4.0},"sevenDaySonnet":{"used":3.0,"resetsAt":"2026-07-13T12:00:00Z"},"sevenDayFable":{"used":7.0,"resetsAt":"2026-07-13T12:00:00Z"}}"""
+        )
+        assertEquals(3.0, u.sevenDaySonnet?.used)
+        assertEquals(7.0, u.sevenDayFable?.used)
+
+        // absent per-model caps → null (row hidden), matching the broker sending null
+        val u0 = json.decodeFromString<ClaudeUsage>("""{"fiveHour":{"used":1.0},"sevenDay":{"used":1.0}}""")
+        assertEquals(null, u0.sevenDaySonnet)
+        assertEquals(null, u0.sevenDayFable)
+    }
+
+    @Test
     fun codex_reset_result_parses() {
         val r = json.decodeFromString<CodexResetResult>(
             """{"code":"reset","windowsReset":2,"codex":{"plan":"plus","resetCredits":2}}"""

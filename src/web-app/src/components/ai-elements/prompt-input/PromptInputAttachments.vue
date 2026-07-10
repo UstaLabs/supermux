@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue"
-import { X, FileIcon, Loader2, AlertCircle, Check } from "lucide-vue-next"
+import { X, FileIcon, AlertCircle, Check } from "lucide-vue-next"
 import { usePromptInput } from "./context"
 import { useUploads } from "@/stores/uploads"
 import VoiceChip from "@/components/voice/VoiceChip.vue"
@@ -75,8 +75,15 @@ const items = computed(() => files.value)
           v-if="uploads.byId[f.id]?.status === 'uploading'"
           class="absolute inset-0 bg-background/60 flex items-center justify-center pointer-events-none"
         >
-          <Loader2 class="size-4 animate-spin text-foreground" />
+          <span class="text-[10px] font-medium tabular-nums text-foreground">
+            {{ Math.round(((uploads.byId[f.id] as any)?.progress ?? 0) * 100) }}%
+          </span>
         </div>
+        <div
+          v-if="uploads.byId[f.id]?.status === 'uploading'"
+          class="absolute bottom-0 left-0 h-0.5 bg-primary transition-all pointer-events-none"
+          :style="{ width: `${Math.round(((uploads.byId[f.id] as any)?.progress ?? 0) * 100)}%` }"
+        />
         <div
           v-else-if="uploads.byId[f.id]?.status === 'uploaded'"
           class="absolute top-0.5 right-7 size-3 rounded-full bg-emerald-500 flex items-center justify-center pointer-events-none"

@@ -118,14 +118,19 @@ final class PushKeypair {
     // MARK: - Test harness helper
 
     /// Log the public key and, on the simulator, write it to `Documents/push_pubkey.txt`
-    /// so the `simctl push` harness can read it out of the app container. Production
-    /// devices simply log it (the container file is never extracted there).
+    /// so the `simctl push` harness can read it out of the app container. Everywhere else
+    /// it is only logged: on a real iOS device the container file is never extracted, and
+    /// on macOS `.documentDirectory` in an UNSANDBOXED build (dev/test hosts) is the user's
+    /// real `~/Documents` — a TCC-protected folder where this write blocks on a consent
+    /// prompt (which hangs launch forever in a headless run, e.g. the unit-test host).
     private static func dumpPublicKeyForTesting(_ key: P256.KeyAgreement.PrivateKey) {
         let pub = base64urlNoPad(key.publicKey.x963Representation)
         NSLog("[supermux push] public key (b64url): %@", pub)
+        #if targetEnvironment(simulator)
         if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
             try? pub.write(to: dir.appendingPathComponent("push_pubkey.txt"),
                            atomically: true, encoding: .utf8)
         }
+        #endif
     }
 }

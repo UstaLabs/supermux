@@ -1,6 +1,5 @@
 import SwiftUI
 import Shared
-import UIKit
 import PhotosUI
 import UniformTypeIdentifiers
 
@@ -75,8 +74,7 @@ struct ChatPane: View {
     /// True when the clipboard holds something we can stage as an attachment (an image, or a PDF) —
     /// gates the composer's "+ → Paste" item. Type-presence check only (privacy-safe; no banner).
     private var pasteboardHasAttachment: Bool {
-        let pb = UIPasteboard.general
-        return pb.hasImages || pb.contains(pasteboardTypes: [UTType.pdf.identifier])
+        SMPasteboard.hasImages || SMPasteboard.contains(.pdf)
     }
 
     /// Composer is expanded (full controls) when focused, when there's a draft or a
@@ -207,6 +205,7 @@ struct ChatPane: View {
             composerField
         }
         .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 2)
+        .smContentWidthCap()
         .animation(.smooth(duration: 0.28), value: composerExpanded)
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
@@ -214,8 +213,10 @@ struct ChatPane: View {
         }
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .any(of: [.images, .videos]))
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { composer.handleFiles($0) }
-        .fullScreenCover(isPresented: $showCamera) { CameraPicker(mode: .photo, onImage: { composer.addCameraImage($0) }) }
-        .fullScreenCover(isPresented: $showVideoCamera) { CameraPicker(mode: .video, onVideo: { composer.addCameraVideo($0) }) }
+        #if os(iOS)
+        .smFullScreenCover(isPresented: $showCamera) { CameraPicker(mode: .photo, onImage: { composer.addCameraImage($0) }) }
+        .smFullScreenCover(isPresented: $showVideoCamera) { CameraPicker(mode: .video, onVideo: { composer.addCameraVideo($0) }) }
+        #endif
     }
 
     // ONE glass card with an always-present TextField: tapping it focuses natively, so
@@ -240,7 +241,8 @@ struct ChatPane: View {
             } else {
             if composerExpanded {
                 if !composer.pending.isEmpty {
-                    AttachmentTray(pending: composer.pending, onRemove: { composer.removeAttachment($0) })
+                    AttachmentTray(pending: composer.pending, onRemove: { composer.removeAttachment($0) },
+                                   onRetry: { _ in Task { await uploadThenSend() } })
                 }
                 if composer.transcribing {
                     transcribingBar
@@ -264,8 +266,7 @@ struct ChatPane: View {
                     canSubmit: composer.canSubmit,
                     onSubmit: { sendMessage() },
                     onPasteAttachment: {
-                        let pb = UIPasteboard.general
-                        guard pb.hasImages || pb.contains(pasteboardTypes: [UTType.pdf.identifier]) else { return false }
+                        guard SMPasteboard.hasImages || SMPasteboard.contains(.pdf) else { return false }
                         Task { await composer.pasteClipboard() }
                         return true
                     }
@@ -292,6 +293,7 @@ struct ChatPane: View {
                             .frame(width: 34, height: 34)
                             .background(composer.canSubmit ? Theme.teal : Color.gray.opacity(0.4), in: Circle())
                     }
+                    .smMacPlainButton()
                     .disabled(!composer.canSubmit)
                 }
             }
@@ -299,7 +301,7 @@ struct ChatPane: View {
         }
         .padding(.horizontal, composerExpanded ? 12 : 16)
         .padding(.vertical, composerExpanded ? 12 : 10)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: composerExpanded ? 20 : 24, style: .continuous))
+        .composerSurface(cornerRadius: composerExpanded ? 20 : 24)
     }
 
     /// Web ModelPill parity: always visible; "Default" when unset, else a short label.
@@ -318,7 +320,7 @@ struct ChatPane: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(Color(.tertiarySystemFill), in: Capsule())
+        .background(Color.smTertiaryFill, in: Capsule())
     }
 
     /// Shown while the first-run on-device speech model is downloading/preparing — so the
@@ -330,25 +332,44 @@ struct ChatPane: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(Color(.tertiarySystemFill), in: Capsule())
+        .background(Color.smTertiaryFill, in: Capsule())
     }
 
     // MARK: - Send
 
     private func sendMessage() {
-        let (text, toUpload) = composer.consume()
-        Task {
-            var ids: [String] = []
-            for p in toUpload {
-                // Audio clips → "voice"; images and videos stay nil so the broker infers the kind
-                // from the MIME (video/* → "video" server-side). Never mislabel a video as audio.
-                let kind = p.mime.hasPrefix("audio") ? "voice" : nil
-                if let id = await broker.upload(session.id, data: p.data, filename: p.filename, mime: p.mime, kind: kind) {
-                    ids.append(id)
-                }
+        guard composer.canSubmit else { return }
+        Task { await uploadThenSend() }
+    }
+
+    /// Upload every not-yet-uploaded attachment (chunked+resumable for file-URL videos, single
+    /// POST for images/audio), driving each chip's progress. On any failure, mark it failed and
+    /// STOP — keep the draft + chips so the user can retry; never send minus an attachment.
+    @MainActor
+    private func uploadThenSend() async {
+        for p in composer.pending where p.uploadedFileId == nil {
+            composer.markUploading(p.id)
+            // Audio clips → "voice"; images and videos stay nil so the broker infers the kind
+            // from the MIME (video/* → "video" server-side). Never mislabel a video as audio.
+            let kind = p.mime.hasPrefix("audio") ? "voice" : nil
+            let fid: String?
+            if let url = p.fileURL {
+                fid = await broker.uploadResumable(session.id, source: NSFileHandleChunkSource(path: url.path),
+                    filename: p.filename, mime: p.mime, kind: kind) { sent, total in
+                        Task { @MainActor in composer.setProgress(p.id, total > 0 ? Double(sent) / Double(total) : 0) }
+                    }
+            } else if let data = p.data {
+                fid = await broker.upload(session.id, data: data, filename: p.filename, mime: p.mime, kind: kind)
+            } else {
+                fid = nil
             }
-            broker.send(session.id, text, attachments: ids.isEmpty ? nil : ids)
+            if let fid { composer.markUploaded(p.id, fid) } else { composer.markFailed(p.id); return }
         }
+        let ids = composer.pending.compactMap { $0.uploadedFileId }
+        let text = composer.draft
+        composer.draft = ""
+        composer.pending = []
+        broker.send(session.id, text, attachments: ids.isEmpty ? nil : ids)
     }
 
     // MARK: - Shared pill helper
@@ -360,7 +381,7 @@ struct ChatPane: View {
                 Text(text).font(.caption.weight(.medium)).lineLimit(1)
             }
             .padding(.horizontal, 9).padding(.vertical, 4)
-            .background(Color(.tertiarySystemFill), in: Capsule())
+            .background(Color.smTertiaryFill, in: Capsule())
             .foregroundStyle(.secondary)
         }
         .buttonStyle(.plain)
@@ -391,6 +412,12 @@ struct SessionTranscript: View, Equatable {
     private var phase: String? { broker.agentPhase[session.id] }
     private var working: Bool { broker.agentWorking[session.id] == true }
     private var sending: Bool { broker.pendingSend.contains(session.id) }
+    private var waiting: Bool { broker.agentWaiting[session.id] == true }
+    /// Only RUNNING tasks get a chip — a chip clears the moment its task finishes, so
+    /// chips never accumulate. The outcome (done/failed) lives in the chat stream.
+    private var visibleBgTasks: [ServerFrameBgTask] {
+        (broker.bgTasks[session.id] ?? []).filter { $0.status == "running" }
+    }
     private var activityEvents: [ActivityEvent] { broker.activity[session.id] ?? [] }
     /// Messages + tool-call activity, time-merged into blocks (parity with the web ChatView).
     private var blocks: [ChatBlock] { buildChatBlocks(messages: log, activity: activityEvents) }
@@ -401,6 +428,7 @@ struct SessionTranscript: View, Equatable {
                 if blocks.isEmpty {
                     starterPrompts
                         .frame(maxWidth: .infinity)
+                        .smContentWidthCap()
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
@@ -416,17 +444,33 @@ struct SessionTranscript: View, Equatable {
                                 }
                             }
                         }
+                        .smContentWidthCap()
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
                         .listRowBackground(Color.clear)
                     }
+                    if !visibleBgTasks.isEmpty {
+                        BgTaskChipsView(tasks: visibleBgTasks)
+                            .smContentWidthCap()
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                            .listRowBackground(Color.clear)
+                    }
                     if working {
                         workingIndicator
+                            .smContentWidthCap()
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
                             .listRowBackground(Color.clear)
                     } else if sending {
                         sendingIndicator
+                            .smContentWidthCap()
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                            .listRowBackground(Color.clear)
+                    } else if waiting {
+                        waitingIndicator
+                            .smContentWidthCap()
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
                             .listRowBackground(Color.clear)
@@ -490,9 +534,27 @@ struct SessionTranscript: View, Equatable {
     }
     private var workingLabel: String {
         switch broker.agentDetail[session.id] {
-        case "running": return "Working…"
+        case "running":
+            // Name the blocker while a tool runs ("Working… · Bash") — already in the frame.
+            if let tool = broker.agentTool[session.id], !tool.isEmpty { return "Working… · \(tool)" }
+            return "Working…"
         default: return "Thinking…"
         }
+    }
+
+    /// Turn over, background tasks still open: the harness will wake the agent when
+    /// they finish. Amber pulse = attention-not-error; no Stop (nothing to interrupt).
+    private var waitingIndicator: some View {
+        HStack(spacing: 8) {
+            Text("⧗")
+                .font(.caption)
+                .foregroundStyle(Color.orange)
+                .modifier(WaitingPulse())
+            Text("Waiting on background tasks")
+                .font(.caption).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var sendingIndicator: some View {
@@ -518,13 +580,13 @@ struct SessionTranscript: View, Equatable {
     private var starterPrompts: some View {
         VStack(spacing: 10) {
             Spacer().frame(height: 36)
-            Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(Theme.teal)
+            Image(systemName: "bubble.left.and.bubble.right").font(.largeTitle).foregroundStyle(Theme.teal)
             Text("Start the conversation").font(.headline)
             ForEach(["What's the current state?", "Run the tests", "Summarize recent changes"], id: \.self) { p in
                 Button { broker.send(session.id, p) } label: {
                     Text(p).font(.subheadline).frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 14).padding(.vertical, 11)
-                        .background(Color(.secondarySystemBackground),
+                        .background(Color.smSecondaryBackground,
                                     in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .buttonStyle(.plain).foregroundStyle(.primary)

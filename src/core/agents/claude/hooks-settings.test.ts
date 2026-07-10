@@ -12,6 +12,8 @@ const {
   hooksFileUsesHookSecret,
   INTERNAL_HOOK_SECRET_FILE,
   readPersistedHookSecret,
+  writePersistedHookSecret,
+  resolveInternalHookSecret,
 } = await import("./hooks-settings")
 
 test("includes an AskUserQuestion deny hook and a StopFailure curl hook", () => {
@@ -67,4 +69,22 @@ test("hooksFileUsesHookSecret is false when curl URLs omit ?s=", () => {
   try { unlinkSync(INTERNAL_HOOK_SECRET_FILE) } catch { /* absent */ }
   writeClaudeHooksSettings(9898, "")
   expect(hooksFileUsesHookSecret()).toBe(false)
+})
+
+// Claude Code snapshots hook config at CLI startup, so the secret embedded in a
+// long-running session's hooks must survive broker restarts — a per-boot secret
+// silently 403s every pre-restart session and its status freezes at "idle".
+test("resolveInternalHookSecret reuses the persisted secret across boots", () => {
+  writePersistedHookSecret("boot-one-secret")
+  expect(resolveInternalHookSecret(() => "freshly-generated")).toBe("boot-one-secret")
+  expect(readPersistedHookSecret()).toBe("boot-one-secret")
+})
+
+test("resolveInternalHookSecret generates and persists only on first boot", () => {
+  const { unlinkSync } = require("fs")
+  try { unlinkSync(INTERNAL_HOOK_SECRET_FILE) } catch { /* absent */ }
+  expect(resolveInternalHookSecret(() => "gen-a")).toBe("gen-a")
+  expect(readPersistedHookSecret()).toBe("gen-a")
+  // simulated second boot: the generator must not be consulted again
+  expect(resolveInternalHookSecret(() => "gen-b")).toBe("gen-a")
 })

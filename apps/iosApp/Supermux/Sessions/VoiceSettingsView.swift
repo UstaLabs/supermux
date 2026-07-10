@@ -53,7 +53,7 @@ struct VoiceSettingsView: View {
             }
         }
         .navigationTitle("Voice")
-        .navigationBarTitleDisplayMode(.inline)
+        .smInlineNavigationTitle()
         .tint(Theme.teal)
         .sheet(isPresented: $showGlossary) { GlossaryView(broker: broker) }
         .task { await load() }

@@ -96,6 +96,8 @@ data class AgentStatus(
     val tool: String? = null,
     val since: Long? = null,
     val workingSince: Long? = null,
+    val waiting: Boolean = false,    // idle but background tasks still open
+    val bgOpen: Int = 0,             // open background-task count
 )
 
 @Serializable
@@ -122,6 +124,7 @@ sealed interface ServerFrame {
         val sessions: List<SessionInfo> = emptyList(),
         val logs: Map<String, List<LogEntry>> = emptyMap(),
         val activity: Map<String, List<ActivityEvent>> = emptyMap(),
+        val bgTasks: Map<String, List<BgTask>> = emptyMap(),
         val agentState: Map<String, AgentStatus> = emptyMap(),
         val commands: Map<String, List<SlashCommand>> = emptyMap(),
         val commandsResolved: Map<String, Boolean> = emptyMap(),
@@ -143,6 +146,8 @@ sealed interface ServerFrame {
         val tool: String? = null,
         val since: Long? = null,
         val workingSince: Long? = null,
+        val waiting: Boolean = false,      // idle but background tasks still open
+        val bgOpen: Int = 0,               // open background-task count
     ) : ServerFrame
 
     @Serializable @SerialName("agent_error")
@@ -157,6 +162,23 @@ sealed interface ServerFrame {
 
     @Serializable @SerialName("activity_append")
     data class ActivityAppend(val session: String, val event: ActivityEvent) : ServerFrame
+
+    // One background task (bg shell / subagent / workflow) as mirrored from the
+    // broker's BackgroundTaskStore. `kind`: shell | agent | workflow | task.
+    @Serializable
+    data class BgTask(
+        val id: String,
+        val kind: String = "task",
+        val label: String = "",
+        val startedAt: Long = 0,
+        val status: String = "running",    // running | completed | failed
+        val endedAt: Long? = null,
+        val summary: String? = null,
+        val callId: String? = null,        // launching tool_use id (broker plumbing)
+    )
+
+    @Serializable @SerialName("bg_tasks")
+    data class BgTasks(val session: String, val tasks: List<BgTask> = emptyList()) : ServerFrame
 
     @Serializable @SerialName("commands_changed")
     data class CommandsChanged(
@@ -234,6 +256,15 @@ sealed interface ClientFrame {
 
     @Serializable @SerialName("presence")
     data class Presence(val present: Boolean, val session: String? = null) : ClientFrame
+
+    /** Which chat the user is foregrounding (null = the session list) + whether the app is
+     *  visible. The broker's viewing-tracker uses it to suppress a push for a chat you're
+     *  already looking at (parity with the web `useViewing` composable). NOTE: `session` has
+     *  NO default — kotlinx omits a property that equals its default, and the broker rejects a
+     *  frame with a MISSING `session`; a null session (on the list) MUST serialize as
+     *  `"session":null`. */
+    @Serializable @SerialName("viewing")
+    data class Viewing(val session: String?, val visible: Boolean) : ClientFrame
 
     @Serializable @SerialName("send")
     data class Send(

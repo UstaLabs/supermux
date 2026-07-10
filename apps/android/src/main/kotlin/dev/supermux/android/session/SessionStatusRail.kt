@@ -21,23 +21,29 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
+import dev.supermux.android.theme.LocalSemantics
 import dev.supermux.android.theme.MonoFontFamily
 import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.SessionStatusKind
 import dev.supermux.proto.SessionStatusLevel
-import dev.supermux.proto.gitBadge
 import dev.supermux.proto.sessionStatus
-
-private val DoneGreen = Color(0xFF16A34A)
-private val NotDoneAmber = Color(0xFFF59E0B)
 
 /**
  * Leading per-session state: working spinner (top priority), else the git/cloud status icon.
- * Worktree: ✓ done / ⎇ not-done / neutral pristine. Remote: cloud-done / cloud-off + ↑N ↓N counts.
+ * Worktree: ✓ done / ⎇ not-done / neutral pristine. Remote: cloud-done / cloud-off.
+ * Numbers (ahead/behind/dirty) are intentionally omitted here — the list is icon-only; the
+ * session view surfaces the counts.
+ * `bgOpen` > 0 adds a static mono "⧗N" badge (open background tasks) — static because the
+ * session list is a 100+/day surface and the design language budgets motion there.
  */
 @Composable
-fun SessionStatusRail(git: GitLiteStatusDto?, working: Boolean, modifier: Modifier = Modifier) {
+fun SessionStatusRail(git: GitLiteStatusDto?, working: Boolean, bgOpen: Int = 0, modifier: Modifier = Modifier) {
+    val sem = LocalSemantics.current
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        if (bgOpen > 0) {
+            Text("⧗$bgOpen", color = sem.warning, fontFamily = MonoFontFamily, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.width(4.dp))
+        }
         if (working) {
             CircularProgressIndicator(
                 modifier = Modifier.size(14.dp),
@@ -51,19 +57,13 @@ fun SessionStatusRail(git: GitLiteStatusDto?, working: Boolean, modifier: Modifi
             st == null || (st.kind == SessionStatusKind.WORKTREE && st.level == SessionStatusLevel.PRISTINE) ->
                 NeutralDot()
             st.kind == SessionStatusKind.WORKTREE && st.level == SessionStatusLevel.DONE ->
-                StatusIcon(R.drawable.ic_check, DoneGreen)
+                StatusIcon(R.drawable.ic_check, sem.success)
             st.kind == SessionStatusKind.WORKTREE ->
-                StatusIcon(R.drawable.ic_git_branch, NotDoneAmber)
+                StatusIcon(R.drawable.ic_git_branch, sem.warning)
             st.kind == SessionStatusKind.REMOTE && st.level == SessionStatusLevel.DONE ->
-                StatusIcon(R.drawable.ic_cloud_done, DoneGreen)
-            else -> {
-                StatusIcon(R.drawable.ic_cloud_off, NotDoneAmber)
-                val text = gitBadge(git)?.text
-                if (!text.isNullOrEmpty()) {
-                    Spacer(Modifier.width(4.dp))
-                    Text(text, color = NotDoneAmber, fontFamily = MonoFontFamily, fontSize = 10.sp, fontWeight = FontWeight.Medium)
-                }
-            }
+                StatusIcon(R.drawable.ic_cloud_done, sem.success)
+            else ->
+                StatusIcon(R.drawable.ic_cloud_off, sem.warning)
         }
     }
 }

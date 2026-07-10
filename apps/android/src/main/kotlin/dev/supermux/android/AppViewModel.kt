@@ -16,6 +16,8 @@ import dev.supermux.net.AddCommentBody
 import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
+import dev.supermux.net.ChunkSource
+import dev.supermux.net.GitOpResult
 import dev.supermux.net.CuratorSettingsResponse
 import dev.supermux.net.BrokerClient
 import dev.supermux.net.CodexResetResult
@@ -51,6 +53,7 @@ import dev.supermux.net.VerifySuggestResult
 import dev.supermux.net.VncClient
 import dev.supermux.android.session.LauncherDraft
 import dev.supermux.android.session.LauncherPrefs
+import dev.supermux.android.session.StagedUpload
 import dev.supermux.android.settings.AddCustomLspArgs
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
@@ -64,8 +67,11 @@ import dev.supermux.proto.SlashCommand
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.websocket.WebSockets
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -100,6 +106,14 @@ class AppViewModel(
     private val http = HttpClient(CIO) { install(WebSockets) }
     private val client = BrokerClient(baseUrl, token, http)
     private val api = BrokerApi(baseUrl, token, http)
+
+    // Viewing presence — tells the broker which chat is foreground (parity with iOS/web) so it
+    // suppresses a push for a chat you're already looking at. Driven by MainActivity (selected +
+    // app lifecycle); a 60s heartbeat keeps the broker's 5-min TTL fresh on a long quiet turn.
+    private var viewingSession: String? = null
+    private var viewingVisible: Boolean = false
+    private var lastSentViewing: Pair<String?, Boolean>? = null
+    private var viewingHeartbeat: Job? = null
     private val _sessions = MutableStateFlow<List<SessionInfo>>(emptyList())
     val sessions: StateFlow<List<SessionInfo>> = _sessions
     private val _messages = MutableStateFlow<Map<String, List<LogEntry>>>(emptyMap())
@@ -108,6 +122,8 @@ class AppViewModel(
     val activity: StateFlow<Map<String, List<ActivityEvent>>> = _activity
     private val _agentState = MutableStateFlow<Map<String, AgentStatus>>(emptyMap())
     val agentState: StateFlow<Map<String, AgentStatus>> = _agentState
+    private val _bgTasks = MutableStateFlow<Map<String, List<ServerFrame.BgTask>>>(emptyMap())
+    val bgTasks: StateFlow<Map<String, List<ServerFrame.BgTask>>> = _bgTasks
     private val _pendingSend = MutableStateFlow<Set<String>>(emptySet())
     val pendingSend: StateFlow<Set<String>> = _pendingSend
     private val _commands = MutableStateFlow<Map<String, List<SlashCommand>>>(emptyMap())
@@ -171,6 +187,7 @@ class AppViewModel(
                         _sessions.value = f.sessions
                         _messages.value = f.logs
                         _activity.value = f.activity
+                        _bgTasks.value = f.bgTasks
                         _agentState.value = f.agentState
                         _commands.value = f.commands
                         _commandsResolved.value = f.commandsResolved
@@ -178,6 +195,10 @@ class AppViewModel(
                         _finishJobs.value = f.sessions
                             .mapNotNull { s -> s.finish_job?.let { s.id to it } }
                             .toMap()
+                        // A (re)connect always begins with a snapshot; re-assert viewing presence
+                        // so the broker's per-device tracker is current after a reconnect.
+                        lastSentViewing = null
+                        sendViewingIfChanged()
                     }
                     is ServerFrame.SessionAdded -> {
                         // The broker re-broadcasts session_added for the SAME session (an early add
@@ -207,7 +228,10 @@ class AppViewModel(
                         }
                         incoming.finish_job?.let { job -> _finishJobs.update { it + (incoming.id to job) } }
                     }
-                    is ServerFrame.SessionRemoved -> _sessions.value = _sessions.value.filterNot { it.id == f.id }
+                    is ServerFrame.SessionRemoved -> {
+                        _sessions.value = _sessions.value.filterNot { it.id == f.id }
+                        _bgTasks.update { it - f.id }
+                    }
                     is ServerFrame.MessageAppend -> {
                         // Optimistic-echo dedup (iOS BrokerSession parity): when the real inbound
                         // message lands, drop the matching local-… placeholder we appended on send.
@@ -224,11 +248,15 @@ class AppViewModel(
                             this[f.session] = (this[f.session] ?: emptyList()) + f.event
                         }
                     }
+                    is ServerFrame.BgTasks -> {
+                        _bgTasks.update { it + (f.session to f.tasks) }
+                    }
                     is ServerFrame.AgentState -> {
                         _agentState.value = _agentState.value.toMutableMap().apply {
                             this[f.session] = AgentStatus(
                                 phase = f.phase, state = f.state, working = f.working,
                                 detail = f.detail, tool = f.tool, since = f.since, workingSince = f.workingSince,
+                                waiting = f.waiting, bgOpen = f.bgOpen,
                             )
                         }
                         _pendingSend.update { it - f.session }   // first real state clears the client-local "Sending…"
@@ -279,6 +307,39 @@ class AppViewModel(
             }
         }
         viewModelScope.launch { client.run() }
+    }
+
+    // Viewing presence (mirrors iOS BrokerSession / web useViewing) — pushes suppression for the
+    // chat you're looking at.
+
+    /** Report the foreground chat (`null` = the session list) + whether the app is visible.
+     *  Called by the shell on selection / lifecycle changes. Deduped; (lazily) starts the
+     *  keep-alive heartbeat. */
+    fun updateViewing(session: String?, visible: Boolean) {
+        viewingSession = session
+        viewingVisible = visible
+        sendViewingIfChanged()
+        ensureViewingHeartbeat()
+    }
+
+    private fun sendViewingIfChanged() {
+        val next = viewingSession to viewingVisible
+        if (lastSentViewing == next) return
+        lastSentViewing = next
+        viewModelScope.launch { runCatching { client.send(ClientFrame.Viewing(viewingSession, viewingVisible)) } }
+    }
+
+    /** Re-assert the viewing frame every 60s so the broker's 5-min TTL never lapses while the
+     *  user reads a long, quiet turn. Only refreshes while visible. viewModelScope cancels it
+     *  when the VM clears. */
+    private fun ensureViewingHeartbeat() {
+        if (viewingHeartbeat?.isActive == true) return
+        viewingHeartbeat = viewModelScope.launch {
+            while (isActive) {
+                delay(60_000)
+                if (viewingVisible) runCatching { client.send(ClientFrame.Viewing(viewingSession, true)) }
+            }
+        }
     }
 
     /** Patch the `state` (and optionally `error`) of every [ServerFrame.LspStatus] entry
@@ -416,6 +477,20 @@ class AppViewModel(
         kind: String? = null,
     ): String? = runCatching { api.upload(sessionId, bytes, name, mime, kind).file_id }.getOrNull()
 
+    /** Resumable/chunked upload from a [ChunkSource] (bounded RAM), reporting
+     *  progress. Returns the finalized file_id, or null on failure (the caller
+     *  surfaces a failed chip — never a silent drop). */
+    suspend fun uploadResumable(
+        sessionId: String,
+        source: ChunkSource,
+        name: String,
+        mime: String,
+        kind: String? = null,
+        onProgress: (Long, Long) -> Unit,
+    ): String? = runCatching {
+        api.uploadResumable(sessionId, source, name, mime, kind, onProgress).file_id
+    }.getOrNull()
+
     // ── Voice dictation ──────────────────────────────────────────────────────────
 
     // sessionId is OPTIONAL — null (e.g. the pre-spawn launcher) posts to the id-less /transcribe;
@@ -486,6 +561,13 @@ class AppViewModel(
     /** Post a message to the agent (the finish sheet's "Let the agent fix it"). */
     fun sendMessage(id: String, text: String) { viewModelScope.launch { runCatching { api.sendMessage(id, text) } } }
 
+    // Git ops for the workspace ⋮ menu — run the broker op and hand the result back so the caller
+    // can surface it (parity with iOS SessionChrome.fetch/push/pull/publish).
+    fun gitFetch(id: String, onResult: (GitOpResult?) -> Unit) { viewModelScope.launch { onResult(runCatching { api.gitFetch(id) }.getOrNull()) } }
+    fun gitPush(id: String, onResult: (GitOpResult?) -> Unit) { viewModelScope.launch { onResult(runCatching { api.gitPush(id) }.getOrNull()) } }
+    fun gitPull(id: String, onResult: (GitOpResult?) -> Unit) { viewModelScope.launch { onResult(runCatching { api.gitPull(id) }.getOrNull()) } }
+    fun gitPublish(id: String, onResult: (GitOpResult?) -> Unit) { viewModelScope.launch { onResult(runCatching { api.gitPublish(id) }.getOrNull()) } }
+
     data class PendingFirstMessage(val text: String, val attachments: List<String> = emptyList())
 
     private var pendingFirst: Pair<String, PendingFirstMessage>? = null
@@ -513,9 +595,10 @@ class AppViewModel(
         agent: String,
         model: String?,
         text: String,
-        attachments: List<String> = emptyList(),
+        staged: List<StagedUpload> = emptyList(),
         worktree: Boolean = false,
         baseBranch: String? = null,
+        reasoningLevel: String? = null,
     ): String {
         val validation = validatePath(workdir) ?: throw IllegalArgumentException("Could not validate path")
         val resolvedPath = validation.path
@@ -529,13 +612,20 @@ class AppViewModel(
                 model = model?.ifBlank { null },
                 worktree = if (worktree) true else null,
                 baseBranch = baseBranch?.ifBlank { null },
+                reasoningLevel = reasoningLevel?.ifBlank { null },
             ),
         )
         val sessionId = resp.id.ifBlank {
             _sessions.value.firstOrNull { it.name == resp.name }?.id
                 ?: throw IllegalStateException("Session created but id not available yet")
         }
-        setPendingFirst(sessionId, PendingFirstMessage(text, attachments))
+        // Attachments need a session id, so they upload *after* spawn (mirrors iOS
+        // NewSessionView.spawn() and the web launcher). A file that fails to upload is skipped —
+        // the first message still sends with whatever succeeded, never blocking session creation.
+        val attachmentIds = staged.mapNotNull { s ->
+            uploadResumable(sessionId, s.source, s.name, s.mime, s.kind) { _, _ -> }
+        }
+        setPendingFirst(sessionId, PendingFirstMessage(text, attachmentIds))
         return sessionId
     }
 
@@ -548,9 +638,19 @@ class AppViewModel(
     suspend fun launcherModels(agent: String): List<ModelInfo> =
         runCatching { api.listModels(agent).models }.getOrNull() ?: emptyList()
 
+    /** GET /reasoning-levels?agent=&model= — thinking levels for the launcher (null on failure). */
+    suspend fun launcherReasoning(agent: String, model: String?): ReasoningResponse? =
+        runCatching { api.getReasoningLevels(agent, model) }.getOrNull()
+
     /** GET /repos/info?path= — git status for the launcher's worktree picker (null on failure). */
     suspend fun launcherRepoInfo(workdir: String): RepoInfo? =
         runCatching { api.getRepoInfo(workdir) }.getOrNull()
+
+    /** GET /commands/preview?agent=&workdir= — the agent's slash commands for the launcher (no
+     *  session yet). Empty on failure or blank workdir (iOS NewSessionView previewCommands parity). */
+    suspend fun launcherCommands(agent: String, workdir: String): List<SlashCommand> =
+        if (workdir.isBlank()) emptyList()
+        else runCatching { api.previewCommands(agent, workdir).commands }.getOrNull() ?: emptyList()
 
     /**
      * PUT /settings/config { voiceCleanupEngine?, voiceCleanupModel? }.

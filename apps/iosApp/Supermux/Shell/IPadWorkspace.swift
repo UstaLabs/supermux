@@ -50,7 +50,7 @@ struct IPadWorkspace: View {
         .workspaceShortcuts(layout: layout, session: selected) { route = .newSession }
         // The session header lives in the detail column (see `WorkspaceDetail`), so the stack's
         // own nav bar is hidden — it would otherwise span both columns and double the chrome.
-        .toolbar(.hidden, for: .navigationBar)
+        .smHideNavigationBar()
         .alert("Rename session", isPresented: $showRename) {
             TextField("Name", text: $renameText)
             Button("Cancel", role: .cancel) {}
@@ -116,7 +116,7 @@ struct IPadWorkspace: View {
         Rectangle()
             .fill(Color.secondary.opacity(0.25))
             .frame(width: 1)
-            .hoverEffect(.highlight)
+            .smHoverHighlight()
             .overlay {
                 Color.clear
                     .frame(width: 24)
@@ -204,6 +204,9 @@ private struct WorkspaceDetail: View {
     @Binding var renameText: String
     @Binding var showKillConfirm: Bool
     @State private var finishSheet = false
+    #if os(macOS)
+    @Environment(\.openSettings) private var openSettings
+    #endif
 
     var body: some View {
         VStack(spacing: 0) {
@@ -214,6 +217,16 @@ private struct WorkspaceDetail: View {
                 Divider()
             }
             content
+                // "Not responding" treatment for a dead agent (broker agent_state == "dead") —
+                // the same shared DeadSessionBanner the compact ChatView attaches. Attached to
+                // `content` (not the outer VStack) so it spans the whole multi-pane area but sits
+                // BELOW the session header — Android parity: the dead banner lives above the
+                // panel switch, under the header.
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if broker.agentDead[session.id] == true {
+                        DeadSessionBanner()
+                    }
+                }
         }
         // The Finish bottom sheet (readiness → action → live job → recovery), shared chrome.
         .sheet(isPresented: $finishSheet) { FinishSheet(chrome: chrome) }
@@ -250,7 +263,7 @@ private struct WorkspaceDetail: View {
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.teal)
                 .controlSize(.small)
-                .hoverEffect(.highlight)
+                .smHoverHighlight()
             }
             overflowMenu
         }
@@ -282,7 +295,8 @@ private struct WorkspaceDetail: View {
             } label: {
                 Image(systemName: "link").font(.body)
             }
-            .hoverEffect(.highlight)
+            .smMacBorderlessMenu()
+            .smHoverHighlight()
         }
     }
 
@@ -302,16 +316,25 @@ private struct WorkspaceDetail: View {
             }
             Section {
                 Button { route = .personalAssistants } label: { Label("Assistants", systemImage: "person.2") }
+                Button { route = .archived } label: { Label("Archived", systemImage: "archivebox") }
                 Button { route = .usage } label: { Label("Usage", systemImage: "chart.bar") }
                 Button { route = .devices } label: { Label("Devices", systemImage: "ipad.and.iphone") }
                 Button { route = .proxies } label: { Label("Proxies", systemImage: "network") }
                 Button { route = .displays } label: { Label("Displays", systemImage: "display") }
-                Button { route = .settings } label: { Label("Settings", systemImage: "gearshape") }
+                Button {
+                    // The Mac has a real Settings window (⌘,); iOS keeps the sheet route.
+                    #if os(macOS)
+                    openSettings()
+                    #else
+                    route = .settings
+                    #endif
+                } label: { Label("Settings", systemImage: "gearshape") }
             }
         } label: {
             Image(systemName: "ellipsis.circle").font(.body)
         }
-        .hoverEffect(.highlight)
+        .smMacBorderlessMenu()
+        .smHoverHighlight()
     }
 
     // MARK: - Multi-pane content

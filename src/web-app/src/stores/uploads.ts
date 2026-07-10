@@ -4,7 +4,7 @@ import type { UploadResult } from "@/composables/useUploader"
 
 export type UploadState =
   | { status: "pending" }
-  | { status: "uploading"; startedAt: number }
+  | { status: "uploading"; startedAt: number; progress: number }
   | { status: "uploaded"; result: UploadResult }
   | { status: "failed"; error: string }
 
@@ -15,7 +15,11 @@ export const useUploads = defineStore("uploads", () => {
     return byId.value[id]
   }
   function start(id: string): void {
-    byId.value[id] = { status: "uploading", startedAt: Date.now() }
+    byId.value[id] = { status: "uploading", startedAt: Date.now(), progress: 0 }
+  }
+  function setProgress(id: string, fraction: number): void {
+    const s = byId.value[id]
+    if (s?.status === "uploading") s.progress = Math.max(0, Math.min(1, fraction))
   }
   function succeed(id: string, result: UploadResult): void {
     byId.value[id] = { status: "uploaded", result }
@@ -30,5 +34,5 @@ export const useUploads = defineStore("uploads", () => {
     byId.value = {}
   }
 
-  return { byId, get, start, succeed, fail, reset, clearAll }
+  return { byId, get, start, setProgress, succeed, fail, reset, clearAll }
 })

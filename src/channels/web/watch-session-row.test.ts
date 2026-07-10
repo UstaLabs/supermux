@@ -38,3 +38,9 @@ test("no last message → undefined preview and not unread", () => {
   expect(e.lastText).toBeUndefined()
   expect(e.unread).toBe(false)
 })
+
+test("waiting/bgOpen pass through from agent state", () => {
+  const e = watchRowExtras({ phase: "idle", waiting: true, bgOpen: 2 }, undefined, undefined)
+  expect(e.waiting).toBe(true)
+  expect(e.bgOpen).toBe(2)
+})

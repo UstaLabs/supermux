@@ -7,6 +7,7 @@ import type { ActivityEvent } from "./activity-event"
 export interface TranscriptTailerOpts {
   path: string
   onEvent: (event: ActivityEvent) => void
+  onLine?: (line: string) => void   // raw-line tap for stateful detectors (bg tasks)
   intervalMs?: number
   seekToEnd?: boolean
 }
@@ -14,6 +15,7 @@ export interface TranscriptTailerOpts {
 export class TranscriptTailer {
   private readonly path: string
   private readonly onEvent: (e: ActivityEvent) => void
+  private readonly onLine?: (line: string) => void
   private readonly intervalMs: number
   private readonly seekToEnd: boolean
   private offset = 0
@@ -24,6 +26,7 @@ export class TranscriptTailer {
   constructor(opts: TranscriptTailerOpts) {
     this.path = opts.path
     this.onEvent = opts.onEvent
+    this.onLine = opts.onLine
     this.intervalMs = opts.intervalMs ?? 300
     this.seekToEnd = opts.seekToEnd ?? false
   }
@@ -36,6 +39,7 @@ export class TranscriptTailer {
     while ((nl = this.buffer.indexOf("\n")) !== -1) {
       const line = this.buffer.slice(0, nl)
       this.buffer = this.buffer.slice(nl + 1)
+      this.onLine?.(line)
       for (const ev of parseTranscriptLine(line)) this.onEvent(ev)
     }
   }

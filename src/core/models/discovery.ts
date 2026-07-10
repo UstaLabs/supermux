@@ -1,8 +1,11 @@
 import type { AgentKind } from "../agents/types"
 import { AgentKind as Agent } from "../../shared/agents"
 import { readFileSync } from "fs"
-import { execSync } from "child_process"
+import { exec } from "child_process"
+import { promisify } from "util"
 import { home } from "../../shared/home"
+
+const execAsync = promisify(exec)
 
 export type ModelInfo = {
   id: string
@@ -47,14 +50,16 @@ export async function discoverClaudeModels(opts?: {
   }
 }
 
-function runCli(command: string): string {
-  return execSync(command, { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "pipe"] })
+// Non-blocking so the periodic model refresh never stalls the event loop.
+async function runCli(command: string): Promise<string> {
+  const { stdout } = await execAsync(command, { encoding: "utf8", timeout: 10_000 })
+  return stdout
 }
 
 export async function discoverCodexModels(opts?: {
   run?: (cmd: string) => Promise<string>
 }): Promise<ModelInfo[]> {
-  const runFn = opts?.run ?? ((cmd: string) => Promise.resolve(runCli(cmd)))
+  const runFn = opts?.run ?? runCli
   try {
     const raw = await runFn("codex debug models")
     const parsed = JSON.parse(raw) as { models?: { slug: string; display_name: string; visibility?: string; supported_reasoning_levels?: { effort: string; description?: string }[] }[] }
@@ -77,7 +82,7 @@ export async function discoverCodexModels(opts?: {
 export async function discoverCursorModels(opts?: {
   run?: (cmd: string) => Promise<string>
 }): Promise<ModelInfo[]> {
-  const runFn = opts?.run ?? ((cmd: string) => Promise.resolve(runCli(cmd)))
+  const runFn = opts?.run ?? runCli
   try {
     const raw = await runFn("cursor-agent --list-models")
     const models: ModelInfo[] = []
@@ -94,7 +99,7 @@ export async function discoverCursorModels(opts?: {
 export async function discoverOpenCodeModels(opts?: {
   run?: (cmd: string) => Promise<string>
 }): Promise<ModelInfo[]> {
-  const runFn = opts?.run ?? ((cmd: string) => Promise.resolve(runCli(cmd)))
+  const runFn = opts?.run ?? runCli
   try {
     // opencode prints one "<providerID>/<modelID>" per line. The id is kept in
     // that form because OpenCodeAdapter.parseModel splits on the first "/" to

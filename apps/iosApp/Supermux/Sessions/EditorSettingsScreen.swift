@@ -57,7 +57,7 @@ struct EditorSettingsScreen: View {
             lspSection
         }
         .navigationTitle("Editor")
-        .navigationBarTitleDisplayMode(.inline)
+        .smInlineNavigationTitle()
         .tint(Theme.teal)
         .task { await loadLsp() }
     }
@@ -458,7 +458,7 @@ private struct LabeledFormField: View {
             TextField(placeholder, text: $text)
                 .font(mono ? .system(.body, design: .monospaced) : .body)
                 .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
+                .smNoAutocapitalization()
         }
     }
 }

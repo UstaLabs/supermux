@@ -45,6 +45,16 @@ function fmtClaude(c: ClaudeUsage): string {
   const r7 = windowResetStr(c.sevenDay, "iso")
   lines.push(`  7d: ${pct(c.sevenDay.used)}${r7 ? ` · resets ${r7}` : ""}`)
 
+  if (c.sevenDaySonnet) {
+    const rs = windowResetStr(c.sevenDaySonnet, "iso")
+    lines.push(`  7d Sonnet: ${pct(c.sevenDaySonnet.used)}${rs ? ` · resets ${rs}` : ""}`)
+  }
+
+  if (c.sevenDayFable) {
+    const rf = windowResetStr(c.sevenDayFable, "iso")
+    lines.push(`  7d Fable: ${pct(c.sevenDayFable.used)}${rf ? ` · resets ${rf}` : ""}`)
+  }
+
   if (c.extraUsage && c.extraUsage.enabled) {
     const used = c.extraUsage.usedCredits.toLocaleString("en-US", { maximumFractionDigits: 0 })
     const limit = c.extraUsage.monthlyLimit.toLocaleString("en-US", { maximumFractionDigits: 0 })

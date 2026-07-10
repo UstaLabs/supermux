@@ -6,10 +6,10 @@ import SwiftTerm
 /// `BrokerSession`; this representable only re-parents that one instance into the
 /// current mount. It creates nothing and tears nothing down — keeping the same
 /// `TerminalView` alive across remounts is what preserves the scrollback.
-struct SwiftTermView: UIViewRepresentable {
+struct SwiftTermView: PlatformViewRepresentable {
     let view: TerminalView
 
-    func makeUIView(context: Context) -> TerminalView {
+    func makePlatformView(context: Context) -> TerminalView {
         // Detach from any prior mount before SwiftUI re-parents this cached, reused view.
         // Only one mount of a given terminal exists at a time, so this is normally a no-op;
         // it guards the toggle transition (split ⇄ standalone) from a "view already has a
@@ -18,5 +18,5 @@ struct SwiftTermView: UIViewRepresentable {
         return view
     }
 
-    func updateUIView(_ uiView: TerminalView, context: Context) {}
+    func updatePlatformView(_ uiView: TerminalView, context: Context) {}
 }

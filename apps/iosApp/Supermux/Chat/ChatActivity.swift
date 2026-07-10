@@ -106,7 +106,7 @@ struct ToolRowView: View {
                 .padding(.horizontal, 10).padding(.bottom, 8)
             }
         }
-        .background(Color(.secondarySystemBackground).opacity(0.4),
+        .background(Color.smSecondaryBackground.opacity(0.4),
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 0.5))
     }
@@ -147,7 +147,7 @@ struct ToolRowView: View {
             }
             .frame(maxHeight: 200)
             .padding(8)
-            .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))
+            .background(Color.smTertiaryFill, in: RoundedRectangle(cornerRadius: 6))
         }
     }
 }

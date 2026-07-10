@@ -56,7 +56,12 @@ self.addEventListener("push", (event) => {
       body: data.text ?? "New message",
       icon: "/icons/icon-192.png",
       badge: "/icons/icon-192.png",
+      // One notification per chat: a newer message replaces the older (kept in lockstep with
+      // `lib/notifications.ts` `notificationTag`, which clears this set when the chat opens).
       tag: `cmux:${data.sessionId ?? data.session}`,
+      // Re-alert (sound/vibrate) when a replacement lands, so a new message in an already-shown
+      // chat isn't a silent in-place swap.
+      renotify: true,
       data: { session: data.session, sessionId: data.sessionId, ts: data.ts },
       requireInteraction: false,
     }),

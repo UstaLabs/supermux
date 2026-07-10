@@ -10,6 +10,10 @@ struct SessionsListView: View {
     var onNewSession: () -> Void
     var onArchived: () -> Void
 
+    #if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+    #endif
+
     @State private var collapsed: Set<String> = SessionsListView.loadCollapsed()
     // Continuous pull-to-reveal: bar height tracks the live overscroll; latches open past a threshold.
     @State private var revealHeight: CGFloat = 0
@@ -37,6 +41,9 @@ struct SessionsListView: View {
                     .padding(.vertical, 3)
                 }
                 .buttonStyle(.plain)
+                // Composite icon+text button — give UI tests a stable handle that
+                // doesn't depend on concatenated Text-derived accessibility labels.
+                .accessibilityIdentifier("new-session")
             }
 
             ForEach(broker.groups(), id: \.workdir) { group in
@@ -47,7 +54,14 @@ struct SessionsListView: View {
                 } header: { header(group) }
             }
         }
-        .listStyle(.insetGrouped)
+        // On the Mac this list IS the app sidebar — the source-list style gives it the native
+        // sidebar row metrics + selection treatment instead of a flat content-list look.
+        // (Other management lists keep `.inset` via the shim; iPhone keeps `.insetGrouped`.)
+        #if os(macOS)
+        .listStyle(.sidebar)
+        #else
+        .smInsetGroupedListStyle()
+        #endif
         // Continuous Mail-style reveal: the "Archived" bar lives in a top safeAreaInset (outside
         // the scroll content) and its height tracks the live overscroll 1:1. The offset signal
         // (contentOffset.y + contentInsets.top) is invariant to the inset's own height, so the
@@ -70,7 +84,7 @@ struct SessionsListView: View {
         .navigationTitle("supermux")
         // Inline title: a persistent top reveal bar can't coexist with a large title (the
         // safeAreaInset eats the large title's space and squashes it).
-        .navigationBarTitleDisplayMode(.inline)
+        .smInlineNavigationTitle()
         .overlay {
             if !broker.synced && broker.sessions.isEmpty {
                 ProgressView("Connecting…").tint(Theme.teal)
@@ -138,8 +152,10 @@ struct SessionsListView: View {
 
     @ViewBuilder private func row(_ s: SessionInfo) -> some View {
         let muted = s.mute?.boolValue ?? false
-        SessionRow(broker: broker, session: s, preview: broker.messages[s.id]?.last?.text,
-                   phase: broker.agentPhase[s.id], muted: muted)
+        SessionRow(session: s, preview: broker.messages[s.id]?.last?.text,
+                   phase: broker.agentPhase[s.id],
+                   working: broker.agentWorking[s.id] == true,
+                   bgOpen: broker.agentBgOpen[s.id] ?? 0, muted: muted)
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 Button(role: .destructive) { killTarget = s } label: { Label("Kill", systemImage: "xmark.circle") }
                 Button { renameText = s.name; renameTarget = s } label: { Label("Rename", systemImage: "pencil") }.tint(.gray)
@@ -148,6 +164,12 @@ struct SessionsListView: View {
                 }.tint(Theme.teal)
             }
             .contextMenu {
+                #if os(macOS)
+                Button { openWindow(id: "session", value: s.id) } label: {
+                    Label("Open in New Window", systemImage: "macwindow.badge.plus")
+                }
+                Divider()
+                #endif
                 Button { broker.toggleMute(s) } label: {
                     Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
                 }
@@ -170,17 +192,23 @@ struct SessionsListView: View {
 }
 
 struct SessionRow: View {
-    let broker: BrokerSession
     let session: SessionInfo
     var preview: String?
     var phase: String?
+    // `working`/`bgOpen` are passed IN from the parent (which reads them in its own `body`)
+    // instead of read from `broker` here. A child View's own @Observable read inside a `List`
+    // row can go stale (e.g. while the row is off-screen behind the pushed chat on iPhone) and
+    // miss the re-invalidation — so the spinner never appeared even though the flag was true,
+    // while the chat view (reading the same value in its own body) updated fine. Hoisting the
+    // read to SessionsListView.body — like `preview`/`phase`, and like the collapsed rail —
+    // keeps the row a pure value view that always repaints with live state.
+    var working: Bool = false
+    var bgOpen: Int = 0
     var muted: Bool = false
-
-    private var working: Bool { broker.agentWorking[session.id] == true }
 
     var body: some View {
         HStack(spacing: 8) {
-            SessionStatusRail(git: session.git, working: working)
+            SessionStatusRail(git: session.git, working: working, bgOpen: bgOpen)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(session.name).font(.subheadline.weight(.semibold)).lineLimit(1)

@@ -12,6 +12,10 @@ struct SessionsRailView: View {
     var onExpand: () -> Void
     var onNewSession: () -> Void
 
+    #if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+    #endif
+
     var body: some View {
         VStack(spacing: 12) {
             Button(action: onExpand) {
@@ -25,6 +29,8 @@ struct SessionsRailView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Start a new session")
+            // SF-symbol-only button — no stable text to match on in UI tests.
+            .accessibilityIdentifier("new-session")
 
             ScrollView {
                 VStack(spacing: 10) {
@@ -48,7 +54,7 @@ struct SessionsRailView: View {
                 .overlay(alignment: .topTrailing) {
                     if working(s) {
                         Circle().fill(Theme.teal).frame(width: 9, height: 9)
-                            .overlay(Circle().strokeBorder(Color(.systemBackground), lineWidth: 1.5))
+                            .overlay(Circle().strokeBorder(Color.smBackground, lineWidth: 1.5))
                             .offset(x: 3, y: -3)
                     }
                 }
@@ -60,6 +66,12 @@ struct SessionsRailView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(s.name)
         .contextMenu {
+            #if os(macOS)
+            Button { openWindow(id: "session", value: s.id) } label: {
+                Label("Open in New Window", systemImage: "macwindow.badge.plus")
+            }
+            Divider()
+            #endif
             Button { broker.toggleMute(s) } label: {
                 Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
             }

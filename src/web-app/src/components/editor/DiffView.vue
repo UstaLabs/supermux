@@ -2,19 +2,43 @@
 import { ref, computed, watch } from "vue"
 import { ChevronRight, ChevronDown, X, Plus, MessageSquare } from "@lucide/vue"
 import type { RepoDiff } from "@/composables/useEditor"
-import { api, type ReviewComment } from "@/api/client"
+import { api, type ReviewComment, type RepoRefs } from "@/api/client"
 import { toast } from "vue-sonner"
 
 const props = defineProps<{
   repos: RepoDiff[]
   comments?: ReviewComment[]
   sessionId: string
+  base: string
+  refs: RepoRefs[]
 }>()
 
 const emit = defineEmits<{
   close: []
   reload: []
+  setBase: [base: string]
 }>()
+
+// ── Base selector ───────────────────────────────────────────────────────────
+const baseMenuOpen = ref(false)
+const baseSubmenu = ref<null | "commit" | "branch">(null)
+
+// refs from the primary (first) repo drive the submenus
+const primaryRefs = computed(() => props.refs[0] ?? { repo: "", branches: [], commits: [] })
+
+const baseLabel = computed(() => {
+  const b = props.base
+  if (b === "head") return "Uncommitted"
+  if (b.startsWith("commit:")) return b.slice(7, 14)
+  if (b.startsWith("branch:")) return b.slice(7)
+  return "Session start"
+})
+
+function chooseBase(spec: string) {
+  baseMenuOpen.value = false
+  baseSubmenu.value = null
+  if (spec !== props.base) emit("setBase", spec)
+}
 
 const totalFiles = computed(() => props.repos.reduce((n, r) => n + r.files.length, 0))
 const multiRepo = computed(() => props.repos.length > 1)
@@ -191,6 +215,49 @@ function lineHoverKey(repo: string, path: string, newLine: number | undefined): 
     <div class="flex items-center justify-between px-3 py-2 border-b border-border sticky top-0 bg-[var(--cmux-header)]/95 backdrop-blur z-10">
       <span class="text-[13px] font-medium">{{ totalFiles }} changed file{{ totalFiles !== 1 ? 's' : '' }}</span>
       <div class="flex items-center gap-1">
+        <div class="relative">
+          <button
+            class="text-[11px] px-2 py-1 rounded-md hover:bg-accent transition-colors text-muted-foreground flex items-center gap-1"
+            title="Change diff base"
+            @click="baseMenuOpen = !baseMenuOpen; baseSubmenu = null"
+          >
+            <span class="text-foreground/80">Base:</span> {{ baseLabel }}
+            <ChevronDown class="size-3" />
+          </button>
+          <div
+            v-if="baseMenuOpen"
+            class="absolute right-0 mt-1 w-52 rounded-md border border-border bg-[var(--cmux-header)] shadow-lg z-20 py-1 text-[12px]"
+          >
+            <button class="block w-full text-left px-3 py-1.5 hover:bg-accent" @click="chooseBase('session-start')">Session start</button>
+            <button class="block w-full text-left px-3 py-1.5 hover:bg-accent" @click="chooseBase('head')">Uncommitted (HEAD)</button>
+            <button class="w-full text-left px-3 py-1.5 hover:bg-accent flex items-center justify-between" @click="baseSubmenu = baseSubmenu === 'commit' ? null : 'commit'">
+              Previous commit… <ChevronRight class="size-3" />
+            </button>
+            <div v-if="baseSubmenu === 'commit'" class="max-h-56 overflow-y-auto border-t border-border/50">
+              <button
+                v-for="c in primaryRefs.commits"
+                :key="c.sha"
+                class="block w-full text-left px-3 py-1.5 hover:bg-accent truncate"
+                @click="chooseBase('commit:' + c.sha)"
+              >
+                <span class="font-mono text-[11px] text-muted-foreground">{{ c.sha }}</span> {{ c.subject }}
+              </button>
+              <div v-if="primaryRefs.commits.length === 0" class="px-3 py-1.5 text-muted-foreground italic">No commits</div>
+            </div>
+            <button class="w-full text-left px-3 py-1.5 hover:bg-accent flex items-center justify-between" @click="baseSubmenu = baseSubmenu === 'branch' ? null : 'branch'">
+              Another branch… <ChevronRight class="size-3" />
+            </button>
+            <div v-if="baseSubmenu === 'branch'" class="max-h-56 overflow-y-auto border-t border-border/50">
+              <button
+                v-for="b in primaryRefs.branches"
+                :key="b"
+                class="block w-full text-left px-3 py-1.5 hover:bg-accent font-mono text-[11px] truncate"
+                @click="chooseBase('branch:' + b)"
+              >{{ b }}</button>
+              <div v-if="primaryRefs.branches.length === 0" class="px-3 py-1.5 text-muted-foreground italic">No branches</div>
+            </div>
+          </div>
+        </div>
         <button
           class="text-[11px] px-2 py-1 rounded-md hover:bg-accent transition-colors"
           :class="wrap ? 'text-primary' : 'text-muted-foreground'"

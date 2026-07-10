@@ -6,7 +6,9 @@ import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -39,6 +41,7 @@ import dev.supermux.android.theme.softElevation
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.session.formatWorkdir
+import dev.supermux.session.inferHomeDir
 import dev.supermux.session.groupSessions
 import kotlinx.coroutines.launch
 
@@ -158,20 +161,25 @@ fun PathGroupHeader(label: String, count: Int, collapsed: Boolean = false) {
     }
 }
 
-@OptIn(ExperimentalSharedTransitionApi::class)
+@OptIn(ExperimentalSharedTransitionApi::class, ExperimentalFoundationApi::class)
 @Composable
 fun SessionRow(
     s: SessionInfo,
     active: Boolean,
     preview: LogEntry? = null,
     working: Boolean = false,
+    bgOpen: Int = 0,
     onClick: () -> Unit,
+    onRename: () -> Unit = {},
+    onKill: () -> Unit = {},
+    onToggleMute: () -> Unit = {},
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
 ) {
     val c = LocalPanes.current
     val cs = MaterialTheme.colorScheme
     val haptic = rememberHaptics()
+    var menuExpanded by remember { mutableStateOf(false) }
 
     // Unread indicator: inbound message that is the latest entry
     val hasUnread = !active && preview?.direction == "inbound"
@@ -183,23 +191,30 @@ fun SessionRow(
             .softElevation(radius = Radii.md)
             .clip(RoundedCornerShape(6.dp))
             .background(cs.surfaceContainer)
-            .clickable { haptic(HapticKind.Tick); onClick() }
+            .combinedClickable(
+                onClick = { haptic(HapticKind.Tick); onClick() },
+                onLongClick = { haptic(HapticKind.Confirm); menuExpanded = true },
+            )
     } else {
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 4.dp)
             .clip(RoundedCornerShape(6.dp))
             .background(Color.Transparent)
-            .clickable { haptic(HapticKind.Tick); onClick() }
+            .combinedClickable(
+                onClick = { haptic(HapticKind.Tick); onClick() },
+                onLongClick = { haptic(HapticKind.Confirm); menuExpanded = true },
+            )
     }
 
+    Box {
     Row(
         rowModifier
             .testTag("session_row_${s.id}")
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        SessionStatusRail(git = s.git, working = working, modifier = Modifier.align(Alignment.CenterVertically))
+        SessionStatusRail(git = s.git, working = working, bgOpen = bgOpen, modifier = Modifier.align(Alignment.CenterVertically))
         Spacer(Modifier.width(12.dp))
 
         Column(Modifier.weight(1f)) {
@@ -209,7 +224,11 @@ fun SessionRow(
                     s.name,
                     color = cs.onSurface,
                     fontSize = 15.sp,
-                    fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.Medium,
+                    // Bold the ACTIVE session (selection) as well as unread ones. Previously only
+                    // unread (last-message-inbound) rows were bold, and selecting a row cleared its
+                    // unread → it *lost* bold on click and regained it when you selected away, which
+                    // read as "clicking doesn't bold it, but clicking another one does".
+                    fontWeight = if (active || hasUnread) FontWeight.Bold else FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
@@ -254,7 +273,9 @@ fun SessionRow(
                 )
             } else {
                 Text(
-                    s.workdir,
+                    // Match iOS: abbreviate the workdir via the shared KMP util (~/… under home,
+                    // …/parent/leaf when deep) instead of showing the raw absolute path.
+                    formatWorkdir(s.workdir, inferHomeDir(s.workdir)),
                     color = cs.onSurfaceVariant,
                     fontFamily = MonoFontFamily,
                     fontSize = 11.sp,
@@ -264,6 +285,18 @@ fun SessionRow(
                 )
             }
         }
+    }
+    DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+        DropdownMenuItem(text = { Text("Rename") }, onClick = { menuExpanded = false; onRename() })
+        DropdownMenuItem(
+            text = { Text(if (s.mute == true) "Unmute" else "Mute") },
+            onClick = { menuExpanded = false; onToggleMute() },
+        )
+        DropdownMenuItem(
+            text = { Text("Kill", color = MaterialTheme.colorScheme.error) },
+            onClick = { menuExpanded = false; onKill() },
+        )
+    }
     }
 }
 
@@ -280,15 +313,24 @@ fun SessionListScreen(
     loadProjects: suspend () -> List<String> = { emptyList() },
     validatePath: suspend (String) -> dev.supermux.net.PathValidation? = { null },
     onNavigate: (String) -> Unit = {},
+    onRename: (String, String) -> Unit = { _, _ -> },
+    onKill: (String) -> Unit = {},
+    onMute: (String, Boolean) -> Unit = { _, _ -> },
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
 ) {
     val cs = MaterialTheme.colorScheme
-    val groups = remember(sessions, home, lastBySession) {
-        groupSessions(sessions, home) { lastBySession[it.id]?.ts ?: "" }
+    // Infer the home dir from the sessions' workdirs (iOS `BrokerSession.grouped` parity) instead of
+    // the hardcoded DevConfig.HOME placeholder, so "~/…" abbreviation in group labels matches iOS.
+    val effectiveHome = inferHomeDir(sessions.firstOrNull()?.workdir) ?: home
+    val groups = remember(sessions, effectiveHome, lastBySession) {
+        groupSessions(sessions, effectiveHome) { lastBySession[it.id]?.ts ?: "" }
     }
 
     var menuExpanded by remember { mutableStateOf(false) }
+    var renameTarget by remember { mutableStateOf<SessionInfo?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    var killTarget by remember { mutableStateOf<SessionInfo?>(null) }
 
     Scaffold(
         topBar = {
@@ -455,7 +497,11 @@ fun SessionListScreen(
                         active = s.id == activeId,
                         preview = lastBySession[s.id],
                         working = agentState[s.id]?.working == true,
+                        bgOpen = agentState[s.id]?.bgOpen ?: 0,
                         onClick = { onOpen(s.id) },
+                        onRename = { renameTarget = s; renameText = s.name },
+                        onKill = { killTarget = s },
+                        onToggleMute = { onMute(s.id, !(s.mute ?: false)) },
                         sharedScope = sharedScope,
                         animScope = animScope,
                     )
@@ -464,6 +510,32 @@ fun SessionListScreen(
             // Bottom padding so the FAB doesn't cover the last item
             item(key = "bottom_spacer") { Spacer(Modifier.height(88.dp)) }
         }
+    }
+
+    // Long-press row actions (parity with iOS's session-list swipe/context actions).
+    renameTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("Rename session") },
+            text = { OutlinedTextField(value = renameText, onValueChange = { renameText = it }, singleLine = true) },
+            confirmButton = {
+                TextButton(onClick = { onRename(target.id, renameText.trim()); renameTarget = null }) { Text("Rename") }
+            },
+            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text("Cancel") } },
+        )
+    }
+    killTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { killTarget = null },
+            title = { Text("Kill session?") },
+            text = { Text("This ends \"${target.name}\" and its agent. This can't be undone.") },
+            confirmButton = {
+                TextButton(onClick = { onKill(target.id); killTarget = null }) {
+                    Text("Kill", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { killTarget = null }) { Text("Cancel") } },
+        )
     }
 }
 

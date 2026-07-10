@@ -3,7 +3,12 @@ import SwiftUI
 import Shared
 import PhotosUI
 import UniformTypeIdentifiers
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
+import CoreTransferable
 
 /// The composer's shared brain: draft + staged attachments + the mic/dictation pipeline +
 /// slash-command parsing. Lifted out of `ChatPane` so the new-session launcher shares the
@@ -66,7 +71,12 @@ final class ComposerModel {
     // Trims newlines too (the original chat `canSend` used `.whitespaces`, leaving a
     // newline-only draft "sendable" — a latent quirk; this aligns with the launcher's
     // `.whitespacesAndNewlines` send-trim so both screens treat whitespace-only as empty).
-    var canSubmit: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pending.isEmpty }
+    // Blocked while any attachment is still uploading or has failed — never send a message
+    // minus its attachment (the old silent drop). The user retries or removes the failed chip.
+    var canSubmit: Bool {
+        let noBlocking = !pending.contains { $0.uploading || $0.failed }
+        return noBlocking && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pending.isEmpty)
+    }
     var hasContent: Bool { !draft.isEmpty || !pending.isEmpty }
     var isBusy: Bool { dictation.isListening || recorder.isRecording || transcribing || micStarting }
 
@@ -84,6 +94,15 @@ final class ComposerModel {
 
     // MARK: - Attachments
     func removeAttachment(_ p: PendingAttachment) { pending.removeAll { $0.id == p.id } }
+
+    // MARK: - Per-attachment upload state (driven by the screen's send-time upload loop)
+    private func mutate(_ id: UUID, _ f: (inout PendingAttachment) -> Void) {
+        if let i = pending.firstIndex(where: { $0.id == id }) { f(&pending[i]) }
+    }
+    func markUploading(_ id: UUID) { mutate(id) { $0.uploading = true; $0.failed = false } }
+    func setProgress(_ id: UUID, _ p: Double) { mutate(id) { $0.progress = max(0, min(1, p)) } }
+    func markUploaded(_ id: UUID, _ fileId: String) { mutate(id) { $0.uploading = false; $0.progress = 1; $0.uploadedFileId = fileId } }
+    func markFailed(_ id: UUID) { mutate(id) { $0.uploading = false; $0.failed = true } }
 
     /// Derive the upload MIME + filename for a picked photo-library item from the content types
     /// it advertises. A movie item (any `UTType` conforming to `.movie` — e.g. `public.movie`,
@@ -106,9 +125,15 @@ final class ComposerModel {
     /// after awaiting this.
     func loadPhotos(_ items: [PhotosPickerItem]) async {
         for item in items {
-            guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
             let meta = Self.attachmentMeta(for: item.supportedContentTypes, number: pending.count + 1)
-            pending.append(PendingAttachment(data: data, filename: meta.filename, mime: meta.mime))
+            // Videos stage as a temp file URL (streamed in chunks — bounded RAM); images as JPEG Data.
+            if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
+                if let movie = try? await item.loadTransferable(type: MovieFile.self) {
+                    pending.append(PendingAttachment(fileURL: movie.url, filename: meta.filename, mime: meta.mime))
+                }
+            } else if let data = try? await item.loadTransferable(type: Data.self) {
+                pending.append(PendingAttachment(data: data, filename: meta.filename, mime: meta.mime))
+            }
         }
     }
     func handleFiles(_ result: Result<[URL], Error>) {
@@ -122,8 +147,8 @@ final class ComposerModel {
             }
         }
     }
-    func addCameraImage(_ img: UIImage) {
-        if let data = img.jpegData(compressionQuality: 0.85) {
+    func addCameraImage(_ img: PlatformImage) {
+        if let data = img.smJpegData(quality: 0.85) {
             pending.append(PendingAttachment(data: data, filename: "photo-\(pending.count + 1).jpg", mime: "image/jpeg"))
         }
     }
@@ -132,10 +157,13 @@ final class ComposerModel {
     /// Reads the clip into `Data` (Phase 1: the shared upload takes bytes; true streaming is a
     /// separate KMP change) and labels it with the file's real video MIME + extension.
     func addCameraVideo(_ url: URL) {
-        guard let data = try? Data(contentsOf: url) else { return }
         let ext = url.pathExtension.isEmpty ? "mov" : url.pathExtension
         let mime = UTType(filenameExtension: ext)?.preferredMIMEType ?? "video/quicktime"
-        pending.append(PendingAttachment(data: data,
+        // Copy the picker's transient URL to a stable temp file we own, then stream from it.
+        let dest = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + "." + ext)
+        try? FileManager.default.removeItem(at: dest)
+        guard (try? FileManager.default.copyItem(at: url, to: dest)) != nil else { return }
+        pending.append(PendingAttachment(fileURL: dest,
                                          filename: "video-\(pending.count + 1).\(ext)",
                                          mime: mime))
     }
@@ -146,6 +174,7 @@ final class ComposerModel {
     /// "copied a screenshot / photo" case — otherwise any copied file data (e.g. a PDF) via item
     /// providers. Plain text and URLs are skipped here so the text field keeps pasting those as
     /// text; they never reach this path. Reuses the same `pending` staging as the +-menu pickers.
+    #if canImport(UIKit)
     func pasteClipboard(_ pasteboard: UIPasteboard = .general) async {
         if let images = pasteboard.images, !images.isEmpty {
             for image in images { addPastedImage(image) }
@@ -155,11 +184,30 @@ final class ComposerModel {
             await addPastedFile(provider)
         }
     }
+    #else
+    /// Mac analog: NSPasteboard has no item-provider API — stage the pasteboard image if there
+    /// is one, otherwise read copied file URLs (Finder copies) and stage their data.
+    func pasteClipboard() async {
+        if let image = SMPasteboard.image {
+            addPastedImage(image)
+            return
+        }
+        // File URLs ONLY (both belts): a plain web URL here would turn `Data(contentsOf:)`
+        // into a synchronous network fetch on the main actor.
+        guard let urls = NSPasteboard.general.readObjects(
+            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] else { return }
+        for url in urls where url.isFileURL {
+            guard let data = try? Data(contentsOf: url) else { continue }
+            let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+            pending.append(PendingAttachment(data: data, filename: url.lastPathComponent, mime: mime))
+        }
+    }
+    #endif
 
     /// Stage a single pasted image as a JPEG attachment. Split out (and non-private) so the
     /// staging/filename logic is unit-testable without a live `UIPasteboard`.
-    func addPastedImage(_ image: UIImage) {
-        guard let data = image.jpegData(compressionQuality: 0.9) else { return }
+    func addPastedImage(_ image: PlatformImage) {
+        guard let data = image.smJpegData(quality: 0.9) else { return }
         pending.append(PendingAttachment(data: data,
                                          filename: "pasted-\(pending.count + 1).jpg",
                                          mime: "image/jpeg"))
@@ -293,4 +341,23 @@ final class ComposerModel {
         }
     }
     func clearSlashToken() { replaceSlashToken(with: "") }
+}
+
+/// A `Transferable` that materializes a picked video as a temp file URL (copied out of the
+/// system's transient location) instead of loading it into `Data` — so a large video streams
+/// from disk in chunks. Used by `loadPhotos` for movie items.
+struct MovieFile: Transferable {
+    let url: URL
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { movie in
+            SentTransferredFile(movie.url)
+        } importing: { received in
+            let ext = received.file.pathExtension.isEmpty ? "mov" : received.file.pathExtension
+            let dest = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString + "." + ext)
+            try? FileManager.default.removeItem(at: dest)
+            try FileManager.default.copyItem(at: received.file, to: dest)
+            return MovieFile(url: dest)
+        }
+    }
 }

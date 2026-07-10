@@ -1,8 +1,13 @@
 // apps/iosApp/Supermux/Chat/Composer/ComposerInput.swift
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import UniformTypeIdentifiers
 
+#if canImport(UIKit)
 /// A multiline composer text field backed by UIKit so it can do what SwiftUI's `TextField` can't on
 /// iOS: intercept a PASTE of an image/PDF (long-press "Paste" or ⌘V) and stage it as an attachment,
 /// exactly how WhatsApp/Messages accept a pasted photo. Plain-text paste falls through to normal
@@ -157,3 +162,200 @@ final class PasteTextView: UITextView {
     }
     @objc private func hardwareReturn() { onHardwareReturn?() }
 }
+#else
+/// Mac twin of the composer input, mirroring the iOS wrapper's interface 1:1: an `NSTextView`
+/// in a borderless scroll view with a bound draft, placeholder, auto-grow up to `maxLines`
+/// (then it scrolls), focus mirrored via the plain `Bool` binding, Return = send /
+/// Shift+Return = newline, and paste interception so an image/PDF clipboard routes to
+/// `onPasteAttachment` instead of inserting into the text.
+struct ComposerInput: NSViewRepresentable {
+    @Binding var text: String
+    var placeholder: String
+    var maxLines: Int
+    @Binding var isFocused: Bool
+    var canSubmit: Bool
+    var onSubmit: () -> Void
+    /// Invoked on a non-text paste; returns true if it staged something (so the view skips the
+    /// default paste and inserts nothing into the text).
+    var onPasteAttachment: () -> Bool
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        // `init(frame:)` (inherited convenience — PasteTextView overrides both of
+        // NSTextView's designated inits) builds the full text system; a bare `init()`
+        // doesn't exist on NSTextView.
+        let tv = PasteTextView(frame: .zero)
+        tv.delegate = context.coordinator
+        tv.onPasteAttachment = { context.coordinator.parent.onPasteAttachment() }
+        tv.onFocusChange = { context.coordinator.focusChanged($0) }
+        tv.font = .preferredFont(forTextStyle: .body, options: [:])
+        tv.textColor = .smLabel
+        tv.drawsBackground = false
+        tv.isRichText = false
+        tv.allowsUndo = true
+        tv.textContainerInset = .zero
+        tv.textContainer?.lineFragmentPadding = 0
+        tv.textContainer?.widthTracksTextView = true
+        tv.isVerticallyResizable = true
+        tv.isHorizontallyResizable = false
+        tv.autoresizingMask = [.width]
+        tv.minSize = NSSize(width: 0, height: 0)
+        tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+
+        let scroll = NSScrollView()
+        scroll.documentView = tv
+        scroll.borderType = .noBorder
+        scroll.drawsBackground = false
+        scroll.contentView.drawsBackground = false   // the clip view too, or it paints over the glass
+        scroll.hasVerticalScroller = false
+        scroll.hasHorizontalScroller = false
+        scroll.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+        guard let tv = scroll.documentView as? PasteTextView else { return }
+        if tv.string != text {
+            tv.string = text
+            tv.invalidateIntrinsicContentSize()
+        }
+        tv.placeholderLabel.stringValue = placeholder
+        tv.placeholderLabel.isHidden = !text.isEmpty
+        tv.needsLayout = true
+
+        // Focus bridge — deferred so we never mutate the focus binding *during* a SwiftUI update
+        // (parity with the iOS becomeFirstResponder deferral).
+        let want = isFocused
+        let isFirst = tv.window?.firstResponder === tv
+        if want != isFirst {
+            DispatchQueue.main.async {
+                guard let window = tv.window else { return }
+                let isFirstNow = window.firstResponder === tv
+                if want, !isFirstNow { window.makeFirstResponder(tv) }
+                else if !want, isFirstNow { window.makeFirstResponder(nil) }
+            }
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView scroll: NSScrollView, context: Context) -> CGSize? {
+        guard let tv = scroll.documentView as? PasteTextView else { return nil }
+        let width = proposal.width ?? scroll.bounds.width
+        guard width > 0 else { return nil }
+        guard let container = tv.textContainer, let lm = tv.layoutManager else { return nil }
+        container.size = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        lm.ensureLayout(for: container)
+        let fitH = ceil(lm.usedRect(for: container).height)
+        let lineH = ceil(lm.defaultLineHeight(for: tv.font ?? .preferredFont(forTextStyle: .body, options: [:])))
+        let maxH = ceil(lineH * CGFloat(maxLines))
+        let minH = lineH
+        scroll.hasVerticalScroller = fitH > maxH
+        return CGSize(width: width, height: min(max(fitH, minH), maxH))
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: ComposerInput
+        init(_ parent: ComposerInput) { self.parent = parent }
+
+        func textDidChange(_ notification: Notification) {
+            guard let tv = notification.object as? PasteTextView else { return }
+            parent.text = tv.string
+            tv.placeholderLabel.isHidden = !tv.string.isEmpty
+            tv.invalidateIntrinsicContentSize()
+        }
+        /// Return = send / Shift+Return = newline — parity with the iOS hardware key command:
+        /// a plain Return is consumed either way (send when sendable, swallowed otherwise).
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard commandSelector == #selector(NSResponder.insertNewline(_:)) else { return false }
+            if NSApp.currentEvent?.modifierFlags.contains(.shift) == true { return false }
+            handleHardwareReturn()
+            return true
+        }
+        func focusChanged(_ focused: Bool) {
+            if parent.isFocused != focused { parent.isFocused = focused }
+        }
+        func handleHardwareReturn() {
+            // Parity with ComposerEnterAction: Enter sends when there's something to send,
+            // otherwise it's swallowed (the command already consumed the event → no newline).
+            if parent.canSubmit { parent.onSubmit() }
+        }
+    }
+}
+
+/// `NSTextView` that intercepts image/PDF paste (parity with the iOS PasteTextView), reports
+/// first-responder changes for the focus binding, and manages a placeholder label manually
+/// (NSTextView has no native placeholder either).
+final class PasteTextView: NSTextView {
+    var onPasteAttachment: (() -> Bool)?
+    var onFocusChange: ((Bool) -> Void)?
+    /// Injectable so the paste logic is unit-testable; production reads the system clipboard.
+    var pasteboard: NSPasteboard = .general
+
+    let placeholderLabel: NSTextField = {
+        let l = PassthroughLabel(labelWithString: "")
+        l.textColor = .placeholderTextColor
+        l.font = .preferredFont(forTextStyle: .body, options: [:])
+        l.lineBreakMode = .byTruncatingTail
+        l.maximumNumberOfLines = 1
+        return l
+    }()
+
+    override func layout() {
+        super.layout()
+        // Add the placeholder overlay once here (NOT in a custom designated init): declaring an
+        // `init(frame:textContainer:)` would drop NSTextView's inherited `init(frame:)` convenience,
+        // which is the one that builds the full TextKit stack. All stored props have defaults, so
+        // the view needs no custom init.
+        if placeholderLabel.superview == nil { addSubview(placeholderLabel) }
+        let inset = textContainerInset
+        let pad = textContainer?.lineFragmentPadding ?? 0
+        let maxW = max(0, bounds.width - 2 * (inset.width + pad))
+        // Single-line label → intrinsic height is exact (the AppKit-idiomatic measurement).
+        let fitH = placeholderLabel.intrinsicContentSize.height
+        placeholderLabel.frame = NSRect(x: inset.width + pad, y: inset.height,
+                                        width: maxW, height: fitH)
+    }
+
+    /// True when the clipboard holds something we stage as an attachment rather than inserting.
+    private var clipboardHasAttachment: Bool {
+        pasteboard.canReadObject(forClasses: [NSImage.self], options: nil)
+            || pasteboard.availableType(from: [NSPasteboard.PasteboardType(UTType.pdf.identifier)]) != nil
+    }
+
+    /// Keep "Paste" (⌘V / Edit menu) enabled for an image/PDF clipboard — a plain text view
+    /// would otherwise disable it (mac analog of the iOS `canPerformAction` override).
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(NSText.paste(_:)), clipboardHasAttachment {
+            return true
+        }
+        return super.validateUserInterfaceItem(item)
+    }
+
+    override func paste(_ sender: Any?) {
+        if clipboardHasAttachment, onPasteAttachment?() == true {
+            return   // staged as an attachment; do NOT insert anything into the text
+        }
+        super.paste(sender)   // plain text → normal paste
+    }
+
+    // Focus mirroring (the mac analog of textViewDidBegin/EndEditing, which on AppKit only
+    // fire around actual edits, not focus).
+    override func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if ok { onFocusChange?(true) }
+        return ok
+    }
+    override func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if ok { onFocusChange?(false) }
+        return ok
+    }
+}
+
+/// Label that never intercepts clicks, so clicking the placeholder area focuses the text view
+/// underneath (parity with UILabel's default `isUserInteractionEnabled = false`).
+private final class PassthroughLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+#endif

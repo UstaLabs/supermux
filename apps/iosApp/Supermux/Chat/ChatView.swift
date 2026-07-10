@@ -1,6 +1,10 @@
 import SwiftUI
 import Shared
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 
 /// The iPhone (compact) session screen: a 5-tab pane switcher (Chat / Native / Terminal /
 /// Editor / Display) with the toolbar, finish flow, and git actions. The Chat tab renders
@@ -44,13 +48,25 @@ struct ChatView: View {
     private var agentTabIcon: Image {
         guard let asset = agentAssetName else { return Image(systemName: "cube.transparent") }
         if let cached = Self.tabIconCache[asset] { return cached }
+        #if canImport(UIKit)
         guard let ui = UIImage(named: asset) else { return Image(systemName: "cube.transparent") }
         let canvas = CGSize(width: 26, height: 26)
         let inset: CGFloat = 4
         let rendered = UIGraphicsImageRenderer(size: canvas).image { _ in
             ui.draw(in: CGRect(x: inset, y: inset, width: canvas.width - 2 * inset, height: canvas.height - 2 * inset))
         }
-        let image = Image(uiImage: rendered.withRenderingMode(.alwaysOriginal))
+        let image = Image(platform: rendered.withRenderingMode(.alwaysOriginal))
+        #else
+        guard let base = NSImage(named: asset) else { return Image(systemName: "cube.transparent") }
+        let canvas = CGSize(width: 26, height: 26)
+        let inset: CGFloat = 4
+        let rendered = NSImage(size: canvas, flipped: false) { _ in
+            base.draw(in: CGRect(x: inset, y: inset, width: canvas.width - 2 * inset, height: canvas.height - 2 * inset))
+            return true
+        }
+        rendered.isTemplate = false   // keep the brand colors (analog of .alwaysOriginal)
+        let image = Image(platform: rendered)
+        #endif
         Self.tabIconCache[asset] = image
         return image
     }
@@ -100,13 +116,20 @@ struct ChatView: View {
                 DisplayPane(broker: broker, session: session)
             }
         }
+        // "Not responding" treatment for a dead agent (broker agent_state == "dead") — parity
+        // with the web + Android dead-session banners (closes a previously iOS-only gap).
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if broker.agentDead[session.id] == true {
+                DeadSessionBanner()
+            }
+        }
         .navigationTitle(session.name)
         .navigationSubtitle(navSubtitle)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
+            ToolbarItem(placement: .smTopLeading) {
                 AgentLogo(agent: session.agent, size: 20)
             }
-            ToolbarItemGroup(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .smTopTrailing) {
                 if session.session_branch != nil {
                     Button { finishSheet = true } label: {
                         Label("Finish", systemImage: "arrow.triangle.merge")

@@ -19,6 +19,31 @@ extension View {
         glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 
+    /// The composer card. iOS: Liquid Glass. macOS: glass renders near-invisible against the
+    /// flat window background (no floating-chrome compositing like iOS), so the card gets a
+    /// real material + hairline + soft shadow — visible structure in both light and dark.
+    @ViewBuilder func composerSurface(cornerRadius: CGFloat) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        #if os(macOS)
+        background(.regularMaterial, in: shape)
+            .overlay(shape.strokeBorder(Theme.hairline, lineWidth: 1))
+            .shadow(color: .black.opacity(0.10), radius: 10, y: 2)
+        #else
+        glassEffect(.regular, in: shape)
+        #endif
+    }
+
+    /// A filled card. iOS: `smSecondaryBackground` (visibly gray on white). macOS maps that
+    /// token to `controlBackgroundColor` — white-on-white — so the Mac gets the same
+    /// material + hairline + shadow treatment as `composerSurface` instead.
+    @ViewBuilder func smCardSurface(cornerRadius: CGFloat) -> some View {
+        #if os(macOS)
+        composerSurface(cornerRadius: cornerRadius)
+        #else
+        background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        #endif
+    }
+
     /// Agent reply: plain full-bleed text (no card). Kept as a no-op wrapper so call
     /// sites read intentionally and we can reintroduce treatment later if needed.
     func transcriptBody() -> some View {
@@ -36,7 +61,7 @@ extension View {
         let shape = RoundedRectangle(cornerRadius: Theme.cardCorner, style: .continuous)
         return padding(.horizontal, 12)
             .padding(.vertical, 9)
-            .background(Color(.secondarySystemBackground), in: shape)
+            .background(Color.smSecondaryBackground, in: shape)
             .overlay(shape.strokeBorder(Theme.hairline, lineWidth: 1))
     }
 }
