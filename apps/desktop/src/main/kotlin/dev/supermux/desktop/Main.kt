@@ -51,6 +51,10 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //   SM_ARCHIVED=1                 — open the Archived-sessions overlay (File ▸ Archived…'s SAME
 //                                  ui.openArchived()) on start, loading the real app.archived()
 //                                  list (M4e)                                                  [main]
+//   SM_ARCHIVED_OPEN=<name>       — ALSO opens the overlay, then resolves <name> in the real
+//                                  app.archived() list and seeds ui.forceArchivedOpenFor so that
+//                                  session's read-only ArchivedChatView renders with no click
+//                                  (M4e-T3 live verification of the transcript view)            [main]
 //   SM_ARCHIVED_RESUME=<name>     — ALSO opens the overlay, then resolves <name> in the real
 //                                  app.archived() list and drives the SAME resume path the
 //                                  ArchivedScreen's Resume button uses: app.resume(id) fire-and-
@@ -551,32 +555,52 @@ fun main() {
                     // Archived overlay on start via the SAME `ui.openArchived()` the File ▸
                     // "Archived…" menu item calls, so `WorkspaceRoot`'s own LaunchedEffect(ui.archivedOpen)
                     // loads the real `app.archived()` list and the screen renders under Xvfb without a
-                    // menu click. SM_ARCHIVED_RESUME=<archived-session-name> ALSO opens the overlay,
-                    // then independently resolves <name> against `app.archived()` (polled — the archived
-                    // list is a separate fetch from WorkspaceRoot's, avoiding a race with its own
-                    // LaunchedEffect) and drives the SAME resume path `ArchivedScreen`'s onResume callback
-                    // uses in WorkspaceRoot: a fire-and-forget `app.resume(id)` immediately followed by
-                    // closing the overlay (`ui.archivedOpen = false`) — the resumed session then arrives
-                    // back in the live sidebar via a WS frame, same as a real click. This SPAWNS/UN-
-                    // ARCHIVES a real session — only point it at a throwaway you archived yourself, never
-                    // a real archived session. Off by default; harmless in production.
+                    // menu click. SM_ARCHIVED_OPEN=<archived-session-name> ALSO opens the overlay, then
+                    // resolves <name> against a fresh `app.archived()` fetch (polled — a separate fetch
+                    // from WorkspaceRoot's own, to avoid racing it) and seeds `ui.forceArchivedOpenFor`
+                    // with its id, so that row's read-only ArchivedChatView (transcript, no composer)
+                    // renders with no click. SM_ARCHIVED_RESUME=<archived-session-name> instead drives the
+                    // SAME resume path `ArchivedScreen`'s onResume callback uses in WorkspaceRoot: a
+                    // fire-and-forget `app.resume(id)` immediately followed by closing the overlay
+                    // (`ui.archivedOpen = false`) — the resumed session then arrives back in the live
+                    // sidebar via a WS frame, same as a real click. SM_ARCHIVED_OPEN and SM_ARCHIVED_RESUME
+                    // may both be set (open renders first, then resume fires) or used independently. This
+                    // SPAWNS/UN-ARCHIVES a real session on SM_ARCHIVED_RESUME — only point it at a
+                    // throwaway you archived yourself, never a real archived session. Off by default;
+                    // harmless in production.
                     val archivedHook = System.getenv("SM_ARCHIVED") == "1"
+                    val archivedOpenName = System.getenv("SM_ARCHIVED_OPEN")?.takeIf { it.isNotBlank() }
                     val archivedResumeName = System.getenv("SM_ARCHIVED_RESUME")?.takeIf { it.isNotBlank() }
-                    if (archivedHook || archivedResumeName != null) {
+                    if (archivedHook || archivedOpenName != null || archivedResumeName != null) {
                         LaunchedEffect(app) {
                             // Let the first WS snapshot land, same settle window as the other hooks.
                             delay(3_000)
                             ui.openArchived()
                             println("[archived] opened the Archived overlay")
-                            if (archivedResumeName != null) {
-                                // Wait (≤30s) for the named session to show up in a fresh archived() fetch.
-                                var target = app.archived().firstOrNull { it.name == archivedResumeName }
+
+                            // Resolve <name> against a fresh archived() fetch, polling ≤30s (the fetch
+                            // is a separate call from WorkspaceRoot's own list load).
+                            suspend fun resolveArchived(name: String): dev.supermux.net.ArchivedDto? {
+                                var found = app.archived().firstOrNull { it.name == name }
                                 val deadline = System.currentTimeMillis() + 30_000
-                                while (target == null && System.currentTimeMillis() < deadline) {
+                                while (found == null && System.currentTimeMillis() < deadline) {
                                     delay(1_000)
-                                    target = app.archived().firstOrNull { it.name == archivedResumeName }
+                                    found = app.archived().firstOrNull { it.name == name }
                                 }
-                                val t = target
+                                return found
+                            }
+
+                            if (archivedOpenName != null) {
+                                val t = resolveArchived(archivedOpenName)
+                                if (t == null) {
+                                    println("[archived] SM_ARCHIVED_OPEN session '$archivedOpenName' not found in archived() after 30s")
+                                } else {
+                                    ui.forceArchivedOpenFor = t.id
+                                    println("[archived] opened read-only transcript for '$archivedOpenName' (${t.id})")
+                                }
+                            }
+                            if (archivedResumeName != null) {
+                                val t = resolveArchived(archivedResumeName)
                                 if (t == null) {
                                     println("[archived] SM_ARCHIVED_RESUME session '$archivedResumeName' not found in archived() after 30s")
                                 } else {

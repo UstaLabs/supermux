@@ -114,6 +114,13 @@ fun ArchivedScreen(
     // (not the "No archived sessions." empty text) until it resolves, so a slow fetch never flashes
     // an empty state (mirrors Android's `loading` flag + ArchivedChatView's own spinner).
     loading: Boolean = false,
+    // One-shot "open this archived session's read-only transcript" request (an id from [archived]),
+    // set by the off-by-default `SM_ARCHIVED_OPEN` headless hook (via WorkspaceUiState.forceArchivedOpenFor,
+    // M4e-T3 live verification) so the chat view renders without a click. Consumed (→ [onForceOpenConsumed])
+    // the same run it's applied, so it never re-fires on an unrelated recomposition. Null/no-op in
+    // normal operation.
+    forceOpenId: String? = null,
+    onForceOpenConsumed: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     // Internal nav: tapping a row opens a read-only chat view of that session.
@@ -121,6 +128,13 @@ fun ArchivedScreen(
     var selectedProject by remember { mutableStateOf<String?>(null) }
     var filterOpen by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
+
+    LaunchedEffect(forceOpenId) {
+        if (forceOpenId != null) {
+            openedId = forceOpenId
+            onForceOpenConsumed()
+        }
+    }
 
     val projects = remember(archived, home) { archivedProjects(archived, home) }
     // Clear the filter if the selected project no longer has any archived sessions.

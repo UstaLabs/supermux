@@ -220,6 +220,27 @@ class ArchivedScreenTest {
         onNodeWithTag("composer-send").assertDoesNotExist()
     }
 
+    @Test fun force_open_id_opens_the_transcript_with_no_click_then_consumes_itself() = runComposeUiTest {
+        val logs = listOf(
+            LogEntry(id = "m1", ts = "2026-07-09T10:00:00Z", direction = "inbound", text = "hello from alpha"),
+        )
+        var consumedCount = 0
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ArchivedScreen(
+                    fakeArchived, home, onBack = {}, onResume = {}, loadLogs = { logs },
+                    forceOpenId = "a1",
+                    onForceOpenConsumed = { consumedCount++ },
+                )
+            }
+        }
+        waitForIdle()
+        // No click on the row — the chat view is already showing (SM_ARCHIVED_OPEN's live-verification path).
+        onNodeWithTag("archived_chat").assertIsDisplayed()
+        onNodeWithText("hello from alpha").assertIsDisplayed()
+        assertEquals(1, consumedCount)
+    }
+
     @Test fun resume_fires_on_resume_with_the_session_id() = runComposeUiTest {
         var resumed: String? = null
         setContent {

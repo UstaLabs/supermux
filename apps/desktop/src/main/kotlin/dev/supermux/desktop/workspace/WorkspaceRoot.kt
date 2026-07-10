@@ -164,6 +164,18 @@ class WorkspaceUiState {
     var externalAttach by mutableStateOf<Pair<String, dev.supermux.desktop.chat.ComposerExternalAttach>?>(null)
 
     /**
+     * One-shot "open this archived session's read-only transcript" request (an ARCHIVED session
+     * id, not a live one), consumed by [dev.supermux.desktop.session.ArchivedScreen] — it seeds the
+     * internal list⇄chat nav (`openedId`) so the matching row's read-only `ArchivedChatView` renders
+     * without a click, the same way [forceFinishDialogFor] seeds the Finish dialog. Set by the
+     * off-by-default `SM_ARCHIVED_OPEN` headless hook in Main.kt (which also flips [archivedOpen] via
+     * [openArchived] so the overlay is showing); null in normal operation. Cleared once
+     * [dev.supermux.desktop.session.ArchivedScreen] consumes it (mirrors [forceLinksMenuFor]'s
+     * consumed-callback pattern — see [WorkspaceRoot]'s wiring).
+     */
+    var forceArchivedOpenFor by mutableStateOf<String?>(null)
+
+    /**
      * Reconciles the hydrated UI state against the [live] session-id set: drops a selection whose
      * session vanished (killed elsewhere / agent exit) and prunes the layout's per-session pane
      * state.
@@ -463,6 +475,8 @@ fun WorkspaceRoot(
                             ui.archivedOpen = false
                         },
                         loadLogs = { app.archivedLogs(it) },
+                        forceOpenId = ui.forceArchivedOpenFor,
+                        onForceOpenConsumed = { ui.forceArchivedOpenFor = null },
                     )
                 }
             }
