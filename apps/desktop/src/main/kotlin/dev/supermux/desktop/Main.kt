@@ -57,6 +57,8 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //   SM_CHAT_ATTACH="<session-name>|<file-path>|<text>" — stage+upload a file into the chat
 //                                  composer via the SAME stage()/stageFiles() path, wait for the
 //                                  chip to reach Done, then send with <text> (M4d)             [main]
+//   SM_DISPLAY="<session-name>" — open the session + display pane + connect/start its VNC stream
+//                                  (real Xvfb+VNC on the broker host) (M5-2)                       [main]
 //   SM_ARCHIVED=1                 — open the Archived-sessions overlay (File ▸ Archived…'s SAME
 //                                  ui.openArchived()) on start, loading the real app.archived()
 //                                  list (M4e)                                                  [main]
@@ -738,6 +740,45 @@ fun main() {
                             ui.selectedId = t.id
                             ui.externalDictate = t.id to dev.supermux.desktop.chat.ComposerExternalDictate(wavPath)
                             println("[dictate] requested transcribe '$wavPath' for ${t.name} (${t.id})")
+                        }
+                    }
+
+                    // Headless display/VNC-verification hook (M5-2): SM_DISPLAY="<session-name>"
+                    // resolves the named session after the first snapshot, SELECTS it, flips its
+                    // display pane on (the SAME layout.setPanes(...display=true) toggle the header's
+                    // PaneToggleCluster click uses), then ensures a running display stream exists —
+                    // reusing one if `listDisplays()` already shows one for this session, else firing
+                    // a REAL app.startDisplay(name) (broker default provider: linux-xvfb here). The
+                    // mounted DisplayPanel then connects the REAL VncClient to that stream and paints
+                    // it, so a screenshot proves the whole RFB-over-WS round trip with no
+                    // pointer/mic/xdotool involved. DANGER: startDisplay spawns a real Xvfb+VNC
+                    // process on the broker host — only point this at a throwaway session, and clean
+                    // up the started stream afterward (see this plan's Task 5 live-verify steps). Off
+                    // by default; harmless in production.
+                    val displayTest = System.getenv("SM_DISPLAY")?.takeIf { it.isNotBlank() }
+                    if (displayTest != null) {
+                        LaunchedEffect(app) {
+                            var target = app.sessions.value.firstOrNull { it.name == displayTest }
+                            val deadline = System.currentTimeMillis() + 30_000
+                            while (target == null && System.currentTimeMillis() < deadline) {
+                                delay(500)
+                                target = app.sessions.value.firstOrNull { it.name == displayTest }
+                            }
+                            val t = target
+                            if (t == null) {
+                                println("[display] session '$displayTest' not found in snapshot after 30s")
+                                return@LaunchedEffect
+                            }
+                            ui.selectedId = t.id
+                            ui.layout.setPanes(t.id, ui.layout.panesFor(t.id).copy(display = true))
+                            val existing = app.listDisplays().firstOrNull { it.sessionName == t.name && it.status == "running" }
+                            if (existing != null) {
+                                println("[display] reusing existing running display ${existing.id} for ${t.name}")
+                            } else {
+                                println("[display] no running display for '${t.name}' — starting one (real Xvfb+VNC on the broker host)")
+                                val started = app.startDisplay(t.name)
+                                println("[display] startDisplay result: $started")
+                            }
                         }
                     }
 
