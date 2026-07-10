@@ -87,8 +87,11 @@ internal object WavEncoder {
 }
 
 /** Seam over the mic capture backend so [DesktopDictationController] is unit-testable without real
- *  audio hardware — [MicRecorder] is the production implementation, tests inject a fake. */
-internal interface MicCapture {
+ *  audio hardware — [MicRecorder] is the production implementation, tests inject a fake. Public
+ *  (not internal, unlike the rest of this file's dictation seam): it appears in the public
+ *  [DesktopComposer]/`SessionLauncherScreen` composable signatures (`micRecorderFactory`), and
+ *  Kotlin forbids a public declaration from exposing a less-visible type in its own signature. */
+interface MicCapture {
     /** Opens the mic and starts capturing. Returns true if capture is now active, false if the mic
      *  could not be opened (no default line, in use by another app, unsupported format, etc). */
     fun start(): Boolean

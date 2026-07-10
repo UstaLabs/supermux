@@ -90,6 +90,11 @@ fun ChatPanel(
     // KDoc for the funnel. Null in normal operation.
     externalAttach: ComposerExternalAttach? = null,
     onExternalAttachConsumed: () -> Unit = {},
+    // Off-by-default headless hook (SM_DICTATE, Main.kt) delivery: a one-shot "transcribe this WAV
+    // file then append" request routed straight through to [DesktopComposer]'s `externalDictate` —
+    // see its KDoc for the funnel. Null in normal operation.
+    externalDictate: ComposerExternalDictate? = null,
+    onExternalDictateConsumed: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val sem = LocalSemantics.current
@@ -238,8 +243,11 @@ fun ChatPanel(
                 onUpload = { source, name, mime, kind, onProgress ->
                     app.uploadResumable(session.id, source, name, mime, kind, onProgress)
                 },
+                onTranscribeAudio = { bytes, name -> app.transcribeAudio(session.id, bytes, name)?.text },
                 externalAttach = externalAttach,
                 onExternalAttachConsumed = onExternalAttachConsumed,
+                externalDictate = externalDictate,
+                onExternalDictateConsumed = onExternalDictateConsumed,
                 modifier = Modifier
                     .widthIn(max = CONTENT_MAX_WIDTH)
                     .padding(horizontal = Space.lg, vertical = Space.md),

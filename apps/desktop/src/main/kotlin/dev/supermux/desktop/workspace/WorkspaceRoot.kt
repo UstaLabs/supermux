@@ -207,6 +207,16 @@ class WorkspaceUiState {
     var externalAttach by mutableStateOf<Pair<String, dev.supermux.desktop.chat.ComposerExternalAttach>?>(null)
 
     /**
+     * One-shot "transcribe this WAV file into the chat composer's draft" request (session id +
+     * [dev.supermux.desktop.chat.ComposerExternalDictate]), consumed by the matching
+     * [SessionDetail] -> [dev.supermux.desktop.chat.ChatPanel] -> `DesktopComposer`'s
+     * `externalDictate` — the SAME `onTranscribeAudio` seam the mic button uses (see
+     * `ComposerExternalDictate`'s KDoc). Set by the off-by-default `SM_DICTATE` headless hook in
+     * Main.kt; null in normal operation. Cleared once the matching composer consumes it.
+     */
+    var externalDictate by mutableStateOf<Pair<String, dev.supermux.desktop.chat.ComposerExternalDictate>?>(null)
+
+    /**
      * One-shot "open this archived session's read-only transcript" request (an ARCHIVED session
      * id, not a live one), consumed by [dev.supermux.desktop.session.ArchivedScreen] — it seeds the
      * internal list⇄chat nav (`openedId`) so the matching row's read-only `ArchivedChatView` renders
@@ -421,6 +431,10 @@ fun WorkspaceRoot(
                         // attach+send request to the SessionDetail whose id matches.
                         externalAttach = ui.externalAttach?.takeIf { it.first == session.id }?.second,
                         onExternalAttachConsumed = { ui.externalAttach = null },
+                        // SM_DICTATE hook (Main.kt) delivery: hand the pending transcribe request to
+                        // the SessionDetail whose id matches.
+                        externalDictate = ui.externalDictate?.takeIf { it.first == session.id }?.second,
+                        onExternalDictateConsumed = { ui.externalDictate = null },
                         // Overflow ⋮ "Usage" row (M4f): the SAME ui.openUsage() the File ▸
                         // "Usage…" menu item calls.
                         onUsage = { ui.openUsage() },

@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.testTag
 import dev.supermux.desktop.chat.ChatPanel
 import dev.supermux.desktop.chat.ComposerExternalAttach
+import dev.supermux.desktop.chat.ComposerExternalDictate
 import dev.supermux.desktop.chat.FinishButton
 import dev.supermux.desktop.chat.FinishDialog
 import dev.supermux.desktop.chat.isFinishUnacked
@@ -203,6 +204,11 @@ fun SessionDetail(
     // `externalAttach` KDoc for the funnel. Null in normal operation.
     externalAttach: ComposerExternalAttach? = null,
     onExternalAttachConsumed: () -> Unit = {},
+    // Off-by-default headless hook (SM_DICTATE, Main.kt) delivery: a one-shot "transcribe this WAV
+    // file then append" request routed straight through to the chat pane's [DesktopComposer] — see
+    // its `externalDictate` KDoc for the funnel. Null in normal operation.
+    externalDictate: ComposerExternalDictate? = null,
+    onExternalDictateConsumed: () -> Unit = {},
     // Injectable seam for the Native (agent-PTY) panel — defaults to the real [DesktopTerminalPanel].
     // Its SwingPanel cannot be hosted under `runComposeUiTest` (no real AWT window), so the UI tests
     // inject a lightweight pure-Compose fake to exercise the toggle + keep-alive + onExit wiring.
@@ -311,6 +317,8 @@ fun SessionDetail(
                 onOpenFile = onOpenFile,
                 externalAttach = externalAttach,
                 onExternalAttachConsumed = onExternalAttachConsumed,
+                externalDictate = externalDictate,
+                onExternalDictateConsumed = onExternalDictateConsumed,
             )
             if (nativeOpened) {
                 key(session.id) {

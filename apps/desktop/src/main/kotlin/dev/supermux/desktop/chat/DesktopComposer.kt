@@ -132,6 +132,15 @@ data class ComposerAttachment(
  */
 data class ComposerExternalAttach(val filePath: String, val text: String)
 
+/** One-shot "transcribe this WAV file and append its cleaned text to the draft" request for
+ *  [DesktopComposer] (M5-1), delivered from outside the composer's own mic-click state
+ *  (WorkspaceUiState.externalDictate -> SessionDetail -> ChatPanel), mirroring
+ *  [ComposerExternalAttach]. Drives the SAME [DesktopComposer]'s `onTranscribeAudio` seam the mic
+ *  button uses — only the TRIGGER differs (a file already on disk instead of a live TargetDataLine
+ *  capture) — so it proves the real POST->append round-trip under Xvfb, where there is no real mic.
+ *  Set by the off-by-default `SM_DICTATE` headless hook in Main.kt. */
+data class ComposerExternalDictate(val wavPath: String)
+
 /** Best-effort MIME for a path (java.nio Files.probeContentType), octet-stream when unknown. Pure —
  *  mirrors the launcher's `probeMime` so chat + launcher guess identically. */
 internal fun composerMime(path: java.nio.file.Path): String =
@@ -200,6 +209,15 @@ internal fun composerPickFiles(): List<File> {
  * @param onExternalAttachConsumed fired once [externalAttach] has been staged, uploaded to a
  *   terminal state, and (on success) sent — or dropped (missing file / no [onUpload] bound / upload
  *   failed) — so the caller's one-shot holder resets.
+ * @param onTranscribeAudio the mic-dictation transcribe seam — `(wavBytes, filename) -> cleaned
+ *   text?`. When null, the MicButton is hidden entirely (mirrors [onUpload]'s null-hides-Attach
+ *   rule). [ChatPanel] binds this to `app.transcribeAudio(session.id, bytes, filename)`.
+ * @param micRecorderFactory the mic-capture seam (default = the real [MicRecorder]); tests inject
+ *   a fake [MicCapture] so they never open a real audio line.
+ * @param externalDictate a one-shot "transcribe this WAV file, no mic" request (M5-1), delivered
+ *   from outside the composer's own click-driven state — see [ComposerExternalDictate]'s KDoc.
+ * @param onExternalDictateConsumed fired once [externalDictate] has been read and its cleaned text
+ *   (if any) appended, so the caller's one-shot holder resets.
  */
 @OptIn(ExperimentalComposeUiApi::class) // DragData / dragData() (external-file drop payload) — see
 // the drop-target comment below for what was checked before opting in.
@@ -223,6 +241,10 @@ fun DesktopComposer(
     pickFiles: () -> List<File> = ::composerPickFiles,
     externalAttach: ComposerExternalAttach? = null,
     onExternalAttachConsumed: () -> Unit = {},
+    onTranscribeAudio: (suspend (bytes: ByteArray, filename: String) -> String?)? = null,
+    micRecorderFactory: () -> MicCapture = { MicRecorder() },
+    externalDictate: ComposerExternalDictate? = null,
+    onExternalDictateConsumed: () -> Unit = {},
 ) {
     // Attachment state is SCOPED to [sessionKey]: ChatPanel deliberately stays composed across
     // session switches (no key(session.id) wrapper), so a bare remember{} would leak session A's
@@ -309,6 +331,39 @@ fun DesktopComposer(
         }
     }
     val doSend = { sendWith(draft) }
+
+    val dictation = rememberDesktopDictation(
+        resetKey = sessionKey,
+        transcribeAudio = { bytes, name -> onTranscribeAudio?.invoke(bytes, name) },
+        onAppend = { cleaned -> onDraftChange(draft + (if (draft.isBlank()) "" else " ") + cleaned) },
+        recorderFactory = micRecorderFactory,
+    )
+
+    // SM_DICTATE headless hook delivery (M5-1): read the WAV straight off disk and feed it through
+    // the SAME onTranscribeAudio seam the mic button uses — no MicCapture involved at all, since
+    // there is no mic under Xvfb. A missing/blank path or an unbound seam is logged and dropped.
+    LaunchedEffect(externalDictate) {
+        val request = externalDictate ?: return@LaunchedEffect
+        if (onTranscribeAudio == null) {
+            println("[composer] SM_DICTATE ignored — no transcribe seam bound")
+            onExternalDictateConsumed()
+            return@LaunchedEffect
+        }
+        val file = File(request.wavPath)
+        if (!file.isFile) {
+            println("[composer] SM_DICTATE path is not a file: ${request.wavPath}")
+            onExternalDictateConsumed()
+            return@LaunchedEffect
+        }
+        val cleaned = onTranscribeAudio.invoke(file.readBytes(), file.name)?.trim()
+        if (!cleaned.isNullOrEmpty()) {
+            onDraftChange(draft + (if (draft.isBlank()) "" else " ") + cleaned)
+            println("[composer] SM_DICTATE appended cleaned text for '${request.wavPath}'")
+        } else {
+            println("[composer] SM_DICTATE transcribe returned no text for '${request.wavPath}'")
+        }
+        onExternalDictateConsumed()
+    }
 
     // SM_CHAT_ATTACH headless hook delivery (M4d-T3): stage the requested file through the SAME
     // [stageFiles] funnel the Attach dialog/drop target use, poll (no completion callback exists on
@@ -467,21 +522,46 @@ fun DesktopComposer(
                 null
             },
             trailingIcon = {
-                if (agentWorking) {
-                    IconButton(onClick = onInterrupt, modifier = Modifier.testTag("composer-stop")) {
-                        Icon(Icons.Filled.Stop, contentDescription = "Stop")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (onTranscribeAudio != null) {
+                        MicButton(
+                            recording = dictation.recording,
+                            transcribing = dictation.transcribing,
+                            micUnavailable = dictation.micUnavailable,
+                            onClick = { if (dictation.recording) dictation.stopMic() else dictation.startMic() },
+                            modifier = Modifier.testTag("composer-mic"),
+                        )
                     }
-                } else {
-                    IconButton(
-                        onClick = doSend,
-                        enabled = canSend,
-                        modifier = Modifier.testTag("composer-send"),
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                    if (agentWorking) {
+                        IconButton(onClick = onInterrupt, modifier = Modifier.testTag("composer-stop")) {
+                            Icon(Icons.Filled.Stop, contentDescription = "Stop")
+                        }
+                    } else {
+                        IconButton(
+                            onClick = doSend,
+                            enabled = canSend,
+                            modifier = Modifier.testTag("composer-send"),
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                        }
                     }
                 }
             },
         )
+        LaunchedEffect(dictation.errorMessage) {
+            if (dictation.errorMessage != null) {
+                delay(4000)
+                dictation.errorMessage = null
+            }
+        }
+        dictation.errorMessage?.let { msg ->
+            Text(
+                msg,
+                color = MaterialTheme.colorScheme.error,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(top = 4.dp).testTag("composer-mic-error"),
+            )
+        }
     }
 }
 
