@@ -88,6 +88,29 @@ class EditorScrollReader {
 }
 
 /**
+ * Seam letting the panel drive the live engine's LSP bridge (connect/message/disconnect) without
+ * owning the engine itself (which stays encapsulated in [EditorSurface]) — mirrors
+ * [EditorScrollReader]. Before an engine is attached (KCEF not Ready yet) or after one is disposed,
+ * every call is a harmless no-op; [EditorSurface] rebinds the real engine calls into this each time
+ * its engine identity changes (see its `SideEffect`).
+ */
+class EditorLspHandle {
+    // NOTE: the bindable fields are named onConnect/onMessage/onDisconnect (not connect/message/
+    // disconnect) — a property and a member function CANNOT share one name in the same Kotlin
+    // class (it's a "conflicting declarations" compile error, not an overload), so the public
+    // call-surface below needs distinct backing-field names.
+    internal var onConnect: (serverId: String, rootUri: String, fileUri: String, languageId: String) -> Unit =
+        { _, _, _, _ -> }
+    internal var onMessage: (serverId: String, message: String) -> Unit = { _, _ -> }
+    internal var onDisconnect: () -> Unit = {}
+
+    fun connect(serverId: String, rootUri: String, fileUri: String, languageId: String) =
+        onConnect(serverId, rootUri, fileUri, languageId)
+    fun message(serverId: String, message: String) = onMessage(serverId, message)
+    fun disconnect() = onDisconnect()
+}
+
+/**
  * Capture the CURRENT (outgoing) tab's scroll before a tab switch/reveal. DELIBERATE divergence from
  * Android's `engine.readScrollTop { editor.captureActiveScroll(it) }`: the read is async, so by the
  * time its callback lands `selectTab` has already flipped `activeTab` and captureActiveScroll would
@@ -129,6 +152,12 @@ fun EditorSurface(
         DesktopEditorEngine(url, lw, fs)
     },
     scrollReader: EditorScrollReader? = null,
+    // LSP (M4g-3): forward cm6's outbound JSON-RPC to the caller's bridge, report the engine's
+    // ready-gate so the caller can wait for it, and bind the caller's [EditorLspHandle] to the
+    // live engine's push methods — same non-ownership seam pattern as [scrollReader].
+    onLspOut: (serverId: String, message: String) -> Unit = { _, _ -> },
+    onEngineReadyChange: (Boolean) -> Unit = {},
+    lspHandle: EditorLspHandle? = null,
 ) {
     val scope = rememberCoroutineScope()
     // Idempotent: only the first editor pane ever mounted actually starts KCEF (started CAS in the
@@ -159,11 +188,16 @@ fun EditorSurface(
             engine.onChange = onChange
             engine.onSave = onSave
             engine.onFontSize = onFontSize
+            engine.onLspOut = onLspOut
             scrollReader?.read = { cb -> engine.getScrollTop(cb) }
+            lspHandle?.onConnect = engine::lspConnect
+            lspHandle?.onMessage = engine::lspMessage
+            lspHandle?.onDisconnect = engine::lspDisconnect
         }
     }
 
     val engineReady by (engine?.ready ?: remember { MutableStateFlow(false) }).collectAsState()
+    LaunchedEffect(engineReady) { onEngineReadyChange(engineReady) }
 
     // Push the active document / reveal into cm6 (queued in the engine's planner until first paint).
     LaunchedEffect(engine, content, filename, scrollTop) {
