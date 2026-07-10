@@ -531,6 +531,7 @@ class MainActivity : ComponentActivity() {
                         DevicesScreen(
                             onBack = { navController.popBackStack() },
                             onLoad = { vm.devices() },
+                            onAdd = { vm.addDevice(it) },
                             onRevoke = { vm.revoke(it) },
                         )
                     }
