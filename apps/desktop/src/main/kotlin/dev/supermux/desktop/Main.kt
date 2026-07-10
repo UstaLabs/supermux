@@ -118,6 +118,11 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //                                  Off by default.                                      [EditorPanel]
 //   SMX_KCEF_FORCE_ERROR=1        — force KcefState.Error (native-fallback editor, M3)   [KcefRuntime]
 //   SM_EDITOR_SAVE_TEST           — drive the editor save path (M3)                      [EditorPanel]
+//   SM_NOTIFY_TEST="<session-name>"  — force-unselect a session so its NEXT agent reply is
+//                                  guaranteed "unviewed" (M5-3); watch stdout for the
+//                                  unconditional "[notify] session=... text=..." decision+dispatch
+//                                  log line NotificationController prints right before it would
+//                                  raise a tray toast. Off by default; harmless in production.  [main]
 //   SMX_KCEF_EXTRA_ARGS="…"       — extra CEF switches for headless CI                   [KcefRuntime]
 fun main() {
     val store = DesktopTokenStore()
@@ -969,6 +974,39 @@ fun main() {
                             delay(5_000) // screenshot window
                             val removed = app.lspRemoveCustom("m4g4-live-check")
                             println("[lsp-add-remove] removed throwaway server: ok=${removed?.ok}")
+                        }
+                    }
+
+                    // Headless notification-verification hook (M5-3): SM_NOTIFY_TEST=
+                    // "<session-name>" resolves the named session after the first snapshot and
+                    // FORCES ui.selectedId to null (overriding any prior selection, incl. a
+                    // persisted ui-state.json or SM_AUTOSELECT default) so the target is
+                    // guaranteed "unviewed" — the SAME condition NotifyDecision.shouldNotify
+                    // requires. It does NOT itself send anything: drive a REAL agent reply into
+                    // this session from elsewhere (another live session/tool, NOT this desktop
+                    // process) and watch stdout for the unconditional "[notify] session=... " line
+                    // NotificationController prints right before dispatching (see this plan's Task
+                    // 4 for why the OS toast itself can't be proven headlessly — only the decision
+                    // + dispatch can). Off by default; harmless in production.
+                    val notifyTest = System.getenv("SM_NOTIFY_TEST")?.takeIf { it.isNotBlank() }
+                    if (notifyTest != null) {
+                        LaunchedEffect(app) {
+                            var target = app.sessions.value.firstOrNull { it.name == notifyTest }
+                            val deadline = System.currentTimeMillis() + 30_000
+                            while (target == null && System.currentTimeMillis() < deadline) {
+                                delay(500)
+                                target = app.sessions.value.firstOrNull { it.name == notifyTest }
+                            }
+                            val t = target
+                            if (t == null) {
+                                println("[notify-test] session '$notifyTest' not found in snapshot after 30s")
+                                return@LaunchedEffect
+                            }
+                            ui.selectedId = null
+                            println(
+                                "[notify-test] ensured '$notifyTest' (${t.id}) is NOT the selected session — " +
+                                    "its next agent reply should print a [notify] line",
+                            )
                         }
                     }
 
