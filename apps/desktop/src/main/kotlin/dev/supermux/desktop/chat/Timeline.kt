@@ -79,6 +79,7 @@ import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withLink
@@ -94,6 +95,7 @@ import dev.supermux.desktop.ui.openInBrowser
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.Attachment
 import dev.supermux.proto.LogEntry
+import dev.supermux.ui.ColumnAlign
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.MdBlock
 import dev.supermux.ui.SpanStyleKind
@@ -197,16 +199,29 @@ fun mdAnnotated(
                             fontWeight = FontWeight.Normal,
                         )
                     ) { append(s.text) }
+                    SpanStyleKind.STRIKE -> withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) { append(s.text) }
                     SpanStyleKind.LINK -> {
+                        val url = s.url
                         val ref = s.ref
-                        if (ref == null || !linkify) append(s.text) else withLink(
-                            LinkAnnotation.Clickable(
-                                tag = "file:${ref.path}",
-                                styles = TextLinkStyles(
-                                    style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)
-                                ),
-                            ) { onOpenFile(ref) }
-                        ) { append(s.text) }
+                        when {
+                            // Web links from `[label](url)` are always clickable — open the system browser.
+                            url != null -> withLink(
+                                LinkAnnotation.Url(
+                                    url,
+                                    TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
+                                ) { openInBrowser(url) },
+                            ) { append(s.text) }
+                            // File paths only become editor links in agent messages (linkify).
+                            ref != null && linkify -> withLink(
+                                LinkAnnotation.Clickable(
+                                    tag = "file:${ref.path}",
+                                    styles = TextLinkStyles(
+                                        style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)
+                                    ),
+                                ) { onOpenFile(ref) }
+                            ) { append(s.text) }
+                            else -> append(s.text)
+                        }
                     }
                     SpanStyleKind.PLAIN -> appendLinkified(s.text, linkColor)
                 }
@@ -383,7 +398,13 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier, onOpenFile: (FileP
                     verticalAlignment = Alignment.Top,
                     horizontalArrangement = Arrangement.spacedBy(Space.sm),
                 ) {
-                    Text("•", color = cs.onSurfaceVariant, style = typography.bodyLarge)
+                    // Task-list items show a checkbox glyph (display-only); plain bullets keep the dot.
+                    val marker = when (block.task) {
+                        true -> "☑"
+                        false -> "☐"
+                        null -> "•"
+                    }
+                    Text(marker, color = cs.onSurfaceVariant, style = typography.bodyLarge)
                     Text(
                         text = mdAnnotated(block.text, onOpenFile, linkify = linkify),
                         color = cs.onSurface,
@@ -403,9 +424,106 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier, onOpenFile: (FileP
                         modifier = Modifier.weight(1f),
                     )
                 }
+                is MdBlock.Table -> MarkdownTable(block, onOpenFile, linkify)
+                is MdBlock.Image -> MarkdownImage(block)
             }
         }
     }
+}
+
+/** ColumnAlign → Compose [TextAlign] (pure; unit-tested). */
+internal fun columnTextAlign(align: ColumnAlign): TextAlign = when (align) {
+    ColumnAlign.LEFT -> TextAlign.Left
+    ColumnAlign.CENTER -> TextAlign.Center
+    ColumnAlign.RIGHT -> TextAlign.Right
+}
+
+/**
+ * GFM table as a bordered, horizontally-scrollable grid (Android MarkdownTable / iOS
+ * MarkdownTableView parity). Laid out column-major: each column is a `Column(width =
+ * IntrinsicSize.Max)` so every cell shares the widest cell's width, and single-line (no-wrap)
+ * cells mean wide tables scroll instead of squishing. Cells keep inline formatting and per-column
+ * alignment.
+ */
+@Composable
+fun MarkdownTable(table: MdBlock.Table, onOpenFile: (FilePathRef) -> Unit, linkify: Boolean) {
+    val cs = MaterialTheme.colorScheme
+    val cols = table.headers.size
+    if (cols == 0) return
+    Row(
+        Modifier
+            .testTag("md_table")
+            .horizontalScroll(rememberScrollState())
+            .height(IntrinsicSize.Min)
+            .clip(RoundedCornerShape(Radii.sm))
+            .border(1.dp, cs.outlineVariant, RoundedCornerShape(Radii.sm)),
+    ) {
+        for (c in 0 until cols) {
+            if (c > 0) Box(Modifier.width(1.dp).fillMaxHeight().background(cs.outlineVariant))
+            Column(Modifier.width(IntrinsicSize.Max)) {
+                MarkdownTableCell(table.headers.getOrElse(c) { "" }, table.aligns.getOrElse(c) { ColumnAlign.LEFT }, header = true, onOpenFile, linkify)
+                for (row in table.rows) {
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outlineVariant))
+                    MarkdownTableCell(row.getOrElse(c) { "" }, table.aligns.getOrElse(c) { ColumnAlign.LEFT }, header = false, onOpenFile, linkify)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownTableCell(
+    text: String,
+    align: ColumnAlign,
+    header: Boolean,
+    onOpenFile: (FilePathRef) -> Unit,
+    linkify: Boolean,
+) {
+    val cs = MaterialTheme.colorScheme
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .background(if (header) cs.surfaceContainerLow else Color.Transparent)
+            .padding(horizontal = Space.sm + Space.xs, vertical = Space.sm),
+    ) {
+        Text(
+            text = mdAnnotated(text, onOpenFile, linkify = linkify),
+            color = cs.onSurface,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (header) FontWeight.SemiBold else FontWeight.Normal,
+            textAlign = columnTextAlign(align),
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/**
+ * Standalone markdown image `![alt](url)`. Desktop renders a compact, tappable link line
+ * (🖼 + alt/url) that opens the url in the system browser — it deliberately does NOT load the
+ * bitmap inline. Loading images would pull the Coil3 dependency into the packaged desktop app
+ * (jlink/installer), so the link-line fallback is the safe, dependency-free choice. Android
+ * itself falls back to a link for non-https images, so this is acceptable desktop parity.
+ */
+@Composable
+fun MarkdownImage(image: MdBlock.Image) {
+    val cs = MaterialTheme.colorScheme
+    val linkColor = cs.primary
+    Text(
+        text = buildAnnotatedString {
+            append("🖼 ") // 🖼
+            withLink(
+                LinkAnnotation.Url(
+                    image.url,
+                    TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
+                ) { openInBrowser(image.url) },
+            ) { append(image.alt.ifEmpty { image.url }) }
+        },
+        style = MaterialTheme.typography.bodyLarge,
+        modifier = Modifier.testTag("md_image"),
+    )
 }
 
 /**
