@@ -37,6 +37,7 @@ import dev.supermux.net.SpawnRequest
 import dev.supermux.net.SpawnResponse
 import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalSummary
+import dev.supermux.net.TranscribeResponse
 import dev.supermux.net.UpdateCommentBody
 import dev.supermux.net.UsageResponse
 import dev.supermux.net.VerifySaveResult
@@ -821,6 +822,25 @@ class DesktopAppState(
     suspend fun launcherCommands(agent: String, workdir: String): List<SlashCommand> =
         if (workdir.isBlank()) emptyList()
         else runApi("launcherCommands") { api.previewCommands(agent, workdir).commands } ?: emptyList()
+
+    // ── Voice dictation (M5-1) ──────────────────────────────────────────────────────────────
+    // Backs DesktopComposer's MicButton (chat) and SessionLauncherScreen's MicButton (launcher,
+    // id-less pre-spawn /transcribe) — mirrors AppViewModel's transcribeAudio wrapper; the shared
+    // multipart wire shape (BrokerApi.transcribeAudio) is already proven by BrokerApiVoiceTest.
+
+    /** POST {/sessions/<id>,}/transcribe (multipart "audio") → cleaned dictation text (whisper
+     *  path). [sessionId] is OPTIONAL — null routes to the id-less `/transcribe` (the pre-spawn
+     *  launcher composer); a live chat session passes its id so the broker's cleanup pass gets
+     *  session context. Null (not an empty TranscribeResponse) on any failure — the caller keeps
+     *  showing its own "mic unavailable"/"transcription failed" state rather than silently
+     *  succeeding with empty text. */
+    suspend fun transcribeAudio(
+        sessionId: String?,
+        bytes: ByteArray,
+        filename: String,
+        mime: String = "audio/wav",
+    ): TranscribeResponse? =
+        runApi("transcribeAudio") { api.transcribeAudio(sessionId, bytes, filename, mime) }
 
     /**
      * Resumable/chunked upload from a [ChunkSource] (bounded RAM), reporting absolute progress
