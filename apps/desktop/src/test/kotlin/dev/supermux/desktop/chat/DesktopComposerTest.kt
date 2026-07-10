@@ -53,7 +53,7 @@ class DesktopComposerTest {
                 onDraftChange = { draft = it },
                 sending = false,
                 agentWorking = false,
-                onSend = { sent = it; draft = "" },
+                onSend = { s, _ -> sent = s; draft = "" },
                 onInterrupt = {},
             )
         }
@@ -73,7 +73,7 @@ class DesktopComposerTest {
                 onDraftChange = { draft = it },
                 sending = false,
                 agentWorking = false,
-                onSend = { sendCount++; draft = "" },
+                onSend = { _, _ -> sendCount++; draft = "" },
                 onInterrupt = {},
             )
         }
@@ -97,7 +97,7 @@ class DesktopComposerTest {
                 onDraftChange = {},
                 sending = false,
                 agentWorking = false,
-                onSend = {},
+                onSend = { _, _ -> },
                 onInterrupt = {},
             )
         }
@@ -111,7 +111,7 @@ class DesktopComposerTest {
                 onDraftChange = {},
                 sending = true,
                 agentWorking = false,
-                onSend = {},
+                onSend = { _, _ -> },
                 onInterrupt = {},
             )
         }
@@ -125,7 +125,7 @@ class DesktopComposerTest {
                 onDraftChange = {},
                 sending = false,
                 agentWorking = false,
-                onSend = {},
+                onSend = { _, _ -> },
                 onInterrupt = {},
             )
         }
@@ -141,7 +141,7 @@ class DesktopComposerTest {
                 onDraftChange = {},
                 sending = false,
                 agentWorking = true,
-                onSend = {},
+                onSend = { _, _ -> },
                 onInterrupt = { interrupted = true },
             )
         }

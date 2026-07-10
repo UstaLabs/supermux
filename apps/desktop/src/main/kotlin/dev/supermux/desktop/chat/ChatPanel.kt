@@ -219,11 +219,16 @@ fun ChatPanel(
                 onDraftChange = onDraftChange,
                 sending = sending,
                 agentWorking = working,
-                onSend = { text ->
-                    app.sendMessage(session.id, text)
+                onSend = { text, fileIds ->
+                    app.sendMessage(session.id, text, fileIds)
                     onDraftChange("")
                 },
                 onInterrupt = { app.interrupt(session.id) },
+                // Chat uploads against the LIVE session immediately (unlike the launcher's pre-spawn
+                // staging): bind the composer's upload seam to uploadResumable for this session.
+                onUpload = { source, name, mime, kind, onProgress ->
+                    app.uploadResumable(session.id, source, name, mime, kind, onProgress)
+                },
                 modifier = Modifier
                     .widthIn(max = CONTENT_MAX_WIDTH)
                     .padding(horizontal = Space.lg, vertical = Space.md),
