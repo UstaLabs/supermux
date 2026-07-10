@@ -17,6 +17,7 @@ import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.BrokerClient
 import dev.supermux.net.ChunkSource
+import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
@@ -42,6 +43,7 @@ import dev.supermux.net.UpdateCommentBody
 import dev.supermux.net.UsageResponse
 import dev.supermux.net.VerifySaveResult
 import dev.supermux.net.VerifySuggestResult
+import dev.supermux.net.VncClient
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.ClientFrame
@@ -188,6 +190,12 @@ class DesktopAppState(
 
     private val _lspInstallDone = MutableStateFlow<Map<String, ServerFrame.LspInstallDone>>(emptyMap())
     val lspInstallDone: StateFlow<Map<String, ServerFrame.LspInstallDone>> = _lspInstallDone
+
+    // ── Displays (M5-2) ─────────────────────────────────────────────────────────────
+    // Live display streams, kept in sync via display_added/display_removed frames (seeded on
+    // demand by [listDisplays]) — mirrors AppViewModel:158-161.
+    private val _displays = MutableStateFlow<List<DisplayStream>>(emptyList())
+    val displays: StateFlow<List<DisplayStream>> = _displays
 
     /** Whether the client has a fresh snapshot from the broker (i.e. we're synced/connected). */
     val connected: Boolean get() = client.sync.synced
@@ -358,8 +366,15 @@ class DesktopAppState(
             is ServerFrame.LspInstallProgress ->
                 _lspInstallLog.update { it + (frame.serverId to ((it[frame.serverId] ?: emptyList()) + frame.line)) }
             is ServerFrame.LspInstallDone -> _lspInstallDone.update { it + (frame.serverId to frame) }
-            // Out of M1/M3/M4b scope — reduced in later milestones: agent_error, display_*
-            // (see AppViewModel for the full reducer). Deferred to M4g/M5; they must still not crash.
+            // M5-2: display stream lifecycle — the broker broadcasts these as displays start/stop
+            // (via startDisplay/stopDisplay OR another device's own display action); dedup by id
+            // like SessionAdded rather than appending a duplicate (AppViewModel:286-289 parity).
+            is ServerFrame.DisplayAdded ->
+                _displays.update { list -> list.filterNot { it.id == frame.display.id } + frame.display }
+            is ServerFrame.DisplayRemoved ->
+                _displays.update { list -> list.filterNot { it.id == frame.id } }
+            // Out of M1/M3/M4b/M5-2 scope — reduced in later milestones: agent_error (see
+            // AppViewModel for the full reducer). Must still not crash.
             else -> {}
         }
     }
@@ -589,6 +604,43 @@ class DesktopAppState(
      *  parity: the tmux session may already be gone). */
     fun closeTerminal(sessionId: String, terminalId: String) {
         stateScope.launch { runApi("closeTerminal") { api.closeTerminal(sessionId, terminalId) } }
+    }
+
+    // ── Displays (M5-2; mirrors AppViewModel.listDisplays/connectVnc/startDisplay/stopDisplay:
+    //    446-470) ─────────────────────────────────────────────────────────────────────────────
+
+    /** GET /displays. Also seeds [displays] (the StateFlow then stays live via
+     *  display_added/display_removed frames). On failure, returns (and leaves) the CURRENT flow
+     *  value rather than clobbering it with an empty list — a transient GET failure must not blank
+     *  out streams the WS frames already told us are running. */
+    suspend fun listDisplays(): List<DisplayStream> {
+        val list = runApi("listDisplays") { api.listDisplays() } ?: return _displays.value
+        _displays.value = list
+        return list
+    }
+
+    /** Factory for this session's VNC transport client; called once per connected stream and
+     *  remembered by the Display panel (mirrors [connectAgentTerminal]). */
+    fun connectVnc(streamId: String): VncClient = VncClient(baseUrl, token, http, streamId)
+
+    /** POST /displays → the started stream (the display_added frame also folds it into [displays]
+     *  for every connected client, including this one). Null on any failure. [provider] defaults
+     *  to null so the broker picks the right transport for its own host OS (linux-xvfb /
+     *  macos-screen) — desktop has no provider picker (see this plan's Goal, scoping decision 3). */
+    suspend fun startDisplay(
+        sessionName: String,
+        provider: String? = null,
+        device: String? = null,
+        width: Int? = null,
+        height: Int? = null,
+    ): DisplayStream? =
+        runApi("startDisplay") { api.startDisplay(sessionName, provider, device, width, height) }
+
+    /** DELETE /displays/<id> — stop a running display stream (tears down the broker-host Xvfb/VNC
+     *  process or macOS Screen Sharing session). Fire-and-forget; the display_removed frame updates
+     *  [displays] for every connected client once the broker confirms the teardown. */
+    suspend fun stopDisplay(id: String) {
+        runApi("stopDisplay") { api.stopDisplay(id) }
     }
 
     // ── Editor filesystem + lifecycle (M3; mirrors AppViewModel.fsList/fsRead/fsWrite/fsSearch
