@@ -62,12 +62,24 @@ internal class DesktopVncFramebuffer {
     private var buffer = ByteArray(0)
     private var fbW = 0
     private var fbH = 0
+    // ONE long-lived native Skia bitmap, (re)allocated only on a framebuffer-size change (mirrors
+    // Android's VncFramebuffer, which allocates its android.graphics.Bitmap once per resize and
+    // setPixels()es into it every update). A fresh Bitmap-per-update would churn ~fbW*fbH*4 bytes of
+    // NATIVE (off-heap) memory on every FramebufferUpdate — many/sec on a busy desktop — freed only
+    // whenever the JVM Cleaner eventually runs, which -Xmx doesn't bound. So each update installs
+    // pixels into THIS instance and only wraps a fresh (cheap, no native alloc) asComposeImageBitmap
+    // so Compose's MutableState sees a changed identity.
+    private var skiaBitmap: Bitmap? = null
     val bitmap: MutableState<ImageBitmap?> = mutableStateOf(null)
 
     private fun resize(w: Int, h: Int) {
         if (w <= 0 || h <= 0 || (w == fbW && h == fbH)) return
         fbW = w; fbH = h
         buffer = ByteArray(w * h * 4)
+        skiaBitmap?.close()
+        skiaBitmap = Bitmap().apply {
+            allocPixels(ImageInfo(w, h, ColorType.BGRA_8888, ColorAlphaType.OPAQUE))
+        }
     }
 
     /** Apply one FramebufferUpdate. [size] is the latest VncClient.size (w,h); resizes the
@@ -87,15 +99,15 @@ internal class DesktopVncFramebuffer {
                 VncFrameOps.uploadRaw(buffer, fbW, x, y, w, h, r.bgra)
             }
         }
-        val skiaBitmap = Bitmap().apply {
-            allocPixels(ImageInfo(fbW, fbH, ColorType.BGRA_8888, ColorAlphaType.OPAQUE))
-            installPixels(buffer)
-        }
-        bitmap.value = skiaBitmap.asComposeImageBitmap()
+        val bmp = skiaBitmap ?: return
+        bmp.installPixels(buffer)
+        bitmap.value = bmp.asComposeImageBitmap()
     }
 
     fun release() {
         buffer = ByteArray(0); fbW = 0; fbH = 0
+        skiaBitmap?.close()
+        skiaBitmap = null
         bitmap.value = null
     }
 }

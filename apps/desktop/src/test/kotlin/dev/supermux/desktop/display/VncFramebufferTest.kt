@@ -111,6 +111,23 @@ class VncFramebufferTest {
         assertEquals(2, fb.bitmap.value!!.width)
     }
 
+    @Test fun apply_update_reallocates_on_a_size_change_and_reuses_the_bitmap_on_a_same_size_update() {
+        val fb = DesktopVncFramebuffer()
+        // First frame at 2x2 (red at 0,0).
+        fb.applyUpdate(listOf(VncRect(0, 0, 1, 1, byteArrayOf(0x00, 0x00, 0xFF.toByte(), 0xFF.toByte()))), 2 to 2)
+        assertEquals(2, fb.bitmap.value!!.width)
+        assertEquals(2, fb.bitmap.value!!.height)
+
+        // A DesktopSize change to 3x1 must reallocate the backing bitmap to the new dimensions.
+        fb.applyUpdate(listOf(VncRect(0, 0, 1, 1, byteArrayOf(0xFF.toByte(), 0x00, 0x00, 0xFF.toByte()))), 3 to 1)
+        assertEquals(3, fb.bitmap.value!!.width)
+        assertEquals(1, fb.bitmap.value!!.height)
+
+        // A same-size (3x1) update still paints correctly into the reused backing bitmap — green at (1,0).
+        fb.applyUpdate(listOf(VncRect(1, 0, 1, 1, byteArrayOf(0x00, 0xFF.toByte(), 0x00, 0xFF.toByte()))), 3 to 1)
+        assertEquals(0xFF00FF00.toInt(), fb.bitmap.value!!.asSkiaBitmap().getColor(1, 0))
+    }
+
     @Test fun release_clears_the_bitmap_state() {
         val fb = DesktopVncFramebuffer()
         fb.applyUpdate(listOf(VncRect(0, 0, 1, 1, byteArrayOf(1, 2, 3, 4))), 1 to 1)

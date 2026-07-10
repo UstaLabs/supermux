@@ -183,6 +183,12 @@ private fun VncCanvas(streamId: String, provider: String, connectVnc: (String) -
             .onSizeChanged { viewSize = it }
             .focusRequester(focusRequester)
             .focusable()
+            // KNOWN LIMITATION (v1): hardware modifier CHORDS (Ctrl/Alt/Meta + key, e.g. Ctrl+C,
+            // Alt+Tab) are NOT forwarded — a held modifier collapses awt.keyChar into a control code
+            // that keysymForChar rejects, so the combo is silently dropped. This is the verbatim
+            // VncInput port (parity with Android, whose software-IME input surface has no hardware
+            // modifier concept). The explicit "Ctrl+Alt+Del" button is the one deliberate exception.
+            // Forwarding modifier keysyms as their own down/up events is a clean follow-up milestone.
             .onPreviewKeyEvent { e ->
                 val awt = e.nativeKeyEvent as? java.awt.event.KeyEvent ?: return@onPreviewKeyEvent false
                 val down = e.type == KeyEventType.KeyDown

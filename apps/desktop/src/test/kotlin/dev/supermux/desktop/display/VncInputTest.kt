@@ -25,6 +25,22 @@ class VncInputTest {
         assertEquals(50, rx); assertEquals(25, ry)
     }
 
+    @Test fun map_to_remote_letterboxes_a_wider_remote_in_a_tall_narrow_view() {
+        // Reverse of the pillarbox case: a WIDE remote (100x50) in a TALL/narrow view (50x100).
+        // scale = min(50/100, 100/50) = 0.5 → image is 50x25, offX=0, offY=37.5 (top/bottom bars).
+        // Center maps to the remote center.
+        val (cx, cy) = VncInput.mapToRemote(25f, 50f, 50, 100, 100, 50)
+        assertEquals(50, cx); assertEquals(25, cy)
+        // Image top-left corner (0, 37.5) → remote (0,0); bottom-right (50, 62.5) → remote (w,h).
+        val (tlx, tly) = VncInput.mapToRemote(0f, 37.5f, 50, 100, 100, 50)
+        assertEquals(0, tlx); assertEquals(0, tly)
+        val (brx, bry) = VncInput.mapToRemote(50f, 62.5f, 50, 100, 100, 50)
+        assertEquals(100, brx); assertEquals(50, bry)
+        // A click up in the TOP black bar (py=10 < 37.5) clamps sanely to the top edge (ry=0).
+        val (bx, by) = VncInput.mapToRemote(25f, 10f, 50, 100, 100, 50)
+        assertEquals(50, bx); assertEquals(0, by)
+    }
+
     @Test fun map_to_remote_clamps_to_the_remote_bounds() {
         val (rx, ry) = VncInput.mapToRemote(-10f, -10f, 100, 50, 100, 50)
         assertEquals(0, rx); assertEquals(0, ry)
