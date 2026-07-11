@@ -27,6 +27,12 @@ struct SupermuxApp: App {
         if let t = env["SM_PAIR_TOKEN"], let b = env["SM_PAIR_BASE"], !t.isEmpty, !b.isEmpty {
             BrokerConfig.pair(PairToken(baseURL: b, token: t))
         }
+        // Multi-host storage (spec §3.2): run the one-time single-host → PairedHost[0] migration at
+        // launch, AFTER any debug/env auto-pair above so a freshly-seeded token migrates too
+        // (mirrors Android's MainActivity ordering). Existing paired users land in the shared
+        // multi-host `PairedHostStore` with ZERO re-pairing; the live connection still runs from
+        // BrokerConfig for now (the fleet-list UI that reads the store is a later task).
+        HostStore.migrateFromLegacyIfNeeded()
         _paired = State(initialValue: BrokerConfig.isPaired)
         #if os(macOS)
         // Headless feel-test eyes (SM_SNAPSHOT=1) — see DebugSnapshot.swift.
@@ -45,6 +51,9 @@ struct SupermuxApp: App {
                 if paired, let base = BrokerConfig.baseURL, let token = BrokerConfig.token {
                     RootView(baseURL: base, token: token, onUnpair: {
                         BrokerConfig.unpair()
+                        // Keep the multi-host store in lockstep with the single-host truth: forget
+                        // the migrated PairedHost[0] too, so a later re-pair migrates cleanly.
+                        HostStore.forgetAll()
                         paired = false
                     })
                     .id(base)
