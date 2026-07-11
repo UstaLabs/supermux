@@ -1,19 +1,18 @@
-package dev.supermux.android.host
+package dev.supermux.host
 
-import dev.supermux.host.PairedHost
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Pure-JVM unit tests for [HostMetaCodec] — the token/metadata SPLIT that backs the Android
- * [AndroidHostPersistence] (spec §3.2). Metadata (recordId/hostId/name/urls/platform/version/
- * lastSeenAt) is JSON in normal storage; each token lives in the secure store keyed by recordId.
- * The load-bearing guarantee tested here: a token NEVER leaks into the metadata blob, and a host
- * whose token is missing survives (empty token) rather than being dropped — a secure-store
- * corruption must not silently wipe the fleet. No Android framework/Context needed (mirrors
- * PushKeypairCodecTest / LauncherStateTest's framework-free style).
+ * Tests for [HostMetaCodec] — the token/metadata SPLIT that backs every platform's
+ * [HostPersistence] (spec §3.2). Metadata (recordId/hostId/name/urls/platform/version/lastSeenAt)
+ * is JSON in normal storage; each token lives in the secure store keyed by recordId. The
+ * load-bearing guarantee tested here: a token NEVER leaks into the metadata blob, and a host whose
+ * token is missing survives (empty token) rather than being dropped — a secure-store corruption
+ * must not silently wipe the fleet. Framework-free, so it runs on every KMP target (moved here from
+ * the Android module when the codec was lifted to commonMain for cross-platform reuse).
  */
 class HostMetaCodecTest {
 

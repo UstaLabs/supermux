@@ -8,13 +8,11 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import dev.supermux.host.HostMetaCodec
 import dev.supermux.host.HostPersistence
 import dev.supermux.host.PairedHost
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.json.Json
 
 /**
  * Android [HostPersistence] (spec §3.2). The multi-host fleet is stored SPLIT:
@@ -63,60 +61,6 @@ class AndroidHostPersistence(context: Context) : HostPersistence {
 
 /** App-scoped DataStore holding the host-registry metadata JSON (tokens live in the secure store). */
 private val Context.hostRegistryDataStore by preferencesDataStore(name = "host_registry")
-
-/**
- * Pure, framework-free split codec: `List<PairedHost>` ⇄ (metadata JSON, per-record token lookup).
- * Isolated from Android so it is unit-testable on the JVM and so the "no token in the metadata
- * blob" guarantee is structurally enforced ([Meta] has no token field).
- */
-internal object HostMetaCodec {
-    private val json = Json { ignoreUnknownKeys = true }
-    private val listSerializer = ListSerializer(Meta.serializer())
-
-    /** Everything in [PairedHost] EXCEPT the token — the only shape written to normal storage. */
-    @Serializable
-    private data class Meta(
-        val recordId: String,
-        val hostId: String? = null,
-        val displayName: String,
-        val directUrl: String? = null,
-        val relayUrl: String? = null,
-        val platform: String? = null,
-        val version: String? = null,
-        val lastSeenAt: Long = 0L,
-    )
-
-    fun encodeMeta(hosts: List<PairedHost>): String =
-        json.encodeToString(
-            listSerializer,
-            hosts.map {
-                Meta(
-                    recordId = it.recordId, hostId = it.hostId, displayName = it.displayName,
-                    directUrl = it.directUrl, relayUrl = it.relayUrl,
-                    platform = it.platform, version = it.version, lastSeenAt = it.lastSeenAt,
-                )
-            },
-        )
-
-    /**
-     * Rebuild the fleet from the metadata blob, re-injecting each record's token via [token].
-     * A missing token ([token] returns null) yields an EMPTY token so the host is preserved
-     * (visible, re-pairable) rather than dropped. Blank/corrupt JSON → empty list.
-     */
-    fun decode(metaJson: String?, token: (recordId: String) -> String?): List<PairedHost> {
-        if (metaJson.isNullOrBlank()) return emptyList()
-        val metas = runCatching { json.decodeFromString(listSerializer, metaJson) }.getOrNull()
-            ?: return emptyList()
-        return metas.map { m ->
-            PairedHost(
-                recordId = m.recordId, hostId = m.hostId, displayName = m.displayName,
-                directUrl = m.directUrl, relayUrl = m.relayUrl,
-                token = token(m.recordId) ?: "",
-                platform = m.platform, version = m.version, lastSeenAt = m.lastSeenAt,
-            )
-        }
-    }
-}
 
 /**
  * One-token-per-host secure store, backed by the SAME Keystore-encrypted `supermux_secure`
