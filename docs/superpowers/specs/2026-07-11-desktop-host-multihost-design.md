@@ -25,6 +25,7 @@ Non-goals (v1): P2P hole-punching, E2E relay framing, Telegram/WhatsApp multi-ho
 | D7 | POSIX backend | tmux stays; desktop apps bundle a static tmux |
 | D8 | tmux replacement | Windows only (`mux-sessiond`); never on POSIX without explicit triggers |
 | D9 | Web PWA | Single-host in v1 (origin-bound cookie auth; it IS a host's UI) |
+| D10 | BYO connectivity | Tailscale/VPN/reverse-proxy URLs stay first-class: add-host accepts a typed URL, the relay is **default but per-host disableable**, and a relay-less host pairs via a direct-URL-only QR |
 
 ## 3. Host model
 
@@ -43,7 +44,7 @@ PairedHost { recordId (client UUID, the internal key), hostId?, displayName,
 
 **Pairing.** QR/link payload: `{v:1, action:"pair", hostId, name, relayUrl, directUrl?, claimSecret}`. `POST /pair/claim {claimSecret, deviceName}` → `{host, deviceToken}`. The host stores a hash of the secret, expires it in minutes, consumes it atomically once, and — unlike today's trust-on-first-connect claim, which 403s once any device exists — accepts claims on configured hosts (minting one requires an authed device or the local wizard). The client aborts if the response's `hostId` differs from the QR's. Legacy `/pair` stays for the PWA.
 
-**Transport preference.** Loopback → HTTPS direct → relay. Never auto-send the bearer over plain-HTTP LAN; that path exists only behind an explicit labeled opt-in.
+**Transport preference.** Loopback → direct → relay. Direct URLs include user-supplied ones (Tailscale MagicDNS/tailnet IPs, VPN, reverse proxy) — BYO connectivity is first-class (D10), the relay is just the zero-config default and can be disabled per host (the QR then carries `directUrl` only). Plain HTTP is auto-allowed for loopback and tailnet/CGNAT addresses (100.64/10 — the overlay already encrypts); any other plain-HTTP URL needs an explicit labeled opt-in so the bearer never leaks to a real LAN.
 
 ## 4. Relay v1
 
@@ -58,7 +59,7 @@ PairedHost { recordId (client UUID, the internal key), hostId?, displayName,
 
 - **Merged fleet list:** all sessions from all hosts; host badge per row; filter chips (`All · host… · +`); one control WS per online host (feature streams open extra host-scoped sockets). Offline host → greyed group with last-seen, rendered from a persisted last-snapshot per host (cached outside the secure store, dropped when the host is forgotten).
 - **Push:** clients send their local `recordId` when registering the push token with a host; the host echoes it inside the existing E2E-encrypted payload, so grouping/clear/tap route by `(recordId, session)` without the broker ever needing to know client-local ids. Legacy pushes without it route best-effort. Tokens register per host.
-- **Add host:** QR scanner + paste-link → §3 claim. Host sheet: rename, forget (+ best-effort revoke), connection path indicator.
+- **Add host:** QR scanner + paste-link → §3 claim; also a plain "enter host URL" path (Tailscale/VPN/reverse-proxy users) that hits `GET /host` then mints a claim from the host's own UI. Host sheet: rename, forget (+ best-effort revoke), connection path indicator.
 - **New-session:** host picker pill (hidden with one host); agent options filtered by that host's `/agents/status` (fixes today's hardcoded four-agent list).
 
 ## 6. Desktop-as-host (macOS + Linux)
