@@ -1,0 +1,53 @@
+# .github/workflows/desktop-installers.yml
+# Builds the Compose Desktop native installers for the supermux desktop client:
+#   - Linux .deb  (ubuntu-latest, jpackage + dpkg-deb)
+#   - Windows .msi (windows-latest, jpackage + WiX 3.14 — preinstalled on the runner)
+# Both come from the SAME `compose.desktop { nativeDistributions }` block and are built
+# with the SAME Gradle task + JDK 17 that were verified locally for the .deb.
+#
+# NOTE: these are UNSIGNED v1 installers (no code-signing cert / notarization). On first
+# editor use the app downloads KCEF (embedded Chromium, ~100-150MB) into its config dir —
+# that payload is NOT bundled in the installer, only the JCEF Java bindings ride the classpath.
+#
+# Trigger mirrors release.yml: v* tag push (real build) + workflow_dispatch (manual/dry run).
+# This is SEPARATE from release.yml (broker binaries) and does not touch it.
+name: desktop-installers
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  linux-deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Build .deb
+        working-directory: apps
+        run: ./gradlew --no-daemon :desktop:packageDeb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: supermux-linux-deb
+          path: apps/desktop/build/compose/binaries/main/deb/*.deb
+          if-no-files-found: error
+
+  windows-msi:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Build .msi
+        working-directory: apps
+        run: ./gradlew.bat --no-daemon :desktop:packageMsi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: supermux-windows-msi
+          path: apps/desktop/build/compose/binaries/main/msi/*.msi
+          if-no-files-found: error
