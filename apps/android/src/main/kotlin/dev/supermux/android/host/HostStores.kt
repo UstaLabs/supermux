@@ -3,6 +3,7 @@ package dev.supermux.android.host
 import android.content.Context
 import android.util.Log
 import dev.supermux.auth.SecureTokenStore
+import dev.supermux.host.HostSnapshotStore
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
 import java.util.UUID
@@ -19,6 +20,7 @@ object HostStores {
     private const val TAG = "SupermuxMultiHost"
 
     @Volatile private var instance: PairedHostStore? = null
+    @Volatile private var snapshots: HostSnapshotStore? = null
 
     /** The shared store (lazily built; recordId = random UUID). */
     fun store(context: Context): PairedHostStore =
@@ -26,6 +28,14 @@ object HostStores {
             instance ?: PairedHostStore(
                 AndroidHostPersistence(context.applicationContext),
             ) { UUID.randomUUID().toString() }.also { instance = it }
+        }
+
+    /** The shared per-host offline-snapshot cache (spec §5), persisted OUTSIDE the secure store. */
+    fun snapshotStore(context: Context): HostSnapshotStore =
+        snapshots ?: synchronized(this) {
+            snapshots ?: HostSnapshotStore(
+                AndroidSnapshotPersistence(context.applicationContext),
+            ).also { snapshots = it }
         }
 
     /**

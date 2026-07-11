@@ -61,9 +61,14 @@ import dev.supermux.android.session.LauncherDraft
 import dev.supermux.android.session.LauncherPrefs
 import dev.supermux.android.session.StagedUpload
 import dev.supermux.android.settings.AddCustomLspArgs
+import dev.supermux.host.HostSnapshotStore
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
 import dev.supermux.host.PairingPayload
+import dev.supermux.host.SessionKey
+import dev.supermux.host.fleetOwners
+import dev.supermux.host.mergeFleetRows
+import dev.supermux.host.mergedSessions
 import dev.supermux.util.TransportPolicy
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
@@ -135,6 +140,10 @@ class AppViewModel(
     // for existing single-host users before we read the list. Every frame is tagged with its host's
     // recordId and folded by [reduce]; connect/disconnect drive [onConnState].
     private val store: PairedHostStore = HostStores.store(appContext)
+    // Per-host offline-snapshot cache (spec §5): each host's last-known live sessions, persisted
+    // OUTSIDE the secure store so a host that is offline at launch renders its last-known sessions
+    // (dimmed) instead of an empty group. Replaced wholesale per snapshot; dropped on forget.
+    private val snapshotStore: HostSnapshotStore = HostStores.snapshotStore(appContext)
     private val hostConns = HostConnections(viewModelScope, http, onFrame = ::reduce, onConnState = ::onConnState)
 
     // Per-host session buckets are the source of truth for the merged list: a host's Snapshot
@@ -143,6 +152,22 @@ class AppViewModel(
     // derived from these buckets in store order.
     private val sessionsByHost = LinkedHashMap<String, List<SessionInfo>>()
     private val onlineHosts = HashMap<String, Boolean>()
+
+    // ── Host-qualified per-session state (spec §5/§9: identity is (recordId, sessionId)) ──────────
+    // Source of truth for the per-session maps, keyed by SessionKey "recordId␟sessionId" so two hosts
+    // presenting the SAME broker-local sessionId can neither hide one another nor contaminate the
+    // wrong chat. Published to the bare-sessionId StateFlows below via SessionKey.flatten (owner-
+    // strict), so the UI keeps addressing every session by its stable bare id — no UI change. Main-
+    // confined (reduce runs on viewModelScope), so plain maps are race-free, exactly like sessionsByHost.
+    private val msgByKey = LinkedHashMap<String, List<LogEntry>>()
+    private val actByKey = LinkedHashMap<String, List<ActivityEvent>>()
+    private val agentByKey = LinkedHashMap<String, AgentStatus>()
+    private val bgByKey = LinkedHashMap<String, List<ServerFrame.BgTask>>()
+    private val cmdByKey = LinkedHashMap<String, List<SlashCommand>>()
+    private val cmdResByKey = LinkedHashMap<String, Boolean>()
+    private val agentErrByKey = LinkedHashMap<String, ServerFrame.AgentError>()
+    private val finishByKey = LinkedHashMap<String, FinishJobDto>()
+    private val pendingByKey = LinkedHashSet<String>()
 
     private val _sessions = MutableStateFlow<List<SessionInfo>>(emptyList())
     val sessions: StateFlow<List<SessionInfo>> = _sessions
@@ -194,7 +219,7 @@ class AppViewModel(
      *  Dismiss/Done. Client-side only (mirrors web `finishJob.clear(id)` / iOS
      *  `SessionChrome.clearJob()`); there is no broker "clear" endpoint and this never
      *  cancels a running job — the sheet only offers clear on a terminal/failed outcome. */
-    fun clearFinishJob(id: String) { _finishJobs.update { it - id } }
+    fun clearFinishJob(id: String) { if (finishByKey.remove(ownerKey(id)) != null) publishSessionState() }
 
     /** Filesystem-change pulses (session + changed paths). The editor file tree / diff tab
      *  re-fetch on each pulse. A SharedFlow (events, not retained state). */
@@ -230,32 +255,54 @@ class AppViewModel(
         // is empty (e.g. the session right after onboarding persisted the legacy secure store).
         HostStores.migrateFromLegacyIfNeeded(appContext)
         _activeHost.value = store.list().firstOrNull()?.recordId
+        // Spec §5: seed each host's bucket from its persisted last snapshot BEFORE connecting, so a
+        // host that is offline at launch renders its last-known sessions (dimmed, via the offline
+        // group) instead of an empty grey group. Prune caches for hosts forgotten while dead; the
+        // live snapshot overwrites the seed the moment a host connects.
+        snapshotStore.retainOnly(store.list().map { it.recordId })
+        snapshotStore.all().forEach { snap ->
+            if (snap.sessions.isNotEmpty()) sessionsByHost[snap.recordId] = snap.sessions
+        }
         rebuildHostViews()
+        rebuildSessions()
         // Opens one control WS + api per paired host; frames flow into reduce(), tagged by recordId.
         hostConns.sync(store.list())
     }
 
     // ── Multi-host reducer + derived state ─────────────────────────────────────────
 
-    /** Fold a frame from host [recordId] into the unified, sessionId-keyed state. Runs on the
-     *  viewModelScope (Main-confined), so the plain mutable maps below are race-free. */
+    /** Fold a frame from host [recordId] into the unified state. Per-session state is keyed by the
+     *  host-qualified [SessionKey] "recordId␟sessionId" (spec §5/§9) so a sessionId collision across
+     *  brokers can't hide a session or route a frame into the wrong host's chat; the bare-keyed
+     *  StateFlows the UI reads are re-derived by [publishSessionState] at the end. Runs on the
+     *  viewModelScope (Main-confined), so the plain mutable maps are race-free. */
     private fun reduce(recordId: String, f: ServerFrame) {
+        var dirty = false
         when (f) {
             is ServerFrame.Snapshot -> {
-                val prev = sessionsByHost[recordId].orEmpty().map { it.id }.toSet()
                 sessionsByHost[recordId] = f.sessions
                 onlineHosts[recordId] = true
-                store.updateSeen(recordId, System.currentTimeMillis())
+                val now = System.currentTimeMillis()
+                store.updateSeen(recordId, now)
+                // Spec §5: replace this host's persisted snapshot wholesale so it survives a restart
+                // (the snapshot carries live sessions only — archived are never cached here).
+                snapshotStore.replace(
+                    recordId, f.sessions, now,
+                    store.list().firstOrNull { it.recordId == recordId }?.version,
+                )
                 rebuildSessions(); rebuildHostViews()
-                // Replace only THIS host's slice of each session-keyed map (drop stale ids, add fresh).
-                _messages.value = _messages.value - prev + f.logs
-                _activity.value = _activity.value - prev + f.activity
-                _bgTasks.value = _bgTasks.value - prev + f.bgTasks
-                _agentState.value = _agentState.value - prev + f.agentState
-                _commands.value = _commands.value - prev + f.commands
-                _commandsResolved.value = _commandsResolved.value - prev + f.commandsResolved
-                _finishJobs.value = (_finishJobs.value - prev) +
-                    f.sessions.mapNotNull { s -> s.finish_job?.let { s.id to it } }.toMap()
+                // Replace only THIS host's slice of each per-session map (drop its stale keys, add fresh).
+                replaceHostSlice(msgByKey, recordId, f.logs)
+                replaceHostSlice(actByKey, recordId, f.activity)
+                replaceHostSlice(bgByKey, recordId, f.bgTasks)
+                replaceHostSlice(agentByKey, recordId, f.agentState)
+                replaceHostSlice(cmdByKey, recordId, f.commands)
+                replaceHostSlice(cmdResByKey, recordId, f.commandsResolved)
+                replaceHostSlice(
+                    finishByKey, recordId,
+                    f.sessions.mapNotNull { s -> s.finish_job?.let { s.id to it } }.toMap(),
+                )
+                dirty = true
                 // A (re)connect always begins with a snapshot; re-assert viewing presence so the
                 // owning broker's per-device tracker is current after a reconnect.
                 lastSentViewing = null
@@ -287,15 +334,15 @@ class AppViewModel(
                     }
                 }
                 rebuildSessions()
-                incoming.finish_job?.let { job -> _finishJobs.update { it + (incoming.id to job) } }
+                incoming.finish_job?.let { job -> finishByKey[keyFor(recordId, incoming.id)] = job; dirty = true }
             }
             is ServerFrame.SessionRemoved -> {
                 sessionsByHost[recordId] = sessionsByHost[recordId].orEmpty().filterNot { it.id == f.id }
                 rebuildSessions()
-                _bgTasks.update { it - f.id }
+                if (bgByKey.remove(keyFor(recordId, f.id)) != null) dirty = true
             }
             is ServerFrame.SessionState ->
-                patchSession(f.session) {
+                patchSessionIn(recordId, f.session) {
                     it.copy(
                         mute = f.mute ?: it.mute,
                         connected = f.connected ?: it.connected,
@@ -306,42 +353,44 @@ class AppViewModel(
             is ServerFrame.MessageAppend -> {
                 // Optimistic-echo dedup (iOS BrokerSession parity): when the real inbound message
                 // lands, drop the matching local-… placeholder we appended on send.
-                _messages.value = _messages.value.toMutableMap().apply {
-                    val prev = this[f.session] ?: emptyList()
-                    val pruned = if (f.entry.direction.startsWith("in")) {
-                        prev.filterNot { it.id.startsWith("local-") && it.text == f.entry.text }
-                    } else prev
-                    this[f.session] = pruned + f.entry
-                }
+                val key = keyFor(recordId, f.session)
+                val prev = msgByKey[key] ?: emptyList()
+                val pruned = if (f.entry.direction.startsWith("in")) {
+                    prev.filterNot { it.id.startsWith("local-") && it.text == f.entry.text }
+                } else prev
+                msgByKey[key] = pruned + f.entry
+                dirty = true
             }
-            is ServerFrame.ActivityAppend ->
-                _activity.value = _activity.value.toMutableMap().apply {
-                    this[f.session] = (this[f.session] ?: emptyList()) + f.event
-                }
-            is ServerFrame.BgTasks -> _bgTasks.update { it + (f.session to f.tasks) }
+            is ServerFrame.ActivityAppend -> {
+                val key = keyFor(recordId, f.session)
+                actByKey[key] = (actByKey[key] ?: emptyList()) + f.event
+                dirty = true
+            }
+            is ServerFrame.BgTasks -> { bgByKey[keyFor(recordId, f.session)] = f.tasks; dirty = true }
             is ServerFrame.AgentState -> {
-                _agentState.value = _agentState.value.toMutableMap().apply {
-                    this[f.session] = AgentStatus(
-                        phase = f.phase, state = f.state, working = f.working,
-                        detail = f.detail, tool = f.tool, since = f.since, workingSince = f.workingSince,
-                        waiting = f.waiting, bgOpen = f.bgOpen,
-                    )
-                }
-                _pendingSend.update { it - f.session }   // first real state clears the client-local "Sending…"
-                if (f.state != "dead" && _agentErrors.value.containsKey(f.session)) {
-                    _agentErrors.update { it - f.session }
-                }
+                val key = keyFor(recordId, f.session)
+                agentByKey[key] = AgentStatus(
+                    phase = f.phase, state = f.state, working = f.working,
+                    detail = f.detail, tool = f.tool, since = f.since, workingSince = f.workingSince,
+                    waiting = f.waiting, bgOpen = f.bgOpen,
+                )
+                pendingByKey.remove(key)   // first real state clears the client-local "Sending…"
+                if (f.state != "dead") agentErrByKey.remove(key)
+                dirty = true
             }
             is ServerFrame.CommandsChanged -> {
-                _commands.value = _commands.value.toMutableMap().apply { this[f.session] = f.commands }
-                _commandsResolved.update { it + (f.session to f.resolved) }
+                val key = keyFor(recordId, f.session)
+                cmdByKey[key] = f.commands
+                cmdResByKey[key] = f.resolved
+                dirty = true
             }
-            is ServerFrame.AgentError -> _agentErrors.update { it + (f.session to f) }
+            is ServerFrame.AgentError -> { agentErrByKey[keyFor(recordId, f.session)] = f; dirty = true }
             is ServerFrame.FinishJobFrame -> {
                 val job = f.job
                 if (job != null) {
-                    _finishJobs.update { it + (f.session to job) }
-                    patchSession(f.session) { it.copy(finish_job = job) }
+                    finishByKey[keyFor(recordId, f.session)] = job
+                    patchSessionIn(recordId, f.session) { it.copy(finish_job = job) }
+                    dirty = true
                 }
             }
             is ServerFrame.FsChanged -> _fsChanges.tryEmit(f)
@@ -357,9 +406,54 @@ class AppViewModel(
             is ServerFrame.LspInstallProgress ->
                 _lspInstallLog.update { it + (f.serverId to ((it[f.serverId] ?: emptyList()) + f.line)) }
             is ServerFrame.LspInstallDone -> _lspInstallDone.update { it + (f.serverId to f) }
-            is ServerFrame.SessionGit -> patchSession(f.session) { it.copy(git = f.git) }
+            is ServerFrame.SessionGit -> patchSessionIn(recordId, f.session) { it.copy(git = f.git) }
             else -> {}
         }
+        if (dirty) publishSessionState()
+    }
+
+    /** Composite key "recordId␟sessionId" for a frame from [recordId]. */
+    private fun keyFor(recordId: String, sessionId: String): String = SessionKey.key(recordId, sessionId)
+
+    /** Owner-resolved composite key for a UI-driven per-session action: the owner is the merged-list
+     *  owner of [sessionId] (the host the UI is showing/routing to for that bare id). */
+    private fun ownerKey(sessionId: String): String = SessionKey.key(ownerOf(sessionId) ?: "", sessionId)
+
+    /** Replace only host [recordId]'s slice of a composite-keyed map: drop its stale keys, then add
+     *  [fresh] (bare-sessionId → value) re-keyed under [recordId]. Other hosts' entries are untouched. */
+    private fun <V> replaceHostSlice(map: MutableMap<String, V>, recordId: String, fresh: Map<String, V>) {
+        map.keys.removeAll { SessionKey.parse(it)?.recordId == recordId }
+        for ((id, v) in fresh) map[keyFor(recordId, id)] = v
+    }
+
+    /** Re-derive the bare-sessionId StateFlows the UI collects from the host-qualified source maps,
+     *  owner-strictly (a non-owner host's colliding entry is never surfaced — spec §5/§9). */
+    private fun publishSessionState() {
+        val owner = _sessionHost.value
+        _messages.value = SessionKey.flatten(msgByKey, owner)
+        _activity.value = SessionKey.flatten(actByKey, owner)
+        _agentState.value = SessionKey.flatten(agentByKey, owner)
+        _bgTasks.value = SessionKey.flatten(bgByKey, owner)
+        _commands.value = SessionKey.flatten(cmdByKey, owner)
+        _commandsResolved.value = SessionKey.flatten(cmdResByKey, owner)
+        _agentErrors.value = SessionKey.flatten(agentErrByKey, owner)
+        _finishJobs.value = SessionKey.flatten(finishByKey, owner)
+        _pendingSend.value = SessionKey.flattenSet(pendingByKey)
+    }
+
+    /** Drop every host-qualified per-session entry for [recordId] (host forgotten, or a duplicate
+     *  record merged away), so no orphaned keys survive in the source maps. Caller republishes. */
+    private fun dropHostState(recordId: String) {
+        val mine = { k: String -> SessionKey.parse(k)?.recordId == recordId }
+        msgByKey.keys.removeAll(mine)
+        actByKey.keys.removeAll(mine)
+        agentByKey.keys.removeAll(mine)
+        bgByKey.keys.removeAll(mine)
+        cmdByKey.keys.removeAll(mine)
+        cmdResByKey.keys.removeAll(mine)
+        agentErrByKey.keys.removeAll(mine)
+        finishByKey.keys.removeAll(mine)
+        pendingByKey.removeAll(mine)
     }
 
     /** Socket connect/disconnect for a host — drives the offline/greyed group (spec §5). The
@@ -385,30 +479,28 @@ class AppViewModel(
             store.backfillHostId(recordId, hostId)
             val merged = before - store.list().map { it.recordId }.toSet()
             if (merged.isNotEmpty()) {
-                // A duplicate record collapsed into this one — drop its orphaned bucket and reconcile
-                // connections (close the now-removed record's socket), then rederive the merged list.
-                merged.forEach { sessionsByHost.remove(it); onlineHosts.remove(it) }
+                // A duplicate record collapsed into this one — drop its orphaned bucket + cache +
+                // per-session state and reconcile connections (close the removed record's socket).
+                merged.forEach {
+                    sessionsByHost.remove(it); onlineHosts.remove(it); snapshotStore.remove(it); dropHostState(it)
+                }
                 onHostsChanged()
             } else {
                 rebuildHostViews()
             }
             rebuildSessions()
+            publishSessionState()
         }
     }
 
-    /** Rederive [_sessions] + [_sessionHost] from the per-host buckets, in store host order. */
+    /** Rederive [_sessions] + [_sessionHost] from the per-host buckets, in store host order, via the
+     *  shared (unit-tested) fleet merge. The merged rows keep BOTH sides of a sessionId collision
+     *  (spec §5 "both appear"); [_sessions] collapses to one row per bare id (owner wins) so the keyed
+     *  list can't crash, and [_sessionHost] is the owner index that routes per-session commands. */
     private fun rebuildSessions() {
-        val order = store.list().map { it.recordId }
-        val ids = LinkedHashSet(order).apply { addAll(sessionsByHost.keys) }
-        val flat = ArrayList<SessionInfo>()
-        val owner = HashMap<String, String>()
-        for (rid in ids) {
-            sessionsByHost[rid]?.forEach { s ->
-                if (owner[s.id] == null) { flat += s; owner[s.id] = rid }
-            }
-        }
-        _sessions.value = flat
-        _sessionHost.value = owner
+        val rows = mergeFleetRows(store.list().map { it.recordId }, sessionsByHost)
+        _sessions.value = mergedSessions(rows)
+        _sessionHost.value = fleetOwners(rows)
     }
 
     /** Rebuild [_hostViews] from the store + live online map. */
@@ -424,14 +516,21 @@ class AppViewModel(
         }
     }
 
-    /** Patch one session in its owning host's bucket, then rederive the merged list. No-op if the
-     *  session's owner/row is unknown (e.g. a state frame racing ahead of its session_added). */
+    /** Patch one session in its OWNING host's bucket (UI-driven, e.g. optimistic model switch), then
+     *  rederive the merged list. No-op if the owner/row is unknown (a state frame racing ahead of its
+     *  session_added). */
     private fun patchSession(id: String, f: (SessionInfo) -> SessionInfo) {
         val rid = _sessionHost.value[id] ?: sessionsByHost.entries.firstOrNull { e -> e.value.any { it.id == id } }?.key ?: return
-        val bucket = sessionsByHost[rid] ?: return
+        patchSessionIn(rid, id, f)
+    }
+
+    /** Patch a session in a SPECIFIC host's bucket — used by the reducer, where the frame's [recordId]
+     *  is authoritative, so a colliding sessionId on another host is never patched by mistake. */
+    private fun patchSessionIn(recordId: String, id: String, f: (SessionInfo) -> SessionInfo) {
+        val bucket = sessionsByHost[recordId] ?: return
         val idx = bucket.indexOfFirst { it.id == id }
         if (idx < 0) return
-        sessionsByHost[rid] = bucket.toMutableList().also { it[idx] = f(it[idx]) }
+        sessionsByHost[recordId] = bucket.toMutableList().also { it[idx] = f(it[idx]) }
         rebuildSessions()
     }
 
@@ -544,9 +643,12 @@ class AppViewModel(
         store.remove(recordId)
         sessionsByHost.remove(recordId)
         onlineHosts.remove(recordId)
+        snapshotStore.remove(recordId)   // spec §5: the cache is dropped when a host is forgotten
+        dropHostState(recordId)          // and its host-qualified per-session state
         if (_activeHost.value == recordId) _activeHost.value = store.list().firstOrNull()?.recordId
         onHostsChanged()
         rebuildSessions()
+        publishSessionState()
     }
 
     private fun onHostsChanged() {
@@ -637,13 +739,15 @@ class AppViewModel(
 
     private fun appendOptimistic(sessionId: String, text: String) {
         if (text.isEmpty()) return
+        val key = ownerKey(sessionId)
         val optimistic = LogEntry(
-            id = "local-${(_messages.value[sessionId]?.size ?: 0)}-${text.hashCode()}",
+            id = "local-${(msgByKey[key]?.size ?: 0)}-${text.hashCode()}",
             ts = nowIso(),
             direction = "inbound",
             text = text,
         )
-        _messages.update { it + (sessionId to ((it[sessionId] ?: emptyList()) + optimistic)) }
+        msgByKey[key] = (msgByKey[key] ?: emptyList()) + optimistic
+        publishSessionState()
     }
 
     fun send(sessionId: String, text: String) {
@@ -651,7 +755,7 @@ class AppViewModel(
         appendOptimistic(sessionId, text.trim())
         viewModelScope.launch {
             clientFor(sessionId)?.send(ClientFrame.Send(sessionId, args = SendArgs(text)))
-            _pendingSend.update { it + sessionId }
+            pendingByKey.add(ownerKey(sessionId)); publishSessionState()
         }
     }
 
@@ -771,7 +875,7 @@ class AppViewModel(
         viewModelScope.launch {
             runCatching {
                 clientFor(sessionId)?.send(ClientFrame.Send(sessionId, args = SendArgs(text, attachments.ifEmpty { null })))
-                _pendingSend.update { it + sessionId }
+                pendingByKey.add(ownerKey(sessionId)); publishSessionState()
             }
         }
     }
@@ -1010,11 +1114,13 @@ class AppViewModel(
         runCatching { (apiFor(sessionId) ?: activeApi())?.archivedLogs(sessionId) }.getOrNull() ?: emptyList()
 
     fun ensureMessagesLoaded(sessionId: String) {
-        if (_messages.value[sessionId]?.isNotEmpty() == true) return
+        val key = ownerKey(sessionId)
+        if (msgByKey[key]?.isNotEmpty() == true) return
         viewModelScope.launch {
             val fetched = archivedLogs(sessionId)
-            if (fetched.isNotEmpty() && _messages.value[sessionId]?.isNotEmpty() != true) {
-                _messages.update { it + (sessionId to fetched) }
+            if (fetched.isNotEmpty() && msgByKey[key]?.isNotEmpty() != true) {
+                msgByKey[key] = fetched
+                publishSessionState()
             }
         }
     }
