@@ -1,14 +1,16 @@
-package dev.supermux.android.host
+package dev.supermux.host
 
 import dev.supermux.proto.SessionInfo
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /**
  * Pure-JVM tests for the framework-free fleet-view helpers (spec §5): deterministic badge colors,
- * compact labels, offline "last seen" buckets, and host filtering. No Android/Context needed
- * (mirrors [HostMetaCodecTest]).
+ * compact labels, offline "last seen" buckets, host filtering, and the shared OKLCH dot palette.
+ * This is the SINGLE source of truth Android + iOS both consume — the identical assertions guard
+ * cross-platform badge-color parity (mirrors the retired android FleetModelTest).
  */
 class FleetModelTest {
 
@@ -24,8 +26,6 @@ class FleetModelTest {
     }
 
     @Test fun colorIndex_spreadsAcrossPalette() {
-        // Sequential recordIds (the real shape — UUIDs / "record-N") must not collapse to one color;
-        // this FNV-1a spreads them across most of the palette (verified: record-0..7 hit all 6 slots).
         val distinct = (0 until 8).map { hostColorIndex("record-$it") }.toSet()
         assertTrue(distinct.size >= 4, "expected variety across the palette, got $distinct")
     }
@@ -80,5 +80,24 @@ class FleetModelTest {
         val owner = mapOf("a" to "h1", "b" to "h2", "c" to "h1")
         assertEquals(listOf("a", "c"), filterSessions(sessions, owner, "h1").map { it.id })
         assertEquals(listOf("b"), filterSessions(sessions, owner, "h2").map { it.id })
+    }
+
+    // ── shared OKLCH dot palette (cross-platform color parity) ───────────────────
+    @Test fun dotArgb_isOpaqueDeterministicAndThemeVaried() {
+        for (i in 0 until HOST_PALETTE_SIZE) {
+            val dark = hostDotArgb(i, dark = true)
+            val light = hostDotArgb(i, dark = false)
+            // Opaque (alpha byte 0xFF), stable, and the two themes differ per slot.
+            assertEquals(0xFF, (dark ushr 24) and 0xFF, "dark slot $i must be opaque")
+            assertEquals(0xFF, (light ushr 24) and 0xFF, "light slot $i must be opaque")
+            assertEquals(dark, hostDotArgb(i, dark = true), "same slot must be stable")
+            assertNotEquals(dark, light, "dark/light slot $i should differ")
+        }
+    }
+
+    @Test fun dotArgb_slotWrapsIntoPalette() {
+        // colorIndex is always in-range, but guard the wrap so an out-of-range slot can't throw.
+        assertEquals(hostDotArgb(0, dark = true), hostDotArgb(HOST_PALETTE_SIZE, dark = true))
+        assertEquals(hostHueDegrees(1), hostHueDegrees(1 + HOST_PALETTE_SIZE))
     }
 }
