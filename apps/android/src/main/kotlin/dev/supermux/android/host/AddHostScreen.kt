@@ -2,6 +2,7 @@ package dev.supermux.android.host
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -9,12 +10,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -67,8 +70,11 @@ fun AddHostScreen(
     onBack: () -> Unit,
     defaultDeviceName: String,
     onClaim: suspend (PairingPayload, deviceName: String) -> AddHostResult,
-    onClaimByUrl: suspend (url: String, deviceName: String) -> AddHostResult,
+    onClaimByUrl: suspend (url: String, deviceName: String, allowInsecure: Boolean) -> AddHostResult,
     onAdded: () -> Unit,
+    // True when a typed URL is plain HTTP to a non-loopback host → the unencrypted opt-in is required
+    // before it can be added (spec §3.5). Defaults to never-required for single-arg callers/previews.
+    needsInsecureOptIn: (String) -> Boolean = { false },
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -77,6 +83,7 @@ fun AddHostScreen(
     var pasteInput by rememberSaveable { mutableStateOf("") }
     var urlInput by rememberSaveable { mutableStateOf("") }
     var deviceName by rememberSaveable { mutableStateOf(defaultDeviceName) }
+    var insecureAck by rememberSaveable { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var info by remember { mutableStateOf<String?>(null) }
@@ -209,12 +216,38 @@ fun AddHostScreen(
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false),
                         modifier = Modifier.fillMaxWidth().testTag("add_host_url_field"),
                     )
+                    // Plain-HTTP guard (spec §3.5): a non-loopback http:// / ws:// URL would carry the
+                    // device token unencrypted — require a deliberate, labeled opt-in before adding it.
+                    val needsOptIn = urlInput.isNotBlank() && needsInsecureOptIn(urlInput.trim())
+                    if (needsOptIn) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .testTag("add_host_insecure_optin"),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                checked = insecureAck,
+                                onCheckedChange = { insecureAck = it; error = null },
+                                enabled = !busy,
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                "Connect over an unencrypted connection — only on a network you trust (VPN/tailnet/LAN).",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = cs.onSurfaceVariant,
+                            )
+                        }
+                    }
                     Button(
                         onClick = {
                             error = null; info = null; busy = true
-                            scope.launch { handle(onClaimByUrl(urlInput.trim(), deviceName.trim().ifBlank { defaultDeviceName })) }
+                            val ack = insecureAck
+                            scope.launch {
+                                handle(onClaimByUrl(urlInput.trim(), deviceName.trim().ifBlank { defaultDeviceName }, ack))
+                            }
                         },
-                        enabled = !busy && urlInput.isNotBlank(),
+                        enabled = !busy && urlInput.isNotBlank() && (!needsOptIn || insecureAck),
                         modifier = Modifier.fillMaxWidth().testTag("add_host_url_submit"),
                     ) { Text("Connect") }
                 }

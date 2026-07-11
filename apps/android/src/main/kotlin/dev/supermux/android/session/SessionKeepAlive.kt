@@ -187,6 +187,8 @@ fun SessionKeepAlivePhoneHost(
                         hostFilter = hostFilter,
                         onHostFilter = onHostFilter,
                         onAddHost = onAddHost,
+                        onRenameHost = { id, name -> vm.renameHost(id, name) },
+                        onForgetHost = { id -> vm.forgetHost(id) },
                         sharedScope = this@SharedTransitionLayout,
                         animScope = this,
                     )

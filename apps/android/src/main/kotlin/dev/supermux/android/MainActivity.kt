@@ -335,6 +335,8 @@ class MainActivity : ComponentActivity() {
                                                 hostFilter = hostFilter,
                                                 onHostFilter = setHostFilter,
                                                 onAddHost = { navController.navigate(AddHost) },
+                                                onRenameHost = { id, name -> vm.renameHost(id, name) },
+                                                onForgetHost = { id -> vm.forgetHost(id) },
                                             )
                                         }
                                     }
@@ -443,6 +445,8 @@ class MainActivity : ComponentActivity() {
                                         hostFilter = hostFilter,
                                         onHostFilter = setHostFilter,
                                         onAddHost = { navController.navigate(AddHost) },
+                                        onRenameHost = { id, name -> vm.renameHost(id, name) },
+                                        onForgetHost = { id -> vm.forgetHost(id) },
                                     )
                                 }
                                 Box(
@@ -524,8 +528,9 @@ class MainActivity : ComponentActivity() {
                             onBack = { navController.popBackStack() },
                             defaultDeviceName = android.os.Build.MODEL?.ifBlank { "Android phone" } ?: "Android phone",
                             onClaim = { payload, name -> vm.addHost(payload, name) },
-                            onClaimByUrl = { url, name -> vm.addHostByUrl(url, name) },
+                            onClaimByUrl = { url, name, allowInsecure -> vm.addHostByUrl(url, name, allowInsecure) },
                             onAdded = { navController.popBackStack() },
+                            needsInsecureOptIn = { vm.urlNeedsInsecureOptIn(it) },
                         )
                     }
                     composable<Settings> {

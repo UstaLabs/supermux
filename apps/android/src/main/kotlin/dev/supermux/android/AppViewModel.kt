@@ -64,6 +64,7 @@ import dev.supermux.android.settings.AddCustomLspArgs
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
 import dev.supermux.host.PairingPayload
+import dev.supermux.util.TransportPolicy
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.ClientFrame
@@ -366,6 +367,33 @@ class AppViewModel(
     private fun onConnState(recordId: String, online: Boolean) {
         onlineHosts[recordId] = online
         rebuildHostViews()
+        if (online) backfillHostIdentity(recordId)
+    }
+
+    /** Once a host's socket is up, learn its durable hostId from GET /host and backfill the record
+     *  (spec §3.1/§5): a migrated `hostId == null` record gets its real id, and if that id already
+     *  belongs to another record the two collapse into one (the shared store merges them). Best-effort
+     *  and idempotent — skipped once the id is known, so it doesn't refetch on every reconnect. */
+    private fun backfillHostIdentity(recordId: String) {
+        val current = store.list().firstOrNull { it.recordId == recordId } ?: return
+        if (!current.hostId.isNullOrBlank()) return
+        val api = hostConns.api(recordId) ?: return
+        viewModelScope.launch {
+            val hostId = runCatching { api.getHost() }.getOrNull()?.hostId?.takeIf { it.isNotBlank() }
+                ?: return@launch
+            val before = store.list().map { it.recordId }.toSet()
+            store.backfillHostId(recordId, hostId)
+            val merged = before - store.list().map { it.recordId }.toSet()
+            if (merged.isNotEmpty()) {
+                // A duplicate record collapsed into this one — drop its orphaned bucket and reconcile
+                // connections (close the now-removed record's socket), then rederive the merged list.
+                merged.forEach { sessionsByHost.remove(it); onlineHosts.remove(it) }
+                onHostsChanged()
+            } else {
+                rebuildHostViews()
+            }
+            rebuildSessions()
+        }
     }
 
     /** Rederive [_sessions] + [_sessionHost] from the per-host buckets, in store host order. */
@@ -437,12 +465,15 @@ class AppViewModel(
         val res = runCatching { api.pairClaim(payload.claimSecret, deviceName) }.getOrNull()
             ?: return AddHostResult.Error("The host rejected the pairing — the claim is expired or already used.")
         if (res.deviceToken.isBlank()) return AddHostResult.Error("The host didn't return a device token.")
-        res.host?.hostId?.takeIf { it.isNotBlank() }?.let { returned ->
-            if (returned != payload.hostId) {
-                return AddHostResult.Error("Host identity mismatch (scanned ${payload.hostId}, got $returned) — aborting.")
-            }
+        // Anti-MITM (spec §3.4): the broker that answered MUST prove it is the scanned host. Require an
+        // exact, non-empty hostId match — a missing or blank returned id is a failure, not a pass.
+        val returned = res.host?.hostId
+        if (returned.isNullOrBlank() || returned != payload.hostId) {
+            return AddHostResult.Error(
+                "Host identity mismatch (scanned ${payload.hostId}, got ${returned?.ifBlank { null } ?: "none"}) — aborting.",
+            )
         }
-        val host = store.add(
+        val host = store.addOrUpdate(
             displayName = payload.name.ifBlank { res.host?.name?.ifBlank { null } ?: "New host" },
             token = res.deviceToken,
             relayUrl = payload.relayUrl,
@@ -461,8 +492,15 @@ class AppViewModel(
      * (trust-on-first-connect) and we persist it; an already-set-up host returns [NeedsClaim] so the
      * user mints a claim from the host's own UI and scans/pastes that instead.
      */
-    suspend fun addHostByUrl(rawUrl: String, deviceName: String): AddHostResult {
+    suspend fun addHostByUrl(rawUrl: String, deviceName: String, allowInsecure: Boolean = false): AddHostResult {
         val url = normalizeHostUrl(rawUrl) ?: return AddHostResult.Error("Enter a valid http(s) or ws(s) URL.")
+        // Transport guard (spec §3.5): don't send anything over an unencrypted, non-loopback path
+        // until the user has explicitly opted in (the UI shows a labeled checkbox for exactly this).
+        if (!allowInsecure && !TransportPolicy.isPlainHttpAllowedWithoutOptIn(url)) {
+            return AddHostResult.Error(
+                "That's an unencrypted (HTTP) address. Tick “Connect over an unencrypted connection” to add it on a trusted/VPN network.",
+            )
+        }
         val api = BrokerApi(url, "", http)
         val identity = runCatching { api.getHost() }.getOrNull()
             ?: return AddHostResult.Error("That doesn't look like a supermux host (no /host response).")
@@ -473,7 +511,7 @@ class AppViewModel(
                 return AddHostResult.Error("Host identity mismatch — aborting.")
             }
         }
-        val host = store.add(
+        val host = store.addOrUpdate(
             displayName = identity.name.ifBlank { "New host" },
             token = res.deviceToken,
             directUrl = url,
@@ -483,6 +521,21 @@ class AppViewModel(
         )
         onHostsChanged()
         return AddHostResult.Added(host)
+    }
+
+    /** True when a typed add-host URL is plain HTTP to a non-loopback host, so the add-host UI must
+     *  surface the unencrypted-connection opt-in before it can be added (spec §3.5). */
+    fun urlNeedsInsecureOptIn(rawUrl: String): Boolean {
+        val url = normalizeHostUrl(rawUrl) ?: return false
+        return !TransportPolicy.isPlainHttpAllowedWithoutOptIn(url)
+    }
+
+    /** Rename a paired host (the merged-list chip/badge label). */
+    fun renameHost(recordId: String, name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isBlank()) return
+        store.rename(recordId, trimmed)
+        rebuildHostViews()
     }
 
     /** Forget a host: drop its record/token (best-effort local revoke happens in the persistence),

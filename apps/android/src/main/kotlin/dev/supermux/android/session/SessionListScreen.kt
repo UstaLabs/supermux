@@ -329,6 +329,8 @@ fun SessionListScreen(
     hostFilter: String? = null,
     onHostFilter: (String?) -> Unit = {},
     onAddHost: () -> Unit = {},
+    onRenameHost: (recordId: String, name: String) -> Unit = { _, _ -> },
+    onForgetHost: (recordId: String) -> Unit = {},
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
 ) {
@@ -533,6 +535,8 @@ fun SessionListScreen(
                         selected = hostFilter,
                         onSelect = onHostFilter,
                         onAddHost = onAddHost,
+                        onRenameHost = onRenameHost,
+                        onForgetHost = onForgetHost,
                     )
                 }
             }

@@ -1,6 +1,8 @@
 package dev.supermux.android.host
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,11 +11,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -78,7 +89,9 @@ fun HostBadge(host: HostView, modifier: Modifier = Modifier) {
 /**
  * The `All · <host…> · +` filter chip row (spec §5). Each host chip carries its color dot and a
  * live session count; the trailing `+` chip adds a host. [selected] is a recordId or null (= All).
+ * Long-pressing a host chip opens a Rename / Forget menu ([onRenameHost] / [onForgetHost]).
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HostFilterChips(
     hosts: List<HostView>,
@@ -87,9 +100,17 @@ fun HostFilterChips(
     selected: String?,
     onSelect: (String?) -> Unit,
     onAddHost: () -> Unit,
+    onRenameHost: (recordId: String, name: String) -> Unit = { _, _ -> },
+    onForgetHost: (recordId: String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
+    // Long-press host-actions: which chip's menu is open, and the target of the rename/forget dialogs.
+    var menuFor by remember { mutableStateOf<String?>(null) }
+    var renameTarget by remember { mutableStateOf<HostView?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    var forgetTarget by remember { mutableStateOf<HostView?>(null) }
+
     Row(
         modifier
             .testTag("host_filter_chips")
@@ -106,21 +127,43 @@ fun HostFilterChips(
         )
         hosts.forEach { h ->
             val count = sessions.count { sessionHost[it.id] == h.recordId }
-            FilterChip(
-                selected = selected == h.recordId,
-                onClick = { onSelect(h.recordId) },
-                leadingIcon = { HostDot(h.colorIndex, size = 9.dp) },
-                label = {
-                    Text(
-                        buildString {
-                            append(h.shortLabel)
-                            if (count > 0) append("  $count")
-                        },
-                        color = if (h.online) cs.onSurface else cs.onSurfaceVariant.copy(alpha = 0.7f),
+            Box {
+                FilterChip(
+                    selected = selected == h.recordId,
+                    // Tap + long-press are handled by the overlay below; keep the chip visual-only.
+                    onClick = {},
+                    leadingIcon = { HostDot(h.colorIndex, size = 9.dp) },
+                    label = {
+                        Text(
+                            buildString {
+                                append(h.shortLabel)
+                                if (count > 0) append("  $count")
+                            },
+                            color = if (h.online) cs.onSurface else cs.onSurfaceVariant.copy(alpha = 0.7f),
+                        )
+                    },
+                    modifier = Modifier.testTag("host_chip_${h.recordId}"),
+                )
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .combinedClickable(
+                            onClick = { onSelect(h.recordId) },
+                            onLongClick = { menuFor = h.recordId },
+                        )
+                        .testTag("host_chip_press_${h.recordId}"),
+                )
+                DropdownMenu(expanded = menuFor == h.recordId, onDismissRequest = { menuFor = null }) {
+                    DropdownMenuItem(
+                        text = { Text("Rename") },
+                        onClick = { menuFor = null; renameText = h.displayName; renameTarget = h },
                     )
-                },
-                modifier = Modifier.testTag("host_chip_${h.recordId}"),
-            )
+                    DropdownMenuItem(
+                        text = { Text("Forget", color = cs.error) },
+                        onClick = { menuFor = null; forgetTarget = h },
+                    )
+                }
+            }
         }
         // Add-host chip: opens the QR / paste / typed-URL flow.
         FilterChip(
@@ -135,6 +178,43 @@ fun HostFilterChips(
             },
             label = { Text("Add") },
             modifier = Modifier.testTag("host_chip_add"),
+        )
+    }
+
+    renameTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("Rename host") },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    singleLine = true,
+                    modifier = Modifier.testTag("host_rename_field"),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { onRenameHost(target.recordId, renameText.trim()); renameTarget = null },
+                    enabled = renameText.trim().isNotBlank(),
+                    modifier = Modifier.testTag("host_rename_confirm"),
+                ) { Text("Rename") }
+            },
+            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text("Cancel") } },
+        )
+    }
+    forgetTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { forgetTarget = null },
+            title = { Text("Forget host?") },
+            text = { Text("Removes \"${target.displayName}\" and its sessions from this device. You'll need a new pairing link to add it again.") },
+            confirmButton = {
+                TextButton(
+                    onClick = { onForgetHost(target.recordId); forgetTarget = null },
+                    modifier = Modifier.testTag("host_forget_confirm"),
+                ) { Text("Forget", color = cs.error) }
+            },
+            dismissButton = { TextButton(onClick = { forgetTarget = null }) { Text("Cancel") } },
         )
     }
 }
