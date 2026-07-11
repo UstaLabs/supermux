@@ -22,7 +22,7 @@ test("start acquires a lease, spawns frpc for the right subdomain, reports onlin
   expect(st.state).toBe("online")
   expect(st.relayUrl).toBe("https://h-habc.relay.supermux.dev")
   expect(spawned.length).toBe(1)
-  expect(spawned[0][0]).toContain("frpc")
+  expect(spawned[0]![0]).toContain("frpc")
 })
 
 test("a failed lease request reports error, does not spawn", async () => {

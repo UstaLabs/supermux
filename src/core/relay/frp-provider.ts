@@ -6,7 +6,7 @@ export interface FrpProviderOpts {
   relayBase: string       // https://relay.supermux.dev (lease endpoint host)
   relayDomain: string     // relay.supermux.dev (subdomain suffix)
   localPort: number       // 9898
-  fetchImpl?: typeof fetch
+  fetchImpl?: (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<Response>
   getNonce: () => Promise<string>
   spawn: (argv: string[]) => FrpChild
   writeConfig: (ini: string) => string  // writes frpc.ini, returns path

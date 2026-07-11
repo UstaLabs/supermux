@@ -47,7 +47,7 @@ test("POST /pair/claim mints a device token for a valid one-time secret, even wi
     body: JSON.stringify({ claimSecret: secret, deviceName: "phone" }),
   })
   expect(res.status).toBe(200)
-  const body = await res.json()
+  const body = await res.json() as { host: unknown; deviceToken: unknown }
   expect(body.host).toEqual({ hostId: "h123", name: "box", platform: "linux", version: "0.11.0" })
   expect(typeof body.deviceToken).toBe("string")
 })

@@ -17,6 +17,7 @@ export function verifyLease(lease: string, { secret, now = Date.now() }: { secre
   const parts = lease.split(".")
   if (parts.length !== 3) return { ok: false }
   const [hostId, expStr, sig] = parts
+  if (!hostId || !expStr || !sig) return { ok: false }
   const expected = mac(`${hostId}.${expStr}`, secret)
   const a = Buffer.from(sig), b = Buffer.from(expected)
   if (a.length !== b.length || !timingSafeEqual(a, b)) return { ok: false }
