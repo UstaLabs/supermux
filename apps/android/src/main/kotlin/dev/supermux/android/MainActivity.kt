@@ -55,6 +55,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import dev.supermux.android.host.AddHostScreen
+import dev.supermux.android.nav.AddHost
 import dev.supermux.android.nav.Appearance
 import dev.supermux.android.nav.Archived
 import dev.supermux.android.nav.Devices
@@ -167,14 +169,10 @@ class MainActivity : ComponentActivity() {
                     return@SupermuxTheme
                 }
 
-                // Drive the (still single) live connection from PairedHost[0] once migration has
-                // seeded it — proving the migrated record actually carries the app. Falls back to
-                // the legacy secure store for a session where onboarding just paired (that record
-                // migrates on the next launch). The gate above guarantees the legacy values exist.
-                val host0 = remember { HostStores.store(applicationContext).list().firstOrNull() }
-                val brokerUrl = remember { host0?.let { it.relayUrl ?: it.directUrl } ?: store.loadBaseUrl()!! }
-                val token = remember { host0?.token?.ifBlank { null } ?: store.load()!! }
-                val vm: AppViewModel = viewModel(factory = AppViewModel.factory(application, brokerUrl, token))
+                // Multi-host (spec §5): the VM owns N per-host connections from the PairedHostStore,
+                // re-running the idempotent single-host→PairedHost[0] migration on init so existing
+                // users — and the session where onboarding just paired — always have a host to drive.
+                val vm: AppViewModel = viewModel(factory = AppViewModel.factory(application))
                 val sessions by vm.sessions.collectAsStateWithLifecycle()
                 val messages by vm.messages.collectAsStateWithLifecycle()
                 val activity by vm.activity.collectAsStateWithLifecycle()
@@ -182,6 +180,15 @@ class MainActivity : ComponentActivity() {
                 val pendingSend by vm.pendingSend.collectAsStateWithLifecycle()
                 val commands by vm.commands.collectAsStateWithLifecycle()
                 val commandsResolved by vm.commandsResolved.collectAsStateWithLifecycle()
+                // Merged-fleet state: the paired hosts (identity + reachability), the sessionId→host
+                // owner index (per-row badges), and the persisted host-filter chip selection.
+                val hostViews by vm.hostViews.collectAsStateWithLifecycle()
+                val sessionHost by vm.sessionHost.collectAsStateWithLifecycle()
+                val activeHost by vm.activeHost.collectAsStateWithLifecycle()
+                var hostFilter by rememberSaveable { mutableStateOf<String?>(null) }
+                LaunchedEffect(Unit) { hostFilter = vm.loadHostFilter() }
+                val setHostFilter: (String?) -> Unit = { hostFilter = it; vm.saveHostFilter(it) }
+                val loadHostAgents: suspend () -> List<String> = { vm.agentStatuses().filter { it.installed }.map { it.kind } }
                 val lastBySession = messages.mapValues { it.value.lastOrNull() }
                 var selected by rememberSaveable { mutableStateOf<String?>(null) }
                 val liveSessionIds = remember(sessions) { sessions.map { it.id }.toSet() }
@@ -245,6 +252,7 @@ class MainActivity : ComponentActivity() {
                         "archived" -> navController.navigate(Archived)
                         "proxies" -> navController.navigate(Proxies)
                         "appearance" -> navController.navigate(Appearance)
+                        "addhost" -> navController.navigate(AddHost)
                         // "displays"/"theme"/"list" → no destinations (stubs)
                     }
                 }
@@ -322,6 +330,11 @@ class MainActivity : ComponentActivity() {
                                                 onRename = { id, name -> vm.rename(id, name) },
                                                 onKill = { id -> vm.kill(id) },
                                                 onMute = { id, m -> vm.setMute(id, m) },
+                                                hosts = hostViews,
+                                                sessionHost = sessionHost,
+                                                hostFilter = hostFilter,
+                                                onHostFilter = setHostFilter,
+                                                onAddHost = { navController.navigate(AddHost) },
                                             )
                                         }
                                     }
@@ -398,6 +411,11 @@ class MainActivity : ComponentActivity() {
                                 vm = vm,
                                 onNavigate = navTo,
                                 onOpenDisplays = { navController.navigate(Displays) },
+                                hosts = hostViews,
+                                sessionHost = sessionHost,
+                                hostFilter = hostFilter,
+                                onHostFilter = setHostFilter,
+                                onAddHost = { navController.navigate(AddHost) },
                             )
                         }
                     }
@@ -420,6 +438,11 @@ class MainActivity : ComponentActivity() {
                                         onRename = { id, name -> vm.rename(id, name) },
                                         onKill = { id -> vm.kill(id) },
                                         onMute = { id, m -> vm.setMute(id, m) },
+                                        hosts = hostViews,
+                                        sessionHost = sessionHost,
+                                        hostFilter = hostFilter,
+                                        onHostFilter = setHostFilter,
+                                        onAddHost = { navController.navigate(AddHost) },
                                     )
                                 }
                                 Box(
@@ -455,6 +478,10 @@ class MainActivity : ComponentActivity() {
                                             vm.createSessionWithFirstMessage(wd, ag, md, msg, staged, worktree = wt, baseBranch = base, reasoningLevel = rl)
                                         },
                                         onOpenSession = { selected = it; navController.popBackStack() },
+                                        hosts = hostViews,
+                                        selectedHostId = activeHost,
+                                        onSelectHost = { vm.setActiveHost(it) },
+                                        loadAgents = loadHostAgents,
                                     )
                                 }
                             }
@@ -485,8 +512,21 @@ class MainActivity : ComponentActivity() {
                                     vm.createSessionWithFirstMessage(wd, ag, md, msg, staged, worktree = wt, baseBranch = base, reasoningLevel = rl)
                                 },
                                 onOpenSession = { selected = it; navController.popBackStack() },
+                                hosts = hostViews,
+                                selectedHostId = activeHost,
+                                onSelectHost = { vm.setActiveHost(it) },
+                                loadAgents = loadHostAgents,
                             )
                         }
+                    }
+                    composable<AddHost> {
+                        AddHostScreen(
+                            onBack = { navController.popBackStack() },
+                            defaultDeviceName = android.os.Build.MODEL?.ifBlank { "Android phone" } ?: "Android phone",
+                            onClaim = { payload, name -> vm.addHost(payload, name) },
+                            onClaimByUrl = { url, name -> vm.addHostByUrl(url, name) },
+                            onAdded = { navController.popBackStack() },
+                        )
                     }
                     composable<Settings> {
                         SettingsScreen(
@@ -627,6 +667,11 @@ private fun PhoneNavHost(
     vm: AppViewModel,
     onNavigate: (String) -> Unit,
     onOpenDisplays: () -> Unit,
+    hosts: List<dev.supermux.android.host.HostView> = emptyList(),
+    sessionHost: Map<String, String> = emptyMap(),
+    hostFilter: String? = null,
+    onHostFilter: (String?) -> Unit = {},
+    onAddHost: () -> Unit = {},
 ) {
     SessionKeepAlivePhoneHost(
         selected = selected,
@@ -645,5 +690,10 @@ private fun PhoneNavHost(
         vm = vm,
         onNavigate = onNavigate,
         onOpenDisplays = onOpenDisplays,
+        hosts = hosts,
+        sessionHost = sessionHost,
+        hostFilter = hostFilter,
+        onHostFilter = onHostFilter,
+        onAddHost = onAddHost,
     )
 }
