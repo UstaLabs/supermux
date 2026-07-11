@@ -86,7 +86,8 @@ async function applyNow() {
         <div class="px-4 pb-2">
           <h3 class="font-semibold text-base">Thinking Level</h3>
           <p class="text-xs text-muted-foreground">{{ agent }} · {{ sessions.displayName(props.sessionId) ?? props.sessionId }}</p>
-          <p class="text-xs text-muted-foreground mt-0.5">Changing the thinking level restarts the agent for this session.</p>
+          <p v-if="agent === 'claude'" class="text-xs text-muted-foreground mt-0.5">Applies live — no restart.</p>
+          <p v-else class="text-xs text-muted-foreground mt-0.5">Changing the thinking level restarts the agent for this session.</p>
         </div>
         <div class="overflow-y-auto flex-1 px-2 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
           <div v-if="loading" class="py-8 text-center text-muted-foreground text-sm">Loading levels…</div>
@@ -110,6 +111,7 @@ async function applyNow() {
           <div v-if="pendingLevel" class="flex items-center justify-between gap-3 px-3 py-2 mt-1 rounded-lg bg-accent/40">
             <span class="text-xs text-muted-foreground">Will apply after this turn</span>
             <button
+              v-if="agent !== 'claude'"
               class="text-xs font-medium px-2 py-1 rounded-md hover:bg-accent transition-colors"
               :disabled="switching !== null"
               @click="applyNow"

@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { PendingReapply, shouldDeferReapply } from "./pending-reapply"
+import { PendingReapply, shouldDeferReapply, changedSince } from "./pending-reapply"
 
 test("shouldDeferReapply: defer only when busy and not applyNow", () => {
   expect(shouldDeferReapply("idle", false)).toBe(false)
@@ -19,6 +19,30 @@ test("mark captures pre-change values once; has/take reflect it", () => {
   p.mark("s1", { oldModel: "m2", oldReasoningLevel: "high" })
   expect(p.take("s1")).toEqual({ oldModel: "m1", oldReasoningLevel: "low" })
   expect(p.has("s1")).toBe(false) // take() removed it
+})
+
+test("changedSince: model changed only", () => {
+  expect(changedSince({ oldModel: "claude-sonnet-5", oldReasoningLevel: "high" },
+                      { model: "claude-opus-4-8", reasoningLevel: "high" }))
+    .toEqual({ model: true, effort: false })
+})
+
+test("changedSince: effort changed only", () => {
+  expect(changedSince({ oldModel: "claude-sonnet-5", oldReasoningLevel: "high" },
+                      { model: "claude-sonnet-5", reasoningLevel: "max" }))
+    .toEqual({ model: false, effort: true })
+})
+
+test("changedSince: both changed (queued model switch then effort switch)", () => {
+  expect(changedSince({ oldModel: "claude-sonnet-5", oldReasoningLevel: undefined },
+                      { model: "claude-opus-4-8", reasoningLevel: "low" }))
+    .toEqual({ model: true, effort: true })
+})
+
+test("changedSince: nothing changed", () => {
+  expect(changedSince({ oldModel: "m", oldReasoningLevel: "high" },
+                      { model: "m", reasoningLevel: "high" }))
+    .toEqual({ model: false, effort: false })
 })
 
 test("take returns undefined when nothing pending", () => {
