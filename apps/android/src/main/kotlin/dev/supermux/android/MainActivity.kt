@@ -85,6 +85,7 @@ import dev.supermux.android.theme.AppearanceMode
 import dev.supermux.android.theme.SupermuxTheme
 import dev.supermux.ui.ThemeDefaults
 import dev.supermux.android.DevConfig
+import dev.supermux.android.host.HostStores
 import dev.supermux.android.pairing.OnboardingScreen
 import dev.supermux.android.push.PushPermission
 import dev.supermux.android.push.SupermuxMessagingService
@@ -137,7 +138,14 @@ class MainActivity : ComponentActivity() {
                 val store = remember { SecureTokenStore() }
                 // Debug-only: seed token+baseUrl on debuggable builds so the already-paired
                 // emulator boots past the gate (no-op on release / when DEBUG_TOKEN is empty).
-                remember { DevConfig.seedDebugPairingIfEmpty(applicationContext); Unit }
+                // Then run the one-time single-host → PairedHost[0] migration (spec §3.2): existing
+                // paired users land in the multi-host store with zero re-pairing. Ordered after the
+                // debug seed so a debug-seeded token migrates too; before the gate/connection below.
+                remember {
+                    DevConfig.seedDebugPairingIfEmpty(applicationContext)
+                    HostStores.migrateFromLegacyIfNeeded(applicationContext)
+                    Unit
+                }
                 // Paired ⇔ the encrypted store holds BOTH a token and a broker base URL.
                 var paired by rememberSaveable {
                     mutableStateOf(
@@ -159,8 +167,13 @@ class MainActivity : ComponentActivity() {
                     return@SupermuxTheme
                 }
 
-                val brokerUrl = remember { store.loadBaseUrl()!! }   // gate guarantees both are present
-                val token = remember { store.load()!! }
+                // Drive the (still single) live connection from PairedHost[0] once migration has
+                // seeded it — proving the migrated record actually carries the app. Falls back to
+                // the legacy secure store for a session where onboarding just paired (that record
+                // migrates on the next launch). The gate above guarantees the legacy values exist.
+                val host0 = remember { HostStores.store(applicationContext).list().firstOrNull() }
+                val brokerUrl = remember { host0?.let { it.relayUrl ?: it.directUrl } ?: store.loadBaseUrl()!! }
+                val token = remember { host0?.token?.ifBlank { null } ?: store.load()!! }
                 val vm: AppViewModel = viewModel(factory = AppViewModel.factory(application, brokerUrl, token))
                 val sessions by vm.sessions.collectAsStateWithLifecycle()
                 val messages by vm.messages.collectAsStateWithLifecycle()
