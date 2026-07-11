@@ -11,6 +11,11 @@ export interface PushPayload {
   text?: string
   kind?: "photo" | "voice" | "audio" | "video" | "video_note" | "document"
   ts: string
+  /** The sending host's identity (spec §5). Carried INSIDE the E2E-encrypted
+   * native payload (the relay stays blind) so a multi-host client can route the
+   * notification + its tap to the right host — the client maps hostId → its local
+   * PairedHost recordId. Absent on single-host / pre-multi-host brokers. */
+  hostId?: string
 }
 
 export interface WebPushAdapter {

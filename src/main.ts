@@ -739,6 +739,7 @@ async function onAssistantMessage(
         anyPresent: (sid) => viewingTracker.isAnyPresentFor(sid),
         nativeSender,
         nativeDevices,
+        hostId: hostIdentity.hostId,
       }).catch((err) => log.warn("push_hook_failed", { err: err?.message ?? String(err) }))
       const mid = (res.value as any)?.message_id
       // Store the immutable session ID, not the name: classifyInbound's quote-reply
