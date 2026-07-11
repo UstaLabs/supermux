@@ -179,6 +179,34 @@ class FleetState(
         onlineHosts[recordId] = online
         if (online) store.updateSeen(recordId, nowMs())
         rebuildHostViews()
+        if (online) backfillHostIdentity(recordId)
+    }
+
+    /** Once a host's socket is up, learn its durable hostId from GET /host and backfill the record
+     *  (spec §3.1/§5): a migrated `hostId == null` record gets its real id, and if that id already
+     *  belongs to another record the two collapse into one (the shared store merges them). Best-effort
+     *  and idempotent — skipped once the id is known, so it doesn't refetch on every reconnect. */
+    private fun backfillHostIdentity(recordId: String) {
+        val current = store.list().firstOrNull { it.recordId == recordId } ?: return
+        if (!current.hostId.isNullOrBlank()) return
+        val api = conns[recordId]?.app?.api ?: return
+        fleetScope.launch {
+            val hostId = runCatching { api.getHost() }.getOrNull()?.hostId?.takeIf { it.isNotBlank() }
+                ?: return@launch
+            val merged = synchronized(lock) {
+                val before = store.list().map { it.recordId }.toSet()
+                store.backfillHostId(recordId, hostId)
+                (before - store.list().map { it.recordId }.toSet()).also { removed ->
+                    removed.forEach {
+                        sessionsByHost.remove(it); messagesByHost.remove(it)
+                        agentByHost.remove(it); onlineHosts.remove(it)
+                    }
+                }
+            }
+            // A duplicate collapsed into this record → reconcile connections (close the removed one).
+            if (merged.isNotEmpty()) onHostsChanged()
+            synchronized(lock) { recomputeAll() }
+        }
     }
 
     private fun recomputeAll() {
@@ -253,13 +281,16 @@ class FleetState(
         val res = claim(url, payload.claimSecret, deviceName)
             ?: return AddHostResult.Error("The host rejected the pairing — the claim is expired or already used.")
         if (res.deviceToken.isBlank()) return AddHostResult.Error("The host didn't return a device token.")
-        res.host?.hostId?.takeIf { it.isNotBlank() }?.let { returned ->
-            if (returned != payload.hostId) {
-                return AddHostResult.Error("Host identity mismatch (link ${payload.hostId}, got $returned) — aborting.")
-            }
+        // Anti-MITM (spec §3.4): require an EXACT, non-empty hostId match — a missing/blank returned
+        // id is a failure, not a pass (otherwise a MITM broker omitting `host` would be accepted).
+        val returned = res.host?.hostId
+        if (returned.isNullOrBlank() || returned != payload.hostId) {
+            return AddHostResult.Error(
+                "Host identity mismatch (link ${payload.hostId}, got ${returned?.ifBlank { null } ?: "none"}) — aborting.",
+            )
         }
         val host = synchronized(lock) {
-            store.add(
+            store.addOrUpdate(
                 displayName = payload.name.ifBlank { res.host?.name?.ifBlank { null } ?: "New host" },
                 token = res.deviceToken,
                 relayUrl = payload.relayUrl,
@@ -291,7 +322,7 @@ class FleetState(
             }
         }
         val host = synchronized(lock) {
-            store.add(
+            store.addOrUpdate(
                 displayName = identity.name.ifBlank { "New host" },
                 token = res.deviceToken,
                 directUrl = url,

@@ -269,13 +269,16 @@ final class Fleet {
         let api = BrokerApi(baseUrl: url, token: "", http: IosClientKt.iosHttpClient())
         do {
             let result = try await api.pairClaim(claimSecret: payload.claimSecret, deviceName: deviceName)
-            if let host = result.host, !host.hostId.isEmpty, host.hostId != payload.hostId {
+            // Anti-MITM (spec §3.4): the broker that answered must prove it is the scanned host —
+            // require an EXACT, non-empty hostId match (a missing/blank returned id is a failure).
+            guard let returned = result.host?.hostId, !returned.isEmpty, returned == payload.hostId else {
                 return .error("This link is for a different host than the one that answered — not adding it.")
             }
             guard !result.deviceToken.isEmpty else {
                 return .error("The host didn't return a device token.")
             }
-            let added = store.add(
+            // addOrUpdate: re-adding a host already in the fleet refreshes it in place, never duplicates.
+            let added = store.addOrUpdate(
                 displayName: payload.name.isEmpty ? "Host" : payload.name,
                 token: result.deviceToken,
                 relayUrl: isRelay ? url : nil,
