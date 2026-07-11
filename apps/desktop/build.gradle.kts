@@ -68,6 +68,15 @@ compose.desktop {
             packageVersion = "1.0.0"
             description = "supermux desktop"
             vendor = "UstaLabs"
+            // Plan 3 Task 5 (desktop-as-host): bundle the host helper binaries — the compiled Bun
+            // broker (`supermux-broker`), a static `tmux` (Linux/macOS), and `frpc` (all platforms) —
+            // as app resources. jpackage merges resources/{common,<os>,<os>-<arch>}/ into the image
+            // and exposes the dir at runtime via -Dcompose.application.resources.dir (see
+            // HostBinaries). The big natives are NOT committed; scripts/stage-desktop-binaries.sh
+            // fetches/builds them into resources/<os>-<arch>/ in CI before packageDeb/packageMsi
+            // (the dirs carry a .gitignore so they exist but stay empty in git). An unstaged dir
+            // just bundles nothing — the app then falls back to an already-running/system broker.
+            appResourcesRootDir.set(project.layout.projectDirectory.dir("resources"))
             // jdeps auto-detection only sees STATIC bytecode edges, so it misses the JDK modules
             // pulled in by reflection at runtime — JCEF reflects into java.desktop, and
             // ktor/coroutines reach java.naming / java.management / jdk.unsupported. Those gaps

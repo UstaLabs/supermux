@@ -206,6 +206,20 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - uses: oven-sh/setup-bun@v2 # broker compile (scripts/build-binary.sh) during staging
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0-dryrun"; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Stage host helper binaries (broker + frpc + tmux)
+        # Plan 3 Task 5: build the Bun broker + fetch frpc into apps/desktop/resources/linux-x64/
+        # so jpackage bundles them into the .deb. The script self-locates the repo root, so the
+        # `apps` working-directory default is fine via the relative path. tmux has no static
+        # upstream release; supply one via SUPERMUX_TMUX to bundle it, else the slot stays empty
+        # and the host falls back to a system tmux on $PATH.
+        run: ../scripts/stage-desktop-binaries.sh linux-x64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
       - name: Build .deb
         run: ./gradlew :desktop:packageDeb --console=plain --no-daemon
       - name: Stage .deb + checksum
@@ -236,6 +250,19 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0-dryrun"; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Stage host helper binary (frpc)
+        # Plan 3 Task 5: Windows is client-only, so stage only frpc.exe (no broker, no tmux) into
+        # apps/desktop/resources/windows-x64/ for jpackage to bundle — carried for when Windows
+        # later hosts. Git Bash provides sh/curl/tar for the script.
+        shell: bash
+        run: ../scripts/stage-desktop-binaries.sh windows-x64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
       - name: Build .msi
         run: ./gradlew.bat :desktop:packageMsi --console=plain --no-daemon
       - name: Stage .msi + checksum
