@@ -1432,35 +1432,41 @@ export class WebChannel implements Channel {
       return this.json(a.ok ? { paired: true, device: a.device.name, relayUrl } : { paired: false }, a.ok ? 200 : 401)
     }
 
-    // Native pairing claim (spec §3.4): a one-time claimSecret is consumed and a
-    // device token minted — works even after the host has devices. Falls back to
-    // legacy trust-on-first-connect on a brand-new broker with no claimStore.
+    // Native pairing claim (spec §3.4). Two paths, independent of whether a
+    // claimStore exists (it always does in production):
+    //   • a claimSecret is supplied → consume it → mint (add a device to any host).
+    //   • no secret → trust-on-first-connect, permitted ONLY on a brand-new broker
+    //     (no devices, not onboarded). This is how the FIRST device bootstraps —
+    //     it must work with the claimStore present, or fresh onboarding deadlocks.
     if (method === "POST" && path === "/pair/claim") {
       const info = this.getHostInfo?.()
       const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
       const name = (((body.deviceName as string | undefined) ?? (body.name as string | undefined))?.trim()) || undefined
       const mint = this.mintDeviceToken ?? ((n: string) => this.store.mint(n))
-      if (!this.claimStore) {
-        const onboarded = this.opts.getAppConfig?.()?.onboarded ?? false
-        if (this.store.list().length > 0 || onboarded) {
-          return this.json({ error: "already set up — use normal pairing" }, 403)
-        }
-        const minted = mint(name ?? "setup")
-        this.store.touch(minted.token)
-        return new Response(JSON.stringify({ paired: true, name: minted.name }), {
-          status: 200,
-          headers: {
-            "content-type": "application/json",
-            "set-cookie": buildAuthCookie(minted.token, { publicUrl: this.opts.publicUrl, proxyBaseDomain: this.opts.proxyBaseDomain }),
-          },
-        })
-      }
       const secret = typeof body.claimSecret === "string" ? body.claimSecret : ""
-      if (!secret || !this.claimStore.consume(secret)) return new Response("unauthorized", { status: 401 })
-      const minted = mint(name ?? "device")
+
+      if (secret) {
+        if (!this.claimStore || !this.claimStore.consume(secret)) return new Response("unauthorized", { status: 401 })
+        const minted = mint(name ?? "device")
+        this.store.touch(minted.token)
+        const host = info ? { hostId: info.hostId, name: info.name, platform: info.platform, version: info.version } : undefined
+        return this.json({ host, deviceToken: minted.token, name: minted.name })
+      }
+
+      // Secretless: trust-on-first-connect, brand-new broker only.
+      const onboarded = this.opts.getAppConfig?.()?.onboarded ?? false
+      if (this.store.list().length > 0 || onboarded) {
+        return this.json({ error: "already set up — use normal pairing" }, 403)
+      }
+      const minted = mint(name ?? "setup")
       this.store.touch(minted.token)
-      const host = info ? { hostId: info.hostId, name: info.name, platform: info.platform, version: info.version } : undefined
-      return this.json({ host, deviceToken: minted.token, name: minted.name })
+      return new Response(JSON.stringify({ paired: true, name: minted.name }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "set-cookie": buildAuthCookie(minted.token, { publicUrl: this.opts.publicUrl, proxyBaseDomain: this.opts.proxyBaseDomain }),
+        },
+      })
     }
 
     const auth = this.requireAuth(req)

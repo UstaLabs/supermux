@@ -52,6 +52,25 @@ test("POST /pair/claim mints a device token for a valid one-time secret, even wi
   expect(typeof body.deviceToken).toBe("string")
 })
 
+test("fresh broker WITH a claimStore still bootstraps the first device secretlessly (Codex-found regression)", async () => {
+  // Production always constructs a ClaimStore; the secretless trust-on-first-connect
+  // path must still work for the very first device or fresh onboarding deadlocks.
+  const claimStore = new ClaimStore({ clock: () => 0 })
+  const made = makeChannel({ claimStore, getHostInfo: () => ({ hostId: "h", name: "b", platform: "linux", version: "0", protocolVersion: 1 }) })
+  channel = made.channel; await channel.start()
+  const res = await fetch(`${base()}/pair/claim`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ deviceName: "first" }),
+  })
+  expect(res.status).toBe(200)
+  expect((await res.json() as { paired: boolean }).paired).toBe(true)
+  // second secretless attempt is now refused (broker has a device)
+  const again = await fetch(`${base()}/pair/claim`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ deviceName: "second" }),
+  })
+  expect(again.status).toBe(403)
+})
+
 test("POST /pair/mint-claim requires auth and returns a fresh claimSecret", async () => {
   const claimStore = new ClaimStore({ clock: () => 0 })
   const made = makeChannel({ claimStore, getHostInfo: () => ({ hostId: "h", name: "b", platform: "linux", version: "0", protocolVersion: 1 }) })
