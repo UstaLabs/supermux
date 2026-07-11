@@ -394,6 +394,21 @@ fun SessionListScreen(
                         expanded = menuExpanded,
                         onDismissRequest = { menuExpanded = false },
                     ) {
+                        // Always-reachable add-host entry (the filter row's `+` chip is hidden until a
+                        // 2nd host exists, so the very first extra host is added from here — spec §5).
+                        DropdownMenuItem(
+                            text = { Text("Add host") },
+                            leadingIcon = {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_plus),
+                                    contentDescription = null,
+                                    tint = cs.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            },
+                            modifier = Modifier.testTag("nav_add_host"),
+                            onClick = { menuExpanded = false; onAddHost() },
+                        )
                         DropdownMenuItem(
                             text = { Text("Archived") },
                             leadingIcon = {
