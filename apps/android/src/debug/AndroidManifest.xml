@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only source set. Adds a throwaway activity used to screenshot the session
+  list with deterministic mock data (no broker/pairing needed). Never ships to
+  release — the `debug/` source set is excluded from the release variant.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name=".debug.GroupPreviewActivity"
+            android:exported="true" />
+    </application>
+</manifest>

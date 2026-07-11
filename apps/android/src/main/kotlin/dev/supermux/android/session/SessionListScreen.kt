@@ -1,8 +1,11 @@
 package dev.supermux.android.session
 
+import android.content.Context
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -23,7 +26,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -69,6 +76,24 @@ private fun agentDrawableRes(agent: String?): Int? = when (agent?.lowercase()) {
     "codex"  -> R.drawable.agent_codex
     "cursor" -> R.drawable.agent_cursor
     else     -> null
+}
+
+// Collapsed project-group state, persisted across launches. Keyed by each group's
+// `workdir` (the PA group uses the "__pas__" sentinel), mirroring the iOS session
+// list's `cmux:collapsed-paths` UserDefaults set so the two platforms behave alike.
+private const val COLLAPSE_PREFS = "cmux-session-list"
+private const val COLLAPSE_KEY = "collapsed-paths"
+
+private fun loadCollapsedPaths(ctx: Context): Set<String> =
+    ctx.getSharedPreferences(COLLAPSE_PREFS, Context.MODE_PRIVATE)
+        .getStringSet(COLLAPSE_KEY, emptySet())
+        ?.toSet() ?: emptySet()
+
+private fun saveCollapsedPaths(ctx: Context, paths: Set<String>) {
+    ctx.getSharedPreferences(COLLAPSE_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putStringSet(COLLAPSE_KEY, paths)
+        .apply()
 }
 
 @OptIn(ExperimentalSharedTransitionApi::class)
@@ -122,13 +147,37 @@ fun SessionAvatar(
     }
 }
 
-// Fix 3: path-group header with rotating ChevronDown matching the web app
+// Fix 3: path-group header with rotating ChevronDown matching the web app.
+// Tappable to collapse/expand the group (parity with the iOS session list); the
+// chevron rotation animates and the whole row is a ≥48dp expand/collapse target.
 @Composable
-fun PathGroupHeader(label: String, count: Int, collapsed: Boolean = false) {
+fun PathGroupHeader(
+    label: String,
+    count: Int,
+    collapsed: Boolean = false,
+    onToggle: (() -> Unit)? = null,
+) {
     val cs = MaterialTheme.colorScheme
+    val haptic = rememberHaptics()
+    val rotation by animateFloatAsState(
+        targetValue = if (collapsed) -90f else 0f,
+        label = "groupChevronRotation",
+    )
+    val clickable = if (onToggle != null) {
+        Modifier
+            .clickable(
+                role = Role.Button,
+                onClickLabel = if (collapsed) "Expand" else "Collapse",
+            ) { haptic(HapticKind.Tick); onToggle() }
+            .semantics { stateDescription = if (collapsed) "Collapsed" else "Expanded" }
+    } else {
+        Modifier
+    }
     Row(
         Modifier
             .fillMaxWidth()
+            .then(clickable)
+            .heightIn(min = 48.dp)
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -139,7 +188,7 @@ fun PathGroupHeader(label: String, count: Int, collapsed: Boolean = false) {
             tint = cs.onSurfaceVariant,
             modifier = Modifier
                 .size(14.dp)
-                .rotate(if (collapsed) -90f else 0f),
+                .rotate(rotation),
         )
         Text(
             label,
@@ -150,14 +199,12 @@ fun PathGroupHeader(label: String, count: Int, collapsed: Boolean = false) {
             modifier = Modifier.weight(1f),
             maxLines = 1,
         )
-        if (count > 1) {
-            Text(
-                "$count",
-                color = cs.onSurfaceVariant.copy(alpha = 0.6f),
-                fontFamily = MonoFontFamily,
-                fontSize = 10.sp,
-            )
-        }
+        Text(
+            "$count",
+            color = cs.onSurfaceVariant.copy(alpha = 0.6f),
+            fontFamily = MonoFontFamily,
+            fontSize = 10.sp,
+        )
     }
 }
 
@@ -332,6 +379,11 @@ fun SessionListScreen(
     var renameText by remember { mutableStateOf("") }
     var killTarget by remember { mutableStateOf<SessionInfo?>(null) }
 
+    // Which project groups are collapsed (keyed by group workdir), restored from and
+    // written back to SharedPreferences so the choice survives app restarts.
+    val ctx = LocalContext.current
+    var collapsedPaths by remember { mutableStateOf(loadCollapsedPaths(ctx)) }
+
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -489,22 +541,64 @@ fun SessionListScreen(
                 )
             }
 
+            // Each project group renders as its own rounded surface card (Pixel-Settings
+            // style), header above it, so the grouping is visually distinct — the native
+            // Material take on iOS's inset-grouped sections. Tapping a header collapses the
+            // group; the collapsed set is persisted. The whole group is one LazyColumn item
+            // (session counts per project are small), which keeps the card + collapse
+            // animation simple and lets AnimatedVisibility shrink/expand it in place.
             groups.forEach { g ->
-                item(key = "h:${g.workdir}") { PathGroupHeader(g.label, g.sessions.size) }
-                items(g.sessions, key = { it.id.ifEmpty { it.name } }) { s ->
-                    SessionRow(
-                        s,
-                        active = s.id == activeId,
-                        preview = lastBySession[s.id],
-                        working = agentState[s.id]?.working == true,
-                        bgOpen = agentState[s.id]?.bgOpen ?: 0,
-                        onClick = { onOpen(s.id) },
-                        onRename = { renameTarget = s; renameText = s.name },
-                        onKill = { killTarget = s },
-                        onToggleMute = { onMute(s.id, !(s.mute ?: false)) },
-                        sharedScope = sharedScope,
-                        animScope = animScope,
-                    )
+                item(key = "group:${g.workdir}") {
+                    val isCollapsed = collapsedPaths.contains(g.workdir)
+                    Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+                        PathGroupHeader(
+                            label = g.label,
+                            count = g.sessions.size,
+                            collapsed = isCollapsed,
+                            onToggle = {
+                                collapsedPaths = if (isCollapsed) {
+                                    collapsedPaths - g.workdir
+                                } else {
+                                    collapsedPaths + g.workdir
+                                }
+                                saveCollapsedPaths(ctx, collapsedPaths)
+                            },
+                        )
+                        AnimatedVisibility(visible = !isCollapsed) {
+                            Surface(
+                                shape = RoundedCornerShape(Radii.lg),
+                                color = cs.surfaceContainerLow,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("group_card_${g.workdir}"),
+                            ) {
+                                Column {
+                                    g.sessions.forEachIndexed { i, s ->
+                                        if (i > 0) {
+                                            HorizontalDivider(
+                                                modifier = Modifier.padding(start = 20.dp),
+                                                thickness = 0.5.dp,
+                                                color = cs.outlineVariant.copy(alpha = 0.5f),
+                                            )
+                                        }
+                                        SessionRow(
+                                            s,
+                                            active = s.id == activeId,
+                                            preview = lastBySession[s.id],
+                                            working = agentState[s.id]?.working == true,
+                                            bgOpen = agentState[s.id]?.bgOpen ?: 0,
+                                            onClick = { onOpen(s.id) },
+                                            onRename = { renameTarget = s; renameText = s.name },
+                                            onKill = { killTarget = s },
+                                            onToggleMute = { onMute(s.id, !(s.mute ?: false)) },
+                                            sharedScope = sharedScope,
+                                            animScope = animScope,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             // Bottom padding so the FAB doesn't cover the last item
