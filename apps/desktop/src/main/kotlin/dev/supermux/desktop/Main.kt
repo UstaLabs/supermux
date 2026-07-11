@@ -26,8 +26,10 @@ import androidx.compose.ui.window.isTraySupported
 import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.rememberWindowState
 import dev.supermux.desktop.auth.DesktopTokenStore
+import dev.supermux.desktop.host.DesktopHostBootstrap
 import dev.supermux.desktop.host.DesktopHostStores
 import dev.supermux.desktop.host.FleetState
+import dev.supermux.desktop.host.HostWizard
 import dev.supermux.desktop.notify.NotificationController
 import dev.supermux.desktop.notify.TrayNotificationManager
 import dev.supermux.desktop.pairing.OnboardingScreen
@@ -291,14 +293,41 @@ fun main() {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 if (!paired) {
                     val scope = rememberCoroutineScope()
-                    val pairing = remember { PairingState(store, scope) }
-                    DisposableEffect(Unit) { onDispose { pairing.close() } }
-                    OnboardingScreen(pairing, onPaired = {
-                        // Onboarding persisted the legacy (baseUrl, token) into DesktopTokenStore;
-                        // fold it into the fleet as PairedHost[0] before flipping to the app.
-                        runCatching { DesktopHostStores.migrateFromLegacyIfNeeded(hostStore, store) }
-                        paired = true
-                    })
+                    // First-run choice (spec §6 / D6 choice A): on a native-host platform (macOS/Linux)
+                    // the default first run is the desktop-as-host wizard — this computer becomes a host,
+                    // shows a pairing QR for the phone, and auto-pairs "This computer" into the fleet. A
+                    // "Connect to a different broker instead" escape hatch drops to the classic onboarding.
+                    // Windows (client-only) skips straight to onboarding; its "Host from this PC" preview
+                    // card lives in the fleet list (Task 6).
+                    var connectInstead by remember { mutableStateOf(false) }
+                    val showHostWizard = DesktopHostBootstrap.isNativeHostPlatform() && !connectInstead
+
+                    if (showHostWizard) {
+                        // The sidecar spawns OR adopts the local broker (adopt = read-only probe of an
+                        // already-running :9898 broker; it never stops a broker it didn't start). NOT
+                        // stopped on dispose — a freshly-spawned managed broker must keep hosting after
+                        // the wizard closes (the login keep-alive agent owns its persistence).
+                        val sidecar = remember { DesktopHostBootstrap.sidecar() }
+                        val model = remember { DesktopHostBootstrap.buildModel(scope, hostStore, sidecar) }
+                        HostWizard(
+                            model = model,
+                            onDone = {
+                                // The model auto-paired "This computer" into the fleet store; reflect it.
+                                paired = hostStore.list().isNotEmpty()
+                                if (!paired) connectInstead = true // bootstrap failed → fall back to onboarding
+                            },
+                            onConnectInstead = { connectInstead = true },
+                        )
+                    } else {
+                        val pairing = remember { PairingState(store, scope) }
+                        DisposableEffect(Unit) { onDispose { pairing.close() } }
+                        OnboardingScreen(pairing, onPaired = {
+                            // Onboarding persisted the legacy (baseUrl, token) into DesktopTokenStore;
+                            // fold it into the fleet as PairedHost[0] before flipping to the app.
+                            runCatching { DesktopHostStores.migrateFromLegacyIfNeeded(hostStore, store) }
+                            paired = true
+                        })
+                    }
                 } else {
                     val scope = rememberCoroutineScope()
                     // The multi-host fleet: one connection per paired host, merged into WorkspaceRoot.
