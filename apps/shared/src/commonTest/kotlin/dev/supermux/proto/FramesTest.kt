@@ -26,6 +26,35 @@ class FramesTest {
         assertEquals(1717200005000, (f as ServerFrame.AgentState).workingSince)
     }
 
+    // session_state carries per-session patches (model/effort switches, mute,
+    // shim connect). Natives dropped it pre-2026-07-11 → stale pills.
+    @Test fun parses_session_state_model_and_reasoning() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"session_state","session":"abc","model":"claude-opus-4-8","reasoningLevel":"low"}""",
+        )
+        assertTrue(f is ServerFrame.SessionState)
+        assertEquals("claude-opus-4-8", (f as ServerFrame.SessionState).model)
+        assertEquals("low", f.reasoningLevel)
+        assertNull(f.mute)
+        assertNull(f.connected)
+    }
+
+    @Test fun parses_session_state_mute_only() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"session_state","session":"abc","mute":true}""",
+        )
+        assertTrue(f is ServerFrame.SessionState)
+        assertEquals(true, (f as ServerFrame.SessionState).mute)
+        assertNull(f.model)
+    }
+
+    @Test fun session_info_parses_reasoning_level_from_snapshot() {
+        val s = json.decodeFromString<SessionInfo>(
+            """{"id":"1","name":"a","workdir":"/w","agent":"claude","model":"claude-sonnet-5","reasoningLevel":"xhigh"}""",
+        )
+        assertEquals("xhigh", s.reasoningLevel)
+    }
+
     @Test fun parses_session_removed_by_id() {
         val f = json.decodeFromString<ServerFrame>(
             """{"type":"session_removed","id":"550e8400-e29b-41d4-a716-446655440000"}""",
