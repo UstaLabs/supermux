@@ -220,6 +220,7 @@ class AppViewModel(
                                     mute = incoming.mute ?: s.mute,
                                     connected = incoming.connected ?: s.connected,
                                     model = incoming.model ?: s.model,
+                                    reasoningLevel = incoming.reasoningLevel ?: s.reasoningLevel,
                                     repo_root = incoming.repo_root ?: s.repo_root,
                                     role = incoming.role ?: s.role,
                                     session_branch = incoming.session_branch ?: s.session_branch,
@@ -233,6 +234,19 @@ class AppViewModel(
                     is ServerFrame.SessionRemoved -> {
                         _sessions.value = _sessions.value.filterNot { it.id == f.id }
                         _bgTasks.update { it - f.id }
+                    }
+                    is ServerFrame.SessionState -> {
+                        // Per-session patch (model/effort switch, mute, shim connect):
+                        // merge only the fields present (web parity: ws.ts updateState).
+                        _sessions.value = _sessions.value.map { s ->
+                            if (s.id != f.session) s
+                            else s.copy(
+                                mute = f.mute ?: s.mute,
+                                connected = f.connected ?: s.connected,
+                                model = f.model ?: s.model,
+                                reasoningLevel = f.reasoningLevel ?: s.reasoningLevel,
+                            )
+                        }
                     }
                     is ServerFrame.MessageAppend -> {
                         // Optimistic-echo dedup (iOS BrokerSession parity): when the real inbound
@@ -522,8 +536,23 @@ class AppViewModel(
 
     suspend fun fetchModels(id: String): ModelsResponse? = runCatching { api.models(id) }.getOrNull()
     suspend fun fetchReasoning(id: String): ReasoningResponse? = runCatching { api.reasoningLevels(id) }.getOrNull()
-    fun switchModel(id: String, model: String) { viewModelScope.launch { runCatching { api.switchModel(id, model) } } }
-    fun switchReasoning(id: String, level: String) { viewModelScope.launch { runCatching { api.switchReasoning(id, level) } } }
+    // Optimistic local update (web parity): the pill flips immediately; the broker's
+    // session_state broadcast confirms it, and a rollback broadcast reverts it if the
+    // (possibly queued) live switch later fails.
+    fun switchModel(id: String, model: String) {
+        viewModelScope.launch {
+            runCatching { api.switchModel(id, model) }.onSuccess {
+                _sessions.value = _sessions.value.map { s -> if (s.id == id) s.copy(model = model) else s }
+            }
+        }
+    }
+    fun switchReasoning(id: String, level: String) {
+        viewModelScope.launch {
+            runCatching { api.switchReasoning(id, level) }.onSuccess {
+                _sessions.value = _sessions.value.map { s -> if (s.id == id) s.copy(reasoningLevel = level) else s }
+            }
+        }
+    }
 
     // ── Finish flow ──────────────────────────────────────────────────────────────
     // The chat Finish sheet drives the whole job lifecycle off the `finishJobs` StateFlow;

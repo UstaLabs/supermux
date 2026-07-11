@@ -284,7 +284,9 @@ struct ChatPane: View {
                     MicButton(model: composer)
                     pill(modelPillLabel, system: "cpu") { modelSheet = true }
                     if reasoning?.visible ?? false {
-                        pill(reasoning?.current ?? "reasoning", system: "brain") { reasoningSheet = true }
+                        // Live session state first (kept fresh by session_state frames);
+                        // the fetched payload supplies the resolved default when unset.
+                        pill(session.reasoningLevel ?? reasoning?.current ?? "reasoning", system: "brain") { reasoningSheet = true }
                     }
                     Spacer()
                     Button { sendMessage() } label: {

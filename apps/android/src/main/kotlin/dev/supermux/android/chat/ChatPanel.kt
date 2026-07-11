@@ -988,7 +988,10 @@ fun ChatPanel(
                                 )
                                 // Model pill → opens model picker
                                 ModelPill(
-                                    current = modelsData?.current ?: session.model,
+                                    // Live session state first (kept fresh by session_state
+                                    // frames + the optimistic switch update); the fetched
+                                    // picker payload is only a fallback for null model.
+                                    current = session.model ?: modelsData?.current,
                                     onClick = {
                                         scope.launch {
                                             val resp = withContext(Dispatchers.IO) { vmModels(session.id) }
@@ -1001,7 +1004,10 @@ fun ChatPanel(
                                 // Effort pill — only when visible
                                 if (effortVisible) {
                                     EffortPill(
-                                        current = reasoningData?.current,
+                                        // Stored level from live session state when present;
+                                        // the fetched payload supplies the RESOLVED default
+                                        // (e.g. "max") when the session never set one.
+                                        current = session.reasoningLevel ?: reasoningData?.current,
                                         onClick = {
                                             scope.launch {
                                                 val resp = withContext(Dispatchers.IO) { vmReasoning(session.id) }

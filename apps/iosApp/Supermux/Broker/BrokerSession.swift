@@ -226,7 +226,9 @@ final class BrokerSession {
                     id: incoming.id, name: incoming.name, workdir: incoming.workdir,
                     agent: incoming.agent, status: incoming.status ?? old.status,
                     mute: incoming.mute ?? old.mute, connected: incoming.connected ?? old.connected,
-                    model: incoming.model ?? old.model, repo_root: incoming.repo_root ?? old.repo_root,
+                    model: incoming.model ?? old.model,
+                    reasoningLevel: incoming.reasoningLevel ?? old.reasoningLevel,
+                    repo_root: incoming.repo_root ?? old.repo_root,
                     role: incoming.role ?? old.role, session_branch: incoming.session_branch ?? old.session_branch,
                     git: incoming.git ?? old.git, finish_job: incoming.finish_job ?? old.finish_job)
             } else {
@@ -255,6 +257,21 @@ final class BrokerSession {
             evictTerminalHosts(sessionId: r.id)   // session killed → tear down its live terminals
             dropEditorHost(sessionId: r.id)       // …its editor webview (stop() breaks the bridge cycle)
             if let removedName { evictDisplayHosts(sessionName: removedName) }  // …and its displays
+        case .sessionState(let st):
+            // Per-session patch (model/effort switch, mute, shim connect): merge only the
+            // fields present (web parity: ws.ts updateState). Natives dropped this frame
+            // pre-2026-07-11 → model/effort pills stayed stale until app restart.
+            if let idx = sessions.firstIndex(where: { $0.id == st.session }) {
+                let old = sessions[idx]
+                sessions[idx] = old.doCopy(
+                    id: old.id, name: old.name, workdir: old.workdir, agent: old.agent,
+                    status: old.status,
+                    mute: st.mute ?? old.mute, connected: st.connected ?? old.connected,
+                    model: st.model ?? old.model,
+                    reasoningLevel: st.reasoningLevel ?? old.reasoningLevel,
+                    repo_root: old.repo_root, role: old.role, session_branch: old.session_branch,
+                    git: old.git, finish_job: old.finish_job)
+            }
         case .messageAppend(let m):
             // Drop the optimistic local echo when the real inbound message arrives.
             if m.entry.direction.hasPrefix("in") {
@@ -301,6 +318,7 @@ final class BrokerSession {
                     id: sessions[idx].id, name: sessions[idx].name, workdir: sessions[idx].workdir,
                     agent: sessions[idx].agent, status: sessions[idx].status, mute: sessions[idx].mute,
                     connected: sessions[idx].connected, model: sessions[idx].model,
+                    reasoningLevel: sessions[idx].reasoningLevel,
                     repo_root: sessions[idx].repo_root, role: sessions[idx].role,
                     session_branch: sessions[idx].session_branch, git: g.git,
                     finish_job: sessions[idx].finish_job)

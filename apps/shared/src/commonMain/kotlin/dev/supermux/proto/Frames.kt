@@ -17,6 +17,8 @@ data class SessionInfo(
     val mute: Boolean? = null,
     val connected: Boolean? = null,
     val model: String? = null,
+    /** Thinking/effort level (claude/codex); carried on the snapshot + session_state. */
+    val reasoningLevel: String? = null,
     val repo_root: String? = null,
     val role: String? = null,
     /** Worktree session's pinned branch (present only for worktree-backed sessions). */
@@ -135,6 +137,19 @@ sealed interface ServerFrame {
 
     @Serializable @SerialName("session_removed")
     data class SessionRemoved(val id: String) : ServerFrame
+
+    /** Per-session live config/state patch (mute toggles, shim connect, model/effort
+     *  switches). Every field except [session] is optional — apply only what's present.
+     *  Was silently dropped by natives before 2026-07-11 (no serializer) → stale
+     *  model/effort pills until app restart. */
+    @Serializable @SerialName("session_state")
+    data class SessionState(
+        val session: String,
+        val mute: Boolean? = null,
+        val connected: Boolean? = null,
+        val model: String? = null,
+        val reasoningLevel: String? = null,
+    ) : ServerFrame
 
     @Serializable @SerialName("agent_state")
     data class AgentState(
