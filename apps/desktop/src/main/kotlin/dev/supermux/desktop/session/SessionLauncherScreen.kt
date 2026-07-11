@@ -106,6 +106,8 @@ import dev.supermux.desktop.chat.MicButton
 import dev.supermux.desktop.chat.MicCapture
 import dev.supermux.desktop.chat.MicRecorder
 import dev.supermux.desktop.chat.rememberDesktopDictation
+import dev.supermux.desktop.host.HostDot
+import dev.supermux.desktop.host.HostView
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.upload.FileChunkSource
 import dev.supermux.net.ChunkSource
@@ -227,6 +229,10 @@ fun SessionLauncherScreen(
     ) -> Unit,
     transcribeAudio: suspend (bytes: ByteArray, filename: String) -> String? = { _, _ -> null },
     micRecorderFactory: () -> MicCapture = { MicRecorder() },
+    // ── Multi-host host picker (spec §5); defaults to single-host (no picker) ──
+    hosts: List<HostView> = emptyList(),
+    selectedHost: String? = null,
+    onSelectHost: (String) -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -432,6 +438,12 @@ fun SessionLauncherScreen(
             }
             Spacer(Modifier.width(Space.sm))
             Text("New session", color = cs.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            // Multi-host: which broker this session spawns on (defaults to the active host). Hidden
+            // with one host. Sits end-aligned in the top bar so it reads as scoping the whole flow.
+            if (hosts.size > 1) {
+                Spacer(Modifier.weight(1f))
+                LauncherHostPicker(hosts = hosts, selected = selectedHost, enabled = !launcherRestoring, onSelect = onSelectHost)
+            }
         }
 
         // ── Hero: "Let's build" + project heading-dropdown + worktree pill ──
@@ -751,6 +763,50 @@ private fun AgentLetterTile(agent: String?, size: Dp) {
             fontWeight = FontWeight.SemiBold,
             fontSize = (size.value * 0.5f).sp,
         )
+    }
+}
+
+/**
+ * Compact host chip (identity dot + short host name + chevron) — the launcher's host selector,
+ * shown only with >1 paired host (spec §5). Picks which broker the new session spawns on.
+ */
+@Composable
+private fun LauncherHostPicker(
+    hosts: List<HostView>,
+    selected: String?,
+    enabled: Boolean,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val cs = MaterialTheme.colorScheme
+    var expanded by remember { mutableStateOf(false) }
+    val current = hosts.firstOrNull { it.recordId == selected } ?: hosts.firstOrNull() ?: return
+    Box {
+        Row(
+            modifier = modifier
+                .clip(RoundedCornerShape(20.dp))
+                .background(cs.surfaceContainer)
+                .border(1.dp, cs.outline, RoundedCornerShape(20.dp))
+                .clickable(enabled = enabled) { expanded = true }
+                .padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 4.dp)
+                .testTag("launcher_host_pill"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            HostDot(current.colorIndex, size = 8.dp)
+            Text(current.shortLabel, color = cs.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.testTag("launcher_host_menu")) {
+            hosts.forEach { h ->
+                DropdownMenuItem(
+                    leadingIcon = { HostDot(h.colorIndex, size = 9.dp) },
+                    text = { Text(h.displayName + if (!h.online) " (offline)" else "") },
+                    onClick = { onSelect(h.recordId); expanded = false },
+                    modifier = Modifier.testTag("launcher_host_item_${h.recordId}"),
+                )
+            }
+        }
     }
 }
 

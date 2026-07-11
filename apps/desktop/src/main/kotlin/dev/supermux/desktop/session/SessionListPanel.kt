@@ -61,6 +61,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.desktop.host.HostBadge
+import dev.supermux.desktop.host.HostFilterChips
+import dev.supermux.desktop.host.HostView
+import dev.supermux.desktop.host.filterSessions
 import dev.supermux.desktop.theme.LocalPanes
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Radii
@@ -208,6 +212,7 @@ fun SessionRow(
     preview: LogEntry? = null,
     working: Boolean = false,
     bgOpen: Int = 0,
+    host: HostView? = null,
     onClick: () -> Unit,
     onRename: () -> Unit = {},
     onKill: () -> Unit = {},
@@ -278,6 +283,13 @@ fun SessionRow(
                     }
                 }
 
+                // Per-host badge (merged fleet list, multi-host only): the owning host's identity
+                // dot + short name. Null in single-host mode, so the row is unchanged there.
+                if (host != null) {
+                    Spacer(Modifier.height(2.dp))
+                    HostBadge(host)
+                }
+
                 // Status badge — show when status is non-null and not "active".
                 val status = s.status
                 if (status != null && status != "active") {
@@ -336,15 +348,27 @@ fun SessionListPanel(
     onKill: (String) -> Unit = {},
     onMute: (String, Boolean) -> Unit = { _, _ -> },
     onNewSession: () -> Unit = {},
+    // ── Multi-host fleet (spec §5); all default to single-host (no badges/chips) ──
+    hosts: List<HostView> = emptyList(),
+    sessionHost: Map<String, String> = emptyMap(),
+    hostFilter: String? = null,
+    onSelectHostFilter: (String?) -> Unit = {},
+    onAddHost: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
+    // The `All · <host…> · +` chip row + per-row host badges appear ONLY with a real fleet
+    // (>1 host). Single-host desktop users (and every existing test) see the list unchanged.
+    val multiHost = hosts.size > 1
+    val hostByRecord = remember(hosts) { hosts.associateBy { it.recordId } }
+    // Apply the host filter before grouping so the groups + counts reflect the current chip.
+    val visibleSessions = if (multiHost) filterSessions(sessions, sessionHost, hostFilter) else sessions
     // Infer the home dir from the sessions' workdirs (iOS `BrokerSession.grouped` parity) instead
     // of relying solely on the passed-in fallback, so "~/…" abbreviation in group labels matches
     // iOS/Android. `home` is `System.getProperty("user.home")` from the desktop call site.
-    val effectiveHome = inferHomeDir(sessions.firstOrNull()?.workdir) ?: home
-    val groups = remember(sessions, effectiveHome, lastBySession) {
-        groupSessions(sessions, effectiveHome) { lastBySession[it.id]?.ts ?: "" }
+    val effectiveHome = inferHomeDir(visibleSessions.firstOrNull()?.workdir) ?: home
+    val groups = remember(visibleSessions, effectiveHome, lastBySession) {
+        groupSessions(visibleSessions, effectiveHome) { lastBySession[it.id]?.ts ?: "" }
     }
 
     var renameTarget by remember { mutableStateOf<SessionInfo?>(null) }
@@ -360,6 +384,18 @@ fun SessionListPanel(
                 .fillMaxSize(),
         ) {
             item(key = "new_session_row") { NewSessionListRow(onClick = onNewSession) }
+            if (multiHost) {
+                item(key = "host_chips") {
+                    HostFilterChips(
+                        hosts = hosts,
+                        sessions = sessions,
+                        sessionHost = sessionHost,
+                        selected = hostFilter,
+                        onSelect = onSelectHostFilter,
+                        onAddHost = onAddHost,
+                    )
+                }
+            }
             if (groups.isEmpty()) {
                 item(key = "empty_hint") {
                     Text(
@@ -379,6 +415,7 @@ fun SessionListPanel(
                             preview = lastBySession[s.id],
                             working = agentState[s.id]?.working == true,
                             bgOpen = agentState[s.id]?.bgOpen ?: 0,
+                            host = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
                             onClick = { onOpen(s.id) },
                             onRename = { renameTarget = s; renameText = s.name },
                             onKill = { killTarget = s },
