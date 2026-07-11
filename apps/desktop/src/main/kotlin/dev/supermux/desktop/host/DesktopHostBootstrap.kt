@@ -34,8 +34,8 @@ object DesktopHostBootstrap {
 
     /**
      * Walk up from the working dir to find the dev repo root (the dir containing `src/main.ts`) so a
-     * source checkout can spawn `bun src/main.ts`. Returns null in a packaged app (→ a bundled broker
-     * path is Task 5; until then the sidecar simply adopts an already-running broker).
+     * source checkout can spawn `bun src/main.ts`. Returns null in a packaged app, where the sidecar
+     * instead spawns the bundled broker binary ([HostBinaries.resolve] → [sidecar]).
      */
     fun detectRepoDir(start: Path = Path.of(System.getProperty("user.dir") ?: ".")): Path? {
         var dir: Path? = start.toAbsolutePath()
@@ -48,9 +48,26 @@ object DesktopHostBootstrap {
         return null
     }
 
-    /** A sidecar pointed at the local broker, dev-repo aware. Caller owns start()/stop(). */
-    fun sidecar(port: Int = 9898): BrokerSidecar =
-        BrokerSidecar(SidecarConfig(port = port, repoDir = detectRepoDir()))
+    /**
+     * A sidecar pointed at the local broker, aware of BOTH modes (Plan 3 Task 5). In a packaged app
+     * it spawns the BUNDLED broker binary and prepends the materialized bin dir (bundled tmux/frpc)
+     * to the broker's `PATH` so the broker's bare `tmux`/`frpc` execs resolve to our copies; in a
+     * dev checkout it runs `bun <repo>/src/main.ts` and the helpers come off the ambient `$PATH`.
+     * Caller owns start()/stop().
+     */
+    fun sidecar(port: Int = 9898): BrokerSidecar {
+        val bins = runCatching { HostBinaries.resolve(BrokerSidecar.defaultStateDir()) }
+            .getOrDefault(HostBinaries.SidecarBinaries(null, null, null, null))
+        val extraEnv = bins.binDir?.let { mapOf("PATH" to HostBinaries.prependPath(it)) } ?: emptyMap()
+        return BrokerSidecar(
+            SidecarConfig(
+                port = port,
+                repoDir = detectRepoDir(),
+                bundledBrokerPath = bins.brokerPath,
+                extraEnv = extraEnv,
+            ),
+        )
+    }
 
     /**
      * Bootstrap a local device token then mint a one-time phone claim from the LOCAL broker:
