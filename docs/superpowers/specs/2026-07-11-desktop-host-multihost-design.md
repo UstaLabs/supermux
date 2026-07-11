@@ -11,7 +11,7 @@ Every supermux client gains a **multi-host** model: a list of paired brokers ins
 Goals, in order:
 1. Onboarding collapses to: *install desktop app → QR appears → scan with phone → agents from anywhere.*
 2. No regression for existing server-hosted users; a server is just another host in the list.
-3. Honest per-host capability display (agents present, display support, host-preview state).
+3. Per-host UI stays honest by scoping the *existing* per-host APIs (`/agents/status`, dynamic display frames, feature probes) to the selected host — no new capability layer.
 
 Non-goals (v1): P2P hole-punching, E2E relay framing, Telegram/WhatsApp multi-host semantics, relay multi-region, Windows-native hosting (initiative 2), web-PWA host selector.
 
@@ -41,26 +41,15 @@ PairedHost {
   directUrl:   string?     // LAN/private URL if known (e.g. http://192.168.1.20:9898)
   relayUrl:    string      // https://h-<id>.relay.supermux.dev
   token:       string      // device bearer token minted by that host
-  capabilities: HostCapabilities   // last-seen snapshot, refreshed on connect
+  platform:    string?     // last-seen, from GET /host — display/diagnostics only
+  version:     string?     // last-seen broker version — display/diagnostics only
   lastSeenAt:  epochMs
 }
 ```
 
-`SecureTokenStore` (KMP `expect/actual`) grows from one `(token, baseUrl)` to an ordered list of `PairedHost` (JSON blob in the same secure store; Android self-heal behavior from v0.10.1 carries over). Migration: existing single pair becomes `PairedHost[0]` with `hostId` back-filled on first connect (broker exposes `GET /host` → `{hostId, name, capabilities}`).
+`SecureTokenStore` (KMP `expect/actual`) grows from one `(token, baseUrl)` to an ordered list of `PairedHost` (JSON blob in the same secure store; Android self-heal behavior from v0.10.1 carries over). Migration: existing single pair becomes `PairedHost[0]` with `hostId` back-filled on first connect.
 
-**Capabilities** (server-computed, in `GET /host` and the WS hello):
-
-```
-HostCapabilities {
-  agents:        AgentKind[]   // detected CLIs
-  display:       boolean       // Xvfb/mac provider present
-  whisper:       boolean       // server-side STT available
-  platform:      "linux" | "macos" | "windows" | "wsl"
-  version:       string
-}
-```
-
-Clients render per-host affordances from this — never from platform assumptions. (The Windows "Host from this PC — preview" card is a *client-side* affordance of the Windows desktop build, not a capability: a Windows machine without a broker reports nothing.)
+**`GET /host`** (new, also the pairing handshake): `{hostId, name, platform, version}` — identity plus two display-only fields for the host-details screen. **There is deliberately no capability schema.** Per-host feature knowledge comes from APIs that already exist and are already per-host once calls are scoped to the selected host: `GET /agents/status` for installed/authed agent CLIs (broker + shared KMP `BrokerApi` already implement it), display panes appear only when a host announces a running display stream (web `stores/displays.ts` pattern — a host without display support simply never announces one), dictation already degrades with a clear error when no STT path exists, and cross-version feature detection keeps the established graceful-probe pattern (e.g. the thinking-level pill hiding on 404). One incidental fix rides along: the new-session launcher currently hardcodes all four agents instead of filtering by `/agents/status` — with a host picker it starts filtering.
 
 **Connection preference.** Per host: try `directUrl` (if set) with a short timeout, else `relayUrl`; remember what worked, re-probe direct on network change. The phone never needs to know which path is active beyond a small "via relay" indicator in host details.
 
@@ -110,7 +99,7 @@ Committed architecture (joint verdict): per-user **`mux-sessiond`** daemon launc
 
 Narrow, concrete, nothing speculative:
 - Terminal/session targets become opaque IDs in wire formats and client code (no tmux-shaped names leaking).
-- `HostCapabilities` added to `GET /host` + WS hello; clients render from it.
+- `GET /host` added (identity handshake: hostId, name, platform, version).
 - tmux preflight scoped to the Claude backend only (`src/shared/preflight.ts` currently makes tmux globally fatal; codex/cursor/opencode hosts must not require it).
 - Define (not fully implement) the platform-neutral session-control interface: `create/list/inspect/write/sendKey/resize/captureText/captureStyled/attach/detach/interrupt/terminate/subscribe/snapshot` — tmux adapter is the only implementation for now.
 - `LocalEndpoint` type introduced (`unix` today, `windows-pipe` reserved).
@@ -128,7 +117,7 @@ Narrow, concrete, nothing speculative:
 
 ## 10. Testing
 
-- Broker: unit tests for relay framing codec + `RelayTransport` demux against the real request handler (loopback fake relay in-process); host-key/registration signature tests; capability computation tests.
+- Broker: unit tests for relay framing codec + `RelayTransport` demux against the real request handler (loopback fake relay in-process); host-key/registration signature tests; `GET /host` identity tests.
 - Relay server: protocol tests + a soak test with a slow-reader phone (backpressure must propagate to the host tunnel, reusing the existing `getBufferedAmount` discipline).
 - Clients: KMP shared tests for `PairedHost` store + migration; UI tests for fleet-list badge/filter/offline states and the new-session host picker; wizard flow test (QR shown < 5s from cold start, mocked relay).
 - End-to-end (pre-ship): phone on cellular ↔ desktop host behind NAT via the real relay — pair, chat, terminal, upload, VNC-off (cap check), host reboot recovery.
@@ -136,7 +125,7 @@ Narrow, concrete, nothing speculative:
 
 ## 11. Rollout order
 
-1. Phase-0 seam + `GET /host`/capabilities (broker, no behavior change).
+1. Phase-0 seam + `GET /host` identity endpoint (broker, no behavior change).
 2. Relay server + broker relay-client; dogfood with THIS server as the first relayed host.
 3. Multi-host storage + fleet list + add-host QR on Android (fastest iteration), then iOS, then desktop clients.
 4. macOS/Linux desktop host embedding + first-run wizard; bundled tmux.
