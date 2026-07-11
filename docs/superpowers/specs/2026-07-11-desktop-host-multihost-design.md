@@ -44,7 +44,7 @@ PairedHost { recordId (client UUID, the internal key), hostId?, displayName,
 
 **Pairing.** QR/link payload: `{v:1, action:"pair", hostId, name, relayUrl, directUrl?, claimSecret}`. `POST /pair/claim {claimSecret, deviceName}` → `{host, deviceToken}`. The host stores a hash of the secret, expires it in minutes, consumes it atomically once, and — unlike today's trust-on-first-connect claim, which 403s once any device exists — accepts claims on configured hosts (minting one requires an authed device or the local wizard). The client aborts if the response's `hostId` differs from the QR's. Legacy `/pair` stays for the PWA.
 
-**Transport preference.** Loopback → direct → relay. Direct URLs include user-supplied ones (Tailscale MagicDNS/tailnet IPs, VPN, reverse proxy) — BYO connectivity is first-class (D10), the relay is just the zero-config default and can be disabled per host (the QR then carries `directUrl` only). Plain HTTP is auto-allowed for loopback and tailnet/CGNAT addresses (100.64/10 — the overlay already encrypts); any other plain-HTTP URL needs an explicit labeled opt-in so the bearer never leaks to a real LAN.
+**Transport preference.** Loopback → direct → relay. Direct URLs include user-supplied ones (Tailscale MagicDNS/tailnet IPs, VPN, reverse proxy) — BYO connectivity is first-class (D10), the relay is just the zero-config default and can be disabled per host (the QR then carries `directUrl` only). Plain HTTP is auto-allowed for loopback, and for addresses whose route verifiably goes through a VPN/tailnet interface (the OS exposes this; a bare 100.64/10 address proves nothing — it's generic CGNAT space); any other plain-HTTP URL needs an explicit labeled opt-in so the bearer never leaks to an unencrypted network.
 
 ## 4. Relay v1
 
