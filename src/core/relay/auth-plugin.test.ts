@@ -16,20 +16,22 @@ test("Login with no lease is rejected", () => {
   expect(r.reject).toBe(true)
 })
 
+// NewProxy content shape matches frp 0.61 exactly (flat subdomain/proxy_type,
+// lease under user.metas) — captured live in the spike.
 test("NewProxy claiming the leased subdomain is accepted", () => {
   const lease = mintLease({ hostId: "habc", secret: SECRET, ttlMs: 5000, now: 1000 })
-  const r = handleAuthOp({ op: "NewProxy", content: { user: { metas: { lease } }, proxy_config: { subdomain: "h-habc", proxy_type: "http" } } }, ctx)
+  const r = handleAuthOp({ op: "NewProxy", content: { user: { metas: { lease } }, subdomain: "h-habc", proxy_type: "http" } }, ctx)
   expect(r.reject).toBe(false)
 })
 
 test("NewProxy claiming a DIFFERENT host's subdomain is rejected (GATE 1)", () => {
   const lease = mintLease({ hostId: "habc", secret: SECRET, ttlMs: 5000, now: 1000 })
-  const r = handleAuthOp({ op: "NewProxy", content: { user: { metas: { lease } }, proxy_config: { subdomain: "h-hbbb", proxy_type: "http" } } }, ctx)
+  const r = handleAuthOp({ op: "NewProxy", content: { user: { metas: { lease } }, subdomain: "h-hbbb", proxy_type: "http" } }, ctx)
   expect(r.reject).toBe(true)
 })
 
 test("NewProxy for a non-http proxy type is rejected", () => {
   const lease = mintLease({ hostId: "habc", secret: SECRET, ttlMs: 5000, now: 1000 })
-  const r = handleAuthOp({ op: "NewProxy", content: { user: { metas: { lease } }, proxy_config: { subdomain: "h-habc", proxy_type: "tcp" } } }, ctx)
+  const r = handleAuthOp({ op: "NewProxy", content: { user: { metas: { lease } }, subdomain: "h-habc", proxy_type: "tcp" } }, ctx)
   expect(r.reject).toBe(true)
 })
