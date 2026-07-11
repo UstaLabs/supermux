@@ -26,6 +26,7 @@ Non-goals (v1): P2P hole-punching, E2E relay framing, Telegram/WhatsApp multi-ho
 | D8 | tmux replacement | Windows only (`mux-sessiond`); never on POSIX without explicit triggers |
 | D9 | Web PWA | Single-host in v1 (origin-bound cookie auth; it IS a host's UI) |
 | D10 | BYO connectivity | Tailscale/VPN/reverse-proxy URLs stay first-class: add-host accepts a typed URL, the relay is **default but per-host disableable**, and a relay-less host pairs via a direct-URL-only QR |
+| D11 | Relay data plane | **Adopt frp** (self-operated `frps` + a thin supermux identity sidecar) behind a `RelayProvider` boundary, gated on a 1-day spike with four pass/fail gates; the rev-3 custom protocol is the documented fallback. Deletes the broker transport-seam refactor from v1. Alternatives rejected: Cloudflare Tunnel (1,000-tunnel default account limit vs 5k+ target; white-label ToS needs written approval), embedded Tailscale/headscale ("phase 2 disguised as phase 1") |
 
 ## 3. Host model
 
@@ -46,13 +47,15 @@ PairedHost { recordId (client UUID, the internal key), hostId?, displayName,
 
 **Transport preference.** Loopback → direct → relay. Direct URLs include user-supplied ones (Tailscale MagicDNS/tailnet IPs, VPN, reverse proxy) — BYO connectivity is first-class (D10), the relay is just the zero-config default and can be disabled per host (the QR then carries `directUrl` only). Plain HTTP is auto-allowed for loopback, and for addresses whose route verifiably goes through a VPN/tailnet interface (the OS exposes this; a bare 100.64/10 address proves nothing — it's generic CGNAT space); any other plain-HTTP URL needs an explicit labeled opt-in so the bearer never leaks to an unencrypted network.
 
-## 4. Relay v1
+## 4. Relay v1 (D11: frp data plane, supermux identity)
 
-- Host keeps one outbound WSS to `relay.supermux.dev`; registration = sign a relay-issued nonce, relay verifies the pubkey hashes to `host_id`; newest registration wins and the displaced tunnel is told (`replaced`, reconnect with a fresh nonce).
-- Client traffic is carried as multiplexed binary streams over the tunnel: `open` (HTTP request or WS upgrade), bidirectional `data`, `end`, `reset` — versioned, with per-stream backpressure so a fat upload/display stream cannot starve chat/control. Every `open` is answered by the host with status + headers before data flows; a WS upgrade that isn't accepted never streams. Exact framing + limits live in code with the protocol version.
-- **Broker seams (the one real refactor):** relayed HTTP can't just hit Bun's server, and relayed WebSockets can't use `server.upgrade()` at all. The broker gets transport-neutral entry points — `handleHttp(request, ctx)` and `acceptDuplex(request, duplex, ctx)` — that both direct Bun sockets and relay streams feed; all WS routes (control, terminal, display, scrcpy, LSP, proxy) go through them. `ctx` carries trusted `viaRelay`/address metadata; relay-reserved headers from clients are stripped.
-- The relay keeps no durable content — only ephemeral connection/stream/rate state. It ships with basic rate/size/concurrency limits from day one (values in config, tuned from dogfooding); soft fair-use caps come later.
-- Privacy statement (docs + marketing stay consistent): encrypted in transit to and from the relay; **not end-to-end** in v1 — the relay could technically read forwarded traffic, including tokens.
+- **Stack:** edge (Caddy/nginx, wildcard TLS for `*.relay.supermux.dev`) → `frps` HTTP vhost routing → host-side `frpc` sidecar → `localhost:9898`. The broker sees ordinary local connections — HTTP, streaming, and `server.upgrade()` WebSockets all work unchanged. No transport seams, no custom framing in v1.
+- **Identity stays ours; frp is a dumb data plane.** The host authenticates to a small supermux control endpoint with its host key (§3) and receives a short-lived, host-scoped lease; `frpc` presents `hostId` + lease as metadata; an frps auth plugin (Login/NewProxy hooks) validates the lease and permits exactly one vhost claim: `h-<hostId>`. Newest lease wins; the displaced connection is rejected on its next control operation. Host A can never claim `h-B`, TCP ports, or extra proxies.
+- **Boundary for replaceability:** the host side talks to a `RelayProvider` interface; clients know only `https://h-<id>.relay.supermux.dev`. No frp identifiers in pairing records or client APIs — swapping the data plane later (incl. to the custom protocol) touches nothing user-facing.
+- **Spike gates (1 day, pass all or fall back to the custom protocol from rev 3 — git 8e63513):** ① identity binding (cross-host subdomain claims rejected), ② deterministic newest-wins replacement without reconnect fights, ③ WebSocket fidelity through edge→frps→frpc→broker (control WS, terminal, upload, proxied dev-server WS), ④ capacity: 500–1,000 idle clients benchmarked and extrapolated to 5k on one VM, plus a slow-consumer test showing bounded memory and responsive control traffic.
+- **Ops:** pin a tested frps/frpc compatibility range (frp is mid wire-protocol-v2 transition — server-first staged upgrades); bundle `frpc` (~13 MB/platform) with the desktop apps; the edge strips client-supplied forwarded headers and re-adds trusted ones; basic rate/size/concurrency limits day one via edge + frps config + plugin.
+- The relay keeps no durable content — ephemeral connection/lease/rate state only.
+- Privacy statement (docs + marketing stay consistent): encrypted in transit to and from the relay; **not end-to-end** in v1 — supermux infrastructure could technically read forwarded traffic, including tokens.
 - Relay outage degrades to direct/LAN; clients distinguish "relay unreachable" from "host offline".
 
 ## 5. Client UX (iOS, Android, desktop)
@@ -91,8 +94,7 @@ Per-user **`mux-sessiond`** daemon (logon Scheduled Task, never a session-0 Serv
 
 ## 10. Testing
 
-- Relay: framing round-trip, backpressure (saturated upload must not starve control), registration replacement race, bad/replayed registration signatures, limit enforcement.
-- Broker seams: conformance for every WS route over direct AND simulated-relay transports; reserved-header stripping.
+- Relay: the four §4 spike gates become the regression suite — identity binding (cross-host claims rejected), lease expiry/replay fail-closed, deterministic replacement, WS fidelity through the full edge→frps→frpc→broker chain, slow-consumer boundedness; plus failure injection (edge/plugin/frps/frpc/broker killed independently → distinguishable diagnostics) and an frps↔frpc upgrade test within the pinned compatibility window.
 - Pairing: one-time claim semantics (reuse/expiry), claims on configured hosts, payload validation.
 - Clients: migration to `PairedHost[0]`; secure-store per platform; fleet list online/offline/stale states; per-host push routing; launcher agent filtering; wizard QR < 5 s cold start.
 - E2E pre-ship: phone on cellular ↔ NATed desktop via real relay — pair, chat, terminal, upload, host reboot, relay restart.
@@ -100,8 +102,8 @@ Per-user **`mux-sessiond`** daemon (logon Scheduled Task, never a session-0 Serv
 ## 11. Rollout order
 
 1. Phase-0 seam + `GET /host` (no behavior change).
-2. Broker transport seams (`handleHttp`/`acceptDuplex`) with conformance tests, still direct-only.
-3. Relay server + broker relay-client; dogfood with THIS server as host #1.
+2. **frp spike (1 day, four gates)** — pass: continue; fail: swap §4 back to the rev-3 custom protocol (8e63513) and re-plan.
+3. Relay stack (edge + frps + identity sidecar + host-key lease endpoint + bundled frpc); dogfood with THIS server as host #1.
 4. Multi-host storage + fleet list + add-host on Android → iOS → desktop; per-host push.
 5. mac/Linux desktop host embedding + wizard + bundled tmux + adoption rules.
 6. Windows desktop client + preview card.
@@ -111,4 +113,4 @@ Per-user **`mux-sessiond`** daemon (logon Scheduled Task, never a session-0 Serv
 
 - Soft fair-use cap values (from dogfood telemetry).
 - Merged-view pagination past ~200 sessions (defer until real).
-- E2E pairing/framing upgrade (payload + protocol already versioned).
+- E2E upgrade path (QR payload is versioned; E2E transport framing is the phase-2 successor to the frp data plane, swapped behind `RelayProvider`).
