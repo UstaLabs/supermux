@@ -63,6 +63,37 @@ class PairedHostStoreTest {
         assertEquals("MyMac", s.list()[0].displayName)
     }
 
+    @Test fun addOrUpdateAddsWhenHostIdIsNew() {
+        val s = store()
+        s.addOrUpdate(displayName = "box", token = "t1", hostId = "habc")
+        s.addOrUpdate(displayName = "other", token = "t2", hostId = "hdef")
+        assertEquals(2, s.list().size)
+    }
+
+    @Test fun addOrUpdateSameHostTwiceYieldsOneRecord() {
+        val s = store()
+        s.addOrUpdate(displayName = "box", token = "old", relayUrl = "u1", hostId = "habc")
+        val second = s.addOrUpdate(displayName = "box-again", token = "fresh", relayUrl = "u2", hostId = "habc")
+        assertEquals(1, s.list().size)
+        assertEquals("fresh", s.list()[0].token)          // token refreshed to the latest claim
+        assertEquals("u2", s.list()[0].relayUrl)          // URL refreshed too
+        assertEquals(s.list()[0].recordId, second.recordId)
+    }
+
+    @Test fun addOrUpdatePreservesUserRename() {
+        val s = store(PairedHost(recordId = "r1", hostId = "habc", displayName = "My Laptop", token = "t"))
+        s.addOrUpdate(displayName = "auto-name", token = "fresh", hostId = "habc")
+        assertEquals(1, s.list().size)
+        assertEquals("My Laptop", s.list()[0].displayName) // the rename is not clobbered
+    }
+
+    @Test fun addOrUpdateWithBlankHostIdAlwaysAdds() {
+        val s = store()
+        s.addOrUpdate(displayName = "a", token = "t1", hostId = null)
+        s.addOrUpdate(displayName = "b", token = "t2", hostId = null)
+        assertEquals(2, s.list().size) // can't dedup pre-Plan-1 hosts that have no id yet
+    }
+
     @Test fun removeDropsByRecordId() {
         val s = store(PairedHost(recordId = "r1", displayName = "a", token = "t"))
         s.remove("r1")

@@ -18,6 +18,27 @@ class PairedHostStore(
         hosts.add(h); flush(); return h
     }
 
+    /** Add a host, or — if a record with this non-blank [hostId] already exists — update THAT record
+     *  in place (fresh token + URLs + platform/version) and return it, so re-adding a host already in
+     *  the fleet never creates a duplicate. A rename the user made is preserved (the existing display
+     *  name wins unless it was blank). A blank/null [hostId] always adds (can't be deduped yet). */
+    fun addOrUpdate(displayName: String, token: String, relayUrl: String? = null,
+                    directUrl: String? = null, hostId: String? = null,
+                    platform: String? = null, version: String? = null): PairedHost {
+        val idx = if (hostId.isNullOrBlank()) -1 else hosts.indexOfFirst { it.hostId == hostId }
+        if (idx < 0) return add(displayName, token, relayUrl, directUrl, hostId, platform, version)
+        val prev = hosts[idx]
+        val merged = prev.copy(
+            token = token,
+            relayUrl = relayUrl ?: prev.relayUrl,
+            directUrl = directUrl ?: prev.directUrl,
+            platform = platform ?: prev.platform,
+            version = version ?: prev.version,
+            displayName = prev.displayName.ifBlank { displayName },
+        )
+        hosts[idx] = merged; flush(); return merged
+    }
+
     /** One-time seed of the pre-multi-host (token, baseUrl). No-op if any host exists. */
     fun migrateFromSingleHost(token: String, baseUrl: String) {
         if (hosts.isNotEmpty()) return
