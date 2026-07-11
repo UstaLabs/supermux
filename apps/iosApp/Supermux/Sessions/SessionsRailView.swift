@@ -7,7 +7,7 @@ import Shared
 /// a flat (ungrouped) scroll of tappable avatars with a selection ring, a working dot,
 /// and a context menu (Mute / Rename / Kill) mirroring the full list's row actions.
 struct SessionsRailView: View {
-    let broker: BrokerSession
+    let fleet: Fleet
     @Binding var selected: String?
     var onExpand: () -> Void
     var onNewSession: () -> Void
@@ -34,7 +34,7 @@ struct SessionsRailView: View {
 
             ScrollView {
                 VStack(spacing: 10) {
-                    ForEach(broker.sessions, id: \.id) { s in avatar(s) }
+                    ForEach(fleet.filteredSessions, id: \.id) { s in avatar(s) }
                 }
                 .padding(.vertical, 2)
             }
@@ -47,6 +47,7 @@ struct SessionsRailView: View {
     }
 
     @ViewBuilder private func avatar(_ s: SessionInfo) -> some View {
+        let b = fleet.broker(for: s.id)
         let muted = s.mute?.boolValue ?? false
         let selectedNow = s.id == selected
         Button { selected = s.id } label: {
@@ -72,14 +73,14 @@ struct SessionsRailView: View {
             }
             Divider()
             #endif
-            Button { broker.toggleMute(s) } label: {
+            Button { b?.toggleMute(s) } label: {
                 Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
             }
             // Rename needs a text field; surface it by re-expanding to the full list.
             Button { onExpand() } label: { Label("Rename", systemImage: "pencil") }
-            Button(role: .destructive) { broker.kill(s.id) } label: { Label("Kill", systemImage: "xmark.circle") }
+            Button(role: .destructive) { b?.kill(s.id) } label: { Label("Kill", systemImage: "xmark.circle") }
         }
     }
 
-    private func working(_ s: SessionInfo) -> Bool { broker.agentWorking[s.id] == true }
+    private func working(_ s: SessionInfo) -> Bool { fleet.broker(for: s.id)?.agentWorking[s.id] == true }
 }
