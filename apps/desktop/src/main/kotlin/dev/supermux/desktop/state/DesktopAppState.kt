@@ -88,6 +88,10 @@ import java.time.Instant
  *   FINAL concrete class (not open, no interface), so this cannot take a mock subclass — tests
  *   exercising HTTP paths construct a real BrokerApi against a ktor MockEngine HttpClient and
  *   pass it here.
+ * @param onConnectionChange optional per-connection reachability signal (multi-host fleet UI —
+ *   [dev.supermux.desktop.host.FleetState]): invoked `true` right after the control socket opens
+ *   and `false` when it drops, forwarded straight to [BrokerClient]. Default null keeps every
+ *   existing single-host caller/test unchanged.
  */
 class DesktopAppState(
     val baseUrl: String,
@@ -96,6 +100,7 @@ class DesktopAppState(
     connectOnInit: Boolean = true,
     sendFrameOverride: (suspend (ClientFrame) -> Unit)? = null,
     apiOverride: BrokerApi? = null,
+    onConnectionChange: ((Boolean) -> Unit)? = null,
 ) {
     /** Own child scope — supervised and parented to the caller's [scope] — so [close] can cancel
      *  the collector / WS run-loop / heartbeat without tearing down the caller's scope, and one
@@ -104,7 +109,7 @@ class DesktopAppState(
         CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
 
     private val http = HttpClient(CIO) { install(WebSockets) }
-    val client = BrokerClient(baseUrl, token, http)
+    val client = BrokerClient(baseUrl, token, http, onConnectionChange = onConnectionChange)
     val api = apiOverride ?: BrokerApi(baseUrl, token, http)
 
     // CIO's default per-request timeout is 15s — too short for the mic-dictation POST (M5-1): the
