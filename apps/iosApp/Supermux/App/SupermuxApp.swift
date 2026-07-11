@@ -48,11 +48,14 @@ struct SupermuxApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if paired, let base = BrokerConfig.baseURL, let token = BrokerConfig.token {
-                    RootView(baseURL: base, token: token, onUnpair: {
+                if paired, let base = BrokerConfig.baseURL {
+                    // RootView owns the multi-host `Fleet` (built from `HostStore.shared`); the
+                    // primary host's URL keys the view identity so a re-pair to a different broker
+                    // rebuilds the fleet. Added hosts don't change `base`, so the fleet stays live.
+                    RootView(onUnpair: {
                         BrokerConfig.unpair()
                         // Keep the multi-host store in lockstep with the single-host truth: forget
-                        // the migrated PairedHost[0] too, so a later re-pair migrates cleanly.
+                        // every paired host too, so a later re-pair migrates cleanly.
                         HostStore.forgetAll()
                         paired = false
                     })

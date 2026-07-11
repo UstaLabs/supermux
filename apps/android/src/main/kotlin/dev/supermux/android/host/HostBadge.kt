@@ -25,8 +25,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
+import dev.supermux.host.hostDotArgb
 import dev.supermux.proto.SessionInfo
-import dev.supermux.ui.oklchToArgb
 
 /**
  * Host badge visuals for the merged fleet list (spec §5): a stable per-host color dot, a compact
@@ -34,19 +34,17 @@ import dev.supermux.ui.oklchToArgb
  * [dev.supermux.android.theme.SupermuxSemantics]) and held FIXED across dynamic color so a host's
  * dot never gets repainted by the wallpaper — its color is its identity.
  *
- * The pure slot/label/filter logic lives in [FleetModel] (unit-tested on the JVM); this file is
- * only the Compose rendering.
+ * The pure slot/label/filter logic AND the OKLCH dot palette live in the shared [dev.supermux.host]
+ * FleetModel (unit-tested on the JVM, reused verbatim by iOS); this file is only the Compose
+ * rendering — `hostDotArgb` gives the exact same color per slot on every platform.
  */
 
-// Six fixed hues spread around the wheel; L/C tuned per theme for a legible small dot.
-private val HOST_HUES = doubleArrayOf(195.0, 300.0, 70.0, 22.0, 250.0, 150.0)
-
-/** The fixed dot color for a host color slot ([HostView.colorIndex]), theme-aware. */
+/** The fixed dot color for a host color slot ([HostView.colorIndex]), theme-aware — resolved from
+ *  the shared [hostDotArgb] so the dot matches iOS exactly. */
 @Composable
 fun hostDotColor(colorIndex: Int): Color {
     val dark = MaterialTheme.colorScheme.surface.isDark()
-    val h = HOST_HUES[((colorIndex % HOST_HUES.size) + HOST_HUES.size) % HOST_HUES.size]
-    return if (dark) Color(oklchToArgb(0.74, 0.135, h)) else Color(oklchToArgb(0.55, 0.15, h))
+    return Color(hostDotArgb(colorIndex, dark))
 }
 
 private fun Color.isDark(): Boolean =

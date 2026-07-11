@@ -7,7 +7,11 @@ import UniformTypeIdentifiers
 /// "Let's build", a project dropdown, and a compose card (agent picker + the
 /// first message) that spawns the session and sends that message on ↑.
 struct NewSessionView: View {
+    /// The host-global connection the launcher spawns on — the fleet's ACTIVE host, resolved and
+    /// passed by `RootView`. Picking a different host in the host pill (multi-host) updates
+    /// `fleet`'s active record, and `RootView` re-passes the new host's broker.
     let broker: BrokerSession
+    let fleet: Fleet
     var onSpawned: (String) -> Void
 
     @State private var projects: [String] = []
@@ -57,12 +61,19 @@ struct NewSessionView: View {
     @State private var showCamera = false
     @State private var showVideoCamera = false
     @State private var photoItems: [PhotosPickerItem] = []
+    // Installed agent kinds for the ACTIVE host (GET /agents/status) — replaces the hardcoded four
+    // so the picker only offers what THAT host actually has (spec §5). Reloaded on host switch; the
+    // literal list is the fallback until the fetch lands / when the host doesn't answer.
+    @State private var hostAgents: [String] = []
 
     private static let agents = ["claude", "codex", "cursor", "opencode"]
-    private var agents: [String] { Self.agents }
+    private var agents: [String] { hostAgents.isEmpty ? Self.agents : hostAgents }
+    /// The active host as the picker renders it (dot + name), or nil in single-host mode.
+    private var activeHost: HostView? { fleet.hostViews.first { $0.recordId == fleet.activeRecordId } }
 
-    init(broker: BrokerSession, onSpawned: @escaping (String) -> Void) {
+    init(broker: BrokerSession, fleet: Fleet, onSpawned: @escaping (String) -> Void) {
         self.broker = broker
+        self.fleet = fleet
         self.onSpawned = onSpawned
         // Seed every persisted field synchronously, at construction — before the very first
         // render — so there is never a moment where `agent`/`workdir`/etc hold a plain default
@@ -108,7 +119,9 @@ struct NewSessionView: View {
         }
         .navigationTitle("New session").smInlineNavigationTitle()
         .tint(Theme.teal)
-        .task {
+        // Keyed on the active host (baseURL) so a host switch re-wires the composer context and
+        // reloads that host's projects + installed agents (spec §5). Single-host: runs once on appear.
+        .task(id: broker.baseURL) {
             // No session yet (pre-spawn launcher): the broker's id-less /transcribe cleans the
             // draft off the global glossary/engine/model — the same AI correction the chat
             // composer gets, just without prior-message context.
@@ -119,6 +132,10 @@ struct NewSessionView: View {
             ))
             await composer.loadGlossary()
             projects = await broker.projects()
+            // The selected host's installed agents drive the agent menu; keep `agent` valid for it.
+            let installed = (await broker.agentStatuses()).filter { $0.installed }.map { $0.kind }
+            hostAgents = installed
+            if !installed.isEmpty, !installed.contains(agent) { agent = installed.first ?? agent }
             // Debug: force the initial project for headless screenshots (e.g. an eligible repo).
             if let forced = ProcessInfo.processInfo.environment["SM_WORKDIR"], !forced.isEmpty {
                 workdir = forced
@@ -312,6 +329,29 @@ struct NewSessionView: View {
             // into vertical letter-columns (the action buttons used to share this row and
             // overflow it on a narrow iPhone).
             HStack(spacing: 12) {
+                // Host picker (spec §5): which host to spawn on — defaults to the last-used (active)
+                // host, hidden with one host. Picking retargets projects/agents/models to that host.
+                if fleet.multiHost, let h = activeHost {
+                    Menu {
+                        ForEach(fleet.hostViews, id: \.recordId) { hv in
+                            Button { fleet.setActive(hv.recordId) } label: {
+                                if hv.recordId == fleet.activeRecordId {
+                                    Label(hv.displayName, systemImage: "checkmark")
+                                } else {
+                                    Text(hv.displayName)
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 5) {
+                            HostDot(colorIndex: h.colorIndex, size: 9)
+                            Text(h.shortLabel).font(.subheadline.weight(.medium)).lineLimit(1)
+                            Image(systemName: "chevron.down").font(.caption2)
+                        }.foregroundStyle(.primary)
+                    }
+                    .smMacBorderlessMenu()
+                    .accessibilityIdentifier("launcher_host_picker")
+                }
                 #if os(macOS)
                 // The logo sits OUTSIDE the Menu label on the Mac: AppKit flattens custom
                 // menu-button labels and draws asset images at intrinsic size — a giant
