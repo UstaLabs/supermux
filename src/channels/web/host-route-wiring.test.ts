@@ -52,6 +52,23 @@ test("POST /pair/claim mints a device token for a valid one-time secret, even wi
   expect(typeof body.deviceToken).toBe("string")
 })
 
+test("POST /pair/mint-claim requires auth and returns a fresh claimSecret", async () => {
+  const claimStore = new ClaimStore({ clock: () => 0 })
+  const made = makeChannel({ claimStore, getHostInfo: () => ({ hostId: "h", name: "b", platform: "linux", version: "0", protocolVersion: 1 }) })
+  channel = made.channel; await channel.start()
+  expect((await fetch(`${base()}/pair/mint-claim`, { method: "POST" })).status).toBe(401)
+  const token = new DeviceStore(made.devicesFile).mint("dev").token
+  const res = await fetch(`${base()}/pair/mint-claim`, { method: "POST", headers: { authorization: `Bearer ${token}` } })
+  expect(res.status).toBe(200)
+  const { claimSecret } = await res.json() as { claimSecret: string }
+  expect(typeof claimSecret).toBe("string")
+  const claimed = await fetch(`${base()}/pair/claim`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ claimSecret, deviceName: "phone2" }),
+  })
+  expect(claimed.status).toBe(200)
+})
+
 test("POST /pair/claim rejects a reused secret", async () => {
   const claimStore = new ClaimStore({ clock: () => 0 })
   const secret = claimStore.mint()

@@ -1466,6 +1466,13 @@ export class WebChannel implements Channel {
     const auth = this.requireAuth(req)
     if (!auth.ok) return new Response("unauthorized", { status: 401 })
 
+    // Mint a one-time pairing claim so an already-paired client (or the local
+    // desktop wizard) can add ANOTHER device (spec §3.4). Authed-only.
+    if (method === "POST" && path === "/pair/mint-claim") {
+      if (!this.claimStore) return this.json({ error: "pairing claims unavailable" }, 503)
+      return this.json({ claimSecret: this.claimStore.mint() })
+    }
+
     // ── System: broker restart ──────────────────────────────────────────
     if (method === "POST" && path === "/system/restart") {
       const cp = await import("child_process")
