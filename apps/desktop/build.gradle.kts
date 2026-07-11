@@ -26,6 +26,7 @@ dependencies {
     implementation(libs.jediterm.core) // both jediterm modules: dual LGPLv3/Apache-2.0 — used under Apache-2.0
     implementation(libs.jediterm.ui)
     implementation(libs.kcef) // M3 editor: embedded Chromium (JCEF) hosting the shared cm6 bundle (jogamp repo above)
+    implementation(libs.zxing.core) // Plan 3 Task 3: pure-Java QR encoder for the first-run host wizard's pairing QR
 
     testImplementation(libs.coroutines.test)
     testImplementation(kotlin("test"))

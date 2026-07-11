@@ -15,6 +15,7 @@ navigationCompose = "2.8.5"
 termlib = "0.0.35"
 skie = "0.10.12"
 zxingEmbedded = "4.3.0"
+zxingCore = "3.4.1"
 datastore = "1.1.1"
 firebaseBom = "33.7.0"
 googleServices = "4.4.2"
@@ -54,6 +55,9 @@ compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview"
 compose-animation = { module = "androidx.compose.animation:animation" }
 termlib = { module = "org.connectbot:termlib", version.ref = "termlib" }
 zxing-android-embedded = { module = "com.journeyapps:zxing-android-embedded", version.ref = "zxingEmbedded" }
+# Pure-Java QR encoder/decoder (no Android, no network) for the desktop first-run host wizard's
+# pairing QR (Plan 3 Task 3). Distinct from zxing-android-embedded above, which is Android-only.
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxingCore" }
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
 firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }
 firebase-messaging = { module = "com.google.firebase:firebase-messaging" }
