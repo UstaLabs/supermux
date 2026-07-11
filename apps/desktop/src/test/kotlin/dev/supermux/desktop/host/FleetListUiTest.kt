@@ -123,7 +123,9 @@ class FleetListUiTest {
 
     @Test fun addHostScreen_pasteValidPayload_invokesOnClaimWithParsedPayload() = runComposeUiTest {
         var claimedHostId: String? = null
-        val raw = """{"v":1,"action":"pair","hostId":"habc","name":"Box","relayUrl":"https://h-habc.relay.supermux.dev","claimSecret":"s3cret"}"""
+        // hostId must be a real 26-char base32 id (PairingPayload hardening, commit fc5eb29) or
+        // parse() rejects it and onClaim never fires.
+        val raw = """{"v":1,"action":"pair","hostId":"habcdefghijklmnopqrstuvwxy","name":"Box","relayUrl":"https://h-habc.relay.supermux.dev","claimSecret":"s3cret"}"""
         setContent {
             AddHostScreen(
                 onBack = {},
@@ -136,7 +138,7 @@ class FleetListUiTest {
         onNodeWithTag("add_host_paste_field").performTextInput(raw)
         onNodeWithTag("add_host_paste_submit").performClick()
         waitForIdle()
-        assertEquals("habc", claimedHostId)
+        assertEquals("habcdefghijklmnopqrstuvwxy", claimedHostId)
         // Sanity: the payload really is a valid one (guards against a copy/paste typo in the test).
         assertNull(PairingPayload.parse("garbage"))
     }
