@@ -37,6 +37,10 @@ class BrokerClient(
     private val token: String,             // device token (bearer)
     private val http: HttpClient,
     private val policy: ReconnectPolicy = ReconnectPolicy(500, 8000),
+    // Optional per-connection reachability signal (multi-host fleet UI): invoked with `true`
+    // right after the socket opens and `false` when it drops. Default null keeps every existing
+    // single-host / iOS / desktop caller unchanged.
+    private val onConnectionChange: ((Boolean) -> Unit)? = null,
 ) {
     private val json = Json { ignoreUnknownKeys = true; classDiscriminator = "type" }
     private val _frames = MutableSharedFlow<ServerFrame>(extraBufferCapacity = 256)
@@ -56,6 +60,7 @@ class BrokerClient(
                 ) {
                     attempt = 0
                     println("[BrokerClient] connected")
+                    onConnectionChange?.invoke(true)
                     try {
                         liveSession = this
                         // The broker sends the full snapshot only in reply to a `subscribe`.
@@ -92,6 +97,7 @@ class BrokerClient(
             } catch (e: Throwable) {
                 println("[BrokerClient] ws error: $e")
             }
+            onConnectionChange?.invoke(false)
             sync.onDisconnect()
             delay(policy.delayForAttempt(attempt++))
         }
