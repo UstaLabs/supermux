@@ -55,6 +55,20 @@ final class BrokerSession {
     private(set) var finishJobs: [String: FinishJobDto] = [:]
     private(set) var synced = false
 
+    /// Per-host reachability for the merged fleet list (spec §5): true once this host's control WS
+    /// is up, false when it drops. Fed by the shared `BrokerClient`'s `onConnectionChange`. Distinct
+    /// from `synced`, which latches true on the first snapshot ("do we have state yet") and never
+    /// flips back — `online` tracks the live socket so `Fleet` can grey an offline host. `Fleet`
+    /// sets `onConnectionChanged` to learn each transition (record last-seen / backfill identity).
+    private(set) var online = false
+    @ObservationIgnored var onConnectionChanged: ((Bool) -> Void)?
+
+    private func setOnline(_ up: Bool) {
+        guard online != up else { return }
+        online = up
+        onConnectionChanged?(up)
+    }
+
     /// Drop a session's finish job (FinishSheet Dismiss/Done) so the sheet returns to the
     /// readiness menu. The broker only ever ADDS/updates jobs over the WS `finish_job` frame —
     /// it never broadcasts a cleared state — so the client clears its own copy. (web parity:
@@ -67,7 +81,15 @@ final class BrokerSession {
         let http = IosClientKt.iosHttpClient()
         self.api = BrokerApi(baseUrl: baseURL, token: token, http: http)
         self.client = BrokerClient(baseUrl: baseURL, token: token, http: http,
-                                   policy: ReconnectPolicy(baseMs: 500, maxMs: 8000))
+                                   policy: ReconnectPolicy(baseMs: 500, maxMs: 8000),
+                                   onConnectionChange: { [weak self] connected in
+                                       // Kotlin invokes this off the main actor; hop back to touch
+                                       // @Observable state. `connected` is the boxed Kotlin Boolean
+                                       // (K/N leaves primitive lambda params boxed — same as the
+                                       // KotlinLong `onProgress` callbacks elsewhere in this file).
+                                       let up = connected.boolValue
+                                       Task { @MainActor in self?.setOnline(up) }
+                                   })
         #if os(macOS)
         // Macs sleep with the lid: the WS drops and the run-loop enters its backoff delay.
         // On wake, don't sit out that timer — kick the loop immediately so the workspace is
