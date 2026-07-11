@@ -50,8 +50,12 @@ fun WebCodeEditor(
         }
     }
 
-    LaunchedEffect(engine) {
-        if (engine.ready || engine.failed) return@LaunchedEffect
+    // Fallback timer runs from the moment index.html starts loading — NOT from composition:
+    // the WebView attach is deferred a couple of frames behind the chrome (EditorWebViewHost),
+    // and on slow devices that head start plus the create stall ate most of the budget,
+    // tripping the native fallback on editors that were loading fine.
+    LaunchedEffect(engine, engine.loadStarted) {
+        if (!engine.loadStarted || engine.ready || engine.failed) return@LaunchedEffect
         delay(8_000)
         if (!engine.ready) engine.failed = true
     }
