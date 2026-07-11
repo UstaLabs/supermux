@@ -2,7 +2,25 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdtempSync, writeFileSync, chmodSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join, delimiter } from "path"
-import { hasBinary } from "./preflight"
+import { checkPreflight, hasBinary } from "./preflight"
+
+const has = (present: string[]) => (bin: string) => present.includes(bin)
+
+test("missing tmux is a WARNING, not fatal, when an agent CLI exists", () => {
+  const r = checkPreflight(has(["codex"]))
+  expect(r.fatal).toEqual([])
+  expect(r.warnings.some((w) => w.toLowerCase().includes("tmux"))).toBe(true)
+})
+
+test("no agent CLI at all is still fatal", () => {
+  const r = checkPreflight(has([]))
+  expect(r.fatal.length).toBeGreaterThan(0)
+})
+
+test("tmux present produces no tmux warning", () => {
+  const r = checkPreflight(has(["tmux", "claude"]))
+  expect(r.warnings.some((w) => w.toLowerCase().includes("tmux"))).toBe(false)
+})
 
 const origPath = process.env.PATH
 afterEach(() => {
