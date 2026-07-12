@@ -1,7 +1,8 @@
 #!/bin/sh
 # scripts/stage-desktop-binaries.sh — stage the desktop host helper binaries into
 # apps/desktop/resources/<target>/ so Compose Desktop's jpackage bundles them into the
-# .deb / .msi / .app image (Plan 3 Task 5, spec §6 / D7 / D11).
+# .deb / .msi image. macOS targets are also mirrored into the native SwiftUI app's
+# HostResources folder (Plan 3 Task 5, spec §6 / D7 / D11).
 #
 #   usage: scripts/stage-desktop-binaries.sh <target> [version] [commit]
 #   <target> = linux-x64 | linux-arm64 | macos-x64 | macos-arm64 | windows-x64
@@ -93,3 +94,18 @@ fi
 
 echo "[stage] done. contents of $DEST:"
 ls -la "$DEST"
+
+# The shipped macOS app is native SwiftUI, not the Compose image. Keep ONE canonical producer for
+# the three helpers, then mirror the staged mac arm64 artifacts into its folder resource. They stay
+# gitignored in both destinations; Xcode copies HostResources into Supermux.app/Contents/Resources.
+case "$TARGET" in
+  macos-arm64)
+    NATIVE_DEST="$ROOT/apps/iosApp/Supermux/HostResources"
+    mkdir -p "$NATIVE_DEST"
+    for name in supermux-broker frpc tmux; do
+      if [ -f "$DEST/$name" ]; then cp "$DEST/$name" "$NATIVE_DEST/$name"; chmod +x "$NATIVE_DEST/$name"; fi
+    done
+    echo "[stage] native macOS resources: $NATIVE_DEST"
+    ls -la "$NATIVE_DEST"
+    ;;
+esac
