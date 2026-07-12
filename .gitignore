@@ -17,3 +17,8 @@ docs/superpowers/
 # Firebase config — real one carries the app's API key/sender id; keep it local.
 # A committed apps/android/google-services.json.example is the template to copy from.
 apps/android/google-services.json
+
+# Native macOS direct-host helpers are staged release artifacts, never source.
+apps/iosApp/Supermux/HostResources/supermux-broker
+apps/iosApp/Supermux/HostResources/frpc
+apps/iosApp/Supermux/HostResources/tmux

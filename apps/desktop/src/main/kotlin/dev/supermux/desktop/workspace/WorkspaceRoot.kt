@@ -44,6 +44,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import dev.supermux.desktop.host.AddHostScreen
+import dev.supermux.desktop.host.FleetState
+import dev.supermux.desktop.host.HostView
 import dev.supermux.desktop.notify.NoopNotificationManager
 import dev.supermux.desktop.notify.NotificationController
 import dev.supermux.desktop.session.ArchivedScreen
@@ -56,6 +59,7 @@ import dev.supermux.desktop.usage.UsageScreen
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.UsageResponse
 import dev.supermux.session.inferHomeDir
+import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
  * Holder for the workspace UI state that both [WorkspaceRoot] and the window MenuBar (Main.kt) act
@@ -262,12 +266,37 @@ fun WorkspaceRoot(
     // existing WorkspaceRootTest suite (and any other caller that doesn't care about
     // notifications) keeps compiling unmodified with the null-object default.
     notify: NotificationController = NotificationController(NoopNotificationManager),
+    // Multi-host fleet (spec §5): when present, the merged session list + per-row host badges + the
+    // `All · <host…> · +` chip row + add-host + per-session/active-host routing come from here.
+    // Default null = single-host: EVERY flow/op falls back to `app`, so the existing behavior and
+    // the whole WorkspaceRootTest suite are unchanged.
+    fleet: FleetState? = null,
 ) {
     val layout = ui.layout
-    val sessions by app.sessions.collectAsState()
-    val messages by app.messages.collectAsState()
-    val agentState by app.agentState.collectAsState()
+    // Prefer the merged fleet flows when multi-host; else the single [app]'s. `fleet` is stable
+    // across recompositions (remembered in Main), so the `?:` picks the same flow each time.
+    val sessions by (fleet?.sessions ?: app.sessions).collectAsState()
+    val messages by (fleet?.messages ?: app.messages).collectAsState()
+    val agentState by (fleet?.agentState ?: app.agentState).collectAsState()
     val lastBySession = remember(messages) { messages.mapValues { it.value.lastOrNull() } }
+
+    // Stable empty fallbacks so collectAsState never re-subscribes when fleet == null.
+    val emptyHostViews = remember { MutableStateFlow<List<HostView>>(emptyList()) }
+    val emptySessionHost = remember { MutableStateFlow<Map<String, String>>(emptyMap()) }
+    val nullActiveHost = remember { MutableStateFlow<String?>(null) }
+    val hostViews by (fleet?.hostViews ?: emptyHostViews).collectAsState()
+    val sessionHost by (fleet?.sessionHost ?: emptySessionHost).collectAsState()
+    val activeHostId by (fleet?.activeHost ?: nullActiveHost).collectAsState()
+
+    // The active host's app (host-global ops: spawn / archived / usage / LSP settings). Falls back
+    // to [app] in single-host mode.
+    val hostApp = fleet?.appForRecord(activeHostId) ?: fleet?.activeApp() ?: app
+    // The app owning a given session (per-session ops: rename/kill/mute/detail). Single-host → [app].
+    val appFor: (String) -> DesktopAppState = { id -> fleet?.appFor(id) ?: app }
+
+    // Host filter chip selection (recordId, or null = All) + the add-host overlay flag.
+    var hostFilter by remember { mutableStateOf<String?>(null) }
+    var addHostOpen by remember { mutableStateOf(false) }
 
     val focused = LocalWindowInfo.current.isWindowFocused
 
@@ -323,7 +352,9 @@ fun WorkspaceRoot(
     // reply after the user looks away again notifies immediately rather than waiting out a stale
     // dedup window from before they opened it.
     LaunchedEffect(ui.selectedId, focused) {
-        app.updateViewing(ui.selectedId, focused)
+        // Route viewing presence to the OWNING host (fleet) so only that broker treats the chat as
+        // foreground; single-host falls back to [app].
+        if (fleet != null) fleet.updateViewing(ui.selectedId, focused) else app.updateViewing(ui.selectedId, focused)
         val sid = ui.selectedId
         if (sid != null && focused) notify.onSessionFocused(sid)
     }
@@ -335,8 +366,8 @@ fun WorkspaceRoot(
     // have that problem (plain State/StateFlow reads valid from anywhere) so those ARE read live,
     // fresh per event, from inside the long-running collector below.
     LaunchedEffect(focused) {
-        app.agentReplies.collect { event ->
-            val target = app.sessions.value.firstOrNull { it.id == event.session }
+        (fleet?.agentReplies ?: app.agentReplies).collect { event ->
+            val target = (fleet?.sessions ?: app.sessions).value.firstOrNull { it.id == event.session }
             notify.onAgentReply(
                 entry = event.entry,
                 session = event.session,
@@ -390,7 +421,7 @@ fun WorkspaceRoot(
                 // toggles the user can't see). Each overlay handles its own Escape; Ctrl+N is
                 // idempotent and reopening an already-open launcher is a no-op, so dropping it here
                 // too costs nothing. `ui.overlayOpen` is the single gate for every overlay.
-                .then(if (ui.overlayOpen) Modifier else Modifier.workspaceShortcuts(layout, ui.selectedId, onNewSession)),
+                .then(if (ui.overlayOpen || addHostOpen) Modifier else Modifier.workspaceShortcuts(layout, ui.selectedId, onNewSession)),
         ) {
             Row(Modifier.fillMaxSize()) {
                 // ── Sidebar: collapsed rail, or the full list + a drag-resize gutter ──
@@ -411,10 +442,25 @@ fun WorkspaceRoot(
                         onOpen = { ui.selectedId = it },
                         lastBySession = lastBySession,
                         agentState = agentState,
-                        onRename = { id, name -> app.rename(id, name) },
-                        onKill = { id -> app.kill(id) { if (ui.selectedId == id) ui.selectedId = null } },
-                        onMute = { id, muted -> app.setMute(id, muted) },
+                        // Per-session ops route to the OWNING host (multi-host); single-host → [app].
+                        onRename = { id, name -> appFor(id).rename(id, name) },
+                        onKill = { id -> appFor(id).kill(id) { if (ui.selectedId == id) ui.selectedId = null } },
+                        onMute = { id, muted -> appFor(id).setMute(id, muted) },
                         onNewSession = onNewSession,
+                        // Fleet badges/chips (multi-host only; empty in single-host mode).
+                        hosts = hostViews,
+                        sessionHost = sessionHost,
+                        hostFilter = hostFilter,
+                        onSelectHostFilter = { hostFilter = it },
+                        onAddHost = { addHostOpen = true },
+                        // Windows-only "Host from this PC — preview" card (Task 6); native hosts hide it.
+                        showWindowsPreview = dev.supermux.desktop.host.shouldShowWindowsPreview(),
+                        onJoinWindowsPreview = {
+                            dev.supermux.desktop.host.recordWindowsPreviewSignup(
+                                dev.supermux.desktop.auth.DesktopTokenStore.defaultPath().parent.resolve("windows-host-preview.log"),
+                            )
+                        },
+                        onOpenWslGuide = { dev.supermux.desktop.ui.openInBrowser(dev.supermux.desktop.host.WSL_HOST_DOCS_URL) },
                         modifier = Modifier.width(layout.sidebarWidth).fillMaxHeight(),
                     )
                     SidebarDivider(
@@ -437,7 +483,9 @@ fun WorkspaceRoot(
                     }
                 } else {
                     SessionDetail(
-                        app = app,
+                        // Route the detail (chat/editor/terminal/display) to the session's OWNING
+                        // host in multi-host mode; single-host → [app].
+                        app = appFor(session.id),
                         session = session,
                         agent = agentState[session.id],
                         layout = layout,
@@ -502,12 +550,14 @@ fun WorkspaceRoot(
                         sessions = sessions,
                         home = home,
                         onBack = { ui.launcherOpen = false },
-                        loadProjects = { app.listProjects() },
-                        validatePath = { app.validatePath(it) },
-                        loadModels = { app.launcherModels(it) },
-                        loadReasoningLevels = { a, m -> app.launcherReasoning(a, m) },
-                        loadRepoInfo = { app.launcherRepoInfo(it) },
-                        transcribeAudio = { bytes, name -> app.transcribeAudio(null, bytes, name)?.text },
+                        // Host-global lookups + spawn target the ACTIVE host (`hostApp`); the host
+                        // picker below switches it. Single-host → [app].
+                        loadProjects = { hostApp.listProjects() },
+                        validatePath = { hostApp.validatePath(it) },
+                        loadModels = { hostApp.launcherModels(it) },
+                        loadReasoningLevels = { a, m -> hostApp.launcherReasoning(a, m) },
+                        loadRepoInfo = { hostApp.launcherRepoInfo(it) },
+                        transcribeAudio = { bytes, name -> hostApp.transcribeAudio(null, bytes, name)?.text },
                         loadPrefs = { launcherStore.loadPrefs() },
                         onPrefsChange = { launcherStore.savePrefs(it) },
                         loadDraft = { launcherStore.loadDraft() },
@@ -519,7 +569,7 @@ fun WorkspaceRoot(
                         // launcher_error text (its onSubmit contract is Unit-returning, so a failure
                         // has no other channel back to the screen).
                         onSubmit = { workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch ->
-                            val id = app.createSessionWithFirstMessage(
+                            val id = hostApp.createSessionWithFirstMessage(
                                 workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
                             )
                             if (id == null) {
@@ -528,9 +578,13 @@ fun WorkspaceRoot(
                                 )
                             }
                             ui.selectedId = id
-                            app.sendMessage(id, text, app.consumeFirstUploads(id))
+                            hostApp.sendMessage(id, text, hostApp.consumeFirstUploads(id))
                             ui.launcherOpen = false
                         },
+                        // Multi-host: pick which broker to spawn on (hidden with one host).
+                        hosts = hostViews,
+                        selectedHost = activeHostId,
+                        onSelectHost = { fleet?.setActiveHost(it) },
                     )
                 }
             }
@@ -549,7 +603,7 @@ fun WorkspaceRoot(
             LaunchedEffect(ui.archivedOpen) {
                 if (ui.archivedOpen) {
                     archivedLoading = true
-                    archivedList = app.archived()
+                    archivedList = hostApp.archived()
                     archivedLoading = false
                 } else {
                     archivedList = emptyList()
@@ -567,10 +621,10 @@ fun WorkspaceRoot(
                             // Fire-and-forget: kick the un-archive POST (its Boolean return is
                             // irrelevant to the UI — the resumed session returns via a WS frame),
                             // then close the overlay immediately.
-                            overlayScope.launch { app.resume(id) }
+                            overlayScope.launch { hostApp.resume(id) }
                             ui.archivedOpen = false
                         },
-                        loadLogs = { app.archivedLogs(it) },
+                        loadLogs = { hostApp.archivedLogs(it) },
                         forceOpenId = ui.forceArchivedOpenFor,
                         onForceOpenConsumed = { ui.forceArchivedOpenFor = null },
                     )
@@ -589,7 +643,7 @@ fun WorkspaceRoot(
             LaunchedEffect(ui.usageOpen) {
                 if (ui.usageOpen) {
                     usageLoading = true
-                    usageData = app.usage()
+                    usageData = hostApp.usage()
                     usageLoading = false
                 } else {
                     usageData = null
@@ -625,7 +679,7 @@ fun WorkspaceRoot(
                         loading = usageLoading,
                         onBack = { ui.usageOpen = false },
                         onRedeem = {
-                            val r = app.redeemCodexReset()
+                            val r = hostApp.redeemCodexReset()
                             if (r?.code == "reset" && r.codex != null) {
                                 usageData = usageData?.copy(codex = r.codex)
                             }
@@ -667,16 +721,48 @@ fun WorkspaceRoot(
                         },
                 ) {
                     LspSettingsScreen(
-                        lspLoad = { app.lspLoad() },
-                        lspToggle = { id, enabled -> app.lspToggle(id, enabled) },
-                        lspInstall = { id -> app.lspInstall(id) },
-                        lspInstallLog = app.lspInstallLog,
-                        lspInstallDone = app.lspInstallDone,
+                        lspLoad = { hostApp.lspLoad() },
+                        lspToggle = { id, enabled -> hostApp.lspToggle(id, enabled) },
+                        lspInstall = { id -> hostApp.lspInstall(id) },
+                        lspInstallLog = hostApp.lspInstallLog,
+                        lspInstallDone = hostApp.lspInstallDone,
                         lspAddCustom = { args ->
-                            app.lspAddCustom(args.id, args.label, args.command, args.extensions, args.args, args.languageId, args.installCmd)
+                            hostApp.lspAddCustom(args.id, args.label, args.command, args.extensions, args.args, args.languageId, args.installCmd)
                         },
-                        lspRemoveCustom = { id -> app.lspRemoveCustom(id) },
+                        lspRemoveCustom = { id -> hostApp.lspRemoveCustom(id) },
                         onBack = { ui.lspSettingsOpen = false },
+                    )
+                }
+            }
+
+            // ── Add host: a FULL-PANE overlay above the workspace (multi-host, spec §3.4/§5) ──
+            // Opened by the fleet chip row's `+`. Wired to the fleet's claim seams; a successful
+            // add closes the overlay and jumps the filter to the new host so its (soon-arriving)
+            // sessions are front-and-center. Only reachable when `fleet != null`.
+            if (addHostOpen && fleet != null) {
+                val addFocus = remember { FocusRequester() }
+                LaunchedEffect(Unit) { runCatching { addFocus.requestFocus() } }
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .testTag("add_host_overlay")
+                        .focusRequester(addFocus)
+                        .focusable()
+                        .onPreviewKeyEvent { e ->
+                            if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                                addHostOpen = false
+                                true
+                            } else {
+                                false
+                            }
+                        },
+                ) {
+                    AddHostScreen(
+                        onBack = { addHostOpen = false },
+                        defaultDeviceName = remember { runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrNull()?.ifBlank { null } ?: "This desktop" },
+                        onClaim = { payload, name -> fleet.addHost(payload, name) },
+                        onClaimByUrl = { url, name -> fleet.addHostByUrl(url, name) },
+                        onAdded = { addHostOpen = false },
                     )
                 }
             }

@@ -12,6 +12,7 @@ export const PID_FILE = join(STATE_DIR, "broker.pid")
 export const ACCESS_FILE = join(STATE_DIR, "access.json")
 export const COMMANDS_FILE = join(STATE_DIR, "commands.json")
 export const DEVICES_FILE = join(STATE_DIR, "devices.json")
+export const HOST_KEY_FILE = join(STATE_DIR, "host-key")
 
 export const INBOX_DIR = join(STATE_DIR, "inbox")
 

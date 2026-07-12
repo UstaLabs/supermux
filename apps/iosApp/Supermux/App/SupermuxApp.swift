@@ -13,6 +13,10 @@ struct SupermuxApp: App {
     #endif
     @State private var paired: Bool
     @AppStorage("appearance") private var appearance = "system"
+    #if os(macOS)
+    @StateObject private var macHost: MacHostCoordinator
+    @State private var macManualPairing = false
+    #endif
 
     init() {
         // Crash guard FIRST, before any networking: ktor-darwin surfaces WS/connection
@@ -27,8 +31,27 @@ struct SupermuxApp: App {
         if let t = env["SM_PAIR_TOKEN"], let b = env["SM_PAIR_BASE"], !t.isEmpty, !b.isEmpty {
             BrokerConfig.pair(PairToken(baseURL: b, token: t))
         }
-        _paired = State(initialValue: BrokerConfig.isPaired)
+        // Multi-host storage (spec §3.2): run the one-time single-host → PairedHost[0] migration at
+        // launch, AFTER any debug/env auto-pair above so a freshly-seeded token migrates too
+        // (mirrors Android's MainActivity ordering). Existing paired users land in the shared
+        // multi-host `PairedHostStore` with ZERO re-pairing; the live connection still runs from
+        // BrokerConfig for now (the fleet-list UI that reads the store is a later task).
         #if os(macOS)
+        let persistHostState = MacHostPolicy.shouldPersist()
+        if persistHostState { HostStore.migrateFromLegacyIfNeeded() }
+        _paired = State(initialValue: persistHostState && BrokerConfig.isPaired)
+        #else
+        HostStore.migrateFromLegacyIfNeeded()
+        _paired = State(initialValue: BrokerConfig.isPaired)
+        #endif
+        #if os(macOS)
+        let nativeHost = MacHostCoordinator.live()
+        _macHost = StateObject(wrappedValue: nativeHost)
+        // Hosting is an application lifecycle responsibility, not a window lifecycle task.
+        // macOS may restore zero windows after a prior close; the local broker must still start.
+        if MacHostPolicy.shouldAutostart() {
+            Task { @MainActor in await nativeHost.start() }
+        }
         // Headless feel-test eyes (SM_SNAPSHOT=1) — see DebugSnapshot.swift.
         DebugSnapshot.startIfEnabled()
         #endif
@@ -42,13 +65,38 @@ struct SupermuxApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if paired, let base = BrokerConfig.baseURL, let token = BrokerConfig.token {
-                    RootView(baseURL: base, token: token, onUnpair: {
+                if paired, let base = BrokerConfig.baseURL {
+                    // RootView owns the multi-host `Fleet` (built from `HostStore.shared`); the
+                    // primary host's URL keys the view identity so a re-pair to a different broker
+                    // rebuilds the fleet. Added hosts don't change `base`, so the fleet stays live.
+                    RootView(onUnpair: {
                         BrokerConfig.unpair()
+                        // Keep the multi-host store in lockstep with the single-host truth: forget
+                        // every paired host too, so a later re-pair migrates cleanly.
+                        HostStore.forgetAll()
                         paired = false
                     })
                     .id(base)
+                    #if os(macOS)
+                    .task {
+                        if MacHostPolicy.shouldAutostart(), macHost.state == .idle { await macHost.start() }
+                    }
+                    #endif
                 } else {
+                    #if os(macOS)
+                    if macManualPairing {
+                        PairingView { _ in
+                            paired = true
+                            PushManager.shared.registerIfPaired()
+                        }
+                    } else {
+                        MacHostWizard(
+                            coordinator: macHost,
+                            onContinue: { paired = BrokerConfig.isPaired },
+                            onConnectManually: { macManualPairing = true }
+                        )
+                    }
+                    #else
                     PairingView { _ in
                         paired = true
                         #if os(iOS)
@@ -56,6 +104,7 @@ struct SupermuxApp: App {
                         #endif
                         PushManager.shared.registerIfPaired()
                     }
+                    #endif
                 }
             }
             .onOpenURL { url in

@@ -27,6 +27,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
@@ -216,6 +217,8 @@ fun SessionRow(
     preview: LogEntry? = null,
     working: Boolean = false,
     bgOpen: Int = 0,
+    // Non-null only in multi-host mode → renders the compact per-row host badge (dot + short name).
+    hostBadge: dev.supermux.android.host.HostView? = null,
     onClick: () -> Unit,
     onRename: () -> Unit = {},
     onKill: () -> Unit = {},
@@ -280,6 +283,10 @@ fun SessionRow(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                if (hostBadge != null) {
+                    Spacer(Modifier.width(Space.sm))
+                    dev.supermux.android.host.HostBadge(hostBadge)
+                }
                 val timeStr = relTime(preview?.ts)
                 if (timeStr.isNotEmpty()) {
                     Spacer(Modifier.width(Space.sm))
@@ -363,16 +370,38 @@ fun SessionListScreen(
     onRename: (String, String) -> Unit = { _, _ -> },
     onKill: (String) -> Unit = {},
     onMute: (String, Boolean) -> Unit = { _, _ -> },
+    // ── Multi-host (spec §5). All default-empty so single-host callers render exactly as before. ──
+    hosts: List<dev.supermux.android.host.HostView> = emptyList(),
+    sessionHost: Map<String, String> = emptyMap(),
+    hostFilter: String? = null,
+    onHostFilter: (String?) -> Unit = {},
+    onAddHost: () -> Unit = {},
+    onRenameHost: (recordId: String, name: String) -> Unit = { _, _ -> },
+    onForgetHost: (recordId: String) -> Unit = {},
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
 ) {
     val cs = MaterialTheme.colorScheme
+    // Chips + badges appear only with 2+ paired hosts — the common single-host case stays uncluttered.
+    val multiHost = hosts.size >= 2
+    val hostByRecord = remember(hosts) { hosts.associateBy { it.recordId } }
+    val offlineIds = remember(hosts) { hosts.filter { !it.online }.map { it.recordId }.toSet() }
+
+    // Filter (a recordId or null = All), then split live sessions from the offline hosts' cached ones.
+    val shown = if (multiHost) dev.supermux.android.host.filterSessions(sessions, sessionHost, hostFilter) else sessions
+    val onlineSessions = if (multiHost) shown.filter { (sessionHost[it.id] ?: "") !in offlineIds } else shown
+
     // Infer the home dir from the sessions' workdirs (iOS `BrokerSession.grouped` parity) instead of
     // the hardcoded DevConfig.HOME placeholder, so "~/…" abbreviation in group labels matches iOS.
     val effectiveHome = inferHomeDir(sessions.firstOrNull()?.workdir) ?: home
-    val groups = remember(sessions, effectiveHome, lastBySession) {
-        groupSessions(sessions, effectiveHome) { lastBySession[it.id]?.ts ?: "" }
+    val groups = remember(onlineSessions, effectiveHome, lastBySession) {
+        groupSessions(onlineSessions, effectiveHome) { lastBySession[it.id]?.ts ?: "" }
     }
+    // Offline hosts (greyed groups with last-seen), honoring the filter.
+    val offlineGroups = if (multiHost) {
+        hosts.filter { !it.online && (hostFilter == null || hostFilter == it.recordId) }
+            .map { h -> h to shown.filter { sessionHost[it.id] == h.recordId } }
+    } else emptyList()
 
     var menuExpanded by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<SessionInfo?>(null) }
@@ -419,6 +448,21 @@ fun SessionListScreen(
                         expanded = menuExpanded,
                         onDismissRequest = { menuExpanded = false },
                     ) {
+                        // Always-reachable add-host entry (the filter row's `+` chip is hidden until a
+                        // 2nd host exists, so the very first extra host is added from here — spec §5).
+                        DropdownMenuItem(
+                            text = { Text("Add host") },
+                            leadingIcon = {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_plus),
+                                    contentDescription = null,
+                                    tint = cs.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            },
+                            modifier = Modifier.testTag("nav_add_host"),
+                            onClick = { menuExpanded = false; onAddHost() },
+                        )
                         DropdownMenuItem(
                             text = { Text("Archived") },
                             leadingIcon = {
@@ -534,6 +578,21 @@ fun SessionListScreen(
                 .padding(innerPadding)
                 .background(cs.surfaceContainerHigh),
         ) {
+            if (multiHost) {
+                item(key = "host_filter_chips") {
+                    dev.supermux.android.host.HostFilterChips(
+                        hosts = hosts,
+                        sessions = sessions,
+                        sessionHost = sessionHost,
+                        selected = hostFilter,
+                        onSelect = onHostFilter,
+                        onAddHost = onAddHost,
+                        onRenameHost = onRenameHost,
+                        onForgetHost = onForgetHost,
+                    )
+                }
+            }
+
             item(key = "new_session_row") {
                 NewSessionListRow(
                     onClick = onNewSession,
@@ -587,6 +646,7 @@ fun SessionListScreen(
                                             preview = lastBySession[s.id],
                                             working = agentState[s.id]?.working == true,
                                             bgOpen = agentState[s.id]?.bgOpen ?: 0,
+                                            hostBadge = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
                                             onClick = { onOpen(s.id) },
                                             onRename = { renameTarget = s; renameText = s.name },
                                             onKill = { killTarget = s },
@@ -598,6 +658,26 @@ fun SessionListScreen(
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            // Offline hosts (spec §5): a greyed group per unreachable host with its last-seen and
+            // its cached sessions (rendered dimmed). Skipped entirely in single-host mode.
+            offlineGroups.forEach { (host, cached) ->
+                item(key = "offline:${host.recordId}") { OfflineHostHeader(host) }
+                items(cached, key = { "off:${it.id.ifEmpty { it.name }}" }) { s ->
+                    Box(Modifier.graphicsLayer { alpha = 0.55f }) {
+                        SessionRow(
+                            s,
+                            active = false,
+                            preview = lastBySession[s.id],
+                            hostBadge = hostByRecord[host.recordId],
+                            onClick = { onOpen(s.id) },
+                            onRename = { renameTarget = s; renameText = s.name },
+                            onKill = { killTarget = s },
+                            onToggleMute = { onMute(s.id, !(s.mute ?: false)) },
+                        )
                     }
                 }
             }
@@ -629,6 +709,39 @@ fun SessionListScreen(
                 }
             },
             dismissButton = { TextButton(onClick = { killTarget = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+/** Greyed group header for an offline/unreachable host (spec §5): identity dot + name + last-seen. */
+@Composable
+private fun OfflineHostHeader(host: dev.supermux.android.host.HostView) {
+    val cs = MaterialTheme.colorScheme
+    val lastSeen = dev.supermux.android.host.formatLastSeen(System.currentTimeMillis(), host.lastSeenAt)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .testTag("offline_host_${host.recordId}"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        dev.supermux.android.host.HostDot(host.colorIndex, size = 8.dp)
+        Text(
+            host.displayName,
+            color = cs.onSurfaceVariant,
+            fontFamily = MonoFontFamily,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            "· offline" + if (lastSeen.isNotEmpty()) " · seen $lastSeen" else "",
+            color = cs.onSurfaceVariant.copy(alpha = 0.6f),
+            fontFamily = MonoFontFamily,
+            fontSize = 10.sp,
+            maxLines = 1,
         )
     }
 }

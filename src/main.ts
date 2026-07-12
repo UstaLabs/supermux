@@ -63,6 +63,10 @@ import { MIGRATIONS } from "./core/storage/migrations"
 import { checkSchemaStamp, writeSchemaStamp } from "./core/storage/schema-stamp"
 import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
 import { BUILD_VERSION, BUILD_COMMIT } from "./shared/build-info"
+import { loadOrCreateHostKey } from "./core/host-identity"
+import { ClaimStore } from "./channels/web/pair-claim"
+import { NullRelayProvider } from "./core/relay/provider"
+import { FrpRelayProvider } from "./core/relay/frp-provider"
 import { UpdateChecker } from "./core/update/checker"
 import { detectUpdateMode } from "./core/update/mode"
 import { ReviewStore } from "./core/review/store"
@@ -76,7 +80,7 @@ import { DevicePushTokenStore } from "./core/push/device-tokens"
 import { createRelayClient } from "./core/push/relay-adapter"
 import { ViewingTracker } from "./core/push/viewing-tracker"
 import {
-  MUX_HOME, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, DEVICES_FILE,
+  MUX_HOME, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
 } from "./shared/paths"
 import { validateWebEnv } from "./shared/web-env"
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chmodSync, watch as fsWatch } from "fs"
@@ -87,7 +91,7 @@ import { checkPreflight, hasBinary } from "./shared/preflight"
 import { detectAllAgents, detectAgent } from "./core/agents/detect"
 import { createInstallManager } from "./core/agents/install"
 import { withAgentBinDirs } from "./core/agents/bin-dirs"
-import { homedir } from "os"
+import { homedir, hostname } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute } from "path"
 import { fileURLToPath } from "url"
@@ -735,6 +739,7 @@ async function onAssistantMessage(
         anyPresent: (sid) => viewingTracker.isAnyPresentFor(sid),
         nativeSender,
         nativeDevices,
+        hostId: hostIdentity.hostId,
       }).catch((err) => log.warn("push_hook_failed", { err: err?.message ?? String(err) }))
       const mid = (res.value as any)?.message_id
       // Store the immutable session ID, not the name: classifyInbound's quote-reply
@@ -997,6 +1002,30 @@ const advanceRead = makeReadAdvancer({
   broadcast: (frame) => webChannel?.broadcastToAll(frame),
 })
 
+// Host identity (Ed25519 keypair, derived hostId) + one-time pairing claims.
+const hostIdentity = loadOrCreateHostKey(HOST_KEY_FILE)
+const claimStore = new ClaimStore()
+setInterval(() => claimStore.sweep(), 60_000).unref()
+const hostPlatform = process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux"
+
+// Relay data plane (frp). Opt-in via MUX_RELAY_DOMAIN until the spike passes and
+// a relay box exists; otherwise LAN/direct only. Swappable behind RelayProvider.
+const relayProvider = process.env.MUX_RELAY_DOMAIN
+  ? new FrpRelayProvider({
+      identity: hostIdentity,
+      relayBase: process.env.MUX_RELAY_BASE ?? `https://${process.env.MUX_RELAY_DOMAIN}`,
+      relayDomain: process.env.MUX_RELAY_DOMAIN,
+      localPort: MUX_WEB_PORT ?? 9898,
+      getNonce: async () => {
+        const r = await fetch(`${process.env.MUX_RELAY_BASE ?? `https://${process.env.MUX_RELAY_DOMAIN}`}/relay/nonce`)
+        return ((await r.json()) as { nonce: string }).nonce
+      },
+      spawn: (argv) => Bun.spawn(argv, { stdout: "ignore", stderr: "ignore" }),
+      writeConfig: (ini) => { const p = join(STATE_DIR, "frpc.ini"); writeFileSync(p, ini, { mode: 0o600 }); return p },
+    })
+  : new NullRelayProvider()
+void relayProvider.start()
+
 if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   // One install job per agent; "installed" is re-probed (binary on PATH) after
   // the installer exits. Referenced lazily by the startAgentInstall closures.
@@ -1005,6 +1034,15 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   })
   webChannel = new WebChannel({
     updateChecker,
+    getHostInfo: () => ({
+      hostId: hostIdentity.hostId,
+      name: hostname(),
+      platform: hostPlatform,
+      version: BUILD_VERSION,
+      protocolVersion: 1,
+    }),
+    claimStore,
+    getRelayUrl: () => relayProvider.status().relayUrl,
     port: MUX_WEB_PORT,
     devicesFile: DEVICES_FILE,
     publicUrl: MUX_WEB_PUBLIC_URL,

@@ -1,0 +1,8 @@
+# Host helper binaries for the macOS arm64 desktop-as-host image (Plan 3 Task 5):
+#   supermux-broker   — the compiled Bun broker (scripts/build-binary.sh)
+#   tmux              — static tmux
+#   frpc              — frp 0.61.1 client
+# Staged by scripts/stage-desktop-binaries.sh before the .app build (needs a Mac).
+# Large native binaries, never committed. This .gitignore keeps the dir tracked.
+*
+!.gitignore

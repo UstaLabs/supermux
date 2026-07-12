@@ -39,6 +39,9 @@ export interface FirePushArgs {
   nativeSender?: NativePushSender
   /** Returns the list of registered native device ids for this user. */
   nativeDevices?: () => string[]
+  /** This broker's host identity, echoed into the payload so multi-host clients
+   * route the notification to the right host (spec §5). */
+  hostId?: string
 }
 
 // Web is one logical channel and the user is ONE person across their devices, so
@@ -58,6 +61,7 @@ export async function firePushForReply(args: FirePushArgs): Promise<void> {
     text: extractPreview(action),
     kind: action.attachments?.[0]?.kind as any,
     ts: new Date().toISOString(),
+    ...(args.hostId ? { hostId: args.hostId } : {}),
   }
   for (const device of devices()) {
     await sender.sendToDevice(device, payload)

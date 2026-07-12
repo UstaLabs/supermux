@@ -1,0 +1,9 @@
+# Host helper binaries for the Linux arm64 desktop-as-host image (Plan 3 Task 5):
+#   supermux-broker   — the compiled Bun broker (scripts/build-binary.sh)
+#   tmux              — static tmux
+#   frpc              — frp 0.61.1 client
+# Staged by scripts/stage-desktop-binaries.sh in CI before packageDeb; large native
+# binaries, never committed (mirrors the release binary + KCEF, which are built/fetched,
+# not checked in). This .gitignore keeps the dir tracked so appResourcesRootDir resolves.
+*
+!.gitignore

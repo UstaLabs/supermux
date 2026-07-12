@@ -290,6 +290,13 @@ private extension PushAppDelegate {
             UNNotificationCategory(identifier: PushGroupState.chatCategory, actions: [],
                                    intentIdentifiers: [], options: [])
         ])
+        #if os(macOS)
+        // Headless host smoke builds and XCTest-injected app hosts deliberately avoid Keychain.
+        // A differently ad-hoc-signed binary can trigger an ACL prompt over SSH, and XCTest must
+        // never initialize real persistent services. Production/direct-distribution launches
+        // satisfy both policies and take the normal path.
+        guard MacHostPolicy.shouldPersist(), MacHostPolicy.shouldAutostart() else { return }
+        #endif
         // Warm the push keypair on launch so its public key is generated + persisted in
         // the shared Keychain group up front (the NSE reads the same key to decrypt, and
         // the bootstrap handler registers this pubkey with the broker). Idempotent.

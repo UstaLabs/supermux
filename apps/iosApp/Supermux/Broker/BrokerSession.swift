@@ -55,6 +55,24 @@ final class BrokerSession {
     private(set) var finishJobs: [String: FinishJobDto] = [:]
     private(set) var synced = false
 
+    /// Per-host reachability for the merged fleet list (spec §5): true once this host's control WS
+    /// is up, false when it drops. Fed by the shared `BrokerClient`'s `onConnectionChange`. Distinct
+    /// from `synced`, which latches true on the first snapshot ("do we have state yet") and never
+    /// flips back — `online` tracks the live socket so `Fleet` can grey an offline host. `Fleet`
+    /// sets `onConnectionChanged` to learn each transition (record last-seen / backfill identity).
+    private(set) var online = false
+    @ObservationIgnored var onConnectionChanged: ((Bool) -> Void)?
+    // Indirection so the BrokerClient's connection callback captures a plain relay object at
+    // construction — NOT `self` (which isn't fully initialized while `self.client` is being set).
+    // Its target is wired to `self` at the end of init, once every stored property exists.
+    @ObservationIgnored private let connFlag = ConnectionFlag()
+
+    private func setOnline(_ up: Bool) {
+        guard online != up else { return }
+        online = up
+        onConnectionChanged?(up)
+    }
+
     /// Drop a session's finish job (FinishSheet Dismiss/Done) so the sheet returns to the
     /// readiness menu. The broker only ever ADDS/updates jobs over the WS `finish_job` frame —
     /// it never broadcasts a cleared state — so the client clears its own copy. (web parity:
@@ -67,7 +85,19 @@ final class BrokerSession {
         let http = IosClientKt.iosHttpClient()
         self.api = BrokerApi(baseUrl: baseURL, token: token, http: http)
         self.client = BrokerClient(baseUrl: baseURL, token: token, http: http,
-                                   policy: ReconnectPolicy(baseMs: 500, maxMs: 8000))
+                                   policy: ReconnectPolicy(baseMs: 500, maxMs: 8000),
+                                   onConnectionChange: { [connFlag] connected in
+                                       // Kotlin invokes this off the main actor. `connected` is the
+                                       // boxed Kotlin Boolean (K/N leaves primitive lambda params
+                                       // boxed — same as the KotlinLong `onProgress` callbacks). The
+                                       // relay (not self) is captured, then hops to main below.
+                                       connFlag.report(connected.boolValue)
+                                   })
+        // self is fully initialized now (every stored property has a value), so it's safe to point
+        // the connection relay at it — off-main callbacks hop to the main actor to touch @Observable.
+        connFlag.onChange = { [weak self] up in
+            Task { @MainActor in self?.setOnline(up) }
+        }
         #if os(macOS)
         // Macs sleep with the lid: the WS drops and the run-loop enters its backoff delay.
         // On wake, don't sit out that timer — kick the loop immediately so the workspace is
@@ -905,6 +935,15 @@ final class BrokerSession {
             displayHosts.removeValue(forKey: id)?.host.stop()
         }
     }
+}
+
+/// Tiny reference relay so `BrokerSession.init` can hand the shared `BrokerClient` a connection
+/// callback that captures NO `self` (self isn't fully initialized while its `client` stored property
+/// is being set). `onChange` is wired to the session at the end of init; the Kotlin client invokes
+/// `report` off the main actor, which forwards to `onChange` (which hops back to main).
+private final class ConnectionFlag {
+    var onChange: ((Bool) -> Void)?
+    func report(_ up: Bool) { onChange?(up) }
 }
 
 private extension Bool {

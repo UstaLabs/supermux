@@ -26,6 +26,10 @@ import androidx.compose.ui.window.isTraySupported
 import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.rememberWindowState
 import dev.supermux.desktop.auth.DesktopTokenStore
+import dev.supermux.desktop.host.DesktopHostBootstrap
+import dev.supermux.desktop.host.DesktopHostStores
+import dev.supermux.desktop.host.FleetState
+import dev.supermux.desktop.host.HostWizard
 import dev.supermux.desktop.notify.NotificationController
 import dev.supermux.desktop.notify.TrayNotificationManager
 import dev.supermux.desktop.pairing.OnboardingScreen
@@ -146,6 +150,15 @@ fun main() {
     } else if (envToken != null || envBase != null) {
         println("[Main] ignoring partial SM_PAIR_* env — both SM_PAIR_TOKEN and SM_PAIR_BASE must be set")
     }
+
+    // Multi-host fleet store (spec §3.2). Migrate any legacy single-host (baseUrl, token) — including
+    // one just seeded by SM_PAIR_* or a prior single-host install — into PairedHost[0] so existing
+    // desktop users land in the fleet with ZERO re-pairing. Idempotent (no-op once the store holds a
+    // host). Built once here and shared with the composition below.
+    val hostStore = DesktopHostStores.store()
+    runCatching { DesktopHostStores.migrateFromLegacyIfNeeded(hostStore, store) }
+        .onFailure { println("[Main] legacy→fleet migration failed (falling through): $it") }
+
     application {
         // M5-3: TrayState + NotificationController are hoisted ABOVE Window because Tray(...) is
         // an ApplicationScope-receiver composable (confirmed via javap: Tray_desktopKt.Tray's
@@ -211,9 +224,9 @@ fun main() {
             // Paired flag + workspace UI state are hoisted to the Window (FrameWindowScope) so the
             // native MenuBar — which must be called on this scope, not inside a nested @Composable —
             // can reach the same WorkspaceLayout/selection the shortcuts drive.
-            var paired by remember {
-                mutableStateOf(!store.load().isNullOrBlank() && !store.loadBaseUrl().isNullOrBlank())
-            }
+            // Paired once the fleet holds a host (legacy single-host users were migrated to
+            // PairedHost[0] above; onboarding seeds it via the same migration on success).
+            var paired by remember { mutableStateOf(hostStore.list().isNotEmpty()) }
             val uiStore = remember { WorkspaceStateStore() }
             val launcherStore = remember { dev.supermux.desktop.session.LauncherStore() }
             // Hydrate the layout + last selection from ui-state.json (the selection is re-validated
@@ -280,13 +293,50 @@ fun main() {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 if (!paired) {
                     val scope = rememberCoroutineScope()
-                    val pairing = remember { PairingState(store, scope) }
-                    DisposableEffect(Unit) { onDispose { pairing.close() } }
-                    OnboardingScreen(pairing, onPaired = { paired = true })
+                    // First-run choice (spec §6 / D6 choice A): on a native-host platform (macOS/Linux)
+                    // the default first run is the desktop-as-host wizard — this computer becomes a host,
+                    // shows a pairing QR for the phone, and auto-pairs "This computer" into the fleet. A
+                    // "Connect to a different broker instead" escape hatch drops to the classic onboarding.
+                    // Windows (client-only) skips straight to onboarding; its "Host from this PC" preview
+                    // card lives in the fleet list (Task 6).
+                    var connectInstead by remember { mutableStateOf(false) }
+                    val showHostWizard = DesktopHostBootstrap.isNativeHostPlatform() && !connectInstead
+
+                    if (showHostWizard) {
+                        // The sidecar spawns OR adopts the local broker (adopt = read-only probe of an
+                        // already-running :9898 broker; it never stops a broker it didn't start). NOT
+                        // stopped on dispose — a freshly-spawned managed broker must keep hosting after
+                        // the wizard closes (the login keep-alive agent owns its persistence).
+                        val sidecar = remember { DesktopHostBootstrap.sidecar() }
+                        val model = remember { DesktopHostBootstrap.buildModel(scope, hostStore, sidecar) }
+                        HostWizard(
+                            model = model,
+                            onDone = {
+                                // The model auto-paired "This computer" into the fleet store; reflect it.
+                                paired = hostStore.list().isNotEmpty()
+                                if (!paired) connectInstead = true // bootstrap failed → fall back to onboarding
+                            },
+                            onConnectInstead = { connectInstead = true },
+                        )
+                    } else {
+                        val pairing = remember { PairingState(store, scope) }
+                        DisposableEffect(Unit) { onDispose { pairing.close() } }
+                        OnboardingScreen(pairing, onPaired = {
+                            // Onboarding persisted the legacy (baseUrl, token) into DesktopTokenStore;
+                            // fold it into the fleet as PairedHost[0] before flipping to the app.
+                            runCatching { DesktopHostStores.migrateFromLegacyIfNeeded(hostStore, store) }
+                            paired = true
+                        })
+                    }
                 } else {
                     val scope = rememberCoroutineScope()
-                    val app = remember { DesktopAppState(store.loadBaseUrl()!!, store.load()!!, scope) }
-                    DisposableEffect(Unit) { onDispose { app.close() } }
+                    // The multi-host fleet: one connection per paired host, merged into WorkspaceRoot.
+                    val fleet = remember { FleetState(hostStore, scope) }
+                    DisposableEffect(Unit) { onDispose { fleet.close() } }
+                    // The active host's app backs the single-host headless hooks below and is
+                    // WorkspaceRoot's fallback; WorkspaceRoot itself routes through `fleet`. Non-null
+                    // because `paired` ⟹ the store holds a host ⟹ FleetState opened its connection.
+                    val app = remember(fleet) { fleet.activeApp() } ?: return@SupermuxTheme
 
                     // Headless-verification hook (no input injection on CI boxes): SM_SMOKE_SEND=
                     // "<session-name>:<text>" resolves the named session after the first snapshot
@@ -1010,7 +1060,7 @@ fun main() {
                         }
                     }
 
-                    WorkspaceRoot(app, ui, uiStore, launcherStore, notificationController)
+                    WorkspaceRoot(app, ui, uiStore, launcherStore, notificationController, fleet = fleet)
 
                     // Unpair confirmation (File ▸ Unpair…): clears the credential store and flips
                     // back to onboarding, which disposes `app` (DisposableEffect above).
@@ -1021,7 +1071,10 @@ fun main() {
                             text = { Text("This removes the saved pairing credentials and returns to the onboarding screen. Your sessions on the broker are untouched.") },
                             confirmButton = {
                                 TextButton(onClick = {
+                                    // Clear the legacy credential AND forget every fleet host
+                                    // (drops each record + token, closes its socket).
                                     store.clear()
+                                    hostStore.list().map { it.recordId }.forEach { fleet.forgetHost(it) }
                                     showUnpairConfirm = false
                                     paired = false
                                 }) { Text("Unpair") }

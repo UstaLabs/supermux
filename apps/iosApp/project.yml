@@ -48,6 +48,8 @@ targets:
       - path: Supermux
         excludes:
           - "EditorWeb/**"
+          - "Host/**"
+          - "HostResources/**"
       # Bundled CodeMirror 6 editor assets (index.html + cm6.js) as a folder
       # reference so the directory structure is preserved in the .app bundle
       # (Bundle.main … subdirectory: "EditorWeb"). Loaded by the WKWebView editor.
@@ -238,7 +240,11 @@ targets:
         excludes:
           - "EditorWeb/**"
           - "Watch/**"            # WatchConnectivity does not exist on macOS
+          - "HostResources/**"
       - path: Supermux/EditorWeb
+        type: folder
+        buildPhase: resources
+      - path: Supermux/HostResources
         type: folder
         buildPhase: resources
     dependencies:
@@ -270,6 +276,7 @@ targets:
         MACOSX_DEPLOYMENT_TARGET: "26.0"
         ARCHS: arm64
         EXCLUDED_ARCHS: x86_64
+        ENABLE_HARDENED_RUNTIME: "YES"
         # Brand the SYSTEM accent (sidebar selection, focus rings, default buttons) teal on
         # the Mac — AppKit's List/NSTableView selection follows the app accent color asset,
         # not SwiftUI `.tint`. Mac-only setting: iOS keeps its explicit `.tint(Theme.teal)`.
@@ -287,8 +294,10 @@ targets:
           - "@executable_path/../Frameworks"
       configs:
         Release:
-          PROVISIONING_PROFILE_SPECIFIER: "Supermux Mac App Store"
-          CODE_SIGN_IDENTITY: "Apple Distribution"
+          # Native hosting requires an unsandboxed direct distribution. The Mac App Store
+          # lane is intentionally disabled; release archives use Developer ID + notarization.
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Developer ID Application"
     preBuildScripts:
       - name: Build Kotlin Shared.framework (embed and sign)
         basedOnDependencyAnalysis: false
@@ -298,6 +307,18 @@ targets:
           export JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home -v 17 2>/dev/null || /usr/libexec/java_home)}"
           cd "$SRCROOT/.."
           ./gradlew --no-daemon :shared:embedAndSignAppleFrameworkForXcode
+    postBuildScripts:
+      - name: Sign bundled native host helpers
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          [ "${CODE_SIGNING_ALLOWED:-NO}" = "YES" ] || exit 0
+          [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ] || exit 0
+          HOST_RESOURCES="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/HostResources"
+          for helper in supermux-broker frpc tmux; do
+            [ -f "$HOST_RESOURCES/$helper" ] || continue
+            /usr/bin/codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --options runtime "$HOST_RESOURCES/$helper"
+          done
 
   SupermuxMacPushNSE:
     # macOS twin of SupermuxPushNSE: same principal class, same shared crypto
@@ -324,12 +345,13 @@ targets:
         MACOSX_DEPLOYMENT_TARGET: "26.0"
         ARCHS: arm64
         EXCLUDED_ARCHS: x86_64
+        ENABLE_HARDENED_RUNTIME: "YES"
         CODE_SIGN_ENTITLEMENTS: SupermuxPushNSE/SupermuxMacPushNSE.entitlements
         APPLICATION_EXTENSION_API_ONLY: "YES"
       configs:
         Release:
-          PROVISIONING_PROFILE_SPECIFIER: "Supermux Mac NSE App Store"
-          CODE_SIGN_IDENTITY: "Apple Distribution"
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Developer ID Application"
 
   SupermuxTests:
     type: bundle.unit-test

@@ -3,9 +3,10 @@ import { checkPreflight } from "../src/shared/preflight"
 
 const present = (...bins: string[]) => (b: string) => bins.includes(b)
 
-test("missing tmux is fatal", () => {
+test("missing tmux is a warning, not fatal (disables Claude+terminals only)", () => {
   const r = checkPreflight(present("claude"))
-  expect(r.fatal.some((m) => m.includes("tmux"))).toBe(true)
+  expect(r.fatal.some((m) => m.includes("tmux"))).toBe(false)
+  expect(r.warnings.some((m) => m.includes("tmux"))).toBe(true)
 })
 
 test("zero agent CLIs is fatal", () => {

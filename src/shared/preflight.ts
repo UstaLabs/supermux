@@ -13,7 +13,7 @@ export function checkPreflight(has: (bin: string) => boolean): PreflightResult {
   const warnings: string[] = []
 
   if (!has("tmux")) {
-    fatal.push("tmux not found on PATH — supermux runs every session inside tmux. Install tmux and retry.")
+    warnings.push("tmux not found on PATH — Claude sessions and persistent terminals are disabled on this host; codex/cursor/opencode still work. Install tmux to enable them.")
   }
 
   const present = AGENT_CLIS.filter(has)

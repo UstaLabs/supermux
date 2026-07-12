@@ -36,6 +36,31 @@ data class PairJsonResult(val token: String = "", val name: String = "")
 @Serializable
 data class MeResult(val paired: Boolean = false, val device: String? = null)
 
+/** GET /host → public broker identity (spec §3.3). `platform`/`version` are present only for
+ *  an authed caller; unauthenticated pairing/adoption probes get identity fields only. */
+@Serializable
+data class HostIdentity(
+    val hostId: String = "",
+    val name: String = "",
+    val protocolVersion: Int = 0,
+    val platform: String? = null,
+    val version: String? = null,
+)
+
+/** POST /pair/claim body — a one-time claimSecret + this device's chosen display name. */
+@Serializable
+data class PairClaimBody(val claimSecret: String, val deviceName: String)
+
+/** POST /pair/claim → the minted device bearer plus the host's identity, so the client can
+ *  verify `host.hostId` matches the scanned QR before persisting (spec §3.4). On a brand-new
+ *  broker the trust-on-first-connect branch may omit `host`. */
+@Serializable
+data class PairClaimResult(
+    val host: HostIdentity? = null,
+    val deviceToken: String = "",
+    val name: String = "",
+)
+
 @Serializable
 data class AppConfigDto(
     val paName: String = "",
@@ -1017,6 +1042,21 @@ class BrokerApi(
     /** GET /me — bearer-validity probe; {paired, device?}. Used to validate a manually-typed token. */
     suspend fun me(): MeResult =
         getJson("$httpBase/me")
+
+    /** GET /host — public broker identity (spec §3.3). No auth required; used by the add-host
+     *  typed-URL path to confirm a URL is a supermux broker and learn its hostId/name before
+     *  claiming. Non-2xx/transport failure → CancellationException (caller treats as "not a host"). */
+    suspend fun getHost(): HostIdentity =
+        getJson("$httpBase/host")
+
+    /**
+     * POST /pair/claim {claimSecret, deviceName} → {host, deviceToken, name} (spec §3.4).
+     * Consumes a one-time claim and mints a device bearer even on an already-paired host. A
+     * blank/expired/reused secret 401s → CancellationException (caller treats as failure). The
+     * caller MUST verify `host.hostId` equals the scanned payload's hostId before persisting.
+     */
+    suspend fun pairClaim(claimSecret: String, deviceName: String): PairClaimResult =
+        postReturningJson("$httpBase/pair/claim", PairClaimBody(claimSecret, deviceName))
 
     /** GET /sessions/<id>/models */
     suspend fun models(id: String): ModelsResponse =

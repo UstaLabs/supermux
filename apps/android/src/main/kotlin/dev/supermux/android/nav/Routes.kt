@@ -9,6 +9,7 @@ import kotlinx.serialization.Serializable
  */
 @Serializable object Home
 @Serializable object NewSession
+@Serializable object AddHost
 @Serializable object Settings
 @Serializable object Usage
 @Serializable object Devices
