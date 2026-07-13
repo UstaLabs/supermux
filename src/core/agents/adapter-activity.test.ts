@@ -180,3 +180,32 @@ test("defensive: null detail", () => {
   const ev = { kind: "tool-call", tool: "bash", phase: "started", call_id: "c1", detail: null } as const
   expect(toActivityEvents("codex", ev, NOW)[0]).toMatchObject({ kind: "tool", tool: "Bash", title: "Bash", detail: "" })
 })
+
+// --- grok ---
+
+test("grok tool_call started -> title with file_path summary", () => {
+  const ev = { tool: "write", phase: "started" as const, call_id: "c0",
+    detail: { title: "write", rawInput: { file_path: "/w/poem.txt", content: "x" } } }
+  const [a] = toActivityEvents("grok", ev, Date.parse("2026-07-13T00:00:00Z"))
+  expect(a.kind).toBe("tool")
+  expect(a.tool).toBe("Write")
+  expect(a.title).toContain("/w/poem.txt")
+})
+
+test("grok tool_call_update completed -> tool_result done", () => {
+  const ev = { tool: "edit", phase: "completed" as const, call_id: "c0",
+    detail: { title: "Write `/w/poem.txt`", status: "completed",
+      content: [{ type: "content", content: { type: "text", text: "wrote 2 lines" } }] } }
+  const [a] = toActivityEvents("grok", ev, Date.parse("2026-07-13T00:00:00Z"))
+  expect(a.kind).toBe("tool_result")
+  expect(a.title).toBe("done")
+  expect(a.detail).toContain("wrote 2 lines")
+})
+
+test("grok tool_call_update failed -> tool_result error", () => {
+  const ev = { tool: "write", phase: "failed" as const, call_id: "c0",
+    detail: { status: "failed", content: [{ type: "content", content: { type: "text", text: "permission denied" } }] } }
+  const [a] = toActivityEvents("grok", ev, Date.parse("2026-07-13T00:00:00Z"))
+  expect(a.title).toBe("error")
+  expect(a.detail).toContain("permission denied")
+})
