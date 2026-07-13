@@ -66,7 +66,7 @@ import { BUILD_VERSION, BUILD_COMMIT } from "./shared/build-info"
 import { loadOrCreateHostKey } from "./core/host-identity"
 import { ClaimStore } from "./channels/web/pair-claim"
 import { NullRelayProvider } from "./core/relay/provider"
-import { FrpRelayProvider } from "./core/relay/frp-provider"
+import { FrpRelayProvider, parentBoundFrpcCommand } from "./core/relay/frp-provider"
 import { UpdateChecker } from "./core/update/checker"
 import { detectUpdateMode } from "./core/update/mode"
 import { ReviewStore } from "./core/review/store"
@@ -1013,15 +1013,15 @@ const hostPlatform = process.platform === "darwin" ? "macos" : process.platform 
 const relayProvider = process.env.MUX_RELAY_DOMAIN
   ? new FrpRelayProvider({
       identity: hostIdentity,
-      relayBase: process.env.MUX_RELAY_BASE ?? `https://${process.env.MUX_RELAY_DOMAIN}`,
+      relayBase: process.env.MUX_RELAY_BASE ?? `https://control.${process.env.MUX_RELAY_DOMAIN}`,
       relayDomain: process.env.MUX_RELAY_DOMAIN,
       localPort: MUX_WEB_PORT ?? 9898,
       getNonce: async () => {
-        const r = await fetch(`${process.env.MUX_RELAY_BASE ?? `https://${process.env.MUX_RELAY_DOMAIN}`}/relay/nonce`)
+        const r = await fetch(`${process.env.MUX_RELAY_BASE ?? `https://control.${process.env.MUX_RELAY_DOMAIN}`}/relay/nonce`)
         return ((await r.json()) as { nonce: string }).nonce
       },
-      spawn: (argv) => Bun.spawn(argv, { stdout: "ignore", stderr: "ignore" }),
-      writeConfig: (ini) => { const p = join(STATE_DIR, "frpc.ini"); writeFileSync(p, ini, { mode: 0o600 }); return p },
+      spawn: (argv) => Bun.spawn(parentBoundFrpcCommand(argv), { stdout: "ignore", stderr: "ignore" }),
+      writeConfig: (toml) => { const p = join(STATE_DIR, "frpc.toml"); writeFileSync(p, toml, { mode: 0o600 }); return p },
     })
   : new NullRelayProvider()
 void relayProvider.start()
@@ -3407,6 +3407,9 @@ async function gracefulShutdown(signal: string) {
   try {
     updateChecker?.stop()
   } catch (err: any) { log.warn("update_checker_stop_failed", { err: err?.message }) }
+  try {
+    await relayProvider.stop()
+  } catch (err: any) { log.warn("relay_provider_stop_failed", { err: err?.message ?? String(err) }) }
   if (telegram) try {
     await telegram.stop()
   } catch (err: any) { log.warn("telegram_stop_failed", { err: err?.message }) }

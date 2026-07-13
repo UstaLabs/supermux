@@ -278,7 +278,7 @@ data class SidecarConfig(
     val repoDir: Path? = null,
     val bunPath: String = "bun",
     val bundledBrokerPath: Path? = null,
-    val relayDomain: String? = null,
+    val relayDomain: String? = "relay.supermux.dev",
     val extraEnv: Map<String, String> = emptyMap(),
     val healthTimeoutMs: Long = 45_000,
     val healthPollMs: Long = 500,

@@ -1,0 +1,22 @@
+{
+	on_demand_tls {
+		ask http://127.0.0.1:7200/relay/caddy-ask
+	}
+}
+
+control.relay.supermux.dev {
+	tls {
+		on_demand
+	}
+	reverse_proxy 127.0.0.1:7200
+}
+
+*.relay.supermux.dev {
+	tls {
+		on_demand
+	}
+	reverse_proxy 127.0.0.1:8080 {
+		header_up -X-Mux-Via
+		header_up X-Mux-Via relay
+	}
+}

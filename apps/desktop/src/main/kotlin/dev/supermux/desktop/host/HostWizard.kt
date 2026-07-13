@@ -62,7 +62,7 @@ import kotlinx.serialization.json.Json
 private val json = Json { encodeDefaults = true }
 
 /** The local device token + the one-time phone claim the wizard just minted from the local broker. */
-data class HostClaim(val localToken: String, val claimSecret: String)
+data class HostClaim(val localToken: String, val claimSecret: String, val relayUrl: String? = null)
 
 /**
  * Pure builder for the wizard's pairing payload. `directUrl` is always the local broker; `relayUrl`
@@ -137,7 +137,7 @@ class HostWizardModel(
                 _state.value = HostWizardUiState.Error("Couldn't create a pairing code from the local host.")
                 return@launch
             }
-            val relay = provideRelayUrl()
+            val relay = c.relayUrl ?: provideRelayUrl()
             val local = provideLocalUrl()
             val payload = buildPairingPayload(id, hostName, c.claimSecret, directUrl = local, relayUrl = relay)
             val jsonStr = encodePairingPayload(payload)
@@ -162,7 +162,7 @@ class HostWizardModel(
 const val HOST_WIZARD_HEADLINE = "This computer is ready to host your agents. Scan the QR with your phone."
 const val HOST_WIZARD_KEEPALIVE_LABEL = "Keep this computer available when the app is closed and after I sign in"
 private const val RELAY_ON_DISCLOSURE =
-    "Remote access is on: your phone reaches this computer from anywhere through the supermux relay (relay.supermux.dev). Traffic is end-to-end between your devices."
+    "Remote access is on through relay.supermux.dev. Connections are encrypted in transit; relay traffic is not end-to-end encrypted yet."
 private const val RELAY_OFF_DISCLOSURE =
     "Your phone reaches this computer directly on your local network. Turn on remote access later to reach it from anywhere through the supermux relay."
 
