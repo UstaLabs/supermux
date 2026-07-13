@@ -31,6 +31,7 @@ const BINARY: Record<AgentKind, string> = {
   codex: "codex",
   cursor: "cursor-agent",
   opencode: "opencode",
+  grok: "grok",
 }
 
 /** Absolute path to the credential file the broker treats as "this CLI is logged in". */
@@ -46,6 +47,8 @@ export function authCredPath(kind: AgentKind, paths: DetectPaths): string {
       // opencode stores multi-provider creds in its XDG data dir (written by
       // `opencode auth login`), NOT the config dir.
       return join(paths.xdgDataHome || join(paths.home, ".local", "share"), "opencode", "auth.json")
+    case "grok":
+      return join(paths.home, ".grok", "auth.json")
   }
 }
 

@@ -59,7 +59,7 @@ test("marks failed on a non-zero exit", async () => {
 })
 
 test("every agent kind has an install recipe", () => {
-  for (const kind of ["claude", "codex", "cursor", "opencode"] as const) {
+  for (const kind of ["claude", "codex", "cursor", "opencode", "grok"] as const) {
     expect(typeof INSTALL_RECIPES[kind]).toBe("string")
     expect(INSTALL_RECIPES[kind].length).toBeGreaterThan(0)
   }
