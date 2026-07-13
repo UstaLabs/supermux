@@ -10,8 +10,16 @@ struct MacHostPreparedClaim: Equatable {
 struct MacHostBootstrap {
     typealias Request = (URLRequest) async throws -> (Data, HTTPURLResponse)
     private let request: Request
+    private let relayAttempts: Int
+    private let relayPollDelay: UInt64
 
-    init(request: @escaping Request = MacHostBootstrap.liveRequest) {
+    init(
+        relayAttempts: Int = 1,
+        relayPollDelay: UInt64 = 0,
+        request: @escaping Request = MacHostBootstrap.liveRequest
+    ) {
+        self.relayAttempts = max(1, relayAttempts)
+        self.relayPollDelay = relayPollDelay
         self.request = request
     }
 
@@ -77,12 +85,20 @@ struct MacHostBootstrap {
 
     private func fetchRelayURL(base: URL, token: String) async -> String? {
         guard let url = URL(string: "/me", relativeTo: base) else { return nil }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 5
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        guard let (data, response) = try? await self.request(request), response.statusCode == 200,
-              let result = try? JSONDecoder().decode(MeResult.self, from: data) else { return nil }
-        return result.relayUrl?.isEmpty == false ? result.relayUrl : nil
+        for attempt in 0..<relayAttempts {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 5
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            if let (data, response) = try? await self.request(request), response.statusCode == 200,
+               let result = try? JSONDecoder().decode(MeResult.self, from: data),
+               let relayURL = result.relayUrl, !relayURL.isEmpty {
+                return relayURL
+            }
+            if attempt + 1 < relayAttempts, relayPollDelay > 0 {
+                try? await Task.sleep(nanoseconds: relayPollDelay)
+            }
+        }
+        return nil
     }
 
     static func cookieToken(from response: HTTPURLResponse) -> String? {
