@@ -18,6 +18,7 @@ import { LspConnection } from "../../core/lsp/bridge"
 import { encodeTouch, encodeKey, encodeText, TouchAction } from "../../core/display/scrcpy/control"
 import { redactAppConfig } from "../../core/settings/app-config"
 import { pairJsonResponse } from "./pair-json"
+import { buildHostBody } from "./host-route"
 import { normalizeExistingWorkdir, uniqueKnownWorkdirs } from "../../core/session-manager/workdir-paths"
 import { worktreesRoot } from "../../core/worktree/manager"
 import { hooksFileUsesHookSecret } from "../../core/agents/claude/hooks-settings"
@@ -63,7 +64,7 @@ function clientIp(req: Request): string {
 // case — each new instance already starts with an empty bucket.
 export function __resetAuthFailures(): void {}
 
-const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge"]
+const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host"]
 const MAX_CLIENT_LOG_RING = 800
 
 export type StoredClientLogEntry = {
@@ -239,6 +240,10 @@ export interface WebChannelOpts {
   // null = update checks disabled (MUX_UPDATE_CHECK=0); undefined = same as null.
   updateChecker?: UpdateChecker | null
   relayUrl?: string
+  getHostInfo?: () => import("./host-route").HostInfo
+  claimStore?: import("./pair-claim").ClaimStore
+  mintDeviceToken?: (name: string) => { token: string; name: string }
+  getRelayUrl?: () => string | undefined
 }
 
 export class WebChannel implements Channel {
@@ -258,6 +263,10 @@ export class WebChannel implements Channel {
   private readonly deviceTokenStore?: import("../../core/push/device-tokens").DevicePushTokenStore
   private readonly vapidPublicKey?: string
   private readonly relayUrl?: string
+  private readonly getHostInfo?: () => import("./host-route").HostInfo
+  private readonly claimStore?: import("./pair-claim").ClaimStore
+  private readonly mintDeviceToken?: (name: string) => { token: string; name: string }
+  private readonly getRelayUrl?: () => string | undefined
   private inboundHandlers: Array<(m: InboundMessage) => void> = []
   private wsConnections = new Set<{ ws: import("bun").ServerWebSocket<WSData>; deviceName: string }>()
   private displaySockets = new WeakMap<object, import("bun").Socket>()
@@ -276,6 +285,10 @@ export class WebChannel implements Channel {
     this.deviceTokenStore = opts.deviceTokenStore
     this.vapidPublicKey = opts.vapidPublicKey
     this.relayUrl = opts.relayUrl
+    this.getHostInfo = opts.getHostInfo
+    this.claimStore = opts.claimStore
+    this.mintDeviceToken = opts.mintDeviceToken
+    this.getRelayUrl = opts.getRelayUrl
     this.fsWatcher = opts.fsWatcher
   }
 
@@ -1405,35 +1418,66 @@ export class WebChannel implements Channel {
         headers: { "set-cookie": buildClearCookie({ publicUrl: this.opts.publicUrl, proxyBaseDomain: this.opts.proxyBaseDomain }) },
       })
     }
+    // Public host identity (pairing verification + adoption probe). Identity-only
+    // without auth; platform/version added when authed (spec §3.3).
+    if (method === "GET" && path === "/host") {
+      const info = this.getHostInfo?.()
+      if (!info) return this.json({ error: "host identity unavailable" }, 503)
+      return this.json(buildHostBody(info, this.requireAuth(req).ok))
+    }
     // Paired-status probe for the PWA (200 when the cookie is valid, else 401).
     if (method === "GET" && path === "/me") {
       const a = this.requireAuth(req)
-      return this.json(a.ok ? { paired: true, device: a.device.name, relayUrl: this.relayUrl } : { paired: false }, a.ok ? 200 : 401)
+      const relayUrl = this.getRelayUrl?.() ?? this.relayUrl
+      return this.json(a.ok ? { paired: true, device: a.device.name, relayUrl } : { paired: false }, a.ok ? 200 : 401)
     }
 
-    // Trust-on-first-connect: on a brand-new broker (no devices yet, not onboarded),
-    // the first caller is auto-paired. Closes the moment any device exists or
-    // onboarding completes; thereafter use normal pairing (/pair + QR).
+    // Native pairing claim (spec §3.4). Two paths, independent of whether a
+    // claimStore exists (it always does in production):
+    //   • a claimSecret is supplied → consume it → mint (add a device to any host).
+    //   • no secret → trust-on-first-connect, permitted ONLY on a brand-new broker
+    //     (no devices, not onboarded). This is how the FIRST device bootstraps —
+    //     it must work with the claimStore present, or fresh onboarding deadlocks.
     if (method === "POST" && path === "/pair/claim") {
+      const info = this.getHostInfo?.()
+      const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
+      const name = (((body.deviceName as string | undefined) ?? (body.name as string | undefined))?.trim()) || undefined
+      const mint = this.mintDeviceToken ?? ((n: string) => this.store.mint(n))
+      const secret = typeof body.claimSecret === "string" ? body.claimSecret : ""
+
+      if (secret) {
+        if (!this.claimStore || !this.claimStore.consume(secret)) return new Response("unauthorized", { status: 401 })
+        const minted = mint(name ?? "device")
+        this.store.touch(minted.token)
+        const host = info ? { hostId: info.hostId, name: info.name, platform: info.platform, version: info.version } : undefined
+        return this.json({ host, deviceToken: minted.token, name: minted.name })
+      }
+
+      // Secretless: trust-on-first-connect, brand-new broker only.
       const onboarded = this.opts.getAppConfig?.()?.onboarded ?? false
       if (this.store.list().length > 0 || onboarded) {
         return this.json({ error: "already set up — use normal pairing" }, 403)
       }
-      const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
-      const requested = (((body.name as string | undefined) ?? "setup").trim()) || "setup"
-      const { token, name } = this.store.mint(requested)
-      this.store.touch(token)
-      return new Response(JSON.stringify({ paired: true, name }), {
+      const minted = mint(name ?? "setup")
+      this.store.touch(minted.token)
+      return new Response(JSON.stringify({ paired: true, name: minted.name }), {
         status: 200,
         headers: {
           "content-type": "application/json",
-          "set-cookie": buildAuthCookie(token, { publicUrl: this.opts.publicUrl, proxyBaseDomain: this.opts.proxyBaseDomain }),
+          "set-cookie": buildAuthCookie(minted.token, { publicUrl: this.opts.publicUrl, proxyBaseDomain: this.opts.proxyBaseDomain }),
         },
       })
     }
 
     const auth = this.requireAuth(req)
     if (!auth.ok) return new Response("unauthorized", { status: 401 })
+
+    // Mint a one-time pairing claim so an already-paired client (or the local
+    // desktop wizard) can add ANOTHER device (spec §3.4). Authed-only.
+    if (method === "POST" && path === "/pair/mint-claim") {
+      if (!this.claimStore) return this.json({ error: "pairing claims unavailable" }, 503)
+      return this.json({ claimSecret: this.claimStore.mint() })
+    }
 
     // ── System: broker restart ──────────────────────────────────────────
     if (method === "POST" && path === "/system/restart") {

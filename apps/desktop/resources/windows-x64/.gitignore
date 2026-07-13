@@ -1,0 +1,7 @@
+# Host helper binary for the Windows x64 desktop image (Plan 3 Task 5):
+#   frpc.exe          — frp 0.61.1 client (carried for when Windows later hosts)
+# Windows is client-only for now: NO bundled broker, NO tmux (see HostBinaries.isBundled).
+# Staged by scripts/stage-desktop-binaries.sh in CI before packageMsi. Never committed;
+# this .gitignore keeps the dir tracked so appResourcesRootDir resolves.
+*
+!.gitignore

@@ -31,6 +31,7 @@ import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
+import dev.supermux.net.HostIdentity
 import dev.supermux.net.LspInstallResult
 import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
@@ -53,10 +54,22 @@ import dev.supermux.net.UpdateStatus
 import dev.supermux.net.VerifySaveResult
 import dev.supermux.net.VerifySuggestResult
 import dev.supermux.net.VncClient
+import dev.supermux.android.host.HostConnections
+import dev.supermux.android.host.HostStores
+import dev.supermux.android.host.HostView
 import dev.supermux.android.session.LauncherDraft
 import dev.supermux.android.session.LauncherPrefs
 import dev.supermux.android.session.StagedUpload
 import dev.supermux.android.settings.AddCustomLspArgs
+import dev.supermux.host.HostSnapshotStore
+import dev.supermux.host.PairedHost
+import dev.supermux.host.PairedHostStore
+import dev.supermux.host.PairingPayload
+import dev.supermux.host.SessionKey
+import dev.supermux.host.fleetOwners
+import dev.supermux.host.mergeFleetRows
+import dev.supermux.host.mergedSessions
+import dev.supermux.util.TransportPolicy
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.ClientFrame
@@ -88,36 +101,92 @@ import kotlinx.serialization.json.Json
 private val Context.draftDataStore by preferencesDataStore(name = "chat_drafts")
 
 /** App-scoped DataStore backing the New Session launcher's persisted state — separate from
- *  chat_drafts (a different concept/lifecycle: pre-session, not per-session). */
+ *  chat_drafts (a different concept/lifecycle: pre-session, not per-session). Also holds the
+ *  merged-list host-filter selection (a UI pref, same lifecycle as launcher prefs). */
 private val Context.launcherDataStore by preferencesDataStore(name = "launcher_state")
 
+/** Outcome of an add-host attempt (spec §3.4 / §5). */
+sealed interface AddHostResult {
+    data class Added(val host: PairedHost) : AddHostResult
+    /** Typed-URL path reached a real supermux host, but it is already set up and needs a claim
+     *  minted from its own UI (paste/scan that link instead). */
+    data class NeedsClaim(val identity: HostIdentity) : AddHostResult
+    data class Error(val message: String) : AddHostResult
+}
+
+/**
+ * Multi-host app view-model (spec §5). Holds N per-host connections via [HostConnections] and folds
+ * every host's frames into unified, sessionId-keyed state — session ids are globally unique across
+ * hosts, so the reducer maps merge without collision. Per-session commands route to the OWNING host
+ * (via [sessionHost]); host-global operations (settings, agents, projects, spawn) route to the
+ * ACTIVE host ([activeHost], defaulting to the first paired host, switched by opening a chat or the
+ * launcher's host picker). Existing single-host users are transparently migrated to `PairedHost[0]`.
+ */
 class AppViewModel(
     application: Application,
-    private val baseUrl: String,
-    private val token: String,
 ) : AndroidViewModel(application) {
     private val appContext: Context = application.applicationContext
 
     companion object {
         /** Factory so the VM can be Activity-scoped via viewModel(factory = …) and survive config changes. */
-        fun factory(application: Application, baseUrl: String, token: String) = viewModelFactory {
-            initializer { AppViewModel(application, baseUrl, token) }
+        fun factory(application: Application) = viewModelFactory {
+            initializer { AppViewModel(application) }
         }
     }
 
     private val http = HttpClient(CIO) { install(WebSockets) }
-    private val client = BrokerClient(baseUrl, token, http)
-    private val api = BrokerApi(baseUrl, token, http)
 
-    // Viewing presence — tells the broker which chat is foreground (parity with iOS/web) so it
-    // suppresses a push for a chat you're already looking at. Driven by MainActivity (selected +
-    // app lifecycle); a 60s heartbeat keeps the broker's 5-min TTL fresh on a long quiet turn.
+    // The multi-host store + connection registry. Migration (idempotent) guarantees a PairedHost[0]
+    // for existing single-host users before we read the list. Every frame is tagged with its host's
+    // recordId and folded by [reduce]; connect/disconnect drive [onConnState].
+    private val store: PairedHostStore = HostStores.store(appContext)
+    // Per-host offline-snapshot cache (spec §5): each host's last-known live sessions, persisted
+    // OUTSIDE the secure store so a host that is offline at launch renders its last-known sessions
+    // (dimmed) instead of an empty group. Replaced wholesale per snapshot; dropped on forget.
+    private val snapshotStore: HostSnapshotStore = HostStores.snapshotStore(appContext)
+    private val hostConns = HostConnections(viewModelScope, http, onFrame = ::reduce, onConnState = ::onConnState)
+
+    // Per-host session buckets are the source of truth for the merged list: a host's Snapshot
+    // replaces only ITS bucket (so another host's sessions survive), and a bucket is retained while
+    // its host is offline (spec §5 "greyed group with last-seen"). [_sessions]/[_sessionHost] are
+    // derived from these buckets in store order.
+    private val sessionsByHost = LinkedHashMap<String, List<SessionInfo>>()
+    private val onlineHosts = HashMap<String, Boolean>()
+
+    // ── Host-qualified per-session state (spec §5/§9: identity is (recordId, sessionId)) ──────────
+    // Source of truth for the per-session maps, keyed by SessionKey "recordId␟sessionId" so two hosts
+    // presenting the SAME broker-local sessionId can neither hide one another nor contaminate the
+    // wrong chat. Published to the bare-sessionId StateFlows below via SessionKey.flatten (owner-
+    // strict), so the UI keeps addressing every session by its stable bare id — no UI change. Main-
+    // confined (reduce runs on viewModelScope), so plain maps are race-free, exactly like sessionsByHost.
+    private val msgByKey = LinkedHashMap<String, List<LogEntry>>()
+    private val actByKey = LinkedHashMap<String, List<ActivityEvent>>()
+    private val agentByKey = LinkedHashMap<String, AgentStatus>()
+    private val bgByKey = LinkedHashMap<String, List<ServerFrame.BgTask>>()
+    private val cmdByKey = LinkedHashMap<String, List<SlashCommand>>()
+    private val cmdResByKey = LinkedHashMap<String, Boolean>()
+    private val agentErrByKey = LinkedHashMap<String, ServerFrame.AgentError>()
+    private val finishByKey = LinkedHashMap<String, FinishJobDto>()
+    private val pendingByKey = LinkedHashSet<String>()
+
+    private val _sessions = MutableStateFlow<List<SessionInfo>>(emptyList())
+    val sessions: StateFlow<List<SessionInfo>> = _sessions
+    /** sessionId → owning host recordId (drives per-row badges + per-session routing). */
+    private val _sessionHost = MutableStateFlow<Map<String, String>>(emptyMap())
+    val sessionHost: StateFlow<Map<String, String>> = _sessionHost
+    /** The paired fleet as the list renders it (identity + reachability + badge slot). */
+    private val _hostViews = MutableStateFlow<List<HostView>>(emptyList())
+    val hostViews: StateFlow<List<HostView>> = _hostViews
+    /** recordId of the host that host-global ops target (settings/agents/spawn). */
+    private val _activeHost = MutableStateFlow<String?>(null)
+    val activeHost: StateFlow<String?> = _activeHost
+
+    // Viewing presence — tells the OWNING broker which chat is foreground (parity with iOS/web) so it
+    // suppresses a push for a chat you're already looking at.
     private var viewingSession: String? = null
     private var viewingVisible: Boolean = false
     private var lastSentViewing: Pair<String?, Boolean>? = null
     private var viewingHeartbeat: Job? = null
-    private val _sessions = MutableStateFlow<List<SessionInfo>>(emptyList())
-    val sessions: StateFlow<List<SessionInfo>> = _sessions
     private val _messages = MutableStateFlow<Map<String, List<LogEntry>>>(emptyMap())
     val messages: StateFlow<Map<String, List<LogEntry>>> = _messages
     private val _activity = MutableStateFlow<Map<String, List<ActivityEvent>>>(emptyMap())
@@ -150,7 +219,7 @@ class AppViewModel(
      *  Dismiss/Done. Client-side only (mirrors web `finishJob.clear(id)` / iOS
      *  `SessionChrome.clearJob()`); there is no broker "clear" endpoint and this never
      *  cancels a running job — the sheet only offers clear on a terminal/failed outcome. */
-    fun clearFinishJob(id: String) { _finishJobs.update { it - id } }
+    fun clearFinishJob(id: String) { if (finishByKey.remove(ownerKey(id)) != null) publishSessionState() }
 
     /** Filesystem-change pulses (session + changed paths). The editor file tree / diff tab
      *  re-fetch on each pulse. A SharedFlow (events, not retained state). */
@@ -182,144 +251,445 @@ class AppViewModel(
     val lspInstallDone: StateFlow<Map<String, ServerFrame.LspInstallDone>> = _lspInstallDone
 
     init {
-        viewModelScope.launch {
-            client.frames.collect { f ->
-                when (f) {
-                    is ServerFrame.Snapshot -> {
-                        _sessions.value = f.sessions
-                        _messages.value = f.logs
-                        _activity.value = f.activity
-                        _bgTasks.value = f.bgTasks
-                        _agentState.value = f.agentState
-                        _commands.value = f.commands
-                        _commandsResolved.value = f.commandsResolved
-                        // Seed finish jobs from each session's snapshot record.
-                        _finishJobs.value = f.sessions
-                            .mapNotNull { s -> s.finish_job?.let { s.id to it } }
-                            .toMap()
-                        // A (re)connect always begins with a snapshot; re-assert viewing presence
-                        // so the broker's per-device tracker is current after a reconnect.
-                        lastSentViewing = null
-                        sendViewingIfChanged()
-                    }
-                    is ServerFrame.SessionAdded -> {
-                        // The broker re-broadcasts session_added for the SAME session (an early add
-                        // right after spawn, then the authoritative post-register add carrying
-                        // repo_root / session_branch). Dedup by id and backfill — keep existing
-                        // values where the incoming frame omits them — instead of appending a
-                        // duplicate row. (web parity: src/web-app/src/stores/sessions.ts add();
-                        // iOS parity: BrokerSession.reduce().)
-                        val incoming = f.session
-                        _sessions.value = if (_sessions.value.none { it.id == incoming.id }) {
-                            _sessions.value + incoming
-                        } else {
-                            _sessions.value.map { s ->
-                                if (s.id != incoming.id) s
-                                else incoming.copy(
-                                    status = incoming.status ?: s.status,
-                                    mute = incoming.mute ?: s.mute,
-                                    connected = incoming.connected ?: s.connected,
-                                    model = incoming.model ?: s.model,
-                                    repo_root = incoming.repo_root ?: s.repo_root,
-                                    role = incoming.role ?: s.role,
-                                    session_branch = incoming.session_branch ?: s.session_branch,
-                                    git = incoming.git ?: s.git,
-                                    finish_job = incoming.finish_job ?: s.finish_job,
-                                )
-                            }
-                        }
-                        incoming.finish_job?.let { job -> _finishJobs.update { it + (incoming.id to job) } }
-                    }
-                    is ServerFrame.SessionRemoved -> {
-                        _sessions.value = _sessions.value.filterNot { it.id == f.id }
-                        _bgTasks.update { it - f.id }
-                    }
-                    is ServerFrame.MessageAppend -> {
-                        // Optimistic-echo dedup (iOS BrokerSession parity): when the real inbound
-                        // message lands, drop the matching local-… placeholder we appended on send.
-                        _messages.value = _messages.value.toMutableMap().apply {
-                            val prev = this[f.session] ?: emptyList()
-                            val pruned = if (f.entry.direction.startsWith("in")) {
-                                prev.filterNot { it.id.startsWith("local-") && it.text == f.entry.text }
-                            } else prev
-                            this[f.session] = pruned + f.entry
-                        }
-                    }
-                    is ServerFrame.ActivityAppend -> {
-                        _activity.value = _activity.value.toMutableMap().apply {
-                            this[f.session] = (this[f.session] ?: emptyList()) + f.event
-                        }
-                    }
-                    is ServerFrame.BgTasks -> {
-                        _bgTasks.update { it + (f.session to f.tasks) }
-                    }
-                    is ServerFrame.AgentState -> {
-                        _agentState.value = _agentState.value.toMutableMap().apply {
-                            this[f.session] = AgentStatus(
-                                phase = f.phase, state = f.state, working = f.working,
-                                detail = f.detail, tool = f.tool, since = f.since, workingSince = f.workingSince,
-                                waiting = f.waiting, bgOpen = f.bgOpen,
-                            )
-                        }
-                        _pendingSend.update { it - f.session }   // first real state clears the client-local "Sending…"
-                        // Clear a prior agent error once the agent is no longer dead.
-                        if (f.state != "dead" && _agentErrors.value.containsKey(f.session)) {
-                            _agentErrors.update { it - f.session }
-                        }
-                    }
-                    is ServerFrame.CommandsChanged -> {
-                        _commands.value = _commands.value.toMutableMap().apply {
-                            this[f.session] = f.commands
-                        }
-                        _commandsResolved.update { it + (f.session to f.resolved) }
-                    }
-                    is ServerFrame.AgentError -> _agentErrors.update { it + (f.session to f) }
-                    is ServerFrame.FinishJobFrame -> {
-                        val job = f.job
-                        if (job != null) {
-                            _finishJobs.update { it + (f.session to job) }
-                            // Keep list rows in sync with the latest finish job.
-                            _sessions.value = _sessions.value.map { s ->
-                                if (s.id == f.session) s.copy(finish_job = job) else s
-                            }
-                        }
-                    }
-                    is ServerFrame.FsChanged -> _fsChanges.tryEmit(f)
-                    is ServerFrame.DisplayAdded ->
-                        _displays.update { list -> list.filterNot { it.id == f.display.id } + f.display }
-                    is ServerFrame.DisplayRemoved ->
-                        _displays.update { list -> list.filterNot { it.id == f.id } }
-                    is ServerFrame.LspStatus ->
-                        _lspStatus.update { it + ("${f.session}|${f.path}" to f) }
-                    is ServerFrame.LspReady -> markLspState(f.session, f.serverId, "ready")
-                    is ServerFrame.LspError -> markLspState(f.session, f.serverId, "error", f.error)
-                    is ServerFrame.LspRpcIn -> _lspRpc.tryEmit(f)
-                    is ServerFrame.LspExit -> markLspState(f.session, f.serverId, "exited")
-                    is ServerFrame.LspInstallProgress ->
-                        _lspInstallLog.update {
-                            it + (f.serverId to ((it[f.serverId] ?: emptyList()) + f.line))
-                        }
-                    is ServerFrame.LspInstallDone -> _lspInstallDone.update { it + (f.serverId to f) }
-                    is ServerFrame.SessionGit ->
-                        _sessions.value = _sessions.value.map { s ->
-                            if (s.id == f.session) s.copy(git = f.git) else s
-                        }
-                    else -> {}
-                }
-            }
+        // Idempotent: seeds PairedHost[0] from the legacy single-host (token, baseUrl) if the store
+        // is empty (e.g. the session right after onboarding persisted the legacy secure store).
+        HostStores.migrateFromLegacyIfNeeded(appContext)
+        _activeHost.value = store.list().firstOrNull()?.recordId
+        // Spec §5: seed each host's bucket from its persisted last snapshot BEFORE connecting, so a
+        // host that is offline at launch renders its last-known sessions (dimmed, via the offline
+        // group) instead of an empty grey group. Prune caches for hosts forgotten while dead; the
+        // live snapshot overwrites the seed the moment a host connects.
+        snapshotStore.retainOnly(store.list().map { it.recordId })
+        snapshotStore.all().forEach { snap ->
+            if (snap.sessions.isNotEmpty()) sessionsByHost[snap.recordId] = snap.sessions
         }
-        viewModelScope.launch { client.run() }
+        rebuildHostViews()
+        rebuildSessions()
+        // Opens one control WS + api per paired host; frames flow into reduce(), tagged by recordId.
+        hostConns.sync(store.list())
     }
 
-    // Viewing presence (mirrors iOS BrokerSession / web useViewing) — pushes suppression for the
-    // chat you're looking at.
+    // ── Multi-host reducer + derived state ─────────────────────────────────────────
+
+    /** Fold a frame from host [recordId] into the unified state. Per-session state is keyed by the
+     *  host-qualified [SessionKey] "recordId␟sessionId" (spec §5/§9) so a sessionId collision across
+     *  brokers can't hide a session or route a frame into the wrong host's chat; the bare-keyed
+     *  StateFlows the UI reads are re-derived by [publishSessionState] at the end. Runs on the
+     *  viewModelScope (Main-confined), so the plain mutable maps are race-free. */
+    private fun reduce(recordId: String, f: ServerFrame) {
+        var dirty = false
+        when (f) {
+            is ServerFrame.Snapshot -> {
+                sessionsByHost[recordId] = f.sessions
+                onlineHosts[recordId] = true
+                val now = System.currentTimeMillis()
+                store.updateSeen(recordId, now)
+                // Spec §5: replace this host's persisted snapshot wholesale so it survives a restart
+                // (the snapshot carries live sessions only — archived are never cached here).
+                snapshotStore.replace(
+                    recordId, f.sessions, now,
+                    store.list().firstOrNull { it.recordId == recordId }?.version,
+                )
+                rebuildSessions(); rebuildHostViews()
+                // Replace only THIS host's slice of each per-session map (drop its stale keys, add fresh).
+                replaceHostSlice(msgByKey, recordId, f.logs)
+                replaceHostSlice(actByKey, recordId, f.activity)
+                replaceHostSlice(bgByKey, recordId, f.bgTasks)
+                replaceHostSlice(agentByKey, recordId, f.agentState)
+                replaceHostSlice(cmdByKey, recordId, f.commands)
+                replaceHostSlice(cmdResByKey, recordId, f.commandsResolved)
+                replaceHostSlice(
+                    finishByKey, recordId,
+                    f.sessions.mapNotNull { s -> s.finish_job?.let { s.id to it } }.toMap(),
+                )
+                dirty = true
+                // A (re)connect always begins with a snapshot; re-assert viewing presence so the
+                // owning broker's per-device tracker is current after a reconnect.
+                lastSentViewing = null
+                sendViewingIfChanged()
+            }
+            is ServerFrame.SessionAdded -> {
+                // Dedup + backfill within this host's bucket (web/iOS parity): the broker
+                // re-broadcasts session_added for the same session (early add then the authoritative
+                // post-register one carrying repo_root/session_branch).
+                val incoming = f.session
+                val bucket = sessionsByHost[recordId].orEmpty()
+                sessionsByHost[recordId] = if (bucket.none { it.id == incoming.id }) {
+                    bucket + incoming
+                } else {
+                    bucket.map { s ->
+                        if (s.id != incoming.id) s
+                        else incoming.copy(
+                            status = incoming.status ?: s.status,
+                            mute = incoming.mute ?: s.mute,
+                            connected = incoming.connected ?: s.connected,
+                            model = incoming.model ?: s.model,
+                            reasoningLevel = incoming.reasoningLevel ?: s.reasoningLevel,
+                            repo_root = incoming.repo_root ?: s.repo_root,
+                            role = incoming.role ?: s.role,
+                            session_branch = incoming.session_branch ?: s.session_branch,
+                            git = incoming.git ?: s.git,
+                            finish_job = incoming.finish_job ?: s.finish_job,
+                        )
+                    }
+                }
+                rebuildSessions()
+                incoming.finish_job?.let { job -> finishByKey[keyFor(recordId, incoming.id)] = job; dirty = true }
+            }
+            is ServerFrame.SessionRemoved -> {
+                sessionsByHost[recordId] = sessionsByHost[recordId].orEmpty().filterNot { it.id == f.id }
+                rebuildSessions()
+                if (bgByKey.remove(keyFor(recordId, f.id)) != null) dirty = true
+            }
+            is ServerFrame.SessionState ->
+                patchSessionIn(recordId, f.session) {
+                    it.copy(
+                        mute = f.mute ?: it.mute,
+                        connected = f.connected ?: it.connected,
+                        model = f.model ?: it.model,
+                        reasoningLevel = f.reasoningLevel ?: it.reasoningLevel,
+                    )
+                }
+            is ServerFrame.MessageAppend -> {
+                // Optimistic-echo dedup (iOS BrokerSession parity): when the real inbound message
+                // lands, drop the matching local-… placeholder we appended on send.
+                val key = keyFor(recordId, f.session)
+                val prev = msgByKey[key] ?: emptyList()
+                val pruned = if (f.entry.direction.startsWith("in")) {
+                    prev.filterNot { it.id.startsWith("local-") && it.text == f.entry.text }
+                } else prev
+                msgByKey[key] = pruned + f.entry
+                dirty = true
+            }
+            is ServerFrame.ActivityAppend -> {
+                val key = keyFor(recordId, f.session)
+                actByKey[key] = (actByKey[key] ?: emptyList()) + f.event
+                dirty = true
+            }
+            is ServerFrame.BgTasks -> { bgByKey[keyFor(recordId, f.session)] = f.tasks; dirty = true }
+            is ServerFrame.AgentState -> {
+                val key = keyFor(recordId, f.session)
+                agentByKey[key] = AgentStatus(
+                    phase = f.phase, state = f.state, working = f.working,
+                    detail = f.detail, tool = f.tool, since = f.since, workingSince = f.workingSince,
+                    waiting = f.waiting, bgOpen = f.bgOpen,
+                )
+                pendingByKey.remove(key)   // first real state clears the client-local "Sending…"
+                if (f.state != "dead") agentErrByKey.remove(key)
+                dirty = true
+            }
+            is ServerFrame.CommandsChanged -> {
+                val key = keyFor(recordId, f.session)
+                cmdByKey[key] = f.commands
+                cmdResByKey[key] = f.resolved
+                dirty = true
+            }
+            is ServerFrame.AgentError -> { agentErrByKey[keyFor(recordId, f.session)] = f; dirty = true }
+            is ServerFrame.FinishJobFrame -> {
+                val job = f.job
+                if (job != null) {
+                    finishByKey[keyFor(recordId, f.session)] = job
+                    patchSessionIn(recordId, f.session) { it.copy(finish_job = job) }
+                    dirty = true
+                }
+            }
+            is ServerFrame.FsChanged -> _fsChanges.tryEmit(f)
+            is ServerFrame.DisplayAdded ->
+                _displays.update { list -> list.filterNot { it.id == f.display.id } + f.display }
+            is ServerFrame.DisplayRemoved ->
+                _displays.update { list -> list.filterNot { it.id == f.id } }
+            is ServerFrame.LspStatus -> _lspStatus.update { it + ("${f.session}|${f.path}" to f) }
+            is ServerFrame.LspReady -> markLspState(f.session, f.serverId, "ready")
+            is ServerFrame.LspError -> markLspState(f.session, f.serverId, "error", f.error)
+            is ServerFrame.LspRpcIn -> _lspRpc.tryEmit(f)
+            is ServerFrame.LspExit -> markLspState(f.session, f.serverId, "exited")
+            is ServerFrame.LspInstallProgress ->
+                _lspInstallLog.update { it + (f.serverId to ((it[f.serverId] ?: emptyList()) + f.line)) }
+            is ServerFrame.LspInstallDone -> _lspInstallDone.update { it + (f.serverId to f) }
+            is ServerFrame.SessionGit -> patchSessionIn(recordId, f.session) { it.copy(git = f.git) }
+            else -> {}
+        }
+        if (dirty) publishSessionState()
+    }
+
+    /** Composite key "recordId␟sessionId" for a frame from [recordId]. */
+    private fun keyFor(recordId: String, sessionId: String): String = SessionKey.key(recordId, sessionId)
+
+    /** Owner-resolved composite key for a UI-driven per-session action: the owner is the merged-list
+     *  owner of [sessionId] (the host the UI is showing/routing to for that bare id). */
+    private fun ownerKey(sessionId: String): String = SessionKey.key(ownerOf(sessionId) ?: "", sessionId)
+
+    /** Replace only host [recordId]'s slice of a composite-keyed map: drop its stale keys, then add
+     *  [fresh] (bare-sessionId → value) re-keyed under [recordId]. Other hosts' entries are untouched. */
+    private fun <V> replaceHostSlice(map: MutableMap<String, V>, recordId: String, fresh: Map<String, V>) {
+        map.keys.removeAll { SessionKey.parse(it)?.recordId == recordId }
+        for ((id, v) in fresh) map[keyFor(recordId, id)] = v
+    }
+
+    /** Re-derive the bare-sessionId StateFlows the UI collects from the host-qualified source maps,
+     *  owner-strictly (a non-owner host's colliding entry is never surfaced — spec §5/§9). */
+    private fun publishSessionState() {
+        val owner = _sessionHost.value
+        _messages.value = SessionKey.flatten(msgByKey, owner)
+        _activity.value = SessionKey.flatten(actByKey, owner)
+        _agentState.value = SessionKey.flatten(agentByKey, owner)
+        _bgTasks.value = SessionKey.flatten(bgByKey, owner)
+        _commands.value = SessionKey.flatten(cmdByKey, owner)
+        _commandsResolved.value = SessionKey.flatten(cmdResByKey, owner)
+        _agentErrors.value = SessionKey.flatten(agentErrByKey, owner)
+        _finishJobs.value = SessionKey.flatten(finishByKey, owner)
+        _pendingSend.value = SessionKey.flattenSet(pendingByKey)
+    }
+
+    /** Drop every host-qualified per-session entry for [recordId] (host forgotten, or a duplicate
+     *  record merged away), so no orphaned keys survive in the source maps. Caller republishes. */
+    private fun dropHostState(recordId: String) {
+        val mine = { k: String -> SessionKey.parse(k)?.recordId == recordId }
+        msgByKey.keys.removeAll(mine)
+        actByKey.keys.removeAll(mine)
+        agentByKey.keys.removeAll(mine)
+        bgByKey.keys.removeAll(mine)
+        cmdByKey.keys.removeAll(mine)
+        cmdResByKey.keys.removeAll(mine)
+        agentErrByKey.keys.removeAll(mine)
+        finishByKey.keys.removeAll(mine)
+        pendingByKey.removeAll(mine)
+    }
+
+    /** Socket connect/disconnect for a host — drives the offline/greyed group (spec §5). The
+     *  session bucket is deliberately retained on disconnect so its last snapshot stays visible. */
+    private fun onConnState(recordId: String, online: Boolean) {
+        onlineHosts[recordId] = online
+        rebuildHostViews()
+        if (online) backfillHostIdentity(recordId)
+    }
+
+    /** Once a host's socket is up, learn its durable hostId from GET /host and backfill the record
+     *  (spec §3.1/§5): a migrated `hostId == null` record gets its real id, and if that id already
+     *  belongs to another record the two collapse into one (the shared store merges them). Best-effort
+     *  and idempotent — skipped once the id is known, so it doesn't refetch on every reconnect. */
+    private fun backfillHostIdentity(recordId: String) {
+        val current = store.list().firstOrNull { it.recordId == recordId } ?: return
+        if (!current.hostId.isNullOrBlank()) return
+        val api = hostConns.api(recordId) ?: return
+        viewModelScope.launch {
+            val hostId = runCatching { api.getHost() }.getOrNull()?.hostId?.takeIf { it.isNotBlank() }
+                ?: return@launch
+            val before = store.list().map { it.recordId }.toSet()
+            store.backfillHostId(recordId, hostId)
+            val merged = before - store.list().map { it.recordId }.toSet()
+            if (merged.isNotEmpty()) {
+                // A duplicate record collapsed into this one — drop its orphaned bucket + cache +
+                // per-session state and reconcile connections (close the removed record's socket).
+                merged.forEach {
+                    sessionsByHost.remove(it); onlineHosts.remove(it); snapshotStore.remove(it); dropHostState(it)
+                }
+                onHostsChanged()
+            } else {
+                rebuildHostViews()
+            }
+            rebuildSessions()
+            publishSessionState()
+        }
+    }
+
+    /** Rederive [_sessions] + [_sessionHost] from the per-host buckets, in store host order, via the
+     *  shared (unit-tested) fleet merge. The merged rows keep BOTH sides of a sessionId collision
+     *  (spec §5 "both appear"); [_sessions] collapses to one row per bare id (owner wins) so the keyed
+     *  list can't crash, and [_sessionHost] is the owner index that routes per-session commands. */
+    private fun rebuildSessions() {
+        val rows = mergeFleetRows(store.list().map { it.recordId }, sessionsByHost)
+        _sessions.value = mergedSessions(rows)
+        _sessionHost.value = fleetOwners(rows)
+    }
+
+    /** Rebuild [_hostViews] from the store + live online map. */
+    private fun rebuildHostViews() {
+        _hostViews.value = store.list().map { h ->
+            HostView(
+                recordId = h.recordId,
+                hostId = h.hostId,
+                displayName = h.displayName,
+                online = onlineHosts[h.recordId] == true,
+                lastSeenAt = h.lastSeenAt,
+            )
+        }
+    }
+
+    /** Patch one session in its OWNING host's bucket (UI-driven, e.g. optimistic model switch), then
+     *  rederive the merged list. No-op if the owner/row is unknown (a state frame racing ahead of its
+     *  session_added). */
+    private fun patchSession(id: String, f: (SessionInfo) -> SessionInfo) {
+        val rid = _sessionHost.value[id] ?: sessionsByHost.entries.firstOrNull { e -> e.value.any { it.id == id } }?.key ?: return
+        patchSessionIn(rid, id, f)
+    }
+
+    /** Patch a session in a SPECIFIC host's bucket — used by the reducer, where the frame's [recordId]
+     *  is authoritative, so a colliding sessionId on another host is never patched by mistake. */
+    private fun patchSessionIn(recordId: String, id: String, f: (SessionInfo) -> SessionInfo) {
+        val bucket = sessionsByHost[recordId] ?: return
+        val idx = bucket.indexOfFirst { it.id == id }
+        if (idx < 0) return
+        sessionsByHost[recordId] = bucket.toMutableList().also { it[idx] = f(it[idx]) }
+        rebuildSessions()
+    }
+
+    // ── Per-session / active-host routing ──────────────────────────────────────────
+
+    private fun ownerOf(sessionId: String): String? = _sessionHost.value[sessionId]
+    private fun apiFor(sessionId: String): BrokerApi? = hostConns.api(ownerOf(sessionId))
+    private fun clientFor(sessionId: String): BrokerClient? = hostConns.client(ownerOf(sessionId))
+    private fun connFor(sessionId: String): HostConnections.Conn? =
+        hostConns.conn(ownerOf(sessionId)) ?: activeConn()
+    private fun activeConn(): HostConnections.Conn? =
+        hostConns.conn(_activeHost.value) ?: hostConns.all().firstOrNull()
+    private fun activeApi(): BrokerApi? = activeConn()?.api
+    private fun activeClient(): BrokerClient? = activeConn()?.client
+
+    /** Route host-global operations (settings/agents/spawn/launcher pickers) to a chosen host —
+     *  the launcher's host picker and opening a chat both call this. */
+    fun setActiveHost(recordId: String) { _activeHost.value = recordId }
+
+    // ── Add host (spec §3.4 / §5) ──────────────────────────────────────────────────
+
+    /**
+     * Claim a host from a scanned/pasted [PairingPayload]: POST /pair/claim, ABORT if the returned
+     * `host.hostId` differs from the payload's (identity-mismatch guard), then persist via the store
+     * and open its connection. The merged list picks up its sessions on the next snapshot.
+     */
+    suspend fun addHost(payload: PairingPayload, deviceName: String): AddHostResult {
+        val url = payload.relayUrl ?: payload.directUrl
+            ?: return AddHostResult.Error("That pairing link has no host URL.")
+        val api = BrokerApi(url, "", http)
+        val res = runCatching { api.pairClaim(payload.claimSecret, deviceName) }.getOrNull()
+            ?: return AddHostResult.Error("The host rejected the pairing — the claim is expired or already used.")
+        if (res.deviceToken.isBlank()) return AddHostResult.Error("The host didn't return a device token.")
+        // Anti-MITM (spec §3.4): the broker that answered MUST prove it is the scanned host. Require an
+        // exact, non-empty hostId match — a missing or blank returned id is a failure, not a pass.
+        val returned = res.host?.hostId
+        if (returned.isNullOrBlank() || returned != payload.hostId) {
+            return AddHostResult.Error(
+                "Host identity mismatch (scanned ${payload.hostId}, got ${returned?.ifBlank { null } ?: "none"}) — aborting.",
+            )
+        }
+        val host = store.addOrUpdate(
+            displayName = payload.name.ifBlank { res.host?.name?.ifBlank { null } ?: "New host" },
+            token = res.deviceToken,
+            relayUrl = payload.relayUrl,
+            directUrl = payload.directUrl,
+            hostId = payload.hostId,
+            platform = res.host?.platform,
+            version = res.host?.version,
+        )
+        onHostsChanged()
+        return AddHostResult.Added(host)
+    }
+
+    /**
+     * Typed-URL add-host (Tailscale/VPN/reverse-proxy — spec §5/D10): GET /host to confirm it is a
+     * supermux broker, then try a secret-less claim. On a fresh/unclaimed broker that mints a device
+     * (trust-on-first-connect) and we persist it; an already-set-up host returns [NeedsClaim] so the
+     * user mints a claim from the host's own UI and scans/pastes that instead.
+     */
+    suspend fun addHostByUrl(rawUrl: String, deviceName: String, allowInsecure: Boolean = false): AddHostResult {
+        val url = normalizeHostUrl(rawUrl) ?: return AddHostResult.Error("Enter a valid http(s) or ws(s) URL.")
+        // Transport guard (spec §3.5): don't send anything over an unencrypted, non-loopback path
+        // until the user has explicitly opted in (the UI shows a labeled checkbox for exactly this).
+        if (!allowInsecure && !TransportPolicy.isPlainHttpAllowedWithoutOptIn(url)) {
+            return AddHostResult.Error(
+                "That's an unencrypted (HTTP) address. Tick “Connect over an unencrypted connection” to add it on a trusted/VPN network.",
+            )
+        }
+        val api = BrokerApi(url, "", http)
+        val identity = runCatching { api.getHost() }.getOrNull()
+            ?: return AddHostResult.Error("That doesn't look like a supermux host (no /host response).")
+        val res = runCatching { api.pairClaim("", deviceName) }.getOrNull()
+        if (res == null || res.deviceToken.isBlank()) return AddHostResult.NeedsClaim(identity)
+        res.host?.hostId?.takeIf { it.isNotBlank() }?.let { returned ->
+            if (identity.hostId.isNotBlank() && returned != identity.hostId) {
+                return AddHostResult.Error("Host identity mismatch — aborting.")
+            }
+        }
+        val host = store.addOrUpdate(
+            displayName = identity.name.ifBlank { "New host" },
+            token = res.deviceToken,
+            directUrl = url,
+            hostId = identity.hostId.ifBlank { null },
+            platform = res.host?.platform ?: identity.platform,
+            version = res.host?.version ?: identity.version,
+        )
+        onHostsChanged()
+        return AddHostResult.Added(host)
+    }
+
+    /** True when a typed add-host URL is plain HTTP to a non-loopback host, so the add-host UI must
+     *  surface the unencrypted-connection opt-in before it can be added (spec §3.5). */
+    fun urlNeedsInsecureOptIn(rawUrl: String): Boolean {
+        val url = normalizeHostUrl(rawUrl) ?: return false
+        return !TransportPolicy.isPlainHttpAllowedWithoutOptIn(url)
+    }
+
+    /** Rename a paired host (the merged-list chip/badge label). */
+    fun renameHost(recordId: String, name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isBlank()) return
+        store.rename(recordId, trimmed)
+        rebuildHostViews()
+    }
+
+    /** Forget a host: drop its record/token (best-effort local revoke happens in the persistence),
+     *  close its socket, and prune its cached sessions from the merged list. */
+    fun forgetHost(recordId: String) {
+        store.remove(recordId)
+        sessionsByHost.remove(recordId)
+        onlineHosts.remove(recordId)
+        snapshotStore.remove(recordId)   // spec §5: the cache is dropped when a host is forgotten
+        dropHostState(recordId)          // and its host-qualified per-session state
+        if (_activeHost.value == recordId) _activeHost.value = store.list().firstOrNull()?.recordId
+        onHostsChanged()
+        rebuildSessions()
+        publishSessionState()
+    }
+
+    private fun onHostsChanged() {
+        hostConns.sync(store.list())
+        if (_activeHost.value == null) _activeHost.value = store.list().firstOrNull()?.recordId
+        rebuildHostViews()
+    }
+
+    private fun normalizeHostUrl(raw: String): String? {
+        val t = raw.trim().trimEnd('/')
+        if (t.isBlank()) return null
+        return when {
+            t.startsWith("http://") || t.startsWith("https://") ||
+                t.startsWith("ws://") || t.startsWith("wss://") -> t
+            t.contains("://") -> null
+            else -> "https://$t"
+        }
+    }
+
+    // ── Host-filter persistence (merged-list chip selection) ────────────────────────
+    private val hostFilterKey = stringPreferencesKey("host_filter")
+
+    /** Persisted host-filter recordId, or null for "All". */
+    suspend fun loadHostFilter(): String? =
+        runCatching { appContext.launcherDataStore.data.first()[hostFilterKey] }.getOrNull()
+            ?.takeIf { it.isNotBlank() }
+
+    fun saveHostFilter(recordId: String?) {
+        viewModelScope.launch {
+            runCatching { appContext.launcherDataStore.edit { it[hostFilterKey] = recordId ?: "" } }
+        }
+    }
+
+    // ── Viewing presence (mirrors iOS BrokerSession / web useViewing) ──────────────
 
     /** Report the foreground chat (`null` = the session list) + whether the app is visible.
-     *  Called by the shell on selection / lifecycle changes. Deduped; (lazily) starts the
-     *  keep-alive heartbeat. */
+     *  Also makes that chat's host the active host so host-global ops target it. */
     fun updateViewing(session: String?, visible: Boolean) {
         viewingSession = session
         viewingVisible = visible
+        if (session != null) ownerOf(session)?.let { _activeHost.value = it }
         sendViewingIfChanged()
         ensureViewingHeartbeat()
     }
@@ -328,25 +698,25 @@ class AppViewModel(
         val next = viewingSession to viewingVisible
         if (lastSentViewing == next) return
         lastSentViewing = next
-        viewModelScope.launch { runCatching { client.send(ClientFrame.Viewing(viewingSession, viewingVisible)) } }
+        val target = viewingSession?.let { clientFor(it) } ?: activeClient()
+        viewModelScope.launch { runCatching { target?.send(ClientFrame.Viewing(viewingSession, viewingVisible)) } }
     }
 
-    /** Re-assert the viewing frame every 60s so the broker's 5-min TTL never lapses while the
-     *  user reads a long, quiet turn. Only refreshes while visible. viewModelScope cancels it
-     *  when the VM clears. */
     private fun ensureViewingHeartbeat() {
         if (viewingHeartbeat?.isActive == true) return
         viewingHeartbeat = viewModelScope.launch {
             while (isActive) {
                 delay(60_000)
-                if (viewingVisible) runCatching { client.send(ClientFrame.Viewing(viewingSession, true)) }
+                if (viewingVisible) {
+                    val target = viewingSession?.let { clientFor(it) } ?: activeClient()
+                    runCatching { target?.send(ClientFrame.Viewing(viewingSession, true)) }
+                }
             }
         }
     }
 
     /** Patch the `state` (and optionally `error`) of every [ServerFrame.LspStatus] entry
-     *  matching [session] + [serverId]; used by the lsp_ready/lsp_error/lsp_exit frames,
-     *  which only carry session+serverId while [_lspStatus] is keyed by "session|path". */
+     *  matching [session] + [serverId]. */
     private fun markLspState(session: String?, serverId: String?, state: String, error: String? = null) {
         if (serverId == null) return
         _lspStatus.update { map ->
@@ -360,39 +730,36 @@ class AppViewModel(
         }
     }
 
-    /** Soft-stop the running agent (POST /sessions/<id>/interrupt). Parity with the iOS
-     *  transcript Stop capsule + the `/stop` slash control. */
-    fun interrupt(id: String) { viewModelScope.launch { runCatching { api.interrupt(id) } } }
+    /** Soft-stop the running agent (POST /sessions/<id>/interrupt). */
+    fun interrupt(id: String) { viewModelScope.launch { runCatching { apiFor(id)?.interrupt(id) } } }
 
     /** ISO-8601 (UTC) timestamp so an optimistic entry sorts LAST under mergeTimeline's
      *  lexicographic `ts` ordering (the broker emits ISO-8601 too). */
     private fun nowIso(): String = java.time.Instant.now().toString()
 
-    /** Append an optimistic outbound bubble so the user's message shows instantly, before the
-     *  broker echoes it back as an inbound message (iOS BrokerSession.send parity). Deduped in
-     *  the MessageAppend reducer. Only echoes when there is text (attachments-only stay quiet). */
     private fun appendOptimistic(sessionId: String, text: String) {
         if (text.isEmpty()) return
+        val key = ownerKey(sessionId)
         val optimistic = LogEntry(
-            id = "local-${(_messages.value[sessionId]?.size ?: 0)}-${text.hashCode()}",
+            id = "local-${(msgByKey[key]?.size ?: 0)}-${text.hashCode()}",
             ts = nowIso(),
             direction = "inbound",
             text = text,
         )
-        _messages.update { it + (sessionId to ((it[sessionId] ?: emptyList()) + optimistic)) }
+        msgByKey[key] = (msgByKey[key] ?: emptyList()) + optimistic
+        publishSessionState()
     }
 
     fun send(sessionId: String, text: String) {
         if (text.isBlank()) return
         appendOptimistic(sessionId, text.trim())
         viewModelScope.launch {
-            client.send(ClientFrame.Send(sessionId, args = SendArgs(text)))
-            _pendingSend.update { it + sessionId }   // optimistic "Sending…" until the next agent_state
+            clientFor(sessionId)?.send(ClientFrame.Send(sessionId, args = SendArgs(text)))
+            pendingByKey.add(ownerKey(sessionId)); publishSessionState()
         }
     }
 
     // ── Per-session composer draft persistence (DataStore) ─────────────────────────
-    // Survives session-switch AND process death (iOS UserDefaults "cmux:draft:<id>" parity).
     private fun draftKey(sessionId: String) = stringPreferencesKey("draft:$sessionId")
 
     suspend fun loadDraft(sessionId: String): String =
@@ -405,7 +772,6 @@ class AppViewModel(
     }
 
     // ── New Session launcher state persistence (DataStore) ─────────────────────────
-    // Two lifecycles: prefs persist forever; draft persists until a session is created.
     private val launcherJson = Json { ignoreUnknownKeys = true }
     private val launcherPrefsKey = stringPreferencesKey("launcher_prefs")
     private val launcherDraftKey = stringPreferencesKey("launcher_draft")
@@ -438,26 +804,32 @@ class AppViewModel(
         }
     }
 
-    fun connectTerminal(sessionId: String): TerminalClient =
-        TerminalClient(baseUrl, token, http, sessionId)
+    fun connectTerminal(sessionId: String): TerminalClient {
+        val c = connFor(sessionId)
+        return TerminalClient(c?.baseUrl ?: "", c?.token ?: "", http, sessionId)
+    }
 
     /** Raw agent-PTY terminal for the Native tab (kind="agent"); shell tab uses the scratch kind. */
-    fun connectAgentTerminal(sessionId: String): TerminalClient =
-        TerminalClient(baseUrl, token, http, sessionId, kind = "agent")
+    fun connectAgentTerminal(sessionId: String): TerminalClient {
+        val c = connFor(sessionId)
+        return TerminalClient(c?.baseUrl ?: "", c?.token ?: "", http, sessionId, kind = "agent")
+    }
 
-    /** GET /displays. Also seeds [_displays] (the doc-comment's "seeded on demand"); the
-     *  StateFlow then stays live via `display_added`/`display_removed` frames. */
+    /** GET /displays on the active host. Also seeds [_displays]. */
     suspend fun listDisplays(): List<DisplayStream> {
-        val list = runCatching { api.listDisplays() }.getOrNull() ?: return _displays.value
+        val list = runCatching { activeApi()?.listDisplays() }.getOrNull() ?: return _displays.value
         _displays.value = list
         return list
     }
-    fun connectScrcpy(streamId: String): ScrcpyClient =
-        ScrcpyClient(baseUrl, token, http, streamId)
-    fun connectVnc(streamId: String): VncClient =
-        VncClient(baseUrl, token, http, streamId)
+    fun connectScrcpy(streamId: String): ScrcpyClient {
+        val c = activeConn()
+        return ScrcpyClient(c?.baseUrl ?: "", c?.token ?: "", http, streamId)
+    }
+    fun connectVnc(streamId: String): VncClient {
+        val c = activeConn()
+        return VncClient(c?.baseUrl ?: "", c?.token ?: "", http, streamId)
+    }
 
-    /** POST /displays → the started stream (the display_added frame also folds it into [displays]). */
     suspend fun startDisplay(
         sessionName: String,
         provider: String? = null,
@@ -465,11 +837,9 @@ class AppViewModel(
         width: Int? = null,
         height: Int? = null,
     ): DisplayStream? =
-        runCatching { api.startDisplay(sessionName, provider, device, width, height) }.getOrNull()
+        runCatching { activeApi()?.startDisplay(sessionName, provider, device, width, height) }.getOrNull()
 
-    suspend fun stopDisplay(id: String) {
-        runCatching { api.stopDisplay(id) }
-    }
+    suspend fun stopDisplay(id: String) { runCatching { activeApi()?.stopDisplay(id) } }
 
     suspend fun upload(
         sessionId: String,
@@ -477,11 +847,8 @@ class AppViewModel(
         name: String,
         mime: String,
         kind: String? = null,
-    ): String? = runCatching { api.upload(sessionId, bytes, name, mime, kind).file_id }.getOrNull()
+    ): String? = runCatching { apiFor(sessionId)?.upload(sessionId, bytes, name, mime, kind)?.file_id }.getOrNull()
 
-    /** Resumable/chunked upload from a [ChunkSource] (bounded RAM), reporting
-     *  progress. Returns the finalized file_id, or null on failure (the caller
-     *  surfaces a failed chip — never a silent drop). */
     suspend fun uploadResumable(
         sessionId: String,
         source: ChunkSource,
@@ -490,50 +857,53 @@ class AppViewModel(
         kind: String? = null,
         onProgress: (Long, Long) -> Unit,
     ): String? = runCatching {
-        api.uploadResumable(sessionId, source, name, mime, kind, onProgress).file_id
+        apiFor(sessionId)?.uploadResumable(sessionId, source, name, mime, kind, onProgress)?.file_id
     }.getOrNull()
 
     // ── Voice dictation ──────────────────────────────────────────────────────────
 
-    // sessionId is OPTIONAL — null (e.g. the pre-spawn launcher) posts to the id-less /transcribe;
-    // the session only enriches cleanup context server-side (see BrokerApi.transcribePath).
-
-    /** Whisper path: multipart audio → cleaned text. Returns null on failure (caller keeps draft). */
+    /** Whisper path: multipart audio → cleaned text. sessionId null (launcher) → active host. */
     suspend fun transcribeAudio(sessionId: String?, bytes: ByteArray, filename: String): String? =
-        runCatching { api.transcribeAudio(sessionId, bytes, filename).text }.getOrNull()
+        runCatching { (sessionId?.let { apiFor(it) } ?: activeApi())?.transcribeAudio(sessionId, bytes, filename)?.text }.getOrNull()
 
-    /** On-device-STT path: JSON draft → cleaned text. Returns null on failure. */
+    /** On-device-STT path: JSON draft → cleaned text. sessionId null (launcher) → active host. */
     suspend fun transcribeDraft(sessionId: String?, draft: String): String? =
-        runCatching { api.transcribeDraft(sessionId, draft).text }.getOrNull()
+        runCatching { (sessionId?.let { apiFor(it) } ?: activeApi())?.transcribeDraft(sessionId, draft)?.text }.getOrNull()
 
     fun sendWith(sessionId: String, text: String, attachments: List<String>) {
         appendOptimistic(sessionId, text.trim())
         viewModelScope.launch {
             runCatching {
-                client.send(ClientFrame.Send(sessionId, args = SendArgs(text, attachments.ifEmpty { null })))
-                _pendingSend.update { it + sessionId }   // optimistic "Sending…" until the next agent_state
+                clientFor(sessionId)?.send(ClientFrame.Send(sessionId, args = SendArgs(text, attachments.ifEmpty { null })))
+                pendingByKey.add(ownerKey(sessionId)); publishSessionState()
             }
         }
     }
 
-    fun rename(id: String, name: String) { viewModelScope.launch { runCatching { api.rename(id, name) } } }
-    fun setMute(id: String, muted: Boolean) { viewModelScope.launch { runCatching { api.setMute(id, muted) } } }
-    fun kill(id: String, onDone: () -> Unit = {}) { viewModelScope.launch { runCatching { api.kill(id) }; onDone() } }
+    fun rename(id: String, name: String) { viewModelScope.launch { runCatching { apiFor(id)?.rename(id, name) } } }
+    fun setMute(id: String, muted: Boolean) { viewModelScope.launch { runCatching { apiFor(id)?.setMute(id, muted) } } }
+    fun kill(id: String, onDone: () -> Unit = {}) { viewModelScope.launch { runCatching { apiFor(id)?.kill(id) }; onDone() } }
 
-    suspend fun fetchModels(id: String): ModelsResponse? = runCatching { api.models(id) }.getOrNull()
-    suspend fun fetchReasoning(id: String): ReasoningResponse? = runCatching { api.reasoningLevels(id) }.getOrNull()
-    fun switchModel(id: String, model: String) { viewModelScope.launch { runCatching { api.switchModel(id, model) } } }
-    fun switchReasoning(id: String, level: String) { viewModelScope.launch { runCatching { api.switchReasoning(id, level) } } }
+    suspend fun fetchModels(id: String): ModelsResponse? = runCatching { apiFor(id)?.models(id) }.getOrNull()
+    suspend fun fetchReasoning(id: String): ReasoningResponse? = runCatching { apiFor(id)?.reasoningLevels(id) }.getOrNull()
+    // Optimistic local update (web parity): the pill flips immediately; the broker's session_state
+    // broadcast confirms it (or rolls it back on a failed live switch).
+    fun switchModel(id: String, model: String) {
+        viewModelScope.launch {
+            runCatching { apiFor(id)?.switchModel(id, model) }.onSuccess {
+                patchSession(id) { it.copy(model = model) }
+            }
+        }
+    }
+    fun switchReasoning(id: String, level: String) {
+        viewModelScope.launch {
+            runCatching { apiFor(id)?.switchReasoning(id, level) }.onSuccess {
+                patchSession(id) { it.copy(reasoningLevel = level) }
+            }
+        }
+    }
 
     // ── Finish flow ──────────────────────────────────────────────────────────────
-    // The chat Finish sheet drives the whole job lifecycle off the `finishJobs` StateFlow;
-    // `finish` only kicks off the async job (the outcome arrives on the WS `finish_job`
-    // frame). `api.finish` throws CancellationException on a non-2xx (SKIE-safe decode),
-    // so runCatching{…}.isSuccess is the kickoff signal surfaced back via [onKickoff].
-
-    /** Kick off a finish job. `prTitle`/`prBody`/`draft`/`prRequiresGreen` are not surfaced by
-     *  the sheet, so they keep the broker defaults. [onKickoff] reports whether the POST was
-     *  accepted so the sheet can show a kickoff-failure message when no job ever appears. */
     fun finish(
         id: String,
         action: String? = null,
@@ -543,40 +913,29 @@ class AppViewModel(
         onKickoff: (Boolean) -> Unit = {},
     ) {
         viewModelScope.launch {
-            val ok = runCatching { api.finish(id, action, skipVerify, commitFirst, commitMessage) }.isSuccess
+            val ok = runCatching { apiFor(id)?.finish(id, action, skipVerify, commitFirst, commitMessage) }.isSuccess
             onKickoff(ok)
         }
     }
 
-    /** Preflight snapshot for the finish menu (branch sync / diff / conflict / dirty). */
     suspend fun finishReadiness(id: String): FinishReadiness? =
-        runCatching { api.finishReadiness(id) }.getOrNull()
-
-    /** Suggest a `.mux/verify.sh` for the no_verify recovery path. */
+        runCatching { apiFor(id)?.finishReadiness(id) }.getOrNull()
     suspend fun verifySuggest(id: String): VerifySuggestResult? =
-        runCatching { api.verifySuggest(id) }.getOrNull()
-
-    /** Save an edited verify script; the sheet auto-runs merge when `ok`. */
+        runCatching { apiFor(id)?.verifySuggest(id) }.getOrNull()
     suspend fun verifySave(id: String, content: String): VerifySaveResult? =
-        runCatching { api.verifySave(id, content) }.getOrNull()
+        runCatching { apiFor(id)?.verifySave(id, content) }.getOrNull()
+    fun sendMessage(id: String, text: String) { viewModelScope.launch { runCatching { apiFor(id)?.sendMessage(id, text) } } }
 
-    /** Post a message to the agent (the finish sheet's "Let the agent fix it"). */
-    fun sendMessage(id: String, text: String) { viewModelScope.launch { runCatching { api.sendMessage(id, text) } } }
-
-    // Git ops for the workspace ⋮ menu — run the broker op and hand the result back so the caller
-    // can surface it (parity with iOS SessionChrome.fetch/push/pull/publish).
-    fun gitFetch(id: String, onResult: (GitOpResult?) -> Unit) { viewModelScope.launch { onResult(runCatching { api.gitFetch(id) }.getOrNull()) } }
-    fun gitPush(id: String, onResult: (GitOpResult?) -> Unit) { viewModelScope.launch { onResult(runCatching { api.gitPush(id) }.getOrNull()) } }
-    fun gitPull(id: String, onResult: (GitOpResult?) -> Unit) { viewModelScope.launch { onResult(runCatching { api.gitPull(id) }.getOrNull()) } }
-    fun gitPublish(id: String, onResult: (GitOpResult?) -> Unit) { viewModelScope.launch { onResult(runCatching { api.gitPublish(id) }.getOrNull()) } }
+    fun gitFetch(id: String, onResult: (GitOpResult?) -> Unit) { viewModelScope.launch { onResult(runCatching { apiFor(id)?.gitFetch(id) }.getOrNull()) } }
+    fun gitPush(id: String, onResult: (GitOpResult?) -> Unit) { viewModelScope.launch { onResult(runCatching { apiFor(id)?.gitPush(id) }.getOrNull()) } }
+    fun gitPull(id: String, onResult: (GitOpResult?) -> Unit) { viewModelScope.launch { onResult(runCatching { apiFor(id)?.gitPull(id) }.getOrNull()) } }
+    fun gitPublish(id: String, onResult: (GitOpResult?) -> Unit) { viewModelScope.launch { onResult(runCatching { apiFor(id)?.gitPublish(id) }.getOrNull()) } }
 
     data class PendingFirstMessage(val text: String, val attachments: List<String> = emptyList())
 
     private var pendingFirst: Pair<String, PendingFirstMessage>? = null
 
-    fun setPendingFirst(sessionId: String, message: PendingFirstMessage) {
-        pendingFirst = sessionId to message
-    }
+    fun setPendingFirst(sessionId: String, message: PendingFirstMessage) { pendingFirst = sessionId to message }
 
     fun consumePendingFirst(sessionId: String): PendingFirstMessage? {
         val entry = pendingFirst ?: return null
@@ -586,12 +945,15 @@ class AppViewModel(
     }
 
     fun spawn(workdir: String, name: String?, agent: String, model: String? = null) {
-        viewModelScope.launch { runCatching { api.spawn(SpawnRequest(workdir = workdir, name = name?.ifBlank { null }, agent = agent, model = model?.ifBlank { null })) } }
+        viewModelScope.launch {
+            runCatching {
+                activeApi()?.spawn(SpawnRequest(workdir = workdir, name = name?.ifBlank { null }, agent = agent, model = model?.ifBlank { null }))
+            }
+        }
     }
 
-    /** Create a session then queue the first message for [ChatScreen] to send on open.
-     *  [worktree]/[baseBranch] are only honored when the workdir is an eligible git repo
-     *  (the broker ignores them otherwise); baseBranch null → cut from the repo's current branch. */
+    /** Create a session on the ACTIVE host (the launcher's host picker sets it) then queue the first
+     *  message for [dev.supermux.android.chat.ChatScreen] to send on open. */
     suspend fun createSessionWithFirstMessage(
         workdir: String,
         agent: String,
@@ -602,7 +964,9 @@ class AppViewModel(
         baseBranch: String? = null,
         reasoningLevel: String? = null,
     ): String {
-        val validation = validatePath(workdir) ?: throw IllegalArgumentException("Could not validate path")
+        val api = activeApi() ?: throw IllegalStateException("No host connected")
+        val validation = runCatching { api.validatePath(workdir) }.getOrNull()
+            ?: throw IllegalArgumentException("Could not validate path")
         val resolvedPath = validation.path
         if (!validation.ok || resolvedPath.isNullOrBlank()) {
             throw IllegalArgumentException(validation.error ?: "Invalid working directory")
@@ -621,77 +985,61 @@ class AppViewModel(
             _sessions.value.firstOrNull { it.name == resp.name }?.id
                 ?: throw IllegalStateException("Session created but id not available yet")
         }
-        // Attachments need a session id, so they upload *after* spawn (mirrors iOS
-        // NewSessionView.spawn() and the web launcher). A file that fails to upload is skipped —
-        // the first message still sends with whatever succeeded, never blocking session creation.
+        // Uploads bind to the SAME host we spawned on (not the owner index, which the WS frame may
+        // not have populated yet). A file that fails to upload is skipped — the first message still
+        // sends with whatever succeeded.
         val attachmentIds = staged.mapNotNull { s ->
-            uploadResumable(sessionId, s.source, s.name, s.mime, s.kind) { _, _ -> }
+            runCatching { api.uploadResumable(sessionId, s.source, s.name, s.mime, s.kind) { _, _ -> }.file_id }.getOrNull()
         }
         setPendingFirst(sessionId, PendingFirstMessage(text, attachmentIds))
         return sessionId
     }
 
-    // ── Settings / Usage / Devices / Archived ────────────────────────────────
+    // ── Settings / Usage / Devices / Archived (active host) ────────────────────────
 
-    suspend fun config(): AppConfigDto? = runCatching { api.getConfig() }.getOrNull()
-    fun saveName(n: String) { viewModelScope.launch { runCatching { api.putConfig(n) } } }
+    suspend fun config(): AppConfigDto? = runCatching { activeApi()?.getConfig() }.getOrNull()
+    fun saveName(n: String) { viewModelScope.launch { runCatching { activeApi()?.putConfig(n) } } }
 
-    /** GET /models?agent= — models for the cleanup-engine + launcher pickers (no session). */
     suspend fun launcherModels(agent: String): List<ModelInfo> =
-        runCatching { api.listModels(agent).models }.getOrNull() ?: emptyList()
-
-    /** GET /reasoning-levels?agent=&model= — thinking levels for the launcher (null on failure). */
+        runCatching { activeApi()?.listModels(agent)?.models }.getOrNull() ?: emptyList()
     suspend fun launcherReasoning(agent: String, model: String?): ReasoningResponse? =
-        runCatching { api.getReasoningLevels(agent, model) }.getOrNull()
-
-    /** GET /repos/info?path= — git status for the launcher's worktree picker (null on failure). */
+        runCatching { activeApi()?.getReasoningLevels(agent, model) }.getOrNull()
     suspend fun launcherRepoInfo(workdir: String): RepoInfo? =
-        runCatching { api.getRepoInfo(workdir) }.getOrNull()
-
-    /** GET /commands/preview?agent=&workdir= — the agent's slash commands for the launcher (no
-     *  session yet). Empty on failure or blank workdir (iOS NewSessionView previewCommands parity). */
+        runCatching { activeApi()?.getRepoInfo(workdir) }.getOrNull()
     suspend fun launcherCommands(agent: String, workdir: String): List<SlashCommand> =
         if (workdir.isBlank()) emptyList()
-        else runCatching { api.previewCommands(agent, workdir).commands }.getOrNull() ?: emptyList()
+        else runCatching { activeApi()?.previewCommands(agent, workdir)?.commands }.getOrNull() ?: emptyList()
 
-    /**
-     * PUT /settings/config { voiceCleanupEngine?, voiceCleanupModel? }.
-     * A null arg leaves that field unchanged; an empty-string model ("") resets the
-     * model to the engine's default (the broker treats "" as the reset sentinel).
-     */
     fun saveVoiceCleanup(engine: String?, model: String?) {
-        viewModelScope.launch { runCatching { api.saveConfig(voiceCleanupEngine = engine, voiceCleanupModel = model) } }
+        viewModelScope.launch { runCatching { activeApi()?.saveConfig(voiceCleanupEngine = engine, voiceCleanupModel = model) } }
     }
 
-    /** Voice-cleanup glossary (shared across devices). */
-    suspend fun fetchGlossary(): List<String> = runCatching { api.fetchGlossary() }.getOrNull() ?: emptyList()
+    suspend fun fetchGlossary(): List<String> = runCatching { activeApi()?.fetchGlossary() }.getOrNull() ?: emptyList()
     suspend fun updateGlossary(terms: List<String>): List<String>? =
-        runCatching { api.updateGlossary(terms) }.getOrNull()
-    suspend fun usage(): String? = runCatching { api.usageRaw() }.getOrNull()
-    suspend fun redeemCodexReset(): CodexResetResult? =
-        runCatching { api.redeemCodexReset() }.getOrNull()
-    suspend fun curatorSettings(): CuratorSettingsResponse? = runCatching { api.getCuratorSettings() }.getOrNull()
+        runCatching { activeApi()?.updateGlossary(terms) }.getOrNull()
+    suspend fun usage(): String? = runCatching { activeApi()?.usageRaw() }.getOrNull()
+    suspend fun redeemCodexReset(): CodexResetResult? = runCatching { activeApi()?.redeemCodexReset() }.getOrNull()
+    suspend fun curatorSettings(): CuratorSettingsResponse? = runCatching { activeApi()?.getCuratorSettings() }.getOrNull()
     suspend fun saveCurator(enabled: Boolean, hour: Int, minute: Int): CuratorSettingsResponse? =
-        runCatching { api.saveCuratorSettings(enabled, hour, minute) }.getOrNull()
-    suspend fun runCuratorNow() { runCatching { api.runCuratorNow() } }
-    suspend fun devices(): List<DeviceDto> = runCatching { api.devices() }.getOrNull() ?: emptyList()
-    /** Mint a one-time pairing link for a new device; null on failure. */
-    suspend fun addDevice(name: String): AddDeviceResponse? = runCatching { api.addDevice(name) }.getOrNull()
-    fun revoke(n: String) { viewModelScope.launch { runCatching { api.revokeDevice(n) } } }
-    suspend fun archived(): List<ArchivedDto> = runCatching { api.archived() }.getOrNull() ?: emptyList()
-    fun resume(id: String) { viewModelScope.launch { runCatching { api.resume(id) } } }
+        runCatching { activeApi()?.saveCuratorSettings(enabled, hour, minute) }.getOrNull()
+    suspend fun runCuratorNow() { runCatching { activeApi()?.runCuratorNow() } }
+    suspend fun devices(): List<DeviceDto> = runCatching { activeApi()?.devices() }.getOrNull() ?: emptyList()
+    suspend fun addDevice(name: String): AddDeviceResponse? = runCatching { activeApi()?.addDevice(name) }.getOrNull()
+    fun revoke(n: String) { viewModelScope.launch { runCatching { activeApi()?.revokeDevice(n) } } }
+    suspend fun archived(): List<ArchivedDto> = runCatching { activeApi()?.archived() }.getOrNull() ?: emptyList()
+    fun resume(id: String) { viewModelScope.launch { runCatching { activeApi()?.resume(id) } } }
 
     // ── Assistant ──────────────────────────────────────────────────────────────
 
-    /** (paName, soul.md) loaded concurrently; null if the config fetch fails. */
     suspend fun assistantLoad(): Pair<String, String>? = coroutineScope {
+        val api = activeApi() ?: return@coroutineScope null
         val cfg = async { runCatching { api.getConfig() }.getOrNull() }
         val soul = async { runCatching { api.getSoul() }.getOrNull() ?: "" }
         cfg.await()?.let { it.paName to soul.await() }
     }
 
-    /** Save paName via saveConfig (NOT the legacy putConfig), then soul; bool = putSoul success. */
     suspend fun assistantSave(paName: String, soul: String): Boolean {
+        val api = activeApi() ?: return false
         runCatching { api.saveConfig(paName = paName) }
         return runCatching { api.putSoul(soul) }.getOrDefault(false)
     }
@@ -699,93 +1047,80 @@ class AppViewModel(
     // ── Agents ─────────────────────────────────────────────────────────────────
 
     suspend fun agentStatuses(): List<AgentInstallStatus> =
-        runCatching { api.agentStatuses() }.getOrNull() ?: emptyList()
+        runCatching { activeApi()?.agentStatuses() }.getOrNull() ?: emptyList()
     suspend fun agentStartLogin(kind: String): AgentLoginState? =
-        runCatching { api.startAgentLogin(kind) }.getOrNull()
+        runCatching { activeApi()?.startAgentLogin(kind) }.getOrNull()
     suspend fun agentPollLogin(kind: String): AgentLoginState? =
-        runCatching { api.agentLoginState(kind) }.getOrNull()
+        runCatching { activeApi()?.agentLoginState(kind) }.getOrNull()
     fun agentSendCode(kind: String, code: String) {
-        viewModelScope.launch { runCatching { api.sendAgentLoginCode(kind, code) } }
+        viewModelScope.launch { runCatching { activeApi()?.sendAgentLoginCode(kind, code) } }
     }
     fun agentCancelLogin(kind: String) {
-        viewModelScope.launch { runCatching { api.cancelAgentLogin(kind) } }
+        viewModelScope.launch { runCatching { activeApi()?.cancelAgentLogin(kind) } }
     }
-    /** Routes the secret to the right saveConfig field by agent kind. */
     fun agentSaveSecret(kind: String, value: String) {
         viewModelScope.launch {
             runCatching {
                 when (kind) {
-                    "claude" -> api.saveConfig(claudeOauthToken = value)
-                    "codex" -> api.saveConfig(codexApiKey = value)
-                    "cursor" -> api.saveConfig(cursorApiKey = value)
+                    "claude" -> activeApi()?.saveConfig(claudeOauthToken = value)
+                    "codex" -> activeApi()?.saveConfig(codexApiKey = value)
+                    "cursor" -> activeApi()?.saveConfig(cursorApiKey = value)
                 }
             }
         }
     }
     suspend fun openCodeProviders(): List<OpenCodeProvider> =
-        runCatching { api.openCodeProviders() }.getOrNull() ?: emptyList()
+        runCatching { activeApi()?.openCodeProviders() }.getOrNull() ?: emptyList()
     fun openCodeSetKey(providerId: String, key: String) {
-        viewModelScope.launch { runCatching { api.setOpenCodeKey(providerId, key) } }
+        viewModelScope.launch { runCatching { activeApi()?.setOpenCodeKey(providerId, key) } }
     }
     suspend fun openCodeStartOAuth(providerId: String, method: Int): OpenCodeOAuthStart? =
-        runCatching { api.startOpenCodeOAuth(providerId, method) }.getOrNull()
+        runCatching { activeApi()?.startOpenCodeOAuth(providerId, method) }.getOrNull()
     fun openCodeFinishOAuth(providerId: String, method: Int, code: String) {
-        viewModelScope.launch { runCatching { api.finishOpenCodeOAuth(providerId, method, code) } }
+        viewModelScope.launch { runCatching { activeApi()?.finishOpenCodeOAuth(providerId, method, code) } }
     }
 
     // ── Editor / LSP ───────────────────────────────────────────────────────────
-    // lspInstallLog / lspInstallDone StateFlows already exist (Phase 2, above) — the
-    // Editor LSP section collects them directly for the live install log.
 
     suspend fun lspLoad(): List<LspServer> =
-        runCatching { api.getEditorSettings().lsp.servers }.getOrNull() ?: emptyList()
+        runCatching { activeApi()?.getEditorSettings()?.lsp?.servers }.getOrNull() ?: emptyList()
     suspend fun lspToggle(id: String, enabled: Boolean): List<LspServer>? =
-        runCatching { api.setLspEnabled(id, enabled).lsp.servers }.getOrNull()
+        runCatching { activeApi()?.setLspEnabled(id, enabled)?.lsp?.servers }.getOrNull()
     suspend fun lspInstall(id: String): LspInstallResult? =
-        runCatching { api.installEditorLsp(id) }.getOrNull()
+        runCatching { activeApi()?.installEditorLsp(id) }.getOrNull()
     suspend fun lspAddCustom(a: AddCustomLspArgs): LspMutationResult? =
         runCatching {
-            api.addCustomEditorLsp(a.id, a.label, a.command, a.extensions, a.args, a.languageId, a.installCmd)
+            activeApi()?.addCustomEditorLsp(a.id, a.label, a.command, a.extensions, a.args, a.languageId, a.installCmd)
         }.getOrNull()
     suspend fun lspRemoveCustom(id: String): LspMutationResult? =
-        runCatching { api.removeCustomEditorLsp(id) }.getOrNull()
+        runCatching { activeApi()?.removeCustomEditorLsp(id) }.getOrNull()
 
     // ── Git hosting (forges) ─────────────────────────────────────────────────────
 
-    suspend fun forgesLoad(): ForgeConnectionsResponse? = runCatching { api.listForges() }.getOrNull()
+    suspend fun forgesLoad(): ForgeConnectionsResponse? = runCatching { activeApi()?.listForges() }.getOrNull()
     suspend fun forgeAdd(kind: String, token: String, host: String?, transport: String): Boolean =
-        runCatching { api.addForge(kind, token, host, transport); true }.getOrDefault(false)
+        runCatching { activeApi()?.addForge(kind, token, host, transport); true }.getOrDefault(false)
     suspend fun forgeImport(kind: String, transport: String): Boolean =
-        runCatching { api.importForge(kind, transport); true }.getOrDefault(false)
-    fun forgeRemove(id: String) { viewModelScope.launch { runCatching { api.removeForge(id) } } }
+        runCatching { activeApi()?.importForge(kind, transport); true }.getOrDefault(false)
+    fun forgeRemove(id: String) { viewModelScope.launch { runCatching { activeApi()?.removeForge(id) } } }
 
     // ── System ─────────────────────────────────────────────────────────────────
 
-    suspend fun updateStatus(): UpdateStatus? = runCatching { api.updateStatus() }.getOrNull()
-    fun restartBroker() { viewModelScope.launch { runCatching { api.restartBroker() } } }
+    suspend fun updateStatus(): UpdateStatus? = runCatching { activeApi()?.updateStatus() }.getOrNull()
+    fun restartBroker() { viewModelScope.launch { runCatching { activeApi()?.restartBroker() } } }
 
-    suspend fun fileBytes(fileId: String): ByteArray? = api.fileBytes(fileId)
+    suspend fun fileBytes(fileId: String): ByteArray? = activeApi()?.fileBytes(fileId)
     suspend fun archivedLogs(sessionId: String): List<LogEntry> =
-        runCatching { api.archivedLogs(sessionId) }.getOrNull() ?: emptyList()
+        runCatching { (apiFor(sessionId) ?: activeApi())?.archivedLogs(sessionId) }.getOrNull() ?: emptyList()
 
-    /**
-     * Lazily fetch a session's transcript when we don't already have it. The WS `Snapshot`
-     * (sent on connect) seeds [messages] for every session live at connect time, and
-     * `MessageAppend` keeps them current — but a session resumed from archive arrives via a
-     * `SessionAdded` frame, which carries NO history, so its transcript stays empty until the
-     * next reconnect/snapshot (e.g. an app restart). Calling this on chat-open closes that gap.
-     * Web/iOS parity: web ChatView.loadMessages / iOS BrokerSession.ensureMessagesLoaded fetch
-     * GET /sessions/:id/messages (the same endpoint [archivedLogs] hits) when the store has
-     * nothing for the session. No-op when the snapshot already populated it.
-     */
     fun ensureMessagesLoaded(sessionId: String) {
-        if (_messages.value[sessionId]?.isNotEmpty() == true) return
+        val key = ownerKey(sessionId)
+        if (msgByKey[key]?.isNotEmpty() == true) return
         viewModelScope.launch {
             val fetched = archivedLogs(sessionId)
-            // Re-check after the await: a live MessageAppend / optimistic send / fresh snapshot
-            // may have populated the buffer while the fetch was in flight — don't clobber it.
-            if (fetched.isNotEmpty() && _messages.value[sessionId]?.isNotEmpty() != true) {
-                _messages.update { it + (sessionId to fetched) }
+            if (fetched.isNotEmpty() && msgByKey[key]?.isNotEmpty() != true) {
+                msgByKey[key] = fetched
+                publishSessionState()
             }
         }
     }
@@ -793,101 +1128,79 @@ class AppViewModel(
     // ── Editor filesystem ──────────────────────────────────────────────────────
 
     suspend fun fsList(sessionId: String, path: String): List<FsEntry> =
-        runCatching { api.fsList(sessionId, path) }.getOrNull() ?: emptyList()
+        runCatching { apiFor(sessionId)?.fsList(sessionId, path) }.getOrNull() ?: emptyList()
     suspend fun fsRead(sessionId: String, path: String): Result<String> =
-        runCatching { api.fsRead(sessionId, path) }
+        runCatching { apiFor(sessionId)?.fsRead(sessionId, path) ?: error("host offline") }
     suspend fun fsWrite(sessionId: String, path: String, content: String): Boolean =
-        runCatching { api.fsWrite(sessionId, path, content) }.getOrDefault(false)
+        runCatching { apiFor(sessionId)?.fsWrite(sessionId, path, content) ?: false }.getOrDefault(false)
     suspend fun fsSearch(sessionId: String, q: String): List<FsSearchResult> =
-        runCatching { api.fsSearch(sessionId, q) }.getOrNull() ?: emptyList()
+        runCatching { apiFor(sessionId)?.fsSearch(sessionId, q) }.getOrNull() ?: emptyList()
 
     // ── Editor diff + inline code-review ───────────────────────────────────────
-    // HTTP wrappers (parity with iOS BrokerSession review*); the DiffView pane drives
-    // these via the lambdas threaded through ChatScreen → EditorPanel.
 
-    /** GET /sessions/<id>/fs/diff → repos + existing review comments (null on failure).
-     *  [base] is the diff-base spec ("session-start"/"head"/"commit:<sha>"/"branch:<name>";
-     *  null = broker default). */
     suspend fun fsDiff(sessionId: String, base: String? = null): FsDiffResult? =
-        runCatching { api.fsDiff(sessionId, base) }.getOrNull()
-
-    /** GET /sessions/<id>/fs/refs → branches + recent commits per repo (null on failure). */
+        runCatching { apiFor(sessionId)?.fsDiff(sessionId, base) }.getOrNull()
     suspend fun fsRefs(sessionId: String): FsRefsResult? =
-        runCatching { api.fsRefs(sessionId) }.getOrNull()
-
-    /** POST a new inline review comment → the created comment (null on failure). */
+        runCatching { apiFor(sessionId)?.fsRefs(sessionId) }.getOrNull()
     suspend fun reviewAddComment(sessionId: String, body: AddCommentBody): ReviewComment? =
-        runCatching { api.reviewAddComment(sessionId, body) }.getOrNull()
-
-    /** PATCH a comment to status="resolved" (iOS reviewResolve parity). */
+        runCatching { apiFor(sessionId)?.reviewAddComment(sessionId, body) }.getOrNull()
     suspend fun reviewResolve(sessionId: String, commentId: String): Boolean =
-        runCatching { api.reviewUpdateComment(sessionId, commentId, UpdateCommentBody(status = "resolved")) }
+        runCatching { apiFor(sessionId)?.reviewUpdateComment(sessionId, commentId, UpdateCommentBody(status = "resolved")) ?: false }
             .getOrDefault(false)
-
-    /** POST /review/submit → delivers open comments to the agent (null on failure). */
     suspend fun reviewSubmit(sessionId: String): ReviewSubmitResult? =
-        runCatching { api.reviewSubmit(sessionId) }.getOrNull()
+        runCatching { apiFor(sessionId)?.reviewSubmit(sessionId) }.getOrNull()
 
     // ── Editor lifecycle + LSP control-plane senders ───────────────────────────
-    // editor_open/close start/stop the broker fs-watcher (so fs_changed fires) and the
-    // lsp_* frames drive code-intelligence. Inbound frames are already folded into
-    // lspStatus / lspRpc / fsChanges flows above; these are the outbound half.
 
     fun editorOpen(sessionId: String) {
-        viewModelScope.launch { runCatching { client.send(ClientFrame.EditorOpen(sessionId)) } }
+        viewModelScope.launch { runCatching { clientFor(sessionId)?.send(ClientFrame.EditorOpen(sessionId)) } }
     }
     fun editorClose(sessionId: String) {
-        viewModelScope.launch { runCatching { client.send(ClientFrame.EditorClose(sessionId)) } }
+        viewModelScope.launch { runCatching { clientFor(sessionId)?.send(ClientFrame.EditorClose(sessionId)) } }
     }
     fun lspStatusQuery(sessionId: String, path: String) {
-        viewModelScope.launch { runCatching { client.send(ClientFrame.LspStatusQuery(sessionId, path)) } }
+        viewModelScope.launch { runCatching { clientFor(sessionId)?.send(ClientFrame.LspStatusQuery(sessionId, path)) } }
     }
     fun lspOpen(sessionId: String, serverId: String) {
-        viewModelScope.launch { runCatching { client.send(ClientFrame.LspOpen(sessionId, serverId)) } }
+        viewModelScope.launch { runCatching { clientFor(sessionId)?.send(ClientFrame.LspOpen(sessionId, serverId)) } }
     }
     fun lspRpcOut(sessionId: String, serverId: String, message: String) {
-        viewModelScope.launch { runCatching { client.send(ClientFrame.LspRpcOut(sessionId, serverId, message)) } }
+        viewModelScope.launch { runCatching { clientFor(sessionId)?.send(ClientFrame.LspRpcOut(sessionId, serverId, message)) } }
     }
     fun lspClose(sessionId: String, serverId: String) {
-        viewModelScope.launch { runCatching { client.send(ClientFrame.LspClose(sessionId, serverId)) } }
+        viewModelScope.launch { runCatching { clientFor(sessionId)?.send(ClientFrame.LspClose(sessionId, serverId)) } }
     }
 
-    suspend fun listProjects(): List<String> = runCatching { api.listProjects() }.getOrNull() ?: emptyList()
-    suspend fun validatePath(path: String): PathValidation? = runCatching { api.validatePath(path) }.getOrNull()
+    suspend fun listProjects(): List<String> = runCatching { activeApi()?.listProjects() }.getOrNull() ?: emptyList()
+    suspend fun validatePath(path: String): PathValidation? = runCatching { activeApi()?.validatePath(path) }.getOrNull()
 
-    // ── Git hosting / forges (project-picker omnibox; mirrors iOS BrokerSession) ────
-    /** Configured GitHub/GitLab connections (empty on any failure). */
+    // ── Git hosting / forges (project-picker omnibox) ────
     suspend fun listForges(): List<ForgeConnection> =
-        runCatching { api.listForges().connections }.getOrNull() ?: emptyList()
-
-    /** Debounced repo search across all connections (empty on any failure). */
+        runCatching { activeApi()?.listForges()?.connections }.getOrNull() ?: emptyList()
     suspend fun searchForge(query: String): List<RemoteRepo> =
-        runCatching { api.searchForge(query).repos }.getOrNull() ?: emptyList()
-
-    /** Clone a remote repo → local checkout path, or null on failure. */
+        runCatching { activeApi()?.searchForge(query)?.repos }.getOrNull() ?: emptyList()
     suspend fun cloneForge(connectionId: String, owner: String, name: String): String? =
-        runCatching { api.cloneForge(connectionId, owner, name).localPath }.getOrNull()?.ifBlank { null }
-
-    /** `git init` a fresh local repo → its path, or null on failure. */
+        runCatching { activeApi()?.cloneForge(connectionId, owner, name)?.localPath }.getOrNull()?.ifBlank { null }
     suspend fun createLocalRepo(name: String): String? =
-        runCatching { api.createLocalRepo(name).localPath }.getOrNull()?.ifBlank { null }
-
-    /** Create a remote repo on the forge then clone it → local path, or null on failure. */
+        runCatching { activeApi()?.createLocalRepo(name)?.localPath }.getOrNull()?.ifBlank { null }
     suspend fun createForge(connectionId: String, name: String): String? =
-        runCatching { api.createForge(connectionId, name).localPath }.getOrNull()?.ifBlank { null }
+        runCatching { activeApi()?.createForge(connectionId, name)?.localPath }.getOrNull()?.ifBlank { null }
 
-    // ── Proxies ──────────────────────────────────────────────────────────────
+    // ── Proxies (active host) ──────────────────────────────────────────────────
 
-    suspend fun proxies(): List<ProxyDto> = runCatching { api.proxies() }.getOrNull() ?: emptyList()
+    suspend fun proxies(): List<ProxyDto> = runCatching { activeApi()?.proxies() }.getOrNull() ?: emptyList()
     fun createProxy(sessionName: String, port: Int, domain: String?) {
-        viewModelScope.launch { runCatching { api.createProxy(sessionName, port, domain) } }
+        viewModelScope.launch { runCatching { activeApi()?.createProxy(sessionName, port, domain) } }
     }
     fun setProxyPublic(domain: String, isPublic: Boolean) {
-        viewModelScope.launch { runCatching { api.setProxyPublic(domain, isPublic) } }
+        viewModelScope.launch { runCatching { activeApi()?.setProxyPublic(domain, isPublic) } }
     }
     fun removeProxy(domain: String) {
-        viewModelScope.launch { runCatching { api.removeProxy(domain) } }
+        viewModelScope.launch { runCatching { activeApi()?.removeProxy(domain) } }
     }
 
-    override fun onCleared() { http.close() }
+    override fun onCleared() {
+        hostConns.closeAll()
+        http.close()
+    }
 }

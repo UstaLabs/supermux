@@ -1,0 +1,132 @@
+// Ported from apps/android/src/main/kotlin/dev/supermux/android/pairing/PairingViewModel.kt —
+// keep in sync (state machine + probe/persist semantics). Desktop swaps the androidx ViewModel
+// for a plain class driven by a caller-owned CoroutineScope (same seam DesktopAppState uses),
+// and SecureTokenStore for the real on-disk DesktopTokenStore.
+package dev.supermux.desktop.pairing
+
+import dev.supermux.desktop.auth.DesktopTokenStore
+import dev.supermux.net.BrokerApi
+import dev.supermux.net.PairUrl
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.cio.CIO
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+
+/** UI state for the onboarding/pairing flow. */
+sealed interface PairingUiState {
+    data object Idle : PairingUiState
+    data object Validating : PairingUiState
+    /** Validated against the broker; awaiting the trust-on-first-connect confirmation. */
+    data class Confirm(val pair: PairUrl, val deviceName: String) : PairingUiState
+    data class Error(val message: String) : PairingUiState
+    /** Persisted; the gate can flip to the live app. */
+    data object Paired : PairingUiState
+}
+
+/**
+ * Owns the first-connect pairing flow: parse an input (URL / deep link / manual
+ * host+token) → validate it against the broker via the native `/pair.json` (with a
+ * `/me` fallback for the resolved device name) → on the user's TOFU confirm, persist
+ * BOTH the base URL and token into [DesktopTokenStore].
+ *
+ * Mirrors iOS/Android behavior (same endpoints, same URL parsing, same store contract)
+ * in a native-M3 presentation. Validation uses a throwaway [BrokerApi] built with the
+ * candidate base+token; nothing is persisted until [confirmPersist].
+ *
+ * @param probeOverride injectable network seam (mirrors [dev.supermux.desktop.state.DesktopAppState]'s
+ *   `sendFrameOverride`/`apiOverride`) — tests inject a fake to assert state transitions without a
+ *   live broker. Defaults to the real `/pair.json` → `/me` probe over a throwaway [HttpClient].
+ */
+class PairingState(
+    private val store: DesktopTokenStore,
+    private val scope: CoroutineScope,
+    private val probeOverride: (suspend (PairUrl) -> String?)? = null,
+) {
+    private val http = HttpClient(CIO)
+
+    private val _state = MutableStateFlow<PairingUiState>(PairingUiState.Idle)
+    val state: StateFlow<PairingUiState> = _state.asStateFlow()
+
+    /** Last-known broker base URL (e.g. from a prior partial pairing) — the deep-link / bare-token fallback. */
+    fun fallbackBaseUrl(): String? = store.loadBaseUrl()
+
+    fun resetError() {
+        if (_state.value is PairingUiState.Error) _state.value = PairingUiState.Idle
+    }
+
+    /**
+     * Parse [input] and validate it against the broker. On success transitions to
+     * [PairingUiState.Confirm] (does NOT persist — that waits for the TOFU confirm).
+     * On any failure transitions to [PairingUiState.Error].
+     */
+    fun validate(input: String, fallbackBase: String? = fallbackBaseUrl()) {
+        val parsed = PairUrl.parse(input, fallbackBase)
+        if (parsed == null) {
+            _state.value = PairingUiState.Error(
+                "Couldn't read a token from that — paste the full pairing link (it contains ?t=…).",
+            )
+            return
+        }
+        validatePair(parsed)
+    }
+
+    /** Validate an already-parsed [PairUrl]. */
+    fun validatePair(parsed: PairUrl) {
+        _state.value = PairingUiState.Validating
+        scope.launch {
+            val name = probeDeviceName(parsed)
+            _state.value = if (name != null) {
+                PairingUiState.Confirm(parsed, name)
+            } else {
+                PairingUiState.Error(
+                    "That broker rejected the token. Check the host is reachable and the link is current.",
+                )
+            }
+        }
+    }
+
+    /**
+     * Validate against the broker and return the resolved device name, or null when the
+     * token/host is bad. Tries `/pair.json` first (the purpose-built native shim), then
+     * `/me`. [BrokerApi.decode] surfaces non-2xx/transport failures as CancellationException,
+     * so a bad token simply yields null here (caught below) rather than crashing.
+     */
+    private suspend fun probeDeviceName(p: PairUrl): String? {
+        probeOverride?.let { return it(p) }
+        val candidate = BrokerApi(p.baseUrl, p.token, http)
+        runCatching { candidate.pairJson(p.token) }.getOrNull()
+            ?.takeIf { it.token.isNotEmpty() }
+            ?.let { return it.name.ifBlank { "this broker" } }
+        return runCatching { candidate.me() }.getOrNull()
+            ?.takeIf { it.paired }
+            ?.let { it.device?.ifBlank { "this broker" } ?: "this broker" }
+    }
+
+    /** TOFU confirm: persist host+token atomically, then mark Paired. */
+    fun confirmPersist(p: PairUrl) {
+        store.saveBaseUrl(p.baseUrl)
+        store.save(p.token)
+        _state.value = PairingUiState.Paired
+    }
+
+    /** Dismiss the TOFU dialog without persisting — back to entry. */
+    fun cancelConfirm() {
+        _state.value = PairingUiState.Idle
+    }
+
+    /**
+     * Release the throwaway probe [HttpClient]. Counterpart of PairingViewModel.onCleared.
+     *
+     * Semantics (covered by PairingStateTest): idempotent (ktor's close() is safe to call
+     * repeatedly), safe before any [validate], and does NOT reset the state machine or cancel
+     * the caller-owned [scope] — a [validate] after close still parses and (via a probe seam)
+     * transitions normally; only a real network probe would then fail, surfacing as the usual
+     * [PairingUiState.Error].
+     */
+    fun close() {
+        http.close()
+    }
+}

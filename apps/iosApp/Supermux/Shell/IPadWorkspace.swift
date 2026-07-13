@@ -13,10 +13,11 @@ import Shared
 /// `safeAreaInset`, not the nav bar). Navigation to management pages is driven by the `route`
 /// binding via `RootView`'s `.navigationDestination`, so it keeps working with the bar hidden.
 struct IPadWorkspace: View {
-    let broker: BrokerSession
+    let fleet: Fleet
     @Binding var selected: String?
     @Binding var route: RootView.NavRoute?
     @Bindable var layout: WorkspaceLayoutModel
+    var onAddHost: () -> Void = {}
 
     // Session-action state shared with ChatPane (slash /rename, /kill).
     @State private var showRename = false
@@ -33,13 +34,19 @@ struct IPadWorkspace: View {
     // `selected` is populated asynchronously (RootView's `.task(id: broker.synced)`), well after
     // onAppear. This one-shot guard defers the hooks until a session is selected, then runs them once.
     @State private var didApplyEnvHooks = false
+    // Which host `chrome` was built for (its baseURL), so switching to a session on a DIFFERENT
+    // host rebuilds the chrome against the owning broker rather than reusing the wrong one.
+    @State private var chromeHostKey: String?
 
-    private var session: SessionInfo? { broker.sessions.first { $0.id == selected } }
+    private var session: SessionInfo? { fleet.sessions.first { $0.id == selected } }
+    /// The selected session's OWNING host (or the active host when nothing is selected). Everything
+    /// in the detail column drives this concrete broker; the sidebar renders the merged fleet.
+    private var broker: BrokerSession? { selected.flatMap { fleet.broker(for: $0) } ?? fleet.activeBroker }
 
     /// The id of the current session's newest running display stream, or nil. Drives the
     /// Display column's auto-open (PWA `SessionDisplayPanel` parity): nil→non-nil = a stream
     /// just went live. Reading `broker.runningDisplay` tracks `broker.displays` for onChange.
-    private var liveDisplayId: String? { session.flatMap { broker.runningDisplay(for: $0.name)?.id } }
+    private var liveDisplayId: String? { session.flatMap { s in broker?.runningDisplay(for: s.name)?.id } }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -54,10 +61,10 @@ struct IPadWorkspace: View {
         .alert("Rename session", isPresented: $showRename) {
             TextField("Name", text: $renameText)
             Button("Cancel", role: .cancel) {}
-            Button("Rename") { if let s = session { broker.rename(s.id, to: renameText) } }
+            Button("Rename") { if let s = session, let b = broker { b.rename(s.id, to: renameText) } }
         }
         .confirmationDialog("Kill \u{201C}\(session?.name ?? "")\u{201D}?", isPresented: $showKillConfirm, titleVisibility: .visible) {
-            Button("Kill session", role: .destructive) { if let s = session { broker.kill(s.id) } }
+            Button("Kill session", role: .destructive) { if let s = session, let b = broker { b.kill(s.id) } }
             Button("Cancel", role: .cancel) {}
         }
         .onAppear { syncChrome(); applyEnvHooksIfReady() }
@@ -75,7 +82,7 @@ struct IPadWorkspace: View {
             layout.setPanes(v, for: s.id)
         }
         // A tapped file path in the selected session's transcript opens its editor column.
-        .onChange(of: broker.editorFocus) { _, f in
+        .onChange(of: broker?.editorFocus) { _, f in
             guard let f, let s = session, f.sessionId == s.id else { return }
             var v = layout.panes(for: s.id)
             v.editorOpen = true
@@ -83,11 +90,15 @@ struct IPadWorkspace: View {
         }
     }
 
-    /// Ensure `chrome` exists for the selected session and (re)load its git/proxy state.
-    /// Reuses one chrome across switches; `load(for:)` is idempotent per session id.
+    /// Ensure `chrome` exists for the selected session and (re)load its git/proxy state. Reuses one
+    /// chrome across switches ON THE SAME HOST; rebuilds it when the selected session lives on a
+    /// different host (so the chrome's broker matches the session). `load(for:)` is idempotent per id.
     private func syncChrome() {
-        guard let s = session else { return }
-        if chrome == nil { chrome = SessionChrome(broker: broker, session: s) }
+        guard let s = session, let b = broker else { return }
+        if chrome == nil || chromeHostKey != b.baseURL {
+            chrome = SessionChrome(broker: b, session: s)
+            chromeHostKey = b.baseURL
+        }
         chrome?.load(for: s)
     }
 
@@ -95,15 +106,16 @@ struct IPadWorkspace: View {
     /// list at `sidebarWidth` followed by a drag-resizable divider. ⌘B toggles `sidebarCollapsed`.
     @ViewBuilder private var sidebar: some View {
         if layout.sidebarCollapsed {
-            SessionsRailView(broker: broker, selected: $selected,
+            SessionsRailView(fleet: fleet, selected: $selected,
                              onExpand: { layout.sidebarCollapsed = false },
                              onNewSession: { route = .newSession })
                 .frame(width: WorkspaceLayoutModel.B.rail)
             Divider()
         } else {
-            SessionsListView(broker: broker, selected: $selected,
+            SessionsListView(fleet: fleet, selected: $selected,
                              onNewSession: { route = .newSession },
-                             onArchived: { route = .archived })
+                             onArchived: { route = .archived },
+                             onAddHost: onAddHost)
                 .frame(width: CGFloat(layout.sidebarWidth))
             sidebarDivider
         }
@@ -136,10 +148,10 @@ struct IPadWorkspace: View {
     @ViewBuilder private var detail: some View {
         // The header + finish dialogs need a non-nil chrome bound for two-way state, so the
         // detail content lives in `WorkspaceDetail` and is rendered only once chrome exists.
-        if let s = session, let chrome {
-            WorkspaceDetail(broker: broker, session: s, layout: layout, chrome: chrome, route: $route,
+        if let s = session, let b = broker, let chrome {
+            WorkspaceDetail(broker: b, session: s, layout: layout, chrome: chrome, route: $route,
                             showRename: $showRename, renameText: $renameText,
-                            showKillConfirm: $showKillConfirm)
+                            showKillConfirm: $showKillConfirm, onAddHost: onAddHost)
         } else {
             ContentUnavailableView("Pick a session", systemImage: "bubble.left.and.bubble.right")
         }
@@ -203,6 +215,7 @@ private struct WorkspaceDetail: View {
     @Binding var showRename: Bool
     @Binding var renameText: String
     @Binding var showKillConfirm: Bool
+    var onAddHost: () -> Void = {}
     @State private var finishSheet = false
     #if os(macOS)
     @Environment(\.openSettings) private var openSettings
@@ -315,6 +328,7 @@ private struct WorkspaceDetail: View {
                 }
             }
             Section {
+                Button { onAddHost() } label: { Label("Add host", systemImage: "plus.rectangle.on.rectangle") }
                 Button { route = .personalAssistants } label: { Label("Assistants", systemImage: "person.2") }
                 Button { route = .archived } label: { Label("Archived", systemImage: "archivebox") }
                 Button { route = .usage } label: { Label("Usage", systemImage: "chart.bar") }

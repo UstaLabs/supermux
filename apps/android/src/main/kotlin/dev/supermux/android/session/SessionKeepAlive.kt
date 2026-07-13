@@ -98,6 +98,12 @@ fun SessionKeepAlivePhoneHost(
     vm: AppViewModel,
     onNavigate: (String) -> Unit,
     onOpenDisplays: () -> Unit,
+    // Multi-host (spec §5): threaded straight to the phone SessionListScreen (chips + badges).
+    hosts: List<dev.supermux.android.host.HostView> = emptyList(),
+    sessionHost: Map<String, String> = emptyMap(),
+    hostFilter: String? = null,
+    onHostFilter: (String?) -> Unit = {},
+    onAddHost: () -> Unit = {},
 ) {
     SharedTransitionLayout {
         Box(Modifier.fillMaxSize()) {
@@ -176,6 +182,13 @@ fun SessionKeepAlivePhoneHost(
                             }
                         },
                         onMute = { id, m -> vm.setMute(id, m) },
+                        hosts = hosts,
+                        sessionHost = sessionHost,
+                        hostFilter = hostFilter,
+                        onHostFilter = onHostFilter,
+                        onAddHost = onAddHost,
+                        onRenameHost = { id, name -> vm.renameHost(id, name) },
+                        onForgetHost = { id -> vm.forgetHost(id) },
                         sharedScope = this@SharedTransitionLayout,
                         animScope = this,
                     )

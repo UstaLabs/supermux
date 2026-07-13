@@ -538,10 +538,16 @@ fun ChatScreen(
         }
 
         var openedPanels by remember { mutableStateOf(setOf(SessionPanel.Chat)) }
+        // The just-tapped panel must compose in the SAME frame: openedPanels only catches up an
+        // effect later, and that in-between frame — old panel already alpha-0, new panel not yet
+        // composed — draws the bare background. On the editor's first open the synchronous WebView
+        // creation freezes that blank frame on screen for seconds (the "whole page goes black"
+        // flash). openedPanels still persists visited panels for keep-alive after switching away.
+        val shownPanels = openedPanels + activePanel
         LaunchedEffect(activePanel) { openedPanels = openedPanels + activePanel }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (SessionPanel.Chat in openedPanels) {
+            if (SessionPanel.Chat in shownPanels) {
                 ChatPanel(
                     session = session,
                     messages = messages,
@@ -576,7 +582,7 @@ fun ChatScreen(
                     modifier = Modifier.keepAlivePanel(activePanel == SessionPanel.Chat),
                 )
             }
-            if (SessionPanel.Native in openedPanels) {
+            if (SessionPanel.Native in shownPanels) {
                 val cat = connectAgentTerminal
                 Box(Modifier.keepAlivePanel(activePanel == SessionPanel.Native)) {
                     if (cat != null) {
@@ -594,7 +600,7 @@ fun ChatScreen(
                     }
                 }
             }
-            if (SessionPanel.Editor in openedPanels) {
+            if (SessionPanel.Editor in shownPanels) {
                 EditorPanel(
                     sessionId = session.id,
                     workdir = session.workdir,
@@ -622,7 +628,7 @@ fun ChatScreen(
                     modifier = Modifier.keepAlivePanel(activePanel == SessionPanel.Editor),
                 )
             }
-            if (SessionPanel.Terminal in openedPanels) {
+            if (SessionPanel.Terminal in shownPanels) {
                 val ct = connectTerminal
                 Box(Modifier.keepAlivePanel(activePanel == SessionPanel.Terminal)) {
                     if (ct != null) {
@@ -634,7 +640,7 @@ fun ChatScreen(
                     }
                 }
             }
-            if (SessionPanel.Display in openedPanels) {
+            if (SessionPanel.Display in shownPanels) {
                 val ld = listDisplays
                 val cScrcpy = connectScrcpy
                 val cVnc = connectVnc

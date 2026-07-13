@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # scripts/mac-app-run.sh — build + relaunch the macOS app on the remote Mac for feel-tests.
-#   usage: scripts/mac-app-run.sh <pair-token> [broker-base]
+#   usage: scripts/mac-app-run.sh [pair-token] [broker-base]
 #   (default broker-base: http://100.84.92.82:9898 — this host's Tailscale IP)
 #
 # Syncs this worktree to the remote Mac, compiles SupermuxMac UNSIGNED, re-signs
-# it ad-hoc with a minimal sandbox-only entitlements plist, clears stale
+# it ad-hoc for direct distribution (no App Sandbox), clears stale
 # supermux keychain items from any prior differently-signed run, then launches
 # via `open --env` against the live broker. Reports the launched PID as proof
 # of a live process, best-effort tails the system log for the app, and takes a
@@ -14,12 +14,11 @@
 # are baked in here (both postdate — and correct — an earlier draft of this
 # script that this file supersedes):
 #
-#  - Ad-hoc launch recipe (Task 12 finding): the committed SupermuxMac.entitlements
-#    carries aps-environment + keychain-access-groups, which NO ad-hoc signature
-#    can satisfy — a build with CODE_SIGN_IDENTITY="-" FAILS AT SIGNING (not at
-#    compiling). So we compile with CODE_SIGNING_ALLOWED=NO (unsigned) and
-#    re-sign afterward with a minimal plist (app-sandbox, network.client,
-#    device.audio-input only). Relatedly, a plain ssh direct-exec of the binary
+#  - Direct-host launch recipe: the committed release entitlements carry APNs +
+#    keychain groups, which an ad-hoc signature cannot satisfy. Compile unsigned,
+#    then re-sign without release entitlements. The direct build intentionally has
+#    NO App Sandbox because it supervises broker/tmux/agent processes and ~/.mux.
+#    Relatedly, a plain ssh direct-exec of the binary
 #    starts the process but never mounts the SwiftUI scene (no Aqua session) —
 #    no UI, no WebSocket — so launch goes through `open --env` instead.
 #
@@ -29,7 +28,7 @@
 #    is safe — the app regenerates both, ACL'd to the new signature.
 set -euo pipefail
 
-TOKEN="${1:?usage: mac-app-run.sh <pair-token> [broker-base] [KEY=VAL ...]}"
+TOKEN="${1:-}"
 BASE="${2:-http://100.84.92.82:9898}"
 # Any further args are extra env for the app (the SM_* debug hooks: SM_SNAPSHOT=1,
 # SM_OPEN_SHEET=settings, SM_IPAD_OPEN_PANES=editor,terminal, …), appended to `open --env`.
@@ -52,25 +51,10 @@ ssh mac 'source ~/ios-build-env.sh; cd ~/supermux-mac/apps/iosApp && xcodegen ge
   xcodebuild -scheme SupermuxMac -destination "platform=macOS,arch=arm64" \
     -derivedDataPath build/dd-mac CODE_SIGNING_ALLOWED=NO build'
 
-step "[3/7] re-sign ad-hoc with minimal sandbox entitlements (app-sandbox, network.client, device.audio-input)"
+step "[3/7] re-sign ad-hoc for direct hosting (intentionally unsandboxed)"
 ssh mac 'set -e
 APP=~/supermux-mac/apps/iosApp/build/dd-mac/Build/Products/Debug/Supermux.app
-PLIST=~/supermux-mac/mac-feel-minimal.entitlements
-cat > "$PLIST" <<PLIST_EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>com.apple.security.app-sandbox</key>
-	<true/>
-	<key>com.apple.security.network.client</key>
-	<true/>
-	<key>com.apple.security.device.audio-input</key>
-	<true/>
-</dict>
-</plist>
-PLIST_EOF
-codesign --force --sign - --entitlements "$PLIST" --deep "$APP"'
+codesign --force --sign - --deep "$APP"'
 
 step "[4/7] delete stale supermux keychain items (both services) before launch"
 ssh mac 'security delete-generic-password -s "dev.supermux.app" ~/Library/Keychains/login.keychain-db 2>/dev/null || true
@@ -82,8 +66,10 @@ step "[5/7] launch via open --env (a direct ssh exec mounts no UI/WS — see hea
 # shell's tilde expansion actually fires; single-quoting it would send the
 # literal string "~/supermux-mac/..." to `open`, which does no tilde expansion
 # of its own and would fail to find the app.
+PAIR_ENV=""
+if [ -n "$TOKEN" ]; then PAIR_ENV=" --env SM_PAIR_TOKEN='$TOKEN' --env SM_PAIR_BASE='$BASE'"; fi
 ssh mac "pkill -x Supermux 2>/dev/null || true; \
-  open --env SM_PAIR_TOKEN='$TOKEN' --env SM_PAIR_BASE='$BASE'$EXTRA_ENV $REMOTE_APP"
+  open$PAIR_ENV$EXTRA_ENV $REMOTE_APP"
 
 step "[6/7] PID proof (12s settle) + best-effort log tail"
 PID="$(ssh mac 'sleep 12; pgrep -x Supermux' || true)"

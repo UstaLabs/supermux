@@ -5,10 +5,15 @@ import Combine
 /// Adaptive shell: `NavigationSplitView` gives iPad sidebar+detail and folds to a
 /// stack on iPhone. Session selection drives the chat (detail); the launcher and
 /// the management screens are pushed as full pages (parity with the web routes).
+///
+/// Multi-host (spec §5): the shell is driven by a `Fleet` — N per-host `BrokerSession`s merged into
+/// one recordId-tagged session list. The list/rail/launcher read the merged fleet; the chat + detail
+/// panes route to the SELECTED session's OWNING host, so the huge single-session surface is unchanged.
 struct RootView: View {
-    @State private var broker: BrokerSession
+    @State private var fleet: Fleet
     @State private var selected: String?
     @State private var route: NavRoute?
+    @State private var showAddHost = false
     @State private var debugArchived: ArchivedItem?    // SM_OPEN_ARCHIVED headless repro
     @State private var layout = WorkspaceLayoutModel()
     #if os(macOS)
@@ -26,14 +31,14 @@ struct RootView: View {
         case newSession, archived, usage, proxies, displays, devices, settings, personalAssistants
     }
 
-    init(baseURL: String, token: String, onUnpair: @escaping () -> Void) {
-        _broker = State(initialValue: BrokerSession(baseURL: baseURL, token: token))
+    init(onUnpair: @escaping () -> Void) {
+        _fleet = State(initialValue: Fleet())
         self.onUnpair = onUnpair
     }
 
     private var selectedSession: SessionInfo? {
         guard let selected else { return nil }
-        return broker.sessions.first(where: { $0.id == selected })
+        return fleet.sessions.first(where: { $0.id == selected })
     }
 
     var body: some View {
@@ -41,26 +46,29 @@ struct RootView: View {
             if isRegularWidth { regularShell } else { compactShell }
         }
         .tint(Theme.teal)
+        .sheet(isPresented: $showAddHost) {
+            AddHostView(fleet: fleet, onAdded: {})
+        }
         .task {
-            broker.start()
+            fleet.start()
             // Seed viewing presence on launch (onChange won't fire for the initial state).
-            broker.updateViewing(session: selected, visible: scenePhase == .active)
+            fleet.updateViewing(session: selected, visible: scenePhase == .active)
         }
         // Cross-platform teardown (deliberately NOT mac-gated): RootView leaves the hierarchy
         // on unpair and on re-pair recreation (`.id(base)` in SupermuxApp) — on iOS too —
-        // and without stop() the old broker's frame loop retains it forever, leaving a stale
-        // session endlessly reconnecting in the background (on macOS also on window close).
-        .onDisappear { broker.stop() }
-        .task(id: broker.synced) {
-            guard broker.synced, selected == nil else { return }
+        // and without stop() the old brokers' frame loops retain them forever, leaving stale
+        // sessions endlessly reconnecting in the background (on macOS also on window close).
+        .onDisappear { fleet.stop() }
+        .task(id: fleet.synced) {
+            guard fleet.synced, selected == nil else { return }
             let want = ProcessInfo.processInfo.environment["SM_OPEN_SESSION"]
-            if let want, let m = broker.sessions.first(where: { $0.name == want }) {
+            if let want, let m = fleet.sessions.first(where: { $0.name == want }) {
                 selected = m.id; return
             }
             // iPad keeps a session in the detail column; iPhone opens to the list.
             guard isRegularWidth else { return }
-            selected = broker.sessions.first(where: { !(broker.messages[$0.id]?.isEmpty ?? true) })?.id
-                ?? broker.sessions.first?.id
+            selected = fleet.sessions.first(where: { !(fleet.broker(for: $0.id)?.messages[$0.id]?.isEmpty ?? true) })?.id
+                ?? fleet.sessions.first?.id
         }
         .task {
             // Debug: auto-push a management page for headless screenshots.
@@ -68,11 +76,11 @@ struct RootView: View {
                 route = NavRoute(debugName: s)
             }
         }
-        .task(id: broker.synced) {
+        .task(id: fleet.synced) {
             // Debug: drive headless navigation to verify per-session reloads.
-            guard broker.synced else { return }
+            guard fleet.synced else { return }
             let env = ProcessInfo.processInfo.environment
-            if let to = env["SM_SWITCH_TO"], let m = broker.sessions.first(where: { $0.name == to }) {
+            if let to = env["SM_SWITCH_TO"], let m = fleet.sessions.first(where: { $0.name == to }) {
                 try? await Task.sleep(nanoseconds: 6_000_000_000)
                 selected = m.id
             } else if env["SM_REOPEN"] == "1", let first = selected {
@@ -82,30 +90,32 @@ struct RootView: View {
                 selected = first                                 // reopen the SAME session
             }
         }
-        .task(id: broker.synced) {
+        .task(id: fleet.synced) {
             // Debug: open an ARCHIVED session's read-only transcript headlessly.
-            guard broker.synced, debugArchived == nil else { return }
+            guard fleet.synced, debugArchived == nil else { return }
             if let want = ProcessInfo.processInfo.environment["SM_OPEN_ARCHIVED"],
-               let a = (await broker.archived()).first(where: { $0.name == want }) {
+               let a = (await fleet.activeBroker?.archived() ?? []).first(where: { $0.name == want }) {
                 debugArchived = ArchivedItem(id: a.id, dto: a)
             }
         }
-        .task(id: broker.synced) {
+        .task(id: fleet.synced) {
             // Debug: reproduce resume-from-archive → open the now-live chat, to verify the
             // transcript loads on open (SM_RESUME_OPEN=<archived session name>). Mirrors the user
             // repro: resume from archive, tap the chat — it must show messages, not be empty.
-            guard broker.synced, selected == nil else { return }
+            guard fleet.synced, selected == nil else { return }
             guard let want = ProcessInfo.processInfo.environment["SM_RESUME_OPEN"],
-                  let a = (await broker.archived()).first(where: { $0.name == want }) else { return }
-            broker.resume(a.id)
+                  let a = (await fleet.activeBroker?.archived() ?? []).first(where: { $0.name == want }) else { return }
+            fleet.activeBroker?.resume(a.id)
             // Wait for the session_added frame to land the resumed session in the live list, then open it.
             for _ in 0..<40 {
-                if let m = broker.sessions.first(where: { $0.id == a.id }) { selected = m.id; return }
+                if let m = fleet.sessions.first(where: { $0.id == a.id }) { selected = m.id; return }
                 try? await Task.sleep(nanoseconds: 250_000_000)
             }
         }
         .smFullScreenCover(item: $debugArchived) { item in
-            NavigationStack { ArchivedChatView(broker: broker, archived: item.dto) }
+            if let b = fleet.activeBroker {
+                NavigationStack { ArchivedChatView(broker: b, archived: item.dto) }
+            }
         }
         .onReceive(PushRouter.shared.$pendingSessionId) { id in
             // A tapped push → open that session. Setting `selected` resolves once the
@@ -116,20 +126,19 @@ struct RootView: View {
             PushRouter.shared.pendingSessionId = nil
         }
         // Opening a chat clears its delivered notifications and re-derives the app badge, and
-        // tells the broker we're now viewing it (so it won't push us for this chat). `selected`
+        // tells the owning host we're now viewing it (so it won't push us for this chat). `selected`
         // is the single source of truth for the open chat on every form factor (iPhone detail,
-        // iPad/mac workspace), and a tapped push routes through it too, so this one hook covers
-        // them all.
+        // iPad/mac workspace), and a tapped push routes through it too, so this one hook covers them all.
         .onChange(of: selected) { _, id in
             if let id { PushManager.shared.clearDelivered(sessionId: id) }
-            broker.updateViewing(session: id, visible: scenePhase == .active)
+            fleet.updateViewing(session: id, visible: scenePhase == .active)
         }
         // Returning to the foreground on an already-open chat clears whatever landed while the
         // app was backgrounded; going to the background reports us away so pushes resume.
         .onChange(of: scenePhase) { _, phase in
             let active = phase == .active
             if active, let id = selected { PushManager.shared.clearDelivered(sessionId: id) }
-            broker.updateViewing(session: selected, visible: active)
+            fleet.updateViewing(session: selected, visible: active)
         }
         #if os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: .smNewSession)) { _ in
@@ -149,13 +158,16 @@ struct RootView: View {
     /// Compact width (iPhone / Slide-Over / narrow): the split view folds to a stack.
     private var compactShell: some View {
         NavigationSplitView {
-            SessionsListView(broker: broker, selected: $selected,
+            SessionsListView(fleet: fleet, selected: $selected,
                              onNewSession: { route = .newSession },
-                             onArchived: { route = .archived })
+                             onArchived: { route = .archived },
+                             onAddHost: { showAddHost = true })
                 .navigationDestination(item: $route) { page($0) }
                 .toolbar {
                     ToolbarItem(placement: .smTopTrailing) {
                         Menu {
+                            Button { showAddHost = true } label: { Label("Add host", systemImage: "plus.rectangle.on.rectangle") }
+                            Divider()
                             Button { route = .personalAssistants } label: { Label("Assistants", systemImage: "person.2") }
                             Button { route = .usage } label: { Label("Usage", systemImage: "chart.bar") }
                             Button { route = .devices } label: { Label("Devices", systemImage: "ipad.and.iphone") }
@@ -170,8 +182,8 @@ struct RootView: View {
                     }
                 }
         } detail: {
-            if let s = selectedSession {
-                ChatView(broker: broker, session: s)
+            if let s = selectedSession, let b = fleet.broker(for: s.id) {
+                ChatView(broker: b, session: s)
             } else {
                 ContentUnavailableView("Pick a session",
                                        systemImage: "bubble.left.and.bubble.right")
@@ -185,7 +197,8 @@ struct RootView: View {
     /// panes behind a lone back-chevron. iOS keeps the push (with its interactive back-swipe).
     private var regularShell: some View {
         NavigationStack {
-            IPadWorkspace(broker: broker, selected: $selected, route: $route, layout: layout)
+            IPadWorkspace(fleet: fleet, selected: $selected, route: $route, layout: layout,
+                          onAddHost: { showAddHost = true })
             #if os(iOS)
                 .navigationDestination(item: $route) { page($0) }
             #endif
@@ -208,15 +221,19 @@ struct RootView: View {
     }
 
     @ViewBuilder private func page(_ r: NavRoute) -> some View {
-        switch r {
-        case .newSession: NewSessionView(broker: broker, onSpawned: { id in route = nil; selected = id })
-        case .personalAssistants: PersonalAssistantsView(broker: broker, onOpen: { id in route = nil; selected = id })
-        case .archived: ArchivedView(broker: broker)
-        case .usage: UsageView(broker: broker)
-        case .proxies: ProxiesView(broker: broker)
-        case .displays: DisplaysView(broker: broker)
-        case .devices: DevicesView(broker: broker)
-        case .settings: SettingsView(broker: broker)
+        if let broker = fleet.activeBroker {
+            switch r {
+            case .newSession: NewSessionView(broker: broker, fleet: fleet, onSpawned: { id in route = nil; selected = id })
+            case .personalAssistants: PersonalAssistantsView(broker: broker, onOpen: { id in route = nil; selected = id })
+            case .archived: ArchivedView(broker: broker)
+            case .usage: UsageView(broker: broker)
+            case .proxies: ProxiesView(broker: broker)
+            case .displays: DisplaysView(broker: broker)
+            case .devices: DevicesView(broker: broker)
+            case .settings: SettingsView(broker: broker)
+            }
+        } else {
+            ProgressView("Connecting…").tint(Theme.teal)
         }
     }
 }

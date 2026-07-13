@@ -1,8 +1,11 @@
 package dev.supermux.android.session
 
+import android.content.Context
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -23,7 +26,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -69,6 +77,24 @@ private fun agentDrawableRes(agent: String?): Int? = when (agent?.lowercase()) {
     "codex"  -> R.drawable.agent_codex
     "cursor" -> R.drawable.agent_cursor
     else     -> null
+}
+
+// Collapsed project-group state, persisted across launches. Keyed by each group's
+// `workdir` (the PA group uses the "__pas__" sentinel), mirroring the iOS session
+// list's `cmux:collapsed-paths` UserDefaults set so the two platforms behave alike.
+private const val COLLAPSE_PREFS = "cmux-session-list"
+private const val COLLAPSE_KEY = "collapsed-paths"
+
+private fun loadCollapsedPaths(ctx: Context): Set<String> =
+    ctx.getSharedPreferences(COLLAPSE_PREFS, Context.MODE_PRIVATE)
+        .getStringSet(COLLAPSE_KEY, emptySet())
+        ?.toSet() ?: emptySet()
+
+private fun saveCollapsedPaths(ctx: Context, paths: Set<String>) {
+    ctx.getSharedPreferences(COLLAPSE_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putStringSet(COLLAPSE_KEY, paths)
+        .apply()
 }
 
 @OptIn(ExperimentalSharedTransitionApi::class)
@@ -122,13 +148,37 @@ fun SessionAvatar(
     }
 }
 
-// Fix 3: path-group header with rotating ChevronDown matching the web app
+// Fix 3: path-group header with rotating ChevronDown matching the web app.
+// Tappable to collapse/expand the group (parity with the iOS session list); the
+// chevron rotation animates and the whole row is a ≥48dp expand/collapse target.
 @Composable
-fun PathGroupHeader(label: String, count: Int, collapsed: Boolean = false) {
+fun PathGroupHeader(
+    label: String,
+    count: Int,
+    collapsed: Boolean = false,
+    onToggle: (() -> Unit)? = null,
+) {
     val cs = MaterialTheme.colorScheme
+    val haptic = rememberHaptics()
+    val rotation by animateFloatAsState(
+        targetValue = if (collapsed) -90f else 0f,
+        label = "groupChevronRotation",
+    )
+    val clickable = if (onToggle != null) {
+        Modifier
+            .clickable(
+                role = Role.Button,
+                onClickLabel = if (collapsed) "Expand" else "Collapse",
+            ) { haptic(HapticKind.Tick); onToggle() }
+            .semantics { stateDescription = if (collapsed) "Collapsed" else "Expanded" }
+    } else {
+        Modifier
+    }
     Row(
         Modifier
             .fillMaxWidth()
+            .then(clickable)
+            .heightIn(min = 48.dp)
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -139,7 +189,7 @@ fun PathGroupHeader(label: String, count: Int, collapsed: Boolean = false) {
             tint = cs.onSurfaceVariant,
             modifier = Modifier
                 .size(14.dp)
-                .rotate(if (collapsed) -90f else 0f),
+                .rotate(rotation),
         )
         Text(
             label,
@@ -150,14 +200,12 @@ fun PathGroupHeader(label: String, count: Int, collapsed: Boolean = false) {
             modifier = Modifier.weight(1f),
             maxLines = 1,
         )
-        if (count > 1) {
-            Text(
-                "$count",
-                color = cs.onSurfaceVariant.copy(alpha = 0.6f),
-                fontFamily = MonoFontFamily,
-                fontSize = 10.sp,
-            )
-        }
+        Text(
+            "$count",
+            color = cs.onSurfaceVariant.copy(alpha = 0.6f),
+            fontFamily = MonoFontFamily,
+            fontSize = 10.sp,
+        )
     }
 }
 
@@ -169,6 +217,8 @@ fun SessionRow(
     preview: LogEntry? = null,
     working: Boolean = false,
     bgOpen: Int = 0,
+    // Non-null only in multi-host mode → renders the compact per-row host badge (dot + short name).
+    hostBadge: dev.supermux.android.host.HostView? = null,
     onClick: () -> Unit,
     onRename: () -> Unit = {},
     onKill: () -> Unit = {},
@@ -233,6 +283,10 @@ fun SessionRow(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                if (hostBadge != null) {
+                    Spacer(Modifier.width(Space.sm))
+                    dev.supermux.android.host.HostBadge(hostBadge)
+                }
                 val timeStr = relTime(preview?.ts)
                 if (timeStr.isNotEmpty()) {
                     Spacer(Modifier.width(Space.sm))
@@ -316,21 +370,48 @@ fun SessionListScreen(
     onRename: (String, String) -> Unit = { _, _ -> },
     onKill: (String) -> Unit = {},
     onMute: (String, Boolean) -> Unit = { _, _ -> },
+    // ── Multi-host (spec §5). All default-empty so single-host callers render exactly as before. ──
+    hosts: List<dev.supermux.android.host.HostView> = emptyList(),
+    sessionHost: Map<String, String> = emptyMap(),
+    hostFilter: String? = null,
+    onHostFilter: (String?) -> Unit = {},
+    onAddHost: () -> Unit = {},
+    onRenameHost: (recordId: String, name: String) -> Unit = { _, _ -> },
+    onForgetHost: (recordId: String) -> Unit = {},
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
 ) {
     val cs = MaterialTheme.colorScheme
+    // Chips + badges appear only with 2+ paired hosts — the common single-host case stays uncluttered.
+    val multiHost = hosts.size >= 2
+    val hostByRecord = remember(hosts) { hosts.associateBy { it.recordId } }
+    val offlineIds = remember(hosts) { hosts.filter { !it.online }.map { it.recordId }.toSet() }
+
+    // Filter (a recordId or null = All), then split live sessions from the offline hosts' cached ones.
+    val shown = if (multiHost) dev.supermux.android.host.filterSessions(sessions, sessionHost, hostFilter) else sessions
+    val onlineSessions = if (multiHost) shown.filter { (sessionHost[it.id] ?: "") !in offlineIds } else shown
+
     // Infer the home dir from the sessions' workdirs (iOS `BrokerSession.grouped` parity) instead of
     // the hardcoded DevConfig.HOME placeholder, so "~/…" abbreviation in group labels matches iOS.
     val effectiveHome = inferHomeDir(sessions.firstOrNull()?.workdir) ?: home
-    val groups = remember(sessions, effectiveHome, lastBySession) {
-        groupSessions(sessions, effectiveHome) { lastBySession[it.id]?.ts ?: "" }
+    val groups = remember(onlineSessions, effectiveHome, lastBySession) {
+        groupSessions(onlineSessions, effectiveHome) { lastBySession[it.id]?.ts ?: "" }
     }
+    // Offline hosts (greyed groups with last-seen), honoring the filter.
+    val offlineGroups = if (multiHost) {
+        hosts.filter { !it.online && (hostFilter == null || hostFilter == it.recordId) }
+            .map { h -> h to shown.filter { sessionHost[it.id] == h.recordId } }
+    } else emptyList()
 
     var menuExpanded by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<SessionInfo?>(null) }
     var renameText by remember { mutableStateOf("") }
     var killTarget by remember { mutableStateOf<SessionInfo?>(null) }
+
+    // Which project groups are collapsed (keyed by group workdir), restored from and
+    // written back to SharedPreferences so the choice survives app restarts.
+    val ctx = LocalContext.current
+    var collapsedPaths by remember { mutableStateOf(loadCollapsedPaths(ctx)) }
 
     Scaffold(
         topBar = {
@@ -367,6 +448,21 @@ fun SessionListScreen(
                         expanded = menuExpanded,
                         onDismissRequest = { menuExpanded = false },
                     ) {
+                        // Always-reachable add-host entry (the filter row's `+` chip is hidden until a
+                        // 2nd host exists, so the very first extra host is added from here — spec §5).
+                        DropdownMenuItem(
+                            text = { Text("Add host") },
+                            leadingIcon = {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_plus),
+                                    contentDescription = null,
+                                    tint = cs.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            },
+                            modifier = Modifier.testTag("nav_add_host"),
+                            onClick = { menuExpanded = false; onAddHost() },
+                        )
                         DropdownMenuItem(
                             text = { Text("Archived") },
                             leadingIcon = {
@@ -482,6 +578,21 @@ fun SessionListScreen(
                 .padding(innerPadding)
                 .background(cs.surfaceContainerHigh),
         ) {
+            if (multiHost) {
+                item(key = "host_filter_chips") {
+                    dev.supermux.android.host.HostFilterChips(
+                        hosts = hosts,
+                        sessions = sessions,
+                        sessionHost = sessionHost,
+                        selected = hostFilter,
+                        onSelect = onHostFilter,
+                        onAddHost = onAddHost,
+                        onRenameHost = onRenameHost,
+                        onForgetHost = onForgetHost,
+                    )
+                }
+            }
+
             item(key = "new_session_row") {
                 NewSessionListRow(
                     onClick = onNewSession,
@@ -489,22 +600,85 @@ fun SessionListScreen(
                 )
             }
 
+            // Each project group renders as its own rounded surface card (Pixel-Settings
+            // style), header above it, so the grouping is visually distinct — the native
+            // Material take on iOS's inset-grouped sections. Tapping a header collapses the
+            // group; the collapsed set is persisted. The whole group is one LazyColumn item
+            // (session counts per project are small), which keeps the card + collapse
+            // animation simple and lets AnimatedVisibility shrink/expand it in place.
             groups.forEach { g ->
-                item(key = "h:${g.workdir}") { PathGroupHeader(g.label, g.sessions.size) }
-                items(g.sessions, key = { it.id.ifEmpty { it.name } }) { s ->
-                    SessionRow(
-                        s,
-                        active = s.id == activeId,
-                        preview = lastBySession[s.id],
-                        working = agentState[s.id]?.working == true,
-                        bgOpen = agentState[s.id]?.bgOpen ?: 0,
-                        onClick = { onOpen(s.id) },
-                        onRename = { renameTarget = s; renameText = s.name },
-                        onKill = { killTarget = s },
-                        onToggleMute = { onMute(s.id, !(s.mute ?: false)) },
-                        sharedScope = sharedScope,
-                        animScope = animScope,
-                    )
+                item(key = "group:${g.workdir}") {
+                    val isCollapsed = collapsedPaths.contains(g.workdir)
+                    Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+                        PathGroupHeader(
+                            label = g.label,
+                            count = g.sessions.size,
+                            collapsed = isCollapsed,
+                            onToggle = {
+                                collapsedPaths = if (isCollapsed) {
+                                    collapsedPaths - g.workdir
+                                } else {
+                                    collapsedPaths + g.workdir
+                                }
+                                saveCollapsedPaths(ctx, collapsedPaths)
+                            },
+                        )
+                        AnimatedVisibility(visible = !isCollapsed) {
+                            Surface(
+                                shape = RoundedCornerShape(Radii.lg),
+                                color = cs.surfaceContainerLow,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("group_card_${g.workdir}"),
+                            ) {
+                                Column {
+                                    g.sessions.forEachIndexed { i, s ->
+                                        if (i > 0) {
+                                            HorizontalDivider(
+                                                modifier = Modifier.padding(start = 20.dp),
+                                                thickness = 0.5.dp,
+                                                color = cs.outlineVariant.copy(alpha = 0.5f),
+                                            )
+                                        }
+                                        SessionRow(
+                                            s,
+                                            active = s.id == activeId,
+                                            preview = lastBySession[s.id],
+                                            working = agentState[s.id]?.working == true,
+                                            bgOpen = agentState[s.id]?.bgOpen ?: 0,
+                                            hostBadge = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
+                                            onClick = { onOpen(s.id) },
+                                            onRename = { renameTarget = s; renameText = s.name },
+                                            onKill = { killTarget = s },
+                                            onToggleMute = { onMute(s.id, !(s.mute ?: false)) },
+                                            sharedScope = sharedScope,
+                                            animScope = animScope,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Offline hosts (spec §5): a greyed group per unreachable host with its last-seen and
+            // its cached sessions (rendered dimmed). Skipped entirely in single-host mode.
+            offlineGroups.forEach { (host, cached) ->
+                item(key = "offline:${host.recordId}") { OfflineHostHeader(host) }
+                items(cached, key = { "off:${it.id.ifEmpty { it.name }}" }) { s ->
+                    Box(Modifier.graphicsLayer { alpha = 0.55f }) {
+                        SessionRow(
+                            s,
+                            active = false,
+                            preview = lastBySession[s.id],
+                            hostBadge = hostByRecord[host.recordId],
+                            onClick = { onOpen(s.id) },
+                            onRename = { renameTarget = s; renameText = s.name },
+                            onKill = { killTarget = s },
+                            onToggleMute = { onMute(s.id, !(s.mute ?: false)) },
+                        )
+                    }
                 }
             }
             // Bottom padding so the FAB doesn't cover the last item
@@ -535,6 +709,39 @@ fun SessionListScreen(
                 }
             },
             dismissButton = { TextButton(onClick = { killTarget = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+/** Greyed group header for an offline/unreachable host (spec §5): identity dot + name + last-seen. */
+@Composable
+private fun OfflineHostHeader(host: dev.supermux.android.host.HostView) {
+    val cs = MaterialTheme.colorScheme
+    val lastSeen = dev.supermux.android.host.formatLastSeen(System.currentTimeMillis(), host.lastSeenAt)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .testTag("offline_host_${host.recordId}"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        dev.supermux.android.host.HostDot(host.colorIndex, size = 8.dp)
+        Text(
+            host.displayName,
+            color = cs.onSurfaceVariant,
+            fontFamily = MonoFontFamily,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            "· offline" + if (lastSeen.isNotEmpty()) " · seen $lastSeen" else "",
+            color = cs.onSurfaceVariant.copy(alpha = 0.6f),
+            fontFamily = MonoFontFamily,
+            fontSize = 10.sp,
+            maxLines = 1,
         )
     }
 }

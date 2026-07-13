@@ -1,0 +1,21 @@
+# Production relay-box frps config (frp 0.61.x). Sits behind Caddy (see
+# Caddyfile.example) which terminates wildcard TLS for *.relay.supermux.dev and
+# reverse-proxies to vhostHTTPPort. The standalone Supermux control service
+# (src/connectivity-relay/main.ts, listening on :7200) validates
+# every Login + NewProxy so each host can bind only its own h-<hostId> subdomain.
+
+bindPort = 7000
+vhostHTTPPort = 8080
+subdomainHost = "relay.supermux.dev"
+proxyBindAddr = "127.0.0.1"
+transport.tls.force = true
+
+# Optional hard ceilings (spec §4.6 — ship day one, tune from telemetry):
+transport.maxPoolCount = 5
+# userConnTimeout, heartbeatTimeout, maxPortsPerClient etc. as needed.
+
+[[httpPlugins]]
+name = "supermux-auth"
+addr = "127.0.0.1:7200"
+path = "/handler"
+ops = ["Login", "NewProxy"]

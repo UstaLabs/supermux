@@ -25,6 +25,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import org.json.JSONObject
@@ -66,6 +67,12 @@ class EditorEngine(
         private set
     var failed by mutableStateOf(false)
         internal set
+    /** True once the WebView exists and index.html is loading. The never-became-ready
+     *  fallback timer keys off this, not panel composition — the WebView attach is deferred
+     *  a couple frames past the chrome (see EditorWebViewHost), and that gap must not eat
+     *  into the timeout budget. */
+    var loadStarted by mutableStateOf(false)
+        private set
 
     private var webView: WebView? = null
     private var lastContent = ""
@@ -92,7 +99,10 @@ class EditorEngine(
 
     fun obtainWebView(): WebView {
         webView?.let { return it }
-        return createWebView().also { webView = it }
+        return createWebView().also {
+            webView = it
+            loadStarted = true
+        }
     }
 
     private var lastScrollTop = 0
@@ -318,6 +328,20 @@ fun EditorWebViewHost(
     modifier: Modifier = Modifier,
 ) {
     if (engine.failed) return
+
+    // Attach the WebView only after the editor chrome has committed two frames. Creating a
+    // session's first WebView stalls the main thread for hundreds of ms (Chromium provider +
+    // GPU functor init); doing it inside the tab-switch frame freezes whatever was last drawn
+    // on screen for that whole stall — the "first editor open flashes" bug. Deferred, the tab
+    // switch paints the dark editor chrome instantly and the stall hides behind a static,
+    // correct-looking screen (the dark backing Box covers the WebView's spot until `ready`).
+    var attachWebView by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        withFrameNanos {}
+        withFrameNanos {}
+        attachWebView = true
+    }
+    if (!attachWebView) return
 
     AndroidView(
         modifier = modifier,

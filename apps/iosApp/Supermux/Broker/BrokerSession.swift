@@ -55,6 +55,24 @@ final class BrokerSession {
     private(set) var finishJobs: [String: FinishJobDto] = [:]
     private(set) var synced = false
 
+    /// Per-host reachability for the merged fleet list (spec §5): true once this host's control WS
+    /// is up, false when it drops. Fed by the shared `BrokerClient`'s `onConnectionChange`. Distinct
+    /// from `synced`, which latches true on the first snapshot ("do we have state yet") and never
+    /// flips back — `online` tracks the live socket so `Fleet` can grey an offline host. `Fleet`
+    /// sets `onConnectionChanged` to learn each transition (record last-seen / backfill identity).
+    private(set) var online = false
+    @ObservationIgnored var onConnectionChanged: ((Bool) -> Void)?
+    // Indirection so the BrokerClient's connection callback captures a plain relay object at
+    // construction — NOT `self` (which isn't fully initialized while `self.client` is being set).
+    // Its target is wired to `self` at the end of init, once every stored property exists.
+    @ObservationIgnored private let connFlag = ConnectionFlag()
+
+    private func setOnline(_ up: Bool) {
+        guard online != up else { return }
+        online = up
+        onConnectionChanged?(up)
+    }
+
     /// Drop a session's finish job (FinishSheet Dismiss/Done) so the sheet returns to the
     /// readiness menu. The broker only ever ADDS/updates jobs over the WS `finish_job` frame —
     /// it never broadcasts a cleared state — so the client clears its own copy. (web parity:
@@ -67,7 +85,19 @@ final class BrokerSession {
         let http = IosClientKt.iosHttpClient()
         self.api = BrokerApi(baseUrl: baseURL, token: token, http: http)
         self.client = BrokerClient(baseUrl: baseURL, token: token, http: http,
-                                   policy: ReconnectPolicy(baseMs: 500, maxMs: 8000))
+                                   policy: ReconnectPolicy(baseMs: 500, maxMs: 8000),
+                                   onConnectionChange: { [connFlag] connected in
+                                       // Kotlin invokes this off the main actor. `connected` is the
+                                       // boxed Kotlin Boolean (K/N leaves primitive lambda params
+                                       // boxed — same as the KotlinLong `onProgress` callbacks). The
+                                       // relay (not self) is captured, then hops to main below.
+                                       connFlag.report(connected.boolValue)
+                                   })
+        // self is fully initialized now (every stored property has a value), so it's safe to point
+        // the connection relay at it — off-main callbacks hop to the main actor to touch @Observable.
+        connFlag.onChange = { [weak self] up in
+            Task { @MainActor in self?.setOnline(up) }
+        }
         #if os(macOS)
         // Macs sleep with the lid: the WS drops and the run-loop enters its backoff delay.
         // On wake, don't sit out that timer — kick the loop immediately so the workspace is
@@ -226,7 +256,9 @@ final class BrokerSession {
                     id: incoming.id, name: incoming.name, workdir: incoming.workdir,
                     agent: incoming.agent, status: incoming.status ?? old.status,
                     mute: incoming.mute ?? old.mute, connected: incoming.connected ?? old.connected,
-                    model: incoming.model ?? old.model, repo_root: incoming.repo_root ?? old.repo_root,
+                    model: incoming.model ?? old.model,
+                    reasoningLevel: incoming.reasoningLevel ?? old.reasoningLevel,
+                    repo_root: incoming.repo_root ?? old.repo_root,
                     role: incoming.role ?? old.role, session_branch: incoming.session_branch ?? old.session_branch,
                     git: incoming.git ?? old.git, finish_job: incoming.finish_job ?? old.finish_job)
             } else {
@@ -255,6 +287,21 @@ final class BrokerSession {
             evictTerminalHosts(sessionId: r.id)   // session killed → tear down its live terminals
             dropEditorHost(sessionId: r.id)       // …its editor webview (stop() breaks the bridge cycle)
             if let removedName { evictDisplayHosts(sessionName: removedName) }  // …and its displays
+        case .sessionState(let st):
+            // Per-session patch (model/effort switch, mute, shim connect): merge only the
+            // fields present (web parity: ws.ts updateState). Natives dropped this frame
+            // pre-2026-07-11 → model/effort pills stayed stale until app restart.
+            if let idx = sessions.firstIndex(where: { $0.id == st.session }) {
+                let old = sessions[idx]
+                sessions[idx] = old.doCopy(
+                    id: old.id, name: old.name, workdir: old.workdir, agent: old.agent,
+                    status: old.status,
+                    mute: st.mute ?? old.mute, connected: st.connected ?? old.connected,
+                    model: st.model ?? old.model,
+                    reasoningLevel: st.reasoningLevel ?? old.reasoningLevel,
+                    repo_root: old.repo_root, role: old.role, session_branch: old.session_branch,
+                    git: old.git, finish_job: old.finish_job)
+            }
         case .messageAppend(let m):
             // Drop the optimistic local echo when the real inbound message arrives.
             if m.entry.direction.hasPrefix("in") {
@@ -301,6 +348,7 @@ final class BrokerSession {
                     id: sessions[idx].id, name: sessions[idx].name, workdir: sessions[idx].workdir,
                     agent: sessions[idx].agent, status: sessions[idx].status, mute: sessions[idx].mute,
                     connected: sessions[idx].connected, model: sessions[idx].model,
+                    reasoningLevel: sessions[idx].reasoningLevel,
                     repo_root: sessions[idx].repo_root, role: sessions[idx].role,
                     session_branch: sessions[idx].session_branch, git: g.git,
                     finish_job: sessions[idx].finish_job)
@@ -887,6 +935,15 @@ final class BrokerSession {
             displayHosts.removeValue(forKey: id)?.host.stop()
         }
     }
+}
+
+/// Tiny reference relay so `BrokerSession.init` can hand the shared `BrokerClient` a connection
+/// callback that captures NO `self` (self isn't fully initialized while its `client` stored property
+/// is being set). `onChange` is wired to the session at the end of init; the Kotlin client invokes
+/// `report` off the main actor, which forwards to `onChange` (which hops back to main).
+private final class ConnectionFlag {
+    var onChange: ((Bool) -> Void)?
+    func report(_ up: Bool) { onChange?(up) }
 }
 
 private extension Bool {

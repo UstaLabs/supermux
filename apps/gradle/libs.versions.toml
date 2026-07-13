@@ -15,10 +15,14 @@ navigationCompose = "2.8.5"
 termlib = "0.0.35"
 skie = "0.10.12"
 zxingEmbedded = "4.3.0"
+zxingCore = "3.4.1"
 datastore = "1.1.1"
 firebaseBom = "33.7.0"
 googleServices = "4.4.2"
 media3 = "1.7.1"
+composeMultiplatform = "1.11.1"
+jediterm = "3.73"
+kcef = "2025.03.23"
 markdown = "0.7.6"
 coil = "3.5.0"
 
@@ -51,12 +55,19 @@ compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview"
 compose-animation = { module = "androidx.compose.animation:animation" }
 termlib = { module = "org.connectbot:termlib", version.ref = "termlib" }
 zxing-android-embedded = { module = "com.journeyapps:zxing-android-embedded", version.ref = "zxingEmbedded" }
+# Pure-Java QR encoder/decoder (no Android, no network) for the desktop first-run host wizard's
+# pairing QR (Plan 3 Task 3). Distinct from zxing-android-embedded above, which is Android-only.
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxingCore" }
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
 firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }
 firebase-messaging = { module = "com.google.firebase:firebase-messaging" }
 media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "media3" }
 media3-ui = { module = "androidx.media3:media3-ui", version.ref = "media3" }
-# GFM markdown parser (multiplatform). Used only by the Android chat renderer; iOS uses its
+coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }
+jediterm-core = { module = "org.jetbrains.jediterm:jediterm-core", version.ref = "jediterm" }
+jediterm-ui = { module = "org.jetbrains.jediterm:jediterm-ui", version.ref = "jediterm" }
+kcef = { module = "dev.datlag:kcef", version.ref = "kcef" }
+# GFM markdown parser (multiplatform). Used by the Android + desktop chat renderers; iOS uses its
 # own native MarkdownView, so Kotlin/Native dead-code-strips this from the Apple framework.
 markdown = { module = "org.jetbrains:markdown", version.ref = "markdown" }
 # Async image loading for inline markdown images (Android). ktor3 backend matches our ktor client.
@@ -72,3 +83,5 @@ compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 skie = { id = "co.touchlab.skie", version.ref = "skie" }
 google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "composeMultiplatform" }

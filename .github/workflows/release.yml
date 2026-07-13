@@ -189,9 +189,98 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  build-desktop-linux:
+    # Linux .deb installer for the Compose Desktop client (apps/desktop), built with
+    # jpackage (dpkg-deb/fakeroot are preinstalled on ubuntu-latest). Runs on tag pushes
+    # AND workflow_dispatch dry runs (builds + uploads; publishes nothing) — like the
+    # other build-* jobs. The app carries its OWN packageVersion (independent of the v*
+    # tag), so the asset name is stable: supermux-linux.deb. Unsigned; KCEF (embedded
+    # Chromium, ~100-150MB) downloads on first editor use and is NOT bundled in the .deb.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: oven-sh/setup-bun@v2 # broker compile (scripts/build-binary.sh) during staging
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0-dryrun"; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Stage host helper binaries (broker + frpc + tmux)
+        # Plan 3 Task 5: build the Bun broker + fetch frpc into apps/desktop/resources/linux-x64/
+        # so jpackage bundles them into the .deb. The script self-locates the repo root, so the
+        # `apps` working-directory default is fine via the relative path. tmux has no static
+        # upstream release; supply one via SUPERMUX_TMUX to bundle it, else the slot stays empty
+        # and the host falls back to a system tmux on $PATH.
+        run: ../scripts/stage-desktop-binaries.sh linux-x64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
+      - name: Build .deb
+        run: ./gradlew :desktop:packageDeb --console=plain --no-daemon
+      - name: Stage .deb + checksum
+        run: |
+          mkdir -p ../dist
+          cp desktop/build/compose/binaries/main/deb/*.deb ../dist/supermux-linux.deb
+          cd ../dist
+          sha256sum supermux-linux.deb > supermux-linux.deb.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: supermux-desktop-linux
+          path: dist/*
+          if-no-files-found: error
+
+  build-desktop-windows:
+    # Windows .msi installer (Compose Desktop client). jpackage's MSI backend needs the
+    # WiX Toolset, which is preinstalled on windows-latest — jpackage CANNOT cross-build
+    # MSI, so this is the only place it's produced. Same Gradle task + JDK 17 as the .deb.
+    # Unsigned v1 (SmartScreen "unknown publisher" warning accepted). Stable asset name:
+    # supermux-windows.msi.
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: apps
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0-dryrun"; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Stage host helper binary (frpc)
+        # Plan 3 Task 5: Windows is client-only, so stage only frpc.exe (no broker, no tmux) into
+        # apps/desktop/resources/windows-x64/ for jpackage to bundle — carried for when Windows
+        # later hosts. Git Bash provides sh/curl/tar for the script.
+        shell: bash
+        run: ../scripts/stage-desktop-binaries.sh windows-x64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
+      - name: Build .msi
+        run: ./gradlew.bat :desktop:packageMsi --console=plain --no-daemon
+      - name: Stage .msi + checksum
+        shell: bash
+        run: |
+          mkdir -p ../dist
+          cp desktop/build/compose/binaries/main/msi/*.msi ../dist/supermux-windows.msi
+          cd ../dist
+          sha256sum supermux-windows.msi > supermux-windows.msi.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: supermux-desktop-windows
+          path: dist/*
+          if-no-files-found: error
+
   release:
     if: github.ref_type == 'tag'
-    needs: [build-binaries, docker, build-android]
+    needs: [build-binaries, docker, build-android, build-desktop-linux, build-desktop-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -206,7 +295,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          assets="dist/supermux-linux-x64 dist/supermux-linux-x64.sha256 dist/supermux-linux-arm64 dist/supermux-linux-arm64.sha256 dist/supermux-darwin-arm64 dist/supermux-darwin-arm64.sha256 dist/supermux-android.apk dist/supermux-android.apk.sha256"
+          assets="dist/supermux-linux-x64 dist/supermux-linux-x64.sha256 dist/supermux-linux-arm64 dist/supermux-linux-arm64.sha256 dist/supermux-darwin-arm64 dist/supermux-darwin-arm64.sha256 dist/supermux-android.apk dist/supermux-android.apk.sha256 dist/supermux-linux.deb dist/supermux-linux.deb.sha256 dist/supermux-windows.msi dist/supermux-windows.msi.sha256"
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 \
             && gh release upload "${GITHUB_REF_NAME}" --clobber $assets \
             || gh release create "${GITHUB_REF_NAME}" --generate-notes $assets

@@ -1,0 +1,27 @@
+# Wildcard DNS points *.relay.supermux.dev at this box. Caddy obtains an
+# individual certificate on demand only after the control service approves the
+# hostname. Verified host IDs persist, so renewals remain allowed after reboot.
+
+{
+	on_demand_tls {
+		ask http://127.0.0.1:7200/relay/caddy-ask
+	}
+}
+
+control.relay.supermux.dev {
+	tls {
+		on_demand
+	}
+	reverse_proxy 127.0.0.1:7200
+}
+
+*.relay.supermux.dev {
+	tls {
+		on_demand
+	}
+	reverse_proxy 127.0.0.1:8080 {
+		# Strip any client-supplied relay marker; the edge is authoritative.
+		header_up -X-Mux-Via
+		header_up X-Mux-Via relay
+	}
+}

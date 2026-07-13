@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>method</key>
-	<string>app-store-connect</string>
+	<string>developer-id</string>
 	<key>destination</key>
 	<string>export</string>
 	<key>teamID</key>
@@ -11,14 +11,7 @@
 	<key>signingStyle</key>
 	<string>manual</string>
 	<key>signingCertificate</key>
-	<string>Apple Distribution</string>
-	<key>provisioningProfiles</key>
-	<dict>
-		<key>dev.supermux.app</key>
-		<string>Supermux Mac App Store</string>
-		<key>dev.supermux.app.mac-push-nse</key>
-		<string>Supermux Mac NSE App Store</string>
-	</dict>
+	<string>Developer ID Application</string>
 	<key>uploadSymbols</key>
 	<true/>
 	<key>manageAppVersionAndBuildNumber</key>

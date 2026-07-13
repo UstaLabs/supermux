@@ -24,7 +24,7 @@ android {
         applicationId = "dev.supermux.android"
         minSdk = libs.versions.androidMinSdk.get().toInt()
         targetSdk = libs.versions.androidCompileSdk.get().toInt()
-        versionCode = 30; versionName = "0.9.6"
+        versionCode = 32; versionName = "0.9.8"
     }
     buildFeatures { compose = true }
     signingConfigs {

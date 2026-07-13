@@ -131,6 +131,15 @@ fun SessionLauncherScreen(
     // no session id to upload against until then) — see AppViewModel.createSessionWithFirstMessage.
     onSubmit: suspend (workdir: String, agent: String, model: String?, reasoningLevel: String?, message: String, worktree: Boolean, baseBranch: String?, staged: List<StagedUpload>) -> String,
     onOpenSession: (String) -> Unit,
+    // ── Multi-host (spec §5). Default-empty/no-op so single-host callers are unchanged. ──
+    // The host picker pill selects which host to spawn on; picking one retargets every loader below
+    // (models/projects/agents/commands) to that host via the caller's onSelectHost → active host.
+    hosts: List<dev.supermux.android.host.HostView> = emptyList(),
+    selectedHostId: String? = null,
+    onSelectHost: (String) -> Unit = {},
+    // The chosen host's installed/available agent kinds (GET /agents/status) — replaces the old
+    // hardcoded four-agent list. Empty → keep the default fallback.
+    loadAgents: suspend () -> List<String> = { emptyList() },
 ) {
     val cs = MaterialTheme.colorScheme
     val context = LocalContext.current
@@ -161,7 +170,17 @@ fun SessionLauncherScreen(
     var lastSeenWorkdir by remember { mutableStateOf<String?>(null) }
     var launcherModels by remember { mutableStateOf(emptyMap<String, String>()) }
     var error by remember { mutableStateOf<String?>(null) }
-    val agents = listOf("claude", "codex", "cursor", "opencode")
+    // The agent options come from the selected host's /agents/status (fixes the old hardcoded four);
+    // the literal list is only the fallback until the fetch lands / when the host doesn't answer.
+    var agents by remember { mutableStateOf(listOf("claude", "codex", "cursor", "opencode")) }
+    val multiHost = hosts.size >= 2
+    LaunchedEffect(selectedHostId) {
+        val fetched = loadAgents()
+        if (fetched.isNotEmpty()) {
+            agents = fetched
+            if (!fetched.contains(agent)) agent = fetched.first()
+        }
+    }
 
     // Model picker (mirrors iOS: refetch on agent change, reset selection to Default/null).
     var models by remember { mutableStateOf(emptyList<ModelInfo>()) }
@@ -501,6 +520,14 @@ fun SessionLauncherScreen(
                         contentDescription = "Select project",
                         tint = cs.onSurfaceVariant,
                         modifier = Modifier.size(16.dp),
+                    )
+                }
+                if (multiHost) {
+                    Spacer(Modifier.height(Space.sm))
+                    HostPickerPill(
+                        hosts = hosts,
+                        selectedHostId = selectedHostId,
+                        onSelect = onSelectHost,
                     )
                 }
                 if (repoInfo?.eligible == true) {
@@ -989,6 +1016,61 @@ private fun AgentPill(agent: String, enabled: Boolean, onClick: () -> Unit) {
             tint = cs.onSurfaceVariant,
             modifier = Modifier.size(14.dp),
         )
+    }
+}
+
+/**
+ * Host picker pill (spec §5) — the launcher's "spawn on which host" selector. Shows the selected
+ * host's color dot + name; a tap opens a menu of the paired fleet. Only rendered with 2+ hosts.
+ * Picking a host calls [onSelect] (which retargets the active host, and thus every loader here).
+ */
+@Composable
+private fun HostPickerPill(
+    hosts: List<dev.supermux.android.host.HostView>,
+    selectedHostId: String?,
+    onSelect: (String) -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val haptic = rememberHaptics()
+    val selected = hosts.firstOrNull { it.recordId == selectedHostId } ?: hosts.firstOrNull() ?: return
+    var menu by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(20.dp))
+                .background(cs.surfaceContainer)
+                .border(1.dp, cs.outline, RoundedCornerShape(20.dp))
+                .clickable { haptic(HapticKind.Tick); menu = true }
+                .padding(horizontal = 11.dp, vertical = 5.dp)
+                .testTag("launcher_host_pill"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            dev.supermux.android.host.HostDot(selected.colorIndex, size = 9.dp)
+            Text(
+                selected.shortLabel,
+                color = cs.onSurface,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
+            Icon(
+                painter = painterResource(R.drawable.ic_chevron_down),
+                contentDescription = "Select host",
+                tint = cs.onSurfaceVariant,
+                modifier = Modifier.size(12.dp),
+            )
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            hosts.forEach { h ->
+                DropdownMenuItem(
+                    text = { Text(h.displayName + if (!h.online) " (offline)" else "") },
+                    leadingIcon = { dev.supermux.android.host.HostDot(h.colorIndex, size = 10.dp) },
+                    modifier = Modifier.testTag("launcher_host_${h.recordId}"),
+                    onClick = { onSelect(h.recordId); menu = false },
+                )
+            }
+        }
     }
 }
 
