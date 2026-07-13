@@ -77,7 +77,7 @@ Mirrors `src/core/agents/cursor/`:
 | `adapter.ts` | `GrokAdapter implements AgentAdapter`. Holds the ACP client, drives the handshake, translates `session/update` → `AgentEvent`, manages the prompt queue + abort. |
 | `acp-client.ts` | Thin JSON-RPC 2.0 framing over the stdio pipe (newline-delimited JSON): request/response correlation by `id`, notification dispatch, server→client request handling (permissions, fs). Isolated + unit-testable with a fake pipe. |
 | `runner.ts` | Spawns `grok agent stdio` with the right env/PATH/cwd; exposes stdin/stdout streams + a kill/abort. Real vs. fake (test) runner, same as cursor. |
-| `mcp-writer.ts` | Ensures the `mux-shim` MCP server is passed in `session/new`'s `mcpServers` (belt-and-suspenders over auto-discovery, so the reply tool is guaranteed present regardless of cwd). |
+| `mcp-writer.ts` | Writes grok's `mux-shim` MCP config (into `~/.grok` MCP config and/or the `session/new` `mcpServers` array) — same role as cursor's `mcp-writer.ts`. Gives grok the file-delivery reply tool + orchestration/side-effect tools. Do NOT rely on grok auto-discovering supermux's project MCP config; write it explicitly per session. |
 | `preamble-writer.ts` | Writes the supermux system prompt via `AGENTS.md` (grok merges git-root-down), matching how codex/cursor ingest their preamble. |
 | `auth.ts` | Detects `~/.grok/auth.json`; surfaces "signed in / free tier / needs login" for the session-detect + install UI. |
 | `activity map` (in `adapter-activity.ts`) | New `if (agent === "grok")` branch in `summarizeDetail`. |
@@ -85,6 +85,9 @@ Mirrors `src/core/agents/cursor/`:
 ### Registration touch-points (existing files)
 
 - `src/shared/agents.ts` — add `"grok"` to the `AgentKind` union + logo/label metadata.
+- Broker outbound/routing — add grok to the **streamed-agent set** so text-only `reply()` is
+  rejected and `agent_message_chunk` is relayed (grok is non-Claude, so `listTools()` already
+  gives it the file-only reply description automatically).
 - `src/core/agents/detect.ts` — add grok binary detection + `~/.grok/auth.json` cred path.
 - `src/core/agents/install.ts` / `bin-dirs.ts` — grok install detection + PATH dir.
 - `src/core/agents/tool-normalize.ts` — grok tool-name normalization (`write`→Write, etc.).
@@ -106,15 +109,33 @@ inbound msg ─► GrokAdapter.send() ─► queue ─► session/prompt (ACP)
   prompt result (_meta usage) ─► usage accounting
 ```
 
-The `mux-shim` `reply` tool (injected via MCP) is how grok's words reach the user —
-identical to every other agent. `agent_message_chunk` text is the *terminal-visible*
-narration; the authoritative user-facing reply still goes through the reply tool.
+**Reply model — grok is a "streamed agent" (identical to codex/cursor/opencode), verified
+against the code:** grok's normal words reach the user by the broker **relaying
+`agent_message_chunk`** (the `assistant-message` event), NOT via the reply tool. `mux-shim`
+IS still injected, and `listTools()` automatically hands any non-Claude kind the reply tool
+**re-described as file-delivery-only** (`REPLY_FOR_STREAMED_AGENTS`, `src/shim/tools.ts`):
+
+- **Text** → stream-relayed automatically. The broker **rejects text-only `reply()`** from
+  streamed agents to prevent a double-send (a grok-visible rule stated in the preamble/agent
+  header, mirroring codex/cursor).
+- **Files/attachments** → the reply tool's `files[]` is the **only** outbound file channel;
+  `transform-outbound.ts` reads each path and registers it into the file store as an
+  attachment. Without the reply tool, grok could not send a file back — hence we keep it.
+- grok also gets the orchestration/side-effect tools (spawn_session, react,
+  download_attachment, expose_port, memory_search, …), same as the other streamed agents.
+
+Making grok a streamed agent is almost free: it's the generic non-Claude path. grok just
+needs (a) to be an `AgentKind` and (b) a `grok/mcp-writer.ts` that writes its mux-shim MCP
+config (via `~/.grok` MCP config and/or the `session/new` `mcpServers` array), plus adding
+grok to the broker's text-only-reply rejection set.
 
 ## Full-parity feature map
 
 | supermux capability | Grok Build mechanism |
 |---|---|
-| Reply to user | `mux-shim` MCP `reply` tool (auto-discovered; also passed in `session/new`) |
+| Reply to user (text) | Broker relays `agent_message_chunk` (stream-relay); text-only `reply()` is rejected — same as codex/cursor/opencode |
+| Send files/attachments out | `mux-shim` `reply` tool with `files[]` (file-delivery-only for streamed agents) → `transform-outbound.ts` |
+| Orchestration / side-effects | `mux-shim` tools (spawn_session, react, download_attachment, expose_port, memory_search, …) |
 | Activity stream (▸ verb arg … status) | `tool_call` / `tool_call_update` → `ActivityEvent` |
 | Thinking / running / idle state | ACP turn lifecycle (`session/prompt` start → result) + `agent_thought_chunk`; feeds the broker's pure-reflector state machine |
 | Dead/crash detection | ACP pipe close (process exit) → liveness `dead`, same as today |
