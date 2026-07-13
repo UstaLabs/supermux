@@ -145,6 +145,26 @@ final class MacBrokerSidecarTests: XCTestCase {
         XCTAssertEqual(sidecar.phase, .stopped)
     }
 
+    func testKeepAliveHandoffOnlyAdoptsAndNeverSpawns() async {
+        var probes = [MacHostProbeResult.portFree, .supermuxHost(hostId: "launchd-host")]
+        var spawnCount = 0
+        let sidecar = MacBrokerSidecar(
+            probe: { _ in probes.removeFirst() },
+            spawn: { _ in spawnCount += 1; return FakeProcess() },
+            acquireManagerLock: { true },
+            healthAttempts: 2,
+            healthPollDelay: 0
+        )
+
+        sidecar.stop()
+        await sidecar.adoptKeepAliveHost()
+
+        XCTAssertEqual(spawnCount, 0)
+        XCTAssertEqual(sidecar.hostId, "launchd-host")
+        XCTAssertEqual(sidecar.ownership, .external)
+        XCTAssertEqual(sidecar.phase, .adopted)
+    }
+
     func testPackagedBrokerPathIncludesHelpersAndCommonAgentLocations() {
         let path = MacBrokerSidecar.childPath(
             bundledBinDirectory: URL(fileURLWithPath: "/tmp/mux-bin"),
@@ -198,7 +218,7 @@ final class MacHostBootstrapTests: XCTestCase {
 
     func testExistingLocalTokenIsReusedToMintPhoneClaim() async throws {
         var requests: [URLRequest] = []
-        let bootstrap = MacHostBootstrap { request in
+        let bootstrap = MacHostBootstrap(relayAttempts: 1) { request in
             requests.append(request)
             return self.response(request.url!, body: #"{"claimSecret":"phone-secret"}"#)
         }
@@ -219,7 +239,7 @@ final class MacHostBootstrapTests: XCTestCase {
 
     func testFreshBrokerBootstrapsTokenFromCookieBeforeMintingClaim() async {
         var paths: [String] = []
-        let bootstrap = MacHostBootstrap { request in
+        let bootstrap = MacHostBootstrap(relayAttempts: 1) { request in
             paths.append(request.url!.path)
             if request.url!.path == "/pair/claim" {
                 return self.response(
@@ -243,7 +263,7 @@ final class MacHostBootstrapTests: XCTestCase {
     }
 
     func testPairingPayloadMatchesSharedContract() async throws {
-        let bootstrap = MacHostBootstrap { request in
+        let bootstrap = MacHostBootstrap(relayAttempts: 1) { request in
             if request.url!.path == "/me" {
                 return self.response(request.url!, body: #"{"paired":true,"relayUrl":"https://h-abcdefghijklmnopqrstuvwxyz.relay.supermux.dev"}"#)
             }
@@ -269,8 +289,33 @@ final class MacHostBootstrapTests: XCTestCase {
         XCTAssertEqual(json["relayUrl"] as? String, "https://h-abcdefghijklmnopqrstuvwxyz.relay.supermux.dev")
     }
 
+    func testWaitsForRelayBeforePublishingPairingPayload() async throws {
+        var relayChecks = 0
+        let bootstrap = MacHostBootstrap(relayAttempts: 3, relayPollDelay: 0) { request in
+            if request.url!.path == "/me" {
+                relayChecks += 1
+                let body = relayChecks < 3
+                    ? #"{"paired":true}"#
+                    : #"{"paired":true,"relayUrl":"https://h-abcdefghijklmnopqrstuvwxyz.relay.supermux.dev"}"#
+                return self.response(request.url!, body: body)
+            }
+            return self.response(request.url!, body: #"{"claimSecret":"phone-secret"}"#)
+        }
+
+        let result = await bootstrap.prepare(
+            localBaseURL: "http://127.0.0.1:9898",
+            pairingDirectURL: "http://192.168.1.101:9898",
+            hostId: "abcdefghijklmnopqrstuvwxyz",
+            hostName: "Studio Mac",
+            existingToken: "token"
+        )
+
+        XCTAssertEqual(relayChecks, 3)
+        XCTAssertEqual(result?.relayURL, "https://h-abcdefghijklmnopqrstuvwxyz.relay.supermux.dev")
+    }
+
     func testBootstrapFailureReturnsNilWithoutPartialResult() async {
-        let bootstrap = MacHostBootstrap { request in
+        let bootstrap = MacHostBootstrap(relayAttempts: 1) { request in
             self.response(request.url!, status: 403, body: #"{"error":"already set up"}"#)
         }
 
@@ -450,6 +495,29 @@ final class MacHostCoordinatorTests: XCTestCase {
 
         await coordinator.start()
         XCTAssertEqual(coordinator.state, .ready(payloadJSON: "payload"))
+    }
+
+    func testRequiredRelayNeverPublishesLocalOnlyQRCode() async {
+        let coordinator = MacHostCoordinator(
+            hostName: "My Mac",
+            requiresRelay: true,
+            startHost: {
+                MacHostEndpoint(baseURL: "http://127.0.0.1:9898", hostId: "abcdefghijklmnopqrstuvwxyz", port: 9898)
+            },
+            existingToken: { "token" },
+            prepare: { _, _, _ in
+                MacHostPreparedClaim(localToken: "token", payloadJSON: "local-only", relayURL: nil)
+            },
+            persistLocalPair: { _, _, _, _ in },
+            installKeepAlive: { _ in true }
+        )
+
+        await coordinator.start()
+
+        XCTAssertEqual(
+            coordinator.state,
+            .failed("Couldn't bring the Supermux relay online. Check your connection, then retry.")
+        )
     }
 
     func testFinishInstallsKeepAliveOnlyWhenSelected() async {

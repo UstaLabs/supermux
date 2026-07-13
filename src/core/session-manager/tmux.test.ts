@@ -1,5 +1,16 @@
 import { describe, expect, test } from "bun:test"
-import { createTmuxClient } from "./tmux"
+import { createTmuxClient, runCommand } from "./tmux"
+
+test("tmux command runner kills a subprocess that never returns", async () => {
+  const started = Date.now()
+  await expect(runCommand("/bin/sh", ["-c", "sleep 30"], 20)).rejects.toThrow(/timed out/)
+  expect(Date.now() - started).toBeLessThan(1_000)
+})
+
+test("tmux command runner resolves on process exit and captures both output streams", async () => {
+  const result = await runCommand("/bin/sh", ["-c", "printf stdout-value; printf stderr-value >&2"])
+  expect(result).toEqual({ code: 0, stdout: "stdout-value", stderr: "stderr-value" })
+})
 
 describe("tmux window IDs", () => {
   test("spawnSessionWindow returns tmux window id", async () => {

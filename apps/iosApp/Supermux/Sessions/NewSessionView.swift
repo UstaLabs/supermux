@@ -28,6 +28,7 @@ struct NewSessionView: View {
     @State private var projectSearch = false
     @State private var launcherCommands: [SlashCommand] = []
     @State private var spawning = false
+    @State private var spawnFailed = false
     // Worktree / base-branch (web LauncherWorktreePicker parity) — shown only when
     // the selected project is an eligible git repo.
     @State private var repoInfo: RepoInfo?
@@ -238,6 +239,11 @@ struct NewSessionView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Enable microphone access for supermux in Settings to record voice messages.")
+        }
+        .alert("Couldn’t start session", isPresented: $spawnFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Make sure the selected agent is installed and signed in on this host, then try again.")
         }
     }
 
@@ -456,7 +462,6 @@ struct NewSessionView: View {
 
     private func spawn() {
         spawning = true
-        launcherState.clearDraft()
         let (raw, toUpload) = composer.consume()
         let firstMsg = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let eligible = repoInfo?.eligible == true
@@ -487,7 +492,16 @@ struct NewSessionView: View {
                 if !firstMsg.isEmpty || !ids.isEmpty {
                     broker.send(id, firstMsg, attachments: ids.isEmpty ? nil : ids)
                 }
+                launcherState.clearDraft()
                 onSpawned(id)
+            } else {
+                if composer.draft.isEmpty {
+                    composer.draft = raw
+                } else if !raw.isEmpty {
+                    composer.draft = raw + "\n" + composer.draft
+                }
+                composer.pending = toUpload + composer.pending
+                spawnFailed = true
             }
             spawning = false
         }

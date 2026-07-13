@@ -15,11 +15,13 @@ function fakes(opts: { hasSession: boolean; systemdRunThrows?: boolean; systemdR
   const run = async (args: string[]) => {
     calls.push({ cmd: "tmux", args })
     if (args[0] === "has-session") return { code: opts.hasSession ? 0 : 1, stdout: "", stderr: "" }
+    if (args[0] === "list-windows") return { code: 0, stdout: "@plain\tw\n", stderr: "" }
     return { code: 0, stdout: "@plain\n", stderr: "" }
   }
   const runRaw = async (cmd: string, args: string[]) => {
     calls.push({ cmd, args })
-    if (opts.systemdRunThrows) throw new Error("spawn systemd-run ENOENT")
+    if (cmd === "systemd-run" && opts.systemdRunThrows) throw new Error("spawn systemd-run ENOENT")
+    if (cmd === "/bin/sh") return { code: 0, stdout: "", stderr: "" }
     const code = opts.systemdRunCode ?? 0
     return { code, stdout: code === 0 ? "@scoped\n" : "", stderr: code === 0 ? "" : "scope failed" }
   }
@@ -39,12 +41,14 @@ describe("tmux server scope (survives broker restart)", () => {
     expect(calls.some((c) => c.cmd === "tmux" && c.args[0] === "new-session")).toBe(false)
   })
 
-  test("falls back to a plain tmux new-session when systemd-run is unavailable", async () => {
+  test("falls back to a detached tmux new-session when systemd-run is unavailable", async () => {
     const { calls, client } = fakes({ hasSession: false, systemdRunThrows: true })
     const { windowId } = await client.spawnSessionWindow({ session: "mux", window: "w", workdir: "/tmp", command: "cmd" })
 
     expect(calls.some((c) => c.cmd === "systemd-run")).toBe(true)
-    expect(calls.some((c) => c.cmd === "tmux" && c.args[0] === "new-session")).toBe(true)
+    const detached = calls.find((c) => c.cmd === "/bin/sh")
+    expect(detached).toBeDefined()
+    expect(detached!.args).toEqual(expect.arrayContaining(["tmux", "new-session"]))
     expect(windowId).toBe("@plain")
   })
 

@@ -23,8 +23,15 @@ struct PairToken: Equatable {
                 return PairToken(baseURL: base, token: token)
             }
         }
-        // Bare token — only usable once a broker URL is already known.
-        if let base = fallbackBaseURL { return PairToken(baseURL: base, token: trimmed) }
+        // Bare legacy token — only usable once a broker URL is already known. DeviceStore
+        // tokens are 32 random bytes encoded as unpadded base64url (43 characters). Do not
+        // accept arbitrary text here: when a URL survives but its Keychain item does not,
+        // accepting a JSON claim as a "bare token" makes pairing look successful while every
+        // subsequent request is unauthorized.
+        if let base = fallbackBaseURL,
+           trimmed.range(of: #"^[A-Za-z0-9_-]{43}$"#, options: .regularExpression) != nil {
+            return PairToken(baseURL: base, token: trimmed)
+        }
         return nil
     }
 

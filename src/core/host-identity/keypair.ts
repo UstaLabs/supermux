@@ -54,7 +54,16 @@ export function loadOrCreateHostKey(path: string): HostIdentity {
   }
   const { privateKey, publicKey } = generateKeyPairSync("ed25519")
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-  writeFileSync(path, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 })
-  chmodSync(path, 0o600) // umask-proof
-  return toIdentity(privateKey, publicKey)
+  try {
+    // Exclusive creation makes the durable identity deterministic even if two first-start
+    // brokers race (for example, the desktop app and a restored LaunchAgent). The loser reads
+    // the winner's key instead of overwriting it and continuing with a different in-memory ID.
+    writeFileSync(path, privateKey.export({ type: "pkcs8", format: "pem" }), { flag: "wx", mode: 0o600 })
+    chmodSync(path, 0o600) // umask-proof
+    return toIdentity(privateKey, publicKey)
+  } catch (error: any) {
+    if (error?.code !== "EEXIST") throw error
+    const winner = createPrivateKey(readFileSync(path, "utf8"))
+    return toIdentity(winner, createPublicKey(winner))
+  }
 }

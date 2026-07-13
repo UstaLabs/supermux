@@ -35,6 +35,7 @@ final class MacHostCoordinator: ObservableObject {
     @Published private(set) var state: State = .idle
     let hostName: String
 
+    private let requiresRelay: Bool
     private let startHost: StartHost
     private let existingToken: () -> String?
     private let prepare: Prepare
@@ -48,6 +49,7 @@ final class MacHostCoordinator: ObservableObject {
 
     init(
         hostName: String,
+        requiresRelay: Bool = false,
         startHost: @escaping StartHost,
         existingToken: @escaping () -> String?,
         prepare: @escaping Prepare,
@@ -57,6 +59,7 @@ final class MacHostCoordinator: ObservableObject {
         restartHost: @escaping () async -> Void = {}
     ) {
         self.hostName = hostName
+        self.requiresRelay = requiresRelay
         self.startHost = startHost
         self.existingToken = existingToken
         self.prepare = prepare
@@ -68,11 +71,16 @@ final class MacHostCoordinator: ObservableObject {
 
     static func live() -> MacHostCoordinator {
         let sidecar = MacBrokerSidecar()
-        let bootstrap = MacHostBootstrap()
+        let relayEnabled = ProcessInfo.processInfo.environment["SM_HOST_RELAY_DISABLED"] != "1"
+        let bootstrap = MacHostBootstrap(
+            relayAttempts: relayEnabled ? 60 : 1,
+            relayPollDelay: relayEnabled ? 250_000_000 : 0
+        )
         let machine = Host.current().localizedName?.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = machine.flatMap { $0.isEmpty ? nil : "This computer (\($0))" } ?? "This computer"
         let coordinator = MacHostCoordinator(
             hostName: name,
+            requiresRelay: relayEnabled,
             startHost: {
                 await sidecar.start()
                 guard let id = sidecar.hostId,
@@ -131,7 +139,7 @@ final class MacHostCoordinator: ObservableObject {
                 )
             },
             stopHost: { sidecar.stop() },
-            restartHost: { await sidecar.start() }
+            restartHost: { await sidecar.adoptKeepAliveHost() }
         )
         coordinator.sidecar = sidecar
         coordinator.terminationObserver = NotificationCenter.default.addObserver(
@@ -154,6 +162,10 @@ final class MacHostCoordinator: ObservableObject {
         self.endpoint = endpoint
         guard let claim = await prepare(endpoint, hostName, existingToken()) else {
             state = .failed("The local host is already configured. Pair this Mac with it, then retry.")
+            return
+        }
+        guard !requiresRelay || claim.relayURL != nil else {
+            state = .failed("Couldn't bring the Supermux relay online. Check your connection, then retry.")
             return
         }
         persistLocalPair(claim.localToken, endpoint.baseURL, endpoint.hostId, hostName)
@@ -207,7 +219,7 @@ struct MacHostWizard: View {
                 .frame(width: 72, height: 72)
             Text("This Mac is your Supermux host")
                 .font(.largeTitle.bold())
-            Text("Your agents run here. Scan the pairing code with Supermux on your phone while both devices are on the same network.")
+            Text("Your agents run here. Once the built-in relay is online, scan the pairing code with Supermux on your phone — even when it is on another network.")
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 520)
