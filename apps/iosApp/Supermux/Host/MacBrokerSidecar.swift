@@ -116,6 +116,23 @@ final class MacBrokerSidecar: ObservableObject {
         phase = .stopped
     }
 
+    /// Complete the managed-process → launchd handoff without ever spawning a second broker.
+    /// `MacHostKeepAlive.install` returns once launchd accepted the job, not once `/host` is
+    /// listening, so calling `start()` here races launchd and can reclaim the port itself.
+    func adoptKeepAliveHost() async {
+        guard phase == .stopped || phase == .failed else { return }
+        phase = .starting
+        ownership = .none
+        hostId = nil
+        if let id = await pollForHost(port: effectivePort) {
+            ownership = .external
+            hostId = id
+            phase = .adopted
+        } else {
+            phase = .failed
+        }
+    }
+
     private func spawnManaged(port: Int) async {
         effectivePort = port
         do {

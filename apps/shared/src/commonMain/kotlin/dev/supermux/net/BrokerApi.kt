@@ -22,6 +22,7 @@ import io.ktor.http.contentType
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SlashCommand
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -921,6 +922,7 @@ class BrokerApi(
     // explicitNulls=false: partial PATCH bodies (e.g. review-comment resolve) must OMIT unset
     // optional fields, not send them as JSON null — an explicit null would overwrite stored data.
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
+    internal var spawnTimeoutMillis: Long = 50_000
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -1113,12 +1115,13 @@ class BrokerApi(
     }
 
     /** POST /sessions */
-    suspend fun spawn(req: SpawnRequest): SpawnResponse =
+    suspend fun spawn(req: SpawnRequest): SpawnResponse = withTimeout(spawnTimeoutMillis) {
         decode(http.post("$httpBase/sessions") {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(req))
         })
+    }
 
     /** GET /settings/config */
     suspend fun getConfig(): AppConfigDto =

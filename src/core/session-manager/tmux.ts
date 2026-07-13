@@ -1,42 +1,35 @@
-import { spawn } from "child_process"
-
 type TmuxResult = { code: number; stdout: string; stderr: string }
 type TmuxRunner = (args: string[]) => Promise<TmuxResult>
 // Runs an arbitrary command (used to wrap tmux in `systemd-run`); injectable for tests.
 type CmdRunner = (cmd: string, args: string[]) => Promise<TmuxResult>
 
-async function streamToString(stream: any): Promise<string> {
-  const chunks: string[] = []
-  // Bun exposes ReadableStream on stdout/stderr; Node exposes Readable with .on("data")
-  if (stream && "getReader" in stream) {
-    const reader = stream.getReader()
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      chunks.push(typeof value === "string" ? value : Buffer.from(value).toString("utf8"))
-    }
-  } else if (stream && "on" in stream) {
-    return new Promise((resolve) => {
-      let out = ""
-      stream.on("data", (d: any) => { out += d })
-      stream.on("end", () => resolve(out))
-    })
-  }
-  return chunks.join("")
-}
+export const TMUX_COMMAND_TIMEOUT_MS = 10_000
 
-function runCommand(cmd: string, args: string[]): Promise<TmuxResult> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] })
-    let stdoutP = streamToString(proc.stdout)
-    let stderrP = streamToString(proc.stderr)
-    proc.on("close", async (code) => {
-      const stdout = await stdoutP
-      const stderr = await stderrP
-      resolve({ code: code ?? 0, stdout, stderr })
-    })
-    proc.on("error", reject)
-  })
+export async function runCommand(cmd: string, args: string[], timeoutMs = TMUX_COMMAND_TIMEOUT_MS): Promise<TmuxResult> {
+  // The broker is a Bun binary; use Bun's native subprocess lifecycle instead of its Node
+  // child_process compatibility events, which are unreliable for tmux clients in a compiled
+  // macOS executable. The first-server path is separately detached below, so every command that
+  // reaches this runner is expected to exit and close its own output streams.
+  const proc = Bun.spawn([cmd, ...args], { stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const code = await Promise.race([
+      proc.exited,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          proc.kill()
+          reject(new Error(`${cmd} timed out after ${timeoutMs}ms`))
+        }, timeoutMs)
+      }),
+    ])
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ])
+    return { code, stdout, stderr }
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 const runTmux: TmuxRunner = (args) => runCommand("tmux", args)
@@ -57,7 +50,13 @@ async function newSessionScoped(runRaw: CmdRunner, run: TmuxRunner, tmuxArgs: st
   } catch {
     // systemd-run not on PATH — fall through to a plain tmux spawn.
   }
-  return run(tmuxArgs)
+  // On macOS the first `tmux new-session` process becomes the long-lived server. Waiting on that
+  // process from Bun therefore waits forever even though the session is ready. Birth it behind a
+  // short-lived shell with every stdio redirected; the shell returns immediately and the caller
+  // resolves the authoritative window id by polling the now-running server.
+  return runRaw("/bin/sh", [
+    "-c", '"$@" </dev/null >/dev/null 2>&1 &', "supermux-tmux-detached", "tmux", ...tmuxArgs,
+  ])
 }
 
 export function createTmuxClient(run: TmuxRunner = runTmux, runRaw: CmdRunner = runCommand) {
@@ -83,7 +82,23 @@ export function createTmuxClient(run: TmuxRunner = runTmux, runRaw: CmdRunner = 
       r = await run(["new-window", "-P", "-F", "#{window_id}", "-t", `${opts.session}:`, "-n", opts.window, "-c", opts.workdir, opts.command])
       if (r.code !== 0) throw new Error(`tmux new-window failed: ${r.stderr}`)
     }
-    return { windowId: r.stdout.trim() }
+    let windowId = r.stdout.trim()
+    // Detached first-server fallback has no stdout. Poll the server for the exact, collision-safe
+    // window name instead of guessing an index or holding the HTTP spawn request open forever.
+    if (!windowId) {
+      for (let attempt = 0; attempt < 40 && !windowId; attempt++) {
+        const listed = await run(["list-windows", "-t", opts.session, "-F", "#{window_id}\t#{window_name}"])
+        if (listed.code === 0) {
+          for (const line of listed.stdout.split("\n")) {
+            const [id, name] = line.split("\t", 2)
+            if (name === opts.window && id) { windowId = id.trim(); break }
+          }
+        }
+        if (!windowId) await new Promise<void>(resolve => setTimeout(resolve, 50))
+      }
+    }
+    if (!windowId) throw new Error(`tmux created window '${opts.window}' but did not report its id`)
+    return { windowId }
   }
 
   async function killWindowById(windowId: string): Promise<void> {

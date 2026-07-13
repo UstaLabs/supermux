@@ -145,6 +145,26 @@ final class MacBrokerSidecarTests: XCTestCase {
         XCTAssertEqual(sidecar.phase, .stopped)
     }
 
+    func testKeepAliveHandoffOnlyAdoptsAndNeverSpawns() async {
+        var probes = [MacHostProbeResult.portFree, .supermuxHost(hostId: "launchd-host")]
+        var spawnCount = 0
+        let sidecar = MacBrokerSidecar(
+            probe: { _ in probes.removeFirst() },
+            spawn: { _ in spawnCount += 1; return FakeProcess() },
+            acquireManagerLock: { true },
+            healthAttempts: 2,
+            healthPollDelay: 0
+        )
+
+        sidecar.stop()
+        await sidecar.adoptKeepAliveHost()
+
+        XCTAssertEqual(spawnCount, 0)
+        XCTAssertEqual(sidecar.hostId, "launchd-host")
+        XCTAssertEqual(sidecar.ownership, .external)
+        XCTAssertEqual(sidecar.phase, .adopted)
+    }
+
     func testPackagedBrokerPathIncludesHelpersAndCommonAgentLocations() {
         let path = MacBrokerSidecar.childPath(
             bundledBinDirectory: URL(fileURLWithPath: "/tmp/mux-bin"),

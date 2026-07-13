@@ -139,7 +139,7 @@ final class MacHostCoordinator: ObservableObject {
                 )
             },
             stopHost: { sidecar.stop() },
-            restartHost: { await sidecar.start() }
+            restartHost: { await sidecar.adoptKeepAliveHost() }
         )
         coordinator.sidecar = sidecar
         coordinator.terminationObserver = NotificationCenter.default.addObserver(
