@@ -1,7 +1,7 @@
 {
   "name": "supermux",
   "version": "0.1.0",
-  "description": "Run Claude Code, Codex, Cursor & OpenCode around the clock on a box you own — steered from any screen. Self-hosted, no vendor cloud.",
+  "description": "Open-source, mobile-first agentic development environment for running Claude Code, Codex, Cursor, and OpenCode on hardware you control.",
   "license": "MIT",
   "private": true,
   "type": "module",
