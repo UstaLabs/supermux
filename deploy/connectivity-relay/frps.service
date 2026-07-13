@@ -1,0 +1,26 @@
+[Unit]
+Description=Supermux FRP relay data plane
+After=network-online.target supermux-connectivity-relay.service
+Wants=network-online.target supermux-connectivity-relay.service
+
+[Service]
+Type=simple
+User=supermux-relay
+Group=supermux-relay
+ExecStart=/usr/local/bin/frps -c /etc/supermux-relay/frps.toml
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

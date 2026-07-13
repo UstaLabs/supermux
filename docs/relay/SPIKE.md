@@ -37,4 +37,15 @@ frps RSS: ~25.8 MB baseline (1 client) → ~27.8 MB with ~40 idle leased clients
 All gates pass. Proceed with frp as the v1 relay data plane behind `RelayProvider` (spec §4 / D11). The rev-3 custom protocol (`git 8e63513`) stays the documented fallback but is not needed. Track the Gate-2 newest-wins refinement as a follow-up if concurrent-live duplicates ever surface in practice.
 
 ## Reproduce
-Harness lives in `~/.cache/x/spike/` (not committed — throwaway): `plugin-server.ts` (wraps `handleAuthOp`), `fake-broker.ts` (HTTP+WS echo), `mint.ts` (real `mintLease`), and the frp TOML configs. Templates for a production relay box are in `frps.ini.example` + `Caddyfile.example` beside this file.
+Harness lives in `~/.cache/x/spike/` (not committed — throwaway): `plugin-server.ts` (wraps `handleAuthOp`), `fake-broker.ts` (HTTP+WS echo), `mint.ts` (real `mintLease`), and the frp TOML configs. Reference templates are in `frps.toml.example` + `Caddyfile.example` beside this file. The production configuration and runbook live in `deploy/connectivity-relay/`.
+
+## Production result (2026-07-13)
+
+The v1 relay is deployed at `*.relay.supermux.dev` with the control API at
+`https://control.relay.supermux.dev`. A real host provider and a complete Supermux broker were
+verified through the public edge for HTTP and WebSocket traffic. Graceful shutdown and SIGKILL both
+released the FRP proxy, so a restarted broker can immediately reclaim its hostname.
+
+The production pass also caught one post-spike incompatibility: current FRP client metadata must be
+sent in TOML (`[metadatas]` and per-proxy `metadatas.lease`). The earlier INI output did not transmit
+the lease metadata to the auth plugin. The shipped provider now writes `frpc.toml`.

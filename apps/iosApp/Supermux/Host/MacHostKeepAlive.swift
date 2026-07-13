@@ -13,7 +13,8 @@ enum MacHostKeepAlive {
         brokerPath: String,
         port: Int,
         binDirectory: String,
-        stateDirectory: String
+        stateDirectory: String,
+        relayDomain: String = "relay.supermux.dev"
     ) -> String {
         let path = xml(brokerPath)
         let bin = xml(binDirectory)
@@ -38,6 +39,8 @@ enum MacHostKeepAlive {
             <string>http://127.0.0.1:\(port)</string>
             <key>MUX_STATE_DIR</key>
             <string>\(state)</string>
+            <key>MUX_RELAY_DOMAIN</key>
+            <string>\(xml(relayDomain))</string>
             <key>PATH</key>
             <string>\(bin):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
           </dict>

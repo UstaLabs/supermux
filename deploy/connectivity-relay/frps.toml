@@ -1,0 +1,13 @@
+bindAddr = "0.0.0.0"
+bindPort = 7000
+proxyBindAddr = "127.0.0.1"
+vhostHTTPPort = 8080
+subdomainHost = "relay.supermux.dev"
+transport.maxPoolCount = 5
+transport.tls.force = true
+
+[[httpPlugins]]
+name = "supermux-auth"
+addr = "127.0.0.1:7200"
+path = "/handler"
+ops = ["Login", "NewProxy"]

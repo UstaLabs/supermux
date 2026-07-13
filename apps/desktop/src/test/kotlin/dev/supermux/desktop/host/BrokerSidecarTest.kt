@@ -238,6 +238,11 @@ class BrokerSidecarTest {
         assertEquals("13021", env["MUX_WHATSAPP_WEBHOOK_PORT"])
     }
 
+    @Test fun relayIsEnabledByDefaultForPackagedHosts() {
+        val env = BrokerSidecar.buildSpawnEnv(SidecarConfig(), port = 9898)
+        assertEquals("relay.supermux.dev", env["MUX_RELAY_DOMAIN"])
+    }
+
     @Test fun parseHostIdReadsGetHostBody() {
         assertEquals("habc", BrokerSidecar.parseHostId("""{"hostId":"habc","name":"x","protocolVersion":1}"""))
         assertNull(BrokerSidecar.parseHostId("""{"name":"no id"}"""))

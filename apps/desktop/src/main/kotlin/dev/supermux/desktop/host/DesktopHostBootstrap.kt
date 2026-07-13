@@ -82,7 +82,7 @@ object DesktopHostBootstrap {
             val token = existingToken?.takeIf { it.isNotBlank() } ?: secretlessClaimToken(client, localUrl, deviceName)
             if (token.isNullOrBlank()) return@withContext null
             val secret = mintClaimSecret(client, localUrl, token) ?: return@withContext null
-            HostClaim(localToken = token, claimSecret = secret)
+            HostClaim(localToken = token, claimSecret = secret, relayUrl = fetchRelayUrl(client, localUrl, token))
         }
 
     /** POST /pair/claim with no secret (brand-new broker) → the minted token from the Set-Cookie header. */
@@ -108,6 +108,16 @@ object DesktopHostBootstrap {
         val resp = client.send(req, BodyHandlers.ofString())
         if (resp.statusCode() != 200) return null
         json.decodeFromString(MintResult.serializer(), resp.body()).claimSecret.takeIf { it.isNotBlank() }
+    }.getOrNull()
+
+    private fun fetchRelayUrl(client: HttpClient, localUrl: String, token: String): String? = runCatching {
+        val req = HttpRequest.newBuilder(URI.create("$localUrl/me"))
+            .timeout(Duration.ofSeconds(5))
+            .header("authorization", "Bearer $token")
+            .GET().build()
+        val resp = client.send(req, BodyHandlers.ofString())
+        if (resp.statusCode() != 200) return null
+        json.decodeFromString(MeResult.serializer(), resp.body()).relayUrl?.takeIf { it.isNotBlank() }
     }.getOrNull()
 
     /** Pull `<AUTH_COOKIE>=<token>` out of one Set-Cookie header value. */
@@ -149,7 +159,6 @@ object DesktopHostBootstrap {
             val existing = hostStore.list().firstOrNull { it.hostId == sidecar.hostId.value }?.token
             mintLocalClaim(sidecar.localBaseUrl, hostName, existing)
         },
-        provideRelayUrl = { null }, // hosting-remote/relay is a follow-up (spec §6 D7); direct-only for now
         onPairThisComputer = { localToken, directUrl, hostId ->
             hostStore.addOrUpdate(
                 displayName = hostName,
@@ -185,4 +194,7 @@ object DesktopHostBootstrap {
 
     @kotlinx.serialization.Serializable
     private data class MintResult(val claimSecret: String = "")
+
+    @kotlinx.serialization.Serializable
+    private data class MeResult(val relayUrl: String? = null)
 }

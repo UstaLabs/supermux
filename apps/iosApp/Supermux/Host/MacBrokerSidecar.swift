@@ -262,6 +262,9 @@ final class MacBrokerSidecar: ObservableObject {
         var environment = base
         environment["MUX_WEB_PORT"] = String(port)
         environment["MUX_WEB_PUBLIC_URL"] = "http://127.0.0.1:\(port)"
+        if environment["SM_HOST_RELAY_DISABLED"] != "1" {
+            environment["MUX_RELAY_DOMAIN"] = environment["MUX_RELAY_DOMAIN"] ?? "relay.supermux.dev"
+        }
         environment["PATH"] = path
         return environment
     }

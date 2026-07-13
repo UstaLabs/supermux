@@ -4,6 +4,7 @@ import Foundation
 struct MacHostPreparedClaim: Equatable {
     let localToken: String
     let payloadJSON: String
+    let relayURL: String?
 }
 
 struct MacHostBootstrap {
@@ -32,19 +33,21 @@ struct MacHostBootstrap {
         }
 
         guard let secret = await mintClaim(base: base, token: token) else { return nil }
+        let relayURL = await fetchRelayURL(base: base, token: token)
         let payload = Payload(
             v: 1,
             action: "pair",
             hostId: hostId,
             name: hostName,
             directUrl: pairingDirectURL ?? localBaseURL,
+            relayUrl: relayURL,
             claimSecret: secret
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(payload),
               let json = String(data: data, encoding: .utf8) else { return nil }
-        return MacHostPreparedClaim(localToken: token, payloadJSON: json)
+        return MacHostPreparedClaim(localToken: token, payloadJSON: json, relayURL: relayURL)
     }
 
     private func bootstrapFirstDevice(base: URL, name: String) async -> String? {
@@ -70,6 +73,16 @@ struct MacHostBootstrap {
               let result = try? JSONDecoder().decode(MintResult.self, from: data),
               !result.claimSecret.isEmpty else { return nil }
         return result.claimSecret
+    }
+
+    private func fetchRelayURL(base: URL, token: String) async -> String? {
+        guard let url = URL(string: "/me", relativeTo: base) else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 5
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let (data, response) = try? await self.request(request), response.statusCode == 200,
+              let result = try? JSONDecoder().decode(MeResult.self, from: data) else { return nil }
+        return result.relayUrl?.isEmpty == false ? result.relayUrl : nil
     }
 
     static func cookieToken(from response: HTTPURLResponse) -> String? {
@@ -101,12 +114,17 @@ struct MacHostBootstrap {
         let claimSecret: String
     }
 
+    private struct MeResult: Codable {
+        let relayUrl: String?
+    }
+
     private struct Payload: Codable {
         let v: Int
         let action: String
         let hostId: String
         let name: String
         let directUrl: String
+        let relayUrl: String?
         let claimSecret: String
     }
 }

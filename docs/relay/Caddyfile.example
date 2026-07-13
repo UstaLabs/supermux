@@ -1,11 +1,27 @@
-# Wildcard TLS + edge for the relay box. Caddy terminates TLS for every
-# h-<hostId>.relay.supermux.dev and forwards to frps's vhost HTTP port.
-# Requires a DNS-01 wildcard cert (a *.relay.supermux.dev A/AAAA record + the
-# Caddy DNS plugin for your provider) — on-demand TLS also works for a start.
+# Wildcard DNS points *.relay.supermux.dev at this box. Caddy obtains an
+# individual certificate on demand only after the control service approves the
+# hostname. Verified host IDs persist, so renewals remain allowed after reboot.
+
+{
+	on_demand_tls {
+		ask http://127.0.0.1:7200/relay/caddy-ask
+	}
+}
+
+control.relay.supermux.dev {
+	tls {
+		on_demand
+	}
+	reverse_proxy 127.0.0.1:7200
+}
 
 *.relay.supermux.dev {
-	# Strip any client-supplied forwarding headers so the broker never trusts
-	# them (spec §4.5); frps/Caddy set the real ones.
-	request_header -X-Mux-Via
-	reverse_proxy 127.0.0.1:8080
+	tls {
+		on_demand
+	}
+	reverse_proxy 127.0.0.1:8080 {
+		# Strip any client-supplied relay marker; the edge is authoritative.
+		header_up -X-Mux-Via
+		header_up X-Mux-Via relay
+	}
 }

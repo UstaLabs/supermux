@@ -177,6 +177,7 @@ final class MacBrokerSidecarTests: XCTestCase {
 
         XCTAssertEqual(environment["MUX_WEB_PORT"], "9911")
         XCTAssertEqual(environment["MUX_WEB_PUBLIC_URL"], "http://127.0.0.1:9911")
+        XCTAssertEqual(environment["MUX_RELAY_DOMAIN"], "relay.supermux.dev")
         XCTAssertEqual(environment["PATH"], "/tmp/mux-bin:/usr/bin")
         XCTAssertEqual(environment["EXISTING"], "kept")
     }
@@ -210,9 +211,10 @@ final class MacHostBootstrapTests: XCTestCase {
         )
 
         XCTAssertEqual(result?.localToken, "local-token")
-        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.count, 2)
         XCTAssertEqual(requests[0].url?.path, "/pair/mint-claim")
         XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer local-token")
+        XCTAssertEqual(requests[1].url?.path, "/me")
     }
 
     func testFreshBrokerBootstrapsTokenFromCookieBeforeMintingClaim() async {
@@ -236,13 +238,16 @@ final class MacHostBootstrapTests: XCTestCase {
             existingToken: nil
         )
 
-        XCTAssertEqual(paths, ["/pair/claim", "/pair/mint-claim"])
+        XCTAssertEqual(paths, ["/pair/claim", "/pair/mint-claim", "/me"])
         XCTAssertEqual(result?.localToken, "fresh-token")
     }
 
     func testPairingPayloadMatchesSharedContract() async throws {
         let bootstrap = MacHostBootstrap { request in
-            self.response(request.url!, body: #"{"claimSecret":"phone-secret"}"#)
+            if request.url!.path == "/me" {
+                return self.response(request.url!, body: #"{"paired":true,"relayUrl":"https://h-abcdefghijklmnopqrstuvwxyz.relay.supermux.dev"}"#)
+            }
+            return self.response(request.url!, body: #"{"claimSecret":"phone-secret"}"#)
         }
 
         let result = await bootstrap.prepare(
@@ -261,7 +266,7 @@ final class MacHostBootstrapTests: XCTestCase {
         XCTAssertEqual(json["name"] as? String, "Studio Mac")
         XCTAssertEqual(json["directUrl"] as? String, "http://192.168.1.101:9911")
         XCTAssertEqual(json["claimSecret"] as? String, "phone-secret")
-        XCTAssertNil(json["relayUrl"])
+        XCTAssertEqual(json["relayUrl"] as? String, "https://h-abcdefghijklmnopqrstuvwxyz.relay.supermux.dev")
     }
 
     func testBootstrapFailureReturnsNilWithoutPartialResult() async {
@@ -325,6 +330,7 @@ final class MacHostKeepAliveTests: XCTestCase {
         XCTAssertEqual(environment["MUX_WEB_PORT"], "9911")
         XCTAssertEqual(environment["MUX_WEB_PUBLIC_URL"], "http://127.0.0.1:9911")
         XCTAssertEqual(environment["MUX_STATE_DIR"], "/Users/a&b/.mux/state")
+        XCTAssertEqual(environment["MUX_RELAY_DOMAIN"], "relay.supermux.dev")
         XCTAssertTrue(plist.contains("/Applications/Supermux &amp; Tools/supermux-broker"))
         XCTAssertTrue(plist.contains("/Users/a&amp;b/.mux/state"))
     }
@@ -407,7 +413,7 @@ final class MacHostCoordinatorTests: XCTestCase {
             },
             existingToken: { nil },
             prepare: { _, _, _ in
-                MacHostPreparedClaim(localToken: "local-token", payloadJSON: #"{"action":"pair"}"#)
+                MacHostPreparedClaim(localToken: "local-token", payloadJSON: #"{"action":"pair"}"#, relayURL: nil)
             },
             persistLocalPair: { token, url, hostId, _ in persisted = (token, url, hostId) },
             installKeepAlive: { _ in true }
@@ -434,7 +440,7 @@ final class MacHostCoordinatorTests: XCTestCase {
                 )
             },
             existingToken: { "token" },
-            prepare: { _, _, _ in MacHostPreparedClaim(localToken: "token", payloadJSON: "payload") },
+            prepare: { _, _, _ in MacHostPreparedClaim(localToken: "token", payloadJSON: "payload", relayURL: nil) },
             persistLocalPair: { _, _, _, _ in },
             installKeepAlive: { _ in true }
         )
@@ -455,7 +461,7 @@ final class MacHostCoordinatorTests: XCTestCase {
                 MacHostEndpoint(baseURL: "http://127.0.0.1:9911", hostId: "abcdefghijklmnopqrstuvwxyz", port: 9911)
             },
             existingToken: { "token" },
-            prepare: { _, _, _ in MacHostPreparedClaim(localToken: "token", payloadJSON: "payload") },
+            prepare: { _, _, _ in MacHostPreparedClaim(localToken: "token", payloadJSON: "payload", relayURL: nil) },
             persistLocalPair: { _, _, _, _ in },
             installKeepAlive: { port in installedPorts.append(port); return true },
             stopHost: { stopCount += 1 },
