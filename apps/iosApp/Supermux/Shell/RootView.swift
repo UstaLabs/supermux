@@ -227,38 +227,60 @@ struct RootView: View {
     }
 
     @ViewBuilder private func page(_ r: NavRoute) -> some View {
+        switch r {
+        case .newSession: ActiveHostPage(fleet: fleet) { broker in
+            NewSessionView(broker: broker, fleet: fleet, onSpawned: { id in route = nil; selected = id })
+        }
+        case .personalAssistants: HostScopedPage(fleet: fleet) { broker in
+            PersonalAssistantsView(broker: broker, onOpen: { id in route = nil; selected = id })
+        }
+        case .archived: HostScopedPage(fleet: fleet) { ArchivedView(broker: $0) }
+        case .usage: HostScopedPage(fleet: fleet) { UsageView(broker: $0) }
+        case .proxies: HostScopedPage(fleet: fleet) { ProxiesView(broker: $0) }
+        case .displays: HostScopedPage(fleet: fleet) { DisplaysView(broker: $0) }
+        case .devices: HostScopedPage(fleet: fleet) { DevicesView(broker: $0) }
+        case .pairDevice: HostScopedPage(fleet: fleet) { AddDeviceView(broker: $0) }
+        case .settings: HostScopedPage(fleet: fleet) { SettingsView(broker: $0) }
+        }
+    }
+}
+
+/// Resolves the fleet's ACTIVE broker inside its own `body`, so a host switch re-renders the page
+/// with the new host's broker. Resolving it in `page(_:)` directly was not enough: a pushed
+/// `navigationDestination` closure is not re-evaluated when observable fleet state changes, so
+/// picking another host left the pushed page (Settings host picker, launcher projects) on the old
+/// broker until it was re-opened.
+private struct ActiveHostPage<Content: View>: View {
+    let fleet: Fleet
+    @ViewBuilder let content: (BrokerSession) -> Content
+
+    var body: some View {
         if let broker = fleet.activeBroker {
-            switch r {
-            case .newSession: NewSessionView(broker: broker, fleet: fleet, onSpawned: { id in route = nil; selected = id })
-            case .personalAssistants: hostScoped(broker) {
-                PersonalAssistantsView(broker: broker, onOpen: { id in route = nil; selected = id })
-            }
-            case .archived: hostScoped(broker) { ArchivedView(broker: broker) }
-            case .usage: hostScoped(broker) { UsageView(broker: broker) }
-            case .proxies: hostScoped(broker) { ProxiesView(broker: broker) }
-            case .displays: hostScoped(broker) { DisplaysView(broker: broker) }
-            case .devices: hostScoped(broker) { DevicesView(broker: broker) }
-            case .pairDevice: hostScoped(broker) { AddDeviceView(broker: broker) }
-            case .settings: hostScoped(broker) { SettingsView(broker: broker) }
-            }
+            content(broker)
         } else {
             ProgressView("Connecting…").tint(Theme.teal)
         }
     }
+}
 
-    private func hostScoped<Content: View>(
-        _ broker: BrokerSession,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        content()
-            // Recreate page-local loading/state when host scope changes. Without this, a page could
-            // keep host A's rows while its action closures had already moved to host B.
-            .id(broker.baseURL)
-            .safeAreaInset(edge: .top, spacing: 0) {
-                HostScopePicker(hosts: fleet.hostViews, selected: fleet.activeRecordId) {
-                    fleet.setActive($0)
+/// `ActiveHostPage` plus the explicit host-scope bar for pages whose data and actions belong to
+/// one broker (Usage, Devices, Settings, …).
+private struct HostScopedPage<Content: View>: View {
+    let fleet: Fleet
+    @ViewBuilder let content: (BrokerSession) -> Content
+
+    var body: some View {
+        ActiveHostPage(fleet: fleet) { broker in
+            content(broker)
+                // Recreate page-local loading/state when host scope changes. Without this, a page
+                // could keep host A's rows while its action closures had already moved to host B.
+                .id(broker.baseURL)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    HostScopePicker(hosts: fleet.hostViews, selected: fleet.activeRecordId) {
+                        fleet.setActive($0)
+                    }
                 }
-            }
+        }
     }
 }
 

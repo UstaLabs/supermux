@@ -111,6 +111,7 @@ struct NewSessionView: View {
                 Image(systemName: "cube.fill").font(.system(size: 38)).foregroundStyle(.primary)
                 Text("Let's build").font(.largeTitle.bold())
                 projectPicker
+                if fleet.multiHost, let h = activeHost { hostPickerPill(h) }
                 if repoInfo?.eligible == true { worktreePill }
                 composeCard
                 if !workdir.isEmpty {
@@ -298,6 +299,41 @@ struct NewSessionView: View {
         return repoInfo?.currentBranch ?? "HEAD"
     }
 
+    // MARK: - Host picker (Android HostPickerPill parity)
+
+    /// "Spawn on which host" — a bordered pill in the hero, under the project dropdown, exactly
+    /// where Android's launcher puts it (multi-host only). Picking a host updates the fleet's
+    /// active record; `RootView` re-passes the new host's broker, which retargets the
+    /// projects/agents/models/commands loads above.
+    private func hostPickerPill(_ h: HostView) -> some View {
+        Menu {
+            ForEach(fleet.hostViews, id: \.recordId) { hv in
+                Button {
+                    fleet.setActive(hv.recordId)
+                } label: {
+                    let title = hv.online ? hv.displayLabel : "\(hv.displayLabel) (offline)"
+                    if hv.recordId == fleet.activeRecordId {
+                        Label(title, systemImage: "checkmark")
+                    } else {
+                        Text(title)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                HostDot(colorIndex: h.colorIndex, size: 9)
+                Text(h.shortLabel).font(.caption.weight(.medium)).lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).opacity(0.6)
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 11).padding(.vertical, 5)
+            .background(Color.smSecondaryBackground, in: Capsule())
+            .overlay(Capsule().strokeBorder(Theme.hairline, lineWidth: 1))
+        }
+        .smMacBorderlessMenu()
+        .accessibilityIdentifier("launcher_host_picker")
+    }
+
     private var worktreePill: some View {
         Button { worktreeSheet = true } label: {
             HStack(spacing: 5) {
@@ -359,29 +395,6 @@ struct NewSessionView: View {
             // into vertical letter-columns (the action buttons used to share this row and
             // overflow it on a narrow iPhone).
             HStack(spacing: 12) {
-                // Host picker (spec §5): which host to spawn on — defaults to the last-used (active)
-                // host, hidden with one host. Picking retargets projects/agents/models to that host.
-                if fleet.multiHost, let h = activeHost {
-                    Menu {
-                        ForEach(fleet.hostViews, id: \.recordId) { hv in
-                            Button { fleet.setActive(hv.recordId) } label: {
-                                if hv.recordId == fleet.activeRecordId {
-                                    Label(hv.displayLabel, systemImage: "checkmark")
-                                } else {
-                                    Text(hv.displayLabel)
-                                }
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 5) {
-                            HostDot(colorIndex: h.colorIndex, size: 9)
-                            Text(h.shortLabel).font(.subheadline.weight(.medium)).lineLimit(1)
-                            Image(systemName: "chevron.down").font(.caption2)
-                        }.foregroundStyle(.primary)
-                    }
-                    .smMacBorderlessMenu()
-                    .accessibilityIdentifier("launcher_host_picker")
-                }
                 #if os(macOS)
                 // The logo sits OUTSIDE the Menu label on the Mac: AppKit flattens custom
                 // menu-button labels and draws asset images at intrinsic size — a giant
