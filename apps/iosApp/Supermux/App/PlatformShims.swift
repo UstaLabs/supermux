@@ -337,6 +337,15 @@ extension View {
         self
         #endif
     }
+    /// The composer's option lists (model / reasoning) anchor to their pill as a popover on
+    /// macOS — the native idiom for a small anchored chooser — and stay a detented sheet on iOS.
+    @ViewBuilder func smOptionPicker<C: View>(isPresented: Binding<Bool>, @ViewBuilder content: @escaping () -> C) -> some View {
+        #if os(macOS)
+        popover(isPresented: isPresented) { content() }
+        #else
+        sheet(isPresented: isPresented) { content() }
+        #endif
+    }
     @ViewBuilder func smHoverHighlight() -> some View {
         #if os(iOS)
         hoverEffect(.highlight)

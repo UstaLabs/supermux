@@ -1,7 +1,7 @@
 import SwiftUI
 import Shared
 
-/// Model / reasoning-level switcher sheet.
+/// Model / reasoning-level switcher: a detented sheet on iOS, a pill-anchored popover on the Mac.
 struct OptionSwitchSheet: View {
     enum Kind { case model, reasoning }
     let title: String
@@ -36,15 +36,22 @@ struct OptionSwitchSheet: View {
                             }
                         }
                         .foregroundStyle(.primary)
+                        .smMacPlainButton()
                     }
                 }
             }
             .navigationTitle(title).smInlineNavigationTitle()
+            // The Mac presents this in a popover, which dismisses on an outside click.
+            #if os(iOS)
             .toolbar { ToolbarItem(placement: .smTopTrailing) { Button("Done") { dismiss() } } }
+            #endif
             .task { await load() }
         }
         .tint(Theme.teal)
         .smPresentationDetents([.medium, .large])
+        #if os(macOS)
+        .frame(width: 280, height: 360)
+        #endif
     }
 
     private func load() async {
