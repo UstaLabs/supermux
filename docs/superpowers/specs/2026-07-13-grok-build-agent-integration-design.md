@@ -35,7 +35,10 @@ All findings below were **live-verified** on the box (see "Recon evidence").
   `grok-build-plan`).
 - **`grok agent stdio` = ACP (JSON-RPC 2.0).** Handshake:
   `initialize {protocolVersion:1, clientCapabilities:{fs:{...}}}` →
-  `session/new {cwd, mcpServers}` → `session/prompt {sessionId, prompt:[{type:"text",text}]}`.
+  `session/new {cwd}` → `session/prompt {sessionId, prompt:[{type:"text",text}]}`.
+  (`mcpServers` on `session/new` is accepted but IGNORED — verified live on 0.2.101.
+  Model/effort likewise ignored on `session/prompt`: both are spawn flags on
+  `grok agent`, and the model can be changed live with `session/set_model`.)
 - **MCP auto-discovery works:** the ACP init stream already surfaced supermux's
   `mux-shim` + `mux-channel` MCP servers (`_x.ai/mcp/servers_updated`) with zero extra
   config. `mcpCapabilities: {http:true, sse:true}`.
@@ -77,7 +80,7 @@ Mirrors `src/core/agents/cursor/`:
 | `adapter.ts` | `GrokAdapter implements AgentAdapter`. Holds the ACP client, drives the handshake, translates `session/update` → `AgentEvent`, manages the prompt queue + abort. |
 | `acp-client.ts` | Thin JSON-RPC 2.0 framing over the stdio pipe (newline-delimited JSON): request/response correlation by `id`, notification dispatch, server→client request handling (permissions, fs). Isolated + unit-testable with a fake pipe. |
 | `runner.ts` | Spawns `grok agent stdio` with the right env/PATH/cwd; exposes stdin/stdout streams + a kill/abort. Real vs. fake (test) runner, same as cursor. |
-| `mcp-writer.ts` | Writes grok's `mux-shim` MCP config (into `~/.grok` MCP config and/or the `session/new` `mcpServers` array) — same role as cursor's `mcp-writer.ts`. Gives grok the file-delivery reply tool + orchestration/side-effect tools. Do NOT rely on grok auto-discovering supermux's project MCP config; write it explicitly per session. |
+| `config-writer.ts` + `auth.ts` | **CORRECTED 2026-07-14 after live verification.** grok IGNORES `mcpServers` on `session/new`, so the shim is declared in a session-private `~/.grok/config.toml` (`[mcp_servers.mux-shim]` + `[mcp_servers.mux-shim.env]`), with `HOME` redirected to the session's `agent_home` (cursor's pattern). The private HOME is load-bearing: grok otherwise auto-imports `~/.claude.json` and pulls the user's global `mux-shim` AND `mux-channel` into every session. `auth.ts` copies (never symlinks) `auth.json` into the private home, since grok rewrites it on token refresh. |
 | `preamble-writer.ts` | Writes the supermux system prompt via `AGENTS.md` (grok merges git-root-down), matching how codex/cursor ingest their preamble. |
 | `auth.ts` | Detects `~/.grok/auth.json`; surfaces "signed in / free tier / needs login" for the session-detect + install UI. |
 | `activity map` (in `adapter-activity.ts`) | New `if (agent === "grok")` branch in `summarizeDetail`. |
@@ -125,8 +128,9 @@ IS still injected, and `listTools()` automatically hands any non-Claude kind the
   download_attachment, expose_port, memory_search, …), same as the other streamed agents.
 
 Making grok a streamed agent is almost free: it's the generic non-Claude path. grok just
-needs (a) to be an `AgentKind` and (b) a `grok/mcp-writer.ts` that writes its mux-shim MCP
-config (via `~/.grok` MCP config and/or the `session/new` `mcpServers` array), plus adding
+needs (a) to be an `AgentKind` and (b) a `grok/config-writer.ts` that declares its mux-shim
+MCP server in the session-private `~/.grok/config.toml` (NOT via `session/new`, which grok
+ignores — verified live), plus adding
 grok to the broker's text-only-reply rejection set.
 
 ## Full-parity feature map
