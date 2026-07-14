@@ -8,11 +8,16 @@
 package dev.supermux.desktop.workspace
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -26,6 +31,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
@@ -39,6 +47,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -47,6 +56,7 @@ import kotlinx.coroutines.withContext
 import dev.supermux.desktop.host.AddHostScreen
 import dev.supermux.desktop.host.FleetState
 import dev.supermux.desktop.host.HostView
+import dev.supermux.desktop.host.HostDot
 import dev.supermux.desktop.notify.NoopNotificationManager
 import dev.supermux.desktop.notify.NotificationController
 import dev.supermux.desktop.session.ArchivedScreen
@@ -291,6 +301,13 @@ fun WorkspaceRoot(
     // The active host's app (host-global ops: spawn / archived / usage / LSP settings). Falls back
     // to [app] in single-host mode.
     val hostApp = fleet?.appForRecord(activeHostId) ?: fleet?.activeApp() ?: app
+    val activeHostSessions = remember(sessions, sessionHost, hostViews, activeHostId) {
+        if (hostViews.size >= 2 && activeHostId != null) {
+            sessions.filter { sessionHost[it.id] == activeHostId }
+        } else {
+            sessions
+        }
+    }
     // The app owning a given session (per-session ops: rename/kill/mute/detail). Single-host → [app].
     val appFor: (String) -> DesktopAppState = { id -> fleet?.appFor(id) ?: app }
 
@@ -352,6 +369,7 @@ fun WorkspaceRoot(
     // reply after the user looks away again notifies immediately rather than waiting out a stale
     // dedup window from before they opened it.
     LaunchedEffect(ui.selectedId, focused) {
+        ui.selectedId?.let { sessionHost[it] }?.let { fleet?.setActiveHost(it) }
         // Route viewing presence to the OWNING host (fleet) so only that broker treats the chat as
         // foreground; single-host falls back to [app].
         if (fleet != null) fleet.updateViewing(ui.selectedId, focused) else app.updateViewing(ui.selectedId, focused)
@@ -547,7 +565,7 @@ fun WorkspaceRoot(
                         },
                 ) {
                     SessionLauncherScreen(
-                        sessions = sessions,
+                        sessions = activeHostSessions,
                         home = home,
                         onBack = { ui.launcherOpen = false },
                         // Host-global lookups + spawn target the ACTIVE host (`hostApp`); the host
@@ -585,6 +603,7 @@ fun WorkspaceRoot(
                         hosts = hostViews,
                         selectedHost = activeHostId,
                         onSelectHost = { fleet?.setActiveHost(it) },
+                        loadAgents = { hostApp.launcherAgents() },
                     )
                 }
             }
@@ -600,7 +619,7 @@ fun WorkspaceRoot(
             // M4-polish gap).
             var archivedList by remember { mutableStateOf<List<ArchivedDto>>(emptyList()) }
             var archivedLoading by remember { mutableStateOf(false) }
-            LaunchedEffect(ui.archivedOpen) {
+            LaunchedEffect(ui.archivedOpen, activeHostId) {
                 if (ui.archivedOpen) {
                     archivedLoading = true
                     archivedList = hostApp.archived()
@@ -611,23 +630,23 @@ fun WorkspaceRoot(
                 }
             }
             if (ui.archivedOpen) {
-                Box(Modifier.fillMaxSize().testTag("archived_overlay")) {
-                    ArchivedScreen(
-                        archived = archivedList,
-                        loading = archivedLoading,
-                        home = home,
-                        onBack = { ui.archivedOpen = false },
-                        onResume = { id ->
-                            // Fire-and-forget: kick the un-archive POST (its Boolean return is
-                            // irrelevant to the UI — the resumed session returns via a WS frame),
-                            // then close the overlay immediately.
-                            overlayScope.launch { hostApp.resume(id) }
-                            ui.archivedOpen = false
-                        },
-                        loadLogs = { hostApp.archivedLogs(it) },
-                        forceOpenId = ui.forceArchivedOpenFor,
-                        onForceOpenConsumed = { ui.forceArchivedOpenFor = null },
-                    )
+                Column(Modifier.fillMaxSize().testTag("archived_overlay")) {
+                    HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
+                    Box(Modifier.weight(1f)) {
+                        ArchivedScreen(
+                            archived = archivedList,
+                            loading = archivedLoading,
+                            home = home,
+                            onBack = { ui.archivedOpen = false },
+                            onResume = { id ->
+                                overlayScope.launch { hostApp.resume(id) }
+                                ui.archivedOpen = false
+                            },
+                            loadLogs = { hostApp.archivedLogs(it) },
+                            forceOpenId = ui.forceArchivedOpenFor,
+                            onForceOpenConsumed = { ui.forceArchivedOpenFor = null },
+                        )
+                    }
                 }
             }
 
@@ -640,7 +659,7 @@ fun WorkspaceRoot(
             // a full re-fetch; any other code just surfaces CodexUsageCard's own inline note.
             var usageData by remember { mutableStateOf<UsageResponse?>(null) }
             var usageLoading by remember { mutableStateOf(false) }
-            LaunchedEffect(ui.usageOpen) {
+            LaunchedEffect(ui.usageOpen, activeHostId) {
                 if (ui.usageOpen) {
                     usageLoading = true
                     usageData = hostApp.usage()
@@ -674,18 +693,23 @@ fun WorkspaceRoot(
                             }
                         },
                 ) {
-                    UsageScreen(
-                        usage = usageData,
-                        loading = usageLoading,
-                        onBack = { ui.usageOpen = false },
-                        onRedeem = {
-                            val r = hostApp.redeemCodexReset()
-                            if (r?.code == "reset" && r.codex != null) {
-                                usageData = usageData?.copy(codex = r.codex)
-                            }
-                            r
-                        },
-                    )
+                    Column(Modifier.fillMaxSize()) {
+                        HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
+                        Box(Modifier.weight(1f)) {
+                            UsageScreen(
+                                usage = usageData,
+                                loading = usageLoading,
+                                onBack = { ui.usageOpen = false },
+                                onRedeem = {
+                                    val r = hostApp.redeemCodexReset()
+                                    if (r?.code == "reset" && r.codex != null) {
+                                        usageData = usageData?.copy(codex = r.codex)
+                                    }
+                                    r
+                                },
+                            )
+                        }
+                    }
                 }
             }
 
@@ -720,18 +744,25 @@ fun WorkspaceRoot(
                             }
                         },
                 ) {
-                    LspSettingsScreen(
-                        lspLoad = { hostApp.lspLoad() },
-                        lspToggle = { id, enabled -> hostApp.lspToggle(id, enabled) },
-                        lspInstall = { id -> hostApp.lspInstall(id) },
-                        lspInstallLog = hostApp.lspInstallLog,
-                        lspInstallDone = hostApp.lspInstallDone,
-                        lspAddCustom = { args ->
-                            hostApp.lspAddCustom(args.id, args.label, args.command, args.extensions, args.args, args.languageId, args.installCmd)
-                        },
-                        lspRemoveCustom = { id -> hostApp.lspRemoveCustom(id) },
-                        onBack = { ui.lspSettingsOpen = false },
-                    )
+                    Column(Modifier.fillMaxSize()) {
+                        HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
+                        Box(Modifier.weight(1f)) {
+                            androidx.compose.runtime.key(activeHostId) {
+                                LspSettingsScreen(
+                                    lspLoad = { hostApp.lspLoad() },
+                                    lspToggle = { id, enabled -> hostApp.lspToggle(id, enabled) },
+                                    lspInstall = { id -> hostApp.lspInstall(id) },
+                                    lspInstallLog = hostApp.lspInstallLog,
+                                    lspInstallDone = hostApp.lspInstallDone,
+                                    lspAddCustom = { args ->
+                                        hostApp.lspAddCustom(args.id, args.label, args.command, args.extensions, args.args, args.languageId, args.installCmd)
+                                    },
+                                    lspRemoveCustom = { id -> hostApp.lspRemoveCustom(id) },
+                                    onBack = { ui.lspSettingsOpen = false },
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
@@ -759,7 +790,7 @@ fun WorkspaceRoot(
                 ) {
                     AddHostScreen(
                         onBack = { addHostOpen = false },
-                        defaultDeviceName = remember { runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrNull()?.ifBlank { null } ?: "This desktop" },
+                        defaultDeviceName = remember { runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrNull()?.ifBlank { null } ?: "Desktop host" },
                         onClaim = { payload, name -> fleet.addHost(payload, name) },
                         onClaimByUrl = { url, name -> fleet.addHostByUrl(url, name) },
                         onAdded = { addHostOpen = false },
@@ -767,5 +798,49 @@ fun WorkspaceRoot(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun HostScopeBar(
+    hosts: List<HostView>,
+    selectedHostId: String?,
+    onSelect: (String) -> Unit,
+) {
+    if (hosts.size < 2) return
+    val selected = hosts.firstOrNull { it.recordId == selectedHostId } ?: hosts.first()
+    val cs = MaterialTheme.colorScheme
+    var expanded by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().background(cs.surfaceContainer)) {
+        Box {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = true }
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+                    .testTag("host_scope_picker"),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Host", color = cs.onSurfaceVariant)
+                Spacer(Modifier.weight(1f))
+                HostDot(selected.colorIndex, size = 9.dp)
+                Text(
+                    selected.displayLabel + if (!selected.online) " · Offline" else "",
+                    modifier = Modifier.padding(start = 7.dp, end = 5.dp),
+                    color = cs.onSurface,
+                )
+                Text("⌄", color = cs.onSurfaceVariant)
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                hosts.forEach { host ->
+                    DropdownMenuItem(
+                        text = { Text(host.displayLabel + if (!host.online) " (offline)" else "") },
+                        leadingIcon = { HostDot(host.colorIndex, size = 10.dp) },
+                        onClick = { expanded = false; onSelect(host.recordId) },
+                    )
+                }
+            }
+        }
+        HorizontalDivider()
     }
 }

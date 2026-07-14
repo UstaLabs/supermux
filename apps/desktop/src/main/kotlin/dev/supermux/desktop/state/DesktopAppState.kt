@@ -900,6 +900,9 @@ class DesktopAppState(
     suspend fun listProjects(): List<String> =
         runApi("listProjects") { api.listProjects() } ?: emptyList()
 
+    suspend fun launcherAgents(): List<String> =
+        runApi("launcherAgents") { api.agentStatuses().filter { it.installed }.map { it.kind } } ?: emptyList()
+
     /** POST /paths/validate → {ok, path?, error?} (resolves ~, checks existence). Null on any
      *  transport/decode failure; an *invalid* path is still a non-null PathValidation(ok=false). */
     suspend fun validatePath(path: String): PathValidation? =

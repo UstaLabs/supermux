@@ -728,7 +728,7 @@ private fun OfflineHostHeader(host: dev.supermux.android.host.HostView) {
     ) {
         dev.supermux.android.host.HostDot(host.colorIndex, size = 8.dp)
         Text(
-            host.displayName,
+            host.displayLabel,
             color = cs.onSurfaceVariant,
             fontFamily = MonoFontFamily,
             fontSize = 11.sp,

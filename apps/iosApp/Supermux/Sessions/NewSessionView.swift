@@ -53,6 +53,8 @@ struct NewSessionView: View {
     @State private var launcherState: LauncherStateStore
     @State private var lastSeenAgent: String?
     @State private var lastSeenWorkdir: String?
+    @State private var lastSeenBrokerURL: String?
+    @State private var lastRepoBrokerURL: String?
     @FocusState private var composing: Bool
     // Wired in `.task` (below) once `broker` is in scope — the real glossary/transcribe closures
     // need it, which isn't available yet here in `init`.
@@ -123,6 +125,20 @@ struct NewSessionView: View {
         // Keyed on the active host (baseURL) so a host switch re-wires the composer context and
         // reloads that host's projects + installed agents (spec §5). Single-host: runs once on appear.
         .task(id: broker.baseURL) {
+            let switchedHost = lastSeenBrokerURL != nil && lastSeenBrokerURL != broker.baseURL
+            lastSeenBrokerURL = broker.baseURL
+            if switchedHost {
+                model = nil
+            }
+            // Never show or submit host A's cached choices while host B is loading.
+            projects = []
+            hostAgents = []
+            models = []
+            reasoningLevels = []
+            reasoningVisible = false
+            launcherCommands = []
+            repoInfo = nil
+            fetchedRepos = []
             // No session yet (pre-spawn launcher): the broker's id-less /transcribe cleans the
             // draft off the global glossary/engine/model — the same AI correction the chat
             // composer gets, just without prior-message context.
@@ -132,7 +148,8 @@ struct NewSessionView: View {
                 audioFallbackTranscribe: { try await broker.transcribeAudio(sessionId: nil, data: $0, filename: $1) }
             ))
             await composer.loadGlossary()
-            projects = await broker.projects()
+            let loadedProjects = await broker.projects()
+            projects = loadedProjects
             // The selected host's installed agents drive the agent menu; keep `agent` valid for it.
             let installed = (await broker.agentStatuses()).filter { $0.installed }.map { $0.kind }
             hostAgents = installed
@@ -140,8 +157,9 @@ struct NewSessionView: View {
             // Debug: force the initial project for headless screenshots (e.g. an eligible repo).
             if let forced = ProcessInfo.processInfo.environment["SM_WORKDIR"], !forced.isEmpty {
                 workdir = forced
-            } else if workdir.isEmpty {
-                workdir = projects.first ?? "~"
+            } else if workdir.isEmpty || (workdir != "~" && !loadedProjects.contains(workdir)) {
+                // A persisted project from another host must never be spawned on this one.
+                workdir = loadedProjects.first ?? "~"
             }
         }
         .task {
@@ -154,8 +172,12 @@ struct NewSessionView: View {
                 projectSearch = true
             }
         }
-        .task(id: agent) {
-            models = await broker.listModels(agent)
+        .task(id: "\(broker.baseURL)|\(agent)") {
+            let loadedModels = await broker.listModels(agent)
+            models = loadedModels
+            if let selected = model, !loadedModels.contains(where: { $0.id == selected }) {
+                model = nil
+            }
             // Reset only on a genuine switch to a *different* agent than the last one this task
             // actually observed — never on the very first run (whatever agent `init` seeded), and
             // never on a same-agent re-invocation. `.task(id:)` was observed on-device spinning up
@@ -172,7 +194,7 @@ struct NewSessionView: View {
         // Thinking levels depend on the agent and (for Codex) the chosen model. Idempotent — it
         // resolves from the sticky per-agent choice each run, so a duplicate .task(id:) re-invocation
         // is harmless (nothing to reset, unlike the model task above).
-        .task(id: "\(agent)|\(model ?? "")") {
+        .task(id: "\(broker.baseURL)|\(agent)|\(model ?? "")") {
             let resp = await broker.reasoningLevels(agent, model)
             let levels = resp?.levels ?? []
             reasoningLevels = levels
@@ -182,19 +204,21 @@ struct NewSessionView: View {
                 : nil
         }
         // Agent slash commands depend on both the agent and the chosen project.
-        .task(id: "\(agent)|\(workdir)") {
+        .task(id: "\(broker.baseURL)|\(agent)|\(workdir)") {
             launcherCommands = workdir.isEmpty ? [] : await broker.previewCommands(agent, workdir)
         }
         // Git repo info for the worktree picker — refreshes whenever the project changes.
-        .task(id: workdir) {
+        .task(id: "\(broker.baseURL)|\(workdir)") {
             guard !workdir.isEmpty else { repoInfo = nil; return }
             let info = await broker.repoInfo(workdir)
             repoInfo = info
+            let switchedRepoHost = lastRepoBrokerURL != nil && lastRepoBrokerURL != broker.baseURL
+            lastRepoBrokerURL = broker.baseURL
             // Same last-observed-value comparison as the agent/model task above. A genuine switch
             // to a different workdir always follows its current branch; the first run (or a
             // same-workdir re-invocation) only fills in a currently-empty baseBranch, preserving
             // whatever `init` seeded from the draft.
-            if let last = lastSeenWorkdir, last != workdir {
+            if switchedRepoHost || (lastSeenWorkdir != nil && lastSeenWorkdir != workdir) {
                 baseBranch = info?.currentBranch ?? ""
             } else if baseBranch.isEmpty {
                 baseBranch = info?.currentBranch ?? ""
@@ -342,9 +366,9 @@ struct NewSessionView: View {
                         ForEach(fleet.hostViews, id: \.recordId) { hv in
                             Button { fleet.setActive(hv.recordId) } label: {
                                 if hv.recordId == fleet.activeRecordId {
-                                    Label(hv.displayName, systemImage: "checkmark")
+                                    Label(hv.displayLabel, systemImage: "checkmark")
                                 } else {
-                                    Text(hv.displayName)
+                                    Text(hv.displayLabel)
                                 }
                             }
                         }

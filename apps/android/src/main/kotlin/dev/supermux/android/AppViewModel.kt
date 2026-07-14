@@ -69,6 +69,7 @@ import dev.supermux.host.SessionKey
 import dev.supermux.host.fleetOwners
 import dev.supermux.host.mergeFleetRows
 import dev.supermux.host.mergedSessions
+import dev.supermux.host.isLegacyHostDisplayName
 import dev.supermux.util.TransportPolicy
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
@@ -470,13 +471,13 @@ class AppViewModel(
      *  and idempotent — skipped once the id is known, so it doesn't refetch on every reconnect. */
     private fun backfillHostIdentity(recordId: String) {
         val current = store.list().firstOrNull { it.recordId == recordId } ?: return
-        if (!current.hostId.isNullOrBlank()) return
+        if (!current.hostId.isNullOrBlank() && !isLegacyHostDisplayName(current.displayName)) return
         val api = hostConns.api(recordId) ?: return
         viewModelScope.launch {
-            val hostId = runCatching { api.getHost() }.getOrNull()?.hostId?.takeIf { it.isNotBlank() }
-                ?: return@launch
+            val identity = runCatching { api.getHost() }.getOrNull() ?: return@launch
+            val hostId = identity.hostId.takeIf { it.isNotBlank() } ?: return@launch
             val before = store.list().map { it.recordId }.toSet()
-            store.backfillHostId(recordId, hostId)
+            store.backfillHostIdentity(recordId, hostId, identity.name)
             val merged = before - store.list().map { it.recordId }.toSet()
             if (merged.isNotEmpty()) {
                 // A duplicate record collapsed into this one — drop its orphaned bucket + cache +

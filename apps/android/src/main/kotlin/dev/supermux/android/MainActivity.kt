@@ -23,6 +23,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -56,6 +57,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import dev.supermux.android.host.AddHostScreen
+import dev.supermux.android.host.HostScopePicker
+import dev.supermux.android.host.HostView
 import dev.supermux.android.nav.AddHost
 import dev.supermux.android.nav.Appearance
 import dev.supermux.android.nav.Archived
@@ -185,6 +188,13 @@ class MainActivity : ComponentActivity() {
                 val hostViews by vm.hostViews.collectAsStateWithLifecycle()
                 val sessionHost by vm.sessionHost.collectAsStateWithLifecycle()
                 val activeHost by vm.activeHost.collectAsStateWithLifecycle()
+                val activeHostSessions = remember(sessions, sessionHost, hostViews, activeHost) {
+                    if (hostViews.size >= 2 && activeHost != null) {
+                        sessions.filter { sessionHost[it.id] == activeHost }
+                    } else {
+                        sessions
+                    }
+                }
                 var hostFilter by rememberSaveable { mutableStateOf<String?>(null) }
                 LaunchedEffect(Unit) { hostFilter = vm.loadHostFilter() }
                 val setHostFilter: (String?) -> Unit = { hostFilter = it; vm.saveHostFilter(it) }
@@ -203,6 +213,7 @@ class MainActivity : ComponentActivity() {
                 // ChatPane.loadPane → BrokerSession.ensureMessagesLoaded.)
                 LaunchedEffect(selected) {
                     selected?.let {
+                        sessionHost[it]?.let(vm::setActiveHost)
                         vm.ensureMessagesLoaded(it)
                         // Opening a chat clears its (grouped) notifications — parity with iOS.
                         SupermuxMessagingService.cancelForSession(applicationContext, it)
@@ -457,7 +468,7 @@ class MainActivity : ComponentActivity() {
                                 )
                                 Box(Modifier.weight(1f)) {
                                     SessionLauncherScreen(
-                                        sessions = sessions,
+                                        sessions = activeHostSessions,
                                         home = DevConfig.HOME,
                                         onBack = { navController.popBackStack() },
                                         loadProjects = { vm.listProjects() },
@@ -491,7 +502,7 @@ class MainActivity : ComponentActivity() {
                             }
                         } else {
                             SessionLauncherScreen(
-                                sessions = sessions,
+                                sessions = activeHostSessions,
                                 home = DevConfig.HOME,
                                 onBack = { navController.popBackStack() },
                                 loadProjects = { vm.listProjects() },
@@ -534,7 +545,7 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                     composable<Settings> {
-                        SettingsScreen(
+                        HostScopedPage(hostViews, activeHost, vm::setActiveHost) { key(activeHost) { SettingsScreen(
                             onBack = { navController.popBackStack() },
                             // Assistant
                             assistantLoad = { vm.assistantLoad() },
@@ -576,54 +587,54 @@ class MainActivity : ComponentActivity() {
                             // System
                             updateStatus = { vm.updateStatus() },
                             restartBroker = { vm.restartBroker() },
-                        )
+                        ) } }
                     }
                     composable<Usage> {
-                        UsageScreen(
+                        HostScopedPage(hostViews, activeHost, vm::setActiveHost) { key(activeHost) { UsageScreen(
                             onBack = { navController.popBackStack() },
                             onLoad = { vm.usage() },
                             onRedeem = { vm.redeemCodexReset() },
-                        )
+                        ) } }
                     }
                     composable<Devices> {
-                        DevicesScreen(
+                        HostScopedPage(hostViews, activeHost, vm::setActiveHost) { key(activeHost) { DevicesScreen(
                             onBack = { navController.popBackStack() },
                             onLoad = { vm.devices() },
                             onAdd = { vm.addDevice(it) },
                             onRevoke = { vm.revoke(it) },
-                        )
+                        ) } }
                     }
                     composable<Archived> {
-                        ArchivedScreen(
+                        HostScopedPage(hostViews, activeHost, vm::setActiveHost) { key(activeHost) { ArchivedScreen(
                             onBack = { navController.popBackStack() },
                             onLoad = { vm.archived() },
                             onResume = { vm.resume(it) },
                             home = DevConfig.HOME,
                             loadLogs = { vm.archivedLogs(it) },
-                        )
+                        ) } }
                     }
                     composable<Proxies> {
-                        ProxyScreen(
+                        HostScopedPage(hostViews, activeHost, vm::setActiveHost) { key(activeHost) { ProxyScreen(
                             onLoad = { vm.proxies() },
-                            sessions = sessions,
+                            sessions = activeHostSessions,
                             onCreate = { s, p, d -> vm.createProxy(s, p, d) },
                             onTogglePublic = { d, pub -> vm.setProxyPublic(d, pub) },
                             onRemove = { vm.removeProxy(it) },
                             onBack = { navController.popBackStack() },
-                        )
+                        ) } }
                     }
                     composable<Displays> {
-                        // Seed the live list once (the reducer otherwise fills only from frames);
-                        // mirrors iOS DisplaysView's `.task { refreshDisplays() }`.
-                        LaunchedEffect(Unit) { vm.listDisplays() }
-                        DisplaysScreen(
-                            onBack = { navController.popBackStack() },
-                            displays = vm.displays,
-                            onStart = { sessionName -> vm.startDisplay(sessionName) },
-                            onStop = { id -> vm.stopDisplay(id) },
-                            connectVnc = { vm.connectVnc(it) },
-                            connectScrcpy = { vm.connectScrcpy(it) },
-                        )
+                        HostScopedPage(hostViews, activeHost, vm::setActiveHost) { key(activeHost) {
+                            LaunchedEffect(activeHost) { vm.listDisplays() }
+                            DisplaysScreen(
+                                onBack = { navController.popBackStack() },
+                                displays = vm.displays,
+                                onStart = { sessionName -> vm.startDisplay(sessionName) },
+                                onStop = { id -> vm.stopDisplay(id) },
+                                connectVnc = { vm.connectVnc(it) },
+                                connectScrcpy = { vm.connectScrcpy(it) },
+                            )
+                        } }
                     }
                     composable<Appearance> {
                         AppearanceSettingsPage(
@@ -648,6 +659,19 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun HostScopedPage(
+    hosts: List<HostView>,
+    selectedHostId: String?,
+    onSelectHost: (String) -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Column(Modifier.fillMaxSize()) {
+        HostScopePicker(hosts, selectedHostId, onSelectHost)
+        Box(Modifier.weight(1f)) { content() }
     }
 }
 

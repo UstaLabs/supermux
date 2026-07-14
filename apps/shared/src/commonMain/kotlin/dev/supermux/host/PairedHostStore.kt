@@ -34,7 +34,11 @@ class PairedHostStore(
             directUrl = directUrl ?: prev.directUrl,
             platform = platform ?: prev.platform,
             version = version ?: prev.version,
-            displayName = prev.displayName.ifBlank { displayName },
+            displayName = if (prev.displayName.isBlank() || isLegacyHostDisplayName(prev.displayName)) {
+                hostDisplayLabel(displayName)
+            } else {
+                prev.displayName
+            },
         )
         hosts[idx] = merged; flush(); return merged
     }
@@ -50,6 +54,11 @@ class PairedHostStore(
 
     /** Learn a record's hostId from GET /host; merge if another record already has it. */
     fun backfillHostId(recordId: String, hostId: String) {
+        backfillHostIdentity(recordId, hostId, "")
+    }
+
+    /** Learn durable identity and replace only legacy auto-generated names, never user renames. */
+    fun backfillHostIdentity(recordId: String, hostId: String, displayName: String) {
         val idx = hosts.indexOfFirst { it.recordId == recordId }
         if (idx < 0) return
         val dupe = hosts.indexOfFirst { it.hostId == hostId && it.recordId != recordId }
@@ -61,14 +70,28 @@ class PairedHostStore(
             val keepAt = minOf(idx, dupe)
             val merged = hosts[idx].copy(
                 hostId = hostId,
-                displayName = hosts[idx].displayName.ifBlank { hosts[dupe].displayName },
+                displayName = resolvedIdentityName(hosts[idx].displayName, displayName)
+                    .ifBlank { hosts[dupe].displayName },
             )
             hosts[keepAt] = merged
             hosts.removeAt(maxOf(idx, dupe))
         } else {
-            hosts[idx] = hosts[idx].copy(hostId = hostId)
+            hosts[idx] = hosts[idx].copy(
+                hostId = hostId,
+                displayName = resolvedIdentityName(hosts[idx].displayName, displayName),
+            )
         }
         flush()
+    }
+
+    private fun resolvedIdentityName(current: String, identity: String): String {
+        if (!isLegacyHostDisplayName(current) && current.isNotBlank()) return current
+        val unwrappedCurrent = hostDisplayLabel(current)
+        return when {
+            unwrappedCurrent != "Host" -> unwrappedCurrent
+            identity.isNotBlank() -> hostDisplayLabel(identity)
+            else -> unwrappedCurrent
+        }
     }
 
     fun rename(recordId: String, name: String) = mutate(recordId) { it.copy(displayName = name) }

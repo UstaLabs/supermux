@@ -41,7 +41,13 @@ struct SessionsListView: View {
                     selected: fleet.filter,
                     count: { rid in owner.values.reduce(0) { $0 + ($1 == rid ? 1 : 0) } },
                     onSelect: { fleet.setFilter($0) },
-                    onAddHost: onAddHost
+                    onAddHost: onAddHost,
+                    onForgetHost: { recordId in
+                        // Tear the detail down before Fleet closes the owning BrokerSession. The
+                        // remaining host becomes active inside Fleet.refresh().
+                        if let sessionId = selected, owner[sessionId] == recordId { selected = nil }
+                        fleet.forgetHost(recordId: recordId)
+                    }
                 )
                 .background(.bar)
                 Divider()
@@ -178,7 +184,7 @@ struct SessionsListView: View {
     private func offlineHeader(_ host: HostView) -> some View {
         HStack(spacing: 6) {
             HostDot(colorIndex: host.colorIndex, size: 8)
-            Text(host.displayName).textCase(nil).foregroundStyle(.secondary)
+            Text(host.displayLabel).textCase(nil).foregroundStyle(.secondary)
             let seen = FleetModelKt.formatLastSeen(nowMs: Int64(Date().timeIntervalSince1970 * 1000),
                                                    lastSeenAt: host.lastSeenAt)
             Text(seen.isEmpty ? "offline" : "offline · \(seen)")

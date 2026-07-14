@@ -5,6 +5,7 @@ import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
 import dev.supermux.host.PairingPayload
+import dev.supermux.host.isLegacyHostDisplayName
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.HostIdentity
 import dev.supermux.net.PairClaimResult
@@ -188,14 +189,19 @@ class FleetState(
      *  and idempotent — skipped once the id is known, so it doesn't refetch on every reconnect. */
     private fun backfillHostIdentity(recordId: String) {
         val current = store.list().firstOrNull { it.recordId == recordId } ?: return
-        if (!current.hostId.isNullOrBlank()) return
+        if (!current.hostId.isNullOrBlank() && !isLegacyHostDisplayName(current.displayName)) return
         val api = conns[recordId]?.app?.api ?: return
         fleetScope.launch {
-            val hostId = runCatching { api.getHost() }.getOrNull()?.hostId?.takeIf { it.isNotBlank() }
-                ?: return@launch
+            val identity = runCatching { api.getHost() }.getOrNull() ?: return@launch
+            val hostId = identity.hostId.takeIf { it.isNotBlank() } ?: return@launch
+            val displayName = if (isLocalDirectUrl(current.directUrl)) {
+                DesktopHostBootstrap.defaultHostName()
+            } else {
+                identity.name
+            }
             val merged = synchronized(lock) {
                 val before = store.list().map { it.recordId }.toSet()
-                store.backfillHostId(recordId, hostId)
+                store.backfillHostIdentity(recordId, hostId, displayName)
                 (before - store.list().map { it.recordId }.toSet()).also { removed ->
                     removed.forEach {
                         sessionsByHost.remove(it); messagesByHost.remove(it)
@@ -207,6 +213,12 @@ class FleetState(
             if (merged.isNotEmpty()) onHostsChanged()
             synchronized(lock) { recomputeAll() }
         }
+    }
+
+    private fun isLocalDirectUrl(url: String?): Boolean {
+        val normalized = url?.lowercase() ?: return false
+        return normalized.startsWith("http://127.0.0.1:") ||
+            normalized.startsWith("http://localhost:")
     }
 
     private fun recomputeAll() {

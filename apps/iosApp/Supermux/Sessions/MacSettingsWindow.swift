@@ -12,7 +12,7 @@ import Shared
 /// `SM_SETTINGS_TAB=<general|assistant|agents|curator|voice|editor|git|system>` selects
 /// the initial tab — the headless-screenshot hook for this window.
 struct MacSettingsWindow: View {
-    @State private var broker: BrokerSession?
+    @State private var fleet: Fleet
     @State private var selected: Tab
 
     enum Tab: String {
@@ -21,37 +21,44 @@ struct MacSettingsWindow: View {
 
     init() {
         let want = ProcessInfo.processInfo.environment["SM_SETTINGS_TAB"]
+        _fleet = State(initialValue: Fleet())
         _selected = State(initialValue: want.flatMap(Tab.init(rawValue:)) ?? .general)
     }
 
     var body: some View {
         Group {
-            if let broker {
-                TabView(selection: $selected) {
-                    pane { GeneralSettingsPane() }
-                        .tabItem { Label("General", systemImage: "gearshape") }
-                        .tag(Tab.general)
-                    pane { AssistantSettingsView(broker: broker) }
-                        .tabItem { Label("Assistant", systemImage: "person.crop.circle") }
-                        .tag(Tab.assistant)
-                    pane { AgentSettingsView(broker: broker) }
-                        .tabItem { Label("Agents", systemImage: "terminal") }
-                        .tag(Tab.agents)
-                    pane { CuratorSettingsView(broker: broker) }
-                        .tabItem { Label("Curator", systemImage: "moon.stars") }
-                        .tag(Tab.curator)
-                    pane { VoiceSettingsView(broker: broker) }
-                        .tabItem { Label("Voice", systemImage: "mic") }
-                        .tag(Tab.voice)
-                    pane { EditorSettingsScreen(broker: broker) }
-                        .tabItem { Label("Editor", systemImage: "doc.text") }
-                        .tag(Tab.editor)
-                    pane { GitHostingSettingsView(broker: broker) }
-                        .tabItem { Label("Git Hosting", systemImage: "arrow.triangle.branch") }
-                        .tag(Tab.git)
-                    pane { SystemSettingsView(broker: broker) }
-                        .tabItem { Label("System", systemImage: "gearshape.2") }
-                        .tag(Tab.system)
+            if let broker = fleet.activeBroker {
+                VStack(spacing: 0) {
+                    HostScopePicker(hosts: fleet.hostViews, selected: fleet.activeRecordId) {
+                        fleet.setActive($0)
+                    }
+                    TabView(selection: $selected) {
+                        pane { GeneralSettingsPane() }
+                            .tabItem { Label("General", systemImage: "gearshape") }
+                            .tag(Tab.general)
+                        pane { AssistantSettingsView(broker: broker) }
+                            .tabItem { Label("Assistant", systemImage: "person.crop.circle") }
+                            .tag(Tab.assistant)
+                        pane { AgentSettingsView(broker: broker) }
+                            .tabItem { Label("Agents", systemImage: "terminal") }
+                            .tag(Tab.agents)
+                        pane { CuratorSettingsView(broker: broker) }
+                            .tabItem { Label("Curator", systemImage: "moon.stars") }
+                            .tag(Tab.curator)
+                        pane { VoiceSettingsView(broker: broker) }
+                            .tabItem { Label("Voice", systemImage: "mic") }
+                            .tag(Tab.voice)
+                        pane { EditorSettingsScreen(broker: broker) }
+                            .tabItem { Label("Editor", systemImage: "doc.text") }
+                            .tag(Tab.editor)
+                        pane { GitHostingSettingsView(broker: broker) }
+                            .tabItem { Label("Git Hosting", systemImage: "arrow.triangle.branch") }
+                            .tag(Tab.git)
+                        pane { SystemSettingsView(broker: broker) }
+                            .tabItem { Label("System", systemImage: "gearshape.2") }
+                            .tag(Tab.system)
+                    }
+                    .id(broker.baseURL)
                 }
             } else {
                 ContentUnavailableView("Not paired",
@@ -61,17 +68,11 @@ struct MacSettingsWindow: View {
             }
         }
         .tint(Theme.teal)
-        .task {
-            guard broker == nil, let base = BrokerConfig.baseURL, let token = BrokerConfig.token else { return }
-            let b = BrokerSession(baseURL: base, token: token)
-            b.start()
-            broker = b
-        }
+        .task { fleet.start() }
         // The Settings scene keeps its view alive across window closes only sometimes —
         // stop the broker either way; reopening re-runs `.task`.
         .onDisappear {
-            broker?.stop()
-            broker = nil
+            fleet.stop()
         }
     }
 

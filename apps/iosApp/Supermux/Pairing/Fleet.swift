@@ -223,9 +223,16 @@ final class Fleet {
         Task { @MainActor [weak self, weak broker] in
             guard let self, let broker,
                   let identity = try? await broker.api.getHost(), !identity.hostId.isEmpty else { return }
-            // Only mutate if we learned something new (avoid churn on every reconnect).
-            if self.hosts.first(where: { $0.recordId == recordId })?.hostId != identity.hostId {
-                self.store.backfillHostId(recordId: recordId, hostId: identity.hostId)
+            let current = self.hosts.first(where: { $0.recordId == recordId })
+            let displayName = Self.identityDisplayName(identity.name, for: current)
+            // Also repair names written by older desktop builds even when hostId is already known.
+            if current?.hostId != identity.hostId ||
+                FleetModelKt.isLegacyHostDisplayName(displayName: current?.displayName ?? "") {
+                self.store.backfillHostIdentity(
+                    recordId: recordId,
+                    hostId: identity.hostId,
+                    displayName: displayName
+                )
                 self.reloadHosts()
             }
         }
@@ -335,6 +342,16 @@ final class Fleet {
         let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if t.isEmpty || t.hasPrefix("http://") || t.hasPrefix("https://") { return t }
         return "https://" + t
+    }
+
+    private static func identityDisplayName(_ advertised: String, for host: PairedHost?) -> String {
+        #if os(macOS)
+        if let direct = host?.directUrl?.lowercased(),
+           direct.hasPrefix("http://127.0.0.1:") || direct.hasPrefix("http://localhost:") {
+            return MacBrokerSidecar.localHostDisplayName()
+        }
+        #endif
+        return advertised
     }
 
     private static func nowMs() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }

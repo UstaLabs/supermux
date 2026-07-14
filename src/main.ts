@@ -151,6 +151,7 @@ import { hydrateCredentialEnv, applyCredentialEnv } from "./core/settings/app-co
 import { reverseProxySnippets } from "./core/settings/exposure"
 import { toActivityEvents } from "./core/agents/adapter-activity"
 import { LoginManager } from "./core/agents/login/manager"
+import { claudeLoginSpawnCommand } from "./core/agents/login/spawn-command"
 import { getRepoInfo } from "./core/git/repo-info"
 import { createWorktree, removeWorktree, ensureWorktreeAt, type WorktreeHandle } from "./core/worktree/manager"
 import { isWorktreeReclaimable } from "./core/worktree/gc"
@@ -939,10 +940,15 @@ const fsWatcher = new FsWatcher()
 function spawnLoginProc(kind: string) {
   const h = homedir()
   let cmd: string, args: string[]
+  let detached = false
   const env = { ...process.env } as Record<string, string>
   if (kind === "codex") { cmd = "codex"; args = ["login", "--device-auth"]; env.CODEX_HOME = `${h}/.codex` }
   else if (kind === "cursor") { cmd = "cursor-agent"; args = ["login"]; env.NO_OPEN_BROWSER = "1" }
-  else if (kind === "claude") { cmd = "script"; args = ["-qec", "stty cols 600; claude auth login", "/dev/null"] }
+  else if (kind === "claude") {
+    const spec = claudeLoginSpawnCommand()
+    ;({ cmd, args } = spec)
+    detached = spec.detached ?? false
+  }
   else { cmd = ""; args = [] } // unknown kind handled below
   let outCb: (c: string) => void = () => {}
   let exitCb: (code: number | null) => void = () => {}
@@ -952,7 +958,7 @@ function spawnLoginProc(kind: string) {
   }
   let child: ReturnType<typeof nodeSpawn>
   try {
-    child = nodeSpawn(cmd, args, { env })
+    child = nodeSpawn(cmd, args, { env, detached })
   } catch (err: any) {
     // Missing binary (ENOENT) etc — report failure instead of crashing the broker.
     log.warn("login_spawn_failed", { kind, cmd, err: err?.message ?? String(err) })
@@ -968,7 +974,12 @@ function spawnLoginProc(kind: string) {
       child.stderr?.on("data", (d) => cb(d.toString()))
     },
     onExit: (cb: (code: number | null) => void) => { exitCb = cb; child.on("exit", cb) },
-    kill: () => { try { child.kill() } catch {} },
+    kill: () => {
+      try {
+        if (detached && child.pid) process.kill(-child.pid, "SIGTERM")
+        else child.kill()
+      } catch {}
+    },
     write: (data: string) => { try { child.stdin?.write(data) } catch {} },
   }
 }
@@ -1007,6 +1018,7 @@ const hostIdentity = loadOrCreateHostKey(HOST_KEY_FILE)
 const claimStore = new ClaimStore()
 setInterval(() => claimStore.sweep(), 60_000).unref()
 const hostPlatform = process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux"
+const advertisedHostName = process.env.MUX_HOST_NAME?.trim() || hostname()
 
 // Relay data plane (frp). Opt-in via MUX_RELAY_DOMAIN until the spike passes and
 // a relay box exists; otherwise LAN/direct only. Swappable behind RelayProvider.
@@ -1036,7 +1048,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     updateChecker,
     getHostInfo: () => ({
       hostId: hostIdentity.hostId,
-      name: hostname(),
+      name: advertisedHostName,
       platform: hostPlatform,
       version: BUILD_VERSION,
       protocolVersion: 1,

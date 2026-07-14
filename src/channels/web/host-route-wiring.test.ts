@@ -79,8 +79,9 @@ test("POST /pair/mint-claim requires auth and returns a fresh claimSecret", asyn
   const token = new DeviceStore(made.devicesFile).mint("dev").token
   const res = await fetch(`${base()}/pair/mint-claim`, { method: "POST", headers: { authorization: `Bearer ${token}` } })
   expect(res.status).toBe(200)
-  const { claimSecret } = await res.json() as { claimSecret: string }
+  const { claimSecret, expiresAt } = await res.json() as { claimSecret: string; expiresAt: string }
   expect(typeof claimSecret).toBe("string")
+  expect(expiresAt).toBe("1970-01-01T00:10:00.000Z")
   const claimed = await fetch(`${base()}/pair/claim`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ claimSecret, deviceName: "phone2" }),

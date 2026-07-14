@@ -96,6 +96,9 @@ final class PushKeypair {
     }
 
     private static func keychainSave(_ raw: Data) {
+        #if os(macOS)
+        writeMacKey(raw)
+        #else
         SecItemDelete(baseQuery() as CFDictionary)
         var add = baseQuery()
         add[kSecValueData as String] = raw
@@ -103,17 +106,46 @@ final class PushKeypair {
         // but after the first post-boot unlock — the key must be readable then.
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         SecItemAdd(add as CFDictionary, nil)
+        #endif
     }
 
     private static func keychainLoad() -> Data? {
+        #if os(macOS)
+        return try? Data(contentsOf: macKeyURL)
+        #else
         var query = baseQuery()
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
+        #if os(macOS)
+        query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        #endif
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
               let data = item as? Data else { return nil }
         return data
+        #endif
     }
+
+    #if os(macOS)
+    private static var macKeyURL: URL {
+        let environment = ProcessInfo.processInfo.environment
+        let state = environment["MUX_STATE_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".mux/state", isDirectory: true)
+        return state.appendingPathComponent("native-push-key")
+    }
+
+    private static func writeMacKey(_ raw: Data) {
+        let file = macKeyURL
+        try? FileManager.default.createDirectory(
+            at: file.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try? raw.write(to: file, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+    }
+    #endif
 
     // MARK: - Test harness helper
 

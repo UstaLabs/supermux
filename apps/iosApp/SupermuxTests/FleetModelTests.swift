@@ -22,7 +22,11 @@ final class FleetModelTests: XCTestCase {
     }
 
     func testShortLabelAndLastSeenBridge() {
-        XCTAssertEqual(FleetModelKt.hostShortLabel(displayName: "This host"), "This")
+        XCTAssertEqual(FleetModelKt.hostShortLabel(displayName: "This host"), "Host")
+        XCTAssertEqual(
+            FleetModelKt.hostDisplayLabel(displayName: "This computer (Ahmet’s MacBook Air)"),
+            "Ahmet’s MacBook Air"
+        )
         XCTAssertEqual(FleetModelKt.hostShortLabel(displayName: "MacBook"), "MacBook")
         XCTAssertEqual(FleetModelKt.formatLastSeen(nowMs: 1_000_000, lastSeenAt: 0), "")
         XCTAssertEqual(FleetModelKt.formatLastSeen(nowMs: 1_000_000, lastSeenAt: 1_000_000 - 5_000), "just now")

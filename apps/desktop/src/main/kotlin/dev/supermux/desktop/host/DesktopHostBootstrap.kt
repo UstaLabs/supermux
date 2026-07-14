@@ -58,7 +58,10 @@ object DesktopHostBootstrap {
     fun sidecar(port: Int = 9898): BrokerSidecar {
         val bins = runCatching { HostBinaries.resolve(BrokerSidecar.defaultStateDir()) }
             .getOrDefault(HostBinaries.SidecarBinaries(null, null, null, null))
-        val extraEnv = bins.binDir?.let { mapOf("PATH" to HostBinaries.prependPath(it)) } ?: emptyMap()
+        val extraEnv = buildMap {
+            bins.binDir?.let { put("PATH", HostBinaries.prependPath(it)) }
+            put("MUX_HOST_NAME", defaultHostName())
+        }
         return BrokerSidecar(
             SidecarConfig(
                 port = port,
@@ -171,16 +174,22 @@ object DesktopHostBootstrap {
         onInstallKeepAlive = { keepAlive ->
             if (keepAlive) {
                 runCatching {
-                    KeepAlive.install(KeepAlive.Spec(exec = keepAliveExec, hostId = sidecar.hostId.value))
+                    KeepAlive.install(
+                        KeepAlive.Spec(
+                            exec = keepAliveExec,
+                            hostId = sidecar.hostId.value,
+                            hostName = hostName,
+                        ),
+                    )
                 }
             }
         },
     )
 
-    /** "This computer" plus the machine's hostname when we can read it. */
+    /** The machine's actual hostname; fleet clients must not see every host as "This". */
     fun defaultHostName(): String {
         val h = runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrNull()?.takeIf { it.isNotBlank() }
-        return if (h != null) "This computer ($h)" else "This computer"
+        return h ?: "Desktop host"
     }
 
     /** Best-effort argv for the login keep-alive to relaunch (the packaged app, or the dev java cmd). */

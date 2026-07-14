@@ -645,6 +645,14 @@ data class AgentInstallStatus(
     val authed: Boolean = false,
 )
 
+/** Broker-owned background job for installing one agent CLI. */
+@Serializable
+data class AgentInstallJob(
+    val state: String = "", // "running" | "done" | "failed"
+    val log: String = "",
+    val exitCode: Int? = null,
+)
+
 /** State of an in-progress agent CLI login (POST/GET /agents/<kind>/login).
  *  Mirrors the broker `LoginState` (src/core/agents/login/session.ts):
  *  `phase`: "starting" | "awaiting_user" | "success" | "failed" | "cancelled".
@@ -840,6 +848,7 @@ private data class OpenCodeOAuthFinishBody(val providerId: String, val method: I
  *  this never clobbers config the caller didn't touch. */
 @Serializable
 private data class ConfigPatchBody(
+    val onboarded: Boolean? = null,
     val paName: String? = null,
     val voiceCleanupModel: String? = null,
     val voiceCleanupEngine: String? = null,
@@ -1137,6 +1146,7 @@ class BrokerApi(
      * Secret fields (tokens) are write-only — they read back redacted, not echoed.
      */
     suspend fun saveConfig(
+        onboarded: Boolean? = null,
         paName: String? = null,
         voiceCleanupModel: String? = null,
         voiceCleanupEngine: String? = null,
@@ -1147,6 +1157,7 @@ class BrokerApi(
     ) = putJson(
         "$httpBase/settings/config",
         ConfigPatchBody(
+            onboarded = onboarded,
             paName = paName,
             voiceCleanupModel = voiceCleanupModel,
             voiceCleanupEngine = voiceCleanupEngine,
@@ -1178,6 +1189,25 @@ class BrokerApi(
     /** GET /agents/status → install + auth state per agent CLI. */
     suspend fun agentStatuses(): List<AgentInstallStatus> =
         getJson("$httpBase/agents/status")
+
+    /** POST /agents/<kind>/install → start (or resume) the broker-owned install job. */
+    suspend fun startAgentInstall(kind: String): AgentInstallJob {
+        val response = http.post("$httpBase/agents/${urlEncode(kind)}/install") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(EmptyBody()))
+        }
+        // The broker intentionally returns 409 with the live job when an install is
+        // already running. Treat that as a resumable success, like the web client.
+        if (response.status.isSuccess() || response.status.value == 409) {
+            return json.decodeFromString(response.bodyAsText())
+        }
+        return decode(response)
+    }
+
+    /** GET /agents/<kind>/install → poll the latest install job. */
+    suspend fun agentInstallState(kind: String): AgentInstallJob =
+        getJson("$httpBase/agents/${urlEncode(kind)}/install")
 
     /** POST /agents/<kind>/login → starts a CLI login, returns the initial state. */
     suspend fun startAgentLogin(kind: String): AgentLoginState =

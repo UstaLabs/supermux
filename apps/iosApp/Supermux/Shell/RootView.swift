@@ -131,6 +131,7 @@ struct RootView: View {
         // iPad/mac workspace), and a tapped push routes through it too, so this one hook covers them all.
         .onChange(of: selected) { _, id in
             if let id { PushManager.shared.clearDelivered(sessionId: id) }
+            if let id, let owner = fleet.sessionHost[id] { fleet.setActive(owner) }
             fleet.updateViewing(session: id, visible: scenePhase == .active)
         }
         // Returning to the foreground on an already-open chat clears whatever landed while the
@@ -224,17 +225,34 @@ struct RootView: View {
         if let broker = fleet.activeBroker {
             switch r {
             case .newSession: NewSessionView(broker: broker, fleet: fleet, onSpawned: { id in route = nil; selected = id })
-            case .personalAssistants: PersonalAssistantsView(broker: broker, onOpen: { id in route = nil; selected = id })
-            case .archived: ArchivedView(broker: broker)
-            case .usage: UsageView(broker: broker)
-            case .proxies: ProxiesView(broker: broker)
-            case .displays: DisplaysView(broker: broker)
-            case .devices: DevicesView(broker: broker)
-            case .settings: SettingsView(broker: broker)
+            case .personalAssistants: hostScoped(broker) {
+                PersonalAssistantsView(broker: broker, onOpen: { id in route = nil; selected = id })
+            }
+            case .archived: hostScoped(broker) { ArchivedView(broker: broker) }
+            case .usage: hostScoped(broker) { UsageView(broker: broker) }
+            case .proxies: hostScoped(broker) { ProxiesView(broker: broker) }
+            case .displays: hostScoped(broker) { DisplaysView(broker: broker) }
+            case .devices: hostScoped(broker) { DevicesView(broker: broker) }
+            case .settings: hostScoped(broker) { SettingsView(broker: broker) }
             }
         } else {
             ProgressView("Connecting…").tint(Theme.teal)
         }
+    }
+
+    private func hostScoped<Content: View>(
+        _ broker: BrokerSession,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            // Recreate page-local loading/state when host scope changes. Without this, a page could
+            // keep host A's rows while its action closures had already moved to host B.
+            .id(broker.baseURL)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                HostScopePicker(hosts: fleet.hostViews, selected: fleet.activeRecordId) {
+                    fleet.setActive($0)
+                }
+            }
     }
 }
 

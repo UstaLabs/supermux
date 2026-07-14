@@ -1476,7 +1476,8 @@ export class WebChannel implements Channel {
     // desktop wizard) can add ANOTHER device (spec §3.4). Authed-only.
     if (method === "POST" && path === "/pair/mint-claim") {
       if (!this.claimStore) return this.json({ error: "pairing claims unavailable" }, 503)
-      return this.json({ claimSecret: this.claimStore.mint() })
+      const claim = this.claimStore.mintWithExpiry()
+      return this.json({ claimSecret: claim.secret, expiresAt: new Date(claim.expiresAt).toISOString() })
     }
 
     // ── System: broker restart ──────────────────────────────────────────
