@@ -610,13 +610,13 @@ private struct ProjectPickerSheet: View {
                                     Text(query).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
                                 }
                             }
-                        }
+                        }.smMacPlainButton()
                     }
                 }
                 if !filteredProjects.isEmpty {
                     Section("Projects") {
                         ForEach(filteredProjects, id: \.self) { p in
-                            Button { onPick(p); dismiss() } label: { projectRow(name: basename(p), sub: label(p), checked: p == current) }
+                            Button { onPick(p); dismiss() } label: { projectRow(name: basename(p), sub: label(p), checked: p == current) }.smMacPlainButton()
                         }
                     }
                 }
@@ -634,7 +634,7 @@ private struct ProjectPickerSheet: View {
                                     Label("Clone", systemImage: "arrow.down.circle")
                                         .labelStyle(.titleAndIcon).font(.caption).foregroundStyle(.secondary)
                                 }
-                            }.disabled(resolving)
+                            }.disabled(resolving).smMacPlainButton()
                         }
                     }
                 }
@@ -645,12 +645,12 @@ private struct ProjectPickerSheet: View {
                     Section("Create") {
                         Button { resolveCreateLocal() } label: {
                             Label("Create locally — \(query)", systemImage: "plus.circle")
-                        }.disabled(resolving)
+                        }.disabled(resolving).smMacPlainButton()
                         ForEach(connections, id: \.id) { c in
                             Button { resolveCreateForge(c.id) } label: {
                                 Label("Create on \(c.host) — \(c.account.login)/\(query)", systemImage: "plus.circle")
                                     .lineLimit(1)
-                            }.disabled(resolving)
+                            }.disabled(resolving).smMacPlainButton()
                         }
                     }
                 }
@@ -672,6 +672,9 @@ private struct ProjectPickerSheet: View {
                 }
             }
         }
+        #if os(macOS)
+        .frame(minWidth: 520, minHeight: 560)
+        #endif
         .tint(Theme.teal)
         .task {
             connections = await broker.forges()

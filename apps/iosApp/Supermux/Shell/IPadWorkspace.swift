@@ -37,6 +37,9 @@ struct IPadWorkspace: View {
     // Which host `chrome` was built for (its baseURL), so switching to a session on a DIFFERENT
     // host rebuilds the chrome against the owning broker rather than reusing the wrong one.
     @State private var chromeHostKey: String?
+    #if os(macOS)
+    @Environment(\.openSettings) private var openSettings
+    #endif
 
     private var session: SessionInfo? { fleet.sessions.first { $0.id == selected } }
     /// The selected session's OWNING host (or the active host when nothing is selected). Everything
@@ -112,13 +115,48 @@ struct IPadWorkspace: View {
                 .frame(width: WorkspaceLayoutModel.B.rail)
             Divider()
         } else {
-            SessionsListView(fleet: fleet, selected: $selected,
-                             onNewSession: { route = .newSession },
-                             onArchived: { route = .archived },
-                             onAddHost: onAddHost)
-                .frame(width: CGFloat(layout.sidebarWidth))
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    Text("Sessions").font(.headline)
+                    Spacer(minLength: 8)
+                    globalMenu
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 52)
+                .background(.bar)
+                .overlay(alignment: .bottom) { Divider() }
+                SessionsListView(fleet: fleet, selected: $selected,
+                                 onNewSession: { route = .newSession },
+                                 onArchived: { route = .archived },
+                                 onAddHost: onAddHost)
+            }
+            .frame(width: CGFloat(layout.sidebarWidth))
             sidebarDivider
         }
+    }
+
+    /// App-global pages: not session-scoped, so they live at the app level in the sidebar rather
+    /// than in the session header. (Archived stays inside `SessionsListView`'s in-list pull-bar.)
+    @ViewBuilder private var globalMenu: some View {
+        Menu {
+            Button { onAddHost() } label: { Label("Add host", systemImage: "plus.rectangle.on.rectangle") }
+            Button { route = .personalAssistants } label: { Label("Assistants", systemImage: "person.2") }
+            Button { route = .usage } label: { Label("Usage", systemImage: "chart.bar") }
+            Button { route = .devices } label: { Label("Devices", systemImage: "ipad.and.iphone") }
+            Button { route = .proxies } label: { Label("Proxies", systemImage: "network") }
+            Button { route = .displays } label: { Label("Displays", systemImage: "display") }
+            Button {
+                #if os(macOS)
+                openSettings()
+                #else
+                route = .settings
+                #endif
+            } label: { Label("Settings", systemImage: "gearshape") }
+        } label: {
+            Image(systemName: "ellipsis.circle").font(.body)
+        }
+        .smMacBorderlessMenu()
+        .smHoverHighlight()
     }
 
     /// A 1pt visible rule with a ~24pt hit area; dragging adjusts `sidebarWidth`. Captures the
@@ -149,9 +187,9 @@ struct IPadWorkspace: View {
         // The header + finish dialogs need a non-nil chrome bound for two-way state, so the
         // detail content lives in `WorkspaceDetail` and is rendered only once chrome exists.
         if let s = session, let b = broker, let chrome {
-            WorkspaceDetail(broker: b, session: s, layout: layout, chrome: chrome, route: $route,
+            WorkspaceDetail(broker: b, session: s, layout: layout, chrome: chrome,
                             showRename: $showRename, renameText: $renameText,
-                            showKillConfirm: $showKillConfirm, onAddHost: onAddHost)
+                            showKillConfirm: $showKillConfirm)
         } else {
             ContentUnavailableView("Pick a session", systemImage: "bubble.left.and.bubble.right")
         }
@@ -211,15 +249,10 @@ private struct WorkspaceDetail: View {
     let session: SessionInfo
     @Bindable var layout: WorkspaceLayoutModel
     @Bindable var chrome: SessionChrome
-    @Binding var route: RootView.NavRoute?
     @Binding var showRename: Bool
     @Binding var renameText: String
     @Binding var showKillConfirm: Bool
-    var onAddHost: () -> Void = {}
     @State private var finishSheet = false
-    #if os(macOS)
-    @Environment(\.openSettings) private var openSettings
-    #endif
 
     var body: some View {
         VStack(spacing: 0) {
@@ -313,11 +346,11 @@ private struct WorkspaceDetail: View {
         }
     }
 
-    /// The overflow ⋯ menu: git ops (when the session is a repo) + the management pages that
-    /// used to live in the stack's toolbar (now route-driven, since the nav bar is hidden).
+    /// The overflow ⋯ menu: session-scoped git ops (Fetch/Push/Pull/Publish). Only shown for
+    /// sessions that are git repos, so non-repo sessions never render an empty `⋯`.
     @ViewBuilder private var overflowMenu: some View {
-        Menu {
-            if let g = chrome.git, g.isRepo {
+        if let g = chrome.git, g.isRepo {
+            Menu {
                 Section("Git") {
                     Button { chrome.fetch() } label: { Label("Fetch", systemImage: "arrow.down") }
                     Button { chrome.push() } label: { Label("Push", systemImage: "arrow.up") }
@@ -326,29 +359,12 @@ private struct WorkspaceDetail: View {
                         Button { chrome.publish() } label: { Label("Publish", systemImage: "arrow.up.to.line") }
                     }
                 }
+            } label: {
+                Image(systemName: "ellipsis.circle").font(.body)
             }
-            Section {
-                Button { onAddHost() } label: { Label("Add host", systemImage: "plus.rectangle.on.rectangle") }
-                Button { route = .personalAssistants } label: { Label("Assistants", systemImage: "person.2") }
-                Button { route = .archived } label: { Label("Archived", systemImage: "archivebox") }
-                Button { route = .usage } label: { Label("Usage", systemImage: "chart.bar") }
-                Button { route = .devices } label: { Label("Devices", systemImage: "ipad.and.iphone") }
-                Button { route = .proxies } label: { Label("Proxies", systemImage: "network") }
-                Button { route = .displays } label: { Label("Displays", systemImage: "display") }
-                Button {
-                    // The Mac has a real Settings window (⌘,); iOS keeps the sheet route.
-                    #if os(macOS)
-                    openSettings()
-                    #else
-                    route = .settings
-                    #endif
-                } label: { Label("Settings", systemImage: "gearshape") }
-            }
-        } label: {
-            Image(systemName: "ellipsis.circle").font(.body)
+            .smMacBorderlessMenu()
+            .smHoverHighlight()
         }
-        .smMacBorderlessMenu()
-        .smHoverHighlight()
     }
 
     // MARK: - Multi-pane content
