@@ -1,5 +1,6 @@
 // src/core/agents/claude/transcript-parser.ts
 import type { ActivityEvent } from "./activity-event"
+import { relativizePath } from "../path-relativize"
 
 const TITLE_MAX = 120
 const DETAIL_MAX = 2000
@@ -19,12 +20,13 @@ function firstLine(s: string): string {
   return s.trim()
 }
 
-function shortInput(name: string, input: unknown): string {
+function shortInput(name: string, input: unknown, workdir: string | undefined): string {
   if (!input || typeof input !== "object" || Array.isArray(input)) return ""
   const obj = input as Record<string, unknown>
   const field = TITLE_FIELDS[name]
-  const pick = field && typeof obj[field] === "string" ? (obj[field] as string)
+  const raw = field && typeof obj[field] === "string" ? (obj[field] as string)
     : Object.values(obj).find((v) => typeof v === "string") as string | undefined
+  const pick = raw ? relativizePath(raw, workdir) : ""
   return pick ? firstLine(pick) : ""
 }
 
@@ -36,7 +38,7 @@ function resultText(content: unknown): string {
   return ""
 }
 
-function block(b: any, ts: string): ActivityEvent | null {
+function block(b: any, ts: string, workdir: string | undefined): ActivityEvent | null {
   if (!b || typeof b !== "object") return null
   if (b.type === "thinking") {
     return null  // content is redacted; duration-aware "Thought for Ns" markers come from agentStateStore
@@ -45,7 +47,7 @@ function block(b: any, ts: string): ActivityEvent | null {
     return { ts, kind: "interrupt", title: "Interrupted" }
   }
   if (b.type === "tool_use" && typeof b.name === "string") {
-    const arg = shortInput(b.name, b.input)
+    const arg = shortInput(b.name, b.input, workdir)
     const title = clip(arg ? `${b.name}: ${arg}` : b.name, TITLE_MAX)
     const detail = clip(JSON.stringify(b.input ?? {}), DETAIL_MAX)
     return { ts, kind: "tool", tool: b.name, title: title.text, detail: detail.text, phase: "started", ...(typeof b.id === "string" ? { callId: b.id } : {}), ...(detail.truncated ? { truncated: true } : {}) }
@@ -57,7 +59,7 @@ function block(b: any, ts: string): ActivityEvent | null {
   return null
 }
 
-export function parseTranscriptLine(line: string): ActivityEvent[] {
+export function parseTranscriptLine(line: string, workdir: string | undefined): ActivityEvent[] {
   try {
     const trimmed = line.trim()
     if (!trimmed) return []
@@ -67,7 +69,7 @@ export function parseTranscriptLine(line: string): ActivityEvent[] {
     if (!Array.isArray(content)) return []
     const ts = typeof obj.timestamp === "string" ? obj.timestamp : new Date(0).toISOString()
     const out: ActivityEvent[] = []
-    for (const b of content) { const ev = block(b, ts); if (ev) out.push(ev) }
+    for (const b of content) { const ev = block(b, ts, workdir); if (ev) out.push(ev) }
     return out
   } catch {
     return []
