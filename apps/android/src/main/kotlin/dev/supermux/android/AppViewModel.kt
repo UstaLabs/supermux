@@ -51,6 +51,7 @@ import dev.supermux.net.ScrcpyClient
 import dev.supermux.net.SpawnRequest
 import dev.supermux.net.UpdateCommentBody
 import dev.supermux.net.TerminalClient
+import dev.supermux.net.TerminalSummary
 import dev.supermux.net.UpdateStatus
 import dev.supermux.net.VerifySaveResult
 import dev.supermux.net.VerifySuggestResult
@@ -850,9 +851,17 @@ class AppViewModel(
         }
     }
 
-    fun connectTerminal(sessionId: String): TerminalClient {
+    fun connectTerminal(sessionId: String, terminalId: String = "main"): TerminalClient {
         val c = connFor(sessionId)
-        return TerminalClient(c?.baseUrl ?: "", c?.token ?: "", http, sessionId)
+        return TerminalClient(c?.baseUrl ?: "", c?.token ?: "", http, sessionId, terminalId = terminalId)
+    }
+
+    /** Broker-owned scratch terminals for this session, shared by every connected client. */
+    suspend fun listTerminals(sessionId: String): List<TerminalSummary> =
+        apiFor(sessionId)?.listTerminals(sessionId) ?: emptyList()
+
+    suspend fun closeTerminal(sessionId: String, terminalId: String) {
+        apiFor(sessionId)?.closeTerminal(sessionId, terminalId)
     }
 
     /** Raw agent-PTY terminal for the Native tab (kind="agent"); shell tab uses the scratch kind. */

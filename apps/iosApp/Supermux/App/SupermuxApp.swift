@@ -145,6 +145,10 @@ struct SupermuxApp: App {
                     NotificationCenter.default.post(name: .smNewSession, object: nil)
                 }
                 .keyboardShortcut("n", modifiers: .command)
+                Divider()
+                Button("Pair New Device…") {
+                    NotificationCenter.default.post(name: .smPairNewDevice, object: nil)
+                }
             }
             TextEditingCommands()
         }

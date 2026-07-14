@@ -116,6 +116,7 @@ import dev.supermux.session.inferHomeDir
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.toWorkdirRelativePath
 import dev.supermux.android.terminal.TerminalPanel
+import dev.supermux.android.terminal.ScratchTerminalPanel
 import dev.supermux.android.session.SessionAvatar
 import dev.supermux.android.theme.HapticKind
 import dev.supermux.android.theme.Space
@@ -185,7 +186,9 @@ fun ChatScreen(
     lspOpen: (String, String) -> Unit = { _, _ -> },
     lspRpcOut: (String, String, String) -> Unit = { _, _, _ -> },
     lspClose: (String, String) -> Unit = { _, _ -> },
-    connectTerminal: (() -> dev.supermux.net.TerminalClient)? = null,
+    connectTerminal: ((String) -> dev.supermux.net.TerminalClient)? = null,
+    listTerminals: suspend () -> List<dev.supermux.net.TerminalSummary> = { emptyList() },
+    closeTerminal: suspend (String) -> Unit = {},
     // Native tab — terminal bound to the agent PTY with kind="agent"; iOS parity, claude-only.
     connectAgentTerminal: (() -> dev.supermux.net.TerminalClient)? = null,
     listDisplays: (suspend () -> List<dev.supermux.net.DisplayStream>)? = null,
@@ -632,7 +635,14 @@ fun ChatScreen(
                 val ct = connectTerminal
                 Box(Modifier.keepAlivePanel(activePanel == SessionPanel.Terminal)) {
                     if (ct != null) {
-                        TerminalPanel(connect = ct, modifier = Modifier.fillMaxSize(), active = activePanel == SessionPanel.Terminal)
+                        ScratchTerminalPanel(
+                            sessionId = session.id,
+                            connect = ct,
+                            listTerminals = listTerminals,
+                            closeTerminal = closeTerminal,
+                            modifier = Modifier.fillMaxSize(),
+                            active = activePanel == SessionPanel.Terminal,
+                        )
                     } else {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Text("Terminal unavailable", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)

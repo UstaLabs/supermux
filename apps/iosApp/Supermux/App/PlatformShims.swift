@@ -436,4 +436,8 @@ extension Notification.Name {
     /// route to the new-session launcher. Menu commands live in the `App` scene, not the
     /// view tree, so they reach `RootView` via NotificationCenter rather than a binding.
     static let smNewSession = Notification.Name("sm.newSession")
+
+    /// Posted by macOS File ▸ Pair New Device…. Unlike the session-header overflow,
+    /// the File menu remains available when the host has no sessions yet.
+    static let smPairNewDevice = Notification.Name("sm.pairNewDevice")
 }
