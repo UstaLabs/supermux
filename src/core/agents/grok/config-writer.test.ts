@@ -29,6 +29,9 @@ test("writeGrokConfig declares mux-shim with the session's env and disables clau
   expect(toml).toContain('MUX_AGENT_KIND = "grok"')
   expect(toml).toContain('MUX_SOCKETS_DIR = "/run/mux/sockets"')
   expect(toml).toContain("[claude_compat]\nimported = true")
+  // The broker spawns a grok child per session; an update check on launch could
+  // swap the binary mid-conversation or drift versions between live sessions.
+  expect(toml).toContain("auto_update = false")
 })
 
 test("writeGrokConfig escapes paths that would break the TOML", () => {
