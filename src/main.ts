@@ -34,7 +34,7 @@ import { acquirePidFile, releasePidFile } from "./core/session-manager/pid-file"
 import { spawnSessionWindow, killWindowById, listSessionWindows, livePanePid, sendKeysToWindowId, resolveWindowIdByName } from "./core/session-manager/tmux"
 import { ensureWindowId } from "./core/session-manager/window-id"
 import { liveWindowId } from "./core/session-manager/live-window"
-import { spawnSession as spawnSessionHelper, spawnPA, resumeOpenCodeSession } from "./core/session-manager/spawn-helper"
+import { spawnSession as spawnSessionHelper, spawnPA, resumeOpenCodeSession, resumeGrokSession } from "./core/session-manager/spawn-helper"
 import { RuntimeRegistry, type SessionRuntime } from "./core/session-manager/runtime"
 import { buildClaudeSpawnCommand } from "./core/session-manager/spawn-command"
 import { createAgentRpc } from "./core/agent-rpc"
@@ -112,6 +112,7 @@ import { refreshModelCache, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
 import { OpenCodeAdapter } from "./core/agents/opencode/adapter"
 import type { OpenCodeSpawnHandle } from "./core/agents/opencode/spawn"
+import { GrokAdapter } from "./core/agents/grok/adapter"
 import { resolveSessionEffort, clampSessionReasoningLevel } from "./core/models/session-agent-settings"
 import { supportedReasoningLevels, shouldShowReasoningControl } from "./core/models/reasoning-levels"
 import { DeviceStore } from "./channels/web/device-store"
@@ -577,6 +578,12 @@ function registerCodexRuntime(sessionId: string, name: string, adapter: CodexAda
 
 function registerCursorRuntime(sessionId: string, adapter: CursorAdapter): void {
   registerRuntime(sessionId, { kind: AgentKind.Cursor, adapter })
+}
+
+// grok's stdio child is owned by the adapter (no separate handle), so unlike
+// opencode there's no handle.onExit to unregister on — adapter.stop() is the kill.
+function registerGrokRuntime(sessionId: string, adapter: GrokAdapter): void {
+  registerRuntime(sessionId, { kind: AgentKind.Grok, adapter })
 }
 
 function registerOpenCodeRuntime(sessionId: string, name: string, adapter: OpenCodeAdapter, handle: OpenCodeSpawnHandle): void {
@@ -1299,6 +1306,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             registerCursorRuntime(sid, adapter)
           } else if (adapter instanceof OpenCodeAdapter) {
             registerOpenCodeRuntime(sid, name, adapter, handle as OpenCodeSpawnHandle)
+          } else if (adapter instanceof GrokAdapter) {
+            registerGrokRuntime(sid, adapter)
           }
           wireAdapterEvents(adapter, sid)
         },
@@ -1316,6 +1325,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
         },
         onOpenCodeSessionId: (name, sessionId) => {
+          const session = registry.resolveName(name)
+          if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
+        },
+        onGrokSessionId: (name, sessionId) => {
           const session = registry.resolveName(name)
           if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
         },
@@ -1651,6 +1664,10 @@ async function killSession(id: string) {
   } else if (s.agent === "opencode") {
     const runtime = runtimes.get(s.id)
     if (runtime?.kind === AgentKind.OpenCode) runtime.handle.kill()
+  } else if (s.agent === AgentKind.Grok) {
+    // The `grok agent stdio` child is owned by the adapter, so stop() is the kill.
+    const runtime = runtimes.get(s.id)
+    if (runtime?.kind === AgentKind.Grok) void runtime.adapter.stop()
   }
   deleteRuntime(s.id)
   stopClaudeTailer(s.id)   // also clears the session's background tasks
@@ -1885,6 +1902,17 @@ async function resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name
         { id: sessionId, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id },
       )
       registerOpenCodeRuntime(sessionId, name, adapter, handle)
+      wireAdapterEvents(adapter, sessionId)
+    } else if (session.agent === AgentKind.Grok) {
+      await server.bind(sessionId)
+      const { adapter } = await resumeGrokSession(
+        {
+          resolveAttachment: resolveAttachmentPath,
+          onGrokSessionId: (_name, sid) => { registry.sessions.setAgentSessionId(sessionId, sid) },
+        },
+        { id: sessionId, name, workdir: session.workdir, model: session.model, agent_session_id: session.agent_session_id },
+      )
+      registerGrokRuntime(sessionId, adapter)
       wireAdapterEvents(adapter, sessionId)
     } else {
       return { ok: false, error: `Cannot resume agent type: ${session.agent}` }
@@ -2530,6 +2558,8 @@ async function spawnSession(args: { workdir: string; requestedName?: string; age
           registerCursorRuntime(sid, adapter)
         } else if (adapter instanceof OpenCodeAdapter) {
           registerOpenCodeRuntime(sid, name, adapter, handle as OpenCodeSpawnHandle)
+        } else if (adapter instanceof GrokAdapter) {
+          registerGrokRuntime(sid, adapter)
         }
         wireAdapterEvents(adapter, sid)
       },
@@ -2538,6 +2568,10 @@ async function spawnSession(args: { workdir: string; requestedName?: string; age
         if (session) registry.sessions.setAgentSessionId(session.id, threadId)
       },
       onCursorSessionId: (name: string, sessionId: string) => {
+        const session = registry.resolveName(name)
+        if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
+      },
+      onGrokSessionId: (name: string, sessionId: string) => {
         const session = registry.resolveName(name)
         if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
       },
@@ -2725,10 +2759,11 @@ async function switchSessionModel(sessionId: string, newModel: string, opts?: { 
     }
   }
 
-  // cursor and opencode read their adapter's `model` field fresh on each turn
-  // (opencode re-parses it in send() via parseModel()), so a model switch is a
-  // live in-process field update — no process/serve restart, no config reapply.
-  if (session.agent === "cursor" || session.agent === "opencode") {
+  // cursor, opencode and grok read their adapter's `model` field fresh on each
+  // turn (opencode re-parses it in send() via parseModel(); grok folds it into
+  // each session/prompt), so a model switch is a live in-process field update —
+  // no process/serve restart, no config reapply.
+  if (session.agent === "cursor" || session.agent === "opencode" || session.agent === AgentKind.Grok) {
     const adapter = adapters.get(session.id) as any
     if (adapter && "model" in adapter) {
       adapter.model = newModel
@@ -2846,6 +2881,8 @@ ch.on("inbound", async (msg: InboundMessage) => {
               registerCursorRuntime(sid, adapter)
             } else if (adapter instanceof OpenCodeAdapter) {
               registerOpenCodeRuntime(sid, name, adapter, handle as OpenCodeSpawnHandle)
+            } else if (adapter instanceof GrokAdapter) {
+              registerGrokRuntime(sid, adapter)
             }
             wireAdapterEvents(adapter, sid)
           },
@@ -2863,6 +2900,10 @@ ch.on("inbound", async (msg: InboundMessage) => {
             if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
           },
           onOpenCodeSessionId: (name, sessionId) => {
+            const session = registry.resolveName(name)
+            if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
+          },
+          onGrokSessionId: (name, sessionId) => {
             const session = registry.resolveName(name)
             if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
           },
@@ -3248,6 +3289,25 @@ async function resumeNonClaudeAdapters(): Promise<void> {
         log.info("opencode_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
       } catch (err: any) {
         log.warn("opencode_resume_failed", { name: s.name, err: String(err) })
+      }
+    } else if (s.agent === AgentKind.Grok) {
+      // grok's worker (in-process adapter + `grok agent stdio` child) dies with
+      // the broker; same rationale as opencode above. No agent_home guard is
+      // needed — grok's MCP + preamble are rebuilt from the row alone.
+      try {
+        const { adapter } = await resumeGrokSession(
+          {
+            resolveAttachment: resolveAttachmentPath,
+            onGrokSessionId: (_name, sid) => { registry.sessions.setAgentSessionId(s.id, sid) },
+          },
+          { id: s.id, name: s.name, workdir: s.workdir, model: s.model, agent_session_id: s.agent_session_id },
+        )
+        registerGrokRuntime(s.id, adapter)
+        wireAdapterEvents(adapter, s.id)
+        if (s.status === "suspended") registry.sessions.activate(s.id, process.pid)
+        log.info("grok_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
+      } catch (err: any) {
+        log.warn("grok_resume_failed", { name: s.name, err: String(err) })
       }
     }
   }

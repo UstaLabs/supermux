@@ -20,6 +20,10 @@ import { writeOpenCodeConfig } from "../agents/opencode/config-writer"
 import { writeOpenCodePreamble } from "../agents/opencode/preamble-writer"
 import { spawnOpenCodeServer, type OpenCodeSpawnHandle } from "../agents/opencode/spawn"
 import { OpenCodeAdapter } from "../agents/opencode/adapter"
+import { writeGrokPreamble } from "../agents/grok/preamble-writer"
+import { buildGrokMcpServers } from "../agents/grok/mcp-writer"
+import { realGrokRunner, type GrokRunner } from "../agents/grok/runner"
+import { GrokAdapter } from "../agents/grok/adapter"
 import { cursorSpawnArgs, codexSpawnArgs, codexPrepareSessionHome, opencodeConfigEntries } from "../plugins"
 import { join } from "path"
 import { shimSpawnSpec } from "./shim-spawn"
@@ -49,6 +53,9 @@ function captureBaseCommits(workdir: string): Record<string, string> {
 const HOME = home()
 
 type CursorSpawnHandle = { onExit: (cb: (code: number | null) => void) => void }
+/** grok has no separate spawn handle (the adapter owns its stdio child); this
+ * mirrors cursor's inert handle so registerAdapter keeps one shape. */
+type GrokSpawnHandle = { onExit: (cb: (code: number | null) => void) => void }
 
 export type SpawnDeps = {
   registry: Registry
@@ -68,15 +75,18 @@ export type SpawnDeps = {
   cursorSmokeAgent?: typeof smokeCursorAgent
   cursorRunnerFactory?: (opts: { home: string; authEnv: Record<string, string> }) => CursorRunner
   cursorAdapterFactory?: (opts: ConstructorParameters<typeof CursorAdapter>[0]) => CursorAdapter
+  grokRunnerFactory?: () => GrokRunner
+  grokAdapterFactory?: (opts: ConstructorParameters<typeof GrokAdapter>[0]) => GrokAdapter
   registerAdapter?: (
     name: string,
-    adapter: CodexAdapter | CursorAdapter | OpenCodeAdapter,
-    handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle,
+    adapter: CodexAdapter | CursorAdapter | OpenCodeAdapter | GrokAdapter,
+    handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
   ) => void
   onThreadId?: (name: string, threadId: string) => void
   onCodexSessionId?: (name: string, sessionId: string) => void
   onCursorSessionId?: (name: string, sessionId: string) => void
   onOpenCodeSessionId?: (name: string, sessionId: string) => void
+  onGrokSessionId?: (name: string, sessionId: string) => void
   onClaudeSessionId?: (name: string, claudeSessionId: string) => void
   onTmuxWindowId?: (brokerSessionId: string, windowId: string) => void
 }
@@ -123,6 +133,8 @@ export async function spawnSession(deps: SpawnDeps, args: SpawnArgs): Promise<Sp
       return spawnCursorSession(deps, args)
     case AgentKind.OpenCode:
       return spawnOpenCodeSession(deps, args)
+    case AgentKind.Grok:
+      return spawnGrokSession(deps, args)
   }
 }
 
@@ -140,11 +152,12 @@ export async function spawnPA(opts: {
   onCodexSessionId?: (brokerSessionId: string, sessionId: string) => void
   onCursorSessionId?: (name: string, sessionId: string) => void
   onOpenCodeSessionId?: (name: string, sessionId: string) => void
+  onGrokSessionId?: (name: string, sessionId: string) => void
   resolveEffort?: (session: Pick<Session, "agent" | "model" | "reasoningLevel">) => string | undefined
   registerAdapter?: (
     name: string,
-    adapter: CodexAdapter | CursorAdapter | OpenCodeAdapter,
-    handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle,
+    adapter: CodexAdapter | CursorAdapter | OpenCodeAdapter | GrokAdapter,
+    handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
   ) => void
   codexResolveAuth?: typeof resolveCodexAuth
   codexPrepareSessionHome?: typeof codexPrepareSessionHome
@@ -157,6 +170,8 @@ export async function spawnPA(opts: {
   cursorAdapterFactory?: (opts: ConstructorParameters<typeof CursorAdapter>[0]) => CursorAdapter
   opencodeSpawnServer?: typeof spawnOpenCodeServer
   opencodeAdapterFactory?: (opts: ConstructorParameters<typeof OpenCodeAdapter>[0]) => OpenCodeAdapter
+  grokRunnerFactory?: () => GrokRunner
+  grokAdapterFactory?: (opts: ConstructorParameters<typeof GrokAdapter>[0]) => GrokAdapter
   resolveAttachment?: (file_id: string) => Promise<string>
   /** When provided, spawnPA skips registerPA (session already exists) and
    * updates the existing session's PID on completion. */
@@ -369,6 +384,48 @@ export async function spawnPA(opts: {
 
     await adapter.start()
     opts.registerAdapter?.(name, adapter, handle)
+  } else if (agent === AgentKind.Grok) {
+    const sessionHome = join(STATE_DIR, "agents", "grok", name)
+    mkdirSync(sessionHome, { recursive: true, mode: 0o700 })
+
+    // grok reads its credentials from the real ~/.grok, so (unlike cursor/codex)
+    // there's no auth to resolve or copy — the child just inherits HOME.
+    writeGrokPreamble({ workdir, sessionName: name })
+
+    const adapter = (opts.grokAdapterFactory ?? ((o) => new GrokAdapter(o)))({
+      sessionName: name,
+      workdir,
+      runner: (opts.grokRunnerFactory ?? (() => realGrokRunner))(),
+      persistSessionId: async (sid) => { opts.onGrokSessionId?.(name, sid) },
+      initialSessionId: undefined,
+      model,
+      mcpServers: buildGrokMcpServers({
+        ...shimSpawnSpec(),
+        sessionId: id,
+        sessionName: name,
+        socketsDir: SOCKETS_DIR,
+      }),
+      resolveAttachment: opts.resolveAttachment,
+    })
+
+    if (!skipRegister) {
+      registry.registerPA({
+        id,
+        name,
+        agent,
+        workdir,
+        model,
+        reasoningLevel,
+        pid: 0,
+        is_default: registry.listPAs().length === 0,
+        agent_home: sessionHome,
+        base_commits: captureBaseCommits(workdir),
+      })
+    }
+    finalPid = 0
+
+    await adapter.start()
+    opts.registerAdapter?.(name, adapter, { onExit: () => {} })
   }
 
   if (skipRegister) {
@@ -700,4 +757,97 @@ export async function resumeOpenCodeSession(
   if (session.agent_session_id) await adapter.resume()
   else await adapter.start()
   return { adapter, handle }
+}
+
+/** grok's worker is an in-process adapter driving a `grok agent stdio` child over
+ * ACP. Unlike cursor (per-turn CLI) the child is persistent; unlike codex/opencode
+ * it's owned by the adapter, so there's no separate handle and no pid to track —
+ * the row is registered with pid 0 and adapter.stop() is the kill.
+ *
+ * MCP + preamble are NOT files grok reads from a private home: the mux-shim server
+ * is handed to grok inline via ACP `session/new`, and the identity preamble goes to
+ * AGENTS.md in the workdir (git-excluded, override-safe). sessionHome exists only to
+ * give the row an agent_home for resume. */
+export async function spawnGrokSession(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
+  const base = args.requestedName ?? deriveName(args.workdir)
+  const name = ensureUnique(base, deps.registry.takenNames())
+  const id = randomUUID()
+  deps.registry.reserveName(name)
+
+  const sessionHome = join(STATE_DIR, "agents", "grok", name)
+  mkdirSync(sessionHome, { recursive: true, mode: 0o700 })
+
+  writeGrokPreamble({ workdir: args.workdir, sessionName: name })
+
+  await deps.bind(id)
+
+  const adapter = (deps.grokAdapterFactory ?? ((o) => new GrokAdapter(o)))({
+    sessionName: name,
+    workdir: args.workdir,
+    runner: (deps.grokRunnerFactory ?? (() => realGrokRunner))(),
+    persistSessionId: async (sid) => { deps.onGrokSessionId?.(name, sid) },
+    initialSessionId: undefined,
+    model: args.model,
+    mcpServers: buildGrokMcpServers({
+      ...shimSpawnSpec(),
+      sessionId: id,
+      sessionName: name,
+      socketsDir: SOCKETS_DIR,
+    }),
+    resolveAttachment: deps.resolveAttachment,
+  })
+
+  // Register BEFORE adapter.start(): start() completes the ACP handshake, which
+  // fires persistSessionId — that callback resolves the row by name, so the row
+  // must already exist or the grok session id is lost (breaking resume).
+  deps.registry.register({
+    id,
+    name,
+    workdir: args.workdir,
+    pid: 0,
+    agent: AgentKind.Grok,
+    agent_home: sessionHome,
+    base_commits: captureBaseCommits(args.workdir),
+    internal: args.internal,
+  } as any)
+
+  await adapter.start()
+
+  deps.registerAdapter?.(name, adapter, { onExit: () => {} })
+
+  return { name, session_id: id, model: args.model }
+}
+
+/** Rebuild a grok session's adapter + stdio child after a broker restart. The child
+ * dies with the broker; the session row and grok's own session store persist, so
+ * resume respawns the child and re-binds an adapter, loading the prior grok session
+ * id when one was persisted (else starting fresh). Self-heals the preamble. */
+export async function resumeGrokSession(
+  deps: {
+    resolveAttachment?: (file_id: string) => Promise<string>
+    onGrokSessionId?: (name: string, sid: string) => void
+    grokRunnerFactory?: () => GrokRunner
+  },
+  session: { id: string; name: string; workdir: string; model?: string; agent_session_id?: string },
+): Promise<{ adapter: GrokAdapter }> {
+  writeGrokPreamble({ workdir: session.workdir, sessionName: session.name })
+
+  const adapter = new GrokAdapter({
+    sessionName: session.name,
+    workdir: session.workdir,
+    runner: (deps.grokRunnerFactory ?? (() => realGrokRunner))(),
+    persistSessionId: async (sid) => { deps.onGrokSessionId?.(session.name, sid) },
+    initialSessionId: session.agent_session_id || undefined,
+    model: session.model,
+    mcpServers: buildGrokMcpServers({
+      ...shimSpawnSpec(),
+      sessionId: session.id,
+      sessionName: session.name,
+      socketsDir: SOCKETS_DIR,
+    }),
+    resolveAttachment: deps.resolveAttachment,
+  })
+  if (session.agent_session_id) await adapter.resume()
+  else await adapter.start()
+  return { adapter }
 }

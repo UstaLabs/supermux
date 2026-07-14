@@ -40,10 +40,17 @@ test("detectAgent checks the RIGHT binary name per kind (cursor-agent, not curso
   expect(seen).toEqual(["cursor-agent"])
 })
 
-test("detectAllAgents returns all four kinds", () => {
+test("detectAllAgents returns every kind", () => {
   const probes: DetectProbes = { hasBinary: () => true, fileExists: () => true }
   const all = detectAllAgents(probes, PATHS)
-  expect(all.map((a) => a.kind).sort()).toEqual(["claude", "codex", "cursor", "opencode"])
+  expect(all.map((a) => a.kind).sort()).toEqual(["claude", "codex", "cursor", "grok", "opencode"])
+})
+
+test("detectAgent: grok credential lives at ~/.grok/auth.json", () => {
+  const seen: string[] = []
+  const probes: DetectProbes = { hasBinary: () => true, fileExists: (p) => { seen.push(p); return true } }
+  expect(detectAgent("grok", probes, PATHS)).toEqual({ kind: "grok", installed: true, authed: true })
+  expect(seen[0]).toBe(`${PATHS.home}/.grok/auth.json`)
 })
 
 test("detectAgent: opencode free tier (installed, no auth.json) ⇒ installed but NOT authed", () => {
