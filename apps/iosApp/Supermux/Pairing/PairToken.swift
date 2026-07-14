@@ -19,7 +19,8 @@ struct PairToken: Equatable {
                 if let port = url.port { base += ":\(port)" }
                 return PairToken(baseURL: base, token: token)
             }
-            if scheme == "supermux", let token = queryToken(url), let base = fallbackBaseURL {
+            if scheme == "supermux", let token = queryToken(url),
+               let base = queryValue("base", url) ?? fallbackBaseURL {
                 return PairToken(baseURL: base, token: token)
             }
         }
@@ -36,8 +37,12 @@ struct PairToken: Equatable {
     }
 
     private static func queryToken(_ url: URL) -> String? {
-        let t = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-            .queryItems?.first(where: { $0.name == "t" })?.value
+        let t = queryValue("t", url)
         return (t?.isEmpty == false) ? t : nil
+    }
+
+    private static func queryValue(_ name: String, _ url: URL) -> String? {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == name })?.value
     }
 }

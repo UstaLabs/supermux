@@ -261,14 +261,19 @@ final class Fleet {
 
     // MARK: - Add / forget hosts
 
-    /// Parse a scanned/pasted pairing payload, claim it against its host, and persist it (spec §3.4).
-    /// The shared `PairingPayload.parse` rejects the wrong version/action + non-supermux relay
-    /// origins; the claim then aborts if the broker's returned hostId ≠ the payload's — the exact
-    /// guard Android's add-host enforces.
+    /// Accept both current structured claims and pre-multi-host `/pair?t=…` device-token URLs.
     func claim(raw: String, deviceName: String) async -> AddHostResult {
-        guard let payload = PairingPayload.companion.parse(raw: raw) else {
-            return .error("That isn't a valid supermux pairing link — copy the whole payload from the host.")
+        if let payload = PairingPayload.companion.parse(raw: raw) {
+            return await claim(payload: payload, deviceName: deviceName)
         }
+        guard let legacy = PairToken.parse(raw) else {
+            return .error("That isn't a valid supermux pairing link — scan or paste the complete QR value.")
+        }
+        return await claim(legacy: legacy)
+    }
+
+    /// Current one-time claim path. The returned identity must match the QR exactly.
+    private func claim(payload: PairingPayload, deviceName: String) async -> AddHostResult {
         let isRelay = !(payload.relayUrl ?? "").isEmpty
         guard let url = Self.payloadUrl(payload), !url.isEmpty else {
             return .error("That pairing link has no host URL.")
@@ -298,6 +303,35 @@ final class Fleet {
         } catch {
             return .error("Couldn't reach the host or the claim was rejected.")
         }
+    }
+
+    /// Legacy QR path. Old brokers already minted the bearer embedded in `/pair?t=…` and do not
+    /// implement `/pair/claim` (or usually `/host`), so validate with their native auth probes and
+    /// store the token directly. Identity enrichment remains best-effort for newer brokers.
+    private func claim(legacy: PairToken) async -> AddHostResult {
+        let api = BrokerApi(baseUrl: legacy.baseURL, token: legacy.token, http: IosClientKt.iosHttpClient())
+        let pairResult = try? await api.pairJson(token: legacy.token)
+        var valid = pairResult?.token == legacy.token
+        if !valid, let me = try? await api.me() { valid = me.paired }
+        guard valid else {
+            return .error("The host rejected this pairing token. Check that it is reachable and generate a fresh QR if needed.")
+        }
+
+        let identity = try? await api.getHost()
+        let identityName = identity?.name ?? ""
+        let identityHostId = identity?.hostId ?? ""
+        let name = identityName.isEmpty ? Self.legacyHostDisplayName(legacy.baseURL) : identityName
+        let relay = Self.isRelayHostUrl(legacy.baseURL)
+        let added = store.addOrUpdate(
+            displayName: name,
+            token: legacy.token,
+            relayUrl: relay ? legacy.baseURL : nil,
+            directUrl: relay ? nil : legacy.baseURL,
+            hostId: identityHostId.isEmpty ? nil : identityHostId,
+            platform: identity?.platform,
+            version: identity?.version)
+        refresh()
+        return .added(added)
     }
 
     /// Typed-URL path for Tailscale/VPN/reverse-proxy users: confirm it's a supermux broker
@@ -342,6 +376,16 @@ final class Fleet {
         let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if t.isEmpty || t.hasPrefix("http://") || t.hasPrefix("https://") { return t }
         return "https://" + t
+    }
+
+    private static func legacyHostDisplayName(_ url: String) -> String {
+        guard let host = URL(string: url)?.host, !host.isEmpty else { return "Host" }
+        return host
+    }
+
+    private static func isRelayHostUrl(_ url: String) -> Bool {
+        guard let host = URL(string: url)?.host?.lowercased() else { return false }
+        return host == "relay.supermux.dev" || host.hasSuffix(".relay.supermux.dev")
     }
 
     private static func identityDisplayName(_ advertised: String, for host: PairedHost?) -> String {

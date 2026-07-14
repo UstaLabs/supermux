@@ -49,20 +49,20 @@ import dev.supermux.android.AddHostResult
 import dev.supermux.android.R
 import dev.supermux.android.pairing.rememberQrScanLauncher
 import dev.supermux.host.PairingPayload
+import dev.supermux.net.PairUrl
 import kotlinx.coroutines.launch
 
 private enum class AddMode { Scan, Paste, Url }
 
 /**
  * Add-host flow (spec §3.4 / §5): three ways to add a broker to the fleet.
- *  - **Scan** a pairing QR (reuses the onboarding [rememberQrScanLauncher]).
- *  - **Paste** the pairing payload (the QR's `{v:1,action:"pair",…,claimSecret}` JSON).
+ *  - **Scan** a current claim QR or a legacy `/pair?t=…` QR (reuses onboarding's scanner).
+ *  - **Paste** either pairing format.
  *  - **URL** — a plain typed host URL for Tailscale/VPN/reverse-proxy users: GET /host to confirm
  *    it's a supermux broker, then trust-on-first-connect claim (or "mint a claim on the host" hint).
  *
- * Scan/Paste parse with [PairingPayload.parse] (rejects wrong version/action + non-supermux relay
- * origins) then claim; the VM aborts if the returned hostId ≠ the scanned one. Native M3, mirrors
- * [dev.supermux.android.pairing.OnboardingScreen].
+ * Current payloads use the one-time claim flow with the hostId mismatch guard. Legacy URLs already
+ * contain a device bearer, so they are validated against `/pair.json` (then `/me`) before storage.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,6 +70,7 @@ fun AddHostScreen(
     onBack: () -> Unit,
     defaultDeviceName: String,
     onClaim: suspend (PairingPayload, deviceName: String) -> AddHostResult,
+    onClaimLegacy: suspend (PairUrl) -> AddHostResult,
     onClaimByUrl: suspend (url: String, deviceName: String, allowInsecure: Boolean) -> AddHostResult,
     onAdded: () -> Unit,
     // True when a typed URL is plain HTTP to a non-loopback host → the unencrypted opt-in is required
@@ -100,19 +101,25 @@ fun AddHostScreen(
         }
     }
 
-    fun claimPayload(raw: String) {
+    fun claimInput(raw: String) {
         error = null; info = null
         val payload = PairingPayload.parse(raw)
-        if (payload == null) {
-            error = "That isn't a valid supermux pairing link. Copy the whole payload from the host."
+        if (payload != null) {
+            busy = true
+            scope.launch { handle(onClaim(payload, deviceName.trim().ifBlank { defaultDeviceName })) }
+            return
+        }
+        val legacy = PairUrl.parse(raw)
+        if (legacy == null) {
+            error = "That isn't a valid supermux pairing link. Scan or paste the complete QR value."
             return
         }
         busy = true
-        scope.launch { handle(onClaim(payload, deviceName.trim().ifBlank { defaultDeviceName })) }
+        scope.launch { handle(onClaimLegacy(legacy)) }
     }
 
     val qrLaunch = rememberQrScanLauncher { decoded ->
-        if (decoded != null) claimPayload(decoded)
+        if (decoded != null) claimInput(decoded)
     }
 
     Scaffold(
@@ -191,7 +198,7 @@ fun AddHostScreen(
                         value = pasteInput,
                         onValueChange = { pasteInput = it; error = null },
                         label = { Text("Pairing link") },
-                        placeholder = { Text("{\"v\":1,\"action\":\"pair\",…}") },
+                        placeholder = { Text("https://host/pair?t=… or {\"v\":1,…}") },
                         minLines = 1,
                         maxLines = 4,
                         enabled = !busy,
@@ -199,7 +206,7 @@ fun AddHostScreen(
                         modifier = Modifier.fillMaxWidth().testTag("add_host_paste_field"),
                     )
                     Button(
-                        onClick = { claimPayload(pasteInput) },
+                        onClick = { claimInput(pasteInput) },
                         enabled = !busy && pasteInput.isNotBlank(),
                         modifier = Modifier.fillMaxWidth().testTag("add_host_paste_submit"),
                     ) { Text("Add host") }

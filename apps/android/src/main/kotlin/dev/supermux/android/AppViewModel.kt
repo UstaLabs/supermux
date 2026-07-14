@@ -40,6 +40,7 @@ import dev.supermux.net.ModelsResponse
 import dev.supermux.net.OpenCodeOAuthStart
 import dev.supermux.net.OpenCodeProvider
 import dev.supermux.net.PathValidation
+import dev.supermux.net.PairUrl
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RemoteRepo
@@ -587,6 +588,41 @@ class AppViewModel(
     }
 
     /**
+     * Add a pre-multi-host broker from its legacy `/pair?t=…` QR. That URL already carries a
+     * durable device bearer, so sending it to `/pair/claim` would incorrectly reject it as an
+     * expired claim. Validate the bearer using endpoints available on old brokers, then persist it
+     * directly. `/host` is best-effort because brokers predating multi-host do not expose it.
+     */
+    suspend fun addLegacyHost(pair: PairUrl): AddHostResult {
+        val api = BrokerApi(pair.baseUrl, pair.token, http)
+        val validPairJson = runCatching { api.pairJson(pair.token) }.getOrNull()
+            ?.token == pair.token
+        val validMe = if (validPairJson) false else {
+            runCatching { api.me() }.getOrNull()?.paired == true
+        }
+        if (!validPairJson && !validMe) {
+            return AddHostResult.Error(
+                "The host rejected this pairing token. Check that it is reachable and generate a fresh QR if needed.",
+            )
+        }
+
+        val identity = runCatching { api.getHost() }.getOrNull()
+        val displayName = identity?.name?.takeIf { it.isNotBlank() }
+            ?: legacyHostDisplayName(pair.baseUrl)
+        val host = store.addOrUpdate(
+            displayName = displayName,
+            token = pair.token,
+            relayUrl = pair.baseUrl.takeIf(::isRelayHostUrl),
+            directUrl = pair.baseUrl.takeUnless(::isRelayHostUrl),
+            hostId = identity?.hostId?.takeIf { it.isNotBlank() },
+            platform = identity?.platform,
+            version = identity?.version,
+        )
+        onHostsChanged()
+        return AddHostResult.Added(host)
+    }
+
+    /**
      * Typed-URL add-host (Tailscale/VPN/reverse-proxy — spec §5/D10): GET /host to confirm it is a
      * supermux broker, then try a secret-less claim. On a fresh/unclaimed broker that mints a device
      * (trust-on-first-connect) and we persist it; an already-set-up host returns [NeedsClaim] so the
@@ -629,6 +665,15 @@ class AppViewModel(
         val url = normalizeHostUrl(rawUrl) ?: return false
         return !TransportPolicy.isPlainHttpAllowedWithoutOptIn(url)
     }
+
+    private fun legacyHostDisplayName(url: String): String = runCatching {
+        io.ktor.http.Url(url).host
+    }.getOrNull()?.takeIf { it.isNotBlank() } ?: "Host"
+
+    private fun isRelayHostUrl(url: String): Boolean = runCatching {
+        val host = io.ktor.http.Url(url).host.lowercase()
+        host == "relay.supermux.dev" || host.endsWith(".relay.supermux.dev")
+    }.getOrDefault(false)
 
     /** Rename a paired host (the merged-list chip/badge label). */
     fun renameHost(recordId: String, name: String) {

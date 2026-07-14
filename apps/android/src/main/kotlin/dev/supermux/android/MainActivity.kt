@@ -539,6 +539,7 @@ class MainActivity : ComponentActivity() {
                             onBack = { navController.popBackStack() },
                             defaultDeviceName = android.os.Build.MODEL?.ifBlank { "Android phone" } ?: "Android phone",
                             onClaim = { payload, name -> vm.addHost(payload, name) },
+                            onClaimLegacy = { pair -> vm.addLegacyHost(pair) },
                             onClaimByUrl = { url, name, allowInsecure -> vm.addHostByUrl(url, name, allowInsecure) },
                             onAdded = { navController.popBackStack() },
                             needsInsecureOptIn = { vm.urlNeedsInsecureOptIn(it) },
