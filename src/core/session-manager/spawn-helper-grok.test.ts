@@ -59,28 +59,40 @@ describe("Grok spawn", () => {
     expect(persisted).toContain("grok-sess-1")
   })
 
-  test("passes the mux-shim MCP server into session/new and writes the AGENTS.md preamble", async () => {
+  test("registers mux-shim in the session-private config.toml and writes the AGENTS.md preamble", async () => {
     const reg = registry()
     const workdir = mkdtempSync(join(tmpdir(), "mux-grok-"))
     let newParams: any
+    let runnerEnv: any
 
-    await spawnSession({
+    const result = await spawnSession({
       registry: reg,
       bind: async () => {},
       tmuxSession: "mux",
       spawnTmux: async () => { throw new Error("grok must not spawn tmux") },
-      grokRunnerFactory: () => fakeRunner((p) => { newParams = p }),
+      grokRunnerFactory: () => (opts: any) => { runnerEnv = opts.env; return fakeRunner((p) => { newParams = p })(opts) },
     }, {
       workdir,
       requestedName: "grok-shim",
       agent: AgentKind.Grok,
     })
 
+    // grok ignores mcpServers on session/new — the shim must NOT be smuggled there.
     expect(newParams.cwd).toBe(workdir)
-    const shim = newParams.mcpServers.find((s: any) => s.name === "mux-shim")
-    expect(shim).toBeTruthy()
-    expect(shim.env.find((e: any) => e.name === "MUX_DISPLAY_NAME").value).toBe("grok-shim")
-    expect(shim.env.find((e: any) => e.name === "MUX_AGENT_KIND").value).toBe("grok")
+    expect(newParams.mcpServers).toEqual([])
+
+    // HOME is redirected so grok cannot auto-import the user's ~/.claude.json MCPs.
+    const sessionHome = reg.get(result.session_id)!.agent_home!
+    expect(runnerEnv.HOME).toBe(sessionHome)
+
+    const toml = readFileSync(join(sessionHome, ".grok", "config.toml"), "utf8")
+    expect(toml).toContain("[mcp_servers.mux-shim]")
+    expect(toml).toContain(`MUX_SESSION_ID = ${JSON.stringify(result.session_id)}`)
+    expect(toml).toContain('MUX_DISPLAY_NAME = "grok-shim"')
+    expect(toml).toContain('MUX_AGENT_KIND = "grok"')
+    // Belt-and-braces against the claude config import.
+    expect(toml).toContain("[claude_compat]")
+    expect(toml).toContain("imported = true")
 
     const preamble = join(workdir, "AGENTS.md")
     expect(existsSync(preamble)).toBe(true)

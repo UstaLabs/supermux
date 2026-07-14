@@ -21,7 +21,8 @@ import { writeOpenCodePreamble } from "../agents/opencode/preamble-writer"
 import { spawnOpenCodeServer, type OpenCodeSpawnHandle } from "../agents/opencode/spawn"
 import { OpenCodeAdapter } from "../agents/opencode/adapter"
 import { writeGrokPreamble } from "../agents/grok/preamble-writer"
-import { buildGrokMcpServers } from "../agents/grok/mcp-writer"
+import { writeGrokConfig } from "../agents/grok/config-writer"
+import { resolveGrokAuth } from "../agents/grok/auth"
 import { realGrokRunner, type GrokRunner } from "../agents/grok/runner"
 import { GrokAdapter } from "../agents/grok/adapter"
 import { cursorSpawnArgs, codexSpawnArgs, codexPrepareSessionHome, opencodeConfigEntries } from "../plugins"
@@ -388,8 +389,17 @@ export async function spawnPA(opts: {
     const sessionHome = join(STATE_DIR, "agents", "grok", name)
     mkdirSync(sessionHome, { recursive: true, mode: 0o700 })
 
-    // grok reads its credentials from the real ~/.grok, so (unlike cursor/codex)
-    // there's no auth to resolve or copy — the child just inherits HOME.
+    // HOME is redirected to sessionHome so grok reads a private config.toml and
+    // does NOT auto-import the user's ~/.claude.json MCP servers (which would pull
+    // the global mux-shim/mux-channel into this session).
+    const auth = resolveGrokAuth({ userGrokDir: `${HOME}/.grok`, sessionHome })
+    writeGrokConfig({
+      sessionHome,
+      ...shimSpawnSpec(),
+      sessionName: name,
+      sessionId: id,
+      socketsDir: SOCKETS_DIR,
+    })
     writeGrokPreamble({ workdir, sessionName: name })
 
     const adapter = (opts.grokAdapterFactory ?? ((o) => new GrokAdapter(o)))({
@@ -400,12 +410,7 @@ export async function spawnPA(opts: {
       initialSessionId: undefined,
       model,
       effort: opts.resolveEffort?.({ agent, model, reasoningLevel }),
-      mcpServers: buildGrokMcpServers({
-        ...shimSpawnSpec(),
-        sessionId: id,
-        sessionName: name,
-        socketsDir: SOCKETS_DIR,
-      }),
+      env: auth.env,
       resolveAttachment: opts.resolveAttachment,
     })
 
@@ -778,6 +783,14 @@ export async function spawnGrokSession(deps: SpawnDeps, args: SpawnArgs): Promis
   const sessionHome = join(STATE_DIR, "agents", "grok", name)
   mkdirSync(sessionHome, { recursive: true, mode: 0o700 })
 
+  const auth = resolveGrokAuth({ userGrokDir: `${HOME}/.grok`, sessionHome })
+  writeGrokConfig({
+    sessionHome,
+    ...shimSpawnSpec(),
+    sessionName: name,
+    sessionId: id,
+    socketsDir: SOCKETS_DIR,
+  })
   writeGrokPreamble({ workdir: args.workdir, sessionName: name })
 
   await deps.bind(id)
@@ -790,12 +803,7 @@ export async function spawnGrokSession(deps: SpawnDeps, args: SpawnArgs): Promis
     initialSessionId: undefined,
     model: args.model,
     effort: args.effort,
-    mcpServers: buildGrokMcpServers({
-      ...shimSpawnSpec(),
-      sessionId: id,
-      sessionName: name,
-      socketsDir: SOCKETS_DIR,
-    }),
+    env: auth.env,
     resolveAttachment: deps.resolveAttachment,
   })
 
@@ -821,17 +829,28 @@ export async function spawnGrokSession(deps: SpawnDeps, args: SpawnArgs): Promis
 }
 
 /** Rebuild a grok session's adapter + stdio child after a broker restart. The child
- * dies with the broker; the session row and grok's own session store persist, so
- * resume respawns the child and re-binds an adapter, loading the prior grok session
- * id when one was persisted (else starting fresh). Self-heals the preamble. */
+ * dies with the broker; the session row and grok's own session store (under the
+ * session-private ~/.grok) persist, so resume respawns the child and re-binds an
+ * adapter, loading the prior grok session id when one was persisted (else starting
+ * fresh). Self-heals the private config, credential and preamble (all idempotent) —
+ * the grok analogue of codex's codexPrepareSessionHome-on-resume. */
 export async function resumeGrokSession(
   deps: {
     resolveAttachment?: (file_id: string) => Promise<string>
     onGrokSessionId?: (name: string, sid: string) => void
     grokRunnerFactory?: () => GrokRunner
   },
-  session: { id: string; name: string; workdir: string; model?: string; effort?: string; agent_session_id?: string },
+  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string },
 ): Promise<{ adapter: GrokAdapter }> {
+  const sessionHome = session.agent_home
+  const auth = resolveGrokAuth({ userGrokDir: `${HOME}/.grok`, sessionHome })
+  writeGrokConfig({
+    sessionHome,
+    ...shimSpawnSpec(),
+    sessionName: session.name,
+    sessionId: session.id,
+    socketsDir: SOCKETS_DIR,
+  })
   writeGrokPreamble({ workdir: session.workdir, sessionName: session.name })
 
   const adapter = new GrokAdapter({
@@ -842,12 +861,7 @@ export async function resumeGrokSession(
     initialSessionId: session.agent_session_id || undefined,
     model: session.model,
     effort: session.effort,
-    mcpServers: buildGrokMcpServers({
-      ...shimSpawnSpec(),
-      sessionId: session.id,
-      sessionName: session.name,
-      socketsDir: SOCKETS_DIR,
-    }),
+    env: auth.env,
     resolveAttachment: deps.resolveAttachment,
   })
   if (session.agent_session_id) await adapter.resume()

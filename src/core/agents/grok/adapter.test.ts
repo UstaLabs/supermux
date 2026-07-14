@@ -40,6 +40,52 @@ test("start() handshakes and send() streams reply + tool events then completes",
   expect(events.find((e) => e.kind === "turn-complete")).toBeTruthy()
 })
 
+test("accumulates streamed chunk deltas into ONE assistant message per turn", async () => {
+  // Regression guard: grok streams agent_message_chunk token-by-token ("Hel","lo","!").
+  // Emitting per chunk would push one chat message per token.
+  const fr = fakeRunner()
+  const msgs: any[] = []
+  const adapter = new GrokAdapter({ sessionName: "s1", workdir: "/w", runner: fr.runner, persistSessionId: async () => {} })
+  adapter.on("assistant-message", (e) => msgs.push(e))
+
+  const started = adapter.start()
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 1, result: { protocolVersion: 1 } })
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 2, result: { sessionId: "sess-1" } })
+  await started
+
+  const sent = adapter.send("hi")
+  await tick()
+  for (const t of ["Hel", "lo", ", wor", "ld!"]) {
+    fr.feed({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: t } } } })
+  }
+  // No message may be emitted mid-stream.
+  expect(msgs.length).toBe(0)
+  fr.feed({ jsonrpc: "2.0", id: 3, result: { stopReason: "EndTurn" } })
+  await sent
+
+  expect(msgs.length).toBe(1)
+  expect(msgs[0].text).toBe("Hello, world!")
+})
+
+test("flushes the partial answer when a turn is interrupted", async () => {
+  const fr = fakeRunner()
+  const msgs: any[] = []
+  const adapter = new GrokAdapter({ sessionName: "s1", workdir: "/w", runner: fr.runner, persistSessionId: async () => {} })
+  adapter.on("assistant-message", (e) => msgs.push(e))
+  const started = adapter.start()
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 1, result: { protocolVersion: 1 } })
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 2, result: { sessionId: "sess-1" } })
+  await started
+
+  const sent = adapter.send("count")
+  await tick()
+  fr.feed({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "1 2 3" } } } })
+  fr.feed({ jsonrpc: "2.0", id: 3, result: { stopReason: "Cancelled" } })
+  await sent
+
+  expect(msgs.map((m) => m.text)).toEqual(["1 2 3"])
+})
+
 test("start() passes model + effort as spawn flags, not as session/prompt params", async () => {
   // Regression guard: grok ignores a `model` param on session/prompt, and has no
   // session/set_reasoning_effort. Both must ride the spawn flags or the model and

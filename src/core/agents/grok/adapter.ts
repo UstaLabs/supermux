@@ -17,7 +17,6 @@ export type GrokAdapterOpts = {
   /** Reasoning effort (`high` | `medium` | `low` for grok-4.5). Spawn-time only. */
   effort?: string
   resolveAttachment?: (file_id: string) => Promise<string>
-  mcpServers?: unknown[]
   env?: Record<string, string>
 }
 
@@ -33,7 +32,6 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
   private runner: GrokRunner
   private _model?: string
   private _effort?: string
-  private mcpServers: unknown[]
   private env: Record<string, string>
   private resolveAttachment?: (file_id: string) => Promise<string>
   availableModels: { modelId: string }[] = []
@@ -52,7 +50,6 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
     this.sessionId = opts.initialSessionId
     this._model = opts.model
     this._effort = opts.effort
-    this.mcpServers = opts.mcpServers ?? []
     this.env = opts.env ?? {}
     this.resolveAttachment = opts.resolveAttachment
     this.client = new AcpClient(() => {})
@@ -101,9 +98,11 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
       clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } },
     })
     this.availableModels = init?._meta?.modelState?.availableModels ?? init?.modelState?.availableModels ?? []
+    // No mcpServers here: grok ignores the param on session/new. mux-shim is
+    // registered in the session-private ~/.grok/config.toml instead.
     const res: any = await this.client.request("session/new", {
       cwd: this.workdir,
-      mcpServers: this.mcpServers,
+      mcpServers: [],
       ...(this.sessionId ? { loadSessionId: this.sessionId } : {}),
     })
     // session/new echoes modelState too; prefer it as the freshest view.
@@ -164,19 +163,35 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
       })
     } finally {
       this.turnActive = false
+      this.flushAssistant()
       this.emit("turn-complete", { kind: "turn-complete" })
     }
   }
+
+  // grok streams `agent_message_chunk` as token-level DELTAS ("gro", "k", "-", "live"),
+  // not cumulative snapshots. Emitting each chunk as its own assistant-message would
+  // push one chat message per token, so accumulate and emit once per turn (cursor does
+  // the same for a different reason — its chunks are cumulative, so it keeps the last
+  // rather than concatenating).
+  private pendingAssistantText = ""
 
   private onNotification(method: string, params: unknown): void {
     if (method !== "session/update") return
     for (const ev of parseGrokUpdate(params)) {
       if (ev.kind === "assistant-message") {
-        this.emit("assistant-message", { kind: "assistant-message", text: ev.text, chat_id: this.activeChatId })
+        this.pendingAssistantText += ev.text
       } else if (ev.kind === "tool-call") {
         this.emit("tool-call", { kind: "tool-call", tool: ev.tool, phase: ev.phase, call_id: ev.call_id, detail: ev.detail })
       }
     }
+  }
+
+  /** Emit the turn's accumulated text as ONE message. Called on turn end — including
+   * an interrupted turn, so a partial answer still reaches the user. */
+  private flushAssistant(): void {
+    const text = this.pendingAssistantText.trim()
+    this.pendingAssistantText = ""
+    if (text) this.emit("assistant-message", { kind: "assistant-message", text, chat_id: this.activeChatId })
   }
 
   private async onServerRequest(method: string, params: unknown): Promise<unknown> {
@@ -191,7 +206,11 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
 
   private onExit(_code: number | null): void {
     this.client.fail(new Error("grok agent exited"))
-    if (this.turnActive) { this.turnActive = false; this.emit("turn-complete", { kind: "turn-complete" }) }
+    if (this.turnActive) {
+      this.turnActive = false
+      this.flushAssistant()
+      this.emit("turn-complete", { kind: "turn-complete" })
+    }
     this.child = undefined
   }
 

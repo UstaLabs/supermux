@@ -1905,14 +1905,14 @@ async function resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name
       )
       registerOpenCodeRuntime(sessionId, name, adapter, handle)
       wireAdapterEvents(adapter, sessionId)
-    } else if (session.agent === AgentKind.Grok) {
+    } else if (session.agent === AgentKind.Grok && session.agent_home) {
       await server.bind(sessionId)
       const { adapter } = await resumeGrokSession(
         {
           resolveAttachment: resolveAttachmentPath,
           onGrokSessionId: (_name, sid) => { registry.sessions.setAgentSessionId(sessionId, sid) },
         },
-        { id: sessionId, name, workdir: session.workdir, model: session.model, effort: sessionEffort(session), agent_session_id: session.agent_session_id },
+        { id: sessionId, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: sessionEffort(session), agent_session_id: session.agent_session_id },
       )
       registerGrokRuntime(sessionId, adapter)
       wireAdapterEvents(adapter, sessionId)
@@ -3315,15 +3315,19 @@ async function resumeNonClaudeAdapters(): Promise<void> {
       }
     } else if (s.agent === AgentKind.Grok) {
       // grok's worker (in-process adapter + `grok agent stdio` child) dies with
-      // the broker; same rationale as opencode above. No agent_home guard is
-      // needed — grok's MCP + preamble are rebuilt from the row alone.
+      // the broker; same rationale as opencode above. agent_home holds the private
+      // ~/.grok (config + copied credential) the child needs.
+      if (!s.agent_home) {
+        log.warn("grok_resume_skip", { name: s.name, reason: "missing agent_home" })
+        continue
+      }
       try {
         const { adapter } = await resumeGrokSession(
           {
             resolveAttachment: resolveAttachmentPath,
             onGrokSessionId: (_name, sid) => { registry.sessions.setAgentSessionId(s.id, sid) },
           },
-          { id: s.id, name: s.name, workdir: s.workdir, model: s.model, effort: sessionEffort(s), agent_session_id: s.agent_session_id },
+          { id: s.id, name: s.name, workdir: s.workdir, agent_home: s.agent_home, model: s.model, effort: sessionEffort(s), agent_session_id: s.agent_session_id },
         )
         registerGrokRuntime(s.id, adapter)
         wireAdapterEvents(adapter, s.id)
