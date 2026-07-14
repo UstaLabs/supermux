@@ -183,6 +183,20 @@ internal fun filterBranches(repoInfo: RepoInfo?, query: String): List<String> {
     return if (q.isEmpty()) all else all.filter { it.lowercase().contains(q) }
 }
 
+/**
+ * Project paths filtered by a case-insensitive [query] substring matched against BOTH the raw path
+ * and the [formatWorkdir]-style display label (the tilde-prefixed form the picker actually shows).
+ * An empty query returns [projects] unchanged. Mirrors iOS `filteredProjects` so a typed "~" or
+ * "alpha" narrows the list the same way the user already sees on phone.
+ */
+internal fun filterProjects(projects: List<String>, home: String, query: String): List<String> {
+    val q = query.trim().lowercase()
+    if (q.isEmpty()) return projects
+    return projects.filter { path ->
+        path.lowercase().contains(q) || formatWorkdir(path, home).lowercase().contains(q)
+    }
+}
+
 /** One attachment staged before any session exists (uploaded post-spawn by the caller's onSubmit). */
 private data class StagedChip(val id: Long, val name: String, val source: ChunkSource, val mime: String)
 
@@ -919,10 +933,13 @@ private fun WorktreePill(label: String, active: Boolean, onClick: () -> Unit, mo
 }
 
 /**
- * Forge-free project picker: a typed-and-validated path entry + the known-projects list, rendered
- * in a [DropdownMenu] (Android's ModalBottomSheet ProjectPickerSheet, minus the forge omnibox —
- * TODO(M4-forge)). Picking a project or a validated path calls [onPick] and dismisses; an invalid
- * typed path shows the broker's validation error inline (and does NOT pick).
+ * Forge-free project picker: a search field that filters the known-projects list, plus a typed
+ * path entry that validates against the broker. Rendered in a [DropdownMenu] (Android's
+ * ModalBottomSheet ProjectPickerSheet, minus the forge omnibox — TODO(M4-forge)). Picking a
+ * project or a validated path calls [onPick] and dismisses; an invalid typed path shows the
+ * broker's validation error inline (and does NOT pick). The search field is the primary way
+ * to narrow the list on desktop (mirrors iOS `.searchable` + Android's `project_search` field);
+ * the path input is the escape hatch for an unlisted folder.
  */
 @Composable
 internal fun ProjectPicker(
@@ -936,9 +953,12 @@ internal fun ProjectPicker(
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
+    var search by remember(expanded) { mutableStateOf("") }
     var manualPath by remember(expanded) { mutableStateOf("") }
     var validating by remember(expanded) { mutableStateOf(false) }
     var validationError by remember(expanded) { mutableStateOf<String?>(null) }
+
+    val filtered = remember(projects, home, search) { filterProjects(projects, home, search) }
 
     fun confirmPath() {
         val p = manualPath.trim()
@@ -960,6 +980,16 @@ internal fun ProjectPicker(
 
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, modifier = Modifier.testTag("launcher_project_menu")) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp).width(360.dp)) {
+            OutlinedTextField(
+                value = search,
+                onValueChange = { search = it },
+                placeholder = { Text("Search projects…", color = cs.onSurfaceVariant) },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("launcher_project_search"),
+            )
+            Spacer(Modifier.height(6.dp))
             OutlinedTextField(
                 value = manualPath,
                 onValueChange = { manualPath = it; validationError = null },
@@ -987,8 +1017,16 @@ internal fun ProjectPicker(
                 Text(it, color = cs.error, fontSize = 12.sp, modifier = Modifier.testTag("launcher_path_error"))
             }
         }
-        if (projects.isNotEmpty()) HorizontalDivider()
-        projects.forEach { path ->
+        if (filtered.isNotEmpty()) HorizontalDivider()
+        if (filtered.isEmpty() && projects.isNotEmpty()) {
+            Text(
+                "No projects match \"${search.trim()}\".",
+                color = cs.onSurfaceVariant,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp).testTag("launcher_project_empty"),
+            )
+        }
+        filtered.forEach { path ->
             val selected = path == current
             DropdownMenuItem(
                 text = { Text(formatWorkdir(path, home), color = if (selected) cs.primary else cs.onSurface, fontSize = 14.sp, maxLines = 1) },
