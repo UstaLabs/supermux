@@ -399,6 +399,7 @@ export async function spawnPA(opts: {
       persistSessionId: async (sid) => { opts.onGrokSessionId?.(name, sid) },
       initialSessionId: undefined,
       model,
+      effort: opts.resolveEffort?.({ agent, model, reasoningLevel }),
       mcpServers: buildGrokMcpServers({
         ...shimSpawnSpec(),
         sessionId: id,
@@ -788,6 +789,7 @@ export async function spawnGrokSession(deps: SpawnDeps, args: SpawnArgs): Promis
     persistSessionId: async (sid) => { deps.onGrokSessionId?.(name, sid) },
     initialSessionId: undefined,
     model: args.model,
+    effort: args.effort,
     mcpServers: buildGrokMcpServers({
       ...shimSpawnSpec(),
       sessionId: id,
@@ -828,7 +830,7 @@ export async function resumeGrokSession(
     onGrokSessionId?: (name: string, sid: string) => void
     grokRunnerFactory?: () => GrokRunner
   },
-  session: { id: string; name: string; workdir: string; model?: string; agent_session_id?: string },
+  session: { id: string; name: string; workdir: string; model?: string; effort?: string; agent_session_id?: string },
 ): Promise<{ adapter: GrokAdapter }> {
   writeGrokPreamble({ workdir: session.workdir, sessionName: session.name })
 
@@ -839,6 +841,7 @@ export async function resumeGrokSession(
     persistSessionId: async (sid) => { deps.onGrokSessionId?.(session.name, sid) },
     initialSessionId: session.agent_session_id || undefined,
     model: session.model,
+    effort: session.effort,
     mcpServers: buildGrokMcpServers({
       ...shimSpawnSpec(),
       sessionId: session.id,

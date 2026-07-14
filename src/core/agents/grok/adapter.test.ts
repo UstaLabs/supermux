@@ -40,6 +40,61 @@ test("start() handshakes and send() streams reply + tool events then completes",
   expect(events.find((e) => e.kind === "turn-complete")).toBeTruthy()
 })
 
+test("start() passes model + effort as spawn flags, not as session/prompt params", async () => {
+  // Regression guard: grok ignores a `model` param on session/prompt, and has no
+  // session/set_reasoning_effort. Both must ride the spawn flags or the model and
+  // effort pills silently do nothing.
+  const fr = fakeRunner()
+  let seen: any
+  const runner = (opts: any) => { seen = opts; return fr.runner(opts) }
+  const adapter = new GrokAdapter({
+    sessionName: "s1", workdir: "/w", runner, persistSessionId: async () => {},
+    model: "grok-4.5", effort: "low",
+  })
+  const started = adapter.start()
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 1, result: { protocolVersion: 1 } })
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 2, result: { sessionId: "sess-1" } })
+  await started
+
+  expect(seen.model).toBe("grok-4.5")
+  expect(seen.effort).toBe("low")
+
+  const writes: string[] = []
+  fr.client.setWrite((l) => writes.push(l))
+  const sent = adapter.send("hi")
+  await tick()
+  const prompt = writes.map((w) => JSON.parse(w)).find((m) => m.method === "session/prompt")
+  expect(prompt.params.model).toBeUndefined()
+  fr.feed({ jsonrpc: "2.0", id: 3, result: { stopReason: "EndTurn" } })
+  await sent
+})
+
+test("setting model on a live session issues session/set_model", async () => {
+  const fr = fakeRunner()
+  const adapter = new GrokAdapter({ sessionName: "s1", workdir: "/w", runner: fr.runner, persistSessionId: async () => {} })
+  const started = adapter.start()
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 1, result: { protocolVersion: 1 } })
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 2, result: { sessionId: "sess-1" } })
+  await started
+
+  const writes: string[] = []
+  fr.client.setWrite((l) => writes.push(l))
+  adapter.model = "grok-4.5-fast"
+  const setModel = writes.map((w) => JSON.parse(w)).find((m) => m.method === "session/set_model")
+  expect(setModel.params).toMatchObject({ sessionId: "sess-1", modelId: "grok-4.5-fast" })
+  expect(adapter.model).toBe("grok-4.5-fast")
+})
+
+test("start() prefers the modelState echoed by session/new", async () => {
+  const fr = fakeRunner()
+  const adapter = new GrokAdapter({ sessionName: "s1", workdir: "/w", runner: fr.runner, persistSessionId: async () => {} })
+  const started = adapter.start()
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 1, result: { protocolVersion: 1, _meta: { modelState: { availableModels: [{ modelId: "stale" }] } } } })
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 2, result: { sessionId: "sess-1", models: { availableModels: [{ modelId: "grok-4.5" }] } } })
+  await started
+  expect(adapter.availableModels.map((m: any) => m.modelId)).toEqual(["grok-4.5"])
+})
+
 test("interrupt() sends session/cancel notification", async () => {
   const fr = fakeRunner()
   const adapter = new GrokAdapter({ sessionName: "s1", workdir: "/w", runner: fr.runner, persistSessionId: async () => {} })

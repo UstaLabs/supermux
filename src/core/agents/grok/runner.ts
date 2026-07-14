@@ -9,12 +9,31 @@ export type GrokRunner = (opts: {
   env: Record<string, string>
   client: AcpClient
   onExit: (code: number | null) => void
+  /** Passed as `--model`; ACP session/set_model can change it later without a respawn. */
+  model?: string
+  /** Passed as `--reasoning-effort`. There is no ACP method to change this on a live
+   * agent (session/set_reasoning_effort is "Method not found"), so an effort switch
+   * has to respawn the child. */
+  effort?: string
 }) => { kill: () => void }
 
-/** Real runner: spawns `grok agent stdio`. Points the client's writes at the child's
- * stdin (appending the newline framing) and feeds the child's stdout back into the client. */
-export const realGrokRunner: GrokRunner = ({ workdir, env, client, onExit }) => {
-  const child = spawn("grok", ["agent", "stdio"], {
+/** Real runner: spawns `grok agent [--model M] [--reasoning-effort E] --always-approve stdio`.
+ * Flags precede the `stdio` subcommand (`grok agent [OPTIONS] [COMMAND]`). Points the
+ * client's writes at the child's stdin (appending the newline framing) and feeds the
+ * child's stdout back into the client.
+ *
+ * `--always-approve` auto-approves tool execution, matching cursor's `--force`: the
+ * broker drives grok unattended, so an interactive permission prompt would deadlock
+ * the turn. The adapter still answers session/request_permission defensively. */
+export const realGrokRunner: GrokRunner = ({ workdir, env, client, onExit, model, effort }) => {
+  const args = [
+    "agent",
+    ...(model ? ["--model", model] : []),
+    ...(effort ? ["--reasoning-effort", effort] : []),
+    "--always-approve",
+    "stdio",
+  ]
+  const child = spawn("grok", args, {
     cwd: workdir,
     env: { ...process.env, ...env },
     stdio: ["pipe", "pipe", "pipe"],

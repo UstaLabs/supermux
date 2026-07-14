@@ -108,6 +108,7 @@ import { makeRealCursorRunner } from "./core/agents/cursor/runner"
 import { CursorAdapter } from "./core/agents/cursor/adapter"
 import { ModelCache } from "./core/models/cache"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels } from "./core/models/discovery"
+import { discoverGrokModels } from "./core/agents/grok/model-discovery"
 import { refreshModelCache, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
 import { OpenCodeAdapter } from "./core/agents/opencode/adapter"
@@ -423,6 +424,7 @@ const modelDiscoverers: ModelDiscoverers = {
   [AgentKind.Codex]: discoverCodexModels,
   [AgentKind.Cursor]: discoverCursorModels,
   [AgentKind.OpenCode]: discoverOpenCodeModels,
+  [AgentKind.Grok]: discoverGrokModels,
 }
 
 // The model cache is otherwise frozen at boot. If discovery fails transiently
@@ -1910,7 +1912,7 @@ async function resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name
           resolveAttachment: resolveAttachmentPath,
           onGrokSessionId: (_name, sid) => { registry.sessions.setAgentSessionId(sessionId, sid) },
         },
-        { id: sessionId, name, workdir: session.workdir, model: session.model, agent_session_id: session.agent_session_id },
+        { id: sessionId, name, workdir: session.workdir, model: session.model, effort: sessionEffort(session), agent_session_id: session.agent_session_id },
       )
       registerGrokRuntime(sessionId, adapter)
       wireAdapterEvents(adapter, sessionId)
@@ -2719,6 +2721,27 @@ async function reapplySessionAgentConfig(sessionId: string, changed?: { model: b
     }
   }
 
+  if (session.agent === AgentKind.Grok) {
+    try {
+      const runtime = runtimes.get(session.id)
+      if (runtime?.kind !== AgentKind.Grok) return { ok: false, error: "grok session has no live adapter" }
+      // Model applies live over ACP (session/set_model); effort is a spawn flag
+      // with no ACP setter, so setEffort() relaunches the stdio child and reloads
+      // the same grok session id — history is preserved across the respawn.
+      if (changed?.model !== false && session.model) runtime.adapter.model = session.model
+      if (changed?.effort !== false) await runtime.adapter.setEffort(effort)
+      webChannel?.broadcastToAll({
+        type: "session_state",
+        session: session.id,
+        model: session.model,
+        reasoningLevel: effort,
+      })
+      return { ok: true }
+    } catch (err: any) {
+      return { ok: false, error: `agent config apply failed: ${err?.message ?? String(err)}` }
+    }
+  }
+
   return { ok: false, error: `agent does not support reasoning level: ${session.agent}` }
 }
 
@@ -3300,7 +3323,7 @@ async function resumeNonClaudeAdapters(): Promise<void> {
             resolveAttachment: resolveAttachmentPath,
             onGrokSessionId: (_name, sid) => { registry.sessions.setAgentSessionId(s.id, sid) },
           },
-          { id: s.id, name: s.name, workdir: s.workdir, model: s.model, agent_session_id: s.agent_session_id },
+          { id: s.id, name: s.name, workdir: s.workdir, model: s.model, effort: sessionEffort(s), agent_session_id: s.agent_session_id },
         )
         registerGrokRuntime(s.id, adapter)
         wireAdapterEvents(adapter, s.id)

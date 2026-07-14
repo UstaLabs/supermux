@@ -14,6 +14,8 @@ export type GrokAdapterOpts = {
   persistSessionId: (id: string) => Promise<void>
   initialSessionId?: string
   model?: string
+  /** Reasoning effort (`high` | `medium` | `low` for grok-4.5). Spawn-time only. */
+  effort?: string
   resolveAttachment?: (file_id: string) => Promise<string>
   mcpServers?: unknown[]
   env?: Record<string, string>
@@ -30,6 +32,7 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
   private persistSessionId: (id: string) => Promise<void>
   private runner: GrokRunner
   private _model?: string
+  private _effort?: string
   private mcpServers: unknown[]
   private env: Record<string, string>
   private resolveAttachment?: (file_id: string) => Promise<string>
@@ -48,6 +51,7 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
     this.persistSessionId = opts.persistSessionId
     this.sessionId = opts.initialSessionId
     this._model = opts.model
+    this._effort = opts.effort
     this.mcpServers = opts.mcpServers ?? []
     this.env = opts.env ?? {}
     this.resolveAttachment = opts.resolveAttachment
@@ -56,12 +60,40 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
     this.client.onServerRequest = (method, params) => this.onServerRequest(method, params)
   }
 
-  set model(m: string | undefined) { this._model = m }
+  // A model switch is applied live over ACP (session/set_model). The broker treats
+  // grok as a live-switch agent, so this setter must not need a respawn.
+  set model(m: string | undefined) {
+    this._model = m
+    if (m && this.sessionId) {
+      this.client.request("session/set_model", { sessionId: this.sessionId, modelId: m })
+        .catch((err) => log.warn("grok_set_model_failed", { session: this.sessionName, model: m, err: String(err) }))
+    }
+  }
   get model(): string | undefined { return this._model }
 
+  /** Reasoning effort is a spawn-time flag with no ACP setter, so changing it
+   * relaunches the stdio child. The grok session id is already persisted, so
+   * start() reloads the same conversation via loadSessionId — history survives. */
+  async setEffort(effort: string | undefined): Promise<void> {
+    if (effort === this._effort) return
+    this._effort = effort
+    if (!this.child) return
+    this.child.kill()
+    this.child = undefined
+    this.client = new AcpClient(() => {})
+    this.client.onNotification = (method, params) => this.onNotification(method, params)
+    this.client.onServerRequest = (method, params) => this.onServerRequest(method, params)
+    await this.start()
+  }
+
+  get effort(): string | undefined { return this._effort }
+
   async start(): Promise<void> {
+    // model/effort are spawn-time flags: `grok agent --model M --reasoning-effort E stdio`.
+    // session/prompt ignores a `model` param, so this is the only way effort takes hold.
     this.child = this.runner({
       workdir: this.workdir, env: this.env, client: this.client,
+      model: this._model, effort: this._effort,
       onExit: (code) => this.onExit(code),
     })
     const init: any = await this.client.request("initialize", {
@@ -74,6 +106,8 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
       mcpServers: this.mcpServers,
       ...(this.sessionId ? { loadSessionId: this.sessionId } : {}),
     })
+    // session/new echoes modelState too; prefer it as the freshest view.
+    if (res?.models?.availableModels) this.availableModels = res.models.availableModels
     if (res?.sessionId) {
       this.sessionId = res.sessionId
       this.persistSessionId(res.sessionId).catch(() => {})
@@ -122,10 +156,11 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
     this.turnActive = true
     this.emit("turn-start", { kind: "turn-start" })
     try {
+      // No `model` here: grok ignores it on session/prompt. The model is set by
+      // the --model spawn flag and changed live via session/set_model.
       await this.client.request("session/prompt", {
         sessionId: this.sessionId,
         prompt: [{ type: "text", text }],
-        ...(this._model ? { model: this._model } : {}),
       })
     } finally {
       this.turnActive = false
