@@ -28,7 +28,7 @@ struct RootView: View {
 
     /// Full-page destinations pushed from the sidebar (mirrors the web router).
     enum NavRoute: Hashable {
-        case newSession, archived, usage, proxies, displays, devices, settings, personalAssistants
+        case newSession, archived, usage, proxies, displays, devices, pairDevice, settings, personalAssistants
     }
 
     init(onUnpair: @escaping () -> Void) {
@@ -146,6 +146,11 @@ struct RootView: View {
             // macOS File ▸ New Session (⌘N) → open the launcher (a sheet on the Mac).
             route = .newSession
         }
+        .onReceive(NotificationCenter.default.publisher(for: .smPairNewDevice)) { _ in
+            // Device management must be reachable even when no session is selected (and
+            // therefore no session-header overflow menu exists).
+            route = .pairDevice
+        }
         // Settings is a real window on the Mac, not a sheet — redirect any route to it
         // (covers the SM_OPEN_SHEET=settings headless hook; the ⋯ menu opens it directly).
         .onChange(of: route) { _, r in
@@ -233,6 +238,7 @@ struct RootView: View {
             case .proxies: hostScoped(broker) { ProxiesView(broker: broker) }
             case .displays: hostScoped(broker) { DisplaysView(broker: broker) }
             case .devices: hostScoped(broker) { DevicesView(broker: broker) }
+            case .pairDevice: hostScoped(broker) { AddDeviceView(broker: broker) }
             case .settings: hostScoped(broker) { SettingsView(broker: broker) }
             }
         } else {
@@ -276,6 +282,7 @@ private extension RootView.NavRoute {
         case "proxies": self = .proxies
         case "displays": self = .displays
         case "devices": self = .devices
+        case "pair-device": self = .pairDevice
         case "settings": self = .settings
         default: return nil
         }

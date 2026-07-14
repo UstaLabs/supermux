@@ -73,6 +73,31 @@ struct SessionsListView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("new-session")
+
+                #if os(macOS)
+                Button {
+                    // Present after the List finishes its click/selection transaction. Opening
+                    // a sheet synchronously from a macOS List row can leave only the dimming
+                    // layer onscreen; the File-menu command is unaffected because it is outside
+                    // the List. A short defer lets AppKit complete mouse-up and selection first.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        NotificationCenter.default.post(name: .smPairNewDevice, object: nil)
+                    }
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "qrcode").font(.title2).foregroundStyle(Theme.teal)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Pair a new device").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                            Text("Connect iPhone, iPad, or Android")
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, 3)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("pair-new-device")
+                #endif
             }
 
             ForEach(fleet.onlineGroups(), id: \.workdir) { group in
