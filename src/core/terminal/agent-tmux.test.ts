@@ -11,17 +11,26 @@ describe("agent-tmux naming", () => {
 })
 
 describe("agent-tmux attachArgv", () => {
-  test("resolves the window by id (display-message), groups a viewer, exec-attaches", () => {
+  test("resolves the window-id, links it into a dedicated viewer, exec-attaches", () => {
     const argv = attachArgv({ device: "d", agentTarget: "@5" })
     expect(argv[0]).toBe("sh")
     expect(argv[1]).toBe("-c")
     const script = argv[2]!
     const viewer = viewerSessionName("d", "@5")
-    expect(script).toContain(`display-message -p -t '@5' '#{session_name}'`)
-    expect(script).toContain(`display-message -p -t '@5' '#{window_index}'`)
-    expect(script).toContain(`new-session -d -s '${viewer}' -t "$s"`)
-    expect(script).toContain(`select-window -t '${viewer}':"$w"`)
-    expect(script).toContain(`[ -n "$s" ] && [ -n "$w" ] || exit 1`)
+    // Normalize target → stable window-id, bail if gone.
+    expect(script).toContain(`wid=$(tmux display-message -p -t '@5' '#{window_id}'`)
+    expect(script).toContain(`[ -n "$wid" ] || exit 1`)
+    // Dedicated (NOT grouped) viewer: no `new-session -t <agent>`.
+    expect(script).not.toContain(`new-session -d -s '${viewer}' -t`)
+    expect(script).toContain(`new-session -d -s '${viewer}' -n '_mux_ph'`)
+    // Link the target window in by id — guarded so reconnect can't double-link.
+    expect(script).toContain(`link-window -s "$wid" -t '${viewer}':`)
+    expect(script).toContain(`list-windows -t '${viewer}' -F '#{window_id}'`)
+    expect(script).toContain(`grep -qx "$wid"`)
+    // Placeholder is dropped; the agent-address-by-index select-window is gone.
+    expect(script).toContain(`kill-window -t '${viewer}':'_mux_ph'`)
+    expect(script).not.toContain("window_index")
+    expect(script).not.toContain("select-window")
     expect(script).toContain(`exec tmux attach -t '${viewer}'`)
     expect(script).not.toContain("window_name")
   })
@@ -30,7 +39,7 @@ describe("agent-tmux attachArgv", () => {
     const argv = attachArgv({ device: "d", agentTarget: "mux:my-sess" })
     const script = argv[2]!
     const viewer = viewerSessionName("d", "mux:my-sess")
-    expect(script).toContain(`display-message -p -t 'mux:my-sess' '#{session_name}'`)
+    expect(script).toContain(`display-message -p -t 'mux:my-sess' '#{window_id}'`)
     expect(script).toContain(`exec tmux attach -t '${viewer}'`)
   })
 
