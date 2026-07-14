@@ -402,6 +402,7 @@ function ensureClaudeTailer(sessionUuid: string, _name: string, workdir: string,
       if (event.kind === "interrupt") { agentStateStore.applyEvent(sessionUuid, "interrupt"); return }
       activityStore.append(sessionUuid, event)
     },
+    workdir,
     seekToEnd,
   })
   tailer.start()
@@ -886,8 +887,10 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   })
   adapter.on("tool-call", (ev: any) => {
     const now = Date.now()
+    const session = registry.get(sessionId)
+    const workdir = session?.workdir
     try {
-      for (const a of toActivityEvents(adapter.kind, ev, now)) activityStore.append(sessionId, a)
+      for (const a of toActivityEvents(adapter.kind, ev, now, workdir)) activityStore.append(sessionId, a)
     } catch (err) { log.warn("adapter_tool_call_activity_failed", { err: String(err) }) }
     if (ev?.phase === "started") agentStateStore.applyEvent(sessionId, "PreToolUse", normalizeToolName(adapter.kind, ev.tool), now)
     else agentStateStore.applyEvent(sessionId, "PostToolUse", undefined, now)
