@@ -655,10 +655,29 @@ private struct ProjectPickerSheet: View {
                     }
                 }
             }
+            #if os(macOS)
+            .navigationTitle("")
+            #else
             .searchable(text: $search, placement: .smNavDrawerAlways,
                         prompt: "Search projects, repos, or type a path")
             .navigationTitle("Project").smInlineNavigationTitle()
-            .toolbar { ToolbarItem(placement: .smTopTrailing) { Button("Cancel") { dismiss() } } }
+            #endif
+            .toolbar {
+                #if os(macOS)
+                ToolbarItem(placement: .navigation) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("Search projects, repos, or type a path", text: $search)
+                            .textFieldStyle(.plain)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                    .frame(width: 280)
+                }
+                #endif
+                ToolbarItem(placement: .smTopTrailing) { Button("Cancel") { dismiss() } }
+            }
             .overlay {
                 if resolving {
                     ZStack {
