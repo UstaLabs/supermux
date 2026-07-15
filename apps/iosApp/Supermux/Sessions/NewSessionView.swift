@@ -114,25 +114,17 @@ struct NewSessionView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                Spacer().frame(height: 28)
-                Image(systemName: "cube.fill").font(.system(size: 38)).foregroundStyle(.primary)
-                Text("Let's build").font(.largeTitle.bold())
-                projectPicker
-                if fleet.multiHost, let h = activeHost { hostPickerPill(h) }
-                if repoInfo?.eligible == true { worktreePill }
-                composeCard
-                if !workdir.isEmpty {
-                    Label(workdirLabel, systemImage: "folder")
-                        .font(.caption.monospaced()).foregroundStyle(.secondary).padding(.top, 2)
+        Group {
+            #if os(macOS)
+            GeometryReader { proxy in
+                ScrollView {
+                    launcherContent
+                        .frame(minHeight: proxy.size.height, alignment: .center)
                 }
             }
-            .padding(20)
-            #if os(macOS)
-            .frame(maxWidth: 900)
+            #else
+            ScrollView { launcherContent }
             #endif
-            .frame(maxWidth: .infinity)
         }
         .navigationTitle("New session").smInlineNavigationTitle()
         .tint(Theme.teal)
@@ -307,6 +299,32 @@ struct NewSessionView: View {
         } message: {
             Text("Make sure the selected agent is installed and signed in on this host, then try again.")
         }
+    }
+
+    private var launcherContent: some View {
+        VStack(spacing: 16) {
+            #if os(iOS)
+            Spacer().frame(height: 28)
+            #endif
+            Image(systemName: "cube.fill").font(.system(size: 38)).foregroundStyle(.primary)
+            Text("Let's build").font(.largeTitle.bold())
+            projectPicker
+            if fleet.multiHost, let h = activeHost { hostPickerPill(h) }
+            if repoInfo?.eligible == true { worktreePill }
+            composeCard
+            if !workdir.isEmpty {
+                Label(workdirLabel, systemImage: "folder")
+                    .font(.caption.monospaced()).foregroundStyle(.secondary).padding(.top, 2)
+            }
+        }
+        #if os(macOS)
+        .padding(.vertical, 20)
+        .padding(.horizontal, 48)
+        .frame(maxWidth: 900)
+        #else
+        .padding(20)
+        #endif
+        .frame(maxWidth: .infinity)
     }
 
     private var workdirLabel: String {
@@ -641,19 +659,7 @@ private struct ProjectPickerSheet: View {
     var body: some View {
         Group {
             #if os(macOS)
-            VStack(spacing: 0) {
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Search projects, repos, or type a path", text: $search)
-                        .textFieldStyle(.plain)
-                        .focused($searchFocused)
-                }
-                .padding(.horizontal, 10)
-                .frame(height: 38)
-                .background(Color.smSecondaryBackground)
-                Divider()
-                pickerList.listStyle(.inset)
-            }
+            macPicker
             #else
             NavigationStack {
                 pickerList
@@ -663,10 +669,25 @@ private struct ProjectPickerSheet: View {
                     .toolbar {
                         ToolbarItem(placement: .smTopTrailing) { Button("Cancel", action: onClose) }
                     }
-            }
+                }
             #endif
         }
         .tint(Theme.teal)
+        .overlay {
+            if resolving {
+                ZStack {
+                    Color.black.opacity(0.08)
+                    VStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text("Cloning / creating…").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 20).padding(.vertical, 16)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Theme.hairline))
+                    .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+                }
+            }
+        }
         .onAppear {
             #if os(macOS)
             DispatchQueue.main.async { searchFocused = true }
@@ -687,6 +708,178 @@ private struct ProjectPickerSheet: View {
             searching = false
         }
     }
+
+    #if os(macOS)
+    /// A desktop-native command palette: the search field stays fixed while results scroll,
+    /// paths remain readable at wide Mac sizes, and every operation has one consistent row.
+    private var macPicker: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 10) {
+                HStack(spacing: 9) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(searchFocused ? Theme.teal : Color.primary.opacity(0.48))
+                    TextField("Search projects, repositories, or enter a path", text: $search)
+                        .textFieldStyle(.plain)
+                        .font(.body)
+                        .focused($searchFocused)
+                        .onSubmit(submitMacSearch)
+                    if searching {
+                        ProgressView().controlSize(.mini)
+                    } else if !search.isEmpty {
+                        Button { search = "" } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear search")
+                    }
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 40)
+                .background(Color.smTertiaryBackground.opacity(0.72), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(searchFocused ? Theme.teal.opacity(0.65) : Theme.hairline,
+                                      lineWidth: searchFocused ? 1.5 : 1)
+                }
+
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 5) {
+                        if showTypedPath {
+                            macSectionHeader("OPEN PATH", detail: nil)
+                            MacProjectPickerRow(
+                                icon: "arrow.turn.down.left",
+                                title: "Open this path",
+                                subtitle: query,
+                                trailing: "Open",
+                                accent: Theme.teal,
+                                selected: false
+                            ) {
+                                onPick(query); onClose()
+                            }
+                            .padding(.bottom, 6)
+                        }
+
+                        if !filteredProjects.isEmpty {
+                            macSectionHeader(query.isEmpty ? "PROJECTS" : "LOCAL RESULTS",
+                                             detail: "\(filteredProjects.count)")
+                            ForEach(filteredProjects, id: \.self) { p in
+                                MacProjectPickerRow(
+                                    icon: "folder.fill",
+                                    title: basename(p),
+                                    subtitle: label(p),
+                                    trailing: p == current ? "Current" : nil,
+                                    accent: Theme.teal,
+                                    selected: p == current
+                                ) {
+                                    onPick(p); onClose()
+                                }
+                            }
+                            .padding(.bottom, 6)
+                        }
+
+                        ForEach(cloudGroups, id: \.conn.id) { group in
+                            macSectionHeader(group.conn.host.uppercased(),
+                                             detail: "@\(group.conn.account.login)")
+                            ForEach(group.repos, id: \.fullName) { r in
+                                MacProjectPickerRow(
+                                    icon: "icloud.and.arrow.down.fill",
+                                    title: r.name,
+                                    subtitle: r.fullName,
+                                    trailing: "Clone",
+                                    accent: Theme.teal,
+                                    selected: false
+                                ) {
+                                    resolveCloud(r)
+                                }
+                                .disabled(resolving)
+                            }
+                            .padding(.bottom, 6)
+                        }
+
+                        if searching && cloudGroups.isEmpty {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.mini)
+                                Text("Searching connected repositories…")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 10).padding(.vertical, 12)
+                        }
+
+                        if showCreate {
+                            macSectionHeader("CREATE NEW", detail: nil)
+                            MacProjectPickerRow(
+                                icon: "plus",
+                                title: query,
+                                subtitle: "New local Git repository",
+                                trailing: "Create",
+                                accent: Theme.teal,
+                                selected: false
+                            ) {
+                                resolveCreateLocal()
+                            }
+                            .disabled(resolving)
+                            ForEach(connections, id: \.id) { c in
+                                MacProjectPickerRow(
+                                    icon: "plus",
+                                    title: "\(c.account.login)/\(query)",
+                                    subtitle: "Create on \(c.host)",
+                                    trailing: "Create",
+                                    accent: Theme.teal,
+                                    selected: false
+                                ) {
+                                    resolveCreateForge(c.id)
+                                }
+                                .disabled(resolving)
+                            }
+                        }
+
+                        if query.isEmpty && projects.isEmpty {
+                            VStack(spacing: 8) {
+                                Image(systemName: "folder.badge.plus")
+                                    .font(.system(size: 26, weight: .light)).foregroundStyle(.tertiary)
+                                Text("No projects found").font(.callout.weight(.semibold))
+                                Text("Enter a local path above, or search a connected repository.")
+                                    .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 30)
+                        }
+                    }
+                    .padding(8)
+                }
+                .background(Color.smTertiaryBackground.opacity(0.34), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.hairline))
+            }
+            .padding(12)
+        }
+    }
+
+    @ViewBuilder
+    private func macSectionHeader(_ title: String, detail: String?) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+            Spacer()
+            if let detail { Text(detail) }
+        }
+        .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+        .padding(.horizontal, 8).padding(.top, 4).padding(.bottom, 2)
+    }
+
+    private func submitMacSearch() {
+        guard !query.isEmpty else { return }
+        if let exact = projects.first(where: {
+            $0.caseInsensitiveCompare(query) == .orderedSame ||
+            basename($0).caseInsensitiveCompare(query) == .orderedSame
+        }) {
+            onPick(exact); onClose()
+        } else if filteredProjects.count == 1, let only = filteredProjects.first {
+            onPick(only); onClose()
+        } else if showTypedPath {
+            onPick(query); onClose()
+        }
+    }
+    #endif
 
     private var pickerList: some View {
         List {
@@ -747,18 +940,6 @@ private struct ProjectPickerSheet: View {
                 }
             }
         }
-        .overlay {
-            if resolving {
-                ZStack {
-                    Color.black.opacity(0.06).ignoresSafeArea()
-                    VStack(spacing: 10) {
-                        ProgressView()
-                        Text("Cloning / creating…").font(.caption).foregroundStyle(.secondary)
-                    }
-                    .padding(22).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                }
-            }
-        }
     }
 
     private func projectRow(name: String, sub: String, checked: Bool) -> some View {
@@ -802,7 +983,76 @@ private struct ProjectPickerSheet: View {
 }
 
 #if os(macOS)
-/// Web parity: a compact omnibox anchored under the project control. It stays inside the detail
+/// One compact, pointer-friendly result in the Mac project popover. A custom row avoids the
+/// table chrome and full-width selection bars that made the old iOS-style List feel out of place.
+private struct MacProjectPickerRow: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    let trailing: String?
+    let accent: Color
+    let selected: Bool
+    let action: () -> Void
+
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(accent.opacity(selected ? 0.17 : 0.09))
+                    Image(systemName: icon)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(selected ? accent : Color.primary.opacity(0.58))
+                }
+                .frame(width: 32, height: 32)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.callout.weight(selected ? .semibold : .medium))
+                        .foregroundStyle(.primary).lineLimit(1)
+                    Text(subtitle)
+                        .font(.caption.monospaced()).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+                Spacer(minLength: 8)
+                if selected {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                        if let trailing { Text(trailing) }
+                    }
+                    .font(.caption.weight(.medium)).foregroundStyle(accent)
+                } else if let trailing {
+                    HStack(spacing: 4) {
+                        Text(trailing)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(hovered ? accent : Color.primary.opacity(0.42))
+                }
+            }
+            .padding(.horizontal, 9).padding(.vertical, 7)
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(
+                selected ? accent.opacity(0.105) : (hovered ? Color.primary.opacity(0.055) : .clear),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay {
+                if selected {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(accent.opacity(0.22))
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Compact omnibox popover anchored under the project control. It lives inside the detail
 /// workspace rather than becoming an AppKit sheet window or a centered modal.
 private struct MacProjectPickerOverlay: View {
     let anchor: CGRect
@@ -813,10 +1063,11 @@ private struct MacProjectPickerOverlay: View {
     var onPick: (String) -> Void
     var onClose: () -> Void
 
-    private var cardWidth: CGFloat { min(560, max(320, container.width - 32)) }
+    private var cardWidth: CGFloat { min(540, max(320, container.width - 32)) }
     private var cardHeight: CGFloat {
-        let visibleRows = CGFloat(min(max(projects.count, 1), 3))
-        return min(container.height - 32, max(180, 126 + visibleRows * 48))
+        let visibleRows = CGFloat(min(max(projects.count, 1), 6))
+        let desired = max(200, 82 + visibleRows * 53)
+        return min(max(160, container.height - 32), desired)
     }
     private var cardX: CGFloat {
         min(max(anchor.midX, cardWidth / 2 + 16), container.width - cardWidth / 2 - 16)
@@ -841,13 +1092,13 @@ private struct MacProjectPickerOverlay: View {
                 onClose: onClose
             )
             .frame(width: cardWidth, height: cardHeight)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(Color.smSeparator.opacity(0.7))
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(Color.smSeparator.opacity(0.65))
             }
-            .shadow(color: .black.opacity(0.2), radius: 14, y: 6)
+            .shadow(color: .black.opacity(0.18), radius: 18, y: 7)
             .position(x: cardX, y: cardY)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
