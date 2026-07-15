@@ -20,6 +20,18 @@ test("codex completed -> tool_result done with aggregated_output as detail", () 
   expect(r).toEqual({ ts: ISO, kind: "tool_result", title: "done", detail: "ok", phase: "completed", callId: "c1" })
 })
 
+test("codex commandExecution completed -> multiline output from current app-server fields", () => {
+  const ev = { kind: "tool-call", tool: "commandExecution", phase: "completed", call_id: "c1", detail: { type: "commandExecution", aggregatedOutput: "first\nsecond\n", exitCode: 0 } } as const
+  const [r] = toActivityEvents("codex", ev, NOW, WD)
+  expect(r).toEqual({ ts: ISO, kind: "tool_result", title: "done", detail: "first\nsecond", phase: "completed", callId: "c1" })
+})
+
+test("codex failed command with no output -> exit code detail", () => {
+  const ev = { kind: "tool-call", tool: "commandExecution", phase: "failed", call_id: "c1", detail: { type: "commandExecution", aggregatedOutput: null, exitCode: 7 } } as const
+  const [r] = toActivityEvents("codex", ev, NOW, WD)
+  expect(r).toMatchObject({ kind: "tool_result", title: "error", detail: "Exit code 7" })
+})
+
 test("codex completed with no aggregated_output -> empty detail", () => {
   const ev = { kind: "tool-call", tool: "shell", phase: "completed", call_id: "c1", detail: { type: "command_execution" } } as const
   const [r] = toActivityEvents("codex", ev, NOW, WD)
@@ -34,6 +46,28 @@ test("failed -> tool_result error", () => {
 test("codex file_change started -> Edit with path (workdir-relative)", () => {
   const ev = { kind: "tool-call", tool: "file_change", phase: "started", call_id: "c2", detail: { type: "fileChange", path: "/w/a/b.ts" } } as const
   expect(toActivityEvents("codex", ev, NOW, WD)[0]).toMatchObject({ kind: "tool", tool: "Edit", title: "Edit: a/b.ts", detail: "/w/a/b.ts" })
+})
+
+test("codex fileChange started -> affected paths and unified diffs from current app-server fields", () => {
+  const changes = [
+    { path: "/w/src/a.ts", kind: { type: "update", move_path: null }, diff: "@@ -1 +1 @@\n-old\n+new" },
+    { path: "/w/src/b.ts", kind: { type: "add" }, diff: "+export {}" },
+  ]
+  const ev = { kind: "tool-call", tool: "fileChange", phase: "started", call_id: "c2", detail: { type: "fileChange", changes } } as const
+  const [r] = toActivityEvents("codex", ev, NOW, WD)
+  expect(r).toMatchObject({
+    kind: "tool",
+    tool: "Edit",
+    title: "Edit: src/a.ts, src/b.ts",
+    detail: "update /w/src/a.ts\n@@ -1 +1 @@\n-old\n+new\n\nadd /w/src/b.ts\n+export {}",
+  })
+})
+
+test("codex fileChange completed -> changed-file result", () => {
+  const changes = [{ path: "/w/src/a.ts", kind: { type: "update", move_path: null }, diff: "@@ -1 +1 @@" }]
+  const ev = { kind: "tool-call", tool: "fileChange", phase: "completed", call_id: "c2", detail: { type: "fileChange", changes } } as const
+  const [r] = toActivityEvents("codex", ev, NOW, WD)
+  expect(r).toMatchObject({ kind: "tool_result", title: "done", detail: "update src/a.ts" })
 })
 
 test("codex web_search started -> WebFetch with query", () => {
@@ -60,6 +94,22 @@ test("codex mcpToolCall completed -> result detail", () => {
   const ev = { kind: "tool-call", tool: "mcp_tool_call", phase: "completed", call_id: "m1", detail: { type: "mcpToolCall", toolName: "spawn_session", arguments: { name: "test" }, result: '{"session_id":"abc"}' } } as const
   const [r] = toActivityEvents("codex", ev, NOW, WD)
   expect(r).toEqual({ ts: ISO, kind: "tool_result", title: "done", detail: '{"session_id":"abc"}', phase: "completed", callId: "m1" })
+})
+
+test("codex mcpToolCall current shape -> tool name and text content", () => {
+  const started = { kind: "tool-call", tool: "mcpToolCall", phase: "started", call_id: "m2", detail: { type: "mcpToolCall", server: "mux", tool: "reply", arguments: { text: "hello" } } } as const
+  expect(toActivityEvents("codex", started, NOW, WD)[0]).toMatchObject({ title: "Tool: reply hello", detail: "reply hello" })
+
+  const completed = { kind: "tool-call", tool: "mcpToolCall", phase: "completed", call_id: "m2", detail: { type: "mcpToolCall", tool: "reply", result: { content: [{ type: "text", text: "sent\nok" }], structuredContent: null } } } as const
+  expect(toActivityEvents("codex", completed, NOW, WD)[0]).toMatchObject({ kind: "tool_result", detail: "sent\nok" })
+})
+
+test("codex dynamicToolCall -> input and multiline output", () => {
+  const started = { kind: "tool-call", tool: "Imagegen", phase: "started", call_id: "d1", detail: { type: "dynamicToolCall", tool: "Imagegen", arguments: { prompt: "draw a fox" } } } as const
+  expect(toActivityEvents("codex", started, NOW, WD)[0]).toMatchObject({ tool: "Imagegen", title: "Imagegen: draw a fox", detail: "draw a fox" })
+
+  const completed = { kind: "tool-call", tool: "Imagegen", phase: "completed", call_id: "d1", detail: { type: "dynamicToolCall", contentItems: [{ type: "inputText", text: "created\nasset" }] } } as const
+  expect(toActivityEvents("codex", completed, NOW, WD)[0]).toMatchObject({ kind: "tool_result", detail: "created\nasset" })
 })
 
 // --- cursor ---
