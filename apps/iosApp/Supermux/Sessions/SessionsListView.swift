@@ -12,6 +12,7 @@ struct SessionsListView: View {
     var onNewSession: () -> Void
     var onArchived: () -> Void
     var onAddHost: () -> Void = {}
+    var onSessionSelected: (String) -> Void = { _ in }
 
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
@@ -79,7 +80,7 @@ struct SessionsListView: View {
                 Section {
                     if !collapsed.contains(group.workdir) {
                         ForEach(group.sessions, id: \.id) { s in
-                            row(s, host: multiHost ? hostByRecord[owner[s.id] ?? ""] : nil).tag(s.id)
+                            selectableRow(s, host: multiHost ? hostByRecord[owner[s.id] ?? ""] : nil)
                         }
                     }
                 } header: { header(group) }
@@ -89,7 +90,8 @@ struct SessionsListView: View {
             ForEach(fleet.offlineHostGroups(), id: \.host.recordId) { entry in
                 Section {
                     ForEach(entry.sessions, id: \.id) { s in
-                        row(s, host: hostByRecord[entry.host.recordId]).tag(s.id).opacity(0.5)
+                        selectableRow(s, host: hostByRecord[entry.host.recordId])
+                            .opacity(0.5)
                     }
                 } header: { offlineHeader(entry.host) }
             }
@@ -221,6 +223,26 @@ struct SessionsListView: View {
                 Button { renameText = s.name; renameTarget = s } label: { Label("Rename", systemImage: "pencil") }
                 Button(role: .destructive) { killTarget = s } label: { Label("Kill", systemImage: "xmark.circle") }
             }
+    }
+
+    /// AppKit's `List(selection:)` does not emit a selection change when the already-selected
+    /// row is clicked. Make the row a real button on macOS so callers can still react to that
+    /// click (notably, leaving the New Session workspace), while retaining native list selection.
+    @ViewBuilder private func selectableRow(_ s: SessionInfo, host: HostView?) -> some View {
+        #if os(macOS)
+        Button {
+            selected = s.id
+            onSessionSelected(s.id)
+        } label: {
+            row(s, host: host)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .tag(s.id)
+        #else
+        row(s, host: host)
+            .tag(s.id)
+        #endif
     }
 
     private func toggle(_ wd: String) {

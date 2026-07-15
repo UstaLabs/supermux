@@ -82,6 +82,13 @@ struct IPadWorkspace<NewSessionContent: View>: View {
         // hooks need a selected session, which arrives async after onAppear — apply them here on
         // the first selection too (the guard makes it one-shot, so a later switch won't re-fire).
         .onChange(of: selected) { _, _ in syncChrome(); applyEnvHooksIfReady() }
+        #if os(macOS)
+        // Web parity: choosing a sidebar session leaves the launcher and reveals that session in
+        // the detail workspace. New Session itself never hides or disables the sidebar.
+        .onChange(of: selected) { _, _ in
+            if route == .newSession { route = nil }
+        }
+        #endif
         // Auto-open the Display column on the no-stream → live edge for this session (PWA parity).
         // Gated to nil→non-nil so a manual ⌘D close isn't resurrected by a second/restarted
         // stream getting a new id while one was already live. Writes the CURRENT session's pane.
@@ -118,7 +125,11 @@ struct IPadWorkspace<NewSessionContent: View>: View {
         if layout.sidebarCollapsed {
             SessionsRailView(fleet: fleet, selected: $selected,
                              onExpand: { layout.sidebarCollapsed = false },
-                             onNewSession: { route = .newSession })
+                             onNewSession: { route = .newSession },
+                             onSessionSelected: { id in
+                                 selected = id
+                                 if route == .newSession { route = nil }
+                             })
                 .frame(width: WorkspaceLayoutModel.B.rail)
             Divider()
         } else {
@@ -135,7 +146,11 @@ struct IPadWorkspace<NewSessionContent: View>: View {
                 SessionsListView(fleet: fleet, selected: $selected,
                                  onNewSession: { route = .newSession },
                                  onArchived: { route = .archived },
-                                 onAddHost: onAddHost)
+                                 onAddHost: onAddHost,
+                                 onSessionSelected: { id in
+                                     selected = id
+                                     if route == .newSession { route = nil }
+                                 })
             }
             .frame(width: CGFloat(layout.sidebarWidth))
             sidebarDivider

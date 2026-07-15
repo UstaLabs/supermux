@@ -3,6 +3,15 @@ import Shared
 import PhotosUI
 import UniformTypeIdentifiers
 
+#if os(macOS)
+private struct MacProjectPickerAnchorKey: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>?
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
+    }
+}
+#endif
+
 /// Compose-first launcher — mirrors the web SessionLauncherView: centered
 /// "Let's build", a project dropdown, and a compose card (agent picker + the
 /// first message) that spawns the session and sends that message on ↑.
@@ -119,7 +128,11 @@ struct NewSessionView: View {
                         .font(.caption.monospaced()).foregroundStyle(.secondary).padding(.top, 2)
                 }
             }
-            .padding(20).frame(maxWidth: .infinity)
+            .padding(20)
+            #if os(macOS)
+            .frame(maxWidth: 900)
+            #endif
+            .frame(maxWidth: .infinity)
         }
         .navigationTitle("New session").smInlineNavigationTitle()
         .tint(Theme.teal)
@@ -227,15 +240,19 @@ struct NewSessionView: View {
             lastSeenWorkdir = workdir
         }
         #if os(macOS)
-        .overlay {
-            if projectSearch {
-                MacProjectPickerOverlay(
-                    broker: broker,
-                    projects: projects,
-                    current: workdir,
-                    onPick: { workdir = $0 },
-                    onClose: { projectSearch = false }
-                )
+        .overlayPreferenceValue(MacProjectPickerAnchorKey.self) { anchor in
+            GeometryReader { proxy in
+                if projectSearch, let anchor {
+                    MacProjectPickerOverlay(
+                        anchor: proxy[anchor],
+                        container: proxy.size,
+                        broker: broker,
+                        projects: projects,
+                        current: workdir,
+                        onPick: { workdir = $0 },
+                        onClose: { projectSearch = false }
+                    )
+                }
             }
         }
         #else
@@ -305,6 +322,9 @@ struct NewSessionView: View {
             }
         }
         .smMacPlainButton()
+        #if os(macOS)
+        .anchorPreference(key: MacProjectPickerAnchorKey.self, value: .bounds) { $0 }
+        #endif
     }
     private var modelLabel: String {
         guard let model else { return "Default" }
@@ -580,6 +600,7 @@ private struct ProjectPickerSheet: View {
     @State private var cloudRepos: [RemoteRepo] = []
     @State private var searching = false
     @State private var resolving = false
+    @FocusState private var searchFocused: Bool
 
     private var query: String { search.trimmingCharacters(in: .whitespaces) }
 
@@ -621,24 +642,17 @@ private struct ProjectPickerSheet: View {
         Group {
             #if os(macOS)
             VStack(spacing: 0) {
-                HStack(spacing: 12) {
-                    Text("Choose project").font(.headline)
-                    Spacer(minLength: 12)
-                    HStack(spacing: 6) {
-                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                        TextField("Search projects, repos, or type a path", text: $search)
-                            .textFieldStyle(.plain)
-                    }
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 6)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .frame(width: 300)
-                    Button("Cancel", action: onClose)
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search projects, repos, or type a path", text: $search)
+                        .textFieldStyle(.plain)
+                        .focused($searchFocused)
                 }
-                .padding(12)
-                .background(.bar)
+                .padding(.horizontal, 10)
+                .frame(height: 38)
+                .background(Color.smSecondaryBackground)
                 Divider()
-                pickerList
+                pickerList.listStyle(.inset)
             }
             #else
             NavigationStack {
@@ -653,6 +667,11 @@ private struct ProjectPickerSheet: View {
             #endif
         }
         .tint(Theme.teal)
+        .onAppear {
+            #if os(macOS)
+            DispatchQueue.main.async { searchFocused = true }
+            #endif
+        }
         .task {
             connections = await broker.forges()
             // Debug: prefill the search for headless screenshots (surfaces cloud/create options).
@@ -783,42 +802,55 @@ private struct ProjectPickerSheet: View {
 }
 
 #if os(macOS)
-/// iPad presents the project picker as a card over the launcher. AppKit backs SwiftUI `.sheet`
-/// with another window, so the Mac recreates that card inside the existing window instead.
+/// Web parity: a compact omnibox anchored under the project control. It stays inside the detail
+/// workspace rather than becoming an AppKit sheet window or a centered modal.
 private struct MacProjectPickerOverlay: View {
+    let anchor: CGRect
+    let container: CGSize
     let broker: BrokerSession
     let projects: [String]
     let current: String
     var onPick: (String) -> Void
     var onClose: () -> Void
 
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                Color.black.opacity(0.18)
-                    .contentShape(Rectangle())
-                    .onTapGesture(perform: onClose)
+    private var cardWidth: CGFloat { min(560, max(320, container.width - 32)) }
+    private var cardHeight: CGFloat {
+        let visibleRows = CGFloat(min(max(projects.count, 1), 3))
+        return min(container.height - 32, max(180, 126 + visibleRows * 48))
+    }
+    private var cardX: CGFloat {
+        min(max(anchor.midX, cardWidth / 2 + 16), container.width - cardWidth / 2 - 16)
+    }
+    private var cardY: CGFloat {
+        let below = anchor.maxY + 8 + cardHeight / 2
+        if below + cardHeight / 2 <= container.height - 16 { return below }
+        return max(cardHeight / 2 + 16, anchor.minY - 8 - cardHeight / 2)
+    }
 
-                ProjectPickerSheet(
-                    broker: broker,
-                    projects: projects,
-                    current: current,
-                    onPick: onPick,
-                    onClose: onClose
-                )
-                .frame(
-                    width: min(max(0, proxy.size.width - 48), 600),
-                    height: min(max(0, proxy.size.height - 48), 540)
-                )
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Color.smSeparator.opacity(0.7))
-                }
-                .shadow(color: .black.opacity(0.25), radius: 24, y: 10)
+    var body: some View {
+        ZStack {
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onClose)
+
+            ProjectPickerSheet(
+                broker: broker,
+                projects: projects,
+                current: current,
+                onPick: onPick,
+                onClose: onClose
+            )
+            .frame(width: cardWidth, height: cardHeight)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.smSeparator.opacity(0.7))
             }
+            .shadow(color: .black.opacity(0.2), radius: 14, y: 6)
+            .position(x: cardX, y: cardY)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .transition(.opacity)
         .onExitCommand(perform: onClose)
         .accessibilityIdentifier("project-picker-overlay")
