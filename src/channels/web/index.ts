@@ -52,10 +52,26 @@ const log = makeLogger("channels/web")
 const RATE_LIMIT_WINDOW_MS = 5 * 60_000
 const RATE_LIMIT_MAX = 16
 
+// Only a proxy we actually sit behind may name the peer for us. frpc (relay) and the nginx
+// exposure recipe both forward from loopback and set X-Forwarded-For; anyone else reaching
+// the port directly is quoting a header they invented. Trusting it from every caller let a
+// brute-forcer mint a fresh rate-limit bucket per guess just by varying one header.
+//
+// Loopback is the default trust set because that is where frpc/nginx forward from. It does
+// mean a LOCAL process can still spoof the header — which is acceptable: anything running
+// as this user can simply read the device token out of the state dir, so the limiter was
+// never a boundary against it. The boundary that matters is remote traffic, which arrives
+// either directly (peer IP, header ignored) or via the proxy (bucketed per real client).
+export const DEFAULT_TRUSTED_PROXY_PEERS = ["127.0.0.1", "::1", "::ffff:127.0.0.1"]
+
+// Resolved once per request at the single entry point, where Bun's `server` — and so the
+// real socket peer — is in scope. Without a peer fallback every direct client (the native
+// macOS app included) shared one "unknown" bucket, so any one client's auth failures
+// throttled every other client on the host.
+const rateLimitBucket = new WeakMap<Request, string>()
+
 function clientIp(req: Request): string {
-  return req.headers.get("cf-connecting-ip")
-      ?? req.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-      ?? "unknown"
+  return rateLimitBucket.get(req) ?? "unknown"
 }
 
 // Auth-failure rate-limit state is now per-WebChannel-instance (see the
@@ -123,6 +139,9 @@ export interface ArchivedSessionSnapshot {
 export interface WebChannelOpts {
   port: number
   devicesFile: string
+  /** Peers allowed to declare the real client via X-Forwarded-For / CF-Connecting-IP.
+   *  Defaults to loopback (where frpc/nginx forward from). See DEFAULT_TRUSTED_PROXY_PEERS. */
+  trustedProxyPeers?: string[]
   publicUrl: string
   staticDir?: string
   staticEmbedded?: Record<string, string>
@@ -304,6 +323,17 @@ export class WebChannel implements Channel {
     if (event === "inbound") this.inboundHandlers.push(handler)
   }
 
+  /** Bucket this request by its real origin: the proxy-declared client when we trust the
+   *  peer to declare one, otherwise the socket peer itself. */
+  private resolveRateLimitBucket(req: Request, server: import("bun").Server<WSData>): void {
+    const peer = server.requestIP(req)?.address ?? ""
+    const trusted = this.opts.trustedProxyPeers ?? DEFAULT_TRUSTED_PROXY_PEERS
+    const forwarded = trusted.includes(peer)
+      ? (req.headers.get("cf-connecting-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0]?.trim())
+      : undefined
+    rateLimitBucket.set(req, forwarded || peer || "unknown")
+  }
+
   private checkRateLimit(req: Request): boolean {
     const ip = clientIp(req)
     const now = Date.now()
@@ -320,6 +350,41 @@ export class WebChannel implements Channel {
     const rec = this.authFailures.get(ip) ?? { count: 0, firstAt: Date.now() }
     rec.count++
     this.authFailures.set(ip, rec)
+  }
+
+  /**
+   * Verify the credential FIRST, and throttle only failures.
+   *
+   * The limiter exists to stop credential GUESSING, so it must gate wrong answers, never
+   * right ones. Checking it before `verify` meant a burst of 401s — e.g. the Mac app
+   * retrying config() 20x with a token left stale by a state reset — rejected every later
+   * request from that bucket, including ones bearing a freshly minted, valid token. The
+   * whole onboarding wizard then reported the host as unreachable while the broker was
+   * healthy and the credential was good.
+   *
+   * Verifying first is also why a success must NOT clear the failure counter: a valid token
+   * is already immune to throttling, so clearing would buy legitimate clients nothing while
+   * handing anyone sharing their bucket a fresh budget on every success. The Mac app polls
+   * about once a second, which would have reset a co-bucketed brute-forcer's count forever.
+   */
+  private authenticate(req: Request): { ok: true; device: { name: string; token: string } } | { ok: false; throttled: boolean } {
+    const token = authToken(req)
+    if (token) {
+      const dev = this.store.verify(token)
+      if (dev) {
+        this.store.touch(token)
+        return { ok: true, device: { name: dev.name, token } }
+      }
+    }
+    // Presenting NO credential is not a guess, so it must not spend the brute-force budget.
+    // /host is public and merely asks whether the caller is authed before adding its
+    // authed-only fields — and MacBrokerSidecar.pollForHost probes it anonymously up to 60x
+    // at 500ms on every app start. Counting those meant the sidecar's own health check blew
+    // the 16-failure budget and throttled the broker it had just spawned.
+    if (!token) return { ok: false, throttled: false }
+    const throttled = !this.checkRateLimit(req)
+    if (!throttled) this.recordAuthFailure(req)
+    return { ok: false, throttled }
   }
 
   async start(): Promise<void> {
@@ -444,6 +509,7 @@ export class WebChannel implements Channel {
   }
 
   private async routeRequestOrUpgrade(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
+    this.resolveRateLimitBucket(req, server)
     const url = new URL(req.url)
     if (this.opts.proxyBaseDomain) {
       const host = req.headers.get("host") ?? ""
@@ -466,17 +532,14 @@ export class WebChannel implements Channel {
       }
     }
     if (url.pathname === "/ws") {
-      const token = authToken(req)
-      if (!this.checkRateLimit(req)) return new Response("rate limited", { status: 429 })
-      const dev = this.store.verify(token)
-      if (!dev) { this.recordAuthFailure(req); return new Response("unauthorized", { status: 401 }) }
-      this.store.touch(token)
+      const auth = this.authenticate(req)
+      if (!auth.ok) return this.authFailureResponse(auth)
+      const dev = auth.device
       const upgraded = server.upgrade(req, { data: { deviceName: dev.name, openedAt: Date.now() } as WSData })
       if (upgraded) return undefined  // 101 returned by Bun automatically
       return new Response("upgrade failed", { status: 500 })
     }
     if (url.pathname === "/ws/term") {
-      const token = authToken(req)
       const sessionName = url.searchParams.get("session") ?? ""
       const kind = url.searchParams.get("kind") === "agent" ? "agent" : "scratch"
       // Per-terminal id (multiple scratch terminals per session). Agent terminals
@@ -484,10 +547,9 @@ export class WebChannel implements Channel {
       const terminalId = kind === "agent"
         ? "agent"
         : ((url.searchParams.get("terminal") ?? "").replace(/[^A-Za-z0-9]/g, "").slice(0, 64) || "main")
-      if (!this.checkRateLimit(req)) return new Response("rate limited", { status: 429 })
-      const dev = this.store.verify(token)
-      if (!dev) { this.recordAuthFailure(req); return new Response("unauthorized", { status: 401 }) }
-      this.store.touch(token)
+      const auth = this.authenticate(req)
+      if (!auth.ok) return this.authFailureResponse(auth)
+      const dev = auth.device
       if (!sessionName || !this.opts.getSessionWorkdir?.(sessionName)) {
         return new Response("session not found", { status: 404 })
       }
@@ -505,12 +567,10 @@ export class WebChannel implements Channel {
       return new Response("upgrade failed", { status: 500 })
     }
     if (url.pathname === "/ws/display") {
-      const token = authToken(req)
       const id = url.searchParams.get("id") ?? ""
-      if (!this.checkRateLimit(req)) return new Response("rate limited", { status: 429 })
-      const dev = this.store.verify(token)
-      if (!dev) { this.recordAuthFailure(req); return new Response("unauthorized", { status: 401 }) }
-      this.store.touch(token)
+      const auth = this.authenticate(req)
+      if (!auth.ok) return this.authFailureResponse(auth)
+      const dev = auth.device
       if (!id || this.opts.getDisplayPort?.(id) === undefined) {
         return new Response("display stream not found", { status: 404 })
       }
@@ -521,12 +581,10 @@ export class WebChannel implements Channel {
       return new Response("upgrade failed", { status: 500 })
     }
     if (url.pathname === "/ws/scrcpy") {
-      const token = authToken(req)
       const id = url.searchParams.get("id") ?? ""
-      if (!this.checkRateLimit(req)) return new Response("rate limited", { status: 429 })
-      const dev = this.store.verify(token)
-      if (!dev) { this.recordAuthFailure(req); return new Response("unauthorized", { status: 401 }) }
-      this.store.touch(token)
+      const auth = this.authenticate(req)
+      if (!auth.ok) return this.authFailureResponse(auth)
+      const dev = auth.device
       if (!id || this.opts.getScrcpy?.(id) === undefined) {
         return new Response("scrcpy stream not found", { status: 404 })
       }
@@ -910,14 +968,23 @@ export class WebChannel implements Channel {
     ws.send(JSON.stringify({ type: "error", reason: "unknown frame type" }))
   }
 
-  private requireAuth(req: Request): { ok: true; device: { name: string; token: string } } | { ok: false } {
-    if (!this.checkRateLimit(req)) return { ok: false }
-    const token = authToken(req)
-    if (!token) { this.recordAuthFailure(req); return { ok: false } }
-    const dev = this.store.verify(token)
-    if (!dev) { this.recordAuthFailure(req); return { ok: false } }
-    this.store.touch(token)
-    return { ok: true, device: { name: dev.name, token } }
+  private requireAuth(req: Request): { ok: true; device: { name: string; token: string } } | { ok: false; throttled: boolean } {
+    return this.authenticate(req)
+  }
+
+  /**
+   * 429 for throttling, 401 for a genuinely bad credential — never conflate the two.
+   * Reporting throttling as 401 told correctly-paired clients their credential was
+   * rejected, which is what sent the previous fix hunting through the client.
+   */
+  private authFailureStatus(a: { ok: false; throttled: boolean }): number {
+    return a.throttled ? 429 : 401
+  }
+
+  private authFailureResponse(a: { ok: false; throttled: boolean }): Response {
+    return a.throttled
+      ? new Response("rate limited", { status: 429 })
+      : new Response("unauthorized", { status: 401 })
   }
 
   private json(body: unknown, status = 200): Response {
@@ -1250,7 +1317,7 @@ export class WebChannel implements Channel {
     // ── Resumable/chunked upload: init → PATCH chunks → HEAD probe ────────
     if (method === "POST" && path === "/upload/init") {
       const authResult = this.requireAuth(req)
-      if (!authResult.ok) return new Response("unauthorized", { status: 401 })
+      if (!authResult.ok) return this.authFailureResponse(authResult)
       if (!this.fileStore) return new Response("file store not mounted", { status: 500 })
       const MAX_UPLOAD_BYTES = Number(process.env.MUX_WEB_UPLOAD_MAX_MB ?? 500) * 1024 * 1024
 
@@ -1283,7 +1350,7 @@ export class WebChannel implements Channel {
 
     if (method === "PATCH" && path.startsWith("/upload/")) {
       const authResult = this.requireAuth(req)
-      if (!authResult.ok) return new Response("unauthorized", { status: 401 })
+      if (!authResult.ok) return this.authFailureResponse(authResult)
       if (!this.fileStore) return new Response("file store not mounted", { status: 500 })
       const upload_id = decodeURIComponent(path.slice("/upload/".length))
 
@@ -1311,7 +1378,7 @@ export class WebChannel implements Channel {
 
     if (method === "HEAD" && path.startsWith("/upload/")) {
       const authResult = this.requireAuth(req)
-      if (!authResult.ok) return new Response(null, { status: 401 })
+      if (!authResult.ok) return this.authFailureResponse(authResult)
       if (!this.fileStore) return new Response(null, { status: 500 })
       const upload_id = decodeURIComponent(path.slice("/upload/".length))
       const offset = await this.fileStore.pendingOffset(upload_id)
@@ -1326,7 +1393,7 @@ export class WebChannel implements Channel {
 
     if (method === "POST" && path === "/push/subscribe") {
       const auth = this.requireAuth(req)
-      if (!auth.ok) return new Response("unauthorized", { status: 401 })
+      if (!auth.ok) return this.authFailureResponse(auth)
       if (!this.pushStore) return new Response("push not configured", { status: 503 })
       let body: any
       try { body = await req.json() } catch { return new Response("bad json", { status: 400 }) }
@@ -1347,14 +1414,14 @@ export class WebChannel implements Channel {
 
     if (method === "DELETE" && path === "/push/subscribe") {
       const auth = this.requireAuth(req)
-      if (!auth.ok) return new Response("unauthorized", { status: 401 })
+      if (!auth.ok) return this.authFailureResponse(auth)
       if (!this.pushStore) return new Response("push not configured", { status: 503 })
       this.pushStore.remove(auth.device.name)
       return this.json({ ok: true })
     }
 
     if (method === "POST" && path === "/push/device") {
-      const auth = this.requireAuth(req); if (!auth.ok) return new Response("unauthorized", { status: 401 })
+      const auth = this.requireAuth(req); if (!auth.ok) return this.authFailureResponse(auth)
       if (!this.deviceTokenStore) return new Response("push not configured", { status: 503 })
       let body: any; try { body = await req.json() } catch { return new Response("bad json", { status: 400 }) }
       const platform = body?.platform, rt = body?.routingToken, pubkey = body?.pubkey
@@ -1365,7 +1432,7 @@ export class WebChannel implements Channel {
     }
 
     if (method === "DELETE" && path === "/push/device") {
-      const auth = this.requireAuth(req); if (!auth.ok) return new Response("unauthorized", { status: 401 })
+      const auth = this.requireAuth(req); if (!auth.ok) return this.authFailureResponse(auth)
       if (!this.deviceTokenStore) return new Response("push not configured", { status: 503 })
       this.deviceTokenStore.remove(auth.device.name)
       return this.json({ ok: true })
@@ -1373,7 +1440,7 @@ export class WebChannel implements Channel {
 
     if (method === "GET" && path.startsWith("/files/")) {
       const auth = this.requireAuth(req)
-      if (!auth.ok) return new Response("unauthorized", { status: 401 })
+      if (!auth.ok) return this.authFailureResponse(auth)
       if (!this.fileStore) return new Response("file store not mounted", { status: 500 })
       const file_id = decodeURIComponent(path.slice("/files/".length))
       const meta = await this.fileStore.get(file_id)
@@ -1429,11 +1496,14 @@ export class WebChannel implements Channel {
       if (!info) return this.json({ error: "host identity unavailable" }, 503)
       return this.json(buildHostBody(info, this.requireAuth(req).ok))
     }
-    // Paired-status probe for the PWA (200 when the cookie is valid, else 401).
+    // Paired-status probe for the PWA (200 when the cookie is valid, else 401/429).
+    // Under throttling this must NOT claim `paired: false` — the device may well be paired
+    // and simply throttled, and answering "unpaired" sends clients into a re-pair flow.
     if (method === "GET" && path === "/me") {
       const a = this.requireAuth(req)
       const relayUrl = this.getRelayUrl?.() ?? this.relayUrl
-      return this.json(a.ok ? { paired: true, device: a.device.name, relayUrl } : { paired: false }, a.ok ? 200 : 401)
+      if (a.ok) return this.json({ paired: true, device: a.device.name, relayUrl }, 200)
+      return this.json(a.throttled ? { error: "rate limited" } : { paired: false }, this.authFailureStatus(a))
     }
 
     // Native pairing claim (spec §3.4). Two paths, independent of whether a
@@ -1474,7 +1544,7 @@ export class WebChannel implements Channel {
     }
 
     const auth = this.requireAuth(req)
-    if (!auth.ok) return new Response("unauthorized", { status: 401 })
+    if (!auth.ok) return this.authFailureResponse(auth)
 
     // Mint a one-time pairing claim so an already-paired client (or the local
     // desktop wizard) can add ANOTHER device (spec §3.4). Authed-only.
@@ -2280,11 +2350,11 @@ export class WebChannel implements Channel {
       }
     }
     if (method === "GET" && path === "/displays") {
-      if (!this.requireAuth(req).ok) return new Response("unauthorized", { status: 401 })
+      const a = this.requireAuth(req); if (!a.ok) return this.authFailureResponse(a)
       return this.json(this.opts.listDisplays?.() ?? [])
     }
     if (method === "POST" && path === "/displays") {
-      if (!this.requireAuth(req).ok) return new Response("unauthorized", { status: 401 })
+      const a = this.requireAuth(req); if (!a.ok) return this.authFailureResponse(a)
       if (!this.opts.startDisplay) return this.json({ error: "not configured" }, 503)
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       try {
@@ -2301,7 +2371,7 @@ export class WebChannel implements Channel {
       }
     }
     if (method === "DELETE" && path.match(/^\/displays\/[^/]+$/)) {
-      if (!this.requireAuth(req).ok) return new Response("unauthorized", { status: 401 })
+      const a = this.requireAuth(req); if (!a.ok) return this.authFailureResponse(a)
       if (!this.opts.stopDisplay) return this.json({ error: "not configured" }, 503)
       const id = decodeURIComponent(path.slice("/displays/".length))
       try { await this.opts.stopDisplay(id); return new Response(null, { status: 204 }) }
@@ -2426,7 +2496,7 @@ export class WebChannel implements Channel {
 
     if (method === "POST" && path === "/client-logs") {
       const auth = this.requireAuth(req)
-      if (!auth.ok) return new Response("unauthorized", { status: 401 })
+      if (!auth.ok) return this.authFailureResponse(auth)
       let body: any
       try { body = await req.json() } catch { return this.json({ error: "invalid json" }, 400) }
       this.ingestClientLogs(auth.device.name, body?.entries ?? [], body?.meta)
@@ -2435,7 +2505,7 @@ export class WebChannel implements Channel {
 
     if (method === "GET" && path === "/debug/client-logs") {
       const auth = this.requireAuth(req)
-      if (!auth.ok) return new Response("unauthorized", { status: 401 })
+      if (!auth.ok) return this.authFailureResponse(auth)
       const category = url.searchParams.get("category") ?? undefined
       const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit") ?? "200") || 200))
       let entries = [...this.clientLogRing]
