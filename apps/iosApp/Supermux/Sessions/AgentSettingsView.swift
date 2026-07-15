@@ -3,15 +3,15 @@ import Shared
 
 /// Agents settings — parity with the web `AgentLoginPanel.vue` + `OpenCodeProviderAuth.vue`.
 ///
-/// One expandable row per detected agent (claude / codex / cursor / opencode). For the
-/// CLI-login agents (claude/codex/cursor) a row offers:
-///   • "Authorize via link" → `startAgentLogin`, then a polling Task that calls
+/// One row per detected agent (claude / codex / cursor / opencode). Link authorization
+/// is the primary action for the CLI-login agents (claude/codex/cursor): it calls
+/// `startAgentLogin`, then a polling Task calls
 ///     `agentLoginState` every ~1.5s until the phase is terminal. While active it shows
 ///     the auth URL (Open + Copy), the device `code` if present, a paste-`code` field
 ///     (`sendAgentLoginCode`) when `needsCode`, and Cancel (`cancelAgentLogin`).
-///   • an API-key / OAuth-token SecureField that saves via `saveConfig(...)`.
-/// The opencode row expands to a per-provider sub-list (`openCodeProviders`) with an
-/// API-key field (`setOpenCodeKey`) and, for an oauth method, a browser login
+/// API-key / OAuth-token entry lives under "Other ways to authorize". OpenCode's
+/// primary action opens its key page; additional providers live under "Other providers"
+/// and support API keys (`setOpenCodeKey`) or browser login
 /// (`startOpenCodeOAuth` → open URL) + paste-code finish (`finishOpenCodeOAuth`).
 ///
 /// Pushed inside the app's NavigationStack, so this view owns no NavigationStack — it
@@ -47,7 +47,7 @@ struct AgentSettingsView: View {
                     AgentRow(broker: broker, status: status, onAuthChanged: { Task { await load() } })
                 }
             } footer: {
-                Text("Manage CLI authorization and API-key fallback for each agent.")
+                Text("Authorize via link, or use a key when needed.")
             }
 
             if let error {
@@ -77,18 +77,23 @@ struct AgentSettingsView: View {
 
 // MARK: - Per-agent row
 
-/// Expandable row for a single agent. Self-contained: owns its disclosure state, the
-/// API-key field, and (for CLI-login agents) the active login state + polling Task.
+/// Self-contained agent row: primary authorization, optional fallback disclosures,
+/// and the active login state + polling Task.
 private struct AgentRow: View {
     let broker: BrokerSession
     let status: AgentInstallStatus
     /// Called after a successful auth so the parent can refresh statuses.
     let onAuthChanged: () -> Void
 
+    @Environment(\.openURL) private var openURL
+
     /// Agents whose auth uses the device-code / browser link flow.
     private static let loginKinds: Set<String> = ["claude", "codex", "cursor"]
 
-    @State private var expanded: Bool
+    @State private var otherWaysExpanded = false
+    @State private var otherProvidersExpanded = false
+    @State private var openCodeAuthActive = false
+    @State private var openCodeSaved = false
     /// True from "Start authorization" until the flow ends (terminal phase / cancel /
     /// row teardown). Drives the login-vs-key UI without us constructing a shared type.
     @State private var loginActive = false
@@ -103,34 +108,46 @@ private struct AgentRow: View {
     @State private var installTask: Task<Void, Never>?
     @State private var installRequestFailed = false
 
-    init(broker: BrokerSession, status: AgentInstallStatus, onAuthChanged: @escaping () -> Void) {
-        self.broker = broker
-        self.status = status
-        self.onAuthChanged = onAuthChanged
-        // Un-authed agents start expanded so setup is obvious; authed ones collapse.
-        _expanded = State(initialValue: !status.authed)
-    }
-
     private var isLoginKind: Bool { Self.loginKinds.contains(status.kind) }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            VStack(alignment: .leading, spacing: 14) {
-                if !status.installed {
-                    installSection
-                } else if status.kind == "opencode" {
+        VStack(alignment: .leading, spacing: 12) {
+            header
+
+            if !status.installed {
+                installSection
+            } else if status.kind == "opencode" {
+                if openCodeAuthActive {
+                    openCodePrimaryAuth
+                }
+                DisclosureGroup(isExpanded: $otherProvidersExpanded) {
                     OpenCodeProvidersSection(broker: broker)
-                } else if loginActive {
+                        .padding(.top, 8)
+                } label: {
+                    Text("Other providers")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                if loginActive {
                     loginFlow()
-                } else {
+                }
+                if status.kind == "codex" && !loginActive {
+                    Text("Device-code login must be enabled in ChatGPT → Settings → Security.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                DisclosureGroup(isExpanded: $otherWaysExpanded) {
                     apiKeyField
-                    if status.installed && isLoginKind { linkLoginButton }
+                        .padding(.top, 8)
+                } label: {
+                    Text("Other ways to authorize")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
                 }
             }
-            .padding(.vertical, 6)
-        } label: {
-            header
         }
+        .padding(.vertical, 6)
         // Tear down any live poll when the row leaves the hierarchy.
         .onDisappear {
             stopPoll()
@@ -142,23 +159,41 @@ private struct AgentRow: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Image(systemName: status.authed ? "checkmark.seal.fill" : iconName)
-                .font(.title3)
-                .foregroundStyle(status.authed ? Theme.teal : .secondary)
-                .frame(width: 28)
+            AgentLogo(agent: status.kind, size: 34)
             VStack(alignment: .leading, spacing: 1) {
-                Text(status.kind.capitalized).font(.body)
+                Text(displayName).font(.body.weight(.medium))
                 Text(statusLabel).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
             if status.authed {
-                Text("Ready").font(.caption.weight(.medium)).foregroundStyle(Theme.teal)
+                Label("Ready", systemImage: "checkmark.circle.fill")
+                    .labelStyle(.titleAndIcon)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Theme.teal)
+            }
+            if status.installed && (isLoginKind || status.kind == "opencode") {
+                Button(primaryActionTitle) {
+                    if status.kind == "opencode" {
+                        startOpenCodeAuth()
+                    } else {
+                        startLogin()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.teal)
+                .controlSize(.small)
+                .disabled(loginActive)
             }
         }
     }
 
-    private var iconName: String {
-        status.installed ? "terminal" : "exclamationmark.triangle"
+    private var displayName: String {
+        status.kind == "opencode" ? "OpenCode" : status.kind.capitalized
+    }
+
+    private var primaryActionTitle: String {
+        if loginActive { return "Authorizing…" }
+        return status.authed ? "Reauthorize" : "Authorize"
     }
 
     private var statusLabel: String {
@@ -302,19 +337,58 @@ private struct AgentRow: View {
 
     // MARK: Link / device-code login
 
-    private var linkLoginButton: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Divider()
-            Label("Authorize via link", systemImage: "link")
-                .font(.caption.weight(.medium))
+    private var openCodePrimaryAuth: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("A browser tab opened. Create or copy your OpenCode key, then paste it here.")
+                .font(.caption)
                 .foregroundStyle(.secondary)
-            if status.kind == "codex" {
-                Text("Requires \"Allow device code login\" enabled in ChatGPT → Settings → Security.")
-                    .font(.caption2).foregroundStyle(.secondary)
+            Link(destination: URL(string: "https://opencode.ai/auth")!) {
+                Label("Reopen opencode.ai/auth", systemImage: "arrow.up.right.square")
             }
-            Button("Start authorization") { startLogin() }
-                .buttonStyle(.bordered)
-                .tint(Theme.teal)
+            .font(.caption)
+            .tint(Theme.teal)
+
+            HStack(spacing: 8) {
+                SecureField("OpenCode key (Zen + Go)", text: $keyValue)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                    .smNoAutocapitalization()
+                    .font(.callout.monospaced())
+                Button(saving ? "Saving…" : "Save") { saveOpenCodeKey() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.teal)
+                    .disabled(trimmedKey.isEmpty || saving)
+            }
+            if openCodeSaved {
+                Label("OpenCode key saved.", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(Theme.teal)
+            }
+        }
+        .padding(12)
+        .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func startOpenCodeAuth() {
+        openCodeAuthActive = true
+        openCodeSaved = false
+        if let url = URL(string: "https://opencode.ai/auth") {
+            openURL(url)
+        }
+    }
+
+    private func saveOpenCodeKey() {
+        let value = trimmedKey
+        guard !value.isEmpty else { return }
+        saving = true
+        openCodeSaved = false
+        broker.setOpenCodeKey(providerId: "opencode", key: value)
+        keyValue = ""
+        Task {
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            saving = false
+            openCodeSaved = true
+            onAuthChanged()
         }
     }
 
@@ -502,13 +576,6 @@ private struct OpenCodeProvidersSection: View {
             if loading && providers.isEmpty {
                 ProgressView().tint(Theme.teal).frame(maxWidth: .infinity)
             } else {
-                // The OpenCode key (Zen + Go) isn't in /provider/auth — it's the built-in
-                // free tier + a key from opencode.ai/auth. Surface one explicit row (the
-                // backend pairs the key onto both opencode + opencode-go) when the
-                // providers list doesn't already include it. Mirrors web `visible`.
-                if !providers.contains(where: { $0.id == "opencode" }) {
-                    OpenCodeZenKeyRow(broker: broker, onChanged: { Task { await load() } })
-                }
                 ForEach(providers, id: \.id) { provider in
                     OpenCodeProviderRow(broker: broker, provider: provider,
                                         onChanged: { Task { await load() } })
@@ -525,60 +592,10 @@ private struct OpenCodeProvidersSection: View {
     private func load() async {
         loading = true
         defer { loading = false }
-        // Anthropic + OpenAI are covered by the claude/codex agents above — hide them
-        // here to avoid duplicate auth surfaces (parity with web HIDDEN set).
-        let hidden: Set<String> = ["anthropic", "openai"]
+        // Anthropic/OpenAI are covered by their agent rows; OpenCode Zen + Go is the
+        // primary authorization action above this disclosure.
+        let hidden: Set<String> = ["anthropic", "openai", "opencode", "opencode-go"]
         providers = await broker.openCodeProviders().filter { !hidden.contains($0.id) }
-    }
-}
-
-/// The explicit "OpenCode key (Zen + Go)" row. Not backed by an `OpenCodeProvider`
-/// (Zen isn't in /provider/auth); saving posts the key under providerId "opencode",
-/// which the backend also mirrors onto "opencode-go".
-private struct OpenCodeZenKeyRow: View {
-    let broker: BrokerSession
-    let onChanged: () -> Void
-
-    @Environment(\.openURL) private var openURL
-    @State private var keyValue = ""
-    @State private var saving = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("OpenCode").font(.callout.weight(.medium))
-            Button {
-                if let url = URL(string: "https://opencode.ai/auth") { openURL(url) }
-            } label: {
-                Label("Get a key at opencode.ai/auth", systemImage: "arrow.up.right")
-            }
-            .font(.caption2).buttonStyle(.borderless).tint(Theme.teal)
-            HStack(spacing: 8) {
-                SecureField("OpenCode key (Zen + Go)", text: $keyValue)
-                    .textFieldStyle(.roundedBorder)
-                    .autocorrectionDisabled()
-                    .smNoAutocapitalization()
-                    .font(.callout.monospaced())
-                Button(saving ? "…" : "Save") { saveKey() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Theme.teal)
-                    .disabled(keyValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || saving)
-            }
-        }
-        .padding(10)
-        .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    private func saveKey() {
-        let key = keyValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { return }
-        saving = true
-        broker.setOpenCodeKey(providerId: "opencode", key: key)
-        keyValue = ""
-        Task {
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            saving = false
-            onChanged()
-        }
     }
 }
 

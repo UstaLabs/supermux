@@ -41,6 +41,11 @@ final class MacHostPolicyTests: XCTestCase {
         ]))
     }
 
+    func testCompletedOnboardingStartsOnNewSession() {
+        XCTAssertEqual(RootView.initialRoute(startWithNewSession: true), .newSession)
+        XCTAssertNil(RootView.initialRoute(startWithNewSession: false))
+    }
+
     func testHealthySupermuxHostIsAdopted() {
         XCTAssertEqual(
             MacHostPolicy.decision(for: .supermuxHost(hostId: "abcdefghijklmnopqrstuvwxyz")),

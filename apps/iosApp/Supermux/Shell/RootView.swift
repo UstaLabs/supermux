@@ -31,9 +31,14 @@ struct RootView: View {
         case newSession, archived, usage, proxies, displays, devices, pairDevice, settings, personalAssistants
     }
 
-    init(onUnpair: @escaping () -> Void) {
+    init(startWithNewSession: Bool = false, onUnpair: @escaping () -> Void) {
         _fleet = State(initialValue: Fleet())
+        _route = State(initialValue: Self.initialRoute(startWithNewSession: startWithNewSession))
         self.onUnpair = onUnpair
+    }
+
+    static func initialRoute(startWithNewSession: Bool) -> NavRoute? {
+        startWithNewSession ? .newSession : nil
     }
 
     private var selectedSession: SessionInfo? {

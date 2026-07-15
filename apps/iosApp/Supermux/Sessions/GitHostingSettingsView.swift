@@ -107,10 +107,7 @@ struct GitHostingSettingsView: View {
     @ViewBuilder
     private func connectionRow(_ c: ForgeConnection) -> some View {
         HStack(spacing: 12) {
-            // Forge icon placeholder — SF symbol per kind
-            Image(systemName: forgeIcon(c.kind))
-                .font(.system(size: 18))
-                .foregroundStyle(c.kind == "gitlab" ? .orange : .primary)
+            ForgeLogo(kind: c.kind, size: 20)
                 .frame(width: 34, height: 34)
                 .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 9))
 
@@ -206,8 +203,8 @@ struct GitHostingSettingsView: View {
                             addSheetOpen = true
                         } label: {
                             HStack(spacing: 8) {
-                                Image(systemName: forgeIcon(kind)).font(.system(size: 15))
-                                Text(kind.capitalized).font(.subheadline.weight(.medium))
+                                ForgeLogo(kind: kind, size: 18)
+                                Text(forgeDisplayName(kind)).font(.subheadline.weight(.medium))
                             }
                             .frame(maxWidth: .infinity).padding(.vertical, 12)
                             .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 12))
@@ -237,7 +234,7 @@ struct GitHostingSettingsView: View {
             }
         } label: {
             HStack(spacing: 12) {
-                Image(systemName: forgeIcon(kind)).font(.system(size: 20)).foregroundStyle(Theme.teal)
+                ForgeLogo(kind: kind, size: 22)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Import from \(cliName(kind))").font(.subheadline.weight(.semibold))
                     if let login {
@@ -282,7 +279,6 @@ struct GitHostingSettingsView: View {
     }
 
     private func cliName(_ kind: String) -> String { kind == "github" ? "gh" : "glab" }
-    private func forgeIcon(_ kind: String) -> String { kind == "gitlab" ? "latch.2.case" : "chevron.left.forwardslash.chevron.right" }
     private func defaultHost(_ kind: String) -> String { kind == "gitlab" ? "gitlab.com" : "github.com" }
 
     private func load() async {
@@ -325,7 +321,11 @@ private struct AddForgeSheet: View {
                 Section {
                     Picker("Provider", selection: $kind) {
                         ForEach(kinds, id: \.self) { k in
-                            Text(k.capitalized).tag(k)
+                            HStack(spacing: 6) {
+                                ForgeLogo(kind: k, size: 16)
+                                Text(forgeDisplayName(k))
+                            }
+                            .tag(k)
                         }
                     }
                     .pickerStyle(.segmented)
@@ -344,7 +344,7 @@ private struct AddForgeSheet: View {
                             }
                         } label: {
                             HStack(spacing: 10) {
-                                Image(systemName: forgeIcon(kind)).foregroundStyle(Theme.teal)
+                                ForgeLogo(kind: kind, size: 20)
                                 Text("Import token from \(cliName)\(cliLoginLabel)")
                                     .font(.subheadline.weight(.medium))
                                 Spacer()
@@ -409,7 +409,7 @@ private struct AddForgeSheet: View {
                             if submitting {
                                 ProgressView().tint(.white)
                             } else {
-                                Text("Connect \(kind.capitalized)").fontWeight(.semibold)
+                                Text("Connect \(forgeDisplayName(kind))").fontWeight(.semibold)
                             }
                             Spacer()
                         }
@@ -430,6 +430,9 @@ private struct AddForgeSheet: View {
         }
         .tint(Theme.teal)
         .smPresentationDetents([.medium, .large])
+        #if os(macOS)
+        .frame(minWidth: 620, minHeight: 540)
+        #endif
         .onAppear {
             if let preset = presetKind, kinds.contains(preset) { kind = preset }
             Task { cliStatus = try? await broker.api.listForges().cli }
@@ -469,10 +472,6 @@ private struct AddForgeSheet: View {
             .components(separatedBy: "/").first ?? ""
     }
 
-    private func forgeIcon(_ k: String) -> String {
-        k == "gitlab" ? "latch.2.case" : "chevron.left.forwardslash.chevron.right"
-    }
-
     // MARK: Actions
 
     private func connect() {
@@ -489,4 +488,8 @@ private struct AddForgeSheet: View {
             submitting = false
         }
     }
+}
+
+private func forgeDisplayName(_ kind: String) -> String {
+    kind == "gitlab" ? "GitLab" : "GitHub"
 }

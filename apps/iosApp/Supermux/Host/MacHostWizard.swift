@@ -296,8 +296,11 @@ struct MacHostWizard: View {
 
     private var header: some View {
         HStack(spacing: 14) {
-            Image(nsImage: NSApplication.shared.applicationIconImage)
+            Image("supermuxLogo")
                 .resizable()
+                .renderingMode(.template)
+                .scaledToFit()
+                .foregroundStyle(.primary)
                 .frame(width: 42, height: 42)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Set up Supermux").font(.headline)
@@ -319,9 +322,12 @@ struct MacHostWizard: View {
         switch step {
         case .welcome:
             VStack(spacing: 22) {
-                Image(nsImage: NSApplication.shared.applicationIconImage)
+                Image("supermuxLogo")
                     .resizable()
-                    .frame(width: 88, height: 88)
+                    .renderingMode(.template)
+                    .scaledToFit()
+                    .foregroundStyle(.primary)
+                    .frame(width: 108, height: 108)
                 Text("Welcome to Supermux")
                     .font(.largeTitle.bold())
                 Text("Run multiple coding agents on this Mac and stay connected from your phone or browser.")
@@ -478,6 +484,9 @@ struct MacHostWizard: View {
                 .tint(Theme.teal)
                 .controlSize(.large)
                 .disabled(!canAdvance || finishing)
+            if step == .welcome {
+                Spacer()
+            }
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 18)
