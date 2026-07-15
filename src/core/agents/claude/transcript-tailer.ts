@@ -10,6 +10,7 @@ export interface TranscriptTailerOpts {
   onLine?: (line: string) => void   // raw-line tap for stateful detectors (bg tasks)
   intervalMs?: number
   seekToEnd?: boolean
+  workdir?: string
 }
 
 export class TranscriptTailer {
@@ -18,6 +19,7 @@ export class TranscriptTailer {
   private readonly onLine?: (line: string) => void
   private readonly intervalMs: number
   private readonly seekToEnd: boolean
+  private readonly workdir: string | undefined
   private offset = 0
   private buffer = ""
   private watching = false
@@ -29,6 +31,7 @@ export class TranscriptTailer {
     this.onLine = opts.onLine
     this.intervalMs = opts.intervalMs ?? 300
     this.seekToEnd = opts.seekToEnd ?? false
+    this.workdir = opts.workdir
   }
 
   // Pure: feed a chunk of appended text; emit an event per complete line.
@@ -40,7 +43,7 @@ export class TranscriptTailer {
       const line = this.buffer.slice(0, nl)
       this.buffer = this.buffer.slice(nl + 1)
       this.onLine?.(line)
-      for (const ev of parseTranscriptLine(line)) this.onEvent(ev)
+      for (const ev of parseTranscriptLine(line, this.workdir)) this.onEvent(ev)
     }
   }
 
