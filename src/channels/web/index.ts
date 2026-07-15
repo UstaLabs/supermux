@@ -219,7 +219,11 @@ export interface WebChannelOpts {
   getAgentInstall?: (kind: string) => import("../../core/agents/install").InstallJob | undefined
   listOpenCodeProviders?: () => Promise<import("../../core/agents/opencode/auth-ops").OpenCodeProviderInfo[]>
   setOpenCodeApiKey?: (providerId: string, key: string) => Promise<void>
-  startOpenCodeOAuth?: (providerId: string, method: number) => Promise<{ url: string; instructions?: string }>
+  startOpenCodeOAuth?: (providerId: string, method: number) => Promise<{
+    url: string
+    instructions?: string
+    method: "auto" | "code"
+  }>
   finishOpenCodeOAuth?: (providerId: string, method: number, code: string) => Promise<void>
   getSoul?: () => Promise<string> | string
   setSoul?: (content: string) => Promise<void> | void

@@ -317,9 +317,14 @@ class BrokerApiSettingsTest {
 
     @Test fun opencode_oauth_start_sends_numeric_method() = runTest {
         val reqs = mutableListOf<HttpRequestData>()
-        val api = captured(body = """{"url":"https://auth"}""", sink = reqs)
+        val api = captured(
+            body = """{"url":"https://auth","instructions":"Enter code: AB-12","method":"auto"}""",
+            sink = reqs,
+        )
         val res = api.startOpenCodeOAuth("anthropic", 0)
         assertEquals("https://auth", res.url)
+        assertEquals("Enter code: AB-12", res.instructions)
+        assertEquals("auto", res.method)
         assertEquals("""{"providerId":"anthropic","method":0}""", reqs.single().bodyText())
     }
 

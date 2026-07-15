@@ -2,7 +2,10 @@ package dev.supermux.net
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.darwin.Darwin
+import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.websocket.WebSockets
+import io.ktor.client.request.header
+import io.ktor.http.HttpHeaders
 import kotlin.experimental.ExperimentalNativeApi
 import kotlin.native.setUnhandledExceptionHook
 
@@ -12,6 +15,19 @@ import kotlin.native.setUnhandledExceptionHook
  * `IosClientKt.iosHttpClient()` so the app need not configure Ktor from Swift.
  */
 fun iosHttpClient(): HttpClient = HttpClient(Darwin) {
+    engine {
+        configureSession {
+            // Native clients authenticate every request with an explicit Bearer token. Never
+            // inherit a stale cmux_token browser cookie: the broker intentionally gives cookies
+            // precedence, which would turn a valid native credential into intermittent 401s.
+            HTTPShouldSetCookies = false
+            HTTPCookieStorage = null
+        }
+    }
+    // An explicit Cookie header overrides NSURLSession's ambient cookie jar. The broker ignores
+    // this sentinel and authenticates the Bearer token, so an old cmux_token can never mask a
+    // valid native credential during repeated settings/onboarding requests.
+    defaultRequest { header(HttpHeaders.Cookie, "supermux_native=1") }
     install(WebSockets) {
         // The broker's initial snapshot can exceed the Darwin WebSocket's default
         // 1 MB maximumMessageSize ("Message too long" / EMSGSIZE). Raise it.

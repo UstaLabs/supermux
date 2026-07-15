@@ -687,9 +687,14 @@ data class OpenCodeProvider(
     val methods: List<OpenCodeAuthMethod> = emptyList(),
 )
 
-/** POST /opencode/auth/oauth/start → the authorization URL (+ optional instructions). */
+/** POST /opencode/auth/oauth/start → the authorization URL, guidance, and callback style. */
 @Serializable
-data class OpenCodeOAuthStart(val url: String = "", val instructions: String? = null)
+data class OpenCodeOAuthStart(
+    val url: String = "",
+    val instructions: String? = null,
+    /** "auto" for device flows completed by the provider; "code" when the user pastes a code. */
+    val method: String = "code",
+)
 
 // ─── Editor / LSP settings (GET/PUT /settings/editor) ─────────────────────────
 /** One language server row. `state`: "ready" | "missing" | "prereq-missing". */

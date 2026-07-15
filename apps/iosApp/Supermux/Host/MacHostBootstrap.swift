@@ -49,11 +49,17 @@ struct MacHostBootstrap {
         if let existingToken, !existingToken.isEmpty {
             token = existingToken
         } else {
-            guard let fresh = await bootstrapFirstDevice(base: base, name: hostName) else { return nil }
+            guard let fresh = await bootstrapFirstDevice(base: base, name: hostName) else {
+                NSLog("%@", "[supermux] local host preparation failed at first-device bootstrap")
+                return nil
+            }
             token = fresh
         }
 
-        guard let minted = await mintClaim(base: base, token: token) else { return nil }
+        guard let minted = await mintClaim(base: base, token: token) else {
+            NSLog("%@", "[supermux] local host preparation failed while minting a pairing claim (existing credential: \(existingToken != nil))")
+            return nil
+        }
         let relayURL = await fetchRelayURL(base: base, token: token)
         let payload = Payload(
             v: 1,
@@ -67,7 +73,10 @@ struct MacHostBootstrap {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(payload),
-              let json = String(data: data, encoding: .utf8) else { return nil }
+              let json = String(data: data, encoding: .utf8) else {
+            NSLog("%@", "[supermux] local host preparation failed while encoding the pairing payload")
+            return nil
+        }
         return MacHostPreparedClaim(
             localToken: token,
             payloadJSON: json,
@@ -95,9 +104,23 @@ struct MacHostBootstrap {
         request.httpMethod = "POST"
         request.timeoutInterval = 5
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        guard let (data, response) = try? await self.request(request), response.statusCode == 200,
-              let result = try? JSONDecoder().decode(MintResult.self, from: data),
-              !result.claimSecret.isEmpty else { return nil }
+        let data: Data
+        let response: HTTPURLResponse
+        do {
+            (data, response) = try await self.request(request)
+        } catch {
+            NSLog("%@", "[supermux] mint-claim request failed: \(error.localizedDescription)")
+            return nil
+        }
+        guard response.statusCode == 200 else {
+            NSLog("%@", "[supermux] mint-claim request returned HTTP \(response.statusCode)")
+            return nil
+        }
+        guard let result = try? JSONDecoder().decode(MintResult.self, from: data),
+              !result.claimSecret.isEmpty else {
+            NSLog("%@", "[supermux] mint-claim response could not be decoded")
+            return nil
+        }
         let expiresAt = result.expiresAt.flatMap(Self.parseISODate)
             ?? Date().addingTimeInterval(10 * 60)
         return (result.claimSecret, expiresAt)
@@ -142,8 +165,23 @@ struct MacHostBootstrap {
         return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
     }
 
+    /// Native host bootstrap requests must never inherit browser cookies. A stale cmux_token
+    /// cookie takes precedence over the explicit Bearer credential on the broker and can turn a
+    /// valid local pair into a misleading 401 while moving through onboarding.
+    static func nativeRequestConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieStorage = nil
+        return configuration
+    }
+
+    private static let nativeSession = URLSession(configuration: nativeRequestConfiguration())
+
     nonisolated static func liveRequest(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let (data, response) = try await URLSession.shared.data(for: request)
+        var nativeRequest = request
+        nativeRequest.httpShouldHandleCookies = false
+        nativeRequest.setValue(nil, forHTTPHeaderField: "Cookie")
+        let (data, response) = try await nativeSession.data(for: nativeRequest)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         return (data, http)
     }

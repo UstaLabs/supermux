@@ -75,7 +75,11 @@ struct GitHostingSettingsView: View {
         List {
             if let error {
                 Section {
-                    Text(error).foregroundStyle(.red).font(.caption)
+                    HStack {
+                        Text(error).foregroundStyle(.red).font(.caption)
+                        Spacer()
+                        Button("Retry") { Task { await load() } }
+                    }
                 }
             }
             Section {
@@ -156,7 +160,12 @@ struct GitHostingSettingsView: View {
         ScrollView {
             VStack(spacing: 0) {
                 if let error {
-                    Text(error).font(.caption).foregroundStyle(.red).padding(.horizontal, 16).padding(.top, 16)
+                    HStack {
+                        Text(error).font(.caption).foregroundStyle(.red)
+                        Button("Retry") { Task { await load() } }
+                            .buttonStyle(.bordered)
+                    }
+                    .padding(.horizontal, 16).padding(.top, 16)
                 }
 
                 VStack(spacing: 16) {
@@ -282,16 +291,18 @@ struct GitHostingSettingsView: View {
     private func defaultHost(_ kind: String) -> String { kind == "gitlab" ? "gitlab.com" : "github.com" }
 
     private func load() async {
-        loading = true
+        if connections.isEmpty { loading = true }
+        defer { loading = false }
         do {
             let r = try await broker.api.listForges()
+            guard !Task.isCancelled else { return }
             connections = r.connections
             cliStatus = r.cli
             error = nil
         } catch {
+            guard !Task.isCancelled else { return }
             self.error = "Couldn't load connections"
         }
-        loading = false
     }
 }
 

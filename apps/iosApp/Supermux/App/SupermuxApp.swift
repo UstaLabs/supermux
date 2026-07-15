@@ -43,8 +43,12 @@ struct SupermuxApp: App {
         let persistHostState = MacHostPolicy.shouldPersist()
         if persistHostState { HostStore.migrateFromLegacyIfNeeded() }
         let initiallyPaired = persistHostState && BrokerConfig.isPaired
+        // Headless interaction checks can exercise the real onboarding hierarchy without
+        // clearing the developer's pairing or changing production state. Inert unless set.
+        let forceOnboarding = env["SM_FORCE_ONBOARDING"] == "1"
         _paired = State(initialValue: initiallyPaired)
-        _macSetupChecked = State(initialValue: !initiallyPaired)
+        _macSetupChecked = State(initialValue: forceOnboarding || !initiallyPaired)
+        _macNeedsOnboarding = State(initialValue: forceOnboarding && initiallyPaired)
         #else
         HostStore.migrateFromLegacyIfNeeded()
         _paired = State(initialValue: BrokerConfig.isPaired)
