@@ -138,6 +138,13 @@ sealed interface ServerFrame {
     @Serializable @SerialName("session_removed")
     data class SessionRemoved(val id: String) : ServerFrame
 
+    @Serializable @SerialName("session_renamed")
+    data class SessionRenamed(
+        val id: String,
+        val old: String,
+        @SerialName("new") val newName: String,
+    ) : ServerFrame
+
     /** Per-session live config/state patch (mute toggles, shim connect, model/effort
      *  switches). Every field except [session] is optional — apply only what's present.
      *  Was silently dropped by natives before 2026-07-11 (no serializer) → stale

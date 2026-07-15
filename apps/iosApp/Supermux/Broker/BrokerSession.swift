@@ -287,6 +287,16 @@ final class BrokerSession {
             evictTerminalHosts(sessionId: r.id)   // session killed → tear down its live terminals
             dropEditorHost(sessionId: r.id)       // …its editor webview (stop() breaks the bridge cycle)
             if let removedName { evictDisplayHosts(sessionName: removedName) }  // …and its displays
+        case .sessionRenamed(let r):
+            if let idx = sessions.firstIndex(where: { $0.id == r.id }) {
+                let old = sessions[idx]
+                sessions[idx] = old.doCopy(
+                    id: old.id, name: r.newName, workdir: old.workdir, agent: old.agent,
+                    status: old.status, mute: old.mute, connected: old.connected,
+                    model: old.model, reasoningLevel: old.reasoningLevel,
+                    repo_root: old.repo_root, role: old.role, session_branch: old.session_branch,
+                    git: old.git, finish_job: old.finish_job)
+            }
         case .sessionState(let st):
             // Per-session patch (model/effort switch, mute, shim connect): merge only the
             // fields present (web parity: ws.ts updateState). Natives dropped this frame

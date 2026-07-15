@@ -321,6 +321,11 @@ class DesktopAppState(
                 _sessions.update { it.filterNot { s -> s.id == frame.id } }
                 _bgTasks.update { it - frame.id }
             }
+            is ServerFrame.SessionRenamed -> {
+                _sessions.update { current ->
+                    current.map { s -> if (s.id == frame.id) s.copy(name = frame.newName) else s }
+                }
+            }
             is ServerFrame.MessageAppend -> {
                 // Optimistic-echo dedup (iOS BrokerSession parity): when the real inbound message
                 // lands, drop the matching local-… placeholder we appended on send.

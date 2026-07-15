@@ -93,6 +93,16 @@ class DesktopAppStateReducerTest {
         assertTrue(s.sessions.value.isEmpty())
     }
 
+    @Test fun session_renamed_updates_the_display_name_live() {
+        val s = state()
+        s.reduce(ServerFrame.Snapshot(sessions = listOf(session("s1"), session("s2"))))
+
+        s.reduce(ServerFrame.SessionRenamed("s1", "name-s1", "Fix Session Renaming"))
+
+        assertEquals("Fix Session Renaming", s.sessions.value.first { it.id == "s1" }.name)
+        assertEquals("name-s2", s.sessions.value.first { it.id == "s2" }.name)
+    }
+
     @Test fun snapshot_resets_viewing_dedup() {
         val s = state()
         s.updateViewing("s1", true)

@@ -63,6 +63,16 @@ class FramesTest {
         assertEquals("550e8400-e29b-41d4-a716-446655440000", (f as ServerFrame.SessionRemoved).id)
     }
 
+    @Test fun parses_session_renamed_with_natural_display_name() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"session_renamed","id":"s1","old":"debug-session-renaming","new":"Fix Session Renaming 🎉"}""",
+        )
+        assertTrue(f is ServerFrame.SessionRenamed)
+        assertEquals("s1", (f as ServerFrame.SessionRenamed).id)
+        assertEquals("debug-session-renaming", f.old)
+        assertEquals("Fix Session Renaming 🎉", f.newName)
+    }
+
     // Display lifecycle frames — broker emits {type:"display_added",display:{...}}
     // and {type:"display_removed",id}.
     @Test fun parses_display_added() {
