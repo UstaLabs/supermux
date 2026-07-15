@@ -4,8 +4,28 @@ import Shared
 
 #if os(macOS)
 final class MacHostPolicyTests: XCTestCase {
-    func testOnboardingStepsMatchWebSetupOrder() {
-        XCTAssertEqual(MacOnboardingStep.allCases.map(\.title), ["Welcome", "Agents", "Connectivity", "Done"])
+    func testOnboardingStepsIncludeOptionalGitHostingBeforeConnectivity() {
+        XCTAssertEqual(
+            MacOnboardingStep.allCases.map(\.title),
+            ["Welcome", "Agents", "Git Hosting", "Connectivity", "Done"]
+        )
+    }
+
+    func testGitHostingCanAdvanceWithoutAConfiguredAccountOnceBrokerIsReady() {
+        XCTAssertFalse(
+            MacOnboardingStep.gitHosting.canAdvance(
+                hasBroker: false,
+                agentsReady: false,
+                hostReady: false
+            )
+        )
+        XCTAssertTrue(
+            MacOnboardingStep.gitHosting.canAdvance(
+                hasBroker: true,
+                agentsReady: false,
+                hostReady: false
+            )
+        )
     }
 
     func testOnboardingRequiresAuthenticatedAgentOrInstalledOpenCode() {

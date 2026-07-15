@@ -235,6 +235,7 @@ enum MacPairingMonitor {
 enum MacOnboardingStep: Int, CaseIterable {
     case welcome
     case agents
+    case gitHosting
     case connectivity
     case done
 
@@ -242,8 +243,17 @@ enum MacOnboardingStep: Int, CaseIterable {
         switch self {
         case .welcome: return "Welcome"
         case .agents: return "Agents"
+        case .gitHosting: return "Git Hosting"
         case .connectivity: return "Connectivity"
         case .done: return "Done"
+        }
+    }
+
+    func canAdvance(hasBroker: Bool, agentsReady: Bool, hostReady: Bool) -> Bool {
+        switch self {
+        case .welcome, .gitHosting, .done: return hasBroker
+        case .agents: return agentsReady
+        case .connectivity: return hostReady
         }
     }
 }
@@ -330,6 +340,14 @@ struct MacHostWizard: View {
                     showsNavigationTitle: false,
                     onReadinessChanged: { agentsReady = $0 }
                 )
+            } else {
+                ProgressView("Connecting to the local host…")
+                    .controlSize(.large)
+            }
+
+        case .gitHosting:
+            if let broker {
+                GitHostingSettingsView(broker: broker)
             } else {
                 ProgressView("Connecting to the local host…")
                     .controlSize(.large)
@@ -466,12 +484,11 @@ struct MacHostWizard: View {
     }
 
     private var canAdvance: Bool {
-        switch step {
-        case .welcome: return broker != nil
-        case .agents: return agentsReady
-        case .connectivity: return coordinator.state.isReady
-        case .done: return broker != nil
-        }
+        step.canAdvance(
+            hasBroker: broker != nil,
+            agentsReady: agentsReady,
+            hostReady: coordinator.state.isReady
+        )
     }
 
     private func prepareBrokerIfReady() {
@@ -484,7 +501,8 @@ struct MacHostWizard: View {
         finishError = nil
         switch step {
         case .welcome: step = .agents
-        case .agents: step = .connectivity
+        case .agents: step = .gitHosting
+        case .gitHosting: step = .connectivity
         case .connectivity: step = .done
         case .done: Task { await completeSetup() }
         }
