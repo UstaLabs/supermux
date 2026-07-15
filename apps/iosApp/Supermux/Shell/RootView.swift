@@ -196,20 +196,23 @@ struct RootView: View {
         }
     }
 
-    /// Regular width (iPad): the PWA's wide multi-pane workspace. On macOS the management
-    /// pages present as sheets (modal over the workspace) rather than pushing over the whole
-    /// multi-pane layout: the Mac has no edge-swipe back, and a full-window push would bury the
-    /// panes behind a lone back-chevron. iOS keeps the push (with its interactive back-swipe).
+    /// Regular width (iPad): the PWA's wide multi-pane workspace. New Session stays in this
+    /// navigation stack on both iPad and Mac, so creating a session never opens another macOS
+    /// window. The remaining Mac management pages keep their compact modal presentation.
     private var regularShell: some View {
         NavigationStack {
             IPadWorkspace(fleet: fleet, selected: $selected, route: $route, layout: layout,
                           onAddHost: { showAddHost = true })
             #if os(iOS)
                 .navigationDestination(item: $route) { page($0) }
+            #else
+                .navigationDestination(isPresented: macNewSessionPresented) {
+                    page(.newSession)
+                }
             #endif
         }
         #if os(macOS)
-        .sheet(item: $route) { r in
+        .sheet(item: macSheetRoute) { r in
             // The pages were designed to be pushed (they rely on the nav back-button and have
             // no page-level dismiss), so the sheet wrapper supplies a single Done button.
             NavigationStack {
@@ -224,6 +227,28 @@ struct RootView: View {
         }
         #endif
     }
+
+    #if os(macOS)
+    /// Routes only New Session through the main window's NavigationStack. Setting this binding to
+    /// false is the navigation back action, so every dismissal path clears the shared route.
+    private var macNewSessionPresented: Binding<Bool> {
+        Binding(
+            get: { route == .newSession },
+            set: { presented in
+                if !presented, route == .newSession { route = nil }
+            }
+        )
+    }
+
+    /// All non-launcher management routes retain their existing Mac sheet presentation. Filtering
+    /// here prevents SwiftUI from also materializing a sheet window for New Session.
+    private var macSheetRoute: Binding<NavRoute?> {
+        Binding(
+            get: { route == .newSession ? nil : route },
+            set: { route = $0 }
+        )
+    }
+    #endif
 
     @ViewBuilder private func page(_ r: NavRoute) -> some View {
         switch r {

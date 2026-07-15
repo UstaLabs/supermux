@@ -226,9 +226,29 @@ struct NewSessionView: View {
             }
             lastSeenWorkdir = workdir
         }
-        .sheet(isPresented: $projectSearch) {
-            ProjectPickerSheet(broker: broker, projects: projects, current: workdir) { workdir = $0 }
+        #if os(macOS)
+        .overlay {
+            if projectSearch {
+                MacProjectPickerOverlay(
+                    broker: broker,
+                    projects: projects,
+                    current: workdir,
+                    onPick: { workdir = $0 },
+                    onClose: { projectSearch = false }
+                )
+            }
         }
+        #else
+        .sheet(isPresented: $projectSearch) {
+            ProjectPickerSheet(
+                broker: broker,
+                projects: projects,
+                current: workdir,
+                onPick: { workdir = $0 },
+                onClose: { projectSearch = false }
+            )
+        }
+        #endif
         .sheet(isPresented: $worktreeSheet) {
             WorktreeSheet(
                 useWorktree: $useWorktree, baseBranch: $baseBranch,
@@ -553,7 +573,7 @@ private struct ProjectPickerSheet: View {
     let projects: [String]
     let current: String
     var onPick: (String) -> Void
-    @Environment(\.dismiss) private var dismiss
+    var onClose: () -> Void
 
     @State private var search = ""
     @State private var connections: [ForgeConnection] = []
@@ -602,7 +622,7 @@ private struct ProjectPickerSheet: View {
             List {
                 if showTypedPath {
                     Section {
-                        Button { onPick(query); dismiss() } label: {
+                        Button { onPick(query); onClose() } label: {
                             HStack(spacing: 10) {
                                 Image(systemName: "arrow.turn.down.left").foregroundStyle(.secondary)
                                 VStack(alignment: .leading, spacing: 1) {
@@ -616,7 +636,7 @@ private struct ProjectPickerSheet: View {
                 if !filteredProjects.isEmpty {
                     Section("Projects") {
                         ForEach(filteredProjects, id: \.self) { p in
-                            Button { onPick(p); dismiss() } label: { projectRow(name: basename(p), sub: label(p), checked: p == current) }.smMacPlainButton()
+                            Button { onPick(p); onClose() } label: { projectRow(name: basename(p), sub: label(p), checked: p == current) }.smMacPlainButton()
                         }
                     }
                 }
@@ -676,7 +696,7 @@ private struct ProjectPickerSheet: View {
                     .frame(width: 280)
                 }
                 #endif
-                ToolbarItem(placement: .smTopTrailing) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .smTopTrailing) { Button("Cancel") { onClose() } }
             }
             .overlay {
                 if resolving {
@@ -728,7 +748,7 @@ private struct ProjectPickerSheet: View {
         Task {
             let path = await broker.cloneForge(connectionId: r.connectionId, owner: r.owner, name: r.name)
             resolving = false
-            if let path { onPick(path); dismiss() }
+            if let path { onPick(path); onClose() }
         }
     }
     private func resolveCreateLocal() {
@@ -737,7 +757,7 @@ private struct ProjectPickerSheet: View {
         Task {
             let path = await broker.createLocalRepo(name)
             resolving = false
-            if let path { onPick(path); dismiss() }
+            if let path { onPick(path); onClose() }
         }
     }
     private func resolveCreateForge(_ connectionId: String) {
@@ -746,10 +766,50 @@ private struct ProjectPickerSheet: View {
         Task {
             let path = await broker.createForge(connectionId: connectionId, name: name)
             resolving = false
-            if let path { onPick(path); dismiss() }
+            if let path { onPick(path); onClose() }
         }
     }
 }
+
+#if os(macOS)
+/// iPad presents the project picker as a card over the launcher. AppKit backs SwiftUI `.sheet`
+/// with another window, so the Mac recreates that card inside the existing window instead.
+private struct MacProjectPickerOverlay: View {
+    let broker: BrokerSession
+    let projects: [String]
+    let current: String
+    var onPick: (String) -> Void
+    var onClose: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.2)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onClose)
+
+            ProjectPickerSheet(
+                broker: broker,
+                projects: projects,
+                current: current,
+                onPick: onPick,
+                onClose: onClose
+            )
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.smSeparator.opacity(0.7))
+            }
+            .shadow(color: .black.opacity(0.25), radius: 24, y: 10)
+            .padding(36)
+        }
+        .transition(.opacity)
+        .onExitCommand(perform: onClose)
+        .accessibilityIdentifier("project-picker-overlay")
+    }
+}
+#endif
 
 /// Worktree + base-branch picker — native take on the web LauncherWorktreePicker:
 /// a toggle for the isolated worktree plus a searchable list of local/remote
