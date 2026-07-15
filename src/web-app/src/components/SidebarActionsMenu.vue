@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from "vue"
 import { useRouter } from "vue-router"
-import { EllipsisVertical, BarChart3, Network, Sun, Moon, Monitor, Settings, Smartphone, Archive, Bot } from "lucide-vue-next"
+import { EllipsisVertical, BarChart3, Network, Sun, Moon, Monitor, Settings, Smartphone, Archive } from "lucide-vue-next"
 import {
   DropdownMenuRoot,
   DropdownMenuTrigger,
@@ -54,13 +54,6 @@ function openArchived() {
         :side-offset="5"
         align="end"
       >
-        <DropdownMenuItem
-          class="flex cursor-default items-center gap-2.5 rounded-md px-2 py-1.5 text-sm outline-none focus:bg-accent"
-          @select="navigate('/personal-assistants')"
-        >
-          <Bot class="size-4 text-muted-foreground" />
-          Personal Assistants
-        </DropdownMenuItem>
         <DropdownMenuItem
           class="flex cursor-default items-center gap-2.5 rounded-md px-2 py-1.5 text-sm outline-none focus:bg-accent"
           @select="openArchived"

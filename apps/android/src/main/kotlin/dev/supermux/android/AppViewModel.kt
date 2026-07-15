@@ -39,6 +39,7 @@ import dev.supermux.net.ModelInfo
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.OpenCodeOAuthStart
 import dev.supermux.net.OpenCodeProvider
+import dev.supermux.net.PADto
 import dev.supermux.net.PathValidation
 import dev.supermux.net.PairUrl
 import dev.supermux.net.ProxyDto
@@ -1085,6 +1086,18 @@ class AppViewModel(
     fun resume(id: String) { viewModelScope.launch { runCatching { activeApi()?.resume(id) } } }
 
     // ── Assistant ──────────────────────────────────────────────────────────────
+
+    suspend fun personalAssistants(): List<PADto> =
+        runCatching { activeApi()?.listPAs() }.getOrNull() ?: emptyList()
+
+    suspend fun createPersonalAssistant(name: String, agent: String, focus: String?): Boolean {
+        val api = activeApi() ?: return false
+        return runCatching { api.createPA(name, agent, focusText = focus) }.isSuccess
+    }
+
+    suspend fun killPersonalAssistant(id: String) {
+        runCatching { activeApi()?.kill(id) }
+    }
 
     suspend fun assistantLoad(): Pair<String, String>? = coroutineScope {
         val api = activeApi() ?: return@coroutineScope null

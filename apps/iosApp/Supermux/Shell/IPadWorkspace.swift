@@ -140,7 +140,6 @@ struct IPadWorkspace: View {
     @ViewBuilder private var globalMenu: some View {
         Menu {
             Button { onAddHost() } label: { Label("Add host", systemImage: "plus.rectangle.on.rectangle") }
-            Button { route = .personalAssistants } label: { Label("Assistants", systemImage: "person.2") }
             Button { route = .usage } label: { Label("Usage", systemImage: "chart.bar") }
             Button { route = .devices } label: { Label("Devices", systemImage: "ipad.and.iphone") }
             Button { route = .proxies } label: { Label("Proxies", systemImage: "network") }

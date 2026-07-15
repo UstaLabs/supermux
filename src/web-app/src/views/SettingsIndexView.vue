@@ -10,7 +10,8 @@ function goBack() {
 }
 
 const items = [
-  { label: "Assistant", desc: "PA name and soul.md", icon: UserRoundCog, path: "/settings/assistant" },
+  { label: "Personal assistants", desc: "Optional persistent orchestrators", icon: UserRoundCog, path: "/personal-assistants" },
+  { label: "PA identity", desc: "Shared soul.md for personal assistants", icon: UserRoundCog, path: "/settings/assistant" },
   { label: "Agents", desc: "CLI authorization and API key fallback", icon: Bot, path: "/settings/agents" },
   { label: "Curator", desc: "Nightly knowledge curation schedule", icon: Sparkle, path: "/settings/curator" },
   { label: "Voice dictation", desc: "Cleanup model for voice transcripts", icon: Mic, path: "/settings/voice" },

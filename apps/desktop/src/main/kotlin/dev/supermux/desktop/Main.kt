@@ -269,6 +269,9 @@ fun main() {
                         Item("Editor / LSP…") {
                             ui.openLspSettings()
                         }
+                        Item("Personal Assistants…") {
+                            ui.openPersonalAssistants()
+                        }
                         Separator()
                         Item("Unpair…") { showUnpairConfirm = true }
                     }

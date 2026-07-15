@@ -21,7 +21,7 @@ test("createSupervisor exposes ensurePersonalAssistants", () => {
   expect(typeof sup.ensurePersonalAssistants).toBe("function")
 })
 
-test("ensurePersonalAssistants bootstraps a PA into paWorkdir when none exists", async () => {
+test("ensurePersonalAssistants keeps a fresh install at zero PAs", async () => {
   const registry = new Registry(db)
   const spawns: any[] = []
   const sup = createSupervisor({
@@ -29,37 +29,6 @@ test("ensurePersonalAssistants bootstraps a PA into paWorkdir when none exists",
     bindSocket: async () => {},
     spawnTmux: async (o) => { spawns.push(o) },
     paWorkdir: "/tmp/amux-test-pa",
-    shouldAutoSpawnPA: () => true,
-  })
-  await sup.ensurePersonalAssistants()
-  expect(spawns.some(s => s.workdir === "/tmp/amux-test-pa")).toBe(true)
-  expect(registry.listPAs().length).toBe(1)
-  expect(registry.defaultPA()).toBeDefined()
-})
-
-test("ensurePersonalAssistants uses getPaName() for the PA name when bootstrapping", async () => {
-  const registry = new Registry(db)
-  const spawns: any[] = []
-  const sup = createSupervisor({
-    registry,
-    bindSocket: async () => {},
-    spawnTmux: async (o) => { spawns.push(o) },
-    getPaName: () => "wizard-name",
-    shouldAutoSpawnPA: () => true,
-  })
-  await sup.ensurePersonalAssistants()
-  expect(registry.listPAs()[0]?.name).toBe("wizard-name")
-  expect(spawns.some(s => s.window === "wizard-name")).toBe(true)
-})
-
-test("ensurePersonalAssistants skips bootstrap when shouldAutoSpawnPA returns false", async () => {
-  const registry = new Registry(db)
-  const spawns: any[] = []
-  const sup = createSupervisor({
-    registry,
-    bindSocket: async () => {},
-    spawnTmux: async (o) => { spawns.push(o) },
-    shouldAutoSpawnPA: () => false,
   })
   await sup.ensurePersonalAssistants()
   expect(spawns.length).toBe(0)
@@ -163,4 +132,3 @@ test("reconcile invokes the internal-worker reaper each tick", async () => {
   await sup.reconcile()
   expect(reapCalls).toBe(1)
 })
-

@@ -9,14 +9,14 @@ import Shared
 /// hosts its pane in a `NavigationStack` so the panes' drill-ins (Add a Git account,
 /// pickers) keep working outside the iOS sheet.
 ///
-/// `SM_SETTINGS_TAB=<general|assistant|agents|curator|voice|editor|git|system>` selects
+/// `SM_SETTINGS_TAB=<general|assistants|assistant|agents|curator|voice|editor|git|system>` selects
 /// the initial tab — the headless-screenshot hook for this window.
 struct MacSettingsWindow: View {
     @State private var fleet: Fleet
     @State private var selected: Tab
 
     enum Tab: String {
-        case general, assistant, agents, curator, voice, editor, git, system
+        case general, assistants, assistant, agents, curator, voice, editor, git, system
     }
 
     init() {
@@ -36,8 +36,11 @@ struct MacSettingsWindow: View {
                         pane { GeneralSettingsPane() }
                             .tabItem { Label("General", systemImage: "gearshape") }
                             .tag(Tab.general)
+                        pane { PersonalAssistantsView(broker: broker) }
+                            .tabItem { Label("PAs", systemImage: "person.2") }
+                            .tag(Tab.assistants)
                         pane { AssistantSettingsView(broker: broker) }
-                            .tabItem { Label("Assistant", systemImage: "person.crop.circle") }
+                            .tabItem { Label("PA Identity", systemImage: "person.crop.circle") }
                             .tag(Tab.assistant)
                         pane { AgentSettingsView(broker: broker) }
                             .tabItem { Label("Agents", systemImage: "terminal") }

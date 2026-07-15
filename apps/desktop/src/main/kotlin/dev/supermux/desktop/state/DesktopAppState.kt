@@ -30,6 +30,7 @@ import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ModelsResponse
+import dev.supermux.net.PADto
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
@@ -840,6 +841,16 @@ class DesktopAppState(
      *  Codex usage so the card can update in place. Null on any failure. */
     suspend fun redeemCodexReset(): CodexResetResult? =
         runApi("redeemCodexReset") { api.redeemCodexReset() }
+
+    suspend fun personalAssistants(): List<PADto> =
+        runApi("personalAssistants") { api.listPAs() } ?: emptyList()
+
+    suspend fun createPersonalAssistant(name: String, agent: String, focus: String?): Boolean =
+        runApi("createPersonalAssistant") { api.createPA(name, agent, focusText = focus); true } ?: false
+
+    suspend fun killPersonalAssistant(id: String) {
+        runApi("killPersonalAssistant") { api.kill(id); true }
+    }
 
     // ── LSP settings (M4g-4 Task 1) ────────────────────────────────────────────────────
     // Backs the LspSettingsScreen overlay (M4g-4 Task 2/3): enable/disable + install + add/remove
