@@ -618,102 +618,40 @@ private struct ProjectPickerSheet: View {
     private var showCreate: Bool { !query.isEmpty && isValidName && !exactMatch }
 
     var body: some View {
-        NavigationStack {
-            List {
-                if showTypedPath {
-                    Section {
-                        Button { onPick(query); onClose() } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "arrow.turn.down.left").foregroundStyle(.secondary)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text("Use this path").foregroundStyle(.primary)
-                                    Text(query).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
-                                }
-                            }
-                        }.smMacPlainButton()
-                    }
-                }
-                if !filteredProjects.isEmpty {
-                    Section("Projects") {
-                        ForEach(filteredProjects, id: \.self) { p in
-                            Button { onPick(p); onClose() } label: { projectRow(name: basename(p), sub: label(p), checked: p == current) }.smMacPlainButton()
-                        }
-                    }
-                }
-                ForEach(cloudGroups, id: \.conn.id) { group in
-                    Section("\(group.conn.host) · @\(group.conn.account.login)") {
-                        ForEach(group.repos, id: \.fullName) { r in
-                            Button { resolveCloud(r) } label: {
-                                HStack(spacing: 10) {
-                                    Image(systemName: "folder").foregroundStyle(.secondary)
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(r.name).foregroundStyle(.primary).lineLimit(1)
-                                        Text(r.fullName).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
-                                    }
-                                    Spacer()
-                                    Label("Clone", systemImage: "arrow.down.circle")
-                                        .labelStyle(.titleAndIcon).font(.caption).foregroundStyle(.secondary)
-                                }
-                            }.disabled(resolving).smMacPlainButton()
-                        }
-                    }
-                }
-                if searching && cloudGroups.isEmpty {
-                    Section { HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Searching repos…").foregroundStyle(.secondary) } }
-                }
-                if showCreate {
-                    Section("Create") {
-                        Button { resolveCreateLocal() } label: {
-                            Label("Create locally — \(query)", systemImage: "plus.circle")
-                        }.disabled(resolving).smMacPlainButton()
-                        ForEach(connections, id: \.id) { c in
-                            Button { resolveCreateForge(c.id) } label: {
-                                Label("Create on \(c.host) — \(c.account.login)/\(query)", systemImage: "plus.circle")
-                                    .lineLimit(1)
-                            }.disabled(resolving).smMacPlainButton()
-                        }
-                    }
-                }
-            }
+        Group {
             #if os(macOS)
-            .navigationTitle("")
-            #else
-            .searchable(text: $search, placement: .smNavDrawerAlways,
-                        prompt: "Search projects, repos, or type a path")
-            .navigationTitle("Project").smInlineNavigationTitle()
-            #endif
-            .toolbar {
-                #if os(macOS)
-                ToolbarItem(placement: .navigation) {
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    Text("Choose project").font(.headline)
+                    Spacer(minLength: 12)
                     HStack(spacing: 6) {
                         Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                         TextField("Search projects, repos, or type a path", text: $search)
                             .textFieldStyle(.plain)
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-                    .frame(width: 280)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 6)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .frame(width: 300)
+                    Button("Cancel", action: onClose)
                 }
-                #endif
-                ToolbarItem(placement: .smTopTrailing) { Button("Cancel") { onClose() } }
+                .padding(12)
+                .background(.bar)
+                Divider()
+                pickerList
             }
-            .overlay {
-                if resolving {
-                    ZStack {
-                        Color.black.opacity(0.06).ignoresSafeArea()
-                        VStack(spacing: 10) {
-                            ProgressView()
-                            Text("Cloning / creating…").font(.caption).foregroundStyle(.secondary)
-                        }
-                        .padding(22).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            #else
+            NavigationStack {
+                pickerList
+                    .searchable(text: $search, placement: .smNavDrawerAlways,
+                                prompt: "Search projects, repos, or type a path")
+                    .navigationTitle("Project").smInlineNavigationTitle()
+                    .toolbar {
+                        ToolbarItem(placement: .smTopTrailing) { Button("Cancel", action: onClose) }
                     }
-                }
             }
+            #endif
         }
-        #if os(macOS)
-        .frame(minWidth: 520, minHeight: 560)
-        #endif
         .tint(Theme.teal)
         .task {
             connections = await broker.forges()
@@ -728,6 +666,79 @@ private struct ProjectPickerSheet: View {
             searching = true
             cloudRepos = await broker.searchForge(query)
             searching = false
+        }
+    }
+
+    private var pickerList: some View {
+        List {
+            if showTypedPath {
+                Section {
+                    Button { onPick(query); onClose() } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "arrow.turn.down.left").foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Use this path").foregroundStyle(.primary)
+                                Text(query).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
+                    }.smMacPlainButton()
+                }
+            }
+            if !filteredProjects.isEmpty {
+                Section("Projects") {
+                    ForEach(filteredProjects, id: \.self) { p in
+                        Button { onPick(p); onClose() } label: { projectRow(name: basename(p), sub: label(p), checked: p == current) }.smMacPlainButton()
+                    }
+                }
+            }
+            ForEach(cloudGroups, id: \.conn.id) { group in
+                Section("\(group.conn.host) · @\(group.conn.account.login)") {
+                    ForEach(group.repos, id: \.fullName) { r in
+                        Button { resolveCloud(r) } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "folder").foregroundStyle(.secondary)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(r.name).foregroundStyle(.primary).lineLimit(1)
+                                    Text(r.fullName).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                                Spacer()
+                                Label("Clone", systemImage: "arrow.down.circle")
+                                    .labelStyle(.titleAndIcon).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .disabled(resolving).smMacPlainButton()
+                    }
+                }
+            }
+            if searching && cloudGroups.isEmpty {
+                Section { HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Searching repos…").foregroundStyle(.secondary) } }
+            }
+            if showCreate {
+                Section("Create") {
+                    Button { resolveCreateLocal() } label: {
+                        Label("Create locally — \(query)", systemImage: "plus.circle")
+                    }.disabled(resolving).smMacPlainButton()
+                    ForEach(connections, id: \.id) { c in
+                        Button { resolveCreateForge(c.id) } label: {
+                            Label("Create on \(c.host) — \(c.account.login)/\(query)", systemImage: "plus.circle")
+                                .lineLimit(1)
+                        }
+                        .disabled(resolving).smMacPlainButton()
+                    }
+                }
+            }
+        }
+        .overlay {
+            if resolving {
+                ZStack {
+                    Color.black.opacity(0.06).ignoresSafeArea()
+                    VStack(spacing: 10) {
+                        ProgressView()
+                        Text("Cloning / creating…").font(.caption).foregroundStyle(.secondary)
+                    }
+                    .padding(22).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+            }
         }
     }
 
@@ -782,27 +793,31 @@ private struct MacProjectPickerOverlay: View {
     var onClose: () -> Void
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.2)
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture(perform: onClose)
+        GeometryReader { proxy in
+            ZStack {
+                Color.black.opacity(0.18)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onClose)
 
-            ProjectPickerSheet(
-                broker: broker,
-                projects: projects,
-                current: current,
-                onPick: onPick,
-                onClose: onClose
-            )
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Color.smSeparator.opacity(0.7))
+                ProjectPickerSheet(
+                    broker: broker,
+                    projects: projects,
+                    current: current,
+                    onPick: onPick,
+                    onClose: onClose
+                )
+                .frame(
+                    width: min(max(0, proxy.size.width - 48), 600),
+                    height: min(max(0, proxy.size.height - 48), 540)
+                )
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Color.smSeparator.opacity(0.7))
+                }
+                .shadow(color: .black.opacity(0.25), radius: 24, y: 10)
             }
-            .shadow(color: .black.opacity(0.25), radius: 24, y: 10)
-            .padding(36)
         }
         .transition(.opacity)
         .onExitCommand(perform: onClose)

@@ -196,19 +196,23 @@ struct RootView: View {
         }
     }
 
-    /// Regular width (iPad): the PWA's wide multi-pane workspace. New Session stays in this
-    /// navigation stack on both iPad and Mac, so creating a session never opens another macOS
-    /// window. The remaining Mac management pages keep their compact modal presentation.
+    /// Regular width (iPad): the PWA's wide multi-pane workspace. iPad pushes management pages;
+    /// Mac keeps New Session in a centered, in-window card and uses sheets for the other pages.
     private var regularShell: some View {
         NavigationStack {
             IPadWorkspace(fleet: fleet, selected: $selected, route: $route, layout: layout,
-                          onAddHost: { showAddHost = true })
+                          onAddHost: { showAddHost = true },
+                          newSessionContent: {
+                              #if os(macOS)
+                              MacNewSessionOverlay(onClose: { route = nil }) {
+                                  page(.newSession)
+                              }
+                              #else
+                              EmptyView()
+                              #endif
+                          })
             #if os(iOS)
                 .navigationDestination(item: $route) { page($0) }
-            #else
-                .navigationDestination(isPresented: macNewSessionPresented) {
-                    page(.newSession)
-                }
             #endif
         }
         #if os(macOS)
@@ -229,17 +233,6 @@ struct RootView: View {
     }
 
     #if os(macOS)
-    /// Routes only New Session through the main window's NavigationStack. Setting this binding to
-    /// false is the navigation back action, so every dismissal path clears the shared route.
-    private var macNewSessionPresented: Binding<Bool> {
-        Binding(
-            get: { route == .newSession },
-            set: { presented in
-                if !presented, route == .newSession { route = nil }
-            }
-        )
-    }
-
     /// All non-launcher management routes retain their existing Mac sheet presentation. Filtering
     /// here prevents SwiftUI from also materializing a sheet window for New Session.
     private var macSheetRoute: Binding<NavRoute?> {
@@ -268,6 +261,49 @@ struct RootView: View {
         }
     }
 }
+
+#if os(macOS)
+private struct MacNewSessionOverlay<Content: View>: View {
+    var onClose: () -> Void
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                Color.black.opacity(0.16)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onClose)
+
+                VStack(spacing: 0) {
+                    HStack {
+                        Text("New session").font(.headline)
+                        Spacer()
+                        Button("Cancel", action: onClose)
+                    }
+                    .padding(12)
+                    .background(.bar)
+                    Divider()
+                    content()
+                }
+                .frame(
+                    width: min(max(0, proxy.size.width - 64), 760),
+                    height: min(max(0, proxy.size.height - 64), 640)
+                )
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(Color.smSeparator.opacity(0.7))
+                }
+                .shadow(color: .black.opacity(0.3), radius: 28, y: 12)
+            }
+        }
+        .transition(.opacity)
+        .onExitCommand(perform: onClose)
+        .accessibilityIdentifier("new-session-overlay")
+    }
+}
+#endif
 
 /// Resolves the fleet's ACTIVE broker inside its own `body`, so a host switch re-renders the page
 /// with the new host's broker. Resolving it in `page(_:)` directly was not enough: a pushed

@@ -12,12 +12,13 @@ import Shared
 /// hidden for the workspace (the sidebar keeps its in-list "Archived" pull-bar, which is a
 /// `safeAreaInset`, not the nav bar). Navigation to management pages is driven by the `route`
 /// binding via `RootView`'s `.navigationDestination`, so it keeps working with the bar hidden.
-struct IPadWorkspace: View {
+struct IPadWorkspace<NewSessionContent: View>: View {
     let fleet: Fleet
     @Binding var selected: String?
     @Binding var route: RootView.NavRoute?
     @Bindable var layout: WorkspaceLayoutModel
     var onAddHost: () -> Void = {}
+    @ViewBuilder var newSessionContent: () -> NewSessionContent
 
     // Session-action state shared with ChatPane (slash /rename, /kill).
     @State private var showRename = false
@@ -54,7 +55,13 @@ struct IPadWorkspace: View {
     var body: some View {
         HStack(spacing: 0) {
             sidebar
-            detail.frame(maxWidth: .infinity, maxHeight: .infinity)
+            ZStack {
+                detail
+                #if os(macOS)
+                if route == .newSession { newSessionContent() }
+                #endif
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .animation(.snappy(duration: 0.25), value: layout.sidebarCollapsed)
         .workspaceShortcuts(layout: layout, session: selected) { route = .newSession }
