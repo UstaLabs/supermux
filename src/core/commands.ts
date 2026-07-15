@@ -203,9 +203,6 @@ async function cmdKill(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   const confirmed = /\byes\b/.test(rest)
   const target = ctx.registry.resolveName(name)
   if (!target) return { text: `no such session: ${name}` }
-  if (target.role === "personal_assistant" && ctx.registry.listPAs().length <= 1) {
-    return { text: "cannot kill the last personal assistant" }
-  }
   if (!confirmed) return { text: `confirm: /kill ${name} yes` }
   await ctx.killSession(target.id)
   ctx.registry.unregister(target.id)

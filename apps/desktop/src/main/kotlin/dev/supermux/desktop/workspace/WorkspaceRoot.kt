@@ -64,6 +64,7 @@ import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.session.SessionLauncherScreen
 import dev.supermux.desktop.session.SessionListPanel
 import dev.supermux.desktop.settings.LspSettingsScreen
+import dev.supermux.desktop.settings.PersonalAssistantsScreen
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.usage.UsageScreen
 import dev.supermux.net.ArchivedDto
@@ -118,15 +119,17 @@ class WorkspaceUiState {
      * composition but must open it.
      */
     var lspSettingsOpen by mutableStateOf(false)
+    var personalAssistantsOpen by mutableStateOf(false)
 
     /**
-     * Any full-pane modal overlay ([launcherOpen], [archivedOpen], [usageOpen], or
-     * [lspSettingsOpen]) is up. The workspace pane/sidebar shortcuts (Ctrl+B/L/E/T/D) are gated
+     * Any full-pane modal overlay ([launcherOpen], [archivedOpen], [usageOpen],
+     * [lspSettingsOpen], or [personalAssistantsOpen]) is up. The workspace pane/sidebar shortcuts
+     * (Ctrl+B/L/E/T/D) are gated
      * OFF while this is true, so a chord an overlay leaves unhandled can't bubble to
      * [workspaceShortcuts] and silently mutate the layout behind it. One gate for every overlay,
      * so new overlays don't each have to remember to extend the guard.
      */
-    val overlayOpen: Boolean get() = launcherOpen || archivedOpen || usageOpen || lspSettingsOpen
+    val overlayOpen: Boolean get() = launcherOpen || archivedOpen || usageOpen || lspSettingsOpen || personalAssistantsOpen
 
     /**
      * Open the New-Session launcher, enforcing the "at most one overlay" invariant (closes the
@@ -140,6 +143,7 @@ class WorkspaceUiState {
         archivedOpen = false
         usageOpen = false
         lspSettingsOpen = false
+        personalAssistantsOpen = false
     }
 
     /** Open the Archived-sessions overlay; the "at most one overlay" mirror of [openLauncher]. */
@@ -148,6 +152,7 @@ class WorkspaceUiState {
         launcherOpen = false
         usageOpen = false
         lspSettingsOpen = false
+        personalAssistantsOpen = false
     }
 
     /** Open the Usage overlay; the "at most one overlay" mirror of [openLauncher]/[openArchived]. */
@@ -156,6 +161,7 @@ class WorkspaceUiState {
         launcherOpen = false
         archivedOpen = false
         lspSettingsOpen = false
+        personalAssistantsOpen = false
     }
 
     /** Open the LSP settings overlay; the "at most one overlay" mirror of [openLauncher]/
@@ -165,6 +171,15 @@ class WorkspaceUiState {
         launcherOpen = false
         archivedOpen = false
         usageOpen = false
+        personalAssistantsOpen = false
+    }
+
+    fun openPersonalAssistants() {
+        personalAssistantsOpen = true
+        launcherOpen = false
+        archivedOpen = false
+        usageOpen = false
+        lspSettingsOpen = false
     }
 
     /**
@@ -759,6 +774,38 @@ fun WorkspaceRoot(
                                     },
                                     lspRemoveCustom = { id -> hostApp.lspRemoveCustom(id) },
                                     onBack = { ui.lspSettingsOpen = false },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (ui.personalAssistantsOpen) {
+                val paFocus = remember { FocusRequester() }
+                LaunchedEffect(Unit) { runCatching { paFocus.requestFocus() } }
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .testTag("personal_assistants_overlay")
+                        .focusRequester(paFocus)
+                        .focusable()
+                        .onPreviewKeyEvent { e ->
+                            if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                                ui.personalAssistantsOpen = false
+                                true
+                            } else false
+                        },
+                ) {
+                    Column(Modifier.fillMaxSize()) {
+                        HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
+                        Box(Modifier.weight(1f)) {
+                            androidx.compose.runtime.key(activeHostId) {
+                                PersonalAssistantsScreen(
+                                    load = { hostApp.personalAssistants() },
+                                    create = { name, agent, focus -> hostApp.createPersonalAssistant(name, agent, focus) },
+                                    kill = { hostApp.killPersonalAssistant(it) },
+                                    onBack = { ui.personalAssistantsOpen = false },
                                 )
                             }
                         }

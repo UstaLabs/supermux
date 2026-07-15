@@ -548,6 +548,10 @@ class MainActivity : ComponentActivity() {
                     composable<Settings> {
                         HostScopedPage(hostViews, activeHost, vm::setActiveHost) { key(activeHost) { SettingsScreen(
                             onBack = { navController.popBackStack() },
+                            // Personal assistants
+                            paLoad = { vm.personalAssistants() },
+                            paCreate = { name, agent, focus -> vm.createPersonalAssistant(name, agent, focus) },
+                            paKill = { vm.killPersonalAssistant(it) },
                             // Assistant
                             assistantLoad = { vm.assistantLoad() },
                             assistantSave = { paName, soul -> vm.assistantSave(paName, soul) },

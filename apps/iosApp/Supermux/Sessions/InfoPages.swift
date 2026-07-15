@@ -773,7 +773,7 @@ private struct ArchivedMessageRow: View {
 /// Tapping a PA opens its chat. Parity with the web PersonalAssistantsView.
 struct PersonalAssistantsView: View {
     let broker: BrokerSession
-    var onOpen: (String) -> Void
+    var onOpen: ((String) -> Void)? = nil
     @State private var pas: [PADto] = []
     @State private var loading = true
     @State private var creating = false
@@ -789,9 +789,14 @@ struct PersonalAssistantsView: View {
             } else {
                 List {
                     ForEach(pas, id: \.id) { pa in
-                        Button { onOpen(pa.id) } label: { paRow(pa) }
-                            .buttonStyle(.plain)
-                            .swipeActions { Button("Kill", role: .destructive) { killTarget = pa } }
+                        if let onOpen {
+                            Button { onOpen(pa.id) } label: { paRow(pa) }
+                                .buttonStyle(.plain)
+                                .swipeActions { Button("Kill", role: .destructive) { killTarget = pa } }
+                        } else {
+                            paRow(pa)
+                                .swipeActions { Button("Kill", role: .destructive) { killTarget = pa } }
+                        }
                     }
                 }
             }

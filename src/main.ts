@@ -929,9 +929,6 @@ const proxyLivenessMonitor = new ProxyLivenessMonitor({
 // are assigned. TypeScript sees the definite-assignment gap; the nullable guard on
 // webChannel inside onChange covers the window before webChannel is assigned.
 let loginManager: LoginManager
-// respawnPAsAfterOnboarding is assigned after supervisor is created (below).
-// setAppConfig closes over this binding — safe since it's only invoked at request-time.
-let respawnPAsAfterOnboarding: () => Promise<void> = async () => {}
 const terminalManager = new TerminalManager()
 const displayManager = new DisplayManager({
   providers: [new LinuxXvfbProvider(), new MacosScreenProvider()],
@@ -1491,14 +1488,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     resumeFromArchive: (id: string) => resumeFromArchive(id),
     getAppConfig: () => settings.getAppConfig(appConfigEnv),
     setAppConfig: (patch) => {
-      const wasOnboarded = settings.getAppConfig(appConfigEnv).onboarded
       settings.setAppConfig(patch)
       const next = settings.getAppConfig(appConfigEnv)
       // Explicit PUT is authoritative — overwrite so a corrected/rotated key
       // takes effect for new spawns. Already-running sessions keep their old
       // env until respawn (acceptable for v1).
       applyCredentialEnv(next, process.env)
-      if (!wasOnboarded && next.onboarded) { void respawnPAsAfterOnboarding() }
       return next
     },
     getAgentStatuses: () => {
@@ -2927,7 +2922,10 @@ ch.on("inbound", async (msg: InboundMessage) => {
   }
 
   if (decision.kind === "error") {
-    await ch.send({ op: "reply", chat_id: msg.chat_id, text: `routing error: ${decision.reason}`, disable_notification: false })
+    const text = decision.reason === "no_active_session"
+      ? "No active session. Create one in the app, or use /spawn <workdir> [as name]."
+      : `routing error: ${decision.reason}`
+    await ch.send({ op: "reply", chat_id: msg.chat_id, text, disable_notification: false })
     return
   }
 
@@ -3121,18 +3119,12 @@ const supervisor = createSupervisor({
   onClaudeSessionId: (brokerSessionId, claudeSessionId) => {
     pendingClaudeSessionId.set(brokerSessionId, claudeSessionId)
   },
-  getPaName: () => settings.getAppConfig(appConfigEnv).paName,
-  // Gate purely on `onboarded` (existing installs are seeded onboarded at boot,
-  // below). NOT on device count — the wizard's own claim-on-first-connect creates
-  // a device mid-onboarding, which must not trip the PA into spawning early
-  // (named "assistant" before the user picks a name) on a restart.
-  shouldAutoSpawnPA: () => settings.getAppConfig(appConfigEnv).onboarded,
   paWorkdir: appConfig.paWorkdir || undefined,
   resolveEffort: (s) => sessionEffort(s),
   reapInternalWorkers: () => agentRpc.reapIdle(RPC_WORKER_IDLE_MS),
 })
 // Existing installs (any prior sessions, active/suspended/archived) are implicitly
-// onboarded — they keep their auto-PA and skip the wizard. Only a pristine instance
+// onboarded and skip the wizard. Only a pristine instance
 // stays un-onboarded. Uses SESSIONS, not devices: a fresh install mid-onboarding has
 // a claimed device but no sessions yet, so it must not get seeded.
 if (!settings.getAppConfig(appConfigEnv).onboarded &&
@@ -3141,30 +3133,6 @@ if (!settings.getAppConfig(appConfigEnv).onboarded &&
   log.info("onboarded_seeded_existing_install", {})
 }
 await reconcileOnStartup({ registry, bindSocket: (sid) => server.bind(sid), supervisor, livePanePid: (wid) => livePanePid(wid) })
-
-// Assign the PA respawn implementation now that supervisor is available.
-// Called by setAppConfig when onboarding transitions false → true, so the PA
-// picks up newly-saved agent credentials (process.env has been updated by
-// applyCredentialEnv before this is invoked).
-respawnPAsAfterOnboarding = async () => {
-  try {
-    const pas = registry.listPAs()
-    for (const pa of pas) {
-      try {
-        const wid = await widOf(pa)
-        if (wid) await killWindowById(wid).catch(() => {})
-        registry.unregister(pa.name)
-        log.info("pa_respawn_killed", { name: pa.name })
-      } catch (err: any) {
-        log.warn("pa_respawn_kill_failed", { name: pa.name, err: err?.message ?? String(err) })
-      }
-    }
-    await supervisor.ensurePersonalAssistants()
-    log.info("pa_respawn_after_onboarding_done")
-  } catch (err: any) {
-    log.warn("pa_respawn_after_onboarding_failed", { err: err?.message ?? String(err) })
-  }
-}
 
 async function resumeNonClaudeAdapters(): Promise<void> {
   for (const s of registry.list()) {
