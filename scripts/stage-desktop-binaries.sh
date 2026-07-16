@@ -27,7 +27,6 @@ TARGET="${1:?usage: stage-desktop-binaries.sh <target> [version] [commit]}"
 VERSION="${2:-dev}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 COMMIT="${3:-$(cd "$ROOT" && git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
-FRP_VERSION="0.61.1"
 DEST="$ROOT/apps/desktop/resources/$TARGET"
 
 case "$TARGET" in
@@ -36,19 +35,15 @@ case "$TARGET" in
 esac
 mkdir -p "$DEST"
 
-# frp release archive + arch for this target.
 case "$TARGET" in
-  linux-x64)    FRP_OS=linux;   FRP_ARCH=amd64; FRP_EXT=tar.gz; EXE="" ;;
-  linux-arm64)  FRP_OS=linux;   FRP_ARCH=arm64; FRP_EXT=tar.gz; EXE="" ;;
-  macos-x64)    FRP_OS=darwin;  FRP_ARCH=amd64; FRP_EXT=tar.gz; EXE="" ;;
-  macos-arm64)  FRP_OS=darwin;  FRP_ARCH=arm64; FRP_EXT=tar.gz; EXE="" ;;
-  windows-x64)  FRP_OS=windows; FRP_ARCH=amd64; FRP_EXT=zip;    EXE=".exe" ;;
+  linux-x64|linux-arm64|macos-x64|macos-arm64) EXE="" ;;
+  windows-x64) EXE=".exe" ;;
 esac
 
 echo "[stage] target=$TARGET version=$VERSION commit=$COMMIT -> $DEST"
 
 # ── broker (omit on Windows: client-only) ─────────────────────────────────────────────
-if [ "$FRP_OS" = "windows" ]; then
+if [ "$TARGET" = "windows-x64" ]; then
   echo "[stage] broker: skipped (Windows is client-only)"
 elif [ "${SUPERMUX_SKIP_BROKER:-}" = "1" ]; then
   echo "[stage] broker: skipped (SUPERMUX_SKIP_BROKER=1)"
@@ -62,25 +57,13 @@ if [ -n "${SUPERMUX_FRPC:-}" ]; then
   echo "[stage] frpc: from SUPERMUX_FRPC=$SUPERMUX_FRPC"
   cp "$SUPERMUX_FRPC" "$DEST/frpc$EXE"
 else
-  ARCHIVE="frp_${FRP_VERSION}_${FRP_OS}_${FRP_ARCH}.${FRP_EXT}"
-  URL="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${ARCHIVE}"
-  TMP="$(mktemp -d)"
-  echo "[stage] frpc: downloading $URL"
-  curl -fsSL "$URL" -o "$TMP/$ARCHIVE"
-  if [ "$FRP_EXT" = "zip" ]; then
-    # Windows runners (Git Bash) ship bsdtar (`tar`) but not always `unzip`; both extract zip.
-    if command -v unzip >/dev/null 2>&1; then unzip -q "$TMP/$ARCHIVE" -d "$TMP"; else tar -xf "$TMP/$ARCHIVE" -C "$TMP"; fi
-  else
-    tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
-  fi
-  cp "$TMP/frp_${FRP_VERSION}_${FRP_OS}_${FRP_ARCH}/frpc$EXE" "$DEST/frpc$EXE"
-  rm -rf "$TMP"
+  "$ROOT/scripts/fetch-frpc.sh" "$TARGET" "$DEST/frpc$EXE"
 fi
 chmod +x "$DEST/frpc$EXE" 2>/dev/null || true
 echo "[stage] frpc: $DEST/frpc$EXE ($(wc -c < "$DEST/frpc$EXE") bytes)"
 
 # ── tmux (Linux/macOS only) ───────────────────────────────────────────────────────────
-if [ "$FRP_OS" = "windows" ]; then
+if [ "$TARGET" = "windows-x64" ]; then
   echo "[stage] tmux: skipped (Windows is client-only)"
 elif [ -n "${SUPERMUX_TMUX:-}" ]; then
   echo "[stage] tmux: from SUPERMUX_TMUX=$SUPERMUX_TMUX"

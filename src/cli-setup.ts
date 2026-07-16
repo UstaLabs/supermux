@@ -29,6 +29,8 @@ interface Flags {
   port: string
   publicUrl: string
   telegramToken?: string
+  relayDomain: string
+  relayDomainExplicit: boolean
   noService: boolean
   forceSourceUnit: boolean
 }
@@ -37,6 +39,8 @@ function parseFlags(args: string[]): Flags {
   const flags: Flags = {
     port: "8787",
     publicUrl: "http://localhost:8787",
+    relayDomain: "relay.supermux.dev",
+    relayDomainExplicit: false,
     noService: false,
     forceSourceUnit: false,
   }
@@ -51,6 +55,14 @@ function parseFlags(args: string[]): Flags {
         break
       case "--telegram-token":
         flags.telegramToken = args[++i]
+        break
+      case "--relay-domain":
+        flags.relayDomain = args[++i] ?? flags.relayDomain
+        flags.relayDomainExplicit = true
+        break
+      case "--no-relay":
+        flags.relayDomain = ""
+        flags.relayDomainExplicit = true
         break
       case "--no-service":
         flags.noService = true
@@ -376,13 +388,20 @@ export async function runSetupCommand(
   const desired: Array<[string, string]> = [
     ["MUX_WEB_PORT", flags.port],
     ["MUX_WEB_PUBLIC_URL", flags.publicUrl],
+    ["MUX_RELAY_DOMAIN", flags.relayDomain],
   ]
   if (flags.telegramToken) desired.push(["MUX_TELEGRAM_BOT_TOKEN", flags.telegramToken])
 
   let changed = false
   for (const [k, v] of desired) {
     if (map.has(k)) {
-      println(`kept existing ${k}`)
+      if (k === "MUX_RELAY_DOMAIN" && flags.relayDomainExplicit && map.get(k) !== v) {
+        map.set(k, v)
+        changed = true
+        println(`${v ? "updated" : "disabled"} ${k}`)
+      } else {
+        println(`kept existing ${k}`)
+      }
     } else {
       map.set(k, v)
       changed = true
@@ -434,6 +453,12 @@ export async function runSetupCommand(
     )
   }
   println(`Web UI: ${flags.publicUrl}`)
+  const configuredRelay = map.get("MUX_RELAY_DOMAIN")?.trim()
+  println(
+    configuredRelay
+      ? `Remote access: enabled through ${configuredRelay}`
+      : "Remote access: relay disabled (--no-relay)",
+  )
   println(
     "The first browser to connect pairs automatically; headless: `supermux pair <name>`.",
   )

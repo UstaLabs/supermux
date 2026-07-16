@@ -146,13 +146,21 @@ mkdir -p ~/.mux/state && chmod 700 ~/.mux
 cat > ~/.mux/state/.env <<'EOF'
 MUX_WEB_PORT=8787
 MUX_WEB_PUBLIC_URL=http://localhost:8787
+MUX_RELAY_DOMAIN=relay.supermux.dev
 # MUX_TELEGRAM_BOT_TOKEN=123456:abc...   # uncomment + set if using Telegram
 EOF
 chmod 600 ~/.mux/state/.env
 ```
-Adjust `MUX_WEB_PUBLIC_URL` if using a public URL / proxy (the HTTPS address the browser hits). The web channel turns on as soon as `MUX_WEB_PORT` + `MUX_WEB_PUBLIC_URL` are both set; no Telegram token is required.
+The hosted relay gives the broker a stable remote URL while `MUX_WEB_PUBLIC_URL` remains its local origin. Set `MUX_RELAY_DOMAIN=` to opt out, or adjust `MUX_WEB_PUBLIC_URL` when using your own public URL/proxy. The web channel turns on as soon as `MUX_WEB_PORT` + `MUX_WEB_PUBLIC_URL` are both set; no Telegram token is required.
 
-> **Remote (SSH path):** `MUX_WEB_PUBLIC_URL` must be an address your phone/laptop can actually reach — the box's **LAN IP** (e.g. `http://192.168.1.50:8787`), a **VPN** address, or a **public URL** via reverse proxy / Cloudflare Tunnel (see *Public URL / Reverse Proxy* below). `http://localhost:8787` only works for the *this computer* path — on a remote box `localhost` is the box itself, not your browser. Whatever you set here is also what the pairing QR in **B6** points at, so make it reachable before you pair.
+Compiled native releases carry their own verified `frpc`. A source-mode broker needs `frpc` on `PATH`; from the repository on Linux:
+
+```bash
+target=linux-x64; [ "$(uname -m)" = aarch64 ] && target=linux-arm64
+scripts/fetch-frpc.sh "$target" ~/.local/bin/frpc
+```
+
+> **Remote (SSH path):** With `MUX_RELAY_DOMAIN=relay.supermux.dev`, keeping `MUX_WEB_PUBLIC_URL=http://localhost:8787` is correct: `supermux pair` publishes the stable relay URL. If you disable the relay, `MUX_WEB_PUBLIC_URL` must instead be an address your phone/laptop can reach — the box's LAN/VPN address or your own public reverse-proxy URL.
 
 Relevant env vars (all optional, sensible defaults):
 
@@ -162,6 +170,7 @@ Relevant env vars (all optional, sensible defaults):
 | `MUX_STATE_DIR` | `$MUX_HOME/state` | Broker DB, keys, `.env`, sockets |
 | `MUX_TMUX_SESSION` | `supermux` | tmux session name the broker uses |
 | `MUX_TELEGRAM_BOT_TOKEN` | — | Set to enable the Telegram channel |
+| `MUX_RELAY_DOMAIN` | `relay.supermux.dev` in native setup | Hosted connectivity relay; empty disables it |
 
 **VERIFY:** `cat ~/.mux/state/.env` shows the expected values; permissions are `600`.
 

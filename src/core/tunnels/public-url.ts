@@ -54,6 +54,18 @@ export function writeEnvPublicUrl(
   chmodSync(envPath, 0o600)
 }
 
+/** Enable/disable the hosted relay without deleting the key. Keeping an empty
+ * value records an explicit opt-out, so a later idempotent `supermux setup`
+ * does not silently turn it back on. */
+export function setEnvRelayDomain(stateDir: string, domain: string): void {
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  const envPath = join(stateDir, ".env")
+  const map = existsSync(envPath) ? parseEnvFile(readFileSync(envPath, "utf8")) : new Map<string, string>()
+  map.set("MUX_RELAY_DOMAIN", domain)
+  writeFileSync(envPath, serializeEnv(map))
+  chmodSync(envPath, 0o600)
+}
+
 /**
  * Persist a patch to the SQLite app-config so the stored→env precedence agrees
  * with .env (a value the user set during onboarding would otherwise win over the
