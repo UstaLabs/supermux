@@ -4,7 +4,7 @@ import type { SlashCommand } from "@/stores/commands"
 
 /** Agent slash commands for the /new launcher, keyed by selected agent + workdir. */
 export function useLauncherCommands(
-  agent: Ref<"claude" | "codex" | "cursor" | "opencode">,
+  agent: Ref<"claude" | "codex" | "cursor" | "opencode" | "grok">,
   workdir: Ref<string>,
 ) {
   const commands = ref<SlashCommand[]>([])

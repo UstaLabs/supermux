@@ -952,6 +952,8 @@ function spawnLoginProc(kind: string) {
   if (kind === "codex") { cmd = "codex"; args = ["login", "--device-auth"]; env.CODEX_HOME = `${h}/.codex` }
   else if (kind === "cursor") { cmd = "cursor-agent"; args = ["login"]; env.NO_OPEN_BROWSER = "1" }
   else if (kind === "claude") { cmd = "script"; args = ["-qec", "stty cols 600; claude auth login", "/dev/null"] }
+  // grok prints the device URL + code on plain stdout (no PTY needed, same as codex).
+  else if (kind === "grok") { cmd = "grok"; args = ["login", "--device-auth"] }
   else { cmd = ""; args = [] } // unknown kind handled below
   let outCb: (c: string) => void = () => {}
   let exitCb: (code: number | null) => void = () => {}

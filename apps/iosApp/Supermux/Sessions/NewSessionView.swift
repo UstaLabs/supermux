@@ -66,7 +66,7 @@ struct NewSessionView: View {
     // literal list is the fallback until the fetch lands / when the host doesn't answer.
     @State private var hostAgents: [String] = []
 
-    private static let agents = ["claude", "codex", "cursor", "opencode"]
+    private static let agents = ["claude", "codex", "cursor", "opencode", "grok"]
     private var agents: [String] { hostAgents.isEmpty ? Self.agents : hostAgents }
     /// The active host as the picker renders it (dot + name), or nil in single-host mode.
     private var activeHost: HostView? { fleet.hostViews.first { $0.recordId == fleet.activeRecordId } }

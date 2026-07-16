@@ -74,7 +74,8 @@ const helpByKind: Record<string, string> = {
   cursor: "Paste your Cursor API key.",
 }
 
-const loginSupportedKinds = ["claude", "codex", "cursor"]
+// Kinds whose CLI exposes a device-code/browser login the broker can drive.
+const loginSupportedKinds = ["claude", "codex", "cursor", "grok"]
 
 async function refresh() {
   try {
@@ -369,7 +370,7 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div v-if="isConfigOpen(s) && !loginStates[s.kind] && s.kind !== 'opencode'" class="px-4 pb-4 space-y-3">
+        <div v-if="isConfigOpen(s) && !loginStates[s.kind] && s.kind !== 'opencode' && s.kind !== 'grok'" class="px-4 pb-4 space-y-3">
           <div class="space-y-1.5">
             <div class="flex items-center gap-1.5 text-xs text-muted-foreground font-medium">
               <Key class="size-3" />

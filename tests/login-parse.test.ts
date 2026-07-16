@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { parseCodexDeviceAuth, parseCursorLoginUrl } from "../src/core/agents/login/parse"
+import { parseCodexDeviceAuth, parseCursorLoginUrl, parseGrokDeviceAuth } from "../src/core/agents/login/parse"
 
 test("parseCodexDeviceAuth extracts the device URL and one-time code", () => {
   const out = [
@@ -40,4 +40,34 @@ test("parseCursorLoginUrl strips ANSI color codes", () => {
   expect(parseCursorLoginUrl("open: \x1b[94mhttps://cursor.com/loginDeepControl?x=1\x1b[0m now")).toBe(
     "https://cursor.com/loginDeepControl?x=1",
   )
+})
+
+// Verbatim `grok login --device-auth` output (grok 0.2.101, non-TTY). grok prints the
+// code TWICE — embedded in the URL's ?user_code= and again standalone — so this also
+// pins that the first CODE_RE match (from inside the URL) is the same value.
+const GROK_DEVICE_AUTH = [
+  "",
+  "To sign in, open this URL in your browser:",
+  "",
+  "  https://accounts.x.ai/oauth2/device?user_code=PJD9-D6MT",
+  "",
+  "Confirm this code in your browser:",
+  "",
+  "  PJD9-D6MT",
+  "",
+  "\x1b[90mOnly continue with a code you requested. Don't share it with anyone.\x1b[0m",
+].join("\n")
+
+test("parseGrokDeviceAuth extracts grok's device URL and one-time code", () => {
+  expect(parseGrokDeviceAuth(GROK_DEVICE_AUTH)).toEqual({
+    url: "https://accounts.x.ai/oauth2/device?user_code=PJD9-D6MT",
+    code: "PJD9-D6MT",
+  })
+})
+
+test("parseGrokDeviceAuth returns null until the URL has actually been printed", () => {
+  // The manager feeds accumulated stdout as it streams; a partial first line must
+  // not resolve to a half-parsed state.
+  expect(parseGrokDeviceAuth("")).toBeNull()
+  expect(parseGrokDeviceAuth("To sign in, open this URL in your browser:")).toBeNull()
 })

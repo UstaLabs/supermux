@@ -2,7 +2,7 @@ import type { AgentKind } from "../types"
 import { AgentKind as Agent } from "../../../shared/agents"
 import { authCredPath, type DetectPaths } from "../detect"
 import { LoginSession, type LoginState, type LoginProc } from "./session"
-import { parseCodexDeviceAuth, parseCursorLoginUrl } from "./parse"
+import { parseCodexDeviceAuth, parseCursorLoginUrl, parseGrokDeviceAuth } from "./parse"
 
 export interface LoginManagerDeps {
   paths: DetectPaths
@@ -15,6 +15,7 @@ export interface LoginManagerDeps {
 
 function parserFor(kind: AgentKind): (out: string) => { url?: string; code?: string } | null {
   if (kind === Agent.Codex) return (out) => parseCodexDeviceAuth(out)
+  if (kind === Agent.Grok) return (out) => parseGrokDeviceAuth(out)
   if (kind === Agent.Cursor) return (out) => { const url = parseCursorLoginUrl(out); return url ? { url } : null }
   if (kind === Agent.Claude) return (out) => { const url = parseCursorLoginUrl(out); return url ? { url } : null }
   return () => null

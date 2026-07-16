@@ -7,6 +7,8 @@ import cursorLogoUrl from "@/assets/agents/cursor.svg"
 import cursorDarkLogoUrl from "@/assets/agents/cursor-dark.svg"
 import opencodeLogoUrl from "@/assets/agents/opencode.svg"
 import opencodeDarkLogoUrl from "@/assets/agents/opencode-dark.svg"
+import grokLogoUrl from "@/assets/agents/grok.svg"
+import grokDarkLogoUrl from "@/assets/agents/grok-dark.svg"
 
 const props = defineProps<{
   agent?: string
@@ -24,6 +26,8 @@ const logo = computed(() => {
       return { src: cursorLogoUrl, darkSrc: cursorDarkLogoUrl, alt: "Cursor" }
     case "opencode":
       return { src: opencodeLogoUrl, darkSrc: opencodeDarkLogoUrl, alt: "opencode" }
+    case "grok":
+      return { src: grokLogoUrl, darkSrc: grokDarkLogoUrl, alt: "Grok" }
     default:
       return null
   }

@@ -825,7 +825,7 @@ private struct CreatePASheet: View {
     @State private var agent = "claude"
     @State private var focus = ""
     @State private var creating = false
-    private let agents = ["claude", "codex", "cursor", "opencode"]
+    private let agents = ["claude", "codex", "cursor", "opencode", "grok"]
 
     var body: some View {
         NavigationStack {

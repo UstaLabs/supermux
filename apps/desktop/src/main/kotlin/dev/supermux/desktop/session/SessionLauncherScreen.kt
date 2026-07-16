@@ -244,7 +244,7 @@ fun SessionLauncherScreen(
     var projects by remember { mutableStateOf(emptyList<String>()) }
     var submitting by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    val agents = listOf("claude", "codex", "cursor", "opencode")
+    val agents = listOf("claude", "codex", "cursor", "opencode", "grok")
 
     // See the file header + the pure helpers for why launcherRestoring gates the agent/workdir
     // effects and why lastSeenAgent/lastSeenWorkdir (not one-shot booleans) are the safe way to tell

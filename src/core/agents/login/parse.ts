@@ -18,13 +18,27 @@ export interface CodexDeviceAuth {
   code: string
 }
 
-/** Returns {url, code} once BOTH appear in the accumulated stdout, else null. */
-export function parseCodexDeviceAuth(stdout: string): CodexDeviceAuth | null {
+/** Returns {url, code} once BOTH appear in the accumulated stdout, else null.
+ *
+ * Shared by every CLI whose device-code output is "a URL plus an XXXX-XXXX code",
+ * which so far is codex and grok. grok prints the code twice (once embedded in the
+ * URL's `?user_code=`, once standalone); both spellings yield the same value, so
+ * the first match is correct whichever arrives first. */
+export function parseDeviceAuth(stdout: string): CodexDeviceAuth | null {
   const clean = stripAnsi(stdout)
   const url = clean.match(URL_RE)?.[0]
   const code = clean.match(CODE_RE)?.[1]
   if (url && code) return { url, code }
   return null
+}
+
+export function parseCodexDeviceAuth(stdout: string): CodexDeviceAuth | null {
+  return parseDeviceAuth(stdout)
+}
+
+/** grok: `grok login --device-auth` prints the codex-shaped URL + code. */
+export function parseGrokDeviceAuth(stdout: string): CodexDeviceAuth | null {
+  return parseDeviceAuth(stdout)
 }
 
 /** Returns the first http(s) URL in the accumulated stdout, else null. */

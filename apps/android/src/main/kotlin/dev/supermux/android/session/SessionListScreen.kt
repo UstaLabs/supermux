@@ -76,6 +76,7 @@ private fun agentDrawableRes(agent: String?): Int? = when (agent?.lowercase()) {
     "claude" -> R.drawable.agent_claude
     "codex"  -> R.drawable.agent_codex
     "cursor" -> R.drawable.agent_cursor
+    "grok"   -> R.drawable.agent_grok
     else     -> null
 }
 

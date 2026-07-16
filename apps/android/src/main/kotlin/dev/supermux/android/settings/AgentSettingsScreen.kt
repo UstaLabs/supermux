@@ -69,7 +69,7 @@ import kotlinx.coroutines.launch
 // cancelled when the row leaves composition or `loginActive` flips — no manual poll handle.
 
 private const val POLL_INTERVAL_MS = 1500L
-private val LOGIN_KINDS = setOf("claude", "codex", "cursor")
+private val LOGIN_KINDS = setOf("claude", "codex", "cursor", "grok")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -271,7 +271,11 @@ private fun AgentRow(
                         onCancel = cancel,
                     )
                     else -> {
-                        ApiKeyField(kind = status.kind, onSave = { v -> agentSaveSecret(status.kind, v); onAuthChanged() })
+                        // grok authenticates only via `grok login --device-auth`; there's no
+                        // key to paste, so offer just the link flow (like opencode's providers).
+                        if (status.kind != "grok") {
+                            ApiKeyField(kind = status.kind, onSave = { v -> agentSaveSecret(status.kind, v); onAuthChanged() })
+                        }
                         if (status.installed && isLoginKind) {
                             LinkLoginButton(kind = status.kind, onStart = { loginActive = true })
                         }

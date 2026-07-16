@@ -79,7 +79,7 @@ private struct AgentRow: View {
     let onAuthChanged: () -> Void
 
     /// Agents whose auth uses the device-code / browser link flow.
-    private static let loginKinds: Set<String> = ["claude", "codex", "cursor"]
+    private static let loginKinds: Set<String> = ["claude", "codex", "cursor", "grok"]
 
     @State private var expanded: Bool
     /// True from "Start authorization" until the flow ends (terminal phase / cancel /
@@ -111,7 +111,10 @@ private struct AgentRow: View {
                 } else if loginActive {
                     loginFlow()
                 } else {
-                    apiKeyField
+                    // grok authenticates ONLY via `grok login --device-auth`; there's no
+                    // key to paste and no field for it in app config (the save switch
+                    // would fall through to `default: break`), so offer just the link flow.
+                    if status.kind != "grok" { apiKeyField }
                     if status.installed && isLoginKind { linkLoginButton }
                 }
             }
