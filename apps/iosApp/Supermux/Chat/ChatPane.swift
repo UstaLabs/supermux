@@ -105,12 +105,6 @@ struct ChatPane: View {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 composing = true
             }
-            .sheet(isPresented: $modelSheet) {
-                OptionSwitchSheet(title: "Model", broker: broker, session: session, kind: .model)
-            }
-            .sheet(isPresented: $reasoningSheet) {
-                OptionSwitchSheet(title: "Reasoning", broker: broker, session: session, kind: .reasoning)
-            }
             .alert("Microphone access needed", isPresented: $composer.micDenied) {
                 Button("OK", role: .cancel) {}
             } message: {
@@ -283,10 +277,16 @@ struct ChatPane: View {
                                onPaste: { Task { await composer.pasteClipboard() } })
                     MicButton(model: composer)
                     pill(modelPillLabel, system: "cpu") { modelSheet = true }
+                        .smOptionPicker(isPresented: $modelSheet) {
+                            OptionSwitchSheet(title: "Model", broker: broker, session: session, kind: .model)
+                        }
                     if reasoning?.visible ?? false {
                         // Live session state first (kept fresh by session_state frames);
                         // the fetched payload supplies the resolved default when unset.
                         pill(session.reasoningLevel ?? reasoning?.current ?? "reasoning", system: "brain") { reasoningSheet = true }
+                            .smOptionPicker(isPresented: $reasoningSheet) {
+                                OptionSwitchSheet(title: "Reasoning", broker: broker, session: session, kind: .reasoning)
+                            }
                     }
                     Spacer()
                     Button { sendMessage() } label: {

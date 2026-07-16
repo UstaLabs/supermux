@@ -20,7 +20,7 @@ const TMUX_SESSION = process.env.MUX_TMUX_SESSION ?? "mux"
 const log = makeLogger("supervisor")
 
 export type Supervisor = {
-  ensurePersonalAssistants: (bootstrapOpts?: BootstrapPAOpts) => Promise<void>
+  ensurePersonalAssistants: () => Promise<void>
   bootstrapPA: (name: string, bootstrapOpts?: BootstrapPAOpts) => Promise<void>
   reconcile: () => Promise<void>
   stop: () => void
@@ -41,13 +41,8 @@ export type SupervisorOpts = {
   onClaudeSessionId?: (brokerSessionId: string, claudeSessionId: string) => void
   // Override for tests; defaults to the real tmux helper.
   spawnTmux?: (opts: { session: string; window: string; workdir: string; command: string }) => Promise<{ windowId?: string } | void>
-  // PA identity/workdir, resolved from the config store by the caller. When
-  // omitted (e.g. tests), falls back to the historical env/default behavior.
-  // Use getPaName() to read the CURRENT name at spawn time (supports wizard flow).
-  getPaName?: () => string
-  // When provided and returns false, ensurePersonalAssistants skips bootstrapping
-  // a new PA (used to defer creation until onboarding completes on fresh installs).
-  shouldAutoSpawnPA?: () => boolean
+  // PA workdir, resolved from the config store by the caller. When omitted
+  // (e.g. tests), falls back to the historical default.
   paWorkdir?: string
   resolveEffort?: (session: Pick<Session, "agent" | "model" | "reasoningLevel">) => string | undefined
   // Non-Claude PA spawn dependencies (injected by main.ts; optional for tests).
@@ -192,13 +187,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     }
   }
 
-  async function ensurePersonalAssistants(bootstrapOpts?: BootstrapPAOpts) {
+  async function ensurePersonalAssistants() {
     const pas = opts.registry.listPAs()
 
     if (pas.length === 0) {
-      if (opts.shouldAutoSpawnPA && !opts.shouldAutoSpawnPA()) return   // fresh + not onboarded → wait for the wizard
-      // Fresh install: bootstrap a first PA. Name is user-overridable; default neutral.
-      await bootstrapPA(opts.getPaName?.() ?? "assistant", bootstrapOpts)
+      // PAs are opt-in. A fresh install, or a user who removed their last PA,
+      // must stay at zero across broker restarts. Explicit creation goes through
+      // bootstrapPA/spawnPA; once created, the supervisor keeps it alive below.
+      return
     } else {
       // Supervise existing PAs: respawn any whose process is dead.
       for (const pa of pas) {

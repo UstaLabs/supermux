@@ -207,10 +207,11 @@ test("/sessions shows agent-only tag when no model", async () => {
   expect(result.text).toContain("[claude]")
 })
 
-test("/kill refuses the last personal assistant", async () => {
+test("/kill allows removing the last personal assistant", async () => {
   const res = await handleSlash({ command: "kill", rest: "ana yes" }, ctx)
-  expect(res.text).toMatch(/last personal assistant|cannot be killed/i)
-  expect(killed).toEqual([])
+  expect(res.text).toBe("killed ana")
+  expect(killed).toEqual([anaId])
+  expect(r.listPAs()).toHaveLength(0)
 })
 
 test("/kill a non-last PA reassigns is_default to the oldest remaining PA", async () => {

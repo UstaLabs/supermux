@@ -5,6 +5,19 @@ struct MacHostPreparedClaim: Equatable {
     let localToken: String
     let payloadJSON: String
     let relayURL: String?
+    let expiresAt: Date
+
+    init(
+        localToken: String,
+        payloadJSON: String,
+        relayURL: String?,
+        expiresAt: Date = Date().addingTimeInterval(10 * 60)
+    ) {
+        self.localToken = localToken
+        self.payloadJSON = payloadJSON
+        self.relayURL = relayURL
+        self.expiresAt = expiresAt
+    }
 }
 
 struct MacHostBootstrap {
@@ -40,7 +53,7 @@ struct MacHostBootstrap {
             token = fresh
         }
 
-        guard let secret = await mintClaim(base: base, token: token) else { return nil }
+        guard let minted = await mintClaim(base: base, token: token) else { return nil }
         let relayURL = await fetchRelayURL(base: base, token: token)
         let payload = Payload(
             v: 1,
@@ -49,13 +62,18 @@ struct MacHostBootstrap {
             name: hostName,
             directUrl: pairingDirectURL ?? localBaseURL,
             relayUrl: relayURL,
-            claimSecret: secret
+            claimSecret: minted.secret
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(payload),
               let json = String(data: data, encoding: .utf8) else { return nil }
-        return MacHostPreparedClaim(localToken: token, payloadJSON: json, relayURL: relayURL)
+        return MacHostPreparedClaim(
+            localToken: token,
+            payloadJSON: json,
+            relayURL: relayURL,
+            expiresAt: minted.expiresAt
+        )
     }
 
     private func bootstrapFirstDevice(base: URL, name: String) async -> String? {
@@ -71,7 +89,7 @@ struct MacHostBootstrap {
         return Self.cookieToken(from: response)
     }
 
-    private func mintClaim(base: URL, token: String) async -> String? {
+    private func mintClaim(base: URL, token: String) async -> (secret: String, expiresAt: Date)? {
         guard let url = URL(string: "/pair/mint-claim", relativeTo: base) else { return nil }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -80,7 +98,9 @@ struct MacHostBootstrap {
         guard let (data, response) = try? await self.request(request), response.statusCode == 200,
               let result = try? JSONDecoder().decode(MintResult.self, from: data),
               !result.claimSecret.isEmpty else { return nil }
-        return result.claimSecret
+        let expiresAt = result.expiresAt.flatMap(Self.parseISODate)
+            ?? Date().addingTimeInterval(10 * 60)
+        return (result.claimSecret, expiresAt)
     }
 
     private func fetchRelayURL(base: URL, token: String) async -> String? {
@@ -116,6 +136,12 @@ struct MacHostBootstrap {
             }
     }
 
+    private static func parseISODate(_ value: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    }
+
     nonisolated static func liveRequest(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
@@ -128,6 +154,7 @@ struct MacHostBootstrap {
 
     private struct MintResult: Codable {
         let claimSecret: String
+        let expiresAt: String?
     }
 
     private struct MeResult: Codable {

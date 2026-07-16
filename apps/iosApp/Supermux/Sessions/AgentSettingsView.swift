@@ -18,6 +18,8 @@ import Shared
 /// just sets `.navigationTitle("Agents")`.
 struct AgentSettingsView: View {
     let broker: BrokerSession
+    var showsNavigationTitle = true
+    var onReadinessChanged: ((Bool) -> Void)?
 
     @State private var statuses: [AgentInstallStatus] = []
     @State private var loading = true
@@ -33,7 +35,7 @@ struct AgentSettingsView: View {
                 list
             }
         }
-        .navigationTitle("Agents")
+        .navigationTitle(showsNavigationTitle ? "Agents" : "")
         .tint(Theme.teal)
         .task { await load() }
     }
@@ -61,10 +63,15 @@ struct AgentSettingsView: View {
         defer { loading = false }
         let result = await broker.agentStatuses()
         statuses = result
+        onReadinessChanged?(Self.canProceed(with: result))
         // `agentStatuses()` swallows errors (returns []). Only surface "couldn't load"
         // when we have nothing to show, so a transient empty refresh after a successful
         // login doesn't flash an error over real rows.
         error = result.isEmpty ? "Couldn't load agent statuses." : nil
+    }
+
+    static func canProceed(with statuses: [AgentInstallStatus]) -> Bool {
+        statuses.contains { $0.authed || ($0.kind == "opencode" && $0.installed) }
     }
 }
 
@@ -92,6 +99,9 @@ private struct AgentRow: View {
     @State private var keyValue = ""
     @State private var saving = false
     @State private var codeValue = ""
+    @State private var install: AgentInstallJob?
+    @State private var installTask: Task<Void, Never>?
+    @State private var installRequestFailed = false
 
     init(broker: BrokerSession, status: AgentInstallStatus, onAuthChanged: @escaping () -> Void) {
         self.broker = broker
@@ -106,7 +116,9 @@ private struct AgentRow: View {
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 14) {
-                if status.kind == "opencode" {
+                if !status.installed {
+                    installSection
+                } else if status.kind == "opencode" {
                     OpenCodeProvidersSection(broker: broker)
                 } else if loginActive {
                     loginFlow()
@@ -120,7 +132,10 @@ private struct AgentRow: View {
             header
         }
         // Tear down any live poll when the row leaves the hierarchy.
-        .onDisappear { stopPoll() }
+        .onDisappear {
+            stopPoll()
+            stopInstallPoll()
+        }
     }
 
     // MARK: Header
@@ -152,6 +167,75 @@ private struct AgentRow: View {
         // opencode's free `opencode/*` tier works with no credentials.
         if status.kind == "opencode" { return "Ready · free tier" }
         return "Installed, not authenticated"
+    }
+
+    // MARK: Agent installation
+
+    private var installSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Install the \(status.kind.capitalized) CLI on this Mac to use it with Supermux.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if install?.state == "running" {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small).tint(Theme.teal)
+                    Text("Installing \(status.kind)…").font(.callout)
+                }
+            } else {
+                Button(install?.state == "failed" ? "Retry installation" : "Install") {
+                    startInstall()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.teal)
+            }
+
+            if install?.state == "failed" || installRequestFailed {
+                Label(installRequestFailed ? "Couldn't start installation." : "Installation failed.",
+                      systemImage: "xmark.octagon")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+            if let log = install?.log, !log.isEmpty {
+                ScrollView {
+                    Text(String(log.suffix(2_000)))
+                        .font(.caption2.monospaced())
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 110)
+                .padding(8)
+                .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 8))
+            }
+        }
+    }
+
+    private func startInstall() {
+        stopInstallPoll()
+        installRequestFailed = false
+        installTask = Task { [broker] in
+            guard let initial = await broker.startAgentInstall(kind: status.kind) else {
+                installRequestFailed = true
+                return
+            }
+            install = initial
+            while !Task.isCancelled, install?.state == "running" {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if Task.isCancelled { return }
+                guard let next = await broker.agentInstallState(kind: status.kind) else { continue }
+                install = next
+                if next.state == "done" {
+                    onAuthChanged()
+                    return
+                }
+                if next.state == "failed" { return }
+            }
+        }
+    }
+
+    private func stopInstallPoll() {
+        installTask?.cancel()
+        installTask = nil
     }
 
     // MARK: API key / OAuth token
@@ -242,10 +326,20 @@ private struct AgentRow: View {
                 Label("Authorized successfully.", systemImage: "checkmark.circle.fill")
                     .font(.callout).foregroundStyle(Theme.teal)
             case "failed":
-                Label("Login failed: \(state.error ?? "unknown error")", systemImage: "xmark.octagon")
-                    .font(.callout).foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("Login failed: \(state.error ?? "unknown error")", systemImage: "xmark.octagon")
+                        .font(.callout).foregroundStyle(.red)
+                    Button("Retry authorization") { startLogin() }
+                        .buttonStyle(.bordered)
+                        .tint(Theme.teal)
+                }
             case "cancelled":
-                Text("Login cancelled.").font(.callout).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Login cancelled.").font(.callout).foregroundStyle(.secondary)
+                    Button("Start authorization again") { startLogin() }
+                        .buttonStyle(.bordered)
+                        .tint(Theme.teal)
+                }
             default:
                 // "starting" / "awaiting_user" — progress, then the link/code once present.
                 awaitingUser(state)

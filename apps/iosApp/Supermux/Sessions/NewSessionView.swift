@@ -53,6 +53,8 @@ struct NewSessionView: View {
     @State private var launcherState: LauncherStateStore
     @State private var lastSeenAgent: String?
     @State private var lastSeenWorkdir: String?
+    @State private var lastSeenBrokerURL: String?
+    @State private var lastRepoBrokerURL: String?
     @FocusState private var composing: Bool
     // Wired in `.task` (below) once `broker` is in scope — the real glossary/transcribe closures
     // need it, which isn't available yet here in `init`.
@@ -109,6 +111,7 @@ struct NewSessionView: View {
                 Image(systemName: "cube.fill").font(.system(size: 38)).foregroundStyle(.primary)
                 Text("Let's build").font(.largeTitle.bold())
                 projectPicker
+                if fleet.multiHost, let h = activeHost { hostPickerPill(h) }
                 if repoInfo?.eligible == true { worktreePill }
                 composeCard
                 if !workdir.isEmpty {
@@ -123,6 +126,20 @@ struct NewSessionView: View {
         // Keyed on the active host (baseURL) so a host switch re-wires the composer context and
         // reloads that host's projects + installed agents (spec §5). Single-host: runs once on appear.
         .task(id: broker.baseURL) {
+            let switchedHost = lastSeenBrokerURL != nil && lastSeenBrokerURL != broker.baseURL
+            lastSeenBrokerURL = broker.baseURL
+            if switchedHost {
+                model = nil
+            }
+            // Never show or submit host A's cached choices while host B is loading.
+            projects = []
+            hostAgents = []
+            models = []
+            reasoningLevels = []
+            reasoningVisible = false
+            launcherCommands = []
+            repoInfo = nil
+            fetchedRepos = []
             // No session yet (pre-spawn launcher): the broker's id-less /transcribe cleans the
             // draft off the global glossary/engine/model — the same AI correction the chat
             // composer gets, just without prior-message context.
@@ -132,7 +149,8 @@ struct NewSessionView: View {
                 audioFallbackTranscribe: { try await broker.transcribeAudio(sessionId: nil, data: $0, filename: $1) }
             ))
             await composer.loadGlossary()
-            projects = await broker.projects()
+            let loadedProjects = await broker.projects()
+            projects = loadedProjects
             // The selected host's installed agents drive the agent menu; keep `agent` valid for it.
             let installed = (await broker.agentStatuses()).filter { $0.installed }.map { $0.kind }
             hostAgents = installed
@@ -140,8 +158,9 @@ struct NewSessionView: View {
             // Debug: force the initial project for headless screenshots (e.g. an eligible repo).
             if let forced = ProcessInfo.processInfo.environment["SM_WORKDIR"], !forced.isEmpty {
                 workdir = forced
-            } else if workdir.isEmpty {
-                workdir = projects.first ?? "~"
+            } else if workdir.isEmpty || (workdir != "~" && !loadedProjects.contains(workdir)) {
+                // A persisted project from another host must never be spawned on this one.
+                workdir = loadedProjects.first ?? "~"
             }
         }
         .task {
@@ -154,8 +173,12 @@ struct NewSessionView: View {
                 projectSearch = true
             }
         }
-        .task(id: agent) {
-            models = await broker.listModels(agent)
+        .task(id: "\(broker.baseURL)|\(agent)") {
+            let loadedModels = await broker.listModels(agent)
+            models = loadedModels
+            if let selected = model, !loadedModels.contains(where: { $0.id == selected }) {
+                model = nil
+            }
             // Reset only on a genuine switch to a *different* agent than the last one this task
             // actually observed — never on the very first run (whatever agent `init` seeded), and
             // never on a same-agent re-invocation. `.task(id:)` was observed on-device spinning up
@@ -172,7 +195,7 @@ struct NewSessionView: View {
         // Thinking levels depend on the agent and (for Codex) the chosen model. Idempotent — it
         // resolves from the sticky per-agent choice each run, so a duplicate .task(id:) re-invocation
         // is harmless (nothing to reset, unlike the model task above).
-        .task(id: "\(agent)|\(model ?? "")") {
+        .task(id: "\(broker.baseURL)|\(agent)|\(model ?? "")") {
             let resp = await broker.reasoningLevels(agent, model)
             let levels = resp?.levels ?? []
             reasoningLevels = levels
@@ -182,28 +205,50 @@ struct NewSessionView: View {
                 : nil
         }
         // Agent slash commands depend on both the agent and the chosen project.
-        .task(id: "\(agent)|\(workdir)") {
+        .task(id: "\(broker.baseURL)|\(agent)|\(workdir)") {
             launcherCommands = workdir.isEmpty ? [] : await broker.previewCommands(agent, workdir)
         }
         // Git repo info for the worktree picker — refreshes whenever the project changes.
-        .task(id: workdir) {
+        .task(id: "\(broker.baseURL)|\(workdir)") {
             guard !workdir.isEmpty else { repoInfo = nil; return }
             let info = await broker.repoInfo(workdir)
             repoInfo = info
+            let switchedRepoHost = lastRepoBrokerURL != nil && lastRepoBrokerURL != broker.baseURL
+            lastRepoBrokerURL = broker.baseURL
             // Same last-observed-value comparison as the agent/model task above. A genuine switch
             // to a different workdir always follows its current branch; the first run (or a
             // same-workdir re-invocation) only fills in a currently-empty baseBranch, preserving
             // whatever `init` seeded from the draft.
-            if let last = lastSeenWorkdir, last != workdir {
+            if switchedRepoHost || (lastSeenWorkdir != nil && lastSeenWorkdir != workdir) {
                 baseBranch = info?.currentBranch ?? ""
             } else if baseBranch.isEmpty {
                 baseBranch = info?.currentBranch ?? ""
             }
             lastSeenWorkdir = workdir
         }
-        .sheet(isPresented: $projectSearch) {
-            ProjectPickerSheet(broker: broker, projects: projects, current: workdir) { workdir = $0 }
+        #if os(macOS)
+        .overlay {
+            if projectSearch {
+                MacProjectPickerOverlay(
+                    broker: broker,
+                    projects: projects,
+                    current: workdir,
+                    onPick: { workdir = $0 },
+                    onClose: { projectSearch = false }
+                )
+            }
         }
+        #else
+        .sheet(isPresented: $projectSearch) {
+            ProjectPickerSheet(
+                broker: broker,
+                projects: projects,
+                current: workdir,
+                onPick: { workdir = $0 },
+                onClose: { projectSearch = false }
+            )
+        }
+        #endif
         .sheet(isPresented: $worktreeSheet) {
             WorktreeSheet(
                 useWorktree: $useWorktree, baseBranch: $baseBranch,
@@ -274,6 +319,41 @@ struct NewSessionView: View {
         return repoInfo?.currentBranch ?? "HEAD"
     }
 
+    // MARK: - Host picker (Android HostPickerPill parity)
+
+    /// "Spawn on which host" — a bordered pill in the hero, under the project dropdown, exactly
+    /// where Android's launcher puts it (multi-host only). Picking a host updates the fleet's
+    /// active record; `RootView` re-passes the new host's broker, which retargets the
+    /// projects/agents/models/commands loads above.
+    private func hostPickerPill(_ h: HostView) -> some View {
+        Menu {
+            ForEach(fleet.hostViews, id: \.recordId) { hv in
+                Button {
+                    fleet.setActive(hv.recordId)
+                } label: {
+                    let title = hv.online ? hv.displayLabel : "\(hv.displayLabel) (offline)"
+                    if hv.recordId == fleet.activeRecordId {
+                        Label(title, systemImage: "checkmark")
+                    } else {
+                        Text(title)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                HostDot(colorIndex: h.colorIndex, size: 9)
+                Text(h.shortLabel).font(.caption.weight(.medium)).lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).opacity(0.6)
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 11).padding(.vertical, 5)
+            .background(Color.smSecondaryBackground, in: Capsule())
+            .overlay(Capsule().strokeBorder(Theme.hairline, lineWidth: 1))
+        }
+        .smMacBorderlessMenu()
+        .accessibilityIdentifier("launcher_host_picker")
+    }
+
     private var worktreePill: some View {
         Button { worktreeSheet = true } label: {
             HStack(spacing: 5) {
@@ -335,29 +415,6 @@ struct NewSessionView: View {
             // into vertical letter-columns (the action buttons used to share this row and
             // overflow it on a narrow iPhone).
             HStack(spacing: 12) {
-                // Host picker (spec §5): which host to spawn on — defaults to the last-used (active)
-                // host, hidden with one host. Picking retargets projects/agents/models to that host.
-                if fleet.multiHost, let h = activeHost {
-                    Menu {
-                        ForEach(fleet.hostViews, id: \.recordId) { hv in
-                            Button { fleet.setActive(hv.recordId) } label: {
-                                if hv.recordId == fleet.activeRecordId {
-                                    Label(hv.displayName, systemImage: "checkmark")
-                                } else {
-                                    Text(hv.displayName)
-                                }
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 5) {
-                            HostDot(colorIndex: h.colorIndex, size: 9)
-                            Text(h.shortLabel).font(.subheadline.weight(.medium)).lineLimit(1)
-                            Image(systemName: "chevron.down").font(.caption2)
-                        }.foregroundStyle(.primary)
-                    }
-                    .smMacBorderlessMenu()
-                    .accessibilityIdentifier("launcher_host_picker")
-                }
                 #if os(macOS)
                 // The logo sits OUTSIDE the Menu label on the Mac: AppKit flattens custom
                 // menu-button labels and draws asset images at intrinsic size — a giant
@@ -516,7 +573,7 @@ private struct ProjectPickerSheet: View {
     let projects: [String]
     let current: String
     var onPick: (String) -> Void
-    @Environment(\.dismiss) private var dismiss
+    var onClose: () -> Void
 
     @State private var search = ""
     @State private var connections: [ForgeConnection] = []
@@ -561,79 +618,39 @@ private struct ProjectPickerSheet: View {
     private var showCreate: Bool { !query.isEmpty && isValidName && !exactMatch }
 
     var body: some View {
-        NavigationStack {
-            List {
-                if showTypedPath {
-                    Section {
-                        Button { onPick(query); dismiss() } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "arrow.turn.down.left").foregroundStyle(.secondary)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text("Use this path").foregroundStyle(.primary)
-                                    Text(query).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
-                                }
-                            }
-                        }
+        Group {
+            #if os(macOS)
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    Text("Choose project").font(.headline)
+                    Spacer(minLength: 12)
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("Search projects, repos, or type a path", text: $search)
+                            .textFieldStyle(.plain)
                     }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 6)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .frame(width: 300)
+                    Button("Cancel", action: onClose)
                 }
-                if !filteredProjects.isEmpty {
-                    Section("Projects") {
-                        ForEach(filteredProjects, id: \.self) { p in
-                            Button { onPick(p); dismiss() } label: { projectRow(name: basename(p), sub: label(p), checked: p == current) }
-                        }
-                    }
-                }
-                ForEach(cloudGroups, id: \.conn.id) { group in
-                    Section("\(group.conn.host) · @\(group.conn.account.login)") {
-                        ForEach(group.repos, id: \.fullName) { r in
-                            Button { resolveCloud(r) } label: {
-                                HStack(spacing: 10) {
-                                    Image(systemName: "folder").foregroundStyle(.secondary)
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(r.name).foregroundStyle(.primary).lineLimit(1)
-                                        Text(r.fullName).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
-                                    }
-                                    Spacer()
-                                    Label("Clone", systemImage: "arrow.down.circle")
-                                        .labelStyle(.titleAndIcon).font(.caption).foregroundStyle(.secondary)
-                                }
-                            }.disabled(resolving)
-                        }
-                    }
-                }
-                if searching && cloudGroups.isEmpty {
-                    Section { HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Searching repos…").foregroundStyle(.secondary) } }
-                }
-                if showCreate {
-                    Section("Create") {
-                        Button { resolveCreateLocal() } label: {
-                            Label("Create locally — \(query)", systemImage: "plus.circle")
-                        }.disabled(resolving)
-                        ForEach(connections, id: \.id) { c in
-                            Button { resolveCreateForge(c.id) } label: {
-                                Label("Create on \(c.host) — \(c.account.login)/\(query)", systemImage: "plus.circle")
-                                    .lineLimit(1)
-                            }.disabled(resolving)
-                        }
-                    }
-                }
+                .padding(12)
+                .background(.bar)
+                Divider()
+                pickerList
             }
-            .searchable(text: $search, placement: .smNavDrawerAlways,
-                        prompt: "Search projects, repos, or type a path")
-            .navigationTitle("Project").smInlineNavigationTitle()
-            .toolbar { ToolbarItem(placement: .smTopTrailing) { Button("Cancel") { dismiss() } } }
-            .overlay {
-                if resolving {
-                    ZStack {
-                        Color.black.opacity(0.06).ignoresSafeArea()
-                        VStack(spacing: 10) {
-                            ProgressView()
-                            Text("Cloning / creating…").font(.caption).foregroundStyle(.secondary)
-                        }
-                        .padding(22).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            #else
+            NavigationStack {
+                pickerList
+                    .searchable(text: $search, placement: .smNavDrawerAlways,
+                                prompt: "Search projects, repos, or type a path")
+                    .navigationTitle("Project").smInlineNavigationTitle()
+                    .toolbar {
+                        ToolbarItem(placement: .smTopTrailing) { Button("Cancel", action: onClose) }
                     }
-                }
             }
+            #endif
         }
         .tint(Theme.teal)
         .task {
@@ -649,6 +666,79 @@ private struct ProjectPickerSheet: View {
             searching = true
             cloudRepos = await broker.searchForge(query)
             searching = false
+        }
+    }
+
+    private var pickerList: some View {
+        List {
+            if showTypedPath {
+                Section {
+                    Button { onPick(query); onClose() } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "arrow.turn.down.left").foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Use this path").foregroundStyle(.primary)
+                                Text(query).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
+                    }.smMacPlainButton()
+                }
+            }
+            if !filteredProjects.isEmpty {
+                Section("Projects") {
+                    ForEach(filteredProjects, id: \.self) { p in
+                        Button { onPick(p); onClose() } label: { projectRow(name: basename(p), sub: label(p), checked: p == current) }.smMacPlainButton()
+                    }
+                }
+            }
+            ForEach(cloudGroups, id: \.conn.id) { group in
+                Section("\(group.conn.host) · @\(group.conn.account.login)") {
+                    ForEach(group.repos, id: \.fullName) { r in
+                        Button { resolveCloud(r) } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "folder").foregroundStyle(.secondary)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(r.name).foregroundStyle(.primary).lineLimit(1)
+                                    Text(r.fullName).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                                Spacer()
+                                Label("Clone", systemImage: "arrow.down.circle")
+                                    .labelStyle(.titleAndIcon).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .disabled(resolving).smMacPlainButton()
+                    }
+                }
+            }
+            if searching && cloudGroups.isEmpty {
+                Section { HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Searching repos…").foregroundStyle(.secondary) } }
+            }
+            if showCreate {
+                Section("Create") {
+                    Button { resolveCreateLocal() } label: {
+                        Label("Create locally — \(query)", systemImage: "plus.circle")
+                    }.disabled(resolving).smMacPlainButton()
+                    ForEach(connections, id: \.id) { c in
+                        Button { resolveCreateForge(c.id) } label: {
+                            Label("Create on \(c.host) — \(c.account.login)/\(query)", systemImage: "plus.circle")
+                                .lineLimit(1)
+                        }
+                        .disabled(resolving).smMacPlainButton()
+                    }
+                }
+            }
+        }
+        .overlay {
+            if resolving {
+                ZStack {
+                    Color.black.opacity(0.06).ignoresSafeArea()
+                    VStack(spacing: 10) {
+                        ProgressView()
+                        Text("Cloning / creating…").font(.caption).foregroundStyle(.secondary)
+                    }
+                    .padding(22).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+            }
         }
     }
 
@@ -669,7 +759,7 @@ private struct ProjectPickerSheet: View {
         Task {
             let path = await broker.cloneForge(connectionId: r.connectionId, owner: r.owner, name: r.name)
             resolving = false
-            if let path { onPick(path); dismiss() }
+            if let path { onPick(path); onClose() }
         }
     }
     private func resolveCreateLocal() {
@@ -678,7 +768,7 @@ private struct ProjectPickerSheet: View {
         Task {
             let path = await broker.createLocalRepo(name)
             resolving = false
-            if let path { onPick(path); dismiss() }
+            if let path { onPick(path); onClose() }
         }
     }
     private func resolveCreateForge(_ connectionId: String) {
@@ -687,10 +777,54 @@ private struct ProjectPickerSheet: View {
         Task {
             let path = await broker.createForge(connectionId: connectionId, name: name)
             resolving = false
-            if let path { onPick(path); dismiss() }
+            if let path { onPick(path); onClose() }
         }
     }
 }
+
+#if os(macOS)
+/// iPad presents the project picker as a card over the launcher. AppKit backs SwiftUI `.sheet`
+/// with another window, so the Mac recreates that card inside the existing window instead.
+private struct MacProjectPickerOverlay: View {
+    let broker: BrokerSession
+    let projects: [String]
+    let current: String
+    var onPick: (String) -> Void
+    var onClose: () -> Void
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                Color.black.opacity(0.18)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onClose)
+
+                ProjectPickerSheet(
+                    broker: broker,
+                    projects: projects,
+                    current: current,
+                    onPick: onPick,
+                    onClose: onClose
+                )
+                .frame(
+                    width: min(max(0, proxy.size.width - 48), 600),
+                    height: min(max(0, proxy.size.height - 48), 540)
+                )
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Color.smSeparator.opacity(0.7))
+                }
+                .shadow(color: .black.opacity(0.25), radius: 24, y: 10)
+            }
+        }
+        .transition(.opacity)
+        .onExitCommand(perform: onClose)
+        .accessibilityIdentifier("project-picker-overlay")
+    }
+}
+#endif
 
 /// Worktree + base-branch picker — native take on the web LauncherWorktreePicker:
 /// a toggle for the isolated worktree plus a searchable list of local/remote

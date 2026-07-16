@@ -32,9 +32,35 @@ data class HostView(
      *  else the recordId, so the dot color survives a hostId backfill. */
     val colorIndex: Int get() = hostColorIndex(hostId ?: recordId)
 
+    /** Human-facing name with obsolete local-only prefixes removed. */
+    val displayLabel: String get() = hostDisplayLabel(displayName)
+
     /** Compact label for the per-row badge (first word, capped) — the chip row uses the full name. */
     val shortLabel: String get() = hostShortLabel(displayName)
 }
+
+/**
+ * Old desktop builds persisted names such as `This computer (Ahmet's MacBook)`; in a fleet every
+ * host then appeared as the identical `This` badge. Preserve custom names, but unwrap that legacy
+ * local-only prefix everywhere so existing installs become clear without a destructive migration.
+ */
+fun hostDisplayLabel(displayName: String): String {
+    val trimmed = displayName.trim()
+    val wrapped = Regex("^This\\s+(?:computer|host)\\s*\\((.+)\\)$", RegexOption.IGNORE_CASE)
+        .matchEntire(trimmed)
+        ?.groupValues
+        ?.getOrNull(1)
+        ?.trim()
+        .orEmpty()
+    if (wrapped.isNotEmpty()) return wrapped
+    if (trimmed.equals("This computer", ignoreCase = true) ||
+        trimmed.equals("This host", ignoreCase = true)
+    ) return "Host"
+    return trimmed.ifEmpty { "Host" }
+}
+
+fun isLegacyHostDisplayName(displayName: String): Boolean =
+    hostDisplayLabel(displayName) != displayName.trim()
 
 /**
  * Deterministic badge-color slot for [seed] (a hostId or recordId). FNV-1a over the chars so it
@@ -54,10 +80,9 @@ fun hostColorIndex(seed: String, paletteSize: Int = HOST_PALETTE_SIZE): Int {
 /** Compact badge text: the first whitespace-delimited token of the display name, capped at 14
  *  chars (the chip row shows the full name; the row badge must stay short). */
 fun hostShortLabel(displayName: String): String {
-    val trimmed = displayName.trim()
-    if (trimmed.isEmpty()) return "host"
-    val firstToken = trimmed.split(Regex("\\s+")).firstOrNull().orEmpty()
-    return firstToken.take(14).ifEmpty { trimmed.take(14) }
+    val label = hostDisplayLabel(displayName)
+    val firstToken = label.split(Regex("\\s+")).firstOrNull().orEmpty()
+    return firstToken.take(14).ifEmpty { "Host" }
 }
 
 /**

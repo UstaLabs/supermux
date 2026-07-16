@@ -592,11 +592,12 @@ final class BrokerSession {
     /// PUT /settings/config — partial patch. All fields are optional; pass nil to leave
     /// unchanged. An empty-string `voiceCleanupModel` ("") resets the model to the
     /// engine's default (the broker's reset sentinel).
-    func saveConfig(paName: String? = nil, voiceCleanupModel: String? = nil,
+    func saveConfig(onboarded: Bool? = nil, paName: String? = nil, voiceCleanupModel: String? = nil,
                     voiceCleanupEngine: String? = nil,
                     claudeOauthToken: String? = nil, anthropicApiKey: String? = nil,
                     codexApiKey: String? = nil, cursorApiKey: String? = nil) async {
-        try? await api.saveConfig(paName: paName, voiceCleanupModel: voiceCleanupModel,
+        try? await api.saveConfig(onboarded: onboarded?.kb,
+                                  paName: paName, voiceCleanupModel: voiceCleanupModel,
                                   voiceCleanupEngine: voiceCleanupEngine,
                                   claudeOauthToken: claudeOauthToken, anthropicApiKey: anthropicApiKey,
                                   codexApiKey: codexApiKey, cursorApiKey: cursorApiKey)
@@ -608,6 +609,8 @@ final class BrokerSession {
 
     // Agent install status + login flow.
     func agentStatuses() async -> [AgentInstallStatus] { (try? await api.agentStatuses()) ?? [] }
+    func startAgentInstall(kind: String) async -> AgentInstallJob? { try? await api.startAgentInstall(kind: kind) }
+    func agentInstallState(kind: String) async -> AgentInstallJob? { try? await api.agentInstallState(kind: kind) }
     func startAgentLogin(kind: String) async -> AgentLoginState? { try? await api.startAgentLogin(kind: kind) }
     func agentLoginState(kind: String) async -> AgentLoginState? { try? await api.agentLoginState(kind: kind) }
     func sendAgentLoginCode(kind: String, code: String) { Task { [api] in try? await api.sendAgentLoginCode(kind: kind, code: code) } }

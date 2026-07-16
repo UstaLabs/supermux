@@ -14,12 +14,17 @@ enum MacHostKeepAlive {
         port: Int,
         binDirectory: String,
         stateDirectory: String,
-        relayDomain: String = "relay.supermux.dev"
+        relayDomain: String = "relay.supermux.dev",
+        hostName: String? = nil
     ) -> String {
         let path = xml(brokerPath)
         let bin = xml(binDirectory)
         let state = xml(stateDirectory)
         let log = xml(URL(fileURLWithPath: stateDirectory).appendingPathComponent("native-host-launchd.log").path)
+        let hostNameEnvironment = hostName
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .flatMap { $0.isEmpty ? nil : $0 }
+            .map { "\n            <key>MUX_HOST_NAME</key>\n            <string>\(xml($0))</string>" } ?? ""
         return """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -40,7 +45,7 @@ enum MacHostKeepAlive {
             <key>MUX_STATE_DIR</key>
             <string>\(state)</string>
             <key>MUX_RELAY_DOMAIN</key>
-            <string>\(xml(relayDomain))</string>
+            <string>\(xml(relayDomain))</string>\(hostNameEnvironment)
             <key>PATH</key>
             <string>\(bin):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
           </dict>
@@ -75,7 +80,8 @@ enum MacHostKeepAlive {
                 brokerPath: brokerURL.path,
                 port: port,
                 binDirectory: binDirectory.path,
-                stateDirectory: stateDirectory.path
+                stateDirectory: stateDirectory.path,
+                hostName: MacBrokerSidecar.localHostDisplayName()
             )
             try contents.write(to: file, atomically: true, encoding: .utf8)
             _ = runLaunchctl(["bootout", "gui/\(getuid())/\(label)"])

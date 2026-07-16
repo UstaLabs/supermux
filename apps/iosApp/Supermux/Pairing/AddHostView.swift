@@ -5,14 +5,13 @@ import UIKit
 #endif
 
 /// Add-host flow (spec §3.4 / §5): three ways to pair another broker into the merged fleet.
-///  - **Scan** a pairing QR (iOS camera).
-///  - **Paste** the pairing payload (the QR's `{v:1,action:"pair",…,claimSecret}` JSON).
+///  - **Scan** a current claim QR or a legacy `/pair?t=…` QR (iOS camera).
+///  - **Paste** either pairing format.
 ///  - **URL** — a plain typed host URL for Tailscale/VPN/reverse-proxy users: GET /host to confirm
 ///    it's a supermux broker, then a "mint a claim on the host" hint if it's already set up.
 ///
-/// Scan/Paste parse with the shared `PairingPayload.parse` (rejects wrong version/action +
-/// non-supermux relay origins) then claim; `Fleet.claim` aborts if the returned hostId ≠ the
-/// scanned one. The SwiftUI mirror of Android's `AddHostScreen`.
+/// Current claims retain the hostId mismatch guard; legacy device-token URLs are validated against
+/// the old broker before storage. The SwiftUI mirror of Android's `AddHostScreen`.
 struct AddHostView: View {
     let fleet: Fleet
     var onAdded: () -> Void
@@ -110,7 +109,7 @@ struct AddHostView: View {
             #endif
         case .paste:
             VStack(spacing: 12) {
-                TextField("{\"v\":1,\"action\":\"pair\",…}", text: $pasteInput, axis: .vertical)
+                TextField("https://host/pair?t=… or {\"v\":1,…}", text: $pasteInput, axis: .vertical)
                     .lineLimit(1...4)
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()

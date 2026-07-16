@@ -11,6 +11,8 @@ struct TerminalPanel: View {
     @State private var tabs: [String] = []        // terminal ids
     @State private var activeId: String = ""
     @State private var loaded = false
+    @State private var pendingCreates: [String: Date] = [:]
+    @State private var pendingCloses: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,19 +20,29 @@ struct TerminalPanel: View {
             Divider()
             ZStack {
                 if !activeId.isEmpty {
+                    let terminalId = activeId
                     TerminalPane(broker: broker, session: session,
-                                 kind: "scratch", terminalId: activeId,
-                                 onExit: { onPaneExit(activeId) })
+                                 kind: "scratch", terminalId: terminalId,
+                                 onExit: { onPaneExit(terminalId) })
                         // Remount on tab switch is cheap now: each tab's live terminal is
                         // cached in BrokerSession, so this reuses the warm host (no reconnect).
-                        .id("\(session.id):\(activeId)")
+                        .id("\(session.id):\(terminalId)")
                 } else if loaded {
                     emptyState
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .task(id: session.id) { await refresh() }
+        .task(id: session.id) {
+            while !Task.isCancelled {
+                await refresh()
+                do {
+                    try await Task.sleep(nanoseconds: 3_000_000_000)
+                } catch {
+                    break
+                }
+            }
+        }
     }
 
     private var tabStrip: some View {
@@ -74,20 +86,31 @@ struct TerminalPanel: View {
 
     private func addTab() {
         let id = genId()
+        pendingCreates[id] = Date()
         tabs.append(id)
         activeId = id
     }
 
     private func closeTab(_ id: String) {
         let idx = tabs.firstIndex(of: id)
+        pendingCreates.removeValue(forKey: id)
+        pendingCloses.insert(id)
         tabs.removeAll { $0 == id }
         pickActiveAfterRemoval(idx ?? 0)
-        Task { try? await broker.api.closeTerminal(session: session.id, terminal: id) }
+        Task {
+            do {
+                try await broker.api.closeTerminal(session: session.id, terminal: id)
+            } catch {
+                pendingCloses.remove(id)
+            }
+            await refresh()
+        }
     }
 
     /// Shell exited (tmux already gone): drop the tab, no close call needed.
     private func onPaneExit(_ id: String) {
         let idx = tabs.firstIndex(of: id)
+        pendingCreates.removeValue(forKey: id)
         tabs.removeAll { $0 == id }
         pickActiveAfterRemoval(idx ?? 0)
     }
@@ -99,12 +122,30 @@ struct TerminalPanel: View {
     }
 
     private func refresh() async {
-        let ids = ((try? await broker.api.listTerminals(session: session.id)) ?? []).map { $0.id }
-        tabs = ids
-        if tabs.isEmpty {
-            addTab()                                  // first open → one usable terminal
-        } else if !tabs.contains(activeId) {
-            activeId = tabs[0]
+        do {
+            let remoteIds = try await broker.api.listTerminals(session: session.id).map { $0.id }
+            let remote = Set(remoteIds)
+            let now = Date()
+
+            for id in remoteIds { pendingCreates.removeValue(forKey: id) }
+            pendingCreates = pendingCreates.filter { now.timeIntervalSince($0.value) < 15 }
+            pendingCloses = Set(pendingCloses.filter { remote.contains($0) })
+
+            let pendingLocal = tabs.filter { id in
+                !remote.contains(id) && !pendingCloses.contains(id) && pendingCreates[id] != nil
+            }
+            tabs = (remoteIds.filter { !pendingCloses.contains($0) } + pendingLocal)
+                .reduce(into: [String]()) { result, id in
+                    if !result.contains(id) { result.append(id) }
+                }
+
+            if tabs.isEmpty && !loaded {
+                addTab()                              // first open → one usable terminal
+            } else if !tabs.contains(activeId) {
+                activeId = tabs.first ?? ""
+            }
+        } catch {
+            if tabs.isEmpty && !loaded { addTab() }
         }
         loaded = true
     }

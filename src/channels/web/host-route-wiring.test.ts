@@ -79,13 +79,34 @@ test("POST /pair/mint-claim requires auth and returns a fresh claimSecret", asyn
   const token = new DeviceStore(made.devicesFile).mint("dev").token
   const res = await fetch(`${base()}/pair/mint-claim`, { method: "POST", headers: { authorization: `Bearer ${token}` } })
   expect(res.status).toBe(200)
-  const { claimSecret } = await res.json() as { claimSecret: string }
+  const { claimSecret, expiresAt } = await res.json() as { claimSecret: string; expiresAt: string }
   expect(typeof claimSecret).toBe("string")
+  expect(expiresAt).toBe("1970-01-01T00:10:00.000Z")
   const claimed = await fetch(`${base()}/pair/claim`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ claimSecret, deviceName: "phone2" }),
   })
   expect(claimed.status).toBe(200)
+})
+
+test("POST /devices publishes the live relay URL instead of localhost", async () => {
+  const made = makeChannel({
+    publicUrl: "http://127.0.0.1:9898",
+    getRelayUrl: () => "https://h-live.relay.supermux.dev",
+  })
+  channel = made.channel; await channel.start()
+  const token = new DeviceStore(made.devicesFile).mint("admin").token
+
+  const res = await fetch(`${base()}/devices`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ name: "phone" }),
+  })
+
+  expect(res.status).toBe(200)
+  const body = await res.json() as { url: string; name: string }
+  expect(body.name).toBe("phone")
+  expect(body.url).toStartWith("https://h-live.relay.supermux.dev/pair?t=")
 })
 
 test("POST /pair/claim rejects a reused secret", async () => {

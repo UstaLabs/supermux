@@ -39,7 +39,9 @@ import dev.supermux.net.ModelInfo
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.OpenCodeOAuthStart
 import dev.supermux.net.OpenCodeProvider
+import dev.supermux.net.PADto
 import dev.supermux.net.PathValidation
+import dev.supermux.net.PairUrl
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RemoteRepo
@@ -50,6 +52,7 @@ import dev.supermux.net.ScrcpyClient
 import dev.supermux.net.SpawnRequest
 import dev.supermux.net.UpdateCommentBody
 import dev.supermux.net.TerminalClient
+import dev.supermux.net.TerminalSummary
 import dev.supermux.net.UpdateStatus
 import dev.supermux.net.VerifySaveResult
 import dev.supermux.net.VerifySuggestResult
@@ -69,6 +72,7 @@ import dev.supermux.host.SessionKey
 import dev.supermux.host.fleetOwners
 import dev.supermux.host.mergeFleetRows
 import dev.supermux.host.mergedSessions
+import dev.supermux.host.isLegacyHostDisplayName
 import dev.supermux.util.TransportPolicy
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
@@ -470,13 +474,13 @@ class AppViewModel(
      *  and idempotent — skipped once the id is known, so it doesn't refetch on every reconnect. */
     private fun backfillHostIdentity(recordId: String) {
         val current = store.list().firstOrNull { it.recordId == recordId } ?: return
-        if (!current.hostId.isNullOrBlank()) return
+        if (!current.hostId.isNullOrBlank() && !isLegacyHostDisplayName(current.displayName)) return
         val api = hostConns.api(recordId) ?: return
         viewModelScope.launch {
-            val hostId = runCatching { api.getHost() }.getOrNull()?.hostId?.takeIf { it.isNotBlank() }
-                ?: return@launch
+            val identity = runCatching { api.getHost() }.getOrNull() ?: return@launch
+            val hostId = identity.hostId.takeIf { it.isNotBlank() } ?: return@launch
             val before = store.list().map { it.recordId }.toSet()
-            store.backfillHostId(recordId, hostId)
+            store.backfillHostIdentity(recordId, hostId, identity.name)
             val merged = before - store.list().map { it.recordId }.toSet()
             if (merged.isNotEmpty()) {
                 // A duplicate record collapsed into this one — drop its orphaned bucket + cache +
@@ -586,6 +590,41 @@ class AppViewModel(
     }
 
     /**
+     * Add a pre-multi-host broker from its legacy `/pair?t=…` QR. That URL already carries a
+     * durable device bearer, so sending it to `/pair/claim` would incorrectly reject it as an
+     * expired claim. Validate the bearer using endpoints available on old brokers, then persist it
+     * directly. `/host` is best-effort because brokers predating multi-host do not expose it.
+     */
+    suspend fun addLegacyHost(pair: PairUrl): AddHostResult {
+        val api = BrokerApi(pair.baseUrl, pair.token, http)
+        val validPairJson = runCatching { api.pairJson(pair.token) }.getOrNull()
+            ?.token == pair.token
+        val validMe = if (validPairJson) false else {
+            runCatching { api.me() }.getOrNull()?.paired == true
+        }
+        if (!validPairJson && !validMe) {
+            return AddHostResult.Error(
+                "The host rejected this pairing token. Check that it is reachable and generate a fresh QR if needed.",
+            )
+        }
+
+        val identity = runCatching { api.getHost() }.getOrNull()
+        val displayName = identity?.name?.takeIf { it.isNotBlank() }
+            ?: legacyHostDisplayName(pair.baseUrl)
+        val host = store.addOrUpdate(
+            displayName = displayName,
+            token = pair.token,
+            relayUrl = pair.baseUrl.takeIf(::isRelayHostUrl),
+            directUrl = pair.baseUrl.takeUnless(::isRelayHostUrl),
+            hostId = identity?.hostId?.takeIf { it.isNotBlank() },
+            platform = identity?.platform,
+            version = identity?.version,
+        )
+        onHostsChanged()
+        return AddHostResult.Added(host)
+    }
+
+    /**
      * Typed-URL add-host (Tailscale/VPN/reverse-proxy — spec §5/D10): GET /host to confirm it is a
      * supermux broker, then try a secret-less claim. On a fresh/unclaimed broker that mints a device
      * (trust-on-first-connect) and we persist it; an already-set-up host returns [NeedsClaim] so the
@@ -628,6 +667,15 @@ class AppViewModel(
         val url = normalizeHostUrl(rawUrl) ?: return false
         return !TransportPolicy.isPlainHttpAllowedWithoutOptIn(url)
     }
+
+    private fun legacyHostDisplayName(url: String): String = runCatching {
+        io.ktor.http.Url(url).host
+    }.getOrNull()?.takeIf { it.isNotBlank() } ?: "Host"
+
+    private fun isRelayHostUrl(url: String): Boolean = runCatching {
+        val host = io.ktor.http.Url(url).host.lowercase()
+        host == "relay.supermux.dev" || host.endsWith(".relay.supermux.dev")
+    }.getOrDefault(false)
 
     /** Rename a paired host (the merged-list chip/badge label). */
     fun renameHost(recordId: String, name: String) {
@@ -804,9 +852,17 @@ class AppViewModel(
         }
     }
 
-    fun connectTerminal(sessionId: String): TerminalClient {
+    fun connectTerminal(sessionId: String, terminalId: String = "main"): TerminalClient {
         val c = connFor(sessionId)
-        return TerminalClient(c?.baseUrl ?: "", c?.token ?: "", http, sessionId)
+        return TerminalClient(c?.baseUrl ?: "", c?.token ?: "", http, sessionId, terminalId = terminalId)
+    }
+
+    /** Broker-owned scratch terminals for this session, shared by every connected client. */
+    suspend fun listTerminals(sessionId: String): List<TerminalSummary> =
+        apiFor(sessionId)?.listTerminals(sessionId) ?: emptyList()
+
+    suspend fun closeTerminal(sessionId: String, terminalId: String) {
+        apiFor(sessionId)?.closeTerminal(sessionId, terminalId)
     }
 
     /** Raw agent-PTY terminal for the Native tab (kind="agent"); shell tab uses the scratch kind. */
@@ -1030,6 +1086,18 @@ class AppViewModel(
     fun resume(id: String) { viewModelScope.launch { runCatching { activeApi()?.resume(id) } } }
 
     // ── Assistant ──────────────────────────────────────────────────────────────
+
+    suspend fun personalAssistants(): List<PADto> =
+        runCatching { activeApi()?.listPAs() }.getOrNull() ?: emptyList()
+
+    suspend fun createPersonalAssistant(name: String, agent: String, focus: String?): Boolean {
+        val api = activeApi() ?: return false
+        return runCatching { api.createPA(name, agent, focusText = focus) }.isSuccess
+    }
+
+    suspend fun killPersonalAssistant(id: String) {
+        runCatching { activeApi()?.kill(id) }
+    }
 
     suspend fun assistantLoad(): Pair<String, String>? = coroutineScope {
         val api = activeApi() ?: return@coroutineScope null

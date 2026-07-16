@@ -151,6 +151,7 @@ import { hydrateCredentialEnv, applyCredentialEnv } from "./core/settings/app-co
 import { reverseProxySnippets } from "./core/settings/exposure"
 import { toActivityEvents } from "./core/agents/adapter-activity"
 import { LoginManager } from "./core/agents/login/manager"
+import { claudeLoginSpawnCommand } from "./core/agents/login/spawn-command"
 import { getRepoInfo } from "./core/git/repo-info"
 import { createWorktree, removeWorktree, ensureWorktreeAt, type WorktreeHandle } from "./core/worktree/manager"
 import { isWorktreeReclaimable } from "./core/worktree/gc"
@@ -401,6 +402,7 @@ function ensureClaudeTailer(sessionUuid: string, _name: string, workdir: string,
       if (event.kind === "interrupt") { agentStateStore.applyEvent(sessionUuid, "interrupt"); return }
       activityStore.append(sessionUuid, event)
     },
+    workdir,
     seekToEnd,
   })
   tailer.start()
@@ -885,8 +887,10 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   })
   adapter.on("tool-call", (ev: any) => {
     const now = Date.now()
+    const session = registry.get(sessionId)
+    const workdir = session?.workdir
     try {
-      for (const a of toActivityEvents(adapter.kind, ev, now)) activityStore.append(sessionId, a)
+      for (const a of toActivityEvents(adapter.kind, ev, now, workdir)) activityStore.append(sessionId, a)
     } catch (err) { log.warn("adapter_tool_call_activity_failed", { err: String(err) }) }
     if (ev?.phase === "started") agentStateStore.applyEvent(sessionId, "PreToolUse", normalizeToolName(adapter.kind, ev.tool), now)
     else agentStateStore.applyEvent(sessionId, "PostToolUse", undefined, now)
@@ -925,9 +929,6 @@ const proxyLivenessMonitor = new ProxyLivenessMonitor({
 // are assigned. TypeScript sees the definite-assignment gap; the nullable guard on
 // webChannel inside onChange covers the window before webChannel is assigned.
 let loginManager: LoginManager
-// respawnPAsAfterOnboarding is assigned after supervisor is created (below).
-// setAppConfig closes over this binding — safe since it's only invoked at request-time.
-let respawnPAsAfterOnboarding: () => Promise<void> = async () => {}
 const terminalManager = new TerminalManager()
 const displayManager = new DisplayManager({
   providers: [new LinuxXvfbProvider(), new MacosScreenProvider()],
@@ -939,10 +940,15 @@ const fsWatcher = new FsWatcher()
 function spawnLoginProc(kind: string) {
   const h = homedir()
   let cmd: string, args: string[]
+  let detached = false
   const env = { ...process.env } as Record<string, string>
   if (kind === "codex") { cmd = "codex"; args = ["login", "--device-auth"]; env.CODEX_HOME = `${h}/.codex` }
   else if (kind === "cursor") { cmd = "cursor-agent"; args = ["login"]; env.NO_OPEN_BROWSER = "1" }
-  else if (kind === "claude") { cmd = "script"; args = ["-qec", "stty cols 600; claude auth login", "/dev/null"] }
+  else if (kind === "claude") {
+    const spec = claudeLoginSpawnCommand()
+    ;({ cmd, args } = spec)
+    detached = spec.detached ?? false
+  }
   else { cmd = ""; args = [] } // unknown kind handled below
   let outCb: (c: string) => void = () => {}
   let exitCb: (code: number | null) => void = () => {}
@@ -952,7 +958,7 @@ function spawnLoginProc(kind: string) {
   }
   let child: ReturnType<typeof nodeSpawn>
   try {
-    child = nodeSpawn(cmd, args, { env })
+    child = nodeSpawn(cmd, args, { env, detached })
   } catch (err: any) {
     // Missing binary (ENOENT) etc — report failure instead of crashing the broker.
     log.warn("login_spawn_failed", { kind, cmd, err: err?.message ?? String(err) })
@@ -968,7 +974,12 @@ function spawnLoginProc(kind: string) {
       child.stderr?.on("data", (d) => cb(d.toString()))
     },
     onExit: (cb: (code: number | null) => void) => { exitCb = cb; child.on("exit", cb) },
-    kill: () => { try { child.kill() } catch {} },
+    kill: () => {
+      try {
+        if (detached && child.pid) process.kill(-child.pid, "SIGTERM")
+        else child.kill()
+      } catch {}
+    },
     write: (data: string) => { try { child.stdin?.write(data) } catch {} },
   }
 }
@@ -1007,6 +1018,7 @@ const hostIdentity = loadOrCreateHostKey(HOST_KEY_FILE)
 const claimStore = new ClaimStore()
 setInterval(() => claimStore.sweep(), 60_000).unref()
 const hostPlatform = process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux"
+const advertisedHostName = process.env.MUX_HOST_NAME?.trim() || hostname()
 
 // Relay data plane (frp). Opt-in via MUX_RELAY_DOMAIN until the spike passes and
 // a relay box exists; otherwise LAN/direct only. Swappable behind RelayProvider.
@@ -1036,7 +1048,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     updateChecker,
     getHostInfo: () => ({
       hostId: hostIdentity.hostId,
-      name: hostname(),
+      name: advertisedHostName,
       platform: hostPlatform,
       version: BUILD_VERSION,
       protocolVersion: 1,
@@ -1476,14 +1488,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     resumeFromArchive: (id: string) => resumeFromArchive(id),
     getAppConfig: () => settings.getAppConfig(appConfigEnv),
     setAppConfig: (patch) => {
-      const wasOnboarded = settings.getAppConfig(appConfigEnv).onboarded
       settings.setAppConfig(patch)
       const next = settings.getAppConfig(appConfigEnv)
       // Explicit PUT is authoritative — overwrite so a corrected/rotated key
       // takes effect for new spawns. Already-running sessions keep their old
       // env until respawn (acceptable for v1).
       applyCredentialEnv(next, process.env)
-      if (!wasOnboarded && next.onboarded) { void respawnPAsAfterOnboarding() }
       return next
     },
     getAgentStatuses: () => {
@@ -2912,7 +2922,10 @@ ch.on("inbound", async (msg: InboundMessage) => {
   }
 
   if (decision.kind === "error") {
-    await ch.send({ op: "reply", chat_id: msg.chat_id, text: `routing error: ${decision.reason}`, disable_notification: false })
+    const text = decision.reason === "no_active_session"
+      ? "No active session. Create one in the app, or use /spawn <workdir> [as name]."
+      : `routing error: ${decision.reason}`
+    await ch.send({ op: "reply", chat_id: msg.chat_id, text, disable_notification: false })
     return
   }
 
@@ -3106,18 +3119,12 @@ const supervisor = createSupervisor({
   onClaudeSessionId: (brokerSessionId, claudeSessionId) => {
     pendingClaudeSessionId.set(brokerSessionId, claudeSessionId)
   },
-  getPaName: () => settings.getAppConfig(appConfigEnv).paName,
-  // Gate purely on `onboarded` (existing installs are seeded onboarded at boot,
-  // below). NOT on device count — the wizard's own claim-on-first-connect creates
-  // a device mid-onboarding, which must not trip the PA into spawning early
-  // (named "assistant" before the user picks a name) on a restart.
-  shouldAutoSpawnPA: () => settings.getAppConfig(appConfigEnv).onboarded,
   paWorkdir: appConfig.paWorkdir || undefined,
   resolveEffort: (s) => sessionEffort(s),
   reapInternalWorkers: () => agentRpc.reapIdle(RPC_WORKER_IDLE_MS),
 })
 // Existing installs (any prior sessions, active/suspended/archived) are implicitly
-// onboarded — they keep their auto-PA and skip the wizard. Only a pristine instance
+// onboarded and skip the wizard. Only a pristine instance
 // stays un-onboarded. Uses SESSIONS, not devices: a fresh install mid-onboarding has
 // a claimed device but no sessions yet, so it must not get seeded.
 if (!settings.getAppConfig(appConfigEnv).onboarded &&
@@ -3126,30 +3133,6 @@ if (!settings.getAppConfig(appConfigEnv).onboarded &&
   log.info("onboarded_seeded_existing_install", {})
 }
 await reconcileOnStartup({ registry, bindSocket: (sid) => server.bind(sid), supervisor, livePanePid: (wid) => livePanePid(wid) })
-
-// Assign the PA respawn implementation now that supervisor is available.
-// Called by setAppConfig when onboarding transitions false → true, so the PA
-// picks up newly-saved agent credentials (process.env has been updated by
-// applyCredentialEnv before this is invoked).
-respawnPAsAfterOnboarding = async () => {
-  try {
-    const pas = registry.listPAs()
-    for (const pa of pas) {
-      try {
-        const wid = await widOf(pa)
-        if (wid) await killWindowById(wid).catch(() => {})
-        registry.unregister(pa.name)
-        log.info("pa_respawn_killed", { name: pa.name })
-      } catch (err: any) {
-        log.warn("pa_respawn_kill_failed", { name: pa.name, err: err?.message ?? String(err) })
-      }
-    }
-    await supervisor.ensurePersonalAssistants()
-    log.info("pa_respawn_after_onboarding_done")
-  } catch (err: any) {
-    log.warn("pa_respawn_after_onboarding_failed", { err: err?.message ?? String(err) })
-  }
-}
 
 async function resumeNonClaudeAdapters(): Promise<void> {
   for (const s of registry.list()) {

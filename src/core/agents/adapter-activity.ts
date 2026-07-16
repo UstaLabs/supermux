@@ -2,6 +2,7 @@ import type { AgentKind } from "./types"
 import type { ActivityEvent } from "./claude/activity-event"
 import { normalizeToolName } from "./tool-normalize"
 import { clip, firstLine, pickString } from "./activity-format"
+import { relativizePath } from "./path-relativize"
 
 const TITLE_MAX = 120
 const DETAIL_MAX = 2000
@@ -44,9 +45,62 @@ function extractCursorResult(toolBody: Record<string, unknown> | undefined): str
   return pickString(caseVal, ["stderr", "error", "message", "stdout"])
 }
 
-function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike): { summary: string; resultDetail: string } {
+type DetailSummary = { summary: string; rawSummary: string; resultDetail: string; inputDetail?: string }
+
+function jsonText(value: unknown): string {
+  if (typeof value === "string") return value
+  if (value == null) return ""
+  try { return JSON.stringify(value, null, 2) ?? "" } catch { return String(value) }
+}
+
+function codexOutputContent(value: unknown): string {
+  if (!Array.isArray(value)) return ""
+  const parts: string[] = []
+  for (const item of value) {
+    if (item && typeof item === "object") {
+      const row = item as Record<string, unknown>
+      if ((row.type === "text" || row.type === "inputText") && typeof row.text === "string") {
+        parts.push(row.text)
+        continue
+      }
+    }
+    const fallback = jsonText(item)
+    if (fallback) parts.push(fallback)
+  }
+  return parts.join("\n")
+}
+
+function codexFileChanges(value: unknown, workdir: string | undefined): { summary: string; detail: string; result: string } {
+  if (!Array.isArray(value)) return { summary: "", detail: "", result: "" }
+  const summaries: string[] = []
+  const details: string[] = []
+  const results: string[] = []
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue
+    const change = item as Record<string, unknown>
+    if (typeof change.path !== "string" || !change.path) continue
+    const kindObj = change.kind && typeof change.kind === "object" ? change.kind as Record<string, unknown> : undefined
+    const kind = typeof change.kind === "string" ? change.kind
+      : typeof kindObj?.type === "string" ? kindObj.type
+      : "update"
+    const movePath = typeof kindObj?.move_path === "string" ? kindObj.move_path
+      : typeof kindObj?.movePath === "string" ? kindObj.movePath
+      : ""
+    const relativePath = relativizePath(change.path, workdir)
+    const relativeMovePath = movePath ? relativizePath(movePath, workdir) : ""
+    const pathLabel = relativeMovePath ? `${relativePath} → ${relativeMovePath}` : relativePath
+    const rawPathLabel = movePath ? `${change.path} → ${movePath}` : change.path
+    summaries.push(pathLabel)
+    results.push(`${kind} ${pathLabel}`)
+    const diff = typeof change.diff === "string" ? change.diff.trim() : ""
+    details.push(diff ? `${kind} ${rawPathLabel}\n${diff}` : `${kind} ${rawPathLabel}`)
+  }
+  return { summary: summaries.join(", "), detail: details.join("\n\n"), result: results.join("\n") }
+}
+
+function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike, workdir: string | undefined): DetailSummary {
   const obj = ev.detail && typeof ev.detail === "object" ? ev.detail as Record<string, unknown> : undefined
-  if (!obj) return { summary: "", resultDetail: "" }
+  if (!obj) return { summary: "", rawSummary: "", resultDetail: "" }
 
   if (agent === "opencode") {
     const state = obj.state as Record<string, unknown> | undefined
@@ -57,32 +111,75 @@ function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike): { summary: st
     const rawPending = typeof state?.raw === "string" ? state.raw.trim() : ""
     // Extract summary from input args (primary), pending `raw`, or state title (for
     // delta SSE updates where structured input may be absent on the first frame).
-    const summary = input && Object.keys(input).length
-      ? pickString(input, OPENCODE_INPUT_FIELDS)
-      : rawPending
-        ? firstLine(rawPending)
-        : rawTitle
+    // `summary` is the workdir-relativized form (used in the card title); `rawSummary`
+    // keeps the absolute path (used in the expand panel — per Q4 we don't rewrite the
+    // raw input JSON). When no input is picked, both fall back to the same pending
+    // `raw` / state title so the title and detail match.
+    const rawPicked = input && Object.keys(input).length ? pickString(input, OPENCODE_INPUT_FIELDS) : ""
+    const picked = rawPicked ? relativizePath(rawPicked, workdir) : ""
+    const fallback = rawPending ? firstLine(rawPending) : rawTitle
+    const summary = picked || fallback
     // For completed events, prefer the actual output over the title — the title is a
     // label (typically the command/input), so `rawTitle || output` showed the input as
     // the output. Flip to `output || rawTitle` so the real result is surfaced.
     const result = ev.phase === "completed" ? (output || rawTitle) : ev.phase === "failed" ? error : ""
-    return { summary, resultDetail: result }
+    return { summary, rawSummary: rawPicked || fallback, resultDetail: result }
   }
 
   if (agent === "codex") {
     if (obj.type === "mcpToolCall" || obj.type === "mcp_tool_call") {
-      const toolName = (typeof obj.toolName === "string" && obj.toolName) || (typeof obj.tool_name === "string" && obj.tool_name) || ""
+      const toolName = (typeof obj.tool === "string" && obj.tool)
+        || (typeof obj.toolName === "string" && obj.toolName)
+        || (typeof obj.tool_name === "string" && obj.tool_name) || ""
       const args = (obj.arguments ?? obj.args) as Record<string, unknown> | undefined
-      const arg = args ? pickString(args, ["command", "path", "workdir", "query", "pattern", "text", "port", "name"]) : ""
-      const result = ev.phase === "completed" ? (typeof obj.result === "string" ? obj.result : JSON.stringify(obj.result ?? "")) : ""
-      return { summary: arg ? `${toolName} ${arg}` : toolName, resultDetail: result }
+      const rawArg = args ? pickString(args, ["command", "path", "workdir", "query", "pattern", "text", "port", "name"]) : ""
+      const arg = rawArg ? relativizePath(rawArg, workdir) : ""
+      const resultObj = obj.result && typeof obj.result === "object" ? obj.result as Record<string, unknown> : undefined
+      const errorObj = obj.error && typeof obj.error === "object" ? obj.error as Record<string, unknown> : undefined
+      const result = ev.phase === "completed"
+        ? (typeof obj.result === "string" ? obj.result : codexOutputContent(resultObj?.content) || jsonText(resultObj?.structuredContent) || jsonText(obj.result))
+        : ev.phase === "failed"
+          ? (typeof obj.error === "string" ? obj.error : typeof errorObj?.message === "string" ? errorObj.message : "")
+          : ""
+      return { summary: arg ? `${toolName} ${arg}` : toolName, rawSummary: arg ? `${toolName} ${rawArg}` : toolName, resultDetail: result }
     }
-    const summary = pickString(obj, ["command", "path", "file", "name", "query", "pattern", "text"])
+    if (obj.type === "dynamicToolCall" || obj.type === "dynamic_tool_call") {
+      const args = (obj.arguments ?? obj.args) as Record<string, unknown> | undefined
+      const rawArg = args ? pickString(args, ["command", "path", "workdir", "query", "pattern", "prompt", "text", "name"]) : ""
+      const arg = rawArg ? relativizePath(rawArg, workdir) : ""
+      const result = (ev.phase === "completed" || ev.phase === "failed")
+        ? codexOutputContent(obj.contentItems ?? obj.content_items)
+        : ""
+      return { summary: arg, rawSummary: rawArg, resultDetail: result }
+    }
+    if (obj.type === "fileChange" || obj.type === "file_change") {
+      const changes = codexFileChanges(obj.changes, workdir)
+      const legacyPath = pickString(obj, ["path", "file"])
+      if (!changes.summary && legacyPath) {
+        return {
+          summary: relativizePath(legacyPath, workdir),
+          rawSummary: legacyPath,
+          resultDetail: ev.phase === "completed" || ev.phase === "failed" ? legacyPath : "",
+        }
+      }
+      return {
+        summary: changes.summary,
+        rawSummary: changes.summary,
+        inputDetail: changes.detail,
+        resultDetail: ev.phase === "completed" || ev.phase === "failed" ? changes.result : "",
+      }
+    }
+    const rawPicked = pickString(obj, ["command", "path", "file", "name", "query", "pattern", "text"])
+    const summary = relativizePath(rawPicked, workdir)
     let result = ""
-    if (ev.phase === "completed") {
-      result = typeof obj.aggregated_output === "string" ? obj.aggregated_output : ""
+    if (ev.phase === "completed" || ev.phase === "failed") {
+      result = typeof obj.aggregatedOutput === "string" ? obj.aggregatedOutput
+        : typeof obj.aggregated_output === "string" ? obj.aggregated_output
+        : ""
+      const exitCode = obj.exitCode ?? obj.exit_code
+      if (!result && ev.phase === "failed" && typeof exitCode === "number") result = `Exit code ${exitCode}`
     }
-    return { summary, resultDetail: result }
+    return { summary, rawSummary: rawPicked, resultDetail: result }
   }
 
   if (agent === "cursor") {
@@ -96,31 +193,35 @@ function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike): { summary: st
     const tc = obj.tool_call as Record<string, unknown> | undefined
     const toolBody = tc && typeof tc === "object" ? (tc[ev.tool] ?? Object.values(tc)[0]) as Record<string, unknown> | undefined : undefined
     const innerArgs = toolBody?.args as Record<string, unknown> | undefined
-    const summary = innerArgs ? pickString(innerArgs, ["command", "pattern", "query", "globPattern", "glob_pattern", "description", "url", "path", "file", "target_file", "text"]) : ""
+    const rawPicked = innerArgs ? pickString(innerArgs, ["command", "pattern", "query", "globPattern", "glob_pattern", "description", "url", "path", "file", "target_file", "text"]) : ""
+    const summary = rawPicked ? relativizePath(rawPicked, workdir) : ""
     const result = (ev.phase === "completed" || ev.phase === "failed") ? extractCursorResult(toolBody) : ""
-    return { summary, resultDetail: result }
+    return { summary, rawSummary: rawPicked, resultDetail: result }
   }
 
   // claude: extract from transcript blocks (handled by transcript-parser, not this path)
-  const summary = pickString(obj, ["command", "path", "file", "name", "query", "pattern"])
-  return { summary, resultDetail: "" }
+  const rawPicked = pickString(obj, ["command", "path", "file", "name", "query", "pattern"])
+  const summary = relativizePath(rawPicked, workdir)
+  return { summary, rawSummary: rawPicked, resultDetail: "" }
 }
 
-export function toActivityEvents(agent: AgentKind, ev: ToolCallEventLike, now: number): ActivityEvent[] {
+export function toActivityEvents(agent: AgentKind, ev: ToolCallEventLike, now: number, workdir: string | undefined): ActivityEvent[] {
   const ts = new Date(now).toISOString()
   const callId = ev.call_id || undefined
-  const { summary: rawSummary, resultDetail } = summarizeDetail(agent, ev)
+  const { summary: relativeSummary, rawSummary, resultDetail, inputDetail } = summarizeDetail(agent, ev, workdir)
 
   if (ev.phase === "started") {
     const tool = normalizeToolName(agent, ev.tool)
-    const summary = firstLine(rawSummary)
+    const summary = firstLine(relativeSummary)
     const titleRaw = summary ? `${tool}: ${summary}` : tool
     const title = clip(titleRaw, TITLE_MAX)
-    const detail = clip(summary, DETAIL_MAX)
+    // The expand-panel detail keeps the raw (un-relativized) value so the user can
+    // see the real host path — only the card title gets the workdir-relative form.
+    const detail = clip(inputDetail ?? firstLine(rawSummary), DETAIL_MAX)
     return [{ ts, kind: "tool", tool, title: title.text, detail: detail.text, phase: "started",
       ...(callId ? { callId } : {}), ...(title.truncated || detail.truncated ? { truncated: true } : {}) }]
   }
-  const result = firstLine(resultDetail)
+  const result = agent === "codex" ? resultDetail.trim() : firstLine(resultDetail)
   const detail = clip(result, DETAIL_MAX)
   return [{ ts, kind: "tool_result", title: ev.phase === "failed" ? "error" : "done",
     detail: detail.text, phase: "completed", ...(detail.truncated ? { truncated: true } : {}),

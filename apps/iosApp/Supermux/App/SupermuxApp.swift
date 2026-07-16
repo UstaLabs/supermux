@@ -16,6 +16,8 @@ struct SupermuxApp: App {
     #if os(macOS)
     @StateObject private var macHost: MacHostCoordinator
     @State private var macManualPairing = false
+    @State private var macSetupChecked: Bool
+    @State private var macNeedsOnboarding = false
     #endif
 
     init() {
@@ -39,7 +41,9 @@ struct SupermuxApp: App {
         #if os(macOS)
         let persistHostState = MacHostPolicy.shouldPersist()
         if persistHostState { HostStore.migrateFromLegacyIfNeeded() }
-        _paired = State(initialValue: persistHostState && BrokerConfig.isPaired)
+        let initiallyPaired = persistHostState && BrokerConfig.isPaired
+        _paired = State(initialValue: initiallyPaired)
+        _macSetupChecked = State(initialValue: !initiallyPaired)
         #else
         HostStore.migrateFromLegacyIfNeeded()
         _paired = State(initialValue: BrokerConfig.isPaired)
@@ -66,35 +70,30 @@ struct SupermuxApp: App {
         WindowGroup {
             Group {
                 if paired, let base = BrokerConfig.baseURL {
-                    // RootView owns the multi-host `Fleet` (built from `HostStore.shared`); the
-                    // primary host's URL keys the view identity so a re-pair to a different broker
-                    // rebuilds the fleet. Added hosts don't change `base`, so the fleet stays live.
-                    RootView(onUnpair: {
-                        BrokerConfig.unpair()
-                        // Keep the multi-host store in lockstep with the single-host truth: forget
-                        // every paired host too, so a later re-pair migrates cleanly.
-                        HostStore.forgetAll()
-                        paired = false
-                    })
-                    .id(base)
                     #if os(macOS)
-                    .task {
-                        if MacHostPolicy.shouldAutostart(), macHost.state == .idle { await macHost.start() }
+                    if !macSetupChecked {
+                        ProgressView("Checking setup…")
+                            .controlSize(.large)
+                            .task { await checkMacOnboarding() }
+                    } else if macNeedsOnboarding {
+                        macWizard
+                    } else {
+                        pairedRoot(base: base)
                     }
+                    #else
+                    pairedRoot(base: base)
                     #endif
                 } else {
                     #if os(macOS)
                     if macManualPairing {
                         PairingView { _ in
                             paired = true
+                            macSetupChecked = true
+                            macNeedsOnboarding = false
                             PushManager.shared.registerIfPaired()
                         }
                     } else {
-                        MacHostWizard(
-                            coordinator: macHost,
-                            onContinue: { paired = BrokerConfig.isPaired },
-                            onConnectManually: { macManualPairing = true }
-                        )
+                        macWizard
                     }
                     #else
                     PairingView { _ in
@@ -114,6 +113,10 @@ struct SupermuxApp: App {
                     ?? PairToken.parse(url.absoluteString, fallbackBaseURL: BrokerConfig.baseURL) {
                     BrokerConfig.pair(p)
                     paired = true
+                    #if os(macOS)
+                    macSetupChecked = true
+                    macNeedsOnboarding = false
+                    #endif
                     #if os(iOS)
                     PhoneWatchProvisioner.shared.pushCurrent()
                     #endif
@@ -142,6 +145,10 @@ struct SupermuxApp: App {
                     NotificationCenter.default.post(name: .smNewSession, object: nil)
                 }
                 .keyboardShortcut("n", modifiers: .command)
+                Divider()
+                Button("Pair New Device…") {
+                    NotificationCenter.default.post(name: .smPairNewDevice, object: nil)
+                }
             }
             TextEditingCommands()
         }
@@ -153,8 +160,8 @@ struct SupermuxApp: App {
         // independent broker client (the broker fans out to N clients).
         #if os(macOS)
         WindowGroup(id: "session", for: String.self) { $sessionId in
-            if let sessionId, let base = BrokerConfig.baseURL, let token = BrokerConfig.token {
-                SessionWindow(baseURL: base, token: token, sessionId: sessionId)
+            if let sessionId {
+                SessionWindow(sessionId: sessionId)
             }
         }
         .defaultSize(width: 1000, height: 760)
@@ -165,6 +172,62 @@ struct SupermuxApp: App {
         }
         #endif
     }
+
+    @ViewBuilder
+    private func pairedRoot(base: String) -> some View {
+        // RootView owns the multi-host `Fleet` (built from `HostStore.shared`); the
+        // primary host's URL keys the view identity so a re-pair to a different broker
+        // rebuilds the fleet. Added hosts don't change `base`, so the fleet stays live.
+        RootView(onUnpair: {
+            BrokerConfig.unpair()
+            HostStore.forgetAll()
+            paired = false
+        })
+        .id(base)
+        #if os(macOS)
+        .task {
+            if MacHostPolicy.shouldAutostart(), macHost.state == .idle { await macHost.start() }
+        }
+        #endif
+    }
+
+    #if os(macOS)
+    private var macWizard: some View {
+        MacHostWizard(
+            coordinator: macHost,
+            onContinue: {
+                paired = BrokerConfig.isPaired
+                macSetupChecked = true
+                macNeedsOnboarding = false
+            },
+            onConnectManually: { macManualPairing = true }
+        )
+    }
+
+    /// A local pair is persisted as soon as the host is prepared so onboarding REST calls
+    /// can authenticate. Ask the broker whether setup actually finished before showing RootView;
+    /// this resumes a wizard that was interrupted after Welcome instead of silently skipping it.
+    private func checkMacOnboarding() async {
+        guard let base = BrokerConfig.baseURL, let token = BrokerConfig.token else {
+            macNeedsOnboarding = true
+            macSetupChecked = true
+            return
+        }
+        let broker = BrokerSession(baseURL: base, token: token)
+        for _ in 0..<20 {
+            if let config = await broker.config() {
+                macNeedsOnboarding = !config.onboarded
+                macSetupChecked = true
+                return
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        // Preserve access for an already-paired but temporarily offline host. RootView will
+        // reconnect normally; we only force onboarding when the broker confirms it is pending.
+        macNeedsOnboarding = false
+        macSetupChecked = true
+    }
+    #endif
 }
 
 private func deepLinkPair(_ url: URL) -> PairToken? {

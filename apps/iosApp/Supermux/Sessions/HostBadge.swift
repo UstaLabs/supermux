@@ -47,8 +47,61 @@ struct HostBadge: View {
     }
 }
 
+/// Explicit host scope for pages whose data and actions belong to one broker (Usage, Devices,
+/// Settings, and similar). Keeping this visible prevents an action from silently targeting the
+/// last host used somewhere else in the app.
+struct HostScopePicker: View {
+    let hosts: [HostView]
+    let selected: String?
+    var onSelect: (String) -> Void
+
+    private var selectedHost: HostView? {
+        hosts.first { $0.recordId == selected } ?? hosts.first
+    }
+
+    var body: some View {
+        if hosts.count >= 2, let host = selectedHost {
+            HStack(spacing: 10) {
+                Text("Host")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Menu {
+                    ForEach(hosts, id: \.recordId) { candidate in
+                        Button { onSelect(candidate.recordId) } label: {
+                            if candidate.recordId == selected {
+                                Label(candidate.displayLabel, systemImage: "checkmark")
+                            } else {
+                                Text(candidate.displayLabel)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        HostDot(colorIndex: host.colorIndex, size: 9)
+                        Text(host.displayLabel).lineLimit(1)
+                        if !host.online {
+                            Text("Offline").foregroundStyle(.secondary)
+                        }
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.subheadline.weight(.medium))
+                }
+                .accessibilityIdentifier("host_scope_picker")
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 9)
+            .background(.bar)
+            .overlay(alignment: .bottom) { Divider() }
+        }
+    }
+}
+
 /// The `All · <host…> · +` filter chip row (spec §5). Each host chip carries its color dot + a live
-/// session count; the trailing `+` chip opens the add-host flow. `selected` is a recordId or nil (All).
+/// session count; the trailing `+` chip opens the add-host flow. `selected` is a recordId or nil
+/// (All). Long-pressing a host chip exposes its destructive forget action, matching Android.
 struct HostFilterChips: View {
     let hosts: [HostView]
     let selected: String?
@@ -56,6 +109,9 @@ struct HostFilterChips: View {
     var count: (String) -> Int
     var onSelect: (String?) -> Void
     var onAddHost: () -> Void
+    var onForgetHost: (String) -> Void
+
+    @State private var forgetTarget: HostView?
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -69,6 +125,15 @@ struct HostFilterChips: View {
                          selected: selected == h.recordId,
                          dimmed: !h.online) { onSelect(h.recordId) }
                         .accessibilityIdentifier("host_chip_\(h.recordId)")
+                        .accessibilityHint("Touch and hold for host actions")
+                        .accessibilityAction(named: Text("Forget host")) {
+                            forgetTarget = h
+                        }
+                        .contextMenu {
+                            Button(role: .destructive) { forgetTarget = h } label: {
+                                Label("Forget Host…", systemImage: "trash")
+                            }
+                        }
                 }
                 chip(label: "Add", systemImage: "plus", dot: nil, selected: false, dimmed: false, action: onAddHost)
                     .accessibilityIdentifier("host_chip_add")
@@ -77,6 +142,22 @@ struct HostFilterChips: View {
             .padding(.vertical, 6)
         }
         .accessibilityIdentifier("host_filter_chips")
+        .confirmationDialog(
+            "Forget \u{201C}\(forgetTarget?.displayLabel ?? "")\u{201D}?",
+            isPresented: Binding(
+                get: { forgetTarget != nil },
+                set: { if !$0 { forgetTarget = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Forget host", role: .destructive) {
+                if let target = forgetTarget { onForgetHost(target.recordId) }
+                forgetTarget = nil
+            }
+            Button("Cancel", role: .cancel) { forgetTarget = nil }
+        } message: {
+            Text("Removes this host and its sessions from this device. You\u{2019}ll need a new pairing link to add it again.")
+        }
     }
 
     @ViewBuilder

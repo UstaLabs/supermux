@@ -119,7 +119,7 @@ Open `http://localhost:8787`. State persists in named volumes; repositories moun
 
 The broker is the source of truth. It runs on the host, supervises agent sessions, keeps their histories, routes messages to the right client, and exposes the workspace APIs. Control operations happen in the broker, so switching or inspecting sessions does not spend agent tokens.
 
-Each worker is isolated in its own git worktree. The main checkout moves only through the finish action you choose. Personal-assistant sessions can stay alive as orchestrators and delegate bounded tasks to workers.
+Each worker is isolated in its own git worktree. The main checkout moves only through the finish action you choose. Optional personal-assistant sessions can be created from Settings when you want an always-on orchestrator; fresh installs do not create one.
 
 ## Connectivity and ownership
 
@@ -137,7 +137,6 @@ Native installs read `~/.mux/state/.env`; Docker reads `.env` in the project dir
 |---|---|
 | `MUX_WEB_PORT`, `MUX_WEB_PUBLIC_URL` | Enable the browser client and set its public origin |
 | `MUX_TELEGRAM_BOT_TOKEN` | Enable the optional Telegram channel |
-| `MUX_PA_NAME` | Personal-assistant session name (default: `assistant`) |
 | `MUX_HOME`, `MUX_STATE_DIR` | Override the default `~/.mux` state locations |
 | `MUX_RELAY_DOMAIN`, `MUX_RELAY_BASE` | Configure the optional connectivity relay |
 | `MUX_PROXY_BASE_DOMAIN` | Enable per-session app previews through the broker proxy |

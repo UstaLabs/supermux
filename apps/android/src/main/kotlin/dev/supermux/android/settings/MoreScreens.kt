@@ -56,6 +56,7 @@ import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
 import dev.supermux.net.OpenCodeOAuthStart
 import dev.supermux.net.OpenCodeProvider
+import dev.supermux.net.PADto
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.UpdateStatus
 import dev.supermux.android.session.relTime
@@ -91,6 +92,10 @@ import org.json.JSONObject
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
+    // Personal assistants
+    paLoad: suspend () -> List<PADto>,
+    paCreate: suspend (name: String, agent: String, focus: String?) -> Boolean,
+    paKill: suspend (id: String) -> Unit,
     // Assistant
     assistantLoad: suspend () -> Pair<String, String>?,
     assistantSave: suspend (paName: String, soul: String) -> Boolean,
@@ -135,6 +140,12 @@ fun SettingsScreen(
     var opened by remember { mutableStateOf<String?>(null) }
 
     when (opened) {
+        "personal-assistants" -> PersonalAssistantsSettingsPage(
+            onBack = { opened = null },
+            load = paLoad,
+            create = paCreate,
+            kill = paKill,
+        )
         "assistant" -> AssistantSettingsPage(
             onBack = { opened = null },
             load = assistantLoad,
@@ -202,6 +213,183 @@ fun SettingsScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+private fun PersonalAssistantsSettingsPage(
+    onBack: () -> Unit,
+    load: suspend () -> List<PADto>,
+    create: suspend (name: String, agent: String, focus: String?) -> Boolean,
+    kill: suspend (id: String) -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
+    var items by remember { mutableStateOf<List<PADto>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var showCreate by remember { mutableStateOf(false) }
+    var killTarget by remember { mutableStateOf<PADto?>(null) }
+
+    suspend fun refresh() {
+        loading = true
+        items = load()
+        loading = false
+    }
+
+    BackHandler { onBack() }
+    LaunchedEffect(Unit) { refresh() }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Personal assistants", color = cs.onSurface) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
+            )
+        },
+        floatingActionButton = {
+            FloatingActionButton(onClick = { showCreate = true }) {
+                Icon(Icons.Default.Add, contentDescription = "Create personal assistant")
+            }
+        },
+        containerColor = cs.background,
+    ) { padding ->
+        when {
+            loading -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+            items.isEmpty() -> Box(Modifier.fillMaxSize().padding(padding).padding(32.dp), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("No personal assistants", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Personal assistants are optional. Tap + to create a persistent orchestrator.",
+                        color = cs.onSurfaceVariant,
+                        fontSize = 13.sp,
+                    )
+                }
+            }
+            else -> LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentPadding = PaddingValues(bottom = 88.dp),
+            ) {
+                items(items, key = { it.id }) { pa ->
+                    ListItem(
+                        headlineContent = {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(pa.name, fontWeight = FontWeight.Medium)
+                                if (pa.isDefault) Text("default", color = cs.primary, fontSize = 11.sp)
+                            }
+                        },
+                        supportingContent = {
+                            Text(
+                                listOfNotNull(pa.agent, pa.model).joinToString(" · ").ifBlank { pa.workdir },
+                                maxLines = 1,
+                            )
+                        },
+                        leadingContent = {
+                            Box(
+                                Modifier.size(9.dp).clip(androidx.compose.foundation.shape.CircleShape)
+                                    .background(if (pa.connected) cs.primary else cs.outline),
+                            )
+                        },
+                        trailingContent = {
+                            IconButton(onClick = { killTarget = pa }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Kill ${pa.name}")
+                            }
+                        },
+                    )
+                    HorizontalDivider(color = cs.outlineVariant)
+                }
+            }
+        }
+    }
+
+    if (showCreate) {
+        PersonalAssistantCreateDialog(
+            onDismiss = { showCreate = false },
+            onCreate = { name, agent, focus ->
+                scope.launch {
+                    if (create(name, agent, focus)) {
+                        showCreate = false
+                        refresh()
+                    }
+                }
+            },
+        )
+    }
+
+    killTarget?.let { pa ->
+        AlertDialog(
+            onDismissRequest = { killTarget = null },
+            title = { Text("Kill ${pa.name}?") },
+            text = { Text("Its session will be archived. You can create another personal assistant later.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    killTarget = null
+                    scope.launch { kill(pa.id); refresh() }
+                }) { Text("Kill") }
+            },
+            dismissButton = { TextButton(onClick = { killTarget = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+@Composable
+private fun PersonalAssistantCreateDialog(
+    onDismiss: () -> Unit,
+    onCreate: (name: String, agent: String, focus: String?) -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    var agent by remember { mutableStateOf("claude") }
+    var focus by remember { mutableStateOf("") }
+    val agents = listOf("claude", "codex", "cursor", "opencode")
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Create personal assistant") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text("Agent", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                agents.chunked(2).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        row.forEach { value ->
+                            FilterChip(
+                                selected = agent == value,
+                                onClick = { agent = value },
+                                label = { Text(value) },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = focus,
+                    onValueChange = { focus = it },
+                    label = { Text("Focus (optional)") },
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = name.isNotBlank(),
+                onClick = { onCreate(name.trim(), agent, focus.trim().takeIf { it.isNotEmpty() }) },
+            ) { Text("Create") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 private fun SettingsIndexPage(
     onBack: () -> Unit,
     onOpen: (String) -> Unit,
@@ -229,8 +417,9 @@ private fun SettingsIndexPage(
         containerColor = cs.background,
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            // Order matches iOS: Assistant, Agents, Curator, Voice, Editor, Git hosting, System.
-            SettingsNavRow(R.drawable.ic_smartphone, "Assistant", "PA name and soul.md") { onOpen("assistant") }
+            SettingsNavRow(R.drawable.ic_smartphone, "Personal assistants", "Optional persistent orchestrators") { onOpen("personal-assistants") }
+            HorizontalDivider(color = cs.outlineVariant)
+            SettingsNavRow(R.drawable.ic_smartphone, "PA identity", "Shared soul.md for personal assistants") { onOpen("assistant") }
             HorizontalDivider(color = cs.outlineVariant)
             SettingsNavRow(R.drawable.ic_settings, "Agents", "CLI authorization and API-key fallback") { onOpen("agents") }
             HorizontalDivider(color = cs.outlineVariant)

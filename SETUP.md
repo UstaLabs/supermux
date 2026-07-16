@@ -4,9 +4,9 @@ You are helping a human install and configure **supermux** on their machine. Wor
 
 ## What supermux is (context for you, the assistant)
 
-supermux is a self-hosted broker that drives coding-agent sessions — Claude Code, Codex, Cursor, and OpenCode — from a phone or laptop over **Telegram** and a **web PWA**. The human runs many agent sessions in parallel; the broker routes chat messages to the right session and relays replies back with push notifications. Personal-assistant (PA) sessions are always-on orchestrators that can spawn and manage worker sessions.
+supermux is a self-hosted broker that drives coding-agent sessions — Claude Code, Codex, Cursor, and OpenCode — from a phone or laptop over **Telegram** and a **web PWA**. The human runs many agent sessions in parallel; the broker routes chat messages to the right session and relays replies back with push notifications. Optional personal-assistant (PA) sessions can be created later as always-on orchestrators.
 
-It runs on Linux (or in a container on any host). It ships **no preset agent persona** — the human names their own assistant and writes their own `soul.md`. Nothing author-specific is baked in.
+It runs on Linux (or in a container on any host). Fresh installs start with no personal assistant; nothing author-specific is baked in.
 
 ---
 
@@ -62,7 +62,7 @@ Open `http://localhost:8787` in a browser. Because this is the first open on a f
    - **Connectivity** — optionally add a Telegram bot token (from **@BotFather**, `/newbot` — no `.env` editing; the channel activates on the **next broker restart**), set a public URL (ready-to-paste Caddy / nginx / Cloudflare Tunnel snippets + a reachability test), and pair more devices.
    - **Done** — spawn your first session.
 
-   *Identity isn't a wizard step* — it's automatic: once your assistant first spawns, the broker runs the `/mux:soul` skill and walks you through writing its `soul.md` (see **Identity** below).
+   Personal assistants are not part of onboarding. They remain available later under **Settings → Personal assistants**.
 
 **VERIFY:** the wizard completes without errors and you can see the session list in the PWA.
 
@@ -127,8 +127,6 @@ opencode auth login
 - "Which channel(s) do you want — web, Telegram, or both?"
 - If Telegram: "Get a bot token from **@BotFather** (`/newbot`) and paste it here."
 - "Do you want a public URL / reverse proxy, or just local (LAN / localhost)?" (Public URL is optional and advanced — `MUX_WEB_PUBLIC_URL` must be the HTTPS address the browser actually uses; see *Public URL / Reverse Proxy* below.)
-- "What's the **name** of your personal assistant (PA)?" (Default is `assistant`.)
-- "Where should the PA's working directory be?" (Default: `~/.mux/workspace`.)
 
 ### B3. Get the code
 ```bash
@@ -163,11 +161,7 @@ Relevant env vars (all optional, sensible defaults):
 | `MUX_HOME` | `~/.mux` | Root of all supermux state + user content |
 | `MUX_STATE_DIR` | `$MUX_HOME/state` | Broker DB, keys, `.env`, sockets |
 | `MUX_TMUX_SESSION` | `supermux` | tmux session name the broker uses |
-| `MUX_PA_NAME` | `assistant` | Name of the default personal assistant |
-| `MUX_PA_WORKDIR` | `$MUX_HOME/workspace` | The PA's working directory |
 | `MUX_TELEGRAM_BOT_TOKEN` | — | Set to enable the Telegram channel |
-
-Set `MUX_PA_NAME` / `MUX_PA_WORKDIR` here too if the human chose non-defaults in B2 (these are environment variables the broker reads at boot — put them in the same `.env` or the systemd unit).
 
 **VERIFY:** `cat ~/.mux/state/.env` shows the expected values; permissions are `600`.
 
@@ -219,12 +213,11 @@ Go to the **"You're done when…"** checklist.
 
 ---
 
-## Identity — automatic (both paths)
+## Personal assistants — optional (both paths)
 
-supermux ships **no preset agent persona** — and you don't set it up by hand. The first time your default assistant session spawns, the broker auto-runs the **`/mux:soul`** skill, which walks you through writing its `~/.mux/soul.md` (voice, values, boundaries — in your own words). A starter `soul.md` is seeded on first boot, so the box works immediately; the skill makes it yours.
+Fresh installs do not create a personal assistant. Normal project sessions are the default workflow.
 
-- Want a specific **name** from the first boot? Set `MUX_PA_NAME` in `~/.mux/state/.env` (default `assistant`).
-- **Revise anytime** — re-run `/mux:soul`, edit `~/.mux/soul.md` directly, or use **Assistant Settings** in the web app.
+If the human wants an always-on orchestrator, open **Settings → Personal assistants** and create one there. The first PA becomes the default fallback and the broker runs **`/mux:soul`** in that session to set up its optional identity. Revise it later with `/mux:soul`, `~/.mux/soul.md`, or **PA identity** in Settings.
 
 ---
 
@@ -323,5 +316,4 @@ The Docker setup wizard (Step 4) shows these same snippets and runs a reachabili
 - [ ] The broker is running (Docker: `docker compose ps` shows `Up`; Native: `systemctl --user status supermux` is `active`).
 - [ ] An agent credential is configured (Docker: via the wizard; Native: agent CLI is installed and logged in).
 - [ ] At least one channel works: the web PWA loads at your `MUX_WEB_PUBLIC_URL`, and/or the Telegram bot responds.
-- [ ] Your assistant set up its `soul.md` — the automatic `/mux:soul` flow ran on first spawn (revise it anytime).
 - [ ] You spawned a session and confirmed it can read and edit files in its working directory (`/workspace` for Docker).

@@ -37,7 +37,8 @@ class FleetModelTest {
     // ── hostShortLabel ─────────────────────────────────────────────────────────
     @Test fun shortLabel_firstTokenCapped() {
         assertEquals("MacBook", hostShortLabel("MacBook"))
-        assertEquals("This", hostShortLabel("This host"))
+        assertEquals("Host", hostShortLabel("This host"))
+        assertEquals("Ahmet's", hostShortLabel("This computer (Ahmet's MacBook Air)"))
         assertEquals("Ahmet-MBP", hostShortLabel("Ahmet-MBP"))
         assertEquals("host", hostShortLabel("   "))
         assertEquals("aaaaaaaaaaaaaa", hostShortLabel("aaaaaaaaaaaaaaaaaaaa")) // capped at 14

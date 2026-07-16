@@ -54,6 +54,7 @@ import dev.supermux.android.editor.PendingEditorOpen
 import dev.supermux.android.session.SessionAvatar
 import dev.supermux.android.session.SessionStatusRail
 import dev.supermux.android.terminal.TerminalPanel
+import dev.supermux.android.terminal.ScratchTerminalPanel
 import dev.supermux.android.theme.HapticKind
 import dev.supermux.android.theme.Space
 import dev.supermux.android.theme.rememberHaptics
@@ -150,7 +151,9 @@ fun SessionWorkspaceDetail(
     lspRpcOut: (String, String, String) -> Unit,
     lspClose: (String, String) -> Unit,
     onEditorConsumesBackChange: (Boolean) -> Unit,
-    connectTerminal: (() -> dev.supermux.net.TerminalClient)? = null,
+    connectTerminal: ((String) -> dev.supermux.net.TerminalClient)? = null,
+    listTerminals: suspend () -> List<dev.supermux.net.TerminalSummary> = { emptyList() },
+    closeTerminal: suspend (String) -> Unit = {},
     connectAgentTerminal: (() -> dev.supermux.net.TerminalClient)? = null,
     listDisplays: (suspend () -> List<dev.supermux.net.DisplayStream>)? = null,
     connectScrcpy: ((String) -> dev.supermux.net.ScrcpyClient)? = null,
@@ -238,7 +241,13 @@ fun SessionWorkspaceDetail(
         val ct = connectTerminal
         Box(Modifier.fillMaxSize().testTag("pane_terminal")) {
             if (ct != null) {
-                TerminalPanel(connect = ct, modifier = Modifier.fillMaxSize())
+                ScratchTerminalPanel(
+                    sessionId = session.id,
+                    connect = ct,
+                    listTerminals = listTerminals,
+                    closeTerminal = closeTerminal,
+                    modifier = Modifier.fillMaxSize(),
+                )
             } else {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("Terminal unavailable", color = cs.onSurfaceVariant, fontSize = 13.sp)

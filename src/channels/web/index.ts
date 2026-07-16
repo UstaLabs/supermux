@@ -1476,7 +1476,8 @@ export class WebChannel implements Channel {
     // desktop wizard) can add ANOTHER device (spec §3.4). Authed-only.
     if (method === "POST" && path === "/pair/mint-claim") {
       if (!this.claimStore) return this.json({ error: "pairing claims unavailable" }, 503)
-      return this.json({ claimSecret: this.claimStore.mint() })
+      const claim = this.claimStore.mintWithExpiry()
+      return this.json({ claimSecret: claim.secret, expiresAt: new Date(claim.expiresAt).toISOString() })
     }
 
     // ── System: broker restart ──────────────────────────────────────────
@@ -2204,7 +2205,11 @@ export class WebChannel implements Channel {
       const requested = ((body.name as string | undefined) ?? "").trim()
       if (!requested) return this.json({ error: "name required" }, 400)
       const { token, name: finalName } = this.store.mint(requested)
-      const url = `${this.opts.publicUrl.replace(/\/$/, "")}/pair?t=${token}`
+      // A desktop host normally listens on localhost and publishes through the built-in
+      // relay. Pairing links leave the host, so prefer the relay's LIVE URL; using the
+      // configured localhost publicUrl here produces a perfectly valid but unusable QR.
+      const pairBase = this.getRelayUrl?.() ?? this.relayUrl ?? this.opts.publicUrl
+      const url = `${pairBase.replace(/\/$/, "")}/pair?t=${token}`
       return this.json({ url, name: finalName })
     }
     if (method === "DELETE" && path.startsWith("/devices/")) {

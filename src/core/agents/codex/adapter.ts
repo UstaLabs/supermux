@@ -13,6 +13,7 @@ export const CODEX_TOOL_ITEM_TYPES = new Set<string>([
   "fileChange", "file_change",
   "webSearch", "web_search",
   "mcpToolCall", "mcp_tool_call",
+  "dynamicToolCall", "dynamic_tool_call",
 ])
 export function isCodexToolItem(type: string | undefined): boolean {
   return typeof type === "string" && CODEX_TOOL_ITEM_TYPES.has(type)
@@ -83,14 +84,22 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
             this.emit("assistant-message", { kind: "assistant-message", text: params.item.text, chat_id: this.lastChatId })
           }
           if (isCodexToolItem(params?.item?.type)) {
-            const failed = params.item.status === "failed" || (params.item.exit_code != null && params.item.exit_code !== 0)
-            this.emit("tool-call", { kind: "tool-call", tool: String(params.item.type), phase: failed ? "failed" : "completed",
+            const exitCode = params.item.exitCode ?? params.item.exit_code
+            const failed = params.item.status === "failed" || params.item.status === "declined"
+              || (exitCode != null && exitCode !== 0)
+            const tool = params.item.type === "dynamicToolCall" || params.item.type === "dynamic_tool_call"
+              ? String(params.item.tool || params.item.type)
+              : String(params.item.type)
+            this.emit("tool-call", { kind: "tool-call", tool, phase: failed ? "failed" : "completed",
               call_id: String(params.item.id ?? ""), detail: params.item })
           }
           break
         case "item/started":
           if (isCodexToolItem(params?.item?.type)) {
-            this.emit("tool-call", { kind: "tool-call", tool: String(params.item.type), phase: "started",
+            const tool = params.item.type === "dynamicToolCall" || params.item.type === "dynamic_tool_call"
+              ? String(params.item.tool || params.item.type)
+              : String(params.item.type)
+            this.emit("tool-call", { kind: "tool-call", tool, phase: "started",
               call_id: String(params.item.id ?? ""), detail: params.item })
           }
           break

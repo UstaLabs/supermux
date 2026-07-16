@@ -93,6 +93,26 @@ class SessionLauncherScreenTest {
         assertTrue(filterBranches(null, "x").isEmpty())
     }
 
+    // ── filterProjects (project-picker search) ──────────────────────────────────────────────────
+
+    @Test fun filter_projects_empty_query_returns_all() {
+        val all = listOf("/home/u/alpha", "/home/u/beta", "/home/u/gamma")
+        assertEquals(all, filterProjects(all, home = "/home/u", query = ""))
+    }
+
+    @Test fun filter_projects_matches_path_substring_case_insensitive() {
+        val all = listOf("/home/u/alpha", "/home/u/beta", "/home/u/gamma")
+        assertEquals(listOf("/home/u/alpha"), filterProjects(all, home = "/home/u", query = "ALPH"))
+        assertEquals(listOf("/home/u/beta"), filterProjects(all, home = "/home/u", query = "beta"))
+    }
+
+    @Test fun filter_projects_matches_formatted_label_too() {
+        // The picker shows formatWorkdir(path, home) — the tilde-prefixed form. Filtering must match
+        // against the displayed label, not just the raw path, so typing "~" still narrows the list.
+        val all = listOf("/home/u/alpha", "/home/u/beta")
+        assertEquals(all, filterProjects(all, home = "/home/u", query = "~"))
+    }
+
     // ── stagedUploadFor (temp file) ─────────────────────────────────────────────────────────────
 
     @Test fun staged_upload_streams_the_file_and_guesses_mime() {
@@ -237,6 +257,35 @@ class SessionLauncherScreenTest {
         waitForIdle()
         onNodeWithText("Default").assertIsDisplayed()
         onNodeWithText("Claude X").assertDoesNotExist()
+    }
+
+    @Test fun project_picker_search_field_filters_project_list() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                Box {
+                    ProjectPicker(
+                        expanded = true,
+                        current = "/home/u/alpha",
+                        projects = listOf("/home/u/alpha", "/home/u/beta", "/home/u/gamma"),
+                        home = "/home/u",
+                        validatePath = { null },
+                        onPick = {},
+                        onDismiss = {},
+                    )
+                }
+            }
+        }
+        // All three projects visible to start.
+        onNodeWithTag("project_row_/home/u/alpha").assertIsDisplayed()
+        onNodeWithTag("project_row_/home/u/beta").assertIsDisplayed()
+        onNodeWithTag("project_row_/home/u/gamma").assertIsDisplayed()
+
+        // Typing into the search field narrows the list.
+        onNodeWithTag("launcher_project_search").performTextInput("beta")
+        waitForIdle()
+        onNodeWithTag("project_row_/home/u/beta").assertIsDisplayed()
+        onNodeWithTag("project_row_/home/u/alpha").assertDoesNotExist()
+        onNodeWithTag("project_row_/home/u/gamma").assertDoesNotExist()
     }
 
     @Test fun project_picker_invalid_path_shows_validation_and_does_not_pick() = runComposeUiTest {
