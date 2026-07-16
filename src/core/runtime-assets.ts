@@ -15,6 +15,7 @@ import ptyHelperEmbedded from "./terminal/pty-helper" with { type: "file" }
 import curatorPromptEmbedded from "../../prompts/knowledge-curator.md" with { type: "file" }
 import environmentMdEmbedded from "../../prompts/environment.md" with { type: "file" }
 import replyFallbackEmbedded from "../../prompts/reply-fallback.md" with { type: "file" }
+import frpcEmbedded from "./relay/frpc-embedded" with { type: "file" }
 
 export function materializeAsset(opts: { stateDir: string; name: string; sourcePath: string; executable?: boolean }): string {
   const dest = join(opts.stateDir, "runtime-assets", BUILD_VERSION, opts.name)
@@ -57,6 +58,17 @@ const REPLY_FALLBACK_SOURCE_PATH = resolvePath(REPO_PROMPTS_DIR, "reply-fallback
 export function ptyHelperPath(stateDir: string): string {
   if (!IS_COMPILED) return PTY_HELPER_SOURCE_PATH
   return materializeAsset({ stateDir, name: "pty-helper", sourcePath: ptyHelperEmbedded, executable: true })
+}
+
+/** Resolve the relay helper. Desktop packages provide frpc on PATH; standalone
+ * compiled releases fall back to their verified embedded copy. */
+export function frpcPath(stateDir: string): string {
+  const configured = process.env.MUX_FRPC_PATH?.trim()
+  if (configured) return configured
+  const onPath = Bun.which("frpc")
+  if (onPath) return onPath
+  if (!IS_COMPILED) return "frpc"
+  return materializeAsset({ stateDir, name: "frpc", sourcePath: frpcEmbedded, executable: true })
 }
 
 // knowledge-curator.md: the curator hands this path to a spawned claude session.

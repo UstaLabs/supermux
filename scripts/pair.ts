@@ -1,7 +1,8 @@
 import { readFileSync } from "fs"
 import qrcode from "qrcode-terminal"
 import { DeviceStore } from "../src/channels/web/device-store"
-import { DEVICES_FILE, ENV_FILE } from "../src/shared/paths"
+import { DEVICES_FILE, ENV_FILE, HOST_KEY_FILE } from "../src/shared/paths"
+import { loadOrCreateHostKey } from "../src/core/host-identity"
 
 const name = process.argv[2]
 if (!name) {
@@ -17,7 +18,10 @@ try {
   }
 } catch {}
 
-const publicUrl = process.env.MUX_WEB_PUBLIC_URL
+const relayDomain = process.env.MUX_RELAY_DOMAIN?.trim()
+const publicUrl = relayDomain
+  ? `https://h-${loadOrCreateHostKey(HOST_KEY_FILE).hostId}.${relayDomain}`
+  : process.env.MUX_WEB_PUBLIC_URL
 if (!publicUrl) {
   console.error("MUX_WEB_PUBLIC_URL not set in", ENV_FILE)
   process.exit(1)

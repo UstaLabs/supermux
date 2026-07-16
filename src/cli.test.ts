@@ -45,6 +45,28 @@ describe("cli dispatcher", () => {
     expect(existsSync(join(tmp, "mux", "state", ".env"))).toBe(true)
   })
 
+  test("pair prefers the fresh setup's stable relay URL", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "smx-cli-relay-pair-"))
+    const env = {
+      ...process.env,
+      HOME: join(tmp, "home"),
+      MUX_HOME: join(tmp, "mux"),
+      MUX_STATE_DIR: join(tmp, "mux", "state"),
+    }
+    const setup = Bun.spawnSync(["bun", "src/cli.ts", "setup", "--no-service"], {
+      cwd: import.meta.dirname + "/..",
+      env,
+    })
+    expect(setup.exitCode).toBe(0)
+
+    const pair = Bun.spawnSync(["bun", "src/cli.ts", "pair", "phone"], {
+      cwd: import.meta.dirname + "/..",
+      env,
+    })
+    expect(pair.exitCode).toBe(0)
+    expect(pair.stdout.toString()).toMatch(/https:\/\/h-[a-z2-7]{26}\.relay\.supermux\.dev\/pair\?t=/)
+  })
+
   test("unknown subcommand usage lists setup", () => {
     const r = runCli(["frobnicate"])
     expect(r.stderr).toContain("setup")

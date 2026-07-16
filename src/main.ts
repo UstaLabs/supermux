@@ -137,7 +137,7 @@ import { normalizeToolName } from "./core/agents/tool-normalize"
 import { gcOrphanAgentHomes, reclaimCursorHomes } from "./core/agents/shared-runtime"
 import { CuratorScheduler } from "./core/curator/scheduler"
 import { runCurator, type CuratorDeps } from "./core/curator/run"
-import { curatorPromptPath } from "./core/runtime-assets"
+import { curatorPromptPath, frpcPath } from "./core/runtime-assets"
 import { SettingsStore } from "./core/settings/store"
 import { SearchStore } from "./core/search/store"
 import { ForgeStore } from "./core/forge/store"
@@ -1032,8 +1032,9 @@ setInterval(() => claimStore.sweep(), 60_000).unref()
 const hostPlatform = process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux"
 const advertisedHostName = process.env.MUX_HOST_NAME?.trim() || hostname()
 
-// Relay data plane (frp). Opt-in via MUX_RELAY_DOMAIN until the spike passes and
-// a relay box exists; otherwise LAN/direct only. Swappable behind RelayProvider.
+// Relay data plane (frp). Fresh native CLI + desktop setups enable the hosted
+// relay by default; an empty/absent MUX_RELAY_DOMAIN keeps the broker LAN-only.
+// The provider boundary still permits custom/self-hosted relay implementations.
 const relayProvider = process.env.MUX_RELAY_DOMAIN
   ? new FrpRelayProvider({
       identity: hostIdentity,
@@ -1044,7 +1045,7 @@ const relayProvider = process.env.MUX_RELAY_DOMAIN
         const r = await fetch(`${process.env.MUX_RELAY_BASE ?? `https://control.${process.env.MUX_RELAY_DOMAIN}`}/relay/nonce`)
         return ((await r.json()) as { nonce: string }).nonce
       },
-      spawn: (argv) => Bun.spawn(parentBoundFrpcCommand(argv), { stdout: "ignore", stderr: "ignore" }),
+      spawn: (argv) => Bun.spawn(parentBoundFrpcCommand([frpcPath(STATE_DIR), ...argv.slice(1)]), { stdout: "ignore", stderr: "ignore" }),
       writeConfig: (toml) => { const p = join(STATE_DIR, "frpc.toml"); writeFileSync(p, toml, { mode: 0o600 }); return p },
     })
   : new NullRelayProvider()
