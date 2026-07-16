@@ -152,6 +152,7 @@ import { reverseProxySnippets } from "./core/settings/exposure"
 import { toActivityEvents } from "./core/agents/adapter-activity"
 import { LoginManager } from "./core/agents/login/manager"
 import { claudeLoginSpawnCommand } from "./core/agents/login/spawn-command"
+import { claudeCliIsAuthenticated } from "./core/agents/claude-auth-status"
 import { getRepoInfo } from "./core/git/repo-info"
 import { createWorktree, removeWorktree, ensureWorktreeAt, type WorktreeHandle } from "./core/worktree/manager"
 import { isWorktreeReclaimable } from "./core/worktree/gc"
@@ -1499,7 +1500,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getAgentStatuses: () => {
       const c = settings.getAppConfig(appConfigEnv)
       const hasCredential = (kind: AgentKind) =>
-        kind === "claude" ? !!(c.claudeOauthToken || c.anthropicApiKey)
+        kind === "claude" ? !!(c.claudeOauthToken || c.anthropicApiKey) || claudeCliIsAuthenticated()
         : kind === "codex" ? !!c.codexApiKey
         : kind === "cursor" ? !!c.cursorApiKey
         : false
@@ -1615,6 +1616,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   loginManager = new LoginManager({
     paths: { home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME },
     fileExists: existsSync,
+    hasCredential: (kind) => kind === AgentKind.Claude && claudeCliIsAuthenticated(),
     spawnLogin: spawnLoginProc,
     onChange: (kind, st) => webChannel?.broadcastToAll({ type: "agent_login_state", kind, state: st }),
   })

@@ -46,3 +46,26 @@ test("sendCode forwards input to the session", () => {
   mgr.sendCode("claude", "MYCODE")
   expect(written).toBe("MYCODE\n")
 })
+
+test("Claude login succeeds when the macOS CLI reports a Keychain credential", () => {
+  let exitCb: (code: number | null) => void = () => {}
+  const mgr = new LoginManager({
+    paths: { home: "/Users/u" },
+    fileExists: () => false,
+    hasCredential: (kind) => kind === "claude",
+    spawnLogin: () => ({
+      onStdout: () => {},
+      onExit: (cb) => { exitCb = cb },
+      kill: () => {},
+      write: () => {},
+    }),
+    onChange: () => {},
+    setInterval: () => 1,
+    clearInterval: () => {},
+  })
+
+  mgr.start("claude")
+  exitCb(0)
+
+  expect(mgr.get("claude")?.phase).toBe("success")
+})
