@@ -30,6 +30,7 @@ import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ModelsResponse
+import dev.supermux.net.PADto
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
@@ -319,6 +320,11 @@ class DesktopAppState(
             is ServerFrame.SessionRemoved -> {
                 _sessions.update { it.filterNot { s -> s.id == frame.id } }
                 _bgTasks.update { it - frame.id }
+            }
+            is ServerFrame.SessionRenamed -> {
+                _sessions.update { current ->
+                    current.map { s -> if (s.id == frame.id) s.copy(name = frame.newName) else s }
+                }
             }
             is ServerFrame.MessageAppend -> {
                 // Optimistic-echo dedup (iOS BrokerSession parity): when the real inbound message
@@ -841,6 +847,16 @@ class DesktopAppState(
     suspend fun redeemCodexReset(): CodexResetResult? =
         runApi("redeemCodexReset") { api.redeemCodexReset() }
 
+    suspend fun personalAssistants(): List<PADto> =
+        runApi("personalAssistants") { api.listPAs() } ?: emptyList()
+
+    suspend fun createPersonalAssistant(name: String, agent: String, focus: String?): Boolean =
+        runApi("createPersonalAssistant") { api.createPA(name, agent, focusText = focus); true } ?: false
+
+    suspend fun killPersonalAssistant(id: String) {
+        runApi("killPersonalAssistant") { api.kill(id); true }
+    }
+
     // ── LSP settings (M4g-4 Task 1) ────────────────────────────────────────────────────
     // Backs the LspSettingsScreen overlay (M4g-4 Task 2/3): enable/disable + install + add/remove
     // custom language servers. [lspInstallLog]/[lspInstallDone] (above) already stream the live
@@ -899,6 +915,9 @@ class DesktopAppState(
     /** GET /projects → known project working directories (absolute paths). Empty on any failure. */
     suspend fun listProjects(): List<String> =
         runApi("listProjects") { api.listProjects() } ?: emptyList()
+
+    suspend fun launcherAgents(): List<String> =
+        runApi("launcherAgents") { api.agentStatuses().filter { it.installed }.map { it.kind } } ?: emptyList()
 
     /** POST /paths/validate → {ok, path?, error?} (resolves ~, checks existence). Null on any
      *  transport/decode failure; an *invalid* path is still a non-null PathValidation(ok=false). */

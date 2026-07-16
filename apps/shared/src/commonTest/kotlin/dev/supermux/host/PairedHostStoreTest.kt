@@ -52,6 +52,20 @@ class PairedHostStoreTest {
         assertEquals("habc", s.list()[0].hostId)
     }
 
+    @Test fun backfillIdentityRepairsLegacyNameButPreservesUserRename() {
+        val legacy = store(PairedHost(
+            recordId = "r1", hostId = "habc", displayName = "This computer (Old Mac)", token = "t"
+        ))
+        legacy.backfillHostIdentity("r1", "habc", "broker-hostname")
+        assertEquals("Old Mac", legacy.list()[0].displayName)
+
+        val renamed = store(PairedHost(
+            recordId = "r2", hostId = "hdef", displayName = "Studio", token = "t"
+        ))
+        renamed.backfillHostIdentity("r2", "hdef", "broker-hostname")
+        assertEquals("Studio", renamed.list()[0].displayName)
+    }
+
     @Test fun backfillMergesDuplicateHostKeepingValidToken() {
         val s = store(
             PairedHost(recordId = "r1", displayName = "MyMac", token = "old", relayUrl = "u1"),
@@ -85,6 +99,14 @@ class PairedHostStoreTest {
         s.addOrUpdate(displayName = "auto-name", token = "fresh", hostId = "habc")
         assertEquals(1, s.list().size)
         assertEquals("My Laptop", s.list()[0].displayName) // the rename is not clobbered
+    }
+
+    @Test fun addOrUpdateReplacesLegacyThisComputerName() {
+        val s = store(PairedHost(
+            recordId = "r1", hostId = "habc", displayName = "This computer (Old Mac)", token = "t"
+        ))
+        s.addOrUpdate(displayName = "New Mac", token = "fresh", hostId = "habc")
+        assertEquals("New Mac", s.list()[0].displayName)
     }
 
     @Test fun addOrUpdateWithBlankHostIdAlwaysAdds() {

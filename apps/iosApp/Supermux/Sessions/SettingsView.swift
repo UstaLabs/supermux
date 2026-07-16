@@ -11,12 +11,22 @@ struct SettingsView: View {
         List {
             Section {
                 NavigationLink {
+                    PersonalAssistantsView(broker: broker)
+                } label: {
+                    SettingsRow(
+                        symbol: "person.2",
+                        title: "Personal assistants",
+                        subtitle: "Optional persistent orchestrators"
+                    )
+                }
+
+                NavigationLink {
                     AssistantSettingsView(broker: broker)
                 } label: {
                     SettingsRow(
                         symbol: "person.crop.circle",
-                        title: "Assistant",
-                        subtitle: "PA name and soul.md"
+                        title: "PA identity",
+                        subtitle: "Shared soul.md for personal assistants"
                     )
                 }
 

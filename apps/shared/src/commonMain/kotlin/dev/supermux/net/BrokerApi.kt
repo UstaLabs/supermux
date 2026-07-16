@@ -22,6 +22,7 @@ import io.ktor.http.contentType
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SlashCommand
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -644,6 +645,14 @@ data class AgentInstallStatus(
     val authed: Boolean = false,
 )
 
+/** Broker-owned background job for installing one agent CLI. */
+@Serializable
+data class AgentInstallJob(
+    val state: String = "", // "running" | "done" | "failed"
+    val log: String = "",
+    val exitCode: Int? = null,
+)
+
 /** State of an in-progress agent CLI login (POST/GET /agents/<kind>/login).
  *  Mirrors the broker `LoginState` (src/core/agents/login/session.ts):
  *  `phase`: "starting" | "awaiting_user" | "success" | "failed" | "cancelled".
@@ -678,9 +687,14 @@ data class OpenCodeProvider(
     val methods: List<OpenCodeAuthMethod> = emptyList(),
 )
 
-/** POST /opencode/auth/oauth/start → the authorization URL (+ optional instructions). */
+/** POST /opencode/auth/oauth/start → the authorization URL, guidance, and callback style. */
 @Serializable
-data class OpenCodeOAuthStart(val url: String = "", val instructions: String? = null)
+data class OpenCodeOAuthStart(
+    val url: String = "",
+    val instructions: String? = null,
+    /** "auto" for device flows completed by the provider; "code" when the user pastes a code. */
+    val method: String = "code",
+)
 
 // ─── Editor / LSP settings (GET/PUT /settings/editor) ─────────────────────────
 /** One language server row. `state`: "ready" | "missing" | "prereq-missing". */
@@ -839,6 +853,7 @@ private data class OpenCodeOAuthFinishBody(val providerId: String, val method: I
  *  this never clobbers config the caller didn't touch. */
 @Serializable
 private data class ConfigPatchBody(
+    val onboarded: Boolean? = null,
     val paName: String? = null,
     val voiceCleanupModel: String? = null,
     val voiceCleanupEngine: String? = null,
@@ -921,6 +936,7 @@ class BrokerApi(
     // explicitNulls=false: partial PATCH bodies (e.g. review-comment resolve) must OMIT unset
     // optional fields, not send them as JSON null — an explicit null would overwrite stored data.
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
+    internal var spawnTimeoutMillis: Long = 50_000
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -1113,12 +1129,13 @@ class BrokerApi(
     }
 
     /** POST /sessions */
-    suspend fun spawn(req: SpawnRequest): SpawnResponse =
+    suspend fun spawn(req: SpawnRequest): SpawnResponse = withTimeout(spawnTimeoutMillis) {
         decode(http.post("$httpBase/sessions") {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(req))
         })
+    }
 
     /** GET /settings/config */
     suspend fun getConfig(): AppConfigDto =
@@ -1134,6 +1151,7 @@ class BrokerApi(
      * Secret fields (tokens) are write-only — they read back redacted, not echoed.
      */
     suspend fun saveConfig(
+        onboarded: Boolean? = null,
         paName: String? = null,
         voiceCleanupModel: String? = null,
         voiceCleanupEngine: String? = null,
@@ -1144,6 +1162,7 @@ class BrokerApi(
     ) = putJson(
         "$httpBase/settings/config",
         ConfigPatchBody(
+            onboarded = onboarded,
             paName = paName,
             voiceCleanupModel = voiceCleanupModel,
             voiceCleanupEngine = voiceCleanupEngine,
@@ -1175,6 +1194,25 @@ class BrokerApi(
     /** GET /agents/status → install + auth state per agent CLI. */
     suspend fun agentStatuses(): List<AgentInstallStatus> =
         getJson("$httpBase/agents/status")
+
+    /** POST /agents/<kind>/install → start (or resume) the broker-owned install job. */
+    suspend fun startAgentInstall(kind: String): AgentInstallJob {
+        val response = http.post("$httpBase/agents/${urlEncode(kind)}/install") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(EmptyBody()))
+        }
+        // The broker intentionally returns 409 with the live job when an install is
+        // already running. Treat that as a resumable success, like the web client.
+        if (response.status.isSuccess() || response.status.value == 409) {
+            return json.decodeFromString(response.bodyAsText())
+        }
+        return decode(response)
+    }
+
+    /** GET /agents/<kind>/install → poll the latest install job. */
+    suspend fun agentInstallState(kind: String): AgentInstallJob =
+        getJson("$httpBase/agents/${urlEncode(kind)}/install")
 
     /** POST /agents/<kind>/login → starts a CLI login, returns the initial state. */
     suspend fun startAgentLogin(kind: String): AgentLoginState =

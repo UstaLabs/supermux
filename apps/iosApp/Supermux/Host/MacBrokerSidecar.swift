@@ -116,6 +116,23 @@ final class MacBrokerSidecar: ObservableObject {
         phase = .stopped
     }
 
+    /// Complete the managed-process → launchd handoff without ever spawning a second broker.
+    /// `MacHostKeepAlive.install` returns once launchd accepted the job, not once `/host` is
+    /// listening, so calling `start()` here races launchd and can reclaim the port itself.
+    func adoptKeepAliveHost() async {
+        guard phase == .stopped || phase == .failed else { return }
+        phase = .starting
+        ownership = .none
+        hostId = nil
+        if let id = await pollForHost(port: effectivePort) {
+            ownership = .external
+            hostId = id
+            phase = .adopted
+        } else {
+            phase = .failed
+        }
+    }
+
     private func spawnManaged(port: Int) async {
         effectivePort = port
         do {
@@ -205,7 +222,12 @@ final class MacBrokerSidecar: ObservableObject {
             existing: environment["PATH"],
             home: FileManager.default.homeDirectoryForCurrentUser
         )
-        process.environment = brokerEnvironment(port: port, base: environment, path: path)
+        process.environment = brokerEnvironment(
+            port: port,
+            base: environment,
+            path: path,
+            hostName: localHostDisplayName()
+        )
 
         let logURL = stateDir.appendingPathComponent("native-host.log")
         if !FileManager.default.fileExists(atPath: logURL.path) {
@@ -257,7 +279,8 @@ final class MacBrokerSidecar: ObservableObject {
     nonisolated static func brokerEnvironment(
         port: Int,
         base: [String: String],
-        path: String
+        path: String,
+        hostName: String? = nil
     ) -> [String: String] {
         var environment = base
         environment["MUX_WEB_PORT"] = String(port)
@@ -265,8 +288,18 @@ final class MacBrokerSidecar: ObservableObject {
         if environment["SM_HOST_RELAY_DISABLED"] != "1" {
             environment["MUX_RELAY_DOMAIN"] = environment["MUX_RELAY_DOMAIN"] ?? "relay.supermux.dev"
         }
+        if environment["MUX_HOST_NAME"]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+           let hostName,
+           !hostName.isEmpty {
+            environment["MUX_HOST_NAME"] = hostName
+        }
         environment["PATH"] = path
         return environment
+    }
+
+    nonisolated static func localHostDisplayName() -> String {
+        let name = Host.current().localizedName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.flatMap { $0.isEmpty ? nil : $0 } ?? "Mac host"
     }
 
     nonisolated private static func findRepositoryRoot() -> URL? {

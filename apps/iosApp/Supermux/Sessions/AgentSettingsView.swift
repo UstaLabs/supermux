@@ -3,21 +3,23 @@ import Shared
 
 /// Agents settings — parity with the web `AgentLoginPanel.vue` + `OpenCodeProviderAuth.vue`.
 ///
-/// One expandable row per detected agent (claude / codex / cursor / opencode). For the
-/// CLI-login agents (claude/codex/cursor) a row offers:
-///   • "Authorize via link" → `startAgentLogin`, then a polling Task that calls
+/// One row per detected agent (claude / codex / cursor / opencode). Link authorization
+/// is the primary action for the CLI-login agents (claude/codex/cursor): it calls
+/// `startAgentLogin`, then a polling Task calls
 ///     `agentLoginState` every ~1.5s until the phase is terminal. While active it shows
 ///     the auth URL (Open + Copy), the device `code` if present, a paste-`code` field
 ///     (`sendAgentLoginCode`) when `needsCode`, and Cancel (`cancelAgentLogin`).
-///   • an API-key / OAuth-token SecureField that saves via `saveConfig(...)`.
-/// The opencode row expands to a per-provider sub-list (`openCodeProviders`) with an
-/// API-key field (`setOpenCodeKey`) and, for an oauth method, a browser login
-/// (`startOpenCodeOAuth` → open URL) + paste-code finish (`finishOpenCodeOAuth`).
+/// API-key / OAuth-token entry lives under "Other ways to authorize". OpenCode's
+/// primary action first explains its key handoff; additional providers live under
+/// "Other providers" and support verified API-key saves or browser authorization that
+/// preserves the provider's instructions and callback style.
 ///
 /// Pushed inside the app's NavigationStack, so this view owns no NavigationStack — it
 /// just sets `.navigationTitle("Agents")`.
 struct AgentSettingsView: View {
     let broker: BrokerSession
+    var showsNavigationTitle = true
+    var onReadinessChanged: ((Bool) -> Void)?
 
     @State private var statuses: [AgentInstallStatus] = []
     @State private var loading = true
@@ -33,7 +35,7 @@ struct AgentSettingsView: View {
                 list
             }
         }
-        .navigationTitle("Agents")
+        .navigationTitle(showsNavigationTitle ? "Agents" : "")
         .tint(Theme.teal)
         .task { await load() }
     }
@@ -45,43 +47,63 @@ struct AgentSettingsView: View {
                     AgentRow(broker: broker, status: status, onAuthChanged: { Task { await load() } })
                 }
             } footer: {
-                Text("Manage CLI authorization and API-key fallback for each agent.")
+                Text("Authorize via link, or use a key when needed.")
             }
 
             if let error {
                 Section {
-                    Text(error).foregroundStyle(.red)
+                    HStack {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.red)
+                        Spacer()
+                        Button("Retry") { Task { await load() } }
+                            .buttonStyle(.bordered)
+                    }
                 }
             }
         }
     }
 
     private func load() async {
-        loading = true
+        if statuses.isEmpty { loading = true }
         defer { loading = false }
-        let result = await broker.agentStatuses()
+        let response = await broker.loadAgentStatuses()
+        guard !Task.isCancelled else { return }
+        guard let result = response else {
+            error = "Couldn't reach the host."
+            return
+        }
         statuses = result
-        // `agentStatuses()` swallows errors (returns []). Only surface "couldn't load"
-        // when we have nothing to show, so a transient empty refresh after a successful
-        // login doesn't flash an error over real rows.
-        error = result.isEmpty ? "Couldn't load agent statuses." : nil
+        error = nil
+        onReadinessChanged?(Self.canProceed(with: result))
+        if result.isEmpty { error = "The host returned no coding agents." }
+    }
+
+    static func canProceed(with statuses: [AgentInstallStatus]) -> Bool {
+        statuses.contains { $0.authed || ($0.kind == "opencode" && $0.installed) }
     }
 }
 
 // MARK: - Per-agent row
 
-/// Expandable row for a single agent. Self-contained: owns its disclosure state, the
-/// API-key field, and (for CLI-login agents) the active login state + polling Task.
+/// Self-contained agent row: primary authorization, optional fallback disclosures,
+/// and the active login state + polling Task.
 private struct AgentRow: View {
     let broker: BrokerSession
     let status: AgentInstallStatus
     /// Called after a successful auth so the parent can refresh statuses.
     let onAuthChanged: () -> Void
 
+    @Environment(\.openURL) private var openURL
+
     /// Agents whose auth uses the device-code / browser link flow.
     private static let loginKinds: Set<String> = ["claude", "codex", "cursor", "grok"]
 
-    @State private var expanded: Bool
+    @State private var otherWaysExpanded = false
+    @State private var otherProvidersExpanded = false
+    @State private var openCodeAuthActive = false
+    @State private var openCodeSaved = false
+    @State private var openCodeError: String?
     /// True from "Start authorization" until the flow ends (terminal phase / cancel /
     /// row teardown). Drives the login-vs-key UI without us constructing a shared type.
     @State private var loginActive = false
@@ -91,62 +113,133 @@ private struct AgentRow: View {
     @State private var pollTask: Task<Void, Never>?
     @State private var keyValue = ""
     @State private var saving = false
+    @State private var credentialSaved = false
+    @State private var credentialError: String?
     @State private var codeValue = ""
-
-    init(broker: BrokerSession, status: AgentInstallStatus, onAuthChanged: @escaping () -> Void) {
-        self.broker = broker
-        self.status = status
-        self.onAuthChanged = onAuthChanged
-        // Un-authed agents start expanded so setup is obvious; authed ones collapse.
-        _expanded = State(initialValue: !status.authed)
-    }
+    @State private var install: AgentInstallJob?
+    @State private var installTask: Task<Void, Never>?
+    @State private var installRequestFailed = false
 
     private var isLoginKind: Bool { Self.loginKinds.contains(status.kind) }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            VStack(alignment: .leading, spacing: 14) {
-                if status.kind == "opencode" {
+        VStack(alignment: .leading, spacing: 12) {
+            header
+
+            if !status.installed {
+                installSection
+            } else if status.kind == "opencode" {
+                if openCodeAuthActive {
+                    openCodePrimaryAuth
+                }
+                expansionButton(
+                    title: "Other providers",
+                    isExpanded: otherProvidersExpanded,
+                    accessibilityID: "agent_other_providers"
+                ) {
+                    otherProvidersExpanded.toggle()
+                }
+                if otherProvidersExpanded {
                     OpenCodeProvidersSection(broker: broker)
-                } else if loginActive {
+                        .padding(.top, 8)
+                }
+            } else {
+                if loginActive {
                     loginFlow()
-                } else {
-                    // grok authenticates ONLY via `grok login --device-auth`; there's no
-                    // key to paste and no field for it in app config (the save switch
-                    // would fall through to `default: break`), so offer just the link flow.
-                    if status.kind != "grok" { apiKeyField }
-                    if status.installed && isLoginKind { linkLoginButton }
+                }
+                if status.kind == "codex" && !loginActive {
+                    Text("Device-code login must be enabled in ChatGPT → Settings → Security.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                // grok authenticates ONLY via `grok login --device-auth`; there's no key
+                // to paste (its save would fall through to `default: break`), so it doesn't
+                // get the "Other ways to authorize" key field — just the header link flow.
+                if status.kind != "grok" {
+                    expansionButton(
+                        title: "Other ways to authorize",
+                        isExpanded: otherWaysExpanded,
+                        accessibilityID: "agent_other_ways_\(status.kind)"
+                    ) {
+                        otherWaysExpanded.toggle()
+                    }
+                    if otherWaysExpanded {
+                        apiKeyField
+                            .padding(.top, 8)
+                    }
                 }
             }
-            .padding(.vertical, 6)
-        } label: {
-            header
         }
+        .padding(.vertical, 6)
         // Tear down any live poll when the row leaves the hierarchy.
-        .onDisappear { stopPoll() }
+        .onDisappear {
+            stopPoll()
+            stopInstallPoll()
+        }
+    }
+
+    private func expansionButton(
+        title: String,
+        isExpanded: Bool,
+        accessibilityID: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                Text(title)
+                    .font(.caption.weight(.medium))
+                Spacer()
+            }
+            .foregroundStyle(.secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(accessibilityID)
+        .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
     }
 
     // MARK: Header
 
     private var header: some View {
         HStack(spacing: 12) {
-            Image(systemName: status.authed ? "checkmark.seal.fill" : iconName)
-                .font(.title3)
-                .foregroundStyle(status.authed ? Theme.teal : .secondary)
-                .frame(width: 28)
+            AgentLogo(agent: status.kind, size: 34)
             VStack(alignment: .leading, spacing: 1) {
-                Text(status.kind.capitalized).font(.body)
+                Text(displayName).font(.body.weight(.medium))
                 Text(statusLabel).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
             if status.authed {
-                Text("Ready").font(.caption.weight(.medium)).foregroundStyle(Theme.teal)
+                Label("Ready", systemImage: "checkmark.circle.fill")
+                    .labelStyle(.titleAndIcon)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Theme.teal)
+            }
+            if status.installed && (isLoginKind || status.kind == "opencode") {
+                Button(primaryActionTitle) {
+                    if status.kind == "opencode" {
+                        startOpenCodeAuth()
+                    } else {
+                        startLogin()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.teal)
+                .controlSize(.small)
+                .disabled(loginActive)
             }
         }
     }
 
-    private var iconName: String {
-        status.installed ? "terminal" : "exclamationmark.triangle"
+    private var displayName: String {
+        status.kind == "opencode" ? "OpenCode" : status.kind.capitalized
+    }
+
+    private var primaryActionTitle: String {
+        if loginActive { return "Authorizing…" }
+        return status.authed ? "Reauthorize" : "Authorize"
     }
 
     private var statusLabel: String {
@@ -155,6 +248,75 @@ private struct AgentRow: View {
         // opencode's free `opencode/*` tier works with no credentials.
         if status.kind == "opencode" { return "Ready · free tier" }
         return "Installed, not authenticated"
+    }
+
+    // MARK: Agent installation
+
+    private var installSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Install the \(status.kind.capitalized) CLI on this Mac to use it with Supermux.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if install?.state == "running" {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small).tint(Theme.teal)
+                    Text("Installing \(status.kind)…").font(.callout)
+                }
+            } else {
+                Button(install?.state == "failed" ? "Retry installation" : "Install") {
+                    startInstall()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.teal)
+            }
+
+            if install?.state == "failed" || installRequestFailed {
+                Label(installRequestFailed ? "Couldn't start installation." : "Installation failed.",
+                      systemImage: "xmark.octagon")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+            if let log = install?.log, !log.isEmpty {
+                ScrollView {
+                    Text(String(log.suffix(2_000)))
+                        .font(.caption2.monospaced())
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 110)
+                .padding(8)
+                .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 8))
+            }
+        }
+    }
+
+    private func startInstall() {
+        stopInstallPoll()
+        installRequestFailed = false
+        installTask = Task { [broker] in
+            guard let initial = await broker.startAgentInstall(kind: status.kind) else {
+                installRequestFailed = true
+                return
+            }
+            install = initial
+            while !Task.isCancelled, install?.state == "running" {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if Task.isCancelled { return }
+                guard let next = await broker.agentInstallState(kind: status.kind) else { continue }
+                install = next
+                if next.state == "done" {
+                    onAuthChanged()
+                    return
+                }
+                if next.state == "failed" { return }
+            }
+        }
+    }
+
+    private func stopInstallPoll() {
+        installTask?.cancel()
+        installTask = nil
     }
 
     // MARK: API key / OAuth token
@@ -187,6 +349,16 @@ private struct AgentRow: View {
                 .tint(Theme.teal)
                 .disabled(trimmedKey.isEmpty || saving)
             }
+            if credentialSaved {
+                Label("Credential saved and verified.", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(Theme.teal)
+            }
+            if let credentialError {
+                Label(credentialError, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
         }
     }
 
@@ -205,35 +377,87 @@ private struct AgentRow: View {
         let value = trimmedKey
         guard !value.isEmpty else { return }
         saving = true
+        credentialSaved = false
+        credentialError = nil
         Task {
             defer { saving = false }
-            // Pass only the single field matching this agent (mirrors fieldByKind).
-            switch status.kind {
-            case "claude": await broker.saveConfig(claudeOauthToken: value)
-            case "codex": await broker.saveConfig(codexApiKey: value)
-            case "cursor": await broker.saveConfig(cursorApiKey: value)
-            default: break
+            if await broker.saveAgentCredential(kind: status.kind, value: value) {
+                keyValue = ""
+                credentialSaved = true
+                onAuthChanged()
+            } else {
+                credentialError = "Couldn't verify this credential. Check it and try again."
             }
-            keyValue = ""
-            onAuthChanged()
         }
     }
 
     // MARK: Link / device-code login
 
-    private var linkLoginButton: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Divider()
-            Label("Authorize via link", systemImage: "link")
-                .font(.caption.weight(.medium))
+    private var openCodePrimaryAuth: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Connect OpenCode Zen and Go", systemImage: "key.horizontal")
+                .font(.callout.weight(.semibold))
+            Text("1. Open OpenCode and create or copy an API key.\n2. Return to Supermux, paste the key below, and save it.")
+                .font(.caption)
                 .foregroundStyle(.secondary)
-            if status.kind == "codex" {
-                Text("Requires \"Allow device code login\" enabled in ChatGPT → Settings → Security.")
-                    .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                if let url = URL(string: "https://opencode.ai/auth") { openURL(url) }
+            } label: {
+                Label("Open OpenCode", systemImage: "arrow.up.right.square")
             }
-            Button("Start authorization") { startLogin() }
-                .buttonStyle(.bordered)
-                .tint(Theme.teal)
+            .buttonStyle(.bordered)
+            .tint(Theme.teal)
+
+            HStack(spacing: 8) {
+                SecureField("OpenCode key (Zen + Go)", text: $keyValue)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                    .smNoAutocapitalization()
+                    .font(.callout.monospaced())
+                Button(saving ? "Saving…" : "Save") { saveOpenCodeKey() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.teal)
+                    .disabled(trimmedKey.isEmpty || saving)
+            }
+            if openCodeSaved {
+                Label("OpenCode key saved.", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(Theme.teal)
+            }
+            if let openCodeError {
+                Label(openCodeError, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding(12)
+        .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func startOpenCodeAuth() {
+        // Keep the user in Supermux long enough to read the handoff. The inline panel owns
+        // an explicit "Open OpenCode" button instead of immediately stealing app focus.
+        openCodeAuthActive = true
+        openCodeSaved = false
+        openCodeError = nil
+    }
+
+    private func saveOpenCodeKey() {
+        let value = trimmedKey
+        guard !value.isEmpty else { return }
+        saving = true
+        openCodeSaved = false
+        openCodeError = nil
+        Task {
+            defer { saving = false }
+            if await broker.saveOpenCodeKey(providerId: "opencode", key: value) {
+                keyValue = ""
+                openCodeSaved = true
+                onAuthChanged()
+            } else {
+                openCodeError = "Couldn't save the OpenCode key. Check the host connection and retry."
+            }
         }
     }
 
@@ -245,10 +469,20 @@ private struct AgentRow: View {
                 Label("Authorized successfully.", systemImage: "checkmark.circle.fill")
                     .font(.callout).foregroundStyle(Theme.teal)
             case "failed":
-                Label("Login failed: \(state.error ?? "unknown error")", systemImage: "xmark.octagon")
-                    .font(.callout).foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("Login failed: \(state.error ?? "unknown error")", systemImage: "xmark.octagon")
+                        .font(.callout).foregroundStyle(.red)
+                    Button("Retry authorization") { startLogin() }
+                        .buttonStyle(.bordered)
+                        .tint(Theme.teal)
+                }
             case "cancelled":
-                Text("Login cancelled.").font(.callout).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Login cancelled.").font(.callout).foregroundStyle(.secondary)
+                    Button("Start authorization again") { startLogin() }
+                        .buttonStyle(.bordered)
+                        .tint(Theme.teal)
+                }
             default:
                 // "starting" / "awaiting_user" — progress, then the link/code once present.
                 awaitingUser(state)
@@ -383,14 +617,14 @@ private struct AgentRow: View {
 
 // MARK: - opencode providers
 
-/// Provider sub-list for the opencode agent. Mirrors `OpenCodeProviderAuth.vue`:
-/// per provider an API-key field (`setOpenCodeKey`) and, for an oauth method, a browser
-/// login (`startOpenCodeOAuth`) followed by a paste-code finish (`finishOpenCodeOAuth`).
+/// Provider sub-list for the opencode agent. Each provider supports verified API-key saves
+/// and/or an OAuth handoff that presents its instructions before opening the browser.
 private struct OpenCodeProvidersSection: View {
     let broker: BrokerSession
 
     @State private var providers: [OpenCodeProvider] = []
     @State private var loading = true
+    @State private var error: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -411,13 +645,6 @@ private struct OpenCodeProvidersSection: View {
             if loading && providers.isEmpty {
                 ProgressView().tint(Theme.teal).frame(maxWidth: .infinity)
             } else {
-                // The OpenCode key (Zen + Go) isn't in /provider/auth — it's the built-in
-                // free tier + a key from opencode.ai/auth. Surface one explicit row (the
-                // backend pairs the key onto both opencode + opencode-go) when the
-                // providers list doesn't already include it. Mirrors web `visible`.
-                if !providers.contains(where: { $0.id == "opencode" }) {
-                    OpenCodeZenKeyRow(broker: broker, onChanged: { Task { await load() } })
-                }
                 ForEach(providers, id: \.id) { provider in
                     OpenCodeProviderRow(broker: broker, provider: provider,
                                         onChanged: { Task { await load() } })
@@ -427,6 +654,11 @@ private struct OpenCodeProvidersSection: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
+            if let error {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
         }
         .task { await load() }
     }
@@ -434,60 +666,17 @@ private struct OpenCodeProvidersSection: View {
     private func load() async {
         loading = true
         defer { loading = false }
-        // Anthropic + OpenAI are covered by the claude/codex agents above — hide them
-        // here to avoid duplicate auth surfaces (parity with web HIDDEN set).
-        let hidden: Set<String> = ["anthropic", "openai"]
-        providers = await broker.openCodeProviders().filter { !hidden.contains($0.id) }
-    }
-}
-
-/// The explicit "OpenCode key (Zen + Go)" row. Not backed by an `OpenCodeProvider`
-/// (Zen isn't in /provider/auth); saving posts the key under providerId "opencode",
-/// which the backend also mirrors onto "opencode-go".
-private struct OpenCodeZenKeyRow: View {
-    let broker: BrokerSession
-    let onChanged: () -> Void
-
-    @Environment(\.openURL) private var openURL
-    @State private var keyValue = ""
-    @State private var saving = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("OpenCode").font(.callout.weight(.medium))
-            Button {
-                if let url = URL(string: "https://opencode.ai/auth") { openURL(url) }
-            } label: {
-                Label("Get a key at opencode.ai/auth", systemImage: "arrow.up.right")
-            }
-            .font(.caption2).buttonStyle(.borderless).tint(Theme.teal)
-            HStack(spacing: 8) {
-                SecureField("OpenCode key (Zen + Go)", text: $keyValue)
-                    .textFieldStyle(.roundedBorder)
-                    .autocorrectionDisabled()
-                    .smNoAutocapitalization()
-                    .font(.callout.monospaced())
-                Button(saving ? "…" : "Save") { saveKey() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Theme.teal)
-                    .disabled(keyValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || saving)
-            }
+        // Anthropic/OpenAI are covered by their agent rows; OpenCode Zen + Go is the
+        // primary authorization action above this disclosure.
+        let hidden: Set<String> = ["anthropic", "openai", "opencode", "opencode-go"]
+        let response = await broker.loadOpenCodeProviders()
+        guard !Task.isCancelled else { return }
+        guard let loaded = response else {
+            error = "Couldn't load providers from the host."
+            return
         }
-        .padding(10)
-        .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    private func saveKey() {
-        let key = keyValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { return }
-        saving = true
-        broker.setOpenCodeKey(providerId: "opencode", key: key)
-        keyValue = ""
-        Task {
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            saving = false
-            onChanged()
-        }
+        providers = loaded.filter { !hidden.contains($0.id) }
+        error = nil
     }
 }
 
@@ -501,15 +690,22 @@ private struct OpenCodeProviderRow: View {
     @State private var saving = false
     @State private var oauthURL: URL?
     @State private var oauthMethodIndex: Int?
+    @State private var oauthCallbackMethod = "code"
+    @State private var oauthInstructions: String?
+    @State private var oauthOpened = false
+    @State private var oauthError: String?
+    @State private var startingOAuth = false
     @State private var oauthCode = ""
     @State private var finishing = false
+    @State private var saveError: String?
 
     private var oauthMethod: OpenCodeAuthMethod? { provider.methods.first { $0.type == "oauth" } }
     private var apiMethod: OpenCodeAuthMethod? { provider.methods.first { $0.type == "api" } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
+                ProviderLogo(provider: provider.id, size: 24)
                 Text(prettyName).font(.callout.weight(.medium))
                 if provider.configured {
                     Image(systemName: "checkmark.circle.fill")
@@ -518,31 +714,64 @@ private struct OpenCodeProviderRow: View {
             }
 
             if let oauthURL {
-                // Browser login in progress — reopen + paste-code finish.
-                Text("A browser tab opened — authorize, then paste the code:")
-                    .font(.caption2).foregroundStyle(.secondary)
-                Link(destination: oauthURL) {
-                    Label("Reopen sign-in", systemImage: "arrow.up.right")
+                // Show the provider's device code / handoff guidance before leaving Supermux.
+                Label("Before you open the browser", systemImage: "info.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.teal)
+                Text(oauthInstructions?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                     ?? "Authorize Supermux on the provider's sign-in page, then return here.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    openURL(oauthURL)
+                    oauthOpened = true
+                } label: {
+                    Label(oauthOpened ? "Reopen sign-in page" : "Open sign-in page",
+                          systemImage: "arrow.up.right.square")
                 }
-                .font(.caption).tint(Theme.teal)
-                HStack(spacing: 8) {
-                    TextField("paste code", text: $oauthCode)
-                        .textFieldStyle(.roundedBorder)
-                        .autocorrectionDisabled()
-                        .smNoAutocapitalization()
-                        .font(.callout.monospaced())
-                    Button(finishing ? "…" : "Finish") { finishOAuth() }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Theme.teal)
-                        .disabled(oauthCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || finishing)
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.teal)
+
+                if oauthCallbackMethod == "auto" {
+                    Text("After approving in the browser, return here to complete the connection.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Button(finishing ? "Completing…" : "Complete authorization") {
+                        finishOAuth(code: "authorized")
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(Theme.teal)
+                    .disabled(!oauthOpened || finishing)
+                } else {
+                    Text("Paste the authorization code returned by the provider:")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        TextField("paste code", text: $oauthCode)
+                            .textFieldStyle(.roundedBorder)
+                            .autocorrectionDisabled()
+                            .smNoAutocapitalization()
+                            .font(.callout.monospaced())
+                        Button(finishing ? "…" : "Finish") { finishOAuth(code: oauthCode) }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Theme.teal)
+                            .disabled(oauthCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || finishing)
+                    }
+                }
+                if let oauthError {
+                    Label(oauthError, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.red)
                 }
             } else {
                 if oauthMethod != nil {
                     Button { startOAuth() } label: {
-                        Label("Login via browser", systemImage: "link")
+                        Label(startingOAuth ? "Preparing sign-in…" : "Login via browser", systemImage: "link")
                     }
                     .buttonStyle(.bordered)
                     .tint(Theme.teal)
+                    .disabled(startingOAuth)
                 }
                 if let apiMethod {
                     HStack(spacing: 8) {
@@ -557,6 +786,11 @@ private struct OpenCodeProviderRow: View {
                             .disabled(keyValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || saving)
                     }
                 }
+                if let saveError {
+                    Label(saveError, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
             }
         }
         .padding(10)
@@ -564,7 +798,18 @@ private struct OpenCodeProviderRow: View {
     }
 
     private var prettyName: String {
-        provider.id
+        switch provider.id.lowercased() {
+        case "github-copilot": return "GitHub Copilot"
+        case "gitlab": return "GitLab"
+        case "xai": return "xAI"
+        case "digitalocean": return "DigitalOcean"
+        case "cloudflare-workers-ai": return "Cloudflare Workers AI"
+        case "cloudflare-ai-gateway": return "Cloudflare AI Gateway"
+        case "snowflake-cortex": return "Snowflake Cortex"
+        case "opencode-go": return "OpenCode Go"
+        default: break
+        }
+        return provider.id
             .split(whereSeparator: { $0 == "-" || $0 == "_" })
             .map { word -> String in
                 String(word.prefix(1)).uppercased() + String(word.dropFirst())
@@ -576,43 +821,57 @@ private struct OpenCodeProviderRow: View {
         let key = keyValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
         saving = true
-        broker.setOpenCodeKey(providerId: provider.id, key: key)
-        keyValue = ""
-        // `setOpenCodeKey` is fire-and-forget; give the broker a moment, then refresh
-        // so the "configured" check reflects the new key.
+        saveError = nil
         Task {
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            saving = false
-            onChanged()
+            defer { saving = false }
+            if await broker.saveOpenCodeKey(providerId: provider.id, key: key) {
+                keyValue = ""
+                onChanged()
+            } else {
+                saveError = "Couldn't save this provider key."
+            }
         }
     }
 
     private func startOAuth() {
         guard let method = oauthMethod else { return }
         oauthCode = ""
+        oauthError = nil
+        oauthOpened = false
+        startingOAuth = true
         Task { [broker] in
+            defer { startingOAuth = false }
             guard let start = await broker.startOpenCodeOAuth(providerId: provider.id, method: Int(method.index)),
-                  let url = URL(string: start.url) else { return }
+                  let url = URL(string: start.url) else {
+                oauthError = "Couldn't prepare provider authorization."
+                return
+            }
             await MainActor.run {
                 self.oauthMethodIndex = Int(method.index)
                 self.oauthURL = url
-                openURL(url)
+                self.oauthCallbackMethod = start.method
+                self.oauthInstructions = start.instructions
             }
         }
     }
 
-    private func finishOAuth() {
-        let code = oauthCode.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func finishOAuth(code rawCode: String) {
+        let code = rawCode.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !code.isEmpty, let methodIndex = oauthMethodIndex else { return }
         finishing = true
-        broker.finishOpenCodeOAuth(providerId: provider.id, method: methodIndex, code: code)
+        oauthError = nil
         Task {
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            finishing = false
-            oauthURL = nil
-            oauthMethodIndex = nil
-            oauthCode = ""
-            onChanged()
+            defer { finishing = false }
+            if await broker.finishOpenCodeAuthorization(providerId: provider.id, method: methodIndex, code: code) {
+                oauthURL = nil
+                oauthMethodIndex = nil
+                oauthInstructions = nil
+                oauthCode = ""
+                oauthOpened = false
+                onChanged()
+            } else {
+                oauthError = "Authorization didn't complete. Confirm it in the browser and try again."
+            }
         }
     }
 }
@@ -641,4 +900,8 @@ private struct CopyableCommand: View {
             .tint(Theme.teal)
         }
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

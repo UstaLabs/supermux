@@ -113,6 +113,14 @@ class BrokerApiSettingsTest {
         assertNull(s.error)
     }
 
+    @Test fun agent_install_job_decodes_real_fields() {
+        val job = json.decodeFromString<AgentInstallJob>(
+            """{"state":"failed","log":"npm error","exitCode":1}""")
+        assertEquals("failed", job.state)
+        assertEquals("npm error", job.log)
+        assertEquals(1, job.exitCode)
+    }
+
     @Test fun opencode_providers_decode_bare_array() {
         val list = json.decodeFromString<List<OpenCodeProvider>>(
             """[{"id":"anthropic","configured":true,"methods":[{"type":"oauth","label":"Login","index":0},
@@ -192,6 +200,40 @@ class BrokerApiSettingsTest {
         val api = captured(sink = reqs)
         api.saveConfig(codexApiKey = "sk-123")
         assertEquals("""{"codexApiKey":"sk-123"}""", reqs.single().bodyText())
+    }
+
+    @Test fun save_config_marks_onboarding_complete_without_clobbering_other_fields() = runTest {
+        val reqs = mutableListOf<HttpRequestData>()
+        val api = captured(sink = reqs)
+        api.saveConfig(onboarded = true)
+        assertEquals("""{"onboarded":true}""", reqs.single().bodyText())
+    }
+
+    @Test fun agent_install_starts_and_polls_job() = runTest {
+        val reqs = mutableListOf<HttpRequestData>()
+        val api = captured(body = """{"state":"running","log":"installing","exitCode":null}""", sink = reqs)
+
+        assertEquals("running", api.startAgentInstall("codex").state)
+        assertEquals("running", api.agentInstallState("codex").state)
+
+        assertEquals(HttpMethod.Post, reqs[0].method)
+        assertEquals("http://h/agents/codex/install", reqs[0].url.toString())
+        assertEquals(HttpMethod.Get, reqs[1].method)
+        assertEquals("http://h/agents/codex/install", reqs[1].url.toString())
+    }
+
+    @Test fun agent_install_conflict_resumes_existing_job() = runTest {
+        val reqs = mutableListOf<HttpRequestData>()
+        val api = captured(
+            body = """{"state":"running","log":"already running","exitCode":null}""",
+            status = io.ktor.http.HttpStatusCode.Conflict,
+            sink = reqs,
+        )
+
+        val job = api.startAgentInstall("claude")
+
+        assertEquals("running", job.state)
+        assertEquals("already running", job.log)
     }
 
     @Test fun app_config_decodes_voice_engine() {
@@ -275,9 +317,14 @@ class BrokerApiSettingsTest {
 
     @Test fun opencode_oauth_start_sends_numeric_method() = runTest {
         val reqs = mutableListOf<HttpRequestData>()
-        val api = captured(body = """{"url":"https://auth"}""", sink = reqs)
+        val api = captured(
+            body = """{"url":"https://auth","instructions":"Enter code: AB-12","method":"auto"}""",
+            sink = reqs,
+        )
         val res = api.startOpenCodeOAuth("anthropic", 0)
         assertEquals("https://auth", res.url)
+        assertEquals("Enter code: AB-12", res.instructions)
+        assertEquals("auto", res.method)
         assertEquals("""{"providerId":"anthropic","method":0}""", reqs.single().bodyText())
     }
 

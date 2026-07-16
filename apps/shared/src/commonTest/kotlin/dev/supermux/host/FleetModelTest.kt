@@ -37,10 +37,18 @@ class FleetModelTest {
     // ── hostShortLabel ─────────────────────────────────────────────────────────
     @Test fun shortLabel_firstTokenCapped() {
         assertEquals("MacBook", hostShortLabel("MacBook"))
-        assertEquals("This", hostShortLabel("This host"))
+        assertEquals("Host", hostShortLabel("This host"))
+        assertEquals("Ahmet's", hostShortLabel("This computer (Ahmet's MacBook Air)"))
         assertEquals("Ahmet-MBP", hostShortLabel("Ahmet-MBP"))
-        assertEquals("host", hostShortLabel("   "))
+        assertEquals("Host", hostShortLabel("   "))
         assertEquals("aaaaaaaaaaaaaa", hostShortLabel("aaaaaaaaaaaaaaaaaaaa")) // capped at 14
+    }
+
+    @Test fun displayLabel_unwrapsLegacyLocalPrefix() {
+        assertEquals("Ahmet's MacBook Air", hostDisplayLabel("This computer (Ahmet's MacBook Air)"))
+        assertEquals("Studio", hostDisplayLabel("This host (Studio)"))
+        assertEquals("Host", hostDisplayLabel("This computer"))
+        assertEquals("Build Box", hostDisplayLabel("Build Box"))
     }
 
     // ── formatLastSeen ─────────────────────────────────────────────────────────
@@ -65,6 +73,7 @@ class FleetModelTest {
         val b = HostView("record-B", "habc", "MacBook", online = false)
         assertEquals(a.colorIndex, b.colorIndex)
         assertEquals("MacBook", a.shortLabel)
+        assertEquals("MacBook", a.displayLabel)
     }
 
     // ── filterSessions ──────────────────────────────────────────────────────────

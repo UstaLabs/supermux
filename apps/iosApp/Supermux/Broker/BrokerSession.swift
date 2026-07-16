@@ -287,6 +287,16 @@ final class BrokerSession {
             evictTerminalHosts(sessionId: r.id)   // session killed → tear down its live terminals
             dropEditorHost(sessionId: r.id)       // …its editor webview (stop() breaks the bridge cycle)
             if let removedName { evictDisplayHosts(sessionName: removedName) }  // …and its displays
+        case .sessionRenamed(let r):
+            if let idx = sessions.firstIndex(where: { $0.id == r.id }) {
+                let old = sessions[idx]
+                sessions[idx] = old.doCopy(
+                    id: old.id, name: r.newName, workdir: old.workdir, agent: old.agent,
+                    status: old.status, mute: old.mute, connected: old.connected,
+                    model: old.model, reasoningLevel: old.reasoningLevel,
+                    repo_root: old.repo_root, role: old.role, session_branch: old.session_branch,
+                    git: old.git, finish_job: old.finish_job)
+            }
         case .sessionState(let st):
             // Per-session patch (model/effort switch, mute, shim connect): merge only the
             // fields present (web parity: ws.ts updateState). Natives dropped this frame
@@ -592,11 +602,12 @@ final class BrokerSession {
     /// PUT /settings/config — partial patch. All fields are optional; pass nil to leave
     /// unchanged. An empty-string `voiceCleanupModel` ("") resets the model to the
     /// engine's default (the broker's reset sentinel).
-    func saveConfig(paName: String? = nil, voiceCleanupModel: String? = nil,
+    func saveConfig(onboarded: Bool? = nil, paName: String? = nil, voiceCleanupModel: String? = nil,
                     voiceCleanupEngine: String? = nil,
                     claudeOauthToken: String? = nil, anthropicApiKey: String? = nil,
                     codexApiKey: String? = nil, cursorApiKey: String? = nil) async {
-        try? await api.saveConfig(paName: paName, voiceCleanupModel: voiceCleanupModel,
+        try? await api.saveConfig(onboarded: onboarded?.kb,
+                                  paName: paName, voiceCleanupModel: voiceCleanupModel,
                                   voiceCleanupEngine: voiceCleanupEngine,
                                   claudeOauthToken: claudeOauthToken, anthropicApiKey: anthropicApiKey,
                                   codexApiKey: codexApiKey, cursorApiKey: cursorApiKey)
@@ -608,6 +619,39 @@ final class BrokerSession {
 
     // Agent install status + login flow.
     func agentStatuses() async -> [AgentInstallStatus] { (try? await api.agentStatuses()) ?? [] }
+    /// Preserve transport failure separately from a legitimate empty result. Navigation can
+    /// cancel a settings request; callers use nil to avoid turning that cancellation into a
+    /// misleading host error when the user moves back through onboarding.
+    func loadAgentStatuses() async -> [AgentInstallStatus]? { try? await api.agentStatuses() }
+    func saveAgentCredential(kind: String, value: String) async -> Bool {
+        do {
+            switch kind {
+            case "claude":
+                try await api.saveConfig(onboarded: nil, paName: nil,
+                                         voiceCleanupModel: nil, voiceCleanupEngine: nil,
+                                         claudeOauthToken: value, anthropicApiKey: nil,
+                                         codexApiKey: nil, cursorApiKey: nil)
+            case "codex":
+                try await api.saveConfig(onboarded: nil, paName: nil,
+                                         voiceCleanupModel: nil, voiceCleanupEngine: nil,
+                                         claudeOauthToken: nil, anthropicApiKey: nil,
+                                         codexApiKey: value, cursorApiKey: nil)
+            case "cursor":
+                try await api.saveConfig(onboarded: nil, paName: nil,
+                                         voiceCleanupModel: nil, voiceCleanupEngine: nil,
+                                         claudeOauthToken: nil, anthropicApiKey: nil,
+                                         codexApiKey: nil, cursorApiKey: value)
+            default:
+                return false
+            }
+            let statuses = try await api.agentStatuses()
+            return statuses.contains { $0.kind == kind && $0.authed }
+        } catch {
+            return false
+        }
+    }
+    func startAgentInstall(kind: String) async -> AgentInstallJob? { try? await api.startAgentInstall(kind: kind) }
+    func agentInstallState(kind: String) async -> AgentInstallJob? { try? await api.agentInstallState(kind: kind) }
     func startAgentLogin(kind: String) async -> AgentLoginState? { try? await api.startAgentLogin(kind: kind) }
     func agentLoginState(kind: String) async -> AgentLoginState? { try? await api.agentLoginState(kind: kind) }
     func sendAgentLoginCode(kind: String, code: String) { Task { [api] in try? await api.sendAgentLoginCode(kind: kind, code: code) } }
@@ -615,12 +659,25 @@ final class BrokerSession {
 
     // opencode providers.
     func openCodeProviders() async -> [OpenCodeProvider] { (try? await api.openCodeProviders()) ?? [] }
-    func setOpenCodeKey(providerId: String, key: String) { Task { [api] in try? await api.setOpenCodeKey(providerId: providerId, key: key) } }
+    func loadOpenCodeProviders() async -> [OpenCodeProvider]? { try? await api.openCodeProviders() }
+    func saveOpenCodeKey(providerId: String, key: String) async -> Bool {
+        do {
+            try await api.setOpenCodeKey(providerId: providerId, key: key)
+            return true
+        } catch {
+            return false
+        }
+    }
     func startOpenCodeOAuth(providerId: String, method: Int) async -> OpenCodeOAuthStart? {
         try? await api.startOpenCodeOAuth(providerId: providerId, method: Int32(method))
     }
-    func finishOpenCodeOAuth(providerId: String, method: Int, code: String) {
-        Task { [api] in try? await api.finishOpenCodeOAuth(providerId: providerId, method: Int32(method), code: code) }
+    func finishOpenCodeAuthorization(providerId: String, method: Int, code: String) async -> Bool {
+        do {
+            try await api.finishOpenCodeOAuth(providerId: providerId, method: Int32(method), code: code)
+            return true
+        } catch {
+            return false
+        }
     }
 
     // Editor / LSP settings.

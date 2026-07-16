@@ -55,5 +55,21 @@ enum MacHostPolicy {
     static func shouldAutostart(environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
         environment["XCTestConfigurationFilePath"] == nil && environment["XCTestBundlePath"] == nil
     }
+
+    /// The legacy single-host pair remains the live connection source while fleet storage is
+    /// transitional. A matching current pair must beat a migrated fleet credential, which can
+    /// briefly lag after a token refresh.
+    static func preferredLocalToken(
+        localBaseURL: String,
+        currentBaseURL: String?,
+        currentToken: String?,
+        fleetToken: String?
+    ) -> String? {
+        if currentBaseURL == localBaseURL, let currentToken, !currentToken.isEmpty {
+            return currentToken
+        }
+        if let fleetToken, !fleetToken.isEmpty { return fleetToken }
+        return nil
+    }
 }
 #endif

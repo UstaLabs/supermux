@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -138,39 +140,43 @@ fun PickerSheet(
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
             )
 
-            // Options
-            options.forEach { (id, label) ->
-                val isSelected = id == current
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            haptic(HapticKind.Tick)
-                            onPick(id)
-                            onDismiss()
+            // Scrollable options
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                items(options, key = { it.first }) { (id, label) ->
+                    val isSelected = id == current
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                haptic(HapticKind.Tick)
+                                onPick(id)
+                                onDismiss()
+                            }
+                            .background(
+                                if (isSelected) cs.primary.copy(alpha = 0.10f)
+                                else Color.Transparent
+                            )
+                            .padding(horizontal = 20.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = label,
+                            color = if (isSelected) cs.primary else cs.onSurface,
+                            fontSize = 14.sp,
+                            fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                        )
+                        if (isSelected) {
+                            Spacer(Modifier.width(8.dp))
+                            Icon(
+                                painter = painterResource(R.drawable.ic_check),
+                                contentDescription = null,
+                                tint = cs.primary,
+                                modifier = Modifier.size(16.dp),
+                            )
                         }
-                        .background(
-                            if (isSelected) cs.primary.copy(alpha = 0.10f)
-                            else Color.Transparent
-                        )
-                        .padding(horizontal = 20.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(
-                        text = label,
-                        color = if (isSelected) cs.primary else cs.onSurface,
-                        fontSize = 14.sp,
-                        fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
-                    )
-                    if (isSelected) {
-                        Spacer(Modifier.width(8.dp))
-                        Icon(
-                            painter = painterResource(R.drawable.ic_check),
-                            contentDescription = null,
-                            tint = cs.primary,
-                            modifier = Modifier.size(16.dp),
-                        )
                     }
                 }
             }

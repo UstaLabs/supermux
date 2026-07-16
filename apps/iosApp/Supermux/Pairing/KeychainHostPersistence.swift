@@ -66,29 +66,51 @@ final class KeychainHostPersistence: HostPersistence {
     }
 
     private static func tokenPut(_ account: String, _ token: String) {
+        #if os(macOS)
+        var tokens = macTokens()
+        tokens[account] = token
+        writeMacTokens(tokens)
+        #else
         SecItemDelete(baseQuery(account) as CFDictionary)
         var add = baseQuery(account)
         add[kSecValueData as String] = Data(token.utf8)
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         SecItemAdd(add as CFDictionary, nil)
+        #endif
     }
 
     private static func tokenGet(_ account: String) -> String? {
+        #if os(macOS)
+        return macTokens()[account]
+        #else
         var query = baseQuery(account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
+        #if os(macOS)
+        query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        #endif
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
               let data = item as? Data else { return nil }
         return String(data: data, encoding: .utf8)
+        #endif
     }
 
     private static func tokenRemove(_ account: String) {
+        #if os(macOS)
+        var tokens = macTokens()
+        tokens.removeValue(forKey: account)
+        writeMacTokens(tokens)
+        #else
         SecItemDelete(baseQuery(account) as CFDictionary)
+        #endif
     }
 
     /// recordIds that currently have a stored token — used to prune orphans on save.
     private static func tokenAccounts() -> Set<String> {
+        #if os(macOS)
+        return Set(macTokens().keys)
+        #else
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: tokenService,
@@ -100,5 +122,34 @@ final class KeychainHostPersistence: HostPersistence {
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
               let items = result as? [[String: Any]] else { return [] }
         return Set(items.compactMap { $0[kSecAttrAccount as String] as? String })
+        #endif
     }
+
+    #if os(macOS)
+    private static var macTokensURL: URL {
+        let environment = ProcessInfo.processInfo.environment
+        let state = environment["MUX_STATE_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".mux/state", isDirectory: true)
+        return state.appendingPathComponent("native-host-tokens.json")
+    }
+
+    private static func macTokens() -> [String: String] {
+        guard let data = try? Data(contentsOf: macTokensURL),
+              let decoded = try? JSONDecoder().decode([String: String].self, from: data) else { return [:] }
+        return decoded
+    }
+
+    private static func writeMacTokens(_ tokens: [String: String]) {
+        let file = macTokensURL
+        try? FileManager.default.createDirectory(
+            at: file.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        guard let data = try? JSONEncoder().encode(tokens) else { return }
+        try? data.write(to: file, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+    }
+    #endif
 }

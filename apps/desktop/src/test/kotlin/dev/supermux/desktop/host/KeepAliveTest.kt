@@ -20,6 +20,7 @@ class KeepAliveTest {
     private val spec = KeepAlive.Spec(
         exec = listOf("/opt/supermux/bin/supermux", "--keep-hosting"),
         hostId = "abcdefghijklmnopqrstuvwxyz".take(26),
+        hostName = "Ahmet's MacBook Air",
     )
 
     // ── string generators ───────────────────────────────────────────────────────────
@@ -31,6 +32,8 @@ class KeepAliveTest {
         assertTrue(xml.contains("<string>--keep-hosting</string>"), "exec arg 1")
         assertTrue(xml.contains("<key>SUPERMUX_HOST_ID</key>"), "hostId env key")
         assertTrue(xml.contains("<string>${spec.hostId}</string>"), "hostId value")
+        assertTrue(xml.contains("<key>MUX_HOST_NAME</key>"), "host name env key")
+        assertTrue(xml.contains("<string>${spec.hostName}</string>"), "host name value")
         assertTrue(xml.contains("<key>RunAtLoad</key>") && xml.contains("<key>KeepAlive</key>"), "relaunch keys")
         assertTrue(xml.trimStart().startsWith("<?xml"), "well-formed plist header")
     }
@@ -46,6 +49,7 @@ class KeepAliveTest {
         assertTrue(unit.contains("ExecStart=/opt/supermux/bin/supermux --keep-hosting"), "ExecStart")
         assertTrue(unit.contains("Restart=on-failure"), "restart policy")
         assertTrue(unit.contains("Environment=SUPERMUX_HOST_ID=${spec.hostId}"), "hostId env")
+        assertTrue(unit.contains("Environment=\"MUX_HOST_NAME=${spec.hostName}\""), "host name env")
         assertTrue(unit.contains("WantedBy=default.target"), "install section")
     }
 

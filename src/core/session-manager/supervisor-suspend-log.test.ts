@@ -39,7 +39,7 @@ describe("session-death observability (suspend logging)", () => {
     const registry = freshRegistry()
     const pid = await deadPid()
     const s = registry.register({ name: "ztest-dead-timer", workdir: "/tmp", tmux_target: "mux:ztest1", pid })
-    const sup = createSupervisor({ registry, bindSocket: async () => {}, shouldAutoSpawnPA: () => false })
+    const sup = createSupervisor({ registry, bindSocket: async () => {} })
 
     const prev = process.env.MUX_LOG_LEVEL
     process.env.MUX_LOG_LEVEL = "info"

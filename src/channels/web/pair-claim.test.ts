@@ -18,6 +18,13 @@ test("expired secret is rejected and swept", () => {
   expect(store.consume(secret)).toBe(false)
 })
 
+test("mintWithExpiry returns the exact claim deadline", () => {
+  const store = new ClaimStore({ ttlMs: 5000, clock: () => 1000 })
+  const claim = store.mintWithExpiry()
+  expect(claim.expiresAt).toBe(6000)
+  expect(store.consume(claim.secret)).toBe(true)
+})
+
 test("unknown secret is rejected", () => {
   const store = new ClaimStore({ ttlMs: 5000, clock: () => 0 })
   expect(store.consume("nope")).toBe(false)

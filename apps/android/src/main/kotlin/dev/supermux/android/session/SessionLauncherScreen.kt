@@ -168,13 +168,25 @@ fun SessionLauncherScreen(
     var draftCleared by remember { mutableStateOf(false) }
     var lastSeenAgent by remember { mutableStateOf<String?>(null) }
     var lastSeenWorkdir by remember { mutableStateOf<String?>(null) }
+    var lastSeenHostId by remember { mutableStateOf<String?>(null) }
+    var lastRepoHostId by remember { mutableStateOf<String?>(null) }
     var launcherModels by remember { mutableStateOf(emptyMap<String, String>()) }
     var error by remember { mutableStateOf<String?>(null) }
+    var repoInfo by remember { mutableStateOf<RepoInfo?>(null) }
+    var useWorktree by remember { mutableStateOf(true) }
+    var baseBranch by remember { mutableStateOf("") }
     // The agent options come from the selected host's /agents/status (fixes the old hardcoded four);
     // the literal list is only the fallback until the fetch lands / when the host doesn't answer.
     var agents by remember { mutableStateOf(listOf("claude", "codex", "cursor", "opencode", "grok")) }
     val multiHost = hosts.size >= 2
-    LaunchedEffect(selectedHostId) {
+    LaunchedEffect(selectedHostId, launcherRestoring) {
+        if (launcherRestoring) return@LaunchedEffect
+        val switchedHost = lastSeenHostId != null && lastSeenHostId != selectedHostId
+        lastSeenHostId = selectedHostId
+        if (switchedHost) {
+            model = null
+        }
+        agents = listOf("claude", "codex", "cursor", "opencode")
         val fetched = loadAgents()
         if (fetched.isNotEmpty()) {
             agents = fetched
@@ -186,9 +198,12 @@ fun SessionLauncherScreen(
     var models by remember { mutableStateOf(emptyList<ModelInfo>()) }
     var showModelSheet by remember { mutableStateOf(false) }
     var agentMenu by remember { mutableStateOf(false) }
-    LaunchedEffect(agent, launcherRestoring) {
+    LaunchedEffect(selectedHostId, agent, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
-        models = loadModels(agent)
+        models = emptyList()
+        val loadedModels = loadModels(agent)
+        models = loadedModels
+        if (model != null && loadedModels.none { it.id == model }) model = null
         // Reset only when the live agent genuinely differs from what this effect last recorded
         // — safe against any number of duplicate invocations for the same agent, unlike a
         // one-shot "armed" boolean (see this task's header note for why that broke on iOS).
@@ -209,7 +224,7 @@ fun SessionLauncherScreen(
     var reasoningVisible by remember { mutableStateOf(false) }
     var launcherReasoning by remember { mutableStateOf(emptyMap<String, String>()) }
     var showReasoningSheet by remember { mutableStateOf(false) }
-    LaunchedEffect(agent, model, launcherRestoring) {
+    LaunchedEffect(selectedHostId, agent, model, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
         val resp = loadReasoningLevels(agent, model)
         val levels = resp?.levels ?: emptyList()
@@ -221,15 +236,14 @@ fun SessionLauncherScreen(
     }
 
     // Worktree picker (iOS: useWorktree defaults on; gated on repoInfo.eligible).
-    var repoInfo by remember { mutableStateOf<RepoInfo?>(null) }
-    var useWorktree by remember { mutableStateOf(true) }
-    var baseBranch by remember { mutableStateOf("") }
     var showWorktreeSheet by remember { mutableStateOf(false) }
-    LaunchedEffect(workdir, launcherRestoring) {
+    LaunchedEffect(selectedHostId, workdir, launcherRestoring) {
         if (launcherRestoring) { repoInfo = null; return@LaunchedEffect }
         val info = if (workdir.isBlank()) null else loadRepoInfo(workdir)
         repoInfo = info
-        if (lastSeenWorkdir != null && lastSeenWorkdir != workdir) {
+        val switchedRepoHost = lastRepoHostId != null && lastRepoHostId != selectedHostId
+        lastRepoHostId = selectedHostId
+        if (switchedRepoHost || (lastSeenWorkdir != null && lastSeenWorkdir != workdir)) {
             baseBranch = info?.currentBranch ?: ""
         } else if (baseBranch.isBlank()) {
             baseBranch = info?.currentBranch ?: ""
@@ -241,7 +255,7 @@ fun SessionLauncherScreen(
     // (iOS NewSessionView `.task(id: "\(agent)|\(workdir)")`). Gated on restore so it never fetches
     // against the pre-restore default agent/workdir; loadCommands returns [] for a blank workdir.
     var launcherCommands by remember { mutableStateOf(emptyList<SlashCommand>()) }
-    LaunchedEffect(agent, workdir, launcherRestoring) {
+    LaunchedEffect(selectedHostId, agent, workdir, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
         launcherCommands = loadCommands(agent, workdir)
     }
@@ -308,7 +322,16 @@ fun SessionLauncherScreen(
         }
     }
 
-    LaunchedEffect(Unit) { projects = loadProjects() }
+    LaunchedEffect(selectedHostId, launcherRestoring) {
+        if (launcherRestoring) return@LaunchedEffect
+        projects = emptyList()
+        val loaded = loadProjects()
+        projects = loaded
+        if (workdir.isBlank() || (workdir != "~" && workdir !in loaded)) {
+            workdir = loaded.firstOrNull() ?: "~"
+            workdirTouched = loaded.isNotEmpty()
+        }
+    }
 
     // Default workdir from most recent session, like web chooseDefaultProject.
     LaunchedEffect(sessions) {
@@ -1065,7 +1088,7 @@ private fun HostPickerPill(
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             hosts.forEach { h ->
                 DropdownMenuItem(
-                    text = { Text(h.displayName + if (!h.online) " (offline)" else "") },
+                    text = { Text(h.displayLabel + if (!h.online) " (offline)" else "") },
                     leadingIcon = { dev.supermux.android.host.HostDot(h.colorIndex, size = 10.dp) },
                     modifier = Modifier.testTag("launcher_host_${h.recordId}"),
                     onClick = { onSelect(h.recordId); menu = false },

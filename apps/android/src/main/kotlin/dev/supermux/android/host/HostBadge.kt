@@ -3,10 +3,14 @@ package dev.supermux.android.host
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -16,6 +20,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -83,6 +88,54 @@ fun HostBadge(host: HostView, modifier: Modifier = Modifier) {
             fontSize = 10.sp,
             fontWeight = FontWeight.Medium,
         )
+    }
+}
+
+/** Visible host scope for pages whose reads and actions target one broker. */
+@Composable
+fun HostScopePicker(
+    hosts: List<HostView>,
+    selectedHostId: String?,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (hosts.size < 2) return
+    val selected = hosts.firstOrNull { it.recordId == selectedHostId } ?: hosts.first()
+    val cs = MaterialTheme.colorScheme
+    var expanded by remember { mutableStateOf(false) }
+    Column(modifier.fillMaxWidth().background(cs.surfaceContainer)) {
+        Box {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = true }
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+                    .testTag("host_scope_picker"),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Host", color = cs.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.weight(1f))
+                HostDot(selected.colorIndex, size = 9.dp)
+                Text(
+                    selected.displayLabel + if (!selected.online) " · Offline" else "",
+                    modifier = Modifier.padding(start = 7.dp, end = 5.dp),
+                    color = cs.onSurface,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text("⌄", color = cs.onSurfaceVariant)
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                hosts.forEach { host ->
+                    DropdownMenuItem(
+                        text = { Text(host.displayLabel + if (!host.online) " (offline)" else "") },
+                        leadingIcon = { HostDot(host.colorIndex, size = 10.dp) },
+                        onClick = { expanded = false; onSelect(host.recordId) },
+                    )
+                }
+            }
+        }
+        HorizontalDivider()
     }
 }
 
@@ -156,7 +209,7 @@ fun HostFilterChips(
                 DropdownMenu(expanded = menuFor == h.recordId, onDismissRequest = { menuFor = null }) {
                     DropdownMenuItem(
                         text = { Text("Rename") },
-                        onClick = { menuFor = null; renameText = h.displayName; renameTarget = h },
+                        onClick = { menuFor = null; renameText = h.displayLabel; renameTarget = h },
                     )
                     DropdownMenuItem(
                         text = { Text("Forget", color = cs.error) },
@@ -207,7 +260,7 @@ fun HostFilterChips(
         AlertDialog(
             onDismissRequest = { forgetTarget = null },
             title = { Text("Forget host?") },
-            text = { Text("Removes \"${target.displayName}\" and its sessions from this device. You'll need a new pairing link to add it again.") },
+            text = { Text("Removes \"${target.displayLabel}\" and its sessions from this device. You'll need a new pairing link to add it again.") },
             confirmButton = {
                 TextButton(
                     onClick = { onForgetHost(target.recordId); forgetTarget = null },

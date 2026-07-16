@@ -85,13 +85,16 @@ export async function setOpenCodeApiKey(providerId: string, key: string, metadat
 
 /** Begin an OAuth/browser login for a provider+method; returns the authorization
  * URL the user opens in a browser. */
-export async function startOpenCodeOAuth(providerId: string, method: number): Promise<{ url: string; instructions?: string }> {
+export async function startOpenCodeOAuth(
+  providerId: string,
+  method: number,
+): Promise<{ url: string; instructions?: string; method: "auto" | "code" }> {
   const c = await getClient()
-  const data = unwrap<{ url?: string; instructions?: string }>(
+  const data = unwrap<{ url?: string; instructions?: string; method?: "auto" | "code" }>(
     await c.provider.oauth.authorize({ path: { id: providerId }, body: { method } } as never),
   )
   if (!data?.url) throw new Error("opencode oauth authorize returned no url")
-  return { url: data.url, instructions: data.instructions }
+  return { url: data.url, instructions: data.instructions, method: data.method ?? "code" }
 }
 
 /** Complete an OAuth login with the code the user pasted back from the browser. */

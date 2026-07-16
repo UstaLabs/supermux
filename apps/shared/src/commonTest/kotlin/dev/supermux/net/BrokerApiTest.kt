@@ -1,8 +1,16 @@
 package dev.supermux.net
 
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.utils.io.ByteReadChannel
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class BrokerApiTest {
     private val json = Json { ignoreUnknownKeys = true }
@@ -91,6 +99,21 @@ class BrokerApiTest {
         val encoded = Json.encodeToString(SpawnResponse.serializer(), resp)
         val decoded = json.decodeFromString<SpawnResponse>(encoded)
         assertEquals(resp, decoded)
+    }
+
+    @Test
+    fun spawn_times_out_instead_of_leaving_the_launcher_pending_forever() = runTest {
+        val engine = MockEngine {
+            delay(60_000)
+            respond(ByteReadChannel("{}"))
+        }
+        val api = BrokerApi("http://h", "tok", HttpClient(engine)).also {
+            it.spawnTimeoutMillis = 10
+        }
+
+        assertFailsWith<TimeoutCancellationException> {
+            api.spawn(SpawnRequest(workdir = "/home/user"))
+        }
     }
 
     @Test

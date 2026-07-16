@@ -23,6 +23,22 @@ test("second load returns the SAME identity (persisted, not regenerated)", () =>
   expect(b.publicKeyRaw.equals(a.publicKeyRaw)).toBe(true)
 })
 
+test("concurrent first starts all adopt one durable identity", async () => {
+  const p = freshKeyPath()
+  const modulePath = join(import.meta.dir, "keypair.ts")
+  const script = `import { loadOrCreateHostKey } from ${JSON.stringify(modulePath)}; console.log(loadOrCreateHostKey(${JSON.stringify(p)}).hostId)`
+  const processes = Array.from({ length: 12 }, () =>
+    Bun.spawn([process.execPath, "-e", script], { stdout: "pipe", stderr: "pipe" }))
+  const ids = await Promise.all(processes.map(async process => {
+    const [stdout, exitCode] = await Promise.all([new Response(process.stdout).text(), process.exited])
+    expect(exitCode).toBe(0)
+    return stdout.trim()
+  }))
+
+  expect(new Set(ids).size).toBe(1)
+  expect(loadOrCreateHostKey(p).hostId).toBe(ids[0]!)
+})
+
 test("key file is created 0600", () => {
   const p = freshKeyPath()
   loadOrCreateHostKey(p)

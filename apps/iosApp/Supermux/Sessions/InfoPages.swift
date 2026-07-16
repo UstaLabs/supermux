@@ -135,22 +135,34 @@ private struct AddDeviceSheet: View {
     let broker: BrokerSession
     var onDone: () -> Void
     @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            AddDeviceView(broker: broker, onMinted: onDone)
+                .toolbar { ToolbarItem(placement: .smTopTrailing) { Button("Done") { dismiss() } } }
+        }
+        .tint(Theme.teal)
+        .smPresentationDetents([.medium, .large])
+    }
+}
+
+/// The actual name → one-time QR flow. Kept separate from its modal wrapper so macOS can
+/// present it directly from the global sidebar/File command without stacking a sheet on a sheet.
+struct AddDeviceView: View {
+    let broker: BrokerSession
+    var onMinted: () -> Void = {}
     @State private var name = ""
     @State private var url: String?
     @State private var minting = false
     @State private var copied = false
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if let url { minted(url) } else { entry }
-            }
-            .padding(20)
-            .navigationTitle("Add device").smInlineNavigationTitle()
-            .toolbar { ToolbarItem(placement: .smTopTrailing) { Button("Done") { dismiss() } } }
+        Group {
+            if let url { minted(url) } else { entry }
         }
+        .padding(20)
+        .navigationTitle("Add device").smInlineNavigationTitle()
         .tint(Theme.teal)
-        .smPresentationDetents([.medium, .large])
     }
 
     private var entry: some View {
@@ -163,7 +175,8 @@ private struct AddDeviceSheet: View {
                 minting = true
                 Task {
                     let r = await broker.addDevice(name.trimmingCharacters(in: .whitespaces))
-                    url = r?.url; minting = false; onDone()
+                    url = r?.url; minting = false
+                    if r != nil { onMinted() }
                 }
             } label: {
                 HStack { Spacer()
@@ -760,7 +773,7 @@ private struct ArchivedMessageRow: View {
 /// Tapping a PA opens its chat. Parity with the web PersonalAssistantsView.
 struct PersonalAssistantsView: View {
     let broker: BrokerSession
-    var onOpen: (String) -> Void
+    var onOpen: ((String) -> Void)? = nil
     @State private var pas: [PADto] = []
     @State private var loading = true
     @State private var creating = false
@@ -776,9 +789,14 @@ struct PersonalAssistantsView: View {
             } else {
                 List {
                     ForEach(pas, id: \.id) { pa in
-                        Button { onOpen(pa.id) } label: { paRow(pa) }
-                            .buttonStyle(.plain)
-                            .swipeActions { Button("Kill", role: .destructive) { killTarget = pa } }
+                        if let onOpen {
+                            Button { onOpen(pa.id) } label: { paRow(pa) }
+                                .buttonStyle(.plain)
+                                .swipeActions { Button("Kill", role: .destructive) { killTarget = pa } }
+                        } else {
+                            paRow(pa)
+                                .swipeActions { Button("Kill", role: .destructive) { killTarget = pa } }
+                        }
                     }
                 }
             }

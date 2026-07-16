@@ -19,18 +19,30 @@ struct PairToken: Equatable {
                 if let port = url.port { base += ":\(port)" }
                 return PairToken(baseURL: base, token: token)
             }
-            if scheme == "supermux", let token = queryToken(url), let base = fallbackBaseURL {
+            if scheme == "supermux", let token = queryToken(url),
+               let base = queryValue("base", url) ?? fallbackBaseURL {
                 return PairToken(baseURL: base, token: token)
             }
         }
-        // Bare token — only usable once a broker URL is already known.
-        if let base = fallbackBaseURL { return PairToken(baseURL: base, token: trimmed) }
+        // Bare legacy token — only usable once a broker URL is already known. DeviceStore
+        // tokens are 32 random bytes encoded as unpadded base64url (43 characters). Do not
+        // accept arbitrary text here: when a URL survives but its Keychain item does not,
+        // accepting a JSON claim as a "bare token" makes pairing look successful while every
+        // subsequent request is unauthorized.
+        if let base = fallbackBaseURL,
+           trimmed.range(of: #"^[A-Za-z0-9_-]{43}$"#, options: .regularExpression) != nil {
+            return PairToken(baseURL: base, token: trimmed)
+        }
         return nil
     }
 
     private static func queryToken(_ url: URL) -> String? {
-        let t = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-            .queryItems?.first(where: { $0.name == "t" })?.value
+        let t = queryValue("t", url)
         return (t?.isEmpty == false) ? t : nil
+    }
+
+    private static func queryValue(_ name: String, _ url: URL) -> String? {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == name })?.value
     }
 }

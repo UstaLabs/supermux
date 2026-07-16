@@ -1,8 +1,51 @@
 import XCTest
+import Shared
 @testable import Supermux
 
 #if os(macOS)
 final class MacHostPolicyTests: XCTestCase {
+    func testOnboardingStepsIncludeOptionalGitHostingBeforeConnectivity() {
+        XCTAssertEqual(
+            MacOnboardingStep.allCases.map(\.title),
+            ["Welcome", "Agents", "Git Hosting", "Connectivity", "Done"]
+        )
+    }
+
+    func testGitHostingCanAdvanceWithoutAConfiguredAccountOnceBrokerIsReady() {
+        XCTAssertFalse(
+            MacOnboardingStep.gitHosting.canAdvance(
+                hasBroker: false,
+                agentsReady: false,
+                hostReady: false
+            )
+        )
+        XCTAssertTrue(
+            MacOnboardingStep.gitHosting.canAdvance(
+                hasBroker: true,
+                agentsReady: false,
+                hostReady: false
+            )
+        )
+    }
+
+    func testOnboardingRequiresAuthenticatedAgentOrInstalledOpenCode() {
+        XCTAssertFalse(AgentSettingsView.canProceed(with: [
+            AgentInstallStatus(kind: "codex", installed: true, authed: false),
+            AgentInstallStatus(kind: "opencode", installed: false, authed: false),
+        ]))
+        XCTAssertTrue(AgentSettingsView.canProceed(with: [
+            AgentInstallStatus(kind: "codex", installed: true, authed: true),
+        ]))
+        XCTAssertTrue(AgentSettingsView.canProceed(with: [
+            AgentInstallStatus(kind: "opencode", installed: true, authed: false),
+        ]))
+    }
+
+    func testCompletedOnboardingStartsOnNewSession() {
+        XCTAssertEqual(RootView.initialRoute(startWithNewSession: true), .newSession)
+        XCTAssertNil(RootView.initialRoute(startWithNewSession: false))
+    }
+
     func testHealthySupermuxHostIsAdopted() {
         XCTAssertEqual(
             MacHostPolicy.decision(for: .supermuxHost(hostId: "abcdefghijklmnopqrstuvwxyz")),
@@ -40,6 +83,27 @@ final class MacHostPolicyTests: XCTestCase {
         XCTAssertFalse(MacHostPolicy.shouldAutostart(environment: ["XCTestConfigurationFilePath": "/tmp/tests.xctestconfiguration"]))
         XCTAssertFalse(MacHostPolicy.shouldAutostart(environment: ["XCTestBundlePath": "/tmp/SupermuxMacTests.xctest"]))
         XCTAssertTrue(MacHostPolicy.shouldAutostart(environment: [:]))
+    }
+
+    func testCurrentLocalPairBeatsStaleFleetCredential() {
+        XCTAssertEqual(
+            MacHostPolicy.preferredLocalToken(
+                localBaseURL: "http://127.0.0.1:9898",
+                currentBaseURL: "http://127.0.0.1:9898",
+                currentToken: "current-token",
+                fleetToken: "stale-token"
+            ),
+            "current-token"
+        )
+        XCTAssertEqual(
+            MacHostPolicy.preferredLocalToken(
+                localBaseURL: "http://127.0.0.1:9898",
+                currentBaseURL: "https://remote.example",
+                currentToken: "remote-token",
+                fleetToken: "local-fleet-token"
+            ),
+            "local-fleet-token"
+        )
     }
 }
 
@@ -145,6 +209,26 @@ final class MacBrokerSidecarTests: XCTestCase {
         XCTAssertEqual(sidecar.phase, .stopped)
     }
 
+    func testKeepAliveHandoffOnlyAdoptsAndNeverSpawns() async {
+        var probes = [MacHostProbeResult.portFree, .supermuxHost(hostId: "launchd-host")]
+        var spawnCount = 0
+        let sidecar = MacBrokerSidecar(
+            probe: { _ in probes.removeFirst() },
+            spawn: { _ in spawnCount += 1; return FakeProcess() },
+            acquireManagerLock: { true },
+            healthAttempts: 2,
+            healthPollDelay: 0
+        )
+
+        sidecar.stop()
+        await sidecar.adoptKeepAliveHost()
+
+        XCTAssertEqual(spawnCount, 0)
+        XCTAssertEqual(sidecar.hostId, "launchd-host")
+        XCTAssertEqual(sidecar.ownership, .external)
+        XCTAssertEqual(sidecar.phase, .adopted)
+    }
+
     func testPackagedBrokerPathIncludesHelpersAndCommonAgentLocations() {
         let path = MacBrokerSidecar.childPath(
             bundledBinDirectory: URL(fileURLWithPath: "/tmp/mux-bin"),
@@ -172,13 +256,15 @@ final class MacBrokerSidecarTests: XCTestCase {
         let environment = MacBrokerSidecar.brokerEnvironment(
             port: 9911,
             base: ["EXISTING": "kept"],
-            path: "/tmp/mux-bin:/usr/bin"
+            path: "/tmp/mux-bin:/usr/bin",
+            hostName: "Ahmet’s MacBook Air"
         )
 
         XCTAssertEqual(environment["MUX_WEB_PORT"], "9911")
         XCTAssertEqual(environment["MUX_WEB_PUBLIC_URL"], "http://127.0.0.1:9911")
         XCTAssertEqual(environment["MUX_RELAY_DOMAIN"], "relay.supermux.dev")
         XCTAssertEqual(environment["PATH"], "/tmp/mux-bin:/usr/bin")
+        XCTAssertEqual(environment["MUX_HOST_NAME"], "Ahmet’s MacBook Air")
         XCTAssertEqual(environment["EXISTING"], "kept")
     }
 }
@@ -196,9 +282,16 @@ final class MacHostBootstrapTests: XCTestCase {
         )
     }
 
+    func testNativeBootstrapSessionDoesNotSendStoredBrowserCookies() {
+        let configuration = MacHostBootstrap.nativeRequestConfiguration()
+
+        XCTAssertFalse(configuration.httpShouldSetCookies)
+        XCTAssertNil(configuration.httpCookieStorage)
+    }
+
     func testExistingLocalTokenIsReusedToMintPhoneClaim() async throws {
         var requests: [URLRequest] = []
-        let bootstrap = MacHostBootstrap { request in
+        let bootstrap = MacHostBootstrap(relayAttempts: 1) { request in
             requests.append(request)
             return self.response(request.url!, body: #"{"claimSecret":"phone-secret"}"#)
         }
@@ -219,7 +312,7 @@ final class MacHostBootstrapTests: XCTestCase {
 
     func testFreshBrokerBootstrapsTokenFromCookieBeforeMintingClaim() async {
         var paths: [String] = []
-        let bootstrap = MacHostBootstrap { request in
+        let bootstrap = MacHostBootstrap(relayAttempts: 1) { request in
             paths.append(request.url!.path)
             if request.url!.path == "/pair/claim" {
                 return self.response(
@@ -243,11 +336,14 @@ final class MacHostBootstrapTests: XCTestCase {
     }
 
     func testPairingPayloadMatchesSharedContract() async throws {
-        let bootstrap = MacHostBootstrap { request in
+        let bootstrap = MacHostBootstrap(relayAttempts: 1) { request in
             if request.url!.path == "/me" {
                 return self.response(request.url!, body: #"{"paired":true,"relayUrl":"https://h-abcdefghijklmnopqrstuvwxyz.relay.supermux.dev"}"#)
             }
-            return self.response(request.url!, body: #"{"claimSecret":"phone-secret"}"#)
+            return self.response(
+                request.url!,
+                body: #"{"claimSecret":"phone-secret","expiresAt":"2026-07-14T01:02:03.000Z"}"#
+            )
         }
 
         let result = await bootstrap.prepare(
@@ -267,10 +363,40 @@ final class MacHostBootstrapTests: XCTestCase {
         XCTAssertEqual(json["directUrl"] as? String, "http://192.168.1.101:9911")
         XCTAssertEqual(json["claimSecret"] as? String, "phone-secret")
         XCTAssertEqual(json["relayUrl"] as? String, "https://h-abcdefghijklmnopqrstuvwxyz.relay.supermux.dev")
+        XCTAssertEqual(
+            try XCTUnwrap(result?.expiresAt).timeIntervalSince1970,
+            1_783_990_923,
+            accuracy: 0.001
+        )
+    }
+
+    func testWaitsForRelayBeforePublishingPairingPayload() async throws {
+        var relayChecks = 0
+        let bootstrap = MacHostBootstrap(relayAttempts: 3, relayPollDelay: 0) { request in
+            if request.url!.path == "/me" {
+                relayChecks += 1
+                let body = relayChecks < 3
+                    ? #"{"paired":true}"#
+                    : #"{"paired":true,"relayUrl":"https://h-abcdefghijklmnopqrstuvwxyz.relay.supermux.dev"}"#
+                return self.response(request.url!, body: body)
+            }
+            return self.response(request.url!, body: #"{"claimSecret":"phone-secret"}"#)
+        }
+
+        let result = await bootstrap.prepare(
+            localBaseURL: "http://127.0.0.1:9898",
+            pairingDirectURL: "http://192.168.1.101:9898",
+            hostId: "abcdefghijklmnopqrstuvwxyz",
+            hostName: "Studio Mac",
+            existingToken: "token"
+        )
+
+        XCTAssertEqual(relayChecks, 3)
+        XCTAssertEqual(result?.relayURL, "https://h-abcdefghijklmnopqrstuvwxyz.relay.supermux.dev")
     }
 
     func testBootstrapFailureReturnsNilWithoutPartialResult() async {
-        let bootstrap = MacHostBootstrap { request in
+        let bootstrap = MacHostBootstrap(relayAttempts: 1) { request in
             self.response(request.url!, status: 403, body: #"{"error":"already set up"}"#)
         }
 
@@ -314,7 +440,8 @@ final class MacHostKeepAliveTests: XCTestCase {
             brokerPath: "/Applications/Supermux & Tools/supermux-broker",
             port: 9911,
             binDirectory: "/Applications/Supermux & Tools",
-            stateDirectory: "/Users/a&b/.mux/state"
+            stateDirectory: "/Users/a&b/.mux/state",
+            hostName: "Ahmet & Mac"
         )
 
         let data = try XCTUnwrap(plist.data(using: .utf8))
@@ -331,6 +458,7 @@ final class MacHostKeepAliveTests: XCTestCase {
         XCTAssertEqual(environment["MUX_WEB_PUBLIC_URL"], "http://127.0.0.1:9911")
         XCTAssertEqual(environment["MUX_STATE_DIR"], "/Users/a&b/.mux/state")
         XCTAssertEqual(environment["MUX_RELAY_DOMAIN"], "relay.supermux.dev")
+        XCTAssertEqual(environment["MUX_HOST_NAME"], "Ahmet & Mac")
         XCTAssertTrue(plist.contains("/Applications/Supermux &amp; Tools/supermux-broker"))
         XCTAssertTrue(plist.contains("/Users/a&amp;b/.mux/state"))
     }
@@ -452,6 +580,80 @@ final class MacHostCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.state, .ready(payloadJSON: "payload"))
     }
 
+    func testPairingClaimCanRefreshWithoutRestartingHost() async {
+        var starts = 0
+        var preparations = 0
+        let coordinator = MacHostCoordinator(
+            hostName: "My Mac",
+            startHost: {
+                starts += 1
+                return MacHostEndpoint(
+                    baseURL: "http://127.0.0.1:9898",
+                    hostId: "abcdefghijklmnopqrstuvwxyz",
+                    port: 9898
+                )
+            },
+            existingToken: { "token" },
+            prepare: { _, _, _ in
+                preparations += 1
+                return MacHostPreparedClaim(
+                    localToken: "token",
+                    payloadJSON: "payload-\(preparations)",
+                    relayURL: nil
+                )
+            },
+            persistLocalPair: { _, _, _, _ in },
+            installKeepAlive: { _ in true }
+        )
+
+        await coordinator.start()
+        let refreshed = await coordinator.refreshPairingClaim()
+        XCTAssertTrue(refreshed)
+
+        XCTAssertEqual(starts, 1)
+        XCTAssertEqual(preparations, 2)
+        XCTAssertEqual(coordinator.state, .ready(payloadJSON: "payload-2"))
+    }
+
+    func testPairingMonitorFindsNewDeviceInBrokerOrder() {
+        XCTAssertEqual(
+            MacPairingMonitor.newlyPairedDevice(
+                baseline: ["This computer", "iPhone"],
+                current: ["This computer", "Pixel", "iPhone"]
+            ),
+            "Pixel"
+        )
+        XCTAssertNil(
+            MacPairingMonitor.newlyPairedDevice(
+                baseline: ["This computer"],
+                current: ["This computer"]
+            )
+        )
+    }
+
+    func testRequiredRelayNeverPublishesLocalOnlyQRCode() async {
+        let coordinator = MacHostCoordinator(
+            hostName: "My Mac",
+            requiresRelay: true,
+            startHost: {
+                MacHostEndpoint(baseURL: "http://127.0.0.1:9898", hostId: "abcdefghijklmnopqrstuvwxyz", port: 9898)
+            },
+            existingToken: { "token" },
+            prepare: { _, _, _ in
+                MacHostPreparedClaim(localToken: "token", payloadJSON: "local-only", relayURL: nil)
+            },
+            persistLocalPair: { _, _, _, _ in },
+            installKeepAlive: { _ in true }
+        )
+
+        await coordinator.start()
+
+        XCTAssertEqual(
+            coordinator.state,
+            .failed("Couldn't bring the Supermux relay online. Check your connection, then retry.")
+        )
+    }
+
     func testFinishInstallsKeepAliveOnlyWhenSelected() async {
         var installedPorts: [Int] = []
         var stopCount = 0
@@ -475,6 +677,29 @@ final class MacHostCoordinatorTests: XCTestCase {
         XCTAssertTrue(coordinator.finish(keepAlive: true))
         XCTAssertEqual(installedPorts, [9911])
         XCTAssertEqual(stopCount, 1)
+    }
+
+    func testFailedKeepAliveInstallLeavesInAppHostRunning() async {
+        var stopCount = 0
+        var restartCount = 0
+        let coordinator = MacHostCoordinator(
+            hostName: "My Mac",
+            startHost: {
+                MacHostEndpoint(baseURL: "http://127.0.0.1:9898", hostId: "abcdefghijklmnopqrstuvwxyz", port: 9898)
+            },
+            existingToken: { "token" },
+            prepare: { _, _, _ in MacHostPreparedClaim(localToken: "token", payloadJSON: "payload", relayURL: nil) },
+            persistLocalPair: { _, _, _, _ in },
+            installKeepAlive: { _ in false },
+            stopHost: { stopCount += 1 },
+            restartHost: { restartCount += 1 }
+        )
+
+        await coordinator.start()
+
+        XCTAssertFalse(coordinator.finish(keepAlive: true))
+        XCTAssertEqual(stopCount, 0)
+        XCTAssertEqual(restartCount, 0)
     }
 
     func testApplicationTerminationStopsOnlyThroughSidecarOwnershipPolicy() {

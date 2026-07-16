@@ -11,6 +11,7 @@ struct SessionsRailView: View {
     @Binding var selected: String?
     var onExpand: () -> Void
     var onNewSession: () -> Void
+    var onSessionSelected: (String) -> Void = { _ in }
 
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
@@ -50,7 +51,10 @@ struct SessionsRailView: View {
         let b = fleet.broker(for: s.id)
         let muted = s.mute?.boolValue ?? false
         let selectedNow = s.id == selected
-        Button { selected = s.id } label: {
+        Button {
+            selected = s.id
+            onSessionSelected(s.id)
+        } label: {
             AgentLogo(agent: s.agent, size: 40)
                 .overlay(alignment: .topTrailing) {
                     if working(s) {

@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, provide, onMounted } from "vue"
 import { useRoute, useRouter } from "vue-router"
-import { PanelLeftClose, Plus, Sparkles } from "lucide-vue-next"
+import { PanelLeftClose } from "lucide-vue-next"
 import { useSessions } from "@/stores/sessions"
 import { useUnread } from "@/stores/unread"
 import { useLayout } from "@/stores/layout"
 import { useSortedSessions } from "@/composables/useSortedSessions"
-import { PA_GROUP_KEY, usePathGroups } from "@/composables/usePathGroups"
+import { usePathGroups } from "@/composables/usePathGroups"
 import { useRenameRequest } from "@/composables/useRenameRequest"
 import { api } from "@/api/client"
 import { toast } from "vue-sonner"
@@ -92,9 +92,6 @@ function navigateToSession(id: string) {
   router.push(`/s/${id}`)
 }
 
-function navigateToPA() {
-  router.push("/personal-assistants")
-}
 </script>
 
 <template>
@@ -123,26 +120,6 @@ function navigateToPA() {
 
     <div class="flex-1 overflow-y-auto">
       <NewSessionListRow />
-      <a
-        v-if="!hasPAs"
-        href="#"
-        class="block rounded-md border border-transparent hover:bg-card/70 active:bg-card mx-2 my-1 px-3 py-2.5 transition-colors"
-        @click.prevent="navigateToPA"
-      >
-        <div class="flex items-center gap-3">
-          <div
-            class="size-9 shrink-0 rounded-lg bg-primary/10 text-primary flex items-center justify-center"
-          >
-            <Sparkles class="size-5" />
-          </div>
-          <div class="min-w-0 flex-1">
-            <span class="font-medium text-foreground">New PA</span>
-            <p class="text-[11px] text-muted-foreground/65 mt-0.5 truncate">
-              Create a personal assistant
-            </p>
-          </div>
-        </div>
-      </a>
 
       <template v-for="group in displayGroups" :key="group.workdir">
         <PathGroupSection
@@ -151,16 +128,6 @@ function navigateToPA() {
           :count="group.sessions.length"
           @toggle="toggle(group.workdir)"
         >
-          <template v-if="group.workdir === PA_GROUP_KEY" #actions>
-            <button
-              type="button"
-              class="shrink-0 p-2 -my-1 mr-1 rounded text-muted-foreground hover:text-foreground transition-colors"
-              aria-label="New personal assistant"
-              @click="navigateToPA"
-            >
-              <Plus class="size-3.5" />
-            </button>
-          </template>
           <template v-for="s in group.sessions" :key="s.id">
             <SessionContextMenu
               :name="s.name"
@@ -219,26 +186,6 @@ function navigateToPA() {
     <NotificationsBanner />
 
     <NewSessionListRow class="mt-1" />
-    <a
-      v-if="!hasPAs"
-      href="#"
-      class="block rounded-md border border-transparent hover:bg-card/70 active:bg-card mx-2 my-1 px-3 py-2.5 transition-colors"
-      @click.prevent="navigateToPA"
-    >
-      <div class="flex items-center gap-3">
-        <div
-          class="size-9 shrink-0 rounded-lg bg-primary/10 text-primary flex items-center justify-center"
-        >
-          <Sparkles class="size-5" />
-        </div>
-        <div class="min-w-0 flex-1">
-          <span class="font-medium text-foreground">New PA</span>
-          <p class="text-[11px] text-muted-foreground/65 mt-0.5 truncate">
-            Create a personal assistant
-          </p>
-        </div>
-      </div>
-    </a>
 
     <div v-if="sortedSessions.length === 0" class="px-6 py-8 text-center text-muted-foreground">
       <p class="text-xs">No sessions yet — start one above.</p>
@@ -251,16 +198,6 @@ function navigateToPA() {
         :count="group.sessions.length"
         @toggle="toggle(group.workdir)"
       >
-        <template v-if="group.workdir === PA_GROUP_KEY" #actions>
-          <button
-            type="button"
-            class="shrink-0 p-2 -my-1 mr-1 rounded text-muted-foreground hover:text-foreground transition-colors"
-            aria-label="New personal assistant"
-            @click="navigateToPA"
-          >
-            <Plus class="size-3.5" />
-          </button>
-        </template>
         <SwipeableSessionRow
           v-for="s in group.sessions"
           :key="s.id"

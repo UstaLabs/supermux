@@ -12,6 +12,7 @@ struct SessionsListView: View {
     var onNewSession: () -> Void
     var onArchived: () -> Void
     var onAddHost: () -> Void = {}
+    var onSessionSelected: (String) -> Void = { _ in }
 
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
@@ -41,7 +42,13 @@ struct SessionsListView: View {
                     selected: fleet.filter,
                     count: { rid in owner.values.reduce(0) { $0 + ($1 == rid ? 1 : 0) } },
                     onSelect: { fleet.setFilter($0) },
-                    onAddHost: onAddHost
+                    onAddHost: onAddHost,
+                    onForgetHost: { recordId in
+                        // Tear the detail down before Fleet closes the owning BrokerSession. The
+                        // remaining host becomes active inside Fleet.refresh().
+                        if let sessionId = selected, owner[sessionId] == recordId { selected = nil }
+                        fleet.forgetHost(recordId: recordId)
+                    }
                 )
                 .background(.bar)
                 Divider()
@@ -73,7 +80,7 @@ struct SessionsListView: View {
                 Section {
                     if !collapsed.contains(group.workdir) {
                         ForEach(group.sessions, id: \.id) { s in
-                            row(s, host: multiHost ? hostByRecord[owner[s.id] ?? ""] : nil).tag(s.id)
+                            selectableRow(s, host: multiHost ? hostByRecord[owner[s.id] ?? ""] : nil)
                         }
                     }
                 } header: { header(group) }
@@ -83,7 +90,8 @@ struct SessionsListView: View {
             ForEach(fleet.offlineHostGroups(), id: \.host.recordId) { entry in
                 Section {
                     ForEach(entry.sessions, id: \.id) { s in
-                        row(s, host: hostByRecord[entry.host.recordId]).tag(s.id).opacity(0.5)
+                        selectableRow(s, host: hostByRecord[entry.host.recordId])
+                            .opacity(0.5)
                     }
                 } header: { offlineHeader(entry.host) }
             }
@@ -178,7 +186,7 @@ struct SessionsListView: View {
     private func offlineHeader(_ host: HostView) -> some View {
         HStack(spacing: 6) {
             HostDot(colorIndex: host.colorIndex, size: 8)
-            Text(host.displayName).textCase(nil).foregroundStyle(.secondary)
+            Text(host.displayLabel).textCase(nil).foregroundStyle(.secondary)
             let seen = FleetModelKt.formatLastSeen(nowMs: Int64(Date().timeIntervalSince1970 * 1000),
                                                    lastSeenAt: host.lastSeenAt)
             Text(seen.isEmpty ? "offline" : "offline · \(seen)")
@@ -215,6 +223,26 @@ struct SessionsListView: View {
                 Button { renameText = s.name; renameTarget = s } label: { Label("Rename", systemImage: "pencil") }
                 Button(role: .destructive) { killTarget = s } label: { Label("Kill", systemImage: "xmark.circle") }
             }
+    }
+
+    /// AppKit's `List(selection:)` does not emit a selection change when the already-selected
+    /// row is clicked. Make the row a real button on macOS so callers can still react to that
+    /// click (notably, leaving the New Session workspace), while retaining native list selection.
+    @ViewBuilder private func selectableRow(_ s: SessionInfo, host: HostView?) -> some View {
+        #if os(macOS)
+        Button {
+            selected = s.id
+            onSessionSelected(s.id)
+        } label: {
+            row(s, host: host)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .tag(s.id)
+        #else
+        row(s, host: host)
+            .tag(s.id)
+        #endif
     }
 
     private func toggle(_ wd: String) {

@@ -7,6 +7,7 @@ import { parseCodexDeviceAuth, parseCursorLoginUrl, parseGrokDeviceAuth } from "
 export interface LoginManagerDeps {
   paths: DetectPaths
   fileExists: (p: string) => boolean
+  hasCredential?: (kind: AgentKind) => boolean
   spawnLogin: (kind: AgentKind) => LoginProc
   onChange: (kind: AgentKind, state: LoginState) => void
   setInterval?: (fn: () => void, ms: number) => any
@@ -35,7 +36,8 @@ export class LoginManager {
       kind,
       spawn: () => this.deps.spawnLogin(kind),
       parse: parserFor(kind),
-      isAuthed: () => this.deps.fileExists(authCredPath(kind, this.deps.paths)),
+      isAuthed: () => this.deps.fileExists(authCredPath(kind, this.deps.paths))
+        || (this.deps.hasCredential?.(kind) ?? false),
       onChange: (st) => { this.states.set(kind, st); this.deps.onChange(kind, st) },
       needsCode: kind === Agent.Claude,
       setInterval: this.deps.setInterval,

@@ -337,6 +337,15 @@ extension View {
         self
         #endif
     }
+    /// The composer's option lists (model / reasoning) anchor to their pill as a popover on
+    /// macOS — the native idiom for a small anchored chooser — and stay a detented sheet on iOS.
+    @ViewBuilder func smOptionPicker<C: View>(isPresented: Binding<Bool>, @ViewBuilder content: @escaping () -> C) -> some View {
+        #if os(macOS)
+        popover(isPresented: isPresented) { content() }
+        #else
+        sheet(isPresented: isPresented) { content() }
+        #endif
+    }
     @ViewBuilder func smHoverHighlight() -> some View {
         #if os(iOS)
         hoverEffect(.highlight)
@@ -436,4 +445,8 @@ extension Notification.Name {
     /// route to the new-session launcher. Menu commands live in the `App` scene, not the
     /// view tree, so they reach `RootView` via NotificationCenter rather than a binding.
     static let smNewSession = Notification.Name("sm.newSession")
+
+    /// Posted by macOS File ▸ Pair New Device…. Unlike the session-header overflow,
+    /// the File menu remains available when the host has no sessions yet.
+    static let smPairNewDevice = Notification.Name("sm.pairNewDevice")
 }

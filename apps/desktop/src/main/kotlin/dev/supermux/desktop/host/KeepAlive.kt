@@ -36,6 +36,7 @@ object KeepAlive {
     data class Spec(
         val exec: List<String>,
         val hostId: String? = null,
+        val hostName: String? = null,
         val label: String = LAUNCHD_LABEL,
         val outLog: String = "/tmp/supermux-host.out.log",
         val errLog: String = "/tmp/supermux-host.err.log",
@@ -63,6 +64,9 @@ object KeepAlive {
         val hostIdEnv = spec.hostId?.let {
             "\n    <key>SUPERMUX_HOST_ID</key>\n    <string>${xmlEscape(it)}</string>"
         } ?: ""
+        val hostNameEnv = spec.hostName?.trim()?.takeIf { it.isNotEmpty() }?.let {
+            "\n    <key>MUX_HOST_NAME</key>\n    <string>${xmlEscape(it)}</string>"
+        } ?: ""
         return """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -85,7 +89,7 @@ $args
   <key>EnvironmentVariables</key>
   <dict>
     <key>SUPERMUX_KEEP_ALIVE</key>
-    <string>1</string>$hostIdEnv
+    <string>1</string>$hostIdEnv$hostNameEnv
   </dict>
   <key>StandardOutPath</key>
   <string>${xmlEscape(spec.outLog)}</string>
@@ -100,6 +104,9 @@ $args
     fun systemdUnit(spec: Spec): String {
         val execStart = spec.exec.joinToString(" ")
         val hostIdEnv = spec.hostId?.let { "\nEnvironment=SUPERMUX_HOST_ID=$it" } ?: ""
+        val hostNameEnv = spec.hostName?.trim()?.takeIf { it.isNotEmpty() }?.let {
+            "\nEnvironment=\"MUX_HOST_NAME=${it.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+        } ?: ""
         return """[Unit]
 Description=supermux host (keep this computer available as a host)
 After=network-online.target
@@ -110,7 +117,7 @@ Type=simple
 ExecStart=$execStart
 Restart=on-failure
 RestartSec=5
-Environment=SUPERMUX_KEEP_ALIVE=1$hostIdEnv
+Environment=SUPERMUX_KEEP_ALIVE=1$hostIdEnv$hostNameEnv
 
 [Install]
 WantedBy=default.target
