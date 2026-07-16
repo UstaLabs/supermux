@@ -18,10 +18,13 @@ export function claudeLoginSpawnCommand(platform = process.platform): LoginSpawn
       // `script` calls tcgetattr() on stdin and aborts on that socket with
       // EOPNOTSUPP. `cat | script` converts it to a real POSIX pipe while
       // keeping the stream writable for the OAuth code the user pastes later.
+      // Run `script` through a supervising shell: once Claude/script exits,
+      // kill the sibling `cat` that would otherwise wait on the still-open
+      // socket forever and prevent the broker from observing process exit.
       // Pass the Claude command as $1 instead of interpolating shell text.
       args: [
         "-c",
-        'cat | exec /usr/bin/script -q /dev/null /bin/sh -c "$1"',
+        `cat | /bin/sh -c 'trap "/usr/bin/pkill -TERM -P \\"$PPID\\" -x cat 2>/dev/null || true" EXIT; /usr/bin/script -q /dev/null /bin/sh -c "$1"' supermux-claude-script "$1"`,
         "supermux-claude-login",
         shellCommand,
       ],
