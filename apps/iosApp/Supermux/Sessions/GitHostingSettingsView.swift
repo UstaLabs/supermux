@@ -227,6 +227,8 @@ struct GitHostingSettingsView: View {
                     .font(.caption2).foregroundStyle(.tertiary).multilineTextAlignment(.center)
                     .padding(.top, 10).padding(.horizontal, 32).padding(.bottom, 40)
             }
+            .frame(maxWidth: 640)
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -385,7 +387,7 @@ private struct AddForgeSheet: View {
     var onDone: () -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var kind: String = "github"
+    @State private var kind: ForgeProvider = .github
     @State private var token = ""
     @State private var hostUrl = ""
     @State private var transport = "https"
@@ -394,25 +396,44 @@ private struct AddForgeSheet: View {
     @State private var error: String?
     @State private var cliStatus: ForgeCliStatus?
 
-    private let kinds = ["github", "gitlab"]
-
     var body: some View {
         NavigationStack {
             List {
-                // Kind picker
                 Section {
-                    Picker("Provider", selection: $kind) {
-                        ForEach(kinds, id: \.self) { k in
-                            HStack(spacing: 6) {
-                                ForgeLogo(kind: k, size: 16)
-                                Text(forgeDisplayName(k))
+                    HStack(spacing: 8) {
+                        ForEach(ForgeProvider.allCases, id: \.self) { provider in
+                            Button {
+                                selectProvider(provider)
+                            } label: {
+                                HStack(spacing: 7) {
+                                    ForgeLogo(kind: provider.rawValue, size: 17)
+                                    Text(provider.displayName)
+                                        .font(.subheadline.weight(.semibold))
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 9)
+                                .contentShape(Rectangle())
+                                .background(
+                                    kind == provider ? Theme.teal.opacity(0.14) : Color.smSecondaryBackground,
+                                    in: RoundedRectangle(cornerRadius: 9)
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 9)
+                                        .strokeBorder(
+                                            kind == provider ? Theme.teal : Color.smSeparator,
+                                            lineWidth: 1
+                                        )
+                                )
                             }
-                            .tag(k)
+                            .buttonStyle(.plain)
+                            .disabled(submitting)
+                            .accessibilityIdentifier("forge_provider_\(provider.rawValue)")
+                            .accessibilityAddTraits(kind == provider ? .isSelected : [])
                         }
                     }
-                    .pickerStyle(.segmented)
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                    .listRowBackground(Color.clear)
+                    .padding(.vertical, 2)
+                } header: {
+                    Text("Provider")
                 }
 
                 // CLI import (if available for selected kind and not already connected)
@@ -420,14 +441,22 @@ private struct AddForgeSheet: View {
                     Section {
                         Button {
                             submitting = true
+                            error = nil
                             Task {
-                                _ = await broker.importForge(kind: kind, transport: transport)
-                                dismiss(); onDone()
+                                if await broker.importForge(
+                                    kind: kind.rawValue,
+                                    transport: transport
+                                ) != nil {
+                                    dismiss(); onDone()
+                                } else {
+                                    error = "Couldn't import from \(kind.cliName) — sign in there and try again."
+                                }
+                                submitting = false
                             }
                         } label: {
                             HStack(spacing: 10) {
-                                ForgeLogo(kind: kind, size: 20)
-                                Text("Import token from \(cliName)\(cliLoginLabel)")
+                                ForgeLogo(kind: kind.rawValue, size: 20)
+                                Text("Import token from \(kind.cliName)\(cliLoginLabel)")
                                     .font(.subheadline.weight(.medium))
                                 Spacer()
                                 if submitting { ProgressView().tint(Theme.teal) }
@@ -447,17 +476,22 @@ private struct AddForgeSheet: View {
 
                 // PAT field
                 Section {
-                    SecureField(kind == "github" ? "github_pat_…" : "glpat-…", text: $token)
+                    SecureField(kind.tokenPlaceholder, text: $token)
                         .autocorrectionDisabled()
                         .smNoAutocapitalization()
                         .font(.system(.subheadline, design: .monospaced))
                 } header: {
                     Text("Personal access token")
                 } footer: {
-                    if let error {
-                        Text(error).foregroundStyle(.red)
-                    } else {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let tokenCreationURL {
+                            Link("Create a pre-filled token ↗", destination: tokenCreationURL)
+                                .foregroundStyle(Theme.teal)
+                        }
                         Text("Needs scopes: \(scopesHint)")
+                        if let error {
+                            Text(error).foregroundStyle(.red)
+                        }
                     }
                 }
 
@@ -476,7 +510,7 @@ private struct AddForgeSheet: View {
                         .pickerStyle(.segmented)
                         .padding(.vertical, 4)
 
-                        if transport == "ssh" && kind == "gitlab" {
+                        if transport == "ssh" && kind == .gitlab {
                             Text("SSH for GitLab is experimental.")
                                 .font(.caption2).foregroundStyle(.yellow)
                         }
@@ -491,7 +525,7 @@ private struct AddForgeSheet: View {
                             if submitting {
                                 ProgressView().tint(.white)
                             } else {
-                                Text("Connect \(forgeDisplayName(kind))").fontWeight(.semibold)
+                                Text("Connect \(kind.displayName)").fontWeight(.semibold)
                             }
                             Spacer()
                         }
@@ -516,56 +550,63 @@ private struct AddForgeSheet: View {
         .frame(minWidth: 620, minHeight: 540)
         #endif
         .onAppear {
-            if let preset = presetKind, kinds.contains(preset) { kind = preset }
+            if let presetKind, let preset = ForgeProvider(rawValue: presetKind) { kind = preset }
             Task { cliStatus = try? await broker.api.listForges().cli }
         }
     }
 
     // MARK: Computed
 
-    private var canConnect: Bool { !token.trimmingCharacters(in: .whitespaces).isEmpty }
+    private var canConnect: Bool { !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     private var canImportCli: Bool {
         guard let cli = cliStatus else { return false }
-        let presence = kind == "github" ? cli.github : cli.gitlab
+        let presence = kind == .github ? cli.github : cli.gitlab
         return presence.available
     }
 
-    private var cliName: String { kind == "github" ? "gh" : "glab" }
-
     private var cliLoginLabel: String {
         guard let cli = cliStatus else { return "" }
-        let presence = kind == "github" ? cli.github : cli.gitlab
+        let presence = kind == .github ? cli.github : cli.gitlab
         guard let login = presence.login else { return "" }
         return " (@\(login))"
     }
 
-    private var scopesHint: String {
-        if kind == "github" {
-            let host = extractHost(hostUrl)
-            return (!host.isEmpty && host != "github.com") ? "repo, read:org" : "Contents + Administration (read & write)"
-        }
-        return "api"
+    private var tokenCreationURL: URL? {
+        ForgeTokenTemplate.url(provider: kind, baseURL: hostUrl)
     }
 
-    private func extractHost(_ url: String) -> String {
-        url.trimmingCharacters(in: .whitespaces)
-            .replacingOccurrences(of: "^https?://", with: "", options: .regularExpression)
-            .components(separatedBy: "/").first ?? ""
+    private var scopesHint: String {
+        ForgeTokenTemplate.scopesHint(provider: kind, baseURL: hostUrl)
     }
 
     // MARK: Actions
 
+    private func selectProvider(_ provider: ForgeProvider) {
+        guard !submitting, kind != provider else { return }
+        kind = provider
+        token = ""
+        hostUrl = ""
+        transport = "https"
+        showAdvanced = false
+        error = nil
+    }
+
     private func connect() {
-        let t = token.trimmingCharacters(in: .whitespaces)
+        let t = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
         submitting = true; error = nil
-        let h = hostUrl.trimmingCharacters(in: .whitespaces)
+        let h = hostUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         Task {
-            if let _ = await broker.addForge(kind: kind, token: t, host: h.isEmpty ? nil : h, transport: transport) {
+            if await broker.addForge(
+                kind: kind.rawValue,
+                token: t,
+                host: h.isEmpty ? nil : h,
+                transport: transport
+            ) != nil {
                 dismiss(); onDone()
             } else {
-                error = "Couldn't connect — check your token and try again."
+                error = "Couldn't connect to \(kind.displayName) — check your token and try again."
             }
             submitting = false
         }
