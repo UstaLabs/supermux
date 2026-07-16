@@ -69,7 +69,7 @@ Your subscriptions. Your repositories. Your hardware. No supermux account requir
 3. Follow the first-run host wizard. It starts the local broker, offers to keep it available after sign-in, and shows a pairing QR.
 4. Install Supermux on [iPhone or iPad](https://apps.apple.com/app/supermux/id6782643917) or [Android](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-android.apk), then scan the QR.
 
-The desktop host connects directly on your local network and can use the supermux connectivity relay when you are away.
+The desktop host connects directly on your local network and automatically uses the Supermux connectivity relay when you are away.
 
 ### Host on a server, mini PC, or WSL2
 
@@ -85,7 +85,7 @@ curl -fsSL https://supermux.dev/install.sh | sh
 irm https://supermux.dev/install.ps1 | iex
 ```
 
-The installer configures the broker, connectivity, and first device. For a manual source install, reverse proxy, custom domain, or advanced agent authentication, use the [guided setup](./SETUP.md).
+The native installer enables the built-in relay by default and prints a stable pairing QR, so no router or tunnel setup is required. For a manual source install, reverse proxy, custom domain, or advanced agent authentication, use the [guided setup](./SETUP.md).
 
 ### Run with Docker
 
@@ -124,7 +124,7 @@ Each worker is isolated in its own git worktree. The main checkout moves only th
 ## Connectivity and ownership
 
 - **Local first.** Clients can connect over LAN, VPN, your own reverse proxy, or your own tunnel.
-- **Remote when you need it.** The built-in connectivity relay gives desktop hosts a stable HTTPS address without opening a router port.
+- **Remote immediately.** Native CLI and desktop hosts enable the built-in connectivity relay by default, giving each host a stable HTTPS address without opening a router port. Pass `supermux setup --no-relay` to stay LAN-only; re-enable it with `supermux setup --relay-domain relay.supermux.dev`.
 - **Clear trust boundary.** Repositories, credentials, session history, and broker state remain on your host. Relay connections are encrypted in transit, but relay traffic is not yet end-to-end encrypted at the application layer.
 - **Pairing, not accounts.** New devices join with a short-lived, single-use claim bound to the host identity. A client can keep several independently owned hosts in one fleet.
 - **Open source.** The broker and clients are MIT licensed; the hosted relay is optional.
@@ -138,7 +138,7 @@ Native installs read `~/.mux/state/.env`; Docker reads `.env` in the project dir
 | `MUX_WEB_PORT`, `MUX_WEB_PUBLIC_URL` | Enable the browser client and set its public origin |
 | `MUX_TELEGRAM_BOT_TOKEN` | Enable the optional Telegram channel |
 | `MUX_HOME`, `MUX_STATE_DIR` | Override the default `~/.mux` state locations |
-| `MUX_RELAY_DOMAIN`, `MUX_RELAY_BASE` | Configure the optional connectivity relay |
+| `MUX_RELAY_DOMAIN`, `MUX_RELAY_BASE` | Configure the connectivity relay (`relay.supermux.dev` by default on native setups; empty disables it) |
 | `MUX_PROXY_BASE_DOMAIN` | Enable per-session app previews through the broker proxy |
 
 See [`.env.example`](./.env.example) for a Docker configuration example and the [setup guide](./SETUP.md) for advanced deployments.

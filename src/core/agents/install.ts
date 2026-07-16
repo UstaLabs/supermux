@@ -15,6 +15,7 @@ export const INSTALL_RECIPES: Record<AgentKind, string> = {
   codex: "npm install -g @openai/codex",
   cursor: "curl https://cursor.com/install -fsS | bash",
   opencode: "curl -fsSL https://opencode.ai/install | bash",
+  grok: "curl -fsSL https://x.ai/cli/install.sh | bash",
 }
 
 export type InstallState = "running" | "done" | "failed"

@@ -19,6 +19,7 @@ import { resolveMode } from "./core/tunnels/types"
 import { PROVIDERS, getProvider } from "./core/tunnels/registry"
 import {
   writeEnvPublicUrl,
+  setEnvRelayDomain,
   setStorePublicUrl,
   restartBroker,
   mintPairLink,
@@ -28,6 +29,7 @@ import { openDb } from "./core/storage/db"
 import { SettingsStore } from "./core/settings/store"
 import type { TunnelRecord } from "./core/settings/app-config"
 import { validateWebEnv } from "./shared/web-env"
+import { loadOrCreateHostKey } from "./core/host-identity"
 
 interface Flags {
   provider?: string
@@ -88,6 +90,21 @@ function resolvePort(stateDir: string, flagPort?: string): string {
     /* no .env yet */
   }
   return "8787"
+}
+
+/** Hosted relay domain from the setup-generated .env. Empty means explicitly disabled. */
+function readHostedRelayDomain(stateDir: string): string | undefined {
+  try {
+    const m = readFileSync(join(stateDir, ".env"), "utf8").match(/^MUX_RELAY_DOMAIN=(.*)$/m)
+    return m?.[1]?.trim() || undefined
+  } catch {
+    return undefined
+  }
+}
+
+function hostedRelayUrl(stateDir: string, domain: string): string {
+  const identity = loadOrCreateHostKey(join(stateDir, "host-key"))
+  return `https://h-${identity.hostId}.${domain}`
 }
 
 /** Read the persisted tunnel record (best-effort). */
@@ -189,6 +206,7 @@ async function connectProvider(
     return 1
   }
   writeEnvPublicUrl(ctx.stateDir, ctx.port, result.publicUrl, result.proxyBaseDomain)
+  setEnvRelayDomain(ctx.stateDir, "")
   setStorePublicUrl(ctx.stateDir, {
     webPublicUrl: result.publicUrl,
     webPort: ctx.port,
@@ -222,6 +240,7 @@ async function disconnect(ctx: ConnectCtx, flags: Flags): Promise<number> {
   }
   const local = `http://localhost:${ctx.port}`
   writeEnvPublicUrl(ctx.stateDir, ctx.port, local)
+  setEnvRelayDomain(ctx.stateDir, "")
   setStorePublicUrl(ctx.stateDir, {
     webPublicUrl: local,
     webPort: ctx.port,
@@ -234,27 +253,36 @@ async function disconnect(ctx: ConnectCtx, flags: Flags): Promise<number> {
 }
 
 /** `--status`: report the current tunnel + a fresh pair link. */
-function showStatus(ctx: ConnectCtx): number {
+function showStatus(ctx: ConnectCtx, pair = true): number {
   const rec = readTunnelRecord(ctx.stateDir)
-  if (!rec?.provider) {
-    ctx.println("No tunnel configured — supermux is reachable on its local URL only.")
-    ctx.println("Run `supermux connect` to set one up.")
+  if (rec?.provider) {
+    ctx.println(`Tunnel: ${rec.provider} (${rec.mode})`)
+    ctx.println(`Public URL: ${rec.publicUrl}`)
+    if (pair) printPairLink(mintPairLink(ctx.stateDir, "device", rec.publicUrl), ctx.println)
     return 0
   }
-  ctx.println(`Tunnel: ${rec.provider} (${rec.mode})`)
-  ctx.println(`Public URL: ${rec.publicUrl}`)
-  const link = mintPairLink(ctx.stateDir, "device", rec.publicUrl)
-  printPairLink(link, ctx.println)
+
+  const relayDomain = readHostedRelayDomain(ctx.stateDir)
+  if (relayDomain) {
+    const relayUrl = hostedRelayUrl(ctx.stateDir, relayDomain)
+    ctx.println("Built-in Supermux relay: enabled")
+    ctx.println(`Public URL: ${relayUrl}`)
+    if (pair) printPairLink(mintPairLink(ctx.stateDir, "device", relayUrl), ctx.println)
+    return 0
+  }
+
+  ctx.println("No remote connection configured — supermux is reachable on its local URL only.")
+  ctx.println("Run `supermux setup` to enable the built-in relay, or `supermux connect <provider>` for your own tunnel.")
   return 0
 }
 
 const HELP = `supermux connect — set up a public/mesh link to this box
 
-  supermux connect                 pick a provider from a menu
+  supermux connect                 show the default relay URL + a fresh pair link
   supermux connect <provider>      cloudflared | tailscale | netbird | ngrok | manual
   supermux connect --status        show the current tunnel + a fresh pair link
   supermux connect --switch <p>    tear down the current tunnel, set up <p>
-  supermux connect --off           tear down the tunnel, revert to localhost
+  supermux connect --off           disable remote connectivity and revert to localhost
 
 Flags:
   --port <n>        web port (default: from .env, else 8787)
@@ -309,12 +337,13 @@ export async function runConnectCommand(args: string[], deps: ConnectDeps = {}):
   }
 
   // --status / --off first (no provider needed)
-  if (flags.status) return showStatus(ctx)
+  if (flags.status) return showStatus(ctx, flags.pair)
   if (flags.off) return disconnect(ctx, flags)
 
   // Resolve which provider to set up
   let providerId = flags.switchTo ?? flags.provider
   if (!providerId) {
+    if (readHostedRelayDomain(stateDir)) return showStatus(ctx, flags.pair)
     if (!tty) {
       println("No provider given and no terminal to show the menu.")
       println("Re-run with a provider, e.g.:  supermux connect cloudflared --yes")

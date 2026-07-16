@@ -3,7 +3,7 @@ import Shared
 
 /// Agents settings — parity with the web `AgentLoginPanel.vue` + `OpenCodeProviderAuth.vue`.
 ///
-/// One row per detected agent (claude / codex / cursor / opencode). Link authorization
+/// One row per detected agent (claude / codex / cursor / opencode / grok). Link authorization
 /// is the primary action for the CLI-login agents (claude/codex/cursor): it calls
 /// `startAgentLogin`, then a polling Task calls
 ///     `agentLoginState` every ~1.5s until the phase is terminal. While active it shows
@@ -97,7 +97,7 @@ private struct AgentRow: View {
     @Environment(\.openURL) private var openURL
 
     /// Agents whose auth uses the device-code / browser link flow.
-    private static let loginKinds: Set<String> = ["claude", "codex", "cursor"]
+    private static let loginKinds: Set<String> = ["claude", "codex", "cursor", "grok"]
 
     @State private var otherWaysExpanded = false
     @State private var otherProvidersExpanded = false
@@ -152,16 +152,21 @@ private struct AgentRow: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-                expansionButton(
-                    title: "Other ways to authorize",
-                    isExpanded: otherWaysExpanded,
-                    accessibilityID: "agent_other_ways_\(status.kind)"
-                ) {
-                    otherWaysExpanded.toggle()
-                }
-                if otherWaysExpanded {
-                    apiKeyField
-                        .padding(.top, 8)
+                // grok authenticates ONLY via `grok login --device-auth`; there's no key
+                // to paste (its save would fall through to `default: break`), so it doesn't
+                // get the "Other ways to authorize" key field — just the header link flow.
+                if status.kind != "grok" {
+                    expansionButton(
+                        title: "Other ways to authorize",
+                        isExpanded: otherWaysExpanded,
+                        accessibilityID: "agent_other_ways_\(status.kind)"
+                    ) {
+                        otherWaysExpanded.toggle()
+                    }
+                    if otherWaysExpanded {
+                        apiKeyField
+                            .padding(.top, 8)
+                    }
                 }
             }
         }

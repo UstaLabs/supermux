@@ -3,6 +3,7 @@ export const AgentKind = {
   Codex: "codex",
   Cursor: "cursor",
   OpenCode: "opencode",
+  Grok: "grok",
 } as const
 
 export type AgentKind = (typeof AgentKind)[keyof typeof AgentKind]
@@ -12,6 +13,7 @@ export const AGENT_KINDS = [
   AgentKind.Codex,
   AgentKind.Cursor,
   AgentKind.OpenCode,
+  AgentKind.Grok,
 ] as const
 
 export function isAgentKind(value: unknown): value is AgentKind {

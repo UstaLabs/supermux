@@ -8,12 +8,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
-const agent = defineModel<"claude" | "codex" | "cursor" | "opencode">("agent", { required: true })
+const agent = defineModel<"claude" | "codex" | "cursor" | "opencode" | "grok">("agent", { required: true })
 
 const open = ref(false)
-const agents = ["claude", "codex", "cursor", "opencode"] as const
+const agents = ["claude", "codex", "cursor", "opencode", "grok"] as const
 
-function pick(a: "claude" | "codex" | "cursor" | "opencode") {
+function pick(a: "claude" | "codex" | "cursor" | "opencode" | "grok") {
   agent.value = a
 }
 

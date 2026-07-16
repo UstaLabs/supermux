@@ -8,6 +8,7 @@ describe("shared agent kinds", () => {
       AgentKind.Codex,
       AgentKind.Cursor,
       AgentKind.OpenCode,
+      AgentKind.Grok,
     ])
   })
 
@@ -16,6 +17,13 @@ describe("shared agent kinds", () => {
     expect(isAgentKind("gemini")).toBe(false)
     expect(isAgentKind(undefined)).toBe(false)
     expect(isAgentKind(42)).toBe(false)
+  })
+
+  test("grok is a recognized agent kind", () => {
+    expect(AgentKind.Grok).toBe("grok")
+    expect(AGENT_KINDS).toContain("grok")
+    expect(isAgentKind("grok")).toBe(true)
+    expect(parseAgentKind("grok")).toBe("grok")
   })
 
   test("parseAgentKind returns default only for nullish input", () => {

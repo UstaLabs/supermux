@@ -68,6 +68,7 @@ describe("runSetupCommand (fresh)", () => {
     const map = readEnvMap()
     expect(map.MUX_WEB_PORT).toBe("8787")
     expect(map.MUX_WEB_PUBLIC_URL).toBe("http://localhost:8787")
+    expect(map.MUX_RELAY_DOMAIN).toBe("relay.supermux.dev")
     // no token given → key absent
     expect(map.MUX_TELEGRAM_BOT_TOKEN).toBeUndefined()
 
@@ -181,6 +182,20 @@ describe("runSetupCommand (flags)", () => {
     expect(map.MUX_WEB_PORT).toBe("9999")
     expect(map.MUX_WEB_PUBLIC_URL).toBe("https://x.example")
     expect(map.MUX_TELEGRAM_BOT_TOKEN).toBe("abc:123")
+    expect(map.MUX_RELAY_DOMAIN).toBe("relay.supermux.dev")
+  })
+
+  test("--no-relay records a durable opt-out", async () => {
+    const { println } = collector()
+    await runSetupCommand(["--no-service"], println)
+    await runSetupCommand(["--no-service", "--no-relay"], println)
+    expect(readEnvMap().MUX_RELAY_DOMAIN).toBe("")
+
+    await runSetupCommand(["--no-service"], println)
+    expect(readEnvMap().MUX_RELAY_DOMAIN).toBe("")
+
+    await runSetupCommand(["--no-service", "--relay-domain", "relay.supermux.dev"], println)
+    expect(readEnvMap().MUX_RELAY_DOMAIN).toBe("relay.supermux.dev")
   })
 })
 
@@ -215,6 +230,8 @@ describe("installLaunchdAgent (macOS service)", () => {
         {
           port: "8787",
           publicUrl: "http://localhost:8787",
+          relayDomain: "relay.supermux.dev",
+          relayDomainExplicit: false,
           noService: false,
           forceSourceUnit: false,
         },
