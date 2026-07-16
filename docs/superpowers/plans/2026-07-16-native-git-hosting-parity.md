@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the shared native Git-account sheet render exactly two provider controls and offer the same pre-filled token links as the web flow.
+**Goal:** Make the shared native Git-account sheet render exactly two provider controls, offer the same pre-filled token links as the web flow, and present the macOS form as a centered, uncluttered primary task.
 
-**Architecture:** Introduce a small provider model and pure token-template helper beside `GitHostingSettingsView`, then drive the existing add-account sheet from those values. Replace the macOS-fragile segmented picker with two explicit buttons, retain broker APIs and persistence unchanged, and verify both URL semantics and the real Mac rendering.
+**Architecture:** Introduce a small provider model and pure token-template helper beside `GitHostingSettingsView`, then drive the existing add-account sheet from those values. Replace the macOS-fragile segmented picker with two explicit buttons and compose those controls in a macOS-only centered `ScrollView`, while iPhone and iPad retain the native `List`. Keep broker APIs and persistence unchanged, and verify URL semantics plus the real Mac rendering.
 
 **Tech Stack:** Swift 6, SwiftUI, Foundation `URLComponents`, XCTest, XcodeGen, remote macOS `xcodebuild`
 
@@ -12,8 +12,8 @@
 
 ## File Structure
 
-- Create `apps/iosApp/SupermuxTests/GitHostingSettingsTests.swift`: specify provider order and token-template semantics.
-- Modify `apps/iosApp/Supermux/Sessions/GitHostingSettingsView.swift`: add the provider model, URL helper, two-button selector, link, state reset, and success-only dismissal.
+- Create `apps/iosApp/SupermuxTests/GitHostingSettingsTests.swift`: specify provider order, token-template semantics, and stable layout metrics.
+- Modify `apps/iosApp/Supermux/Sessions/GitHostingSettingsView.swift`: add the provider model, URL helper, two-button selector, link, state reset, success-only dismissal, and platform-specific form composition.
 
 No web, broker, persistence, or onboarding-navigation files change.
 
@@ -347,9 +347,9 @@ Expected: both test commands end with `** TEST SUCCEEDED **`; the build ends wit
 **Files:**
 - Verify: built `Supermux.app` from the dedicated remote build directory
 
-- [ ] **Step 1: Install the verified Mac build and return to the open Git-account sheet**
+- [ ] **Step 1: Launch the verified dedicated Mac build and return to the open Git-account sheet**
 
-Quit the current Supermux app, replace `/Applications/Supermux.app` with the built app from `~/supermux-git-hosting/apps/iosApp/build/dd-mac/Build/Products/Debug/Supermux.app`, relaunch it, and open the Git Hosting add-account sheet.
+Quit only the prior dedicated debug build, launch `~/supermux-git-hosting/apps/iosApp/build/dd-mac/Build/Products/Debug/Supermux.app`, and open the Git Hosting add-account sheet. Do not replace `/Applications/Supermux.app`.
 
 - [ ] **Step 2: Inspect the provider selector and token affordance**
 
@@ -384,3 +384,372 @@ git commit -m "fix(mac): polish Git hosting setup"
 ```
 
 Expected: the final implementation commit contains the shared native UI changes and their focused tests only.
+
+## Approved Layout Revision (2026-07-16)
+
+Tasks 1–4 were completed in commits `6479be3` and `2e5fa3e`. The following tasks implement the approved follow-up: remove the Provider heading and surrounding row lines, enlarge the primary action, and center the entire form horizontally and vertically on macOS.
+
+### Task 5: Specify the stable form metrics
+
+**Files:**
+- Modify: `apps/iosApp/SupermuxTests/GitHostingSettingsTests.swift`
+- Test: `apps/iosApp/SupermuxTests/GitHostingSettingsTests.swift`
+
+- [ ] **Step 1: Write the failing layout-policy test**
+
+Add this test to `GitHostingSettingsTests`:
+
+```swift
+func testMacFormUsesCompactWidthAndPaddedPrimaryAction() {
+    XCTAssertEqual(ForgeAddLayout.contentMaxWidth, 560)
+    XCTAssertEqual(ForgeAddLayout.primaryActionVerticalPadding, 12)
+}
+```
+
+- [ ] **Step 2: Sync and run the focused test to verify RED**
+
+Run:
+
+```bash
+rsync -a --delete --exclude build --exclude .gradle apps/ mac:~/supermux-git-hosting/apps/
+ssh mac 'source ~/ios-build-env.sh && cd ~/supermux-git-hosting/apps/iosApp && xcodegen generate >/dev/null && xcodebuild test -quiet -scheme SupermuxMac -destination "platform=macOS,arch=arm64" -only-testing:SupermuxMacTests/GitHostingSettingsTests -derivedDataPath build/dd-mac CODE_SIGNING_ALLOWED=NO'
+```
+
+Expected: compilation fails with `cannot find 'ForgeAddLayout' in scope`. This is the required RED result.
+
+### Task 6: Compose the centered macOS form
+
+**Files:**
+- Modify: `apps/iosApp/Supermux/Sessions/GitHostingSettingsView.swift`
+- Test: `apps/iosApp/SupermuxTests/GitHostingSettingsTests.swift`
+
+- [ ] **Step 1: Add the tested layout policy before `AddForgeSheet`**
+
+Add:
+
+```swift
+enum ForgeAddLayout {
+    static let contentMaxWidth: CGFloat = 560
+    static let primaryActionVerticalPadding: CGFloat = 12
+}
+```
+
+- [ ] **Step 2: Route `AddForgeSheet` through platform-specific composition**
+
+Replace the `List` inside `NavigationStack` with a shared platform form:
+
+```swift
+NavigationStack {
+    platformForm
+        .navigationTitle("Add a Git account")
+        .smInlineNavigationTitle()
+        .toolbar {
+            ToolbarItem(placement: .smTopLeading) {
+                Button("Cancel") { dismiss() }.disabled(submitting)
+            }
+        }
+}
+```
+
+Add the platform router:
+
+```swift
+@ViewBuilder
+private var platformForm: some View {
+    #if os(macOS)
+    macForm
+    #else
+    mobileForm
+    #endif
+}
+```
+
+- [ ] **Step 3: Extract the reusable provider and action controls**
+
+Move the existing provider `HStack` into `providerSelector`, with no `Provider` header:
+
+```swift
+private var providerSelector: some View {
+    HStack(spacing: 8) {
+        ForEach(ForgeProvider.allCases, id: \.self) { provider in
+            Button {
+                selectProvider(provider)
+            } label: {
+                HStack(spacing: 7) {
+                    ForgeLogo(kind: provider.rawValue, size: 17)
+                    Text(provider.displayName)
+                        .font(.subheadline.weight(.semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 9)
+                .contentShape(Rectangle())
+                .background(
+                    kind == provider ? Theme.teal.opacity(0.14) : Color.smSecondaryBackground,
+                    in: RoundedRectangle(cornerRadius: 9)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 9)
+                        .strokeBorder(
+                            kind == provider ? Theme.teal : Color.smSeparator,
+                            lineWidth: 1
+                        )
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(submitting)
+            .accessibilityIdentifier("forge_provider_\(provider.rawValue)")
+            .accessibilityAddTraits(kind == provider ? .isSelected : [])
+        }
+    }
+    .padding(.vertical, 2)
+}
+```
+
+Move the current Connect `Button` into `connectButton` and change its label padding from `4` to the tested policy:
+
+```swift
+private var connectButton: some View {
+    Button(action: connect) {
+        HStack {
+            Spacer()
+            if submitting {
+                ProgressView().tint(.white)
+            } else {
+                Text("Connect \(kind.displayName)").fontWeight(.semibold)
+            }
+            Spacer()
+        }
+        .padding(.vertical, ForgeAddLayout.primaryActionVerticalPadding)
+        .foregroundStyle(.white)
+    }
+    .disabled(!canConnect || submitting)
+}
+```
+
+Extract the existing CLI import button, divider copy, token field/footer, and advanced disclosure into these computed subviews:
+
+```swift
+private var cliImportButton: some View {
+    Button {
+        submitting = true
+        error = nil
+        Task {
+            if await broker.importForge(
+                kind: kind.rawValue,
+                transport: transport
+            ) != nil {
+                dismiss(); onDone()
+            } else {
+                error = "Couldn't import from \(kind.cliName) — sign in there and try again."
+            }
+            submitting = false
+        }
+    } label: {
+        HStack(spacing: 10) {
+            ForgeLogo(kind: kind.rawValue, size: 20)
+            Text("Import token from \(kind.cliName)\(cliLoginLabel)")
+                .font(.subheadline.weight(.medium))
+            Spacer()
+            if submitting { ProgressView().tint(Theme.teal) }
+        }
+    }
+    .foregroundStyle(.primary)
+    .disabled(submitting)
+}
+
+private var cliDivider: some View {
+    Text("— or paste a token —")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .center)
+}
+
+private var tokenField: some View {
+    SecureField(kind.tokenPlaceholder, text: $token)
+        .autocorrectionDisabled()
+        .smNoAutocapitalization()
+        .font(.system(.subheadline, design: .monospaced))
+}
+
+private var tokenFooter: some View {
+    VStack(alignment: .leading, spacing: 4) {
+        if let tokenCreationURL {
+            Link("Create a pre-filled token ↗", destination: tokenCreationURL)
+                .foregroundStyle(Theme.teal)
+        }
+        Text("Needs scopes: \(scopesHint)")
+        if let error {
+            Text(error).foregroundStyle(.red)
+        }
+    }
+}
+
+private var advancedControls: some View {
+    DisclosureGroup("Self-hosted & transport", isExpanded: $showAdvanced) {
+        TextField("API base URL — e.g. github.acme.com/api/v3", text: $hostUrl)
+            .autocorrectionDisabled()
+            .smNoAutocapitalization()
+            .font(.system(.subheadline, design: .monospaced))
+
+        Picker("Transport", selection: $transport) {
+            Text("HTTPS").tag("https")
+            Text("SSH").tag("ssh")
+        }
+        .pickerStyle(.segmented)
+        .padding(.vertical, 4)
+
+        if transport == "ssh" && kind == .gitlab {
+            Text("SSH for GitLab is experimental.")
+                .font(.caption2)
+                .foregroundStyle(.yellow)
+        }
+    }
+}
+```
+
+- [ ] **Step 4: Preserve the mobile List without the provider lines**
+
+Compose the extracted controls as:
+
+```swift
+private var mobileForm: some View {
+    List {
+        Section {
+            providerSelector
+                .listRowSeparator(.hidden)
+        }
+
+        if canImportCli {
+            Section { cliImportButton }
+            Section {
+                cliDivider
+                    .listRowBackground(Color.clear)
+            }
+        }
+
+        Section { tokenField } header: {
+            Text("Personal access token")
+        } footer: {
+            tokenFooter
+        }
+
+        Section { advancedControls }
+
+        Section {
+            connectButton
+                .listRowBackground(canConnect ? Theme.teal : Color.gray.opacity(0.4))
+        }
+    }
+}
+```
+
+The selector section has neither a header nor a visible row separator. Keep all other mobile controls in their existing `List` structure.
+
+- [ ] **Step 5: Center the complete macOS form in a scrollable viewport**
+
+Compose the same extracted controls in a custom macOS column:
+
+```swift
+private var macForm: some View {
+    GeometryReader { proxy in
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                providerSelector
+
+                if canImportCli {
+                    cliImportButton
+                        .buttonStyle(.plain)
+                        .padding(12)
+                        .background(
+                            Color.smSecondaryBackground,
+                            in: RoundedRectangle(cornerRadius: 10)
+                        )
+                    cliDivider
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Personal access token")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    tokenField
+                        .textFieldStyle(.roundedBorder)
+                    tokenFooter
+                }
+
+                advancedControls
+                    .padding(12)
+                    .background(
+                        Color.smSecondaryBackground,
+                        in: RoundedRectangle(cornerRadius: 10)
+                    )
+
+                connectButton
+                    .background(
+                        canConnect ? Theme.teal : Color.gray.opacity(0.4),
+                        in: RoundedRectangle(cornerRadius: 10)
+                    )
+            }
+            .frame(maxWidth: ForgeAddLayout.contentMaxWidth)
+            .padding(24)
+            .frame(maxWidth: .infinity, minHeight: proxy.size.height, alignment: .center)
+        }
+    }
+}
+```
+
+Because the scroll content has at least the viewport height and uses center alignment, the full column is centered in both axes when it fits and remains reachable by scrolling when expanded content is taller.
+
+- [ ] **Step 6: Re-sync and run the focused test to verify GREEN**
+
+Repeat the Task 5 sync and focused `xcodebuild test` command.
+
+Expected: `GitHostingSettingsTests` passes and the command exits with status 0.
+
+### Task 7: Verify and record the layout revision
+
+**Files:**
+- Verify: `apps/iosApp/Supermux/Sessions/GitHostingSettingsView.swift`
+- Verify: `apps/iosApp/SupermuxTests/GitHostingSettingsTests.swift`
+
+- [ ] **Step 1: Run full macOS unit and build verification**
+
+Run:
+
+```bash
+ssh mac 'source ~/ios-build-env.sh && cd ~/supermux-git-hosting/apps/iosApp && xcodegen generate >/dev/null && xcodebuild test -quiet -scheme SupermuxMac -destination "platform=macOS,arch=arm64" -skip-testing:SupermuxMacUITests -derivedDataPath build/dd-mac CODE_SIGNING_ALLOWED=NO && xcodebuild build -quiet -scheme SupermuxMac -destination "platform=macOS,arch=arm64" -derivedDataPath build/dd-mac CODE_SIGNING_ALLOWED=NO'
+```
+
+Expected: the command exits with status 0 with no test or compiler failures.
+
+- [ ] **Step 2: Inspect the dedicated debug build on the real Mac**
+
+Launch only `~/supermux-git-hosting/apps/iosApp/build/dd-mac/Build/Products/Debug/Supermux.app`, navigate to the onboarding Git Hosting add-account sheet, and capture the screen. Do not replace `/Applications/Supermux.app`.
+
+Verify all of these visual requirements:
+
+- the Provider heading is absent;
+- no List separator appears immediately above or below the provider buttons;
+- the entire form column is centered horizontally and vertically;
+- the controls remain capped at 560 points and do not stretch across the sheet;
+- the Connect GitHub action has visibly increased vertical padding;
+- both provider buttons and the pre-filled-token link remain present and usable;
+- expanding Self-hosted & transport keeps every control reachable by scrolling.
+
+- [ ] **Step 3: Review the exact diff and commit**
+
+Run:
+
+```bash
+git diff --check
+git diff -- apps/iosApp/Supermux/Sessions/GitHostingSettingsView.swift apps/iosApp/SupermuxTests/GitHostingSettingsTests.swift
+git status --short
+```
+
+Stage only the implementation and focused test, then commit:
+
+```bash
+git add apps/iosApp/Supermux/Sessions/GitHostingSettingsView.swift apps/iosApp/SupermuxTests/GitHostingSettingsTests.swift
+git commit -m "fix(mac): center Git account form" -m "Co-Authored-By: GPT-5 - Codex in Supermux <noreply@openai.com>"
+```
+
+Expected: the revision commit contains the macOS layout composition plus its focused layout-policy test and no unrelated files.
