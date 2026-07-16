@@ -306,6 +306,77 @@ struct GitHostingSettingsView: View {
     }
 }
 
+enum ForgeProvider: String, CaseIterable {
+    case github
+    case gitlab
+
+    var displayName: String { self == .github ? "GitHub" : "GitLab" }
+    var cliName: String { self == .github ? "gh" : "glab" }
+    var tokenPlaceholder: String { self == .github ? "github_pat_…" : "glpat-…" }
+}
+
+enum ForgeTokenTemplate {
+    static let tokenName = "supermux"
+    static let tokenDescription = "Clone, create & push repos from supermux"
+
+    static func url(provider: ForgeProvider, baseURL: String) -> URL? {
+        let rawBase = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let customHost: String?
+        if rawBase.isEmpty {
+            customHost = nil
+        } else {
+            guard let host = host(from: rawBase) else { return nil }
+            customHost = host
+        }
+
+        var components = URLComponents()
+        components.scheme = "https"
+        switch provider {
+        case .github where customHost != nil && customHost != "github.com":
+            components.host = customHost
+            components.path = "/settings/tokens/new"
+            components.queryItems = [
+                URLQueryItem(name: "description", value: tokenDescription),
+                URLQueryItem(name: "scopes", value: "repo,read:org"),
+            ]
+        case .github:
+            components.host = "github.com"
+            components.path = "/settings/personal-access-tokens/new"
+            components.queryItems = [
+                URLQueryItem(name: "name", value: tokenName),
+                URLQueryItem(name: "description", value: tokenDescription),
+                URLQueryItem(name: "contents", value: "write"),
+                URLQueryItem(name: "administration", value: "write"),
+            ]
+        case .gitlab:
+            components.host = customHost ?? "gitlab.com"
+            components.path = "/-/user_settings/personal_access_tokens"
+            components.queryItems = [
+                URLQueryItem(name: "name", value: tokenName),
+                URLQueryItem(name: "scopes", value: "api"),
+                URLQueryItem(name: "description", value: tokenDescription),
+            ]
+        }
+        return components.url
+    }
+
+    static func scopesHint(provider: ForgeProvider, baseURL: String) -> String {
+        guard provider == .github else { return "api" }
+        guard let customHost = host(from: baseURL), customHost != "github.com" else {
+            return "Contents + Administration (read & write)"
+        }
+        return "repo, read:org"
+    }
+
+    private static func host(from baseURL: String) -> String? {
+        let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains(where: { $0.isWhitespace }) else { return nil }
+        let candidate = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
+        guard let host = URLComponents(string: candidate)?.host, !host.isEmpty else { return nil }
+        return host.lowercased()
+    }
+}
+
 // MARK: - AddForgeSheet
 
 private struct AddForgeSheet: View {
