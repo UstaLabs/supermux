@@ -61,7 +61,7 @@ import kotlinx.coroutines.launch
 // ─── Agents settings (CLI login + API-key fallback + opencode providers) ─────────
 //
 // Parity with iOS AgentSettingsView — the most state-heavy screen. One expandable row
-// per detected agent (claude / codex / cursor / opencode). For the CLI-login agents the
+// per detected agent (claude / codex / cursor / opencode / grok). For the CLI-login agents the
 // expanded body is EITHER the device-code login state machine (§5b) OR an API-key /
 // OAuth-token secret field (§5c). The opencode row expands to the provider sub-list (§5d).
 //

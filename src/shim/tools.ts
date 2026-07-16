@@ -49,7 +49,7 @@ const OUTBOUND_TOOLS = [
 ]
 
 const ORCHESTRATION_TOOLS = [
-  { name: "spawn_session",  description: "Spawn a new agent session. agent defaults to 'claude'; pass 'codex', 'cursor', or 'opencode' for those CLIs. Pass chat_id to auto-switch that chat to the new session.", inputSchema: { type: "object", properties: { workdir: { type: "string" }, name: { type: "string" }, agent: { type: "string", enum: AGENT_KINDS }, chat_id: { type: "string" } }, required: ["workdir"] } },
+  { name: "spawn_session",  description: "Spawn a new agent session. agent defaults to 'claude'; pass 'codex', 'cursor', 'opencode', or 'grok' for those CLIs. Pass chat_id to auto-switch that chat to the new session.", inputSchema: { type: "object", properties: { workdir: { type: "string" }, name: { type: "string" }, agent: { type: "string", enum: AGENT_KINDS }, chat_id: { type: "string" } }, required: ["workdir"] } },
   { name: "kill_session",   description: "Kill a session by name.",                          inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "rename_session", description: "Rename your OWN session (the one you are running in). Use a short, natural, human-readable display title with spaces and normal capitalization (for example, 'Fix Session Renaming'), not a lowercase slug. Names are preserved as entered after trimming; duplicate names are rejected.", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "mute_session",   description: "Mute or unmute a session.",                        inputSchema: { type: "object", properties: { name: { type: "string" }, muted: { type: "boolean" } }, required: ["name", "muted"] } },

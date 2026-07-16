@@ -3,7 +3,7 @@ import Shared
 
 /// Agents settings — parity with the web `AgentLoginPanel.vue` + `OpenCodeProviderAuth.vue`.
 ///
-/// One row per detected agent (claude / codex / cursor / opencode). Link authorization
+/// One row per detected agent (claude / codex / cursor / opencode / grok). Link authorization
 /// is the primary action for the CLI-login agents (claude/codex/cursor): it calls
 /// `startAgentLogin`, then a polling Task calls
 ///     `agentLoginState` every ~1.5s until the phase is terminal. While active it shows

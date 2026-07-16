@@ -281,7 +281,7 @@ fun SessionLauncherScreen(
 
     LaunchedEffect(selectedHost, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
-        agents = listOf("claude", "codex", "cursor", "opencode")
+        agents = listOf("claude", "codex", "cursor", "opencode", "grok")
         val fetched = loadAgents()
         if (fetched.isNotEmpty()) {
             agents = fetched

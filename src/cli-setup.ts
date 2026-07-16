@@ -20,7 +20,7 @@ import { IS_COMPILED } from "./shared/build-info"
 import { username } from "./shared/home"
 
 // Agent CLIs we report on (PATH presence only — the user owns these logins).
-const AGENT_CLIS = ["claude", "codex", "cursor-agent", "opencode"] as const
+const AGENT_CLIS = ["claude", "codex", "cursor-agent", "opencode", "grok"] as const
 
 const UNIT_NAME = "supermux.service"
 const LAUNCHD_LABEL = "dev.supermux.broker"
