@@ -23,7 +23,7 @@ The mismatch made the plugin reject every legitimate proxy ("only http proxies p
 An frpc holding a valid lease for `hostbbb` tried to claim subdomain `h-spikehost`. frps (via our plugin) rejected it: `start error: subdomain does not match leased hostId`. A host can claim **only** `h-<its own leased hostId>` — no cross-host squatting, no non-http proxy types.
 
 ### GATE 2 — replacement · PASS (real crash case); newest-wins is a documented follow-up
-- **Two live frpc, same subdomain:** frp is **first-wins** — the second gets `proxy [web] already exists` and the original tunnel keeps serving. Deterministic, no flapping. (This is the behavior Sol flagged.)
+- **Two live frpc, same subdomain:** frp is **first-wins** — the second gets `proxy already exists` and the original tunnel keeps serving. Deterministic, no flapping. (This is the behavior Sol flagged.) Production proxy names must include the host ID (`web-<hostId>`), because frps proxy names are server-global; a literal `web` lets the first host block every other host even when subdomains differ.
 - **Crash + reconnect (the real scenario):** SIGKILL the live frpc, immediately reconnect a fresh one for the same host → `start proxy success` in **~1 second**, tunnel serving again. The dead socket is reaped fast, so a crashed host is never locked out.
 - **Assessment:** first-wins-among-live-connections is correct for crash/reconnect. The only case it doesn't cover — kicking a *genuinely live* old connection in favor of a newer one — arises only from a duplicate/stolen lease, which the short-lived per-host lease model already makes rare. **Follow-up (non-blocking):** for true newest-wins, the plugin can kick the old run via the frps admin API on a new Login. Not needed for v1.
 

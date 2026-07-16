@@ -45,6 +45,20 @@ function extractCursorResult(toolBody: Record<string, unknown> | undefined): str
   return pickString(caseVal, ["stderr", "error", "message", "stdout"])
 }
 
+/** grok tool_call_update `content` is an array of `{ type:"content", content:{ type:"text", text }}`
+ * (also plain `{ type:"text", text }`). Join all text parts. */
+function extractGrokContent(content: unknown): string {
+  if (!Array.isArray(content)) return ""
+  const out: string[] = []
+  for (const item of content) {
+    if (!item || typeof item !== "object") continue
+    const row = item as { type?: string; text?: string; content?: { type?: string; text?: string } }
+    if (row.type === "text" && typeof row.text === "string") out.push(row.text)
+    else if (row.content?.type === "text" && typeof row.content.text === "string") out.push(row.content.text)
+  }
+  return out.join("\n")
+}
+
 type DetailSummary = { summary: string; rawSummary: string; resultDetail: string; inputDetail?: string }
 
 function jsonText(value: unknown): string {
@@ -196,6 +210,23 @@ function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike, workdir: strin
     const rawPicked = innerArgs ? pickString(innerArgs, ["command", "pattern", "query", "globPattern", "glob_pattern", "description", "url", "path", "file", "target_file", "text"]) : ""
     const summary = rawPicked ? relativizePath(rawPicked, workdir) : ""
     const result = (ev.phase === "completed" || ev.phase === "failed") ? extractCursorResult(toolBody) : ""
+    return { summary, rawSummary: rawPicked, resultDetail: result }
+  }
+
+  if (agent === "grok") {
+    // grok ACP: `tool_call` carries `rawInput` (args) + `title`; `tool_call_update`
+    // carries `status` + `content: [{ type:"content", content:{ type:"text", text }}]`.
+    const rawInput = obj.rawInput as Record<string, unknown> | undefined
+    const rawPicked = rawInput
+      ? pickString(rawInput, ["command", "file_path", "path", "file", "pattern", "query", "url", "content", "text", "name"])
+      : (typeof obj.title === "string" ? obj.title : "")
+    // `summary` is the workdir-relativized form for the card title; `rawSummary` keeps
+    // the absolute path for anything that needs the on-disk location.
+    const summary = relativizePath(rawPicked, workdir)
+    let result = ""
+    if (ev.phase === "completed" || ev.phase === "failed") {
+      result = extractGrokContent(obj.content)
+    }
     return { summary, rawSummary: rawPicked, resultDetail: result }
   }
 

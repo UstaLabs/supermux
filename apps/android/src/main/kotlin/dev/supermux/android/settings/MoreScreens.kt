@@ -342,7 +342,7 @@ private fun PersonalAssistantCreateDialog(
     var name by remember { mutableStateOf("") }
     var agent by remember { mutableStateOf("claude") }
     var focus by remember { mutableStateOf("") }
-    val agents = listOf("claude", "codex", "cursor", "opencode")
+    val agents = listOf("claude", "codex", "cursor", "opencode", "grok")
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1055,7 +1055,11 @@ fun UsageScreen(
 // ─── Usage data model + parsing (defensive: missing sections → null) ───────────
 
 /** resetsAt raw value: ISO string (claude/cursor) or unix-seconds number (codex). */
-private data class UsageWindowData(val used: Double, val resetsAt: String?)
+private data class UsageWindowData(
+    val used: Double,
+    val resetsAt: String?,
+    val label: String? = null,
+)
 private data class ClaudeExtraUsageData(val enabled: Boolean, val monthlyLimit: Double, val usedCredits: Double, val currency: String)
 private data class ClaudeUsageData(
     val fiveHour: UsageWindowData?,
@@ -1067,8 +1071,7 @@ private data class ClaudeUsageData(
 private data class CodexCreditsData(val hasCredits: Boolean, val balance: String)
 private data class CodexUsageData(
     val plan: String?,
-    val primaryWindow: UsageWindowData?,
-    val secondaryWindow: UsageWindowData?,
+    val windows: List<UsageWindowData>,
     val credits: CodexCreditsData?,
     val limitReached: Boolean,
     val resetCredits: Int,
@@ -1078,6 +1081,7 @@ private data class CursorUsageData(
     val totalSpendCents: Double,
     val includedCents: Double,
     val limitCents: Double,
+    val spendAvailable: Boolean,
     val billingCycleStart: String?,
     val billingCycleEnd: String?,
 )
@@ -1100,7 +1104,11 @@ private fun parseWindow(o: JSONObject?): UsageWindowData? {
     if (o == null) return null
     // resetsAt may be a string (ISO) or a number (unix secs) — keep it as text.
     val reset = if (o.isNull("resetsAt") || !o.has("resetsAt")) null else o.get("resetsAt").toString()
-    return UsageWindowData(used = o.numOr("used"), resetsAt = reset)
+    return UsageWindowData(
+        used = o.numOr("used"),
+        resetsAt = reset,
+        label = o.strOrNull("label"),
+    )
 }
 
 private fun parseUsage(raw: String): UsageData {
@@ -1127,8 +1135,13 @@ private fun parseUsage(raw: String): UsageData {
     val codex = root.objOrNull("codex")?.let { o ->
         CodexUsageData(
             plan = o.strOrNull("plan"),
-            primaryWindow = parseWindow(o.objOrNull("primaryWindow")),
-            secondaryWindow = parseWindow(o.objOrNull("secondaryWindow")),
+            windows = o.optJSONArray("windows")?.let { windows ->
+                buildList {
+                    for (i in 0 until windows.length()) {
+                        parseWindow(windows.optJSONObject(i))?.let(::add)
+                    }
+                }
+            } ?: emptyList(),
             credits = o.objOrNull("credits")?.let { cr ->
                 CodexCreditsData(
                     hasCredits = cr.optBoolean("hasCredits", false),
@@ -1146,6 +1159,7 @@ private fun parseUsage(raw: String): UsageData {
             totalSpendCents = o.numOr("totalSpendCents"),
             includedCents = o.numOr("includedCents"),
             limitCents = o.numOr("limitCents"),
+            spendAvailable = o.optBoolean("spendAvailable", false),
             billingCycleStart = o.strOrNull("billingCycleStart"),
             billingCycleEnd = o.strOrNull("billingCycleEnd"),
         )
@@ -1347,10 +1361,11 @@ private fun CodexUsageCard(
         if (codex == null) {
             Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
         } else {
-            codex.primaryWindow?.let { UsageWindowRow("5-hour window", it.used, it.resetsAt, ResetKind.CODEX) }
-            codex.secondaryWindow?.let { UsageWindowRow("7-day window", it.used, it.resetsAt, ResetKind.CODEX) }
+            codex.windows.forEach { window ->
+                UsageWindowRow(window.label ?: "Usage window", window.used, window.resetsAt, ResetKind.CODEX)
+            }
             codex.credits?.takeIf { it.hasCredits }?.let { cr ->
-                UsageFooterRow("Credits balance", "$${cr.balance}")
+                UsageFooterRow("Credits balance", "${cr.balance} credits")
             }
             UsageFooterRow("🎟️ Resets banked", "${codex.resetCredits}")
             if (codex.resetCredits > 0 && onRedeem != null) {
@@ -1417,7 +1432,9 @@ private fun CursorUsageCard(cursor: CursorUsageData?, error: String?) {
         } else {
             // Cursor uses cents + ISO billing cycle end; reset line tracks billingCycleEnd.
             UsageWindowRow("Usage", cursor.totalPercentUsed, cursor.billingCycleEnd, ResetKind.CURSOR)
-            UsageFooterRow("Spend", "${money(cursor.totalSpendCents)} / ${money(cursor.includedCents)} included")
+            if (cursor.spendAvailable) {
+                UsageFooterRow("Spend", "${money(cursor.totalSpendCents)} / ${money(cursor.includedCents)} included")
+            }
         }
     }
 }

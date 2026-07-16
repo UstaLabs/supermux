@@ -13,7 +13,7 @@ export interface RelayProvider {
   status(): RelayStatus
 }
 
-/** Relay off (LAN/direct only). Default until frp is configured + spike-passed. */
+/** Relay off (LAN/direct only), used for explicit opt-out or custom connectivity. */
 export class NullRelayProvider implements RelayProvider {
   async start(): Promise<void> {}
   async stop(): Promise<void> {}

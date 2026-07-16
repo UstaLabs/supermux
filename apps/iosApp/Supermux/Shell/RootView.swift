@@ -31,9 +31,14 @@ struct RootView: View {
         case newSession, archived, usage, proxies, displays, devices, pairDevice, settings, personalAssistants
     }
 
-    init(onUnpair: @escaping () -> Void) {
+    init(startWithNewSession: Bool = false, onUnpair: @escaping () -> Void) {
         _fleet = State(initialValue: Fleet())
+        _route = State(initialValue: Self.initialRoute(startWithNewSession: startWithNewSession))
         self.onUnpair = onUnpair
+    }
+
+    static func initialRoute(startWithNewSession: Bool) -> NavRoute? {
+        startWithNewSession ? .newSession : nil
     }
 
     private var selectedSession: SessionInfo? {
@@ -143,7 +148,7 @@ struct RootView: View {
         }
         #if os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: .smNewSession)) { _ in
-            // macOS File ▸ New Session (⌘N) → open the launcher (a sheet on the Mac).
+            // macOS File ▸ New Session (⌘N) → replace the detail workspace with the launcher.
             route = .newSession
         }
         .onReceive(NotificationCenter.default.publisher(for: .smPairNewDevice)) { _ in
@@ -197,7 +202,7 @@ struct RootView: View {
     }
 
     /// Regular width (iPad): the PWA's wide multi-pane workspace. iPad pushes management pages;
-    /// Mac keeps New Session in a centered, in-window card and uses sheets for the other pages.
+    /// Mac replaces only the detail workspace for New Session and uses sheets for other pages.
     private var regularShell: some View {
         NavigationStack {
             IPadWorkspace(fleet: fleet, selected: $selected, route: $route, layout: layout,
@@ -268,36 +273,9 @@ private struct MacNewSessionOverlay<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
     var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                Color.black.opacity(0.16)
-                    .contentShape(Rectangle())
-                    .onTapGesture(perform: onClose)
-
-                VStack(spacing: 0) {
-                    HStack {
-                        Text("New session").font(.headline)
-                        Spacer()
-                        Button("Cancel", action: onClose)
-                    }
-                    .padding(12)
-                    .background(.bar)
-                    Divider()
-                    content()
-                }
-                .frame(
-                    width: min(max(0, proxy.size.width - 64), 760),
-                    height: min(max(0, proxy.size.height - 64), 640)
-                )
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(Color.smSeparator.opacity(0.7))
-                }
-                .shadow(color: .black.opacity(0.3), radius: 28, y: 12)
-            }
-        }
+        content()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.smBackground)
         .transition(.opacity)
         .onExitCommand(perform: onClose)
         .accessibilityIdentifier("new-session-overlay")

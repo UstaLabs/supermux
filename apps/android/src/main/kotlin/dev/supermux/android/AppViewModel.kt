@@ -345,6 +345,8 @@ class AppViewModel(
                 rebuildSessions()
                 if (bgByKey.remove(keyFor(recordId, f.id)) != null) dirty = true
             }
+            is ServerFrame.SessionRenamed ->
+                patchSessionIn(recordId, f.id) { it.copy(name = f.newName) }
             is ServerFrame.SessionState ->
                 patchSessionIn(recordId, f.session) {
                     it.copy(

@@ -284,10 +284,15 @@ fun CodexUsageCard(
         if (codex == null) {
             Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
         } else {
-            UsageWindowRow("5-hour window", codex.primaryWindow.used, formatResetEpochSeconds(codex.primaryWindow.resetsAt))
-            UsageWindowRow("7-day window", codex.secondaryWindow.used, formatResetEpochSeconds(codex.secondaryWindow.resetsAt))
+            codex.windows.forEach { window ->
+                UsageWindowRow(
+                    window.label,
+                    window.used,
+                    formatResetEpochSeconds(window.resetsAt),
+                )
+            }
             codex.credits?.takeIf { it.hasCredits }?.let { cr ->
-                UsageFooterRow("Credits balance", "$${cr.balance}")
+                UsageFooterRow("Credits balance", "${cr.balance} credits")
             }
             UsageFooterRow("🎟️ Resets banked", "${codex.resetCredits}")
             if (codex.resetCredits > 0 && onRedeem != null) {
@@ -363,7 +368,9 @@ fun CursorUsageCard(cursor: CursorUsage?, error: String?) {
             Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
         } else {
             UsageWindowRow("Usage", cursor.totalPercentUsed, formatResetIso(cursor.billingCycleEnd))
-            UsageFooterRow("Spend", "${money(cursor.totalSpendCents)} / ${money(cursor.includedCents)} included")
+            if (cursor.spendAvailable) {
+                UsageFooterRow("Spend", "${money(cursor.totalSpendCents)} / ${money(cursor.includedCents)} included")
+            }
         }
     }
 }

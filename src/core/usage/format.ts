@@ -6,6 +6,19 @@ function pct(value: number): string {
   return `${Math.round(value)}% used`
 }
 
+function money(value: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: currency.toUpperCase(),
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value)
+  } catch {
+    return `$${value.toFixed(2)}`
+  }
+}
+
 function relativeReset(ms: number): string {
   const diff = ms - Date.now()
   if (diff <= 0) return "now"
@@ -56,9 +69,9 @@ function fmtClaude(c: ClaudeUsage): string {
   }
 
   if (c.extraUsage && c.extraUsage.enabled) {
-    const used = c.extraUsage.usedCredits.toLocaleString("en-US", { maximumFractionDigits: 0 })
-    const limit = c.extraUsage.monthlyLimit.toLocaleString("en-US", { maximumFractionDigits: 0 })
-    lines.push(`  Extra: $${used} / $${limit}`)
+    const used = money(c.extraUsage.usedCredits, c.extraUsage.currency)
+    const limit = money(c.extraUsage.monthlyLimit, c.extraUsage.currency)
+    lines.push(`  Extra: ${used} / ${limit}`)
   }
 
   return lines.join("\n")
@@ -67,14 +80,13 @@ function fmtClaude(c: ClaudeUsage): string {
 function fmtCodex(c: CodexUsage): string {
   const lines: string[] = [`Codex (${c.plan})`]
 
-  const rp = windowResetStr(c.primaryWindow, "unix-s")
-  lines.push(`  5h: ${pct(c.primaryWindow.used)}${rp ? ` · resets ${rp}` : ""}`)
-
-  const rs = windowResetStr(c.secondaryWindow, "unix-s")
-  lines.push(`  7d: ${pct(c.secondaryWindow.used)}${rs ? ` · resets ${rs}` : ""}`)
+  for (const window of c.windows) {
+    const reset = windowResetStr(window, "unix-s")
+    lines.push(`  ${window.label}: ${pct(window.used)}${reset ? ` · resets ${reset}` : ""}`)
+  }
 
   if (c.credits?.hasCredits) {
-    lines.push(`  Credits: $${c.credits.balance}`)
+    lines.push(`  Credits: ${c.credits.balance} credits`)
   }
 
   if (c.resetCredits > 0) lines.push(`  Resets banked: ${c.resetCredits}`)

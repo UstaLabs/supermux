@@ -32,3 +32,9 @@ test("empty / unknown -> 'tool'", () => {
   expect(normalizeToolName("codex", "")).toBe("tool")
   expect(normalizeToolName("cursor", "")).toBe("tool")
 })
+test("grok tool stems normalize to canonical names", () => {
+  expect(normalizeToolName("grok", "write")).toBe("Write")
+  expect(normalizeToolName("grok", "read")).toBe("Read")
+  expect(normalizeToolName("grok", "edit")).toBe("Edit")
+  expect(normalizeToolName("grok", "shell")).toBe("Bash")
+})

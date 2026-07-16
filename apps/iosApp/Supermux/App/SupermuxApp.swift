@@ -18,6 +18,7 @@ struct SupermuxApp: App {
     @State private var macManualPairing = false
     @State private var macSetupChecked: Bool
     @State private var macNeedsOnboarding = false
+    @State private var macOpenNewSessionAfterOnboarding = false
     #endif
 
     init() {
@@ -42,8 +43,12 @@ struct SupermuxApp: App {
         let persistHostState = MacHostPolicy.shouldPersist()
         if persistHostState { HostStore.migrateFromLegacyIfNeeded() }
         let initiallyPaired = persistHostState && BrokerConfig.isPaired
+        // Headless interaction checks can exercise the real onboarding hierarchy without
+        // clearing the developer's pairing or changing production state. Inert unless set.
+        let forceOnboarding = env["SM_FORCE_ONBOARDING"] == "1"
         _paired = State(initialValue: initiallyPaired)
-        _macSetupChecked = State(initialValue: !initiallyPaired)
+        _macSetupChecked = State(initialValue: forceOnboarding || !initiallyPaired)
+        _macNeedsOnboarding = State(initialValue: forceOnboarding && initiallyPaired)
         #else
         HostStore.migrateFromLegacyIfNeeded()
         _paired = State(initialValue: BrokerConfig.isPaired)
@@ -178,7 +183,7 @@ struct SupermuxApp: App {
         // RootView owns the multi-host `Fleet` (built from `HostStore.shared`); the
         // primary host's URL keys the view identity so a re-pair to a different broker
         // rebuilds the fleet. Added hosts don't change `base`, so the fleet stays live.
-        RootView(onUnpair: {
+        RootView(startWithNewSession: shouldStartWithNewSession, onUnpair: {
             BrokerConfig.unpair()
             HostStore.forgetAll()
             paired = false
@@ -186,6 +191,7 @@ struct SupermuxApp: App {
         .id(base)
         #if os(macOS)
         .task {
+            macOpenNewSessionAfterOnboarding = false
             if MacHostPolicy.shouldAutostart(), macHost.state == .idle { await macHost.start() }
         }
         #endif
@@ -196,6 +202,7 @@ struct SupermuxApp: App {
         MacHostWizard(
             coordinator: macHost,
             onContinue: {
+                macOpenNewSessionAfterOnboarding = true
                 paired = BrokerConfig.isPaired
                 macSetupChecked = true
                 macNeedsOnboarding = false
@@ -228,6 +235,14 @@ struct SupermuxApp: App {
         macSetupChecked = true
     }
     #endif
+
+    private var shouldStartWithNewSession: Bool {
+        #if os(macOS)
+        macOpenNewSessionAfterOnboarding
+        #else
+        false
+        #endif
+    }
 }
 
 private func deepLinkPair(_ url: URL) -> PairToken? {

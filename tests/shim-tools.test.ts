@@ -23,6 +23,15 @@ test("listTools advertises orchestration tools too", () => {
   }
 })
 
+test("rename_session asks agents for a natural display title", () => {
+  const description = listTools().find(t => t.name === "rename_session")?.description ?? ""
+  expect(description).toContain("human-readable")
+  expect(description).toContain("with spaces")
+  expect(description).toContain("normal capitalization")
+  expect(description).not.toContain("joined by '-'")
+  expect(description).not.toContain("normalized")
+})
+
 test("outbound tool descriptions are channel-neutral", () => {
   const desc = (name: string) => {
     const t = listTools("claude").find(t => t.name === name)

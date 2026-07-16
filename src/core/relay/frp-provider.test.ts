@@ -38,6 +38,7 @@ test("start acquires a lease, spawns frpc for the right subdomain, reports onlin
   expect(spawned[0]![0]).toContain("frpc")
   expect(leaseRequest?.publicKey).toBe(Buffer.alloc(32).toString("base64url"))
   expect(writtenConfig).toContain('serverAddr = "relay.supermux.dev"')
+  expect(writtenConfig).toContain('name = "web-habc"')
   expect(writtenConfig).toContain("[metadatas]")
   await provider.stop()
 })

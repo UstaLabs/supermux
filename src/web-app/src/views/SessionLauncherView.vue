@@ -58,7 +58,7 @@ const workdirTouched = ref(false)
 // that we stop following the recency order so the project can't change under
 // them while they compose — see chooseDefaultProject and the watcher below.
 const composeStarted = ref(false)
-const agent = ref<"claude" | "codex" | "cursor" | "opencode">("claude")
+const agent = ref<"claude" | "codex" | "cursor" | "opencode" | "grok">("claude")
 const model = ref("")
 const reasoningLevel = ref("")
 const LS_KEY = "cmux:launcher-prefs"
@@ -118,9 +118,9 @@ async function onWorktreeRefresh() {
 }
 
 interface LauncherPrefs {
-  agent: "claude" | "codex" | "cursor" | "opencode"
-  models: Partial<Record<"claude" | "codex" | "cursor" | "opencode", string>>
-  reasoningLevels?: Partial<Record<"claude" | "codex" | "cursor" | "opencode", string>>
+  agent: "claude" | "codex" | "cursor" | "opencode" | "grok"
+  models: Partial<Record<"claude" | "codex" | "cursor" | "opencode" | "grok", string>>
+  reasoningLevels?: Partial<Record<"claude" | "codex" | "cursor" | "opencode" | "grok", string>>
 }
 
 function loadPrefs(): LauncherPrefs | null {
@@ -145,7 +145,7 @@ function savePrefs() {
   } catch {}
 }
 
-const AGENTS = ["claude", "codex", "cursor", "opencode"] as const
+const AGENTS = ["claude", "codex", "cursor", "opencode", "grok"] as const
 const prefs = loadPrefs()
 if (prefs) {
   agent.value = AGENTS.includes(prefs.agent as typeof AGENTS[number]) ? prefs.agent : "claude"

@@ -7,8 +7,9 @@ import { codexResetNote } from "@/lib/codex-reset"
 interface UsageWindow { used: number; resetsAt: string | number | null }
 interface ClaudeExtraUsage { enabled: boolean; monthlyLimit: number; usedCredits: number; currency: string }
 interface ClaudeUsage { fiveHour: UsageWindow; sevenDay: UsageWindow; sevenDaySonnet: UsageWindow | null; sevenDayFable: UsageWindow | null; extraUsage: ClaudeExtraUsage | null }
-interface CodexUsage { plan: string; primaryWindow: UsageWindow; secondaryWindow: UsageWindow; credits: { hasCredits: boolean; balance: string } | null; limitReached: boolean; resetCredits: number }
-interface CursorUsage { totalPercentUsed: number; totalSpendCents: number; includedCents: number; limitCents: number; billingCycleStart: string; billingCycleEnd: string }
+interface CodexWindow extends UsageWindow { id: string; label: string; windowSeconds: number | null }
+interface CodexUsage { plan: string; windows: CodexWindow[]; credits: { hasCredits: boolean; balance: string } | null; limitReached: boolean; resetCredits: number }
+interface CursorUsage { totalPercentUsed: number; totalSpendCents: number; includedCents: number; limitCents: number; spendAvailable: boolean; billingCycleStart: string; billingCycleEnd: string }
 interface OpenCodeUsage { sessions: number; messages: number; totalCostUsd: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
 interface UsageResponse { claude: ClaudeUsage | null; codex: CodexUsage | null; cursor: CursorUsage | null; opencode: OpenCodeUsage | null; errors: Record<string, string> }
 
@@ -208,33 +209,21 @@ async function useReset() {
             <span v-if="codex?.limitReached" class="text-[10px] font-medium text-red-400 bg-red-500/10 px-2 py-0.5 rounded-full">limit reached</span>
           </div>
           <template v-if="codex">
-            <!-- Primary window (5h) -->
-            <div class="mb-3">
+            <div v-for="window in codex.windows" :key="window.id" class="mb-3">
               <div class="flex items-center justify-between text-xs mb-1">
-                <span class="text-muted-foreground">5-hour window</span>
-                <span>{{ Math.round(codex.primaryWindow.used) }}% used</span>
+                <span class="text-muted-foreground">{{ window.label }}</span>
+                <span>{{ Math.round(window.used) }}% used</span>
               </div>
               <div class="h-2 rounded-full bg-muted overflow-hidden">
-                <div :class="barColor(codex.primaryWindow.used)" class="h-full rounded-full transition-all" :style="{ width: clamp(codex.primaryWindow.used) + '%' }" />
+                <div :class="barColor(window.used)" class="h-full rounded-full transition-all" :style="{ width: clamp(window.used) + '%' }" />
               </div>
-              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(codex.primaryWindow.resetsAt, 'codex') }}</p>
-            </div>
-            <!-- Secondary window (7d) -->
-            <div class="mb-3">
-              <div class="flex items-center justify-between text-xs mb-1">
-                <span class="text-muted-foreground">7-day window</span>
-                <span>{{ Math.round(codex.secondaryWindow.used) }}% used</span>
-              </div>
-              <div class="h-2 rounded-full bg-muted overflow-hidden">
-                <div :class="barColor(codex.secondaryWindow.used)" class="h-full rounded-full transition-all" :style="{ width: clamp(codex.secondaryWindow.used) + '%' }" />
-              </div>
-              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(codex.secondaryWindow.resetsAt, 'codex') }}</p>
+              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(window.resetsAt, 'codex') }}</p>
             </div>
             <!-- Credits -->
             <div v-if="codex.credits && codex.credits.hasCredits" class="pt-2 border-t border-border">
               <div class="flex items-center justify-between text-xs">
                 <span class="text-muted-foreground">Credits balance</span>
-                <span>${{ codex.credits.balance }}</span>
+                <span>{{ codex.credits.balance }} credits</span>
               </div>
             </div>
             <!-- Banked rate-limit resets -->
@@ -291,7 +280,7 @@ async function useReset() {
               </div>
               <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(cursor.billingCycleEnd, 'cursor') }}</p>
             </div>
-            <div class="pt-2 border-t border-border">
+            <div v-if="cursor.spendAvailable" class="pt-2 border-t border-border">
               <div class="flex items-center justify-between text-xs">
                 <span class="text-muted-foreground">Spend</span>
                 <span>${{ (cursor.totalSpendCents / 100).toFixed(2) }} / ${{ (cursor.includedCents / 100).toFixed(2) }} included</span>

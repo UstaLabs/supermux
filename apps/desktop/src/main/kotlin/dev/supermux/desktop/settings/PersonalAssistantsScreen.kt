@@ -147,7 +147,7 @@ private fun CreatePersonalAssistantDialog(
     var name by remember { mutableStateOf("") }
     var agent by remember { mutableStateOf("claude") }
     var focus by remember { mutableStateOf("") }
-    val agents = listOf("claude", "codex", "cursor", "opencode")
+    val agents = listOf("claude", "codex", "cursor", "opencode", "grok")
 
     AlertDialog(
         onDismissRequest = onDismiss,

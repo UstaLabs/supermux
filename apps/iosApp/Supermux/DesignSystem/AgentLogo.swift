@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Per-agent brand logo (asset-catalog SVGs), on a rounded tile. Falls back to a
-/// tinted glyph for unknown agents.
+/// Per-agent brand mark from the agent's own artwork. The mark is intentionally not
+/// placed inside another generic square: several brands already define their own shape,
+/// and double-framing made the settings rows look like mismatched app icons.
 struct AgentLogo: View {
     let agent: String?
     var size: CGFloat = 34
@@ -12,23 +13,32 @@ struct AgentLogo: View {
         case "codex": return "codex"
         case "cursor": return "cursor"
         case "opencode": return "opencode"
+        case "grok": return "grok"
         default: return nil
         }
     }
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
-        shape
-            .fill(Color.smSecondaryBackground)
-            .overlay(shape.strokeBorder(Theme.hairline, lineWidth: 1))
-            .frame(width: size, height: size)
-            .overlay {
-                if let assetName {
-                    Image(assetName).resizable().scaledToFit().padding(size * 0.2)
+        ZStack {
+            if let assetName {
+                if agent?.lowercased() == "codex" || agent?.lowercased() == "cursor" {
+                    Image(assetName)
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .foregroundStyle(.primary)
                 } else {
-                    Image(systemName: "cube.transparent")
-                        .font(.system(size: size * 0.46)).foregroundStyle(Theme.teal)
+                    Image(assetName)
+                        .resizable()
+                        .scaledToFit()
                 }
+            } else {
+                Image(systemName: "cube.transparent")
+                    .font(.system(size: size * 0.52))
+                    .foregroundStyle(Theme.teal)
             }
+        }
+        .padding(size * 0.06)
+        .frame(width: size, height: size)
     }
 }

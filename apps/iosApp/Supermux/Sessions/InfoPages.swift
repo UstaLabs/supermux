@@ -504,10 +504,11 @@ struct UsageView: View {
         UsageCard(title: "Codex", subtitle: u?.plan ?? "unknown", dimmed: u == nil,
                   badge: (u?.limitReached == true) ? "limit reached" : nil) {
             if let u {
-                usageBar("5-hour window", u.primaryWindow.used, reset: resetCodex(u.primaryWindow.resetsAt))
-                usageBar("7-day window", u.secondaryWindow.used, reset: resetCodex(u.secondaryWindow.resetsAt))
+                ForEach(u.windows, id: \.id) { window in
+                    usageBar(window.label, window.used, reset: resetCodex(window.resetsAt))
+                }
                 if let c = u.credits, c.hasCredits {
-                    Divider(); rowLine("Credits balance", "$\(c.balance)")
+                    Divider(); rowLine("Credits balance", "\(c.balance) credits")
                 }
                 Divider()
                 rowLine("🎟️ Resets banked", "\(u.resetCredits)")
@@ -535,9 +536,11 @@ struct UsageView: View {
     @ViewBuilder private func cursorCard(_ u: CursorUsage?, err: String?) -> some View {
         UsageCard(title: "Cursor", subtitle: "Billing cycle", dimmed: u == nil) {
             if let u {
-                usageBar("Usage", u.totalPercentUsed, reset: "")
-                Divider()
-                rowLine("Spend", String(format: "$%.2f / $%.2f included", u.totalSpendCents / 100, u.includedCents / 100))
+                usageBar("Usage", u.totalPercentUsed, reset: resetCursor(u.billingCycleEnd))
+                if u.spendAvailable {
+                    Divider()
+                    rowLine("Spend", String(format: "$%.2f / $%.2f included", u.totalSpendCents / 100, u.includedCents / 100))
+                }
             } else { unavailable(err) }
         }
     }
@@ -593,6 +596,12 @@ struct UsageView: View {
     private func resetCodex(_ epochSec: KotlinDouble?) -> String {
         guard let s = epochSec?.doubleValue else { return "" }
         return resetText(Date(timeIntervalSince1970: s))
+    }
+    private func resetCursor(_ raw: String?) -> String {
+        guard let raw else { return "" }
+        if let ms = Double(raw) { return resetText(Date(timeIntervalSince1970: ms / 1000)) }
+        guard let date = parseISO(raw) else { return "" }
+        return resetText(date)
     }
     private func parseISO(_ s: String) -> Date? {
         let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -843,7 +852,7 @@ private struct CreatePASheet: View {
     @State private var agent = "claude"
     @State private var focus = ""
     @State private var creating = false
-    private let agents = ["claude", "codex", "cursor", "opencode"]
+    private let agents = ["claude", "codex", "cursor", "opencode", "grok"]
 
     var body: some View {
         NavigationStack {

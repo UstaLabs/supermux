@@ -251,7 +251,13 @@ data class ClaudeUsage(
 )
 
 @Serializable
-data class CodexWindow(val used: Double = 0.0, val resetsAt: Double? = null)
+data class CodexWindow(
+    val id: String = "",
+    val used: Double = 0.0,
+    val resetsAt: Double? = null,
+    val label: String = "",
+    val windowSeconds: Double? = null,
+)
 
 @Serializable
 data class CodexCredits(val hasCredits: Boolean = false, val balance: String = "")
@@ -259,8 +265,7 @@ data class CodexCredits(val hasCredits: Boolean = false, val balance: String = "
 @Serializable
 data class CodexUsage(
     val plan: String = "",
-    val primaryWindow: CodexWindow = CodexWindow(),
-    val secondaryWindow: CodexWindow = CodexWindow(),
+    val windows: List<CodexWindow> = emptyList(),
     val credits: CodexCredits? = null,
     val limitReached: Boolean = false,
     val resetCredits: Int = 0,
@@ -272,6 +277,7 @@ data class CursorUsage(
     val totalSpendCents: Double = 0.0,
     val includedCents: Double = 0.0,
     val limitCents: Double = 0.0,
+    val spendAvailable: Boolean = false,
     val billingCycleStart: String? = null,
     val billingCycleEnd: String? = null,
 )
@@ -637,7 +643,7 @@ data class ReviewSubmitResult(
 // ─── Agents: install status + link/code login (GET/POST /agents/*) ─────────────
 /** GET /agents/status → per-CLI install + auth state (detectAllAgents).
  *  Named `AgentInstallStatus` to avoid colliding with proto.AgentStatus (which is
- *  the agent's *runtime phase*). `kind`: "claude" | "codex" | "cursor" | "opencode". */
+ *  the agent's *runtime phase*). `kind`: "claude" | "codex" | "cursor" | "opencode" | "grok". */
 @Serializable
 data class AgentInstallStatus(
     val kind: String = "",
@@ -687,9 +693,14 @@ data class OpenCodeProvider(
     val methods: List<OpenCodeAuthMethod> = emptyList(),
 )
 
-/** POST /opencode/auth/oauth/start → the authorization URL (+ optional instructions). */
+/** POST /opencode/auth/oauth/start → the authorization URL, guidance, and callback style. */
 @Serializable
-data class OpenCodeOAuthStart(val url: String = "", val instructions: String? = null)
+data class OpenCodeOAuthStart(
+    val url: String = "",
+    val instructions: String? = null,
+    /** "auto" for device flows completed by the provider; "code" when the user pastes a code. */
+    val method: String = "code",
+)
 
 // ─── Editor / LSP settings (GET/PUT /settings/editor) ─────────────────────────
 /** One language server row. `state`: "ready" | "missing" | "prereq-missing". */

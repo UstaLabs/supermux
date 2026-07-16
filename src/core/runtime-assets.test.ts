@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
-import { environmentMdContent, materializeAsset } from "./runtime-assets"
+import { environmentMdContent, frpcPath, materializeAsset } from "./runtime-assets"
 import { readEnvironmentMd } from "./agents/environment"
 
 describe("materializeAsset", () => {
@@ -50,4 +50,15 @@ describe("environment.md single-importer rule", () => {
     expect(existsSync(content)).toBe(false) // content, not a path
     expect(environmentMdContent()).toBe(content) // both readers agree
   })
+})
+
+test("frpcPath honors an explicit helper path", () => {
+  const previous = process.env.MUX_FRPC_PATH
+  process.env.MUX_FRPC_PATH = "/opt/supermux/frpc"
+  try {
+    expect(frpcPath("/tmp/unused")).toBe("/opt/supermux/frpc")
+  } finally {
+    if (previous === undefined) delete process.env.MUX_FRPC_PATH
+    else process.env.MUX_FRPC_PATH = previous
+  }
 })

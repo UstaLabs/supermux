@@ -124,6 +124,7 @@ test("--off reverts to localhost", async () => {
   })
   expect(code).toBe(0)
   expect(readFileSync(join(dir, ".env"), "utf8")).toContain("MUX_WEB_PUBLIC_URL=http://localhost:8787")
+  expect(readFileSync(join(dir, ".env"), "utf8")).toContain("MUX_RELAY_DOMAIN=\n")
 })
 
 test("interactive menu picks a provider by number", async () => {
@@ -133,6 +134,18 @@ test("interactive menu picks a provider by number", async () => {
   })
   expect(code).toBe(0)
   expect(readFileSync(join(dir, ".env"), "utf8")).toContain("https://fake.example.com")
+})
+
+test("fresh setup relay makes bare connect immediately print a stable pair URL", async () => {
+  const dir = tmp()
+  const out: string[] = []
+  writeFileSync(join(dir, ".env"), "MUX_WEB_PORT=8787\nMUX_RELAY_DOMAIN=relay.supermux.dev\n")
+  const code = await runConnectCommand([], {
+    providers: [fake()], stateDir: dir, tty: false, run: okRun, println: (s) => out.push(s),
+  })
+  expect(code).toBe(0)
+  expect(out.join("\n")).toContain("Built-in Supermux relay: enabled")
+  expect(out.join("\n")).toMatch(/https:\/\/h-[a-z2-7]{26}\.relay\.supermux\.dev\/pair\?t=/)
 })
 
 test("no provider + no TTY exits 2 with guidance", async () => {
@@ -149,12 +162,12 @@ test("unknown provider exits 2", async () => {
   expect(code).toBe(2)
 })
 
-test("--status with no record says no tunnel", async () => {
+test("--status with no record says no remote connection", async () => {
   const dir = tmp()
   const out: string[] = []
   const code = await runConnectCommand(["--status"], { providers: [fake()], stateDir: dir, tty: false, run: okRun, println: (s) => out.push(s) })
   expect(code).toBe(0)
-  expect(out.join("\n")).toContain("No tunnel configured")
+  expect(out.join("\n")).toContain("No remote connection configured")
 })
 
 test("--help returns 0 and prints usage", async () => {

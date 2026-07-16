@@ -95,16 +95,15 @@ final class MacHostCoordinator: ObservableObject {
             },
             existingToken: {
                 guard MacHostPolicy.shouldPersist() else { return nil }
-                if let id = sidecar.hostId,
-                   let token = HostStore.shared.list().first(where: { $0.hostId == id })?.token,
-                   !token.isEmpty {
-                    return token
+                let fleetToken = sidecar.hostId.flatMap { id in
+                    HostStore.shared.list().first(where: { $0.hostId == id })?.token
                 }
-                if let base = BrokerConfig.baseURL,
-                   base == sidecar.localBaseURL {
-                    return BrokerConfig.token
-                }
-                return nil
+                return MacHostPolicy.preferredLocalToken(
+                    localBaseURL: sidecar.localBaseURL,
+                    currentBaseURL: BrokerConfig.baseURL,
+                    currentToken: BrokerConfig.token,
+                    fleetToken: fleetToken
+                )
             },
             prepare: { endpoint, hostName, token in
                 await bootstrap.prepare(
@@ -292,12 +291,16 @@ struct MacHostWizard: View {
             await monitorPairing()
         }
         .onChange(of: coordinator.state) { _, _ in prepareBrokerIfReady() }
+        .onDisappear { broker?.stop() }
     }
 
     private var header: some View {
         HStack(spacing: 14) {
-            Image(nsImage: NSApplication.shared.applicationIconImage)
+            Image("supermuxLogo")
                 .resizable()
+                .renderingMode(.template)
+                .scaledToFit()
+                .foregroundStyle(.primary)
                 .frame(width: 42, height: 42)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Set up Supermux").font(.headline)
@@ -319,9 +322,12 @@ struct MacHostWizard: View {
         switch step {
         case .welcome:
             VStack(spacing: 22) {
-                Image(nsImage: NSApplication.shared.applicationIconImage)
+                Image("supermuxLogo")
                     .resizable()
-                    .frame(width: 88, height: 88)
+                    .renderingMode(.template)
+                    .scaledToFit()
+                    .foregroundStyle(.primary)
+                    .frame(width: 108, height: 108)
                 Text("Welcome to Supermux")
                     .font(.largeTitle.bold())
                 Text("Run multiple coding agents on this Mac and stay connected from your phone or browser.")
@@ -478,6 +484,9 @@ struct MacHostWizard: View {
                 .tint(Theme.teal)
                 .controlSize(.large)
                 .disabled(!canAdvance || finishing)
+            if step == .welcome {
+                Spacer()
+            }
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 18)
@@ -494,7 +503,12 @@ struct MacHostWizard: View {
     private func prepareBrokerIfReady() {
         guard broker == nil, coordinator.state.isReady,
               let base = BrokerConfig.baseURL, let token = BrokerConfig.token else { return }
-        broker = BrokerSession(baseURL: base, token: token)
+        let session = BrokerSession(baseURL: base, token: token)
+        // Keep one control connection alive for the whole wizard. Moving between steps must
+        // not create and tear down host sessions or leave a cancelled REST request looking
+        // like a disconnect when the user navigates back.
+        session.start()
+        broker = session
     }
 
     private func advance() {

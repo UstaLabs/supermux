@@ -97,7 +97,7 @@ export class FrpRelayProvider implements RelayProvider {
         "[metadatas]",
         `lease = ${JSON.stringify(lease)}`,
         "[[proxies]]",
-        'name = "web"',
+        `name = ${JSON.stringify(`web-${this.o.identity.hostId}`)}`,
         'type = "http"',
         'localIP = "127.0.0.1"',
         `localPort = ${this.o.localPort}`,

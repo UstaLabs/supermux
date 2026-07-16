@@ -41,6 +41,11 @@ final class MacHostPolicyTests: XCTestCase {
         ]))
     }
 
+    func testCompletedOnboardingStartsOnNewSession() {
+        XCTAssertEqual(RootView.initialRoute(startWithNewSession: true), .newSession)
+        XCTAssertNil(RootView.initialRoute(startWithNewSession: false))
+    }
+
     func testHealthySupermuxHostIsAdopted() {
         XCTAssertEqual(
             MacHostPolicy.decision(for: .supermuxHost(hostId: "abcdefghijklmnopqrstuvwxyz")),
@@ -78,6 +83,27 @@ final class MacHostPolicyTests: XCTestCase {
         XCTAssertFalse(MacHostPolicy.shouldAutostart(environment: ["XCTestConfigurationFilePath": "/tmp/tests.xctestconfiguration"]))
         XCTAssertFalse(MacHostPolicy.shouldAutostart(environment: ["XCTestBundlePath": "/tmp/SupermuxMacTests.xctest"]))
         XCTAssertTrue(MacHostPolicy.shouldAutostart(environment: [:]))
+    }
+
+    func testCurrentLocalPairBeatsStaleFleetCredential() {
+        XCTAssertEqual(
+            MacHostPolicy.preferredLocalToken(
+                localBaseURL: "http://127.0.0.1:9898",
+                currentBaseURL: "http://127.0.0.1:9898",
+                currentToken: "current-token",
+                fleetToken: "stale-token"
+            ),
+            "current-token"
+        )
+        XCTAssertEqual(
+            MacHostPolicy.preferredLocalToken(
+                localBaseURL: "http://127.0.0.1:9898",
+                currentBaseURL: "https://remote.example",
+                currentToken: "remote-token",
+                fleetToken: "local-fleet-token"
+            ),
+            "local-fleet-token"
+        )
     }
 }
 
@@ -254,6 +280,13 @@ final class MacHostBootstrapTests: XCTestCase {
             Data(body.utf8),
             HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: headers)!
         )
+    }
+
+    func testNativeBootstrapSessionDoesNotSendStoredBrowserCookies() {
+        let configuration = MacHostBootstrap.nativeRequestConfiguration()
+
+        XCTAssertFalse(configuration.httpShouldSetCookies)
+        XCTAssertNil(configuration.httpCookieStorage)
     }
 
     func testExistingLocalTokenIsReusedToMintPhoneClaim() async throws {

@@ -2,11 +2,12 @@ import type { AgentKind } from "../types"
 import { AgentKind as Agent } from "../../../shared/agents"
 import { authCredPath, type DetectPaths } from "../detect"
 import { LoginSession, type LoginState, type LoginProc } from "./session"
-import { parseCodexDeviceAuth, parseCursorLoginUrl } from "./parse"
+import { parseCodexDeviceAuth, parseCursorLoginUrl, parseGrokDeviceAuth } from "./parse"
 
 export interface LoginManagerDeps {
   paths: DetectPaths
   fileExists: (p: string) => boolean
+  hasCredential?: (kind: AgentKind) => boolean
   spawnLogin: (kind: AgentKind) => LoginProc
   onChange: (kind: AgentKind, state: LoginState) => void
   setInterval?: (fn: () => void, ms: number) => any
@@ -15,6 +16,7 @@ export interface LoginManagerDeps {
 
 function parserFor(kind: AgentKind): (out: string) => { url?: string; code?: string } | null {
   if (kind === Agent.Codex) return (out) => parseCodexDeviceAuth(out)
+  if (kind === Agent.Grok) return (out) => parseGrokDeviceAuth(out)
   if (kind === Agent.Cursor) return (out) => { const url = parseCursorLoginUrl(out); return url ? { url } : null }
   if (kind === Agent.Claude) return (out) => { const url = parseCursorLoginUrl(out); return url ? { url } : null }
   return () => null
@@ -34,7 +36,8 @@ export class LoginManager {
       kind,
       spawn: () => this.deps.spawnLogin(kind),
       parse: parserFor(kind),
-      isAuthed: () => this.deps.fileExists(authCredPath(kind, this.deps.paths)),
+      isAuthed: () => this.deps.fileExists(authCredPath(kind, this.deps.paths))
+        || (this.deps.hasCredential?.(kind) ?? false),
       onChange: (st) => { this.states.set(kind, st); this.deps.onChange(kind, st) },
       needsCode: kind === Agent.Claude,
       setInterval: this.deps.setInterval,

@@ -121,6 +121,38 @@ test("fetchClaudeUsage reads per-model weekly caps from limits[]", async () => {
   expect(result!.sevenDaySonnet!.used).toBe(3)
 })
 
+test("fetchClaudeUsage maps the current extra-usage money shape", async () => {
+  const credsPath = join(tmpDir, "credentials-current.json")
+  writeFileSync(credsPath, JSON.stringify({
+    claudeAiOauth: { accessToken: "t", expiresAt: Date.now() + 3600_000 },
+  }))
+
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    five_hour: { utilization: 1 },
+    seven_day: { utilization: 2 },
+    extra_usage: {
+      is_enabled: true,
+      monthly_limit: 5000,
+      used_credits: 125,
+      decimal_places: 2,
+      currency: "USD",
+    },
+    spend: {
+      enabled: true,
+      used: { amount_minor: 125, exponent: 2, currency: "USD" },
+      limit: { amount_minor: 5000, exponent: 2, currency: "USD" },
+    },
+  }))) as unknown as typeof fetch
+
+  const result = await fetchClaudeUsage(credsPath)
+  expect(result!.extraUsage).toEqual({
+    enabled: true,
+    monthlyLimit: 50,
+    usedCredits: 1.25,
+    currency: "USD",
+  })
+})
+
 test("fetchClaudeUsage hides per-model caps when neither limits[] nor legacy fields have them", async () => {
   const credsPath = join(tmpDir, "credentials.json")
   writeFileSync(
@@ -193,8 +225,8 @@ test("fetchCodexUsage returns usage when auth valid", async () => {
       JSON.stringify({
         plan: "plus",
         rate_limit: {
-          primary_window: { used_percent: 60, reset_at: 1748200000 },
-          secondary_window: { used_percent: 20, reset_at: 1748300000 },
+          primary_window: { used_percent: 60, reset_at: 1748200000, limit_window_seconds: 18000 },
+          secondary_window: { used_percent: 20, reset_at: 1748300000, limit_window_seconds: 604800 },
           limit_reached: false,
         },
         credits: { has_credits: true, balance: "15.00" },
@@ -206,9 +238,10 @@ test("fetchCodexUsage returns usage when auth valid", async () => {
   const result = await fetchCodexUsage(authPath)
   expect(result).not.toBeNull()
   expect(result!.plan).toBe("plus")
-  expect(result!.primaryWindow.used).toBe(60)
-  expect(result!.primaryWindow.resetsAt).toBe(1748200000)
-  expect(result!.secondaryWindow.used).toBe(20)
+  expect(result!.windows).toEqual([
+    { id: "primary", used: 60, resetsAt: 1748200000, label: "5-hour window", windowSeconds: 18000 },
+    { id: "secondary", used: 20, resetsAt: 1748300000, label: "7-day window", windowSeconds: 604800 },
+  ])
   expect(result!.credits).not.toBeNull()
   expect(result!.credits!.hasCredits).toBe(true)
   expect(result!.credits!.balance).toBe("15.00")
@@ -238,9 +271,38 @@ test("fetchCodexUsage accepts legacy resets_at field", async () => {
   }) as unknown as typeof fetch
 
   const result = await fetchCodexUsage(authPath)
-  expect(result!.primaryWindow.resetsAt).toBe(1748200000)
-  expect(result!.secondaryWindow.resetsAt).toBe(1748300000)
+  expect(result!.windows[0]).toEqual({
+    id: "primary", used: 10, resetsAt: 1748200000, label: "5-hour window", windowSeconds: null,
+  })
+  expect(result!.windows[1]).toEqual({
+    id: "secondary", used: 5, resetsAt: 1748300000, label: "7-day window", windowSeconds: null,
+  })
   expect(result!.resetCredits).toBe(0)
+})
+
+test("fetchCodexUsage labels the live single primary window by duration", async () => {
+  const authPath = join(tmpDir, "auth-current.json")
+  writeFileSync(authPath, JSON.stringify({ tokens: { access_token: "t" } }))
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    plan_type: "plus",
+    rate_limit: {
+      primary_window: {
+        used_percent: 25,
+        limit_window_seconds: 604800,
+        reset_at: 1784788528,
+      },
+      secondary_window: null,
+    },
+  }))) as unknown as typeof fetch
+
+  const result = await fetchCodexUsage(authPath)
+  expect(result!.windows).toEqual([{
+    id: "primary",
+    used: 25,
+    resetsAt: 1784788528,
+    label: "7-day window",
+    windowSeconds: 604800,
+  }])
 })
 
 test("fetchCodexUsage returns null when auth missing", async () => {
@@ -285,8 +347,29 @@ test("fetchCursorUsage returns usage from sqlite + API", async () => {
   expect(result!.totalSpendCents).toBe(1200)
   expect(result!.includedCents).toBe(2000)
   expect(result!.limitCents).toBe(5000)
+  expect(result!.spendAvailable).toBe(true)
   expect(result!.billingCycleStart).toBe("2026-05-01T00:00:00Z")
   expect(result!.billingCycleEnd).toBe("2026-06-01T00:00:00Z")
+})
+
+test("fetchCursorUsage marks spend unavailable for the current planUsage shape", async () => {
+  const dbPath = join(tmpDir, "cursor-current.vscdb")
+  const db = new Database(dbPath)
+  db.run("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)")
+  db.run("INSERT INTO ItemTable (key, value) VALUES (?, ?)", ["cursorAuth/accessToken", "t"])
+  db.close()
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    billingCycleStart: "1782894225499",
+    billingCycleEnd: "1785572625499",
+    planUsage: { totalPercentUsed: 0 },
+    spendLimitUsage: { overallLimit: 0, overallRemaining: 0 },
+  }))) as unknown as typeof fetch
+
+  const result = await fetchCursorUsage(dbPath)
+  expect(result!.totalPercentUsed).toBe(0)
+  expect(result!.spendAvailable).toBe(false)
+  expect(result!.totalSpendCents).toBe(0)
+  expect(result!.includedCents).toBe(0)
 })
 
 test("fetchCursorUsage returns null when db missing", async () => {
