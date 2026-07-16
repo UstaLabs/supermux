@@ -10,12 +10,12 @@ The Git Hosting onboarding step remains optional. The wizard's Continue button s
 
 The shared native add-account sheet presents:
 
-1. Exactly two equal-width provider buttons: GitHub and GitLab. Each button is one accessible control containing the provider logo and name.
+1. Exactly two equal-width provider buttons: GitHub and GitLab. Each button is one accessible control containing the provider logo and name. No redundant `Provider` heading or separator lines surround the selector.
 2. An authenticated CLI import action when `gh` or `glab` is available for the selected provider.
 3. A divider followed by personal-access-token entry.
 4. A `Create a pre-filled token ↗` link and the required scope summary directly below the token field.
 5. Self-hosted host and HTTPS/SSH transport options inside the existing collapsed disclosure.
-6. A provider-specific Connect action.
+6. A provider-specific Connect action with enough vertical padding to read as the primary action.
 
 Switching provider clears token, host, and error state so credentials cannot accidentally be submitted to the wrong service. HTTPS remains the default transport.
 
@@ -24,6 +24,12 @@ Switching provider clears token, host, and error state so credentials cannot acc
 The current segmented SwiftUI `Picker` is replaced with a custom two-button `HStack`. On macOS, the segmented picker flattens the icon and text within each option into separate segments, so two providers render as four controls. Each custom button owns its complete logo-and-label content and exposes selected state to accessibility.
 
 The selector is shared by onboarding and native Settings because both surfaces use `GitHostingSettingsView`. No onboarding-only duplicate is introduced.
+
+## macOS Layout
+
+On macOS, the form controls are a single column capped at 560 points wide and centered horizontally and vertically within the available sheet body. The column remains scrollable when its content grows because CLI import, errors, or expanded advanced settings make it taller than the viewport. This removes the large unused area below a top-pinned form without stretching controls across the sheet.
+
+iPhone and iPad keep the existing native `List` composition. Only the shared provider heading/separators and Connect-button padding change on mobile; the viewport-centering behavior is macOS-specific.
 
 ## Token Templates
 
@@ -43,8 +49,8 @@ Changing provider resets token, self-hosted URL, advanced disclosure state, and 
 
 ## Architecture
 
-- `apps/iosApp/Supermux/Sessions/GitHostingSettingsView.swift` owns the two-button selector, add-sheet state transitions, token link, and pure token-template helper.
-- `apps/iosApp/SupermuxTests/GitHostingSettingsTests.swift` specifies provider ordering, SaaS token templates, self-hosted token templates, and malformed-host handling.
+- `apps/iosApp/Supermux/Sessions/GitHostingSettingsView.swift` owns the two-button selector, platform-specific form composition, add-sheet state transitions, token link, and pure token-template helper.
+- `apps/iosApp/SupermuxTests/GitHostingSettingsTests.swift` specifies provider ordering, SaaS token templates, self-hosted token templates, malformed-host handling, and the macOS layout policy.
 - The web implementation remains unchanged because it already has two provider controls and pre-filled token links.
 
 No broker route, persistence schema, credential format, or onboarding navigation rule changes.
@@ -54,7 +60,7 @@ No broker route, persistence schema, credential format, or onboarding navigation
 1. Write native unit tests for the provider model and generated token URLs before production changes.
 2. Run the focused macOS tests and full macOS unit suite.
 3. Build and install the macOS app on the remote Mac.
-4. Open the real onboarding Git Hosting sheet and inspect the screen for exactly two provider controls, the pre-filled-token link, correct selected styling, and a usable layout.
+4. Open the real onboarding Git Hosting sheet and inspect the screen for exactly two provider controls, no Provider heading or surrounding lines, a centered form column, a padded Connect action, the pre-filled-token link, and correct selected styling.
 5. Open generated GitHub and GitLab URLs and verify their query parameters.
 
 ## Out of Scope
