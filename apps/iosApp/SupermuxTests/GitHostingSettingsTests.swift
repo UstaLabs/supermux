@@ -7,6 +7,11 @@ final class GitHostingSettingsTests: XCTestCase {
         XCTAssertEqual(ForgeProvider.allCases.map(\.displayName), ["GitHub", "GitLab"])
     }
 
+    func testMacFormUsesCompactWidthAndPaddedPrimaryAction() {
+        XCTAssertEqual(ForgeAddLayout.contentMaxWidth, 560)
+        XCTAssertEqual(ForgeAddLayout.primaryActionVerticalPadding, 12)
+    }
+
     func testGitHubDotComTemplatePrefillsFineGrainedPermissions() throws {
         let url = try XCTUnwrap(ForgeTokenTemplate.url(provider: .github, baseURL: ""))
         XCTAssertEqual(url.scheme, "https")

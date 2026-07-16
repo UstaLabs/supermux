@@ -379,6 +379,11 @@ enum ForgeTokenTemplate {
     }
 }
 
+enum ForgeAddLayout {
+    static let contentMaxWidth: CGFloat = 560
+    static let primaryActionVerticalPadding: CGFloat = 12
+}
+
 // MARK: - AddForgeSheet
 
 private struct AddForgeSheet: View {
@@ -398,151 +403,14 @@ private struct AddForgeSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    HStack(spacing: 8) {
-                        ForEach(ForgeProvider.allCases, id: \.self) { provider in
-                            Button {
-                                selectProvider(provider)
-                            } label: {
-                                HStack(spacing: 7) {
-                                    ForgeLogo(kind: provider.rawValue, size: 17)
-                                    Text(provider.displayName)
-                                        .font(.subheadline.weight(.semibold))
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 9)
-                                .contentShape(Rectangle())
-                                .background(
-                                    kind == provider ? Theme.teal.opacity(0.14) : Color.smSecondaryBackground,
-                                    in: RoundedRectangle(cornerRadius: 9)
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 9)
-                                        .strokeBorder(
-                                            kind == provider ? Theme.teal : Color.smSeparator,
-                                            lineWidth: 1
-                                        )
-                                )
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(submitting)
-                            .accessibilityIdentifier("forge_provider_\(provider.rawValue)")
-                            .accessibilityAddTraits(kind == provider ? .isSelected : [])
-                        }
-                    }
-                    .padding(.vertical, 2)
-                } header: {
-                    Text("Provider")
-                }
-
-                // CLI import (if available for selected kind and not already connected)
-                if canImportCli {
-                    Section {
-                        Button {
-                            submitting = true
-                            error = nil
-                            Task {
-                                if await broker.importForge(
-                                    kind: kind.rawValue,
-                                    transport: transport
-                                ) != nil {
-                                    dismiss(); onDone()
-                                } else {
-                                    error = "Couldn't import from \(kind.cliName) — sign in there and try again."
-                                }
-                                submitting = false
-                            }
-                        } label: {
-                            HStack(spacing: 10) {
-                                ForgeLogo(kind: kind.rawValue, size: 20)
-                                Text("Import token from \(kind.cliName)\(cliLoginLabel)")
-                                    .font(.subheadline.weight(.medium))
-                                Spacer()
-                                if submitting { ProgressView().tint(Theme.teal) }
-                            }
-                        }
-                        .foregroundStyle(.primary)
-                        .disabled(submitting)
-                    }
-
-                    Section {
-                        Text("— or paste a token —")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .listRowBackground(Color.clear)
+            platformForm
+                .navigationTitle("Add a Git account")
+                .smInlineNavigationTitle()
+                .toolbar {
+                    ToolbarItem(placement: .smTopLeading) {
+                        Button("Cancel") { dismiss() }.disabled(submitting)
                     }
                 }
-
-                // PAT field
-                Section {
-                    SecureField(kind.tokenPlaceholder, text: $token)
-                        .autocorrectionDisabled()
-                        .smNoAutocapitalization()
-                        .font(.system(.subheadline, design: .monospaced))
-                } header: {
-                    Text("Personal access token")
-                } footer: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        if let tokenCreationURL {
-                            Link("Create a pre-filled token ↗", destination: tokenCreationURL)
-                                .foregroundStyle(Theme.teal)
-                        }
-                        Text("Needs scopes: \(scopesHint)")
-                        if let error {
-                            Text(error).foregroundStyle(.red)
-                        }
-                    }
-                }
-
-                // Self-hosted & transport disclosure
-                Section {
-                    DisclosureGroup("Self-hosted & transport", isExpanded: $showAdvanced) {
-                        TextField("API base URL — e.g. github.acme.com/api/v3", text: $hostUrl)
-                            .autocorrectionDisabled()
-                            .smNoAutocapitalization()
-                            .font(.system(.subheadline, design: .monospaced))
-
-                        Picker("Transport", selection: $transport) {
-                            Text("HTTPS").tag("https")
-                            Text("SSH").tag("ssh")
-                        }
-                        .pickerStyle(.segmented)
-                        .padding(.vertical, 4)
-
-                        if transport == "ssh" && kind == .gitlab {
-                            Text("SSH for GitLab is experimental.")
-                                .font(.caption2).foregroundStyle(.yellow)
-                        }
-                    }
-                }
-
-                // Connect button
-                Section {
-                    Button(action: connect) {
-                        HStack {
-                            Spacer()
-                            if submitting {
-                                ProgressView().tint(.white)
-                            } else {
-                                Text("Connect \(kind.displayName)").fontWeight(.semibold)
-                            }
-                            Spacer()
-                        }
-                        .padding(.vertical, 4)
-                        .foregroundStyle(.white)
-                    }
-                    .listRowBackground(canConnect ? Theme.teal : Color.gray.opacity(0.4))
-                    .disabled(!canConnect || submitting)
-                }
-            }
-            .navigationTitle("Add a Git account")
-            .smInlineNavigationTitle()
-            .toolbar {
-                ToolbarItem(placement: .smTopLeading) {
-                    Button("Cancel") { dismiss() }.disabled(submitting)
-                }
-            }
         }
         .tint(Theme.teal)
         .smPresentationDetents([.medium, .large])
@@ -553,6 +421,222 @@ private struct AddForgeSheet: View {
             if let presetKind, let preset = ForgeProvider(rawValue: presetKind) { kind = preset }
             Task { cliStatus = try? await broker.api.listForges().cli }
         }
+    }
+
+    @ViewBuilder
+    private var platformForm: some View {
+        #if os(macOS)
+        macForm
+        #else
+        mobileForm
+        #endif
+    }
+
+    private var mobileForm: some View {
+        List {
+            Section {
+                providerSelector
+                    .listRowSeparator(.hidden)
+            }
+
+            if canImportCli {
+                Section { cliImportButton }
+
+                Section {
+                    cliDivider
+                        .listRowBackground(Color.clear)
+                }
+            }
+
+            Section { tokenField } header: {
+                Text("Personal access token")
+            } footer: {
+                tokenFooter
+            }
+
+            Section { advancedControls }
+
+            Section {
+                connectButton
+                    .listRowBackground(canConnect ? Theme.teal : Color.gray.opacity(0.4))
+            }
+        }
+    }
+
+    private var macForm: some View {
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    providerSelector
+
+                    if canImportCli {
+                        cliImportButton
+                            .buttonStyle(.plain)
+                            .padding(12)
+                            .background(
+                                Color.smSecondaryBackground,
+                                in: RoundedRectangle(cornerRadius: 10)
+                            )
+                        cliDivider
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Personal access token")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        tokenField
+                            .textFieldStyle(.roundedBorder)
+                        tokenFooter
+                    }
+
+                    advancedControls
+                        .padding(12)
+                        .background(
+                            Color.smSecondaryBackground,
+                            in: RoundedRectangle(cornerRadius: 10)
+                        )
+
+                    connectButton
+                        .buttonStyle(.plain)
+                        .background(
+                            canConnect ? Theme.teal : Color.gray.opacity(0.4),
+                            in: RoundedRectangle(cornerRadius: 10)
+                        )
+                }
+                .frame(maxWidth: ForgeAddLayout.contentMaxWidth)
+                .padding(24)
+                .frame(maxWidth: .infinity, minHeight: proxy.size.height, alignment: .center)
+            }
+        }
+    }
+
+    private var providerSelector: some View {
+        HStack(spacing: 8) {
+            ForEach(ForgeProvider.allCases, id: \.self) { provider in
+                Button {
+                    selectProvider(provider)
+                } label: {
+                    HStack(spacing: 7) {
+                        ForgeLogo(kind: provider.rawValue, size: 17)
+                        Text(provider.displayName)
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    .contentShape(Rectangle())
+                    .background(
+                        kind == provider ? Theme.teal.opacity(0.14) : Color.smSecondaryBackground,
+                        in: RoundedRectangle(cornerRadius: 9)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9)
+                            .strokeBorder(
+                                kind == provider ? Theme.teal : Color.smSeparator,
+                                lineWidth: 1
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(submitting)
+                .accessibilityIdentifier("forge_provider_\(provider.rawValue)")
+                .accessibilityAddTraits(kind == provider ? .isSelected : [])
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var cliImportButton: some View {
+        Button {
+            submitting = true
+            error = nil
+            Task {
+                if await broker.importForge(
+                    kind: kind.rawValue,
+                    transport: transport
+                ) != nil {
+                    dismiss(); onDone()
+                } else {
+                    error = "Couldn't import from \(kind.cliName) — sign in there and try again."
+                }
+                submitting = false
+            }
+        } label: {
+            HStack(spacing: 10) {
+                ForgeLogo(kind: kind.rawValue, size: 20)
+                Text("Import token from \(kind.cliName)\(cliLoginLabel)")
+                    .font(.subheadline.weight(.medium))
+                Spacer()
+                if submitting { ProgressView().tint(Theme.teal) }
+            }
+        }
+        .foregroundStyle(.primary)
+        .disabled(submitting)
+    }
+
+    private var cliDivider: some View {
+        Text("— or paste a token —")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    private var tokenField: some View {
+        SecureField(kind.tokenPlaceholder, text: $token)
+            .autocorrectionDisabled()
+            .smNoAutocapitalization()
+            .font(.system(.subheadline, design: .monospaced))
+    }
+
+    private var tokenFooter: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let tokenCreationURL {
+                Link("Create a pre-filled token ↗", destination: tokenCreationURL)
+                    .foregroundStyle(Theme.teal)
+            }
+            Text("Needs scopes: \(scopesHint)")
+            if let error {
+                Text(error).foregroundStyle(.red)
+            }
+        }
+    }
+
+    private var advancedControls: some View {
+        DisclosureGroup("Self-hosted & transport", isExpanded: $showAdvanced) {
+            TextField("API base URL — e.g. github.acme.com/api/v3", text: $hostUrl)
+                .autocorrectionDisabled()
+                .smNoAutocapitalization()
+                .font(.system(.subheadline, design: .monospaced))
+
+            Picker("Transport", selection: $transport) {
+                Text("HTTPS").tag("https")
+                Text("SSH").tag("ssh")
+            }
+            .pickerStyle(.segmented)
+            .padding(.vertical, 4)
+
+            if transport == "ssh" && kind == .gitlab {
+                Text("SSH for GitLab is experimental.")
+                    .font(.caption2)
+                    .foregroundStyle(.yellow)
+            }
+        }
+    }
+
+    private var connectButton: some View {
+        Button(action: connect) {
+            HStack {
+                Spacer()
+                if submitting {
+                    ProgressView().tint(.white)
+                } else {
+                    Text("Connect \(kind.displayName)").fontWeight(.semibold)
+                }
+                Spacer()
+            }
+            .padding(.vertical, ForgeAddLayout.primaryActionVerticalPadding)
+            .foregroundStyle(.white)
+        }
+        .disabled(!canConnect || submitting)
     }
 
     // MARK: Computed
