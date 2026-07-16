@@ -13,6 +13,7 @@ struct AgentLogo: View {
         case "codex": return "codex"
         case "cursor": return "cursor"
         case "opencode": return "opencode"
+        case "grok": return "grok"
         default: return nil
         }
     }

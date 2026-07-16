@@ -40,7 +40,7 @@ const creating = ref(false)
 const showCreate = ref(false)
 
 const newName = ref("")
-const newAgent = ref<"claude" | "codex" | "cursor" | "opencode">("claude")
+const newAgent = ref<"claude" | "codex" | "cursor" | "opencode" | "grok">("claude")
 const newModel = ref("")
 const newFocus = ref("")
 

@@ -637,7 +637,7 @@ data class ReviewSubmitResult(
 // ─── Agents: install status + link/code login (GET/POST /agents/*) ─────────────
 /** GET /agents/status → per-CLI install + auth state (detectAllAgents).
  *  Named `AgentInstallStatus` to avoid colliding with proto.AgentStatus (which is
- *  the agent's *runtime phase*). `kind`: "claude" | "codex" | "cursor" | "opencode". */
+ *  the agent's *runtime phase*). `kind`: "claude" | "codex" | "cursor" | "opencode" | "grok". */
 @Serializable
 data class AgentInstallStatus(
     val kind: String = "",

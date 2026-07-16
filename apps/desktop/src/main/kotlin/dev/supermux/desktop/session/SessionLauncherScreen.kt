@@ -259,7 +259,7 @@ fun SessionLauncherScreen(
     var projects by remember { mutableStateOf(emptyList<String>()) }
     var submitting by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var agents by remember { mutableStateOf(listOf("claude", "codex", "cursor", "opencode")) }
+    var agents by remember { mutableStateOf(listOf("claude", "codex", "cursor", "opencode", "grok")) }
 
     // See the file header + the pure helpers for why launcherRestoring gates the agent/workdir
     // effects and why lastSeenAgent/lastSeenWorkdir (not one-shot booleans) are the safe way to tell
@@ -281,7 +281,7 @@ fun SessionLauncherScreen(
 
     LaunchedEffect(selectedHost, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
-        agents = listOf("claude", "codex", "cursor", "opencode")
+        agents = listOf("claude", "codex", "cursor", "opencode", "grok")
         val fetched = loadAgents()
         if (fetched.isNotEmpty()) {
             agents = fetched

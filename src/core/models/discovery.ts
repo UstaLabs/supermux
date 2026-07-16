@@ -96,6 +96,10 @@ export async function discoverCursorModels(opts?: {
   }
 }
 
+// grok's discoverer lives in agents/grok/model-discovery.ts — it reads modelState
+// from the ACP handshake rather than a CLI command, since `grok models` prints ids
+// only (no per-model reasoning metadata, no JSON mode).
+
 export async function discoverOpenCodeModels(opts?: {
   run?: (cmd: string) => Promise<string>
 }): Promise<ModelInfo[]> {

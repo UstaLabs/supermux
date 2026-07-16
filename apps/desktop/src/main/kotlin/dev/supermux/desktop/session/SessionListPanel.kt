@@ -108,6 +108,9 @@ private fun agentBrand(agent: String?): AgentBrand? = when (agent?.lowercase()) 
     // background, so invert to a light tile with near-black ink for legibility in both themes.
     "cursor" -> AgentBrand("▲", Color(0xFFF2F1EC), Color(0xFF111111))
     "opencode" -> AgentBrand("o", Color(0xFF4C6FFF), Color.White)
+    // Grok/xAI mark is a near-black X; invert to a light tile like cursor so it stays
+    // legible in dark mode.
+    "grok" -> AgentBrand("g", Color(0xFFF2F1EC), Color(0xFF111111))
     else -> null
 }
 

@@ -177,7 +177,7 @@ fun SessionLauncherScreen(
     var baseBranch by remember { mutableStateOf("") }
     // The agent options come from the selected host's /agents/status (fixes the old hardcoded four);
     // the literal list is only the fallback until the fetch lands / when the host doesn't answer.
-    var agents by remember { mutableStateOf(listOf("claude", "codex", "cursor", "opencode")) }
+    var agents by remember { mutableStateOf(listOf("claude", "codex", "cursor", "opencode", "grok")) }
     val multiHost = hosts.size >= 2
     LaunchedEffect(selectedHostId, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
@@ -186,7 +186,7 @@ fun SessionLauncherScreen(
         if (switchedHost) {
             model = null
         }
-        agents = listOf("claude", "codex", "cursor", "opencode")
+        agents = listOf("claude", "codex", "cursor", "opencode", "grok")
         val fetched = loadAgents()
         if (fetched.isNotEmpty()) {
             agents = fetched
@@ -963,6 +963,7 @@ private fun AgentLogo(agent: String?, size: Dp) {
         "claude" -> R.drawable.agent_claude
         "codex" -> R.drawable.agent_codex
         "cursor" -> R.drawable.agent_cursor
+        "grok" -> R.drawable.agent_grok
         else -> null
     }
     val shape = RoundedCornerShape(size * 0.28f)
