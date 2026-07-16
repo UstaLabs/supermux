@@ -7,6 +7,12 @@ import { Database } from "bun:sqlite"
 
 export interface UsageWindow { used: number; resetsAt: string | number | null }
 
+export interface CodexUsageWindow extends UsageWindow {
+  id: string
+  label: string
+  windowSeconds: number | null
+}
+
 export interface ClaudeExtraUsage {
   enabled: boolean
   monthlyLimit: number
@@ -25,8 +31,7 @@ export interface ClaudeUsage {
 
 export interface CodexUsage {
   plan: string
-  primaryWindow: UsageWindow
-  secondaryWindow: UsageWindow
+  windows: CodexUsageWindow[]
   credits: { hasCredits: boolean; balance: string } | null
   limitReached: boolean
   resetCredits: number
@@ -37,6 +42,7 @@ export interface CursorUsage {
   totalSpendCents: number
   includedCents: number
   limitCents: number
+  spendAvailable: boolean
   billingCycleStart: string
   billingCycleEnd: string
 }
@@ -121,12 +127,23 @@ export async function fetchClaudeUsage(
     w && typeof w === "object" ? mapWindow(w) : null
 
   const extra = data.extra_usage
+  const spend = data.spend
+  const moneyAmount = (value: any): number | null => {
+    if (typeof value?.amount_minor !== "number") return null
+    const exponent = typeof value.exponent === "number" ? value.exponent : 0
+    return value.amount_minor / 10 ** exponent
+  }
+  const legacyAmount = (value: any): number => {
+    const amount = Number(value) || 0
+    const decimals = Number(extra?.decimal_places)
+    return Number.isInteger(decimals) && decimals >= 0 ? amount / 10 ** decimals : amount
+  }
   const extraUsage: ClaudeExtraUsage | null = extra
     ? {
-        enabled: extra.enabled ?? false,
-        monthlyLimit: extra.monthly_limit ?? 0,
-        usedCredits: extra.used_credits ?? 0,
-        currency: extra.currency ?? "usd",
+        enabled: spend?.enabled ?? extra.is_enabled ?? extra.enabled ?? false,
+        monthlyLimit: moneyAmount(spend?.limit) ?? legacyAmount(extra.monthly_limit),
+        usedCredits: moneyAmount(spend?.used) ?? legacyAmount(extra.used_credits),
+        currency: spend?.limit?.currency ?? spend?.used?.currency ?? extra.currency ?? "usd",
       }
     : null
 
@@ -159,10 +176,33 @@ export async function fetchCodexUsage(
   const data = await res.json() as any
   const rl = data.rate_limit ?? {}
 
-  const mapWindow = (w: any): UsageWindow => ({
-    used: w?.used_percent ?? 0,
-    resetsAt: w?.reset_at ?? w?.resets_at ?? null,
-  })
+  const windowLabel = (seconds: number | null, fallback: string): string => {
+    if (seconds == null || seconds <= 0) return fallback
+    const units: Array<[number, string]> = [
+      [86_400, "day"],
+      [3_600, "hour"],
+      [60, "minute"],
+    ]
+    for (const [unitSeconds, unit] of units) {
+      if (seconds % unitSeconds !== 0) continue
+      const count = seconds / unitSeconds
+      return `${count}-${unit} window`
+    }
+    return fallback
+  }
+
+  const mapWindow = (id: string, w: any, fallbackLabel: string): CodexUsageWindow | null => {
+    if (w == null || typeof w !== "object") return null
+    const rawSeconds = w.limit_window_seconds == null ? NaN : Number(w.limit_window_seconds)
+    const windowSeconds = Number.isFinite(rawSeconds) ? rawSeconds : null
+    return {
+      id,
+      label: windowLabel(windowSeconds, fallbackLabel),
+      windowSeconds,
+      used: w?.used_percent ?? 0,
+      resetsAt: w?.reset_at ?? w?.resets_at ?? null,
+    }
+  }
 
   const credits = data.credits
     ? { hasCredits: data.credits.has_credits ?? false, balance: data.credits.balance ?? "0" }
@@ -170,8 +210,10 @@ export async function fetchCodexUsage(
 
   return {
     plan: data.plan_type ?? data.plan ?? "unknown",
-    primaryWindow: mapWindow(rl.primary_window),
-    secondaryWindow: mapWindow(rl.secondary_window),
+    windows: [
+      mapWindow("primary", rl.primary_window, "5-hour window"),
+      mapWindow("secondary", rl.secondary_window, "7-day window"),
+    ].filter((window): window is CodexUsageWindow => window != null),
     credits,
     limitReached: rl.limit_reached ?? false,
     resetCredits: data.rate_limit_reset_credits?.available_count ?? 0,
@@ -244,11 +286,23 @@ export async function fetchCursorUsage(
   const data = await res.json() as any
   const plan = data.planUsage ?? data
 
+  const finiteNumber = (...values: any[]): number | null => {
+    for (const value of values) {
+      if (value == null || value === "") continue
+      const number = Number(value)
+      if (Number.isFinite(number)) return number
+    }
+    return null
+  }
+  const totalSpendCents = finiteNumber(plan.totalSpend, plan.totalSpendCents)
+  const includedCents = finiteNumber(plan.includedSpend, plan.includedCents)
+
   return {
     totalPercentUsed: plan.totalPercentUsed ?? 0,
-    totalSpendCents: plan.totalSpend ?? plan.totalSpendCents ?? 0,
-    includedCents: plan.includedSpend ?? plan.includedCents ?? 0,
+    totalSpendCents: totalSpendCents ?? 0,
+    includedCents: includedCents ?? 0,
     limitCents: plan.limit ?? plan.limitCents ?? 0,
+    spendAvailable: totalSpendCents != null && includedCents != null,
     billingCycleStart: data.billingCycleStart ?? "",
     billingCycleEnd: data.billingCycleEnd ?? "",
   }

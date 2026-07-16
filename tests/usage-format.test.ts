@@ -15,8 +15,10 @@ function makeClaude(): ClaudeUsage {
 function makeCodex(): CodexUsage {
   return {
     plan: "plus",
-    primaryWindow: { used: 2, resetsAt: Math.floor((Date.now() + 4 * 3_600_000 + 2 * 60_000) / 1000) },
-    secondaryWindow: { used: 73, resetsAt: Math.floor((Date.now() + 6 * 24 * 3_600_000) / 1000) },
+    windows: [
+      { id: "primary", used: 2, resetsAt: Math.floor((Date.now() + 4 * 3_600_000 + 2 * 60_000) / 1000), label: "5-hour window", windowSeconds: 18000 },
+      { id: "secondary", used: 73, resetsAt: Math.floor((Date.now() + 6 * 24 * 3_600_000) / 1000), label: "7-day window", windowSeconds: 604800 },
+    ],
     credits: { hasCredits: true, balance: "15.00" },
     limitReached: false,
     resetCredits: 0,
@@ -25,8 +27,10 @@ function makeCodex(): CodexUsage {
 
 const codexFixture = (resetCredits: number): CodexUsage => ({
   plan: "plus",
-  primaryWindow: { used: 10, resetsAt: null },
-  secondaryWindow: { used: 5, resetsAt: null },
+  windows: [
+    { id: "primary", used: 10, resetsAt: null, label: "5-hour window", windowSeconds: 18000 },
+    { id: "secondary", used: 5, resetsAt: null, label: "7-day window", windowSeconds: 604800 },
+  ],
   credits: null,
   limitReached: false,
   resetCredits,
@@ -38,6 +42,7 @@ function makeCursor(): CursorUsage {
     totalSpendCents: 1200,
     includedCents: 2000,
     limitCents: 5000,
+    spendAvailable: true,
     billingCycleStart: String(Date.now() - 10 * 24 * 3_600_000),
     billingCycleEnd: String(Date.now() + 33 * 24 * 3_600_000),
   }
@@ -105,4 +110,13 @@ test("formatUsageTelegram shows Codex banked resets when > 0", () => {
 test("formatUsageTelegram omits banked resets when 0", () => {
   const out = formatUsageTelegram({ claude: null, codex: codexFixture(0), cursor: null, opencode: null, errors: {} } as any)
   expect(out).not.toContain("Resets banked")
+})
+
+test("formatUsageTelegram renders only the Codex windows returned by the API", () => {
+  const codex = { ...codexFixture(0), windows: [
+    { id: "primary", used: 25, resetsAt: null, label: "7-day window", windowSeconds: 604800 },
+  ] }
+  const out = formatUsageTelegram({ claude: null, codex, cursor: null, opencode: null, errors: {} })
+  expect(out).toContain("7-day window: 25% used")
+  expect(out).not.toContain("5-hour window")
 })

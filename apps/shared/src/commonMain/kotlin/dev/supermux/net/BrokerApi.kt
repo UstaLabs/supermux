@@ -251,7 +251,13 @@ data class ClaudeUsage(
 )
 
 @Serializable
-data class CodexWindow(val used: Double = 0.0, val resetsAt: Double? = null)
+data class CodexWindow(
+    val id: String = "",
+    val used: Double = 0.0,
+    val resetsAt: Double? = null,
+    val label: String = "",
+    val windowSeconds: Double? = null,
+)
 
 @Serializable
 data class CodexCredits(val hasCredits: Boolean = false, val balance: String = "")
@@ -259,8 +265,7 @@ data class CodexCredits(val hasCredits: Boolean = false, val balance: String = "
 @Serializable
 data class CodexUsage(
     val plan: String = "",
-    val primaryWindow: CodexWindow = CodexWindow(),
-    val secondaryWindow: CodexWindow = CodexWindow(),
+    val windows: List<CodexWindow> = emptyList(),
     val credits: CodexCredits? = null,
     val limitReached: Boolean = false,
     val resetCredits: Int = 0,
@@ -272,6 +277,7 @@ data class CursorUsage(
     val totalSpendCents: Double = 0.0,
     val includedCents: Double = 0.0,
     val limitCents: Double = 0.0,
+    val spendAvailable: Boolean = false,
     val billingCycleStart: String? = null,
     val billingCycleEnd: String? = null,
 )

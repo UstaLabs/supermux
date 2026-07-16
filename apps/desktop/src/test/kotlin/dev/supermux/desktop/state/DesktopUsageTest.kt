@@ -70,8 +70,10 @@ class DesktopUsageTest {
                   },
                   "codex": {
                     "plan": "pro",
-                    "primaryWindow": {"used": 30.0, "resetsAt": 1799600000.0},
-                    "secondaryWindow": {"used": 60.0, "resetsAt": 1799700000.0},
+                    "windows": [
+                      {"used": 30.0, "resetsAt": 1799600000.0, "label": "5-hour window", "windowSeconds": 18000.0},
+                      {"used": 60.0, "resetsAt": 1799700000.0, "label": "7-day window", "windowSeconds": 604800.0}
+                    ],
                     "limitReached": false,
                     "resetCredits": 3
                   },
@@ -93,7 +95,7 @@ class DesktopUsageTest {
         assertEquals("/usage", rec.path)
         assertTrue(result != null)
         assertEquals(5.0, result.claude?.sevenDayFable?.used)
-        assertEquals(30.0, result.codex?.primaryWindow?.used)
+        assertEquals(30.0, result.codex?.windows?.first()?.used)
         assertEquals(3, result.codex?.resetCredits)
         assertEquals(20.0, result.cursor?.totalPercentUsed)
         assertEquals("not configured", result.errors["opencode"])
@@ -120,8 +122,10 @@ class DesktopUsageTest {
                   "windowsReset": 1,
                   "codex": {
                     "plan": "pro",
-                    "primaryWindow": {"used": 0.0, "resetsAt": 1799600000.0},
-                    "secondaryWindow": {"used": 0.0, "resetsAt": 1799700000.0},
+                    "windows": [
+                      {"used": 0.0, "resetsAt": 1799600000.0, "label": "5-hour window", "windowSeconds": 18000.0},
+                      {"used": 0.0, "resetsAt": 1799700000.0, "label": "7-day window", "windowSeconds": 604800.0}
+                    ],
                     "limitReached": false,
                     "resetCredits": 2
                   }

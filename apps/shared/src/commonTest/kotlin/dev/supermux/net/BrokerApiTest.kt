@@ -34,8 +34,14 @@ class BrokerApiTest {
 
     @Test
     fun codex_usage_parses_reset_credits() {
-        val u = json.decodeFromString<CodexUsage>("""{"plan":"plus","resetCredits":3}""")
+        val u = json.decodeFromString<CodexUsage>(
+            """{"plan":"plus","windows":[{"id":"primary","used":25.0,"label":"7-day window","windowSeconds":604800.0}],"resetCredits":3}"""
+        )
         assertEquals(3, u.resetCredits)
+        assertEquals(1, u.windows.size)
+        assertEquals("primary", u.windows.single().id)
+        assertEquals("7-day window", u.windows.single().label)
+        assertEquals(604800.0, u.windows.single().windowSeconds)
         // absent → 0
         val u0 = json.decodeFromString<CodexUsage>("""{"plan":"plus"}""")
         assertEquals(0, u0.resetCredits)

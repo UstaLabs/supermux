@@ -64,6 +64,10 @@ class UsageScreenTest {
 
     private fun fixtureUsage(
         codexResetCredits: Int = 3,
+        codexWindows: List<CodexWindow> = listOf(
+            CodexWindow(id = "primary", used = 30.0, resetsAt = null, label = "5-hour window", windowSeconds = 18_000.0),
+            CodexWindow(id = "secondary", used = 60.0, resetsAt = null, label = "7-day window", windowSeconds = 604_800.0),
+        ),
         sevenDayFable: ClaudeWindow? = ClaudeWindow(used = 5.0, resetsAt = null),
         errors: Map<String, String> = emptyMap(),
     ) = UsageResponse(
@@ -76,8 +80,7 @@ class UsageScreenTest {
         ),
         codex = CodexUsage(
             plan = "pro",
-            primaryWindow = CodexWindow(used = 30.0, resetsAt = null),
-            secondaryWindow = CodexWindow(used = 60.0, resetsAt = null),
+            windows = codexWindows,
             credits = CodexCredits(hasCredits = true, balance = "5.00"),
             limitReached = false,
             resetCredits = codexResetCredits,
@@ -87,6 +90,7 @@ class UsageScreenTest {
             totalSpendCents = 500.0,
             includedCents = 2000.0,
             limitCents = 2500.0,
+            spendAvailable = true,
             billingCycleEnd = null,
         ),
         errors = errors,
@@ -141,7 +145,7 @@ class UsageScreenTest {
         onNodeWithText("Extra usage").assertExists()
         onNodeWithText("$10.00 / $100.00").assertExists()
         onNodeWithText("Credits balance").assertExists()
-        onNodeWithText("$5.00").assertExists()
+        onNodeWithText("5.00 credits").assertExists()
         onNodeWithText("🎟️ Resets banked").assertExists()
         onNodeWithText("Spend").assertExists()
         onNodeWithText("$5.00 / $20.00 included").assertExists()
@@ -157,6 +161,44 @@ class UsageScreenTest {
         waitForIdle()
         onNodeWithTag("usage_back").performClick()
         assertTrue(backCalled)
+    }
+
+    @Test fun codex_renders_only_the_duration_label_returned_by_the_broker() = runComposeUiTest {
+        val currentWindow = CodexWindow(
+            id = "primary",
+            used = 25.0,
+            resetsAt = null,
+            label = "7-day window",
+            windowSeconds = 604_800.0,
+        )
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(
+                    usage = fixtureUsage(codexWindows = listOf(currentWindow)),
+                    loading = false,
+                    onBack = {},
+                    onRedeem = { null },
+                )
+            }
+        }
+        waitForIdle()
+        // Claude owns the only 5-hour row; Codex contributes only the live 7-day window.
+        onAllNodesWithText("5-hour window").assertCountEquals(1)
+        onAllNodesWithText("7-day window").assertCountEquals(2)
+        onNodeWithText("25% used").assertExists()
+    }
+
+    @Test fun cursor_hides_spend_when_the_provider_does_not_return_it() = runComposeUiTest {
+        val fixture = fixtureUsage()
+        val usage = fixture.copy(cursor = requireNotNull(fixture.cursor).copy(spendAvailable = false))
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(usage = usage, loading = false, onBack = {}, onRedeem = { null })
+            }
+        }
+        waitForIdle()
+        onNodeWithText("Spend").assertDoesNotExist()
+        onNodeWithText("$5.00 / $20.00 included").assertDoesNotExist()
     }
 
     // ── (2) null sevenDayFable hides the row; a present one shows it ────────────────────────────────
@@ -329,12 +371,14 @@ class UsageScreenTest {
                       "claude": {"fiveHour": {"used": 12.0}, "sevenDay": {"used": 40.0}},
                       "codex": {
                         "plan": "pro",
-                        "primaryWindow": {"used": 30.0},
-                        "secondaryWindow": {"used": 60.0},
+                        "windows": [
+                          {"used": 30.0, "label": "5-hour window", "windowSeconds": 18000.0},
+                          {"used": 60.0, "label": "7-day window", "windowSeconds": 604800.0}
+                        ],
                         "limitReached": false,
                         "resetCredits": $initialResetCredits
                       },
-                      "cursor": {"totalPercentUsed": 20.0, "totalSpendCents": 500.0, "includedCents": 2000.0, "limitCents": 2500.0}
+                      "cursor": {"totalPercentUsed": 20.0, "totalSpendCents": 500.0, "includedCents": 2000.0, "limitCents": 2500.0, "spendAvailable": true}
                     }
                     """.trimIndent(),
                     HttpStatusCode.OK, jsonHeaders,
@@ -346,8 +390,10 @@ class UsageScreenTest {
                       "windowsReset": 1,
                       "codex": {
                         "plan": "pro",
-                        "primaryWindow": {"used": 0.0},
-                        "secondaryWindow": {"used": 1.0},
+                        "windows": [
+                          {"used": 0.0, "label": "5-hour window", "windowSeconds": 18000.0},
+                          {"used": 1.0, "label": "7-day window", "windowSeconds": 604800.0}
+                        ],
                         "limitReached": false,
                         "resetCredits": $redeemedResetCredits
                       }
@@ -428,7 +474,7 @@ class UsageScreenTest {
             }
         }
         waitForIdle()
-        // Before redeeming: the fetched snapshot's resetCredits (3) and primaryWindow used% (30%).
+        // Before redeeming: the fetched snapshot's resetCredits (3) and first window used% (30%).
         onNodeWithText("30% used").assertIsDisplayed()
         onNodeWithTag("codex_redeem_button").performClick()
         waitForIdle()
