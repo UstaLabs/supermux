@@ -227,6 +227,8 @@ struct GitHostingSettingsView: View {
                     .font(.caption2).foregroundStyle(.tertiary).multilineTextAlignment(.center)
                     .padding(.top, 10).padding(.horizontal, 32).padding(.bottom, 40)
             }
+            .frame(maxWidth: 640)
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -306,6 +308,82 @@ struct GitHostingSettingsView: View {
     }
 }
 
+enum ForgeProvider: String, CaseIterable {
+    case github
+    case gitlab
+
+    var displayName: String { self == .github ? "GitHub" : "GitLab" }
+    var cliName: String { self == .github ? "gh" : "glab" }
+    var tokenPlaceholder: String { self == .github ? "github_pat_…" : "glpat-…" }
+}
+
+enum ForgeTokenTemplate {
+    static let tokenName = "supermux"
+    static let tokenDescription = "Clone, create & push repos from supermux"
+
+    static func url(provider: ForgeProvider, baseURL: String) -> URL? {
+        let rawBase = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let customHost: String?
+        if rawBase.isEmpty {
+            customHost = nil
+        } else {
+            guard let host = host(from: rawBase) else { return nil }
+            customHost = host
+        }
+
+        var components = URLComponents()
+        components.scheme = "https"
+        switch provider {
+        case .github where customHost != nil && customHost != "github.com":
+            components.host = customHost
+            components.path = "/settings/tokens/new"
+            components.queryItems = [
+                URLQueryItem(name: "description", value: tokenDescription),
+                URLQueryItem(name: "scopes", value: "repo,read:org"),
+            ]
+        case .github:
+            components.host = "github.com"
+            components.path = "/settings/personal-access-tokens/new"
+            components.queryItems = [
+                URLQueryItem(name: "name", value: tokenName),
+                URLQueryItem(name: "description", value: tokenDescription),
+                URLQueryItem(name: "contents", value: "write"),
+                URLQueryItem(name: "administration", value: "write"),
+            ]
+        case .gitlab:
+            components.host = customHost ?? "gitlab.com"
+            components.path = "/-/user_settings/personal_access_tokens"
+            components.queryItems = [
+                URLQueryItem(name: "name", value: tokenName),
+                URLQueryItem(name: "scopes", value: "api"),
+                URLQueryItem(name: "description", value: tokenDescription),
+            ]
+        }
+        return components.url
+    }
+
+    static func scopesHint(provider: ForgeProvider, baseURL: String) -> String {
+        guard provider == .github else { return "api" }
+        guard let customHost = host(from: baseURL), customHost != "github.com" else {
+            return "Contents + Administration (read & write)"
+        }
+        return "repo, read:org"
+    }
+
+    private static func host(from baseURL: String) -> String? {
+        let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains(where: { $0.isWhitespace }) else { return nil }
+        let candidate = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
+        guard let host = URLComponents(string: candidate)?.host, !host.isEmpty else { return nil }
+        return host.lowercased()
+    }
+}
+
+enum ForgeAddLayout {
+    static let contentMaxWidth: CGFloat = 560
+    static let primaryActionVerticalPadding: CGFloat = 12
+}
+
 // MARK: - AddForgeSheet
 
 private struct AddForgeSheet: View {
@@ -314,7 +392,7 @@ private struct AddForgeSheet: View {
     var onDone: () -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var kind: String = "github"
+    @State private var kind: ForgeProvider = .github
     @State private var token = ""
     @State private var hostUrl = ""
     @State private var transport = "https"
@@ -323,121 +401,16 @@ private struct AddForgeSheet: View {
     @State private var error: String?
     @State private var cliStatus: ForgeCliStatus?
 
-    private let kinds = ["github", "gitlab"]
-
     var body: some View {
         NavigationStack {
-            List {
-                // Kind picker
-                Section {
-                    Picker("Provider", selection: $kind) {
-                        ForEach(kinds, id: \.self) { k in
-                            HStack(spacing: 6) {
-                                ForgeLogo(kind: k, size: 16)
-                                Text(forgeDisplayName(k))
-                            }
-                            .tag(k)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                    .listRowBackground(Color.clear)
-                }
-
-                // CLI import (if available for selected kind and not already connected)
-                if canImportCli {
-                    Section {
-                        Button {
-                            submitting = true
-                            Task {
-                                _ = await broker.importForge(kind: kind, transport: transport)
-                                dismiss(); onDone()
-                            }
-                        } label: {
-                            HStack(spacing: 10) {
-                                ForgeLogo(kind: kind, size: 20)
-                                Text("Import token from \(cliName)\(cliLoginLabel)")
-                                    .font(.subheadline.weight(.medium))
-                                Spacer()
-                                if submitting { ProgressView().tint(Theme.teal) }
-                            }
-                        }
-                        .foregroundStyle(.primary)
-                        .disabled(submitting)
-                    }
-
-                    Section {
-                        Text("— or paste a token —")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .listRowBackground(Color.clear)
+            platformForm
+                .navigationTitle("Add a Git account")
+                .smInlineNavigationTitle()
+                .toolbar {
+                    ToolbarItem(placement: .smTopLeading) {
+                        Button("Cancel") { dismiss() }.disabled(submitting)
                     }
                 }
-
-                // PAT field
-                Section {
-                    SecureField(kind == "github" ? "github_pat_…" : "glpat-…", text: $token)
-                        .autocorrectionDisabled()
-                        .smNoAutocapitalization()
-                        .font(.system(.subheadline, design: .monospaced))
-                } header: {
-                    Text("Personal access token")
-                } footer: {
-                    if let error {
-                        Text(error).foregroundStyle(.red)
-                    } else {
-                        Text("Needs scopes: \(scopesHint)")
-                    }
-                }
-
-                // Self-hosted & transport disclosure
-                Section {
-                    DisclosureGroup("Self-hosted & transport", isExpanded: $showAdvanced) {
-                        TextField("API base URL — e.g. github.acme.com/api/v3", text: $hostUrl)
-                            .autocorrectionDisabled()
-                            .smNoAutocapitalization()
-                            .font(.system(.subheadline, design: .monospaced))
-
-                        Picker("Transport", selection: $transport) {
-                            Text("HTTPS").tag("https")
-                            Text("SSH").tag("ssh")
-                        }
-                        .pickerStyle(.segmented)
-                        .padding(.vertical, 4)
-
-                        if transport == "ssh" && kind == "gitlab" {
-                            Text("SSH for GitLab is experimental.")
-                                .font(.caption2).foregroundStyle(.yellow)
-                        }
-                    }
-                }
-
-                // Connect button
-                Section {
-                    Button(action: connect) {
-                        HStack {
-                            Spacer()
-                            if submitting {
-                                ProgressView().tint(.white)
-                            } else {
-                                Text("Connect \(forgeDisplayName(kind))").fontWeight(.semibold)
-                            }
-                            Spacer()
-                        }
-                        .padding(.vertical, 4)
-                        .foregroundStyle(.white)
-                    }
-                    .listRowBackground(canConnect ? Theme.teal : Color.gray.opacity(0.4))
-                    .disabled(!canConnect || submitting)
-                }
-            }
-            .navigationTitle("Add a Git account")
-            .smInlineNavigationTitle()
-            .toolbar {
-                ToolbarItem(placement: .smTopLeading) {
-                    Button("Cancel") { dismiss() }.disabled(submitting)
-                }
-            }
         }
         .tint(Theme.teal)
         .smPresentationDetents([.medium, .large])
@@ -445,56 +418,279 @@ private struct AddForgeSheet: View {
         .frame(minWidth: 620, minHeight: 540)
         #endif
         .onAppear {
-            if let preset = presetKind, kinds.contains(preset) { kind = preset }
+            if let presetKind, let preset = ForgeProvider(rawValue: presetKind) { kind = preset }
             Task { cliStatus = try? await broker.api.listForges().cli }
         }
     }
 
+    @ViewBuilder
+    private var platformForm: some View {
+        #if os(macOS)
+        macForm
+        #else
+        mobileForm
+        #endif
+    }
+
+    private var mobileForm: some View {
+        List {
+            Section {
+                providerSelector
+                    .listRowSeparator(.hidden)
+            }
+
+            if canImportCli {
+                Section { cliImportButton }
+
+                Section {
+                    cliDivider
+                        .listRowBackground(Color.clear)
+                }
+            }
+
+            Section { tokenField } header: {
+                Text("Personal access token")
+            } footer: {
+                tokenFooter
+            }
+
+            Section { advancedControls }
+
+            Section {
+                connectButton
+                    .listRowBackground(canConnect ? Theme.teal : Color.gray.opacity(0.4))
+            }
+        }
+    }
+
+    private var macForm: some View {
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    providerSelector
+
+                    if canImportCli {
+                        cliImportButton
+                            .buttonStyle(.plain)
+                            .padding(12)
+                            .background(
+                                Color.smSecondaryBackground,
+                                in: RoundedRectangle(cornerRadius: 10)
+                            )
+                        cliDivider
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Personal access token")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        tokenField
+                            .textFieldStyle(.roundedBorder)
+                        tokenFooter
+                    }
+
+                    advancedControls
+                        .padding(12)
+                        .background(
+                            Color.smSecondaryBackground,
+                            in: RoundedRectangle(cornerRadius: 10)
+                        )
+
+                    connectButton
+                        .buttonStyle(.plain)
+                        .background(
+                            canConnect ? Theme.teal : Color.gray.opacity(0.4),
+                            in: RoundedRectangle(cornerRadius: 10)
+                        )
+                }
+                .frame(maxWidth: ForgeAddLayout.contentMaxWidth)
+                .padding(24)
+                .frame(maxWidth: .infinity, minHeight: proxy.size.height, alignment: .center)
+            }
+        }
+    }
+
+    private var providerSelector: some View {
+        HStack(spacing: 8) {
+            ForEach(ForgeProvider.allCases, id: \.self) { provider in
+                Button {
+                    selectProvider(provider)
+                } label: {
+                    HStack(spacing: 7) {
+                        ForgeLogo(kind: provider.rawValue, size: 17)
+                        Text(provider.displayName)
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    .contentShape(Rectangle())
+                    .background(
+                        kind == provider ? Theme.teal.opacity(0.14) : Color.smSecondaryBackground,
+                        in: RoundedRectangle(cornerRadius: 9)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9)
+                            .strokeBorder(
+                                kind == provider ? Theme.teal : Color.smSeparator,
+                                lineWidth: 1
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(submitting)
+                .accessibilityIdentifier("forge_provider_\(provider.rawValue)")
+                .accessibilityAddTraits(kind == provider ? .isSelected : [])
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var cliImportButton: some View {
+        Button {
+            submitting = true
+            error = nil
+            Task {
+                if await broker.importForge(
+                    kind: kind.rawValue,
+                    transport: transport
+                ) != nil {
+                    dismiss(); onDone()
+                } else {
+                    error = "Couldn't import from \(kind.cliName) — sign in there and try again."
+                }
+                submitting = false
+            }
+        } label: {
+            HStack(spacing: 10) {
+                ForgeLogo(kind: kind.rawValue, size: 20)
+                Text("Import token from \(kind.cliName)\(cliLoginLabel)")
+                    .font(.subheadline.weight(.medium))
+                Spacer()
+                if submitting { ProgressView().tint(Theme.teal) }
+            }
+        }
+        .foregroundStyle(.primary)
+        .disabled(submitting)
+    }
+
+    private var cliDivider: some View {
+        Text("— or paste a token —")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    private var tokenField: some View {
+        SecureField(kind.tokenPlaceholder, text: $token)
+            .autocorrectionDisabled()
+            .smNoAutocapitalization()
+            .font(.system(.subheadline, design: .monospaced))
+    }
+
+    private var tokenFooter: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let tokenCreationURL {
+                Link("Create a pre-filled token ↗", destination: tokenCreationURL)
+                    .foregroundStyle(Theme.teal)
+            }
+            Text("Needs scopes: \(scopesHint)")
+            if let error {
+                Text(error).foregroundStyle(.red)
+            }
+        }
+    }
+
+    private var advancedControls: some View {
+        DisclosureGroup("Self-hosted & transport", isExpanded: $showAdvanced) {
+            TextField("API base URL — e.g. github.acme.com/api/v3", text: $hostUrl)
+                .autocorrectionDisabled()
+                .smNoAutocapitalization()
+                .font(.system(.subheadline, design: .monospaced))
+
+            Picker("Transport", selection: $transport) {
+                Text("HTTPS").tag("https")
+                Text("SSH").tag("ssh")
+            }
+            .pickerStyle(.segmented)
+            .padding(.vertical, 4)
+
+            if transport == "ssh" && kind == .gitlab {
+                Text("SSH for GitLab is experimental.")
+                    .font(.caption2)
+                    .foregroundStyle(.yellow)
+            }
+        }
+    }
+
+    private var connectButton: some View {
+        Button(action: connect) {
+            HStack {
+                Spacer()
+                if submitting {
+                    ProgressView().tint(.white)
+                } else {
+                    Text("Connect \(kind.displayName)").fontWeight(.semibold)
+                }
+                Spacer()
+            }
+            .padding(.vertical, ForgeAddLayout.primaryActionVerticalPadding)
+            .foregroundStyle(.white)
+        }
+        .disabled(!canConnect || submitting)
+    }
+
     // MARK: Computed
 
-    private var canConnect: Bool { !token.trimmingCharacters(in: .whitespaces).isEmpty }
+    private var canConnect: Bool { !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     private var canImportCli: Bool {
         guard let cli = cliStatus else { return false }
-        let presence = kind == "github" ? cli.github : cli.gitlab
+        let presence = kind == .github ? cli.github : cli.gitlab
         return presence.available
     }
 
-    private var cliName: String { kind == "github" ? "gh" : "glab" }
-
     private var cliLoginLabel: String {
         guard let cli = cliStatus else { return "" }
-        let presence = kind == "github" ? cli.github : cli.gitlab
+        let presence = kind == .github ? cli.github : cli.gitlab
         guard let login = presence.login else { return "" }
         return " (@\(login))"
     }
 
-    private var scopesHint: String {
-        if kind == "github" {
-            let host = extractHost(hostUrl)
-            return (!host.isEmpty && host != "github.com") ? "repo, read:org" : "Contents + Administration (read & write)"
-        }
-        return "api"
+    private var tokenCreationURL: URL? {
+        ForgeTokenTemplate.url(provider: kind, baseURL: hostUrl)
     }
 
-    private func extractHost(_ url: String) -> String {
-        url.trimmingCharacters(in: .whitespaces)
-            .replacingOccurrences(of: "^https?://", with: "", options: .regularExpression)
-            .components(separatedBy: "/").first ?? ""
+    private var scopesHint: String {
+        ForgeTokenTemplate.scopesHint(provider: kind, baseURL: hostUrl)
     }
 
     // MARK: Actions
 
+    private func selectProvider(_ provider: ForgeProvider) {
+        guard !submitting, kind != provider else { return }
+        kind = provider
+        token = ""
+        hostUrl = ""
+        transport = "https"
+        showAdvanced = false
+        error = nil
+    }
+
     private func connect() {
-        let t = token.trimmingCharacters(in: .whitespaces)
+        let t = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
         submitting = true; error = nil
-        let h = hostUrl.trimmingCharacters(in: .whitespaces)
+        let h = hostUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         Task {
-            if let _ = await broker.addForge(kind: kind, token: t, host: h.isEmpty ? nil : h, transport: transport) {
+            if await broker.addForge(
+                kind: kind.rawValue,
+                token: t,
+                host: h.isEmpty ? nil : h,
+                transport: transport
+            ) != nil {
                 dismiss(); onDone()
             } else {
-                error = "Couldn't connect — check your token and try again."
+                error = "Couldn't connect to \(kind.displayName) — check your token and try again."
             }
             submitting = false
         }
