@@ -92,7 +92,13 @@ private enum MarkdownAttributed {
         return out
     }
 
-    private static var bodyFont: PlatformFont { .preferredFont(forTextStyle: .subheadline) }
+    private static var bodyFont: PlatformFont {
+        #if os(macOS)
+        .preferredFont(forTextStyle: .body)
+        #else
+        .preferredFont(forTextStyle: .subheadline)
+        #endif
+    }
 
     private static func headingFont(_ level: Int) -> PlatformFont {
         let style: PlatformFont.TextStyle = level == 1 ? .title3 : (level == 2 ? .headline : .subheadline)
@@ -334,7 +340,7 @@ struct MarkdownTableView: View {
     @ViewBuilder
     private func cell(_ raw: String, column: Int, header: Bool) -> some View {
         Text(MarkdownInline.attributed(raw))
-            .font(.subheadline)
+            .font(tableFont)
             .fontWeight(header ? .semibold : .regular)
             .fixedSize(horizontal: true, vertical: true)
             .padding(.horizontal, 9)
@@ -342,6 +348,14 @@ struct MarkdownTableView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: table.aligns[column].frameAlignment)
             .background(header ? Theme.teal.opacity(0.10) : Color.clear)
             .overlay(Rectangle().strokeBorder(Theme.hairline, lineWidth: 0.5))
+    }
+
+    private var tableFont: Font {
+        #if os(macOS)
+        .body
+        #else
+        .subheadline
+        #endif
     }
 }
 

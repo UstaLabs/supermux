@@ -188,6 +188,7 @@ struct ComposerInput: NSViewRepresentable {
         let tv = PasteTextView(frame: .zero)
         tv.delegate = context.coordinator
         tv.onPasteAttachment = { context.coordinator.parent.onPasteAttachment() }
+        tv.onHardwareReturn = { context.coordinator.handleHardwareReturn() }
         tv.onFocusChange = { context.coordinator.focusChanged($0) }
         tv.font = .preferredFont(forTextStyle: .body, options: [:])
         tv.textColor = .smLabel
@@ -288,6 +289,7 @@ struct ComposerInput: NSViewRepresentable {
 /// (NSTextView has no native placeholder either).
 final class PasteTextView: NSTextView {
     var onPasteAttachment: (() -> Bool)?
+    var onHardwareReturn: (() -> Void)?
     var onFocusChange: ((Bool) -> Void)?
     /// Injectable so the paste logic is unit-testable; production reads the system clipboard.
     var pasteboard: NSPasteboard = .general
@@ -337,6 +339,24 @@ final class PasteTextView: NSTextView {
             return   // staged as an attachment; do NOT insert anything into the text
         }
         super.paste(sender)   // plain text → normal paste
+    }
+
+    /// AppKit maps modified Return chords through different command selectors depending on the
+    /// keyboard layout. Handle the physical Return keys before command dispatch so Shift+Return,
+    /// Control+Return, and Control+Shift+Return always insert a newline, while plain Return sends.
+    override func keyDown(with event: NSEvent) {
+        let isReturn = event.keyCode == 36 || event.keyCode == 76
+        guard isReturn else {
+            super.keyDown(with: event)
+            return
+        }
+
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if !modifiers.intersection([.shift, .control]).isEmpty {
+            insertText("\n", replacementRange: selectedRange())
+        } else {
+            onHardwareReturn?()
+        }
     }
 
     // Focus mirroring (the mac analog of textViewDidBegin/EndEditing, which on AppKit only

@@ -74,6 +74,9 @@ struct SessionsListView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("new-session")
+                #if os(macOS)
+                .listRowBackground(Color.smBackground)
+                #endif
             }
 
             ForEach(fleet.onlineGroups(), id: \.workdir) { group in
@@ -96,12 +99,21 @@ struct SessionsListView: View {
                 } header: { offlineHeader(entry.host) }
             }
         }
-        #if os(macOS)
-        .listStyle(.sidebar)
-        #else
         .smInsetGroupedListStyle()
+        #if os(macOS)
+        .scrollContentBackground(.hidden)
+        .background(Color.smSecondaryBackground)
+        // Keep the Mac grouped treatment comfortably inset like the iOS list instead of
+        // stretching sidebar rows edge-to-edge.
+        .contentMargins(.horizontal, 8, for: .scrollContent)
         #endif
+        #if os(macOS)
+        // The reveal must not participate in scroll layout on AppKit. A changing safe-area
+        // inset feeds its own height back into contentOffset and makes the row oscillate.
+        .overlay(alignment: .top) { archivedBar }
+        #else
         .safeAreaInset(edge: .top, spacing: 0) { archivedBar }
+        #endif
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             geo.contentOffset.y + geo.contentInsets.top
         } action: { _, top in
@@ -203,13 +215,6 @@ struct SessionsListView: View {
                    phase: b?.agentPhase[s.id],
                    working: b?.agentWorking[s.id] == true,
                    bgOpen: b?.agentBgOpen[s.id] ?? 0, muted: muted, host: host)
-            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                Button(role: .destructive) { killTarget = s } label: { Label("Kill", systemImage: "xmark.circle") }
-                Button { renameText = s.name; renameTarget = s } label: { Label("Rename", systemImage: "pencil") }.tint(.gray)
-                Button { b?.toggleMute(s) } label: {
-                    Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
-                }.tint(Theme.teal)
-            }
             .contextMenu {
                 #if os(macOS)
                 Button { openWindow(id: "session", value: s.id) } label: {
@@ -239,10 +244,36 @@ struct SessionsListView: View {
         }
         .buttonStyle(.plain)
         .tag(s.id)
+        .listRowBackground(Color.smBackground)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            swipeButtons(for: s)
+        }
         #else
         row(s, host: host)
             .tag(s.id)
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                swipeButtons(for: s)
+            }
         #endif
+    }
+
+    /// Keep swipe actions on the actual List row. Putting them inside the macOS row Button's
+    /// label causes SwiftUI to size the reveal controls against the whole button host, producing
+    /// the enormous icons seen in the sidebar.
+    @ViewBuilder private func swipeButtons(for s: SessionInfo) -> some View {
+        let b = fleet.broker(for: s.id)
+        let muted = s.mute?.boolValue ?? false
+        Button(role: .destructive) { killTarget = s } label: {
+            Label("Kill", systemImage: "xmark.circle")
+        }
+        Button { renameText = s.name; renameTarget = s } label: {
+            Label("Rename", systemImage: "pencil")
+        }
+        .tint(.gray)
+        Button { b?.toggleMute(s) } label: {
+            Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
+        }
+        .tint(Theme.teal)
     }
 
     private func toggle(_ wd: String) {

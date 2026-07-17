@@ -24,10 +24,9 @@ struct MessageRow: View {
                     MarkdownView(text: text, onOpenFile: { ref in
                         broker.openFileFromMessage(sessionId: sessionId, workdir: workdir, ref: ref)
                     })
-                        .font(.subheadline)
                         .transcriptBody()
                 } else {
-                    Text(text).font(.subheadline.weight(.medium))
+                    Text(text).font(messageFont.weight(.medium))
                         .textSelection(.enabled)
                         .userMessageSurface()
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -37,6 +36,14 @@ struct MessageRow: View {
                 ForEach(atts, id: \.file_id) { AttachmentView(att: $0, broker: broker) }
             }
         }
+    }
+
+    private var messageFont: Font {
+        #if os(macOS)
+        .body
+        #else
+        .subheadline
+        #endif
     }
 }
 
