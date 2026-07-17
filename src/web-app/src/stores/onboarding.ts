@@ -3,7 +3,7 @@ import { ref } from "vue"
 
 export interface AgentLoginState { kind: string; phase: string; url?: string; code?: string; error?: string }
 
-export const ONBOARDING_STEP_LABELS = ["Welcome", "Agents", "Connectivity", "Done"] as const
+export const ONBOARDING_STEP_LABELS = ["Welcome", "Agents", "Git Hosting", "Connectivity", "Done"] as const
 
 const LAST_STEP = ONBOARDING_STEP_LABELS.length - 1
 
