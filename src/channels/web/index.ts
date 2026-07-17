@@ -161,6 +161,7 @@ export interface WebChannelOpts {
   setDraft?: (sessionId: string, text: string | null) => void
   markRead?: (sessionId: string) => void           // advance read + broadcast session_read
   getModels?: (agent: AgentKind) => { id: string; displayName: string }[]
+  refreshModels?: (agent: AgentKind) => Promise<void>
   switchModel?: (sessionName: string, model: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
   getSessionReasoningLevels?: (id: string) => { agent: string; current?: string; levels: { id: string; description?: string }[]; visible: boolean } | undefined
   // Session-less reasoning levels for the New Session launcher (no session id yet):
@@ -1660,7 +1661,11 @@ export class WebChannel implements Channel {
     if (method === "GET" && path === "/models") {
       const agent = url.searchParams.get("agent")
       if (!agent || !isAgentKind(agent)) return this.json({ error: "invalid agent" }, 400)
-      const models = this.opts.getModels?.(agent) ?? []
+      let models = this.opts.getModels?.(agent) ?? []
+      if (models.length === 0 && this.opts.refreshModels) {
+        await this.opts.refreshModels(agent)
+        models = this.opts.getModels?.(agent) ?? []
+      }
       return this.json({ models })
     }
 
@@ -2092,7 +2097,11 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const info = this.opts.getSessionAgent?.(id)
       if (!info) return this.json({ error: "session not found" }, 404)
-      const models = this.opts.getModels?.(info.agent) ?? []
+      let models = this.opts.getModels?.(info.agent) ?? []
+      if (models.length === 0 && this.opts.refreshModels) {
+        await this.opts.refreshModels(info.agent)
+        models = this.opts.getModels?.(info.agent) ?? []
+      }
       return this.json({ agent: info.agent, current: info.model, models })
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/model$/)) {
@@ -2286,7 +2295,7 @@ export class WebChannel implements Channel {
       // A desktop host normally listens on localhost and publishes through the built-in
       // relay. Pairing links leave the host, so prefer the relay's LIVE URL; using the
       // configured localhost publicUrl here produces a perfectly valid but unusable QR.
-      const pairBase = this.getRelayUrl?.() ?? this.relayUrl ?? this.opts.publicUrl
+      const pairBase = this.getRelayUrl?.() ?? this.opts.publicUrl
       const url = `${pairBase.replace(/\/$/, "")}/pair?t=${token}`
       return this.json({ url, name: finalName })
     }

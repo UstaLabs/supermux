@@ -21,7 +21,8 @@ test("step navigation: next/prev clamp within bounds", () => {
   expect(o.step).toBe(0); o.prev(); expect(o.step).toBe(0)
   o.next(); expect(o.step).toBe(1); o.setStep(4); o.next(); expect(o.step).toBe(4)
 })
-test("onboarding steps match the macOS setup order and exclude identity editing", () => {
-  expect([...ONBOARDING_STEP_LABELS]).toEqual(["Welcome", "Agents", "Git Hosting", "Connectivity", "Done"])
+test("onboarding replaces connectivity settings with phone pairing and excludes identity editing", () => {
+  expect([...ONBOARDING_STEP_LABELS]).toEqual(["Welcome", "Agents", "Git Hosting", "Connect Your Phone", "Done"])
+  expect([...ONBOARDING_STEP_LABELS]).not.toContain("Connectivity")
   expect([...ONBOARDING_STEP_LABELS]).not.toContain("Identity")
 })

@@ -169,8 +169,7 @@ struct SessionsListView: View {
     ) -> some View {
         Section {
             if !collapsed.contains(group.workdir) {
-                ForEach(group.sessions.indices, id: \.self) { index in
-                    let session = group.sessions[index]
+                ForEach(Array(group.sessions.enumerated()), id: \.element.id) { index, session in
                     let recordId = owner[session.id] ?? ""
                     let rowHost: HostView? = multiHost ? hostByRecord[recordId] : nil
                     let position = SidebarRowPosition.at(index, count: group.sessions.count)
@@ -188,8 +187,7 @@ struct SessionsListView: View {
         hostByRecord: [String: HostView]
     ) -> some View {
         Section {
-            ForEach(sessions.indices, id: \.self) { index in
-                let session = sessions[index]
+            ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
                 let rowHost = hostByRecord[host.recordId]
                 let position = SidebarRowPosition.at(index, count: sessions.count)
                 selectableRow(session, host: rowHost, position: position)

@@ -92,32 +92,96 @@ test("discoverGrokModels returns empty when the CLI is missing", async () => {
 })
 
 test("discoverClaudeModels parses Anthropic API response", async () => {
-  const mockFetch = mock(() => Promise.resolve({
-    ok: true,
-    json: () => Promise.resolve({
-      data: [
-        { id: "claude-opus-4-7", display_name: "Claude Opus 4.7" },
-        { id: "claude-sonnet-4-6", display_name: "Claude Sonnet 4.6" },
-      ],
-    }),
-  }))
-  const models = await discoverClaudeModels({ fetch: mockFetch as any })
+  let seenHeaders: Record<string, string> | undefined
+  const mockFetch = mock((_input: unknown, init?: { headers?: Record<string, string> }) => {
+    seenHeaders = init?.headers
+    return Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({
+        data: [
+          { id: "claude-opus-4-7", display_name: "Claude Opus 4.7" },
+          { id: "claude-sonnet-4-6", display_name: "Claude Sonnet 4.6" },
+        ],
+      }),
+    })
+  })
+  const models = await discoverClaudeModels({
+    fetch: mockFetch as any,
+    env: { CLAUDE_CODE_OAUTH_TOKEN: "oauth-token" },
+    readCredentialFile: () => undefined,
+  })
   expect(models).toEqual([
     { id: "claude-opus-4-7", displayName: "Claude Opus 4.7", agent: "claude" },
     { id: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6", agent: "claude" },
   ])
+  expect(seenHeaders).toEqual({
+    Authorization: "Bearer oauth-token",
+    "anthropic-version": "2023-06-01",
+  })
 })
 
 test("discoverClaudeModels returns empty on auth failure", async () => {
   const mockFetch = mock(() => Promise.resolve({ ok: false, status: 401 }))
-  const models = await discoverClaudeModels({ fetch: mockFetch as any })
+  const models = await discoverClaudeModels({
+    fetch: mockFetch as any,
+    env: { CLAUDE_CODE_OAUTH_TOKEN: "oauth-token" },
+    readCredentialFile: () => undefined,
+  })
   expect(models).toEqual([])
 })
 
 test("discoverClaudeModels returns empty on network error", async () => {
   const mockFetch = mock(() => Promise.reject(new Error("network")))
-  const models = await discoverClaudeModels({ fetch: mockFetch as any })
+  const models = await discoverClaudeModels({
+    fetch: mockFetch as any,
+    env: { CLAUDE_CODE_OAUTH_TOKEN: "oauth-token" },
+    readCredentialFile: () => undefined,
+  })
   expect(models).toEqual([])
+})
+
+test("discoverClaudeModels reads a fresh Linux Claude login from the credentials file", async () => {
+  let seenHeaders: Record<string, string> | undefined
+  const mockFetch = mock((_input: unknown, init?: { headers?: Record<string, string> }) => {
+    seenHeaders = init?.headers
+    return Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({ data: [{ id: "claude-opus-4-8", display_name: "Claude Opus 4.8" }] }),
+    })
+  })
+  const models = await discoverClaudeModels({
+    fetch: mockFetch as any,
+    env: {},
+    readCredentialFile: () => JSON.stringify({
+      claudeAiOauth: { accessToken: "linux-file-oauth-token" },
+    }),
+  })
+  expect(models.map((m) => m.id)).toEqual(["claude-opus-4-8"])
+  expect(seenHeaders).toEqual({
+    Authorization: "Bearer linux-file-oauth-token",
+    "anthropic-version": "2023-06-01",
+  })
+})
+
+test("discoverClaudeModels supports API-key-only setup", async () => {
+  let seenHeaders: Record<string, string> | undefined
+  const mockFetch = mock((_input: unknown, init?: { headers?: Record<string, string> }) => {
+    seenHeaders = init?.headers
+    return Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({ data: [{ id: "claude-sonnet-5", display_name: "Claude Sonnet 5" }] }),
+    })
+  })
+  const models = await discoverClaudeModels({
+    fetch: mockFetch as any,
+    env: { ANTHROPIC_API_KEY: "api-key" },
+    readCredentialFile: () => undefined,
+  })
+  expect(models.map((m) => m.id)).toEqual(["claude-sonnet-5"])
+  expect(seenHeaders).toEqual({
+    "x-api-key": "api-key",
+    "anthropic-version": "2023-06-01",
+  })
 })
 
 test("discoverCodexModels parses codex debug models JSON", async () => {

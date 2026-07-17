@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 
 import SetupStepWelcome from "./setup/SetupStepWelcome.vue"
 import SetupStepAgents from "./setup/SetupStepAgents.vue"
-import SetupStepConnectivity from "./setup/SetupStepConnectivity.vue"
+import SetupStepPhone from "./setup/SetupStepPhone.vue"
 import SetupStepDone from "./setup/SetupStepDone.vue"
 import GitHostingSettingsView from "./GitHostingSettingsView.vue"
 
@@ -59,7 +59,7 @@ const nextDisabled = computed(() => {
         @update:canProceed="(v) => (agentsCanProceed = v)"
       />
       <GitHostingSettingsView v-else-if="ob.step === 2" embedded />
-      <SetupStepConnectivity v-else-if="ob.step === 3" />
+      <SetupStepPhone v-else-if="ob.step === 3" />
       <SetupStepDone v-else-if="ob.step === 4" />
     </div>
 
