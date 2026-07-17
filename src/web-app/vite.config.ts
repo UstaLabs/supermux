@@ -3,13 +3,11 @@ import vue from "@vitejs/plugin-vue"
 import tailwindcss from "@tailwindcss/vite"
 import { VitePWA } from "vite-plugin-pwa"
 import { execSync } from "child_process"
-import { readFileSync } from "fs"
 import { resolve } from "path"
 import { PRODUCT_NAME } from "../shared/brand"
 
 const webAppRoot = __dirname
 const repoRoot = resolve(__dirname, "../..")
-const appVersion = JSON.parse(readFileSync(resolve(webAppRoot, "package.json"), "utf8")).version as string
 
 function gitBuildId(): string {
   try {
@@ -24,7 +22,6 @@ function gitBuildId(): string {
 export default defineConfig({
   define: {
     __PRODUCT_NAME__: JSON.stringify(PRODUCT_NAME),
-    __APP_VERSION__: JSON.stringify(appVersion),
     __APP_BUILD_ID__: JSON.stringify(gitBuildId()),
     __APP_BUILD_TIME__: JSON.stringify(new Date().toISOString()),
   },
