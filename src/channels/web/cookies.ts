@@ -78,11 +78,19 @@ export function authedViaBearer(req: Request): boolean {
 // ones on same-origin — POSTs), it MUST match the app origin. A missing Origin
 // means a non-browser client (curl/scripts), which has no ambient cookie to
 // abuse, so it's allowed.
-export function sameOriginOk(req: Request, publicUrl: string): boolean {
+export function sameOriginOk(req: Request, ...publicUrls: (string | undefined)[]): boolean {
   const origin = req.headers.get("origin")
   if (!origin) return true
   try {
-    return new URL(origin).origin === new URL(publicUrl).origin
+    const requestOrigin = new URL(origin).origin
+    return publicUrls.some((publicUrl) => {
+      if (!publicUrl) return false
+      try {
+        return requestOrigin === new URL(publicUrl).origin
+      } catch {
+        return false
+      }
+    })
   } catch {
     return false
   }
