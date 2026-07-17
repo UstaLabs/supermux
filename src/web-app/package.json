@@ -40,6 +40,7 @@
     "marked": "^18.0.4",
     "nanoid": "^5.1.11",
     "pinia": "^2.2.0",
+    "qrcode.vue": "^3.10.0",
     "reka-ui": "^2.9.8",
     "shadcn-vue": "^2.7.3",
     "tailwind-merge": "^3.6.0",
