@@ -1,24 +1,40 @@
 // src/core/forge/cli-import.ts
-import { execFileSync } from "child_process"
+import { execFile, execFileSync } from "child_process"
 import type { ForgeKind } from "./types"
 
 export type Runner = (cmd: string, args: string[]) => string
+export type StatusRunner = (cmd: string, args: string[]) => string | Promise<string>
+
 const defaultRunner: Runner = (cmd, args) => execFileSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim()
+const defaultStatusRunner: StatusRunner = (cmd, args) => new Promise((resolve, reject) => {
+  execFile(cmd, args, {
+    encoding: "utf8",
+    timeout: 2_000,
+    windowsHide: true,
+  }, (error, stdout) => {
+    if (error) reject(error)
+    else resolve(stdout.trim())
+  })
+})
 
 const CLI: Record<ForgeKind, string> = { github: "gh", gitlab: "glab" }
 
 export interface CliStatus { available: boolean; login?: string }
 
-function statusFor(kind: ForgeKind, run: Runner): CliStatus {
+async function statusFor(kind: ForgeKind, run: StatusRunner): Promise<CliStatus> {
   try {
-    const out = kind === "github" ? run("gh", ["auth", "status"]) : run("glab", ["auth", "status"])
+    const out = await (kind === "github" ? run("gh", ["auth", "status"]) : run("glab", ["auth", "status"]))
     const m = out.match(/account\s+(\S+)/i) ?? out.match(/Logged in.*?as\s+(\S+)/i)
     return { available: true, login: m?.[1] }
   } catch { return { available: false } }
 }
 
-export function detectForgeClis(run: Runner = defaultRunner): { github: CliStatus; gitlab: CliStatus } {
-  return { github: statusFor("github", run), gitlab: statusFor("gitlab", run) }
+export async function detectForgeClis(run: StatusRunner = defaultStatusRunner): Promise<{ github: CliStatus; gitlab: CliStatus }> {
+  const [github, gitlab] = await Promise.all([
+    statusFor("github", run),
+    statusFor("gitlab", run),
+  ])
+  return { github, gitlab }
 }
 
 /** Read the live token from an authenticated CLI. Throws if unavailable. */
