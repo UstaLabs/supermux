@@ -109,6 +109,27 @@ test("POST /devices publishes the live relay URL instead of localhost", async ()
   expect(body.url).toStartWith("https://h-live.relay.supermux.dev/pair?t=")
 })
 
+test("POST /devices falls back to the configured web URL, never the push relay", async () => {
+  const made = makeChannel({
+    publicUrl: "http://localhost:8787",
+    relayUrl: "https://push.supermux.dev",
+    getRelayUrl: () => undefined,
+  })
+  channel = made.channel; await channel.start()
+  const token = new DeviceStore(made.devicesFile).mint("admin").token
+
+  const res = await fetch(`${base()}/devices`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ name: "phone" }),
+  })
+
+  expect(res.status).toBe(200)
+  const body = await res.json() as { url: string }
+  expect(body.url).toStartWith("http://localhost:8787/pair?t=")
+  expect(body.url).not.toContain("push.supermux.dev")
+})
+
 test("cookie-authenticated mutation accepts the live relay origin but rejects unrelated origins", async () => {
   const relayUrl = "https://h-live.relay.supermux.dev"
   const made = makeChannel({

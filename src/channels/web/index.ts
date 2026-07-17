@@ -2286,7 +2286,7 @@ export class WebChannel implements Channel {
       // A desktop host normally listens on localhost and publishes through the built-in
       // relay. Pairing links leave the host, so prefer the relay's LIVE URL; using the
       // configured localhost publicUrl here produces a perfectly valid but unusable QR.
-      const pairBase = this.getRelayUrl?.() ?? this.relayUrl ?? this.opts.publicUrl
+      const pairBase = this.getRelayUrl?.() ?? this.opts.publicUrl
       const url = `${pairBase.replace(/\/$/, "")}/pair?t=${token}`
       return this.json({ url, name: finalName })
     }
