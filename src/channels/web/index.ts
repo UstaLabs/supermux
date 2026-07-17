@@ -1146,7 +1146,7 @@ export class WebChannel implements Channel {
       if (!authedViaBearer(req) && !sameOriginOk(
         req,
         this.opts.publicUrl,
-        this.getRelayUrl?.() ?? this.relayUrl,
+        this.getRelayUrl?.(),
       )) {
         return new Response("bad origin", { status: 403 })
       }
