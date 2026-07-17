@@ -109,6 +109,51 @@ test("POST /devices publishes the live relay URL instead of localhost", async ()
   expect(body.url).toStartWith("https://h-live.relay.supermux.dev/pair?t=")
 })
 
+test("cookie-authenticated mutation accepts the live relay origin but rejects unrelated origins", async () => {
+  const relayUrl = "https://h-live.relay.supermux.dev"
+  const made = makeChannel({
+    publicUrl: "http://localhost:8787",
+    getRelayUrl: () => relayUrl,
+  })
+  channel = made.channel; await channel.start()
+  const token = new DeviceStore(made.devicesFile).mint("admin").token
+
+  const postDevice = (origin: string, name: string) => fetch(`${base()}/devices`, {
+    method: "POST",
+    headers: {
+      Cookie: `cmux_token=${token}`,
+      Origin: origin,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ name }),
+  })
+
+  expect((await postDevice(relayUrl, "relay-device")).status).toBe(200)
+  expect((await postDevice("https://evil.example", "evil-device")).status).toBe(403)
+})
+
+test("cookie-authenticated mutation does not trust the push relay while connectivity relay is offline", async () => {
+  const made = makeChannel({
+    publicUrl: "http://localhost:8787",
+    relayUrl: "https://push.supermux.dev",
+    getRelayUrl: () => undefined,
+  })
+  channel = made.channel; await channel.start()
+  const token = new DeviceStore(made.devicesFile).mint("admin").token
+
+  const res = await fetch(`${base()}/devices`, {
+    method: "POST",
+    headers: {
+      Cookie: `cmux_token=${token}`,
+      Origin: "https://push.supermux.dev",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ name: "push-relay-device" }),
+  })
+
+  expect(res.status).toBe(403)
+})
+
 test("POST /pair/claim rejects a reused secret", async () => {
   const claimStore = new ClaimStore({ clock: () => 0 })
   const secret = claimStore.mint()

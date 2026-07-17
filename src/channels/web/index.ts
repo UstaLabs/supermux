@@ -1143,7 +1143,11 @@ export class WebChannel implements Channel {
     if (MUTATING_METHODS.has(method) && API_PREFIXES.some((p) => path === p || path.startsWith(p + "/"))) {
       // Bearer-authed native clients carry no ambient cookie, so CSRF doesn't
       // apply; the same-origin guard is only meaningful for cookie browsers.
-      if (!authedViaBearer(req) && !sameOriginOk(req, this.opts.publicUrl)) {
+      if (!authedViaBearer(req) && !sameOriginOk(
+        req,
+        this.opts.publicUrl,
+        this.getRelayUrl?.(),
+      )) {
         return new Response("bad origin", { status: 403 })
       }
     }
