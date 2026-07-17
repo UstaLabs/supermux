@@ -7,8 +7,10 @@ struct AgentLogo: View {
     let agent: String?
     var size: CGFloat = 34
 
+    private var normalized: String { agent?.lowercased() ?? "" }
+
     private var assetName: String? {
-        switch agent?.lowercased() {
+        switch normalized {
         case "claude": return "claude"
         case "codex": return "codex"
         case "cursor": return "cursor"
@@ -21,12 +23,15 @@ struct AgentLogo: View {
     var body: some View {
         ZStack {
             if let assetName {
-                if agent?.lowercased() == "codex" || agent?.lowercased() == "cursor" {
+                if normalized == "codex" || normalized == "cursor" {
                     Image(assetName)
                         .renderingMode(.template)
                         .resizable()
                         .scaledToFit()
                         .foregroundStyle(.primary)
+                        // The Codex vector reaches every edge of its viewBox. Give its antialiased
+                        // outline enough breathing room at toolbar/tab sizes so it never clips.
+                        .padding(normalized == "codex" ? size * 0.04 : 0)
                 } else {
                     Image(assetName)
                         .resizable()

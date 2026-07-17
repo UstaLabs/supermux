@@ -19,5 +19,24 @@ final class MacOnlyTests: XCTestCase {
     func testPasteTextViewBuildsTextKitStack() {
         XCTAssertNotNil(PasteTextView(frame: .zero).textContainer)
     }
+
+    func testModifiedReturnInsertsNewlineWithoutSubmitting() {
+        let view = PasteTextView(frame: .zero)
+        view.string = "first"
+        view.setSelectedRange(NSRange(location: view.string.utf16.count, length: 0))
+        var submitCount = 0
+        view.onHardwareReturn = { submitCount += 1 }
+
+        let event = NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [.control, .shift],
+            timestamp: 0, windowNumber: 0, context: nil, characters: "\r",
+            charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36
+        )
+        XCTAssertNotNil(event)
+        view.keyDown(with: event!)
+
+        XCTAssertEqual(view.string, "first\n")
+        XCTAssertEqual(submitCount, 0)
+    }
 }
 #endif

@@ -1,6 +1,21 @@
 import SwiftUI
 import Shared
 
+private enum SidebarRowPosition {
+    case only, first, middle, last
+
+    static func at(_ index: Int, count: Int) -> SidebarRowPosition {
+        if count == 1 { return .only }
+        if index == 0 { return .first }
+        if index == count - 1 { return .last }
+        return .middle
+    }
+
+    var roundsTop: Bool { self == .only || self == .first }
+    var roundsBottom: Bool { self == .only || self == .last }
+    var hasDivider: Bool { self == .first || self == .middle }
+}
+
 /// Sidebar / root list — the merged multi-host fleet (spec §5): grouped (PA + project) sessions
 /// across every paired host, a per-row host badge + an `All · <host…> · +` filter chip row (both
 /// shown only when ≥2 hosts are paired), and offline hosts rendered as greyed "last seen" groups.
@@ -70,38 +85,41 @@ struct SessionsListView: View {
                         }
                         Spacer(minLength: 0)
                     }
-                    .padding(.vertical, 3)
+                    .smMacSidebarCard(position: .only, accented: true)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("new-session")
+                #if os(macOS)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
+                #endif
             }
 
             ForEach(fleet.onlineGroups(), id: \.workdir) { group in
-                Section {
-                    if !collapsed.contains(group.workdir) {
-                        ForEach(group.sessions, id: \.id) { s in
-                            selectableRow(s, host: multiHost ? hostByRecord[owner[s.id] ?? ""] : nil)
-                        }
-                    }
-                } header: { header(group) }
+                onlineSection(group, owner: owner, hostByRecord: hostByRecord, multiHost: multiHost)
             }
 
             // Offline hosts: greyed group per host with a "last seen" header (multi-host only).
             ForEach(fleet.offlineHostGroups(), id: \.host.recordId) { entry in
-                Section {
-                    ForEach(entry.sessions, id: \.id) { s in
-                        selectableRow(s, host: hostByRecord[entry.host.recordId])
-                            .opacity(0.5)
-                    }
-                } header: { offlineHeader(entry.host) }
+                offlineSection(host: entry.host, sessions: entry.sessions, hostByRecord: hostByRecord)
             }
         }
         #if os(macOS)
-        .listStyle(.sidebar)
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Color.smGroupedBackground)
+        .contentMargins(.horizontal, 12, for: .scrollContent)
         #else
         .smInsetGroupedListStyle()
         #endif
+        #if os(macOS)
+        // The reveal must not participate in scroll layout on AppKit. A changing safe-area
+        // inset feeds its own height back into contentOffset and makes the row oscillate.
+        .overlay(alignment: .top) { archivedBar }
+        #else
         .safeAreaInset(edge: .top, spacing: 0) { archivedBar }
+        #endif
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             geo.contentOffset.y + geo.contentInsets.top
         } action: { _, top in
@@ -140,6 +158,45 @@ struct SessionsListView: View {
                 killTarget = nil
             }
             Button("Cancel", role: .cancel) { killTarget = nil }
+        }
+    }
+
+    @ViewBuilder private func onlineSection(
+        _ group: SessionGroup,
+        owner: [String: String],
+        hostByRecord: [String: HostView],
+        multiHost: Bool
+    ) -> some View {
+        Section {
+            if !collapsed.contains(group.workdir) {
+                ForEach(group.sessions.indices, id: \.self) { index in
+                    let session = group.sessions[index]
+                    let recordId = owner[session.id] ?? ""
+                    let rowHost: HostView? = multiHost ? hostByRecord[recordId] : nil
+                    let position = SidebarRowPosition.at(index, count: group.sessions.count)
+                    selectableRow(session, host: rowHost, position: position)
+                }
+            }
+        } header: {
+            header(group)
+        }
+    }
+
+    @ViewBuilder private func offlineSection(
+        host: HostView,
+        sessions: [SessionInfo],
+        hostByRecord: [String: HostView]
+    ) -> some View {
+        Section {
+            ForEach(sessions.indices, id: \.self) { index in
+                let session = sessions[index]
+                let rowHost = hostByRecord[host.recordId]
+                let position = SidebarRowPosition.at(index, count: sessions.count)
+                selectableRow(session, host: rowHost, position: position)
+                    .opacity(0.5)
+            }
+        } header: {
+            offlineHeader(host)
         }
     }
 
@@ -196,20 +253,14 @@ struct SessionsListView: View {
         .opacity(0.85)
     }
 
-    @ViewBuilder private func row(_ s: SessionInfo, host: HostView?) -> some View {
+    @ViewBuilder private func row(_ s: SessionInfo, host: HostView?, position: SidebarRowPosition) -> some View {
         let b = fleet.broker(for: s.id)
         let muted = s.mute?.boolValue ?? false
         SessionRow(session: s, preview: b?.messages[s.id]?.last?.text,
                    phase: b?.agentPhase[s.id],
                    working: b?.agentWorking[s.id] == true,
                    bgOpen: b?.agentBgOpen[s.id] ?? 0, muted: muted, host: host)
-            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                Button(role: .destructive) { killTarget = s } label: { Label("Kill", systemImage: "xmark.circle") }
-                Button { renameText = s.name; renameTarget = s } label: { Label("Rename", systemImage: "pencil") }.tint(.gray)
-                Button { b?.toggleMute(s) } label: {
-                    Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
-                }.tint(Theme.teal)
-            }
+            .smMacSidebarCard(position: position, selected: selected == s.id)
             .contextMenu {
                 #if os(macOS)
                 Button { openWindow(id: "session", value: s.id) } label: {
@@ -228,21 +279,53 @@ struct SessionsListView: View {
     /// AppKit's `List(selection:)` does not emit a selection change when the already-selected
     /// row is clicked. Make the row a real button on macOS so callers can still react to that
     /// click (notably, leaving the New Session workspace), while retaining native list selection.
-    @ViewBuilder private func selectableRow(_ s: SessionInfo, host: HostView?) -> some View {
+    @ViewBuilder private func selectableRow(
+        _ s: SessionInfo,
+        host: HostView?,
+        position: SidebarRowPosition
+    ) -> some View {
         #if os(macOS)
         Button {
             selected = s.id
             onSessionSelected(s.id)
         } label: {
-            row(s, host: host)
+            row(s, host: host, position: position)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .tag(s.id)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            swipeButtons(for: s)
+        }
         #else
-        row(s, host: host)
+        row(s, host: host, position: position)
             .tag(s.id)
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                swipeButtons(for: s)
+            }
         #endif
+    }
+
+    /// Keep swipe actions on the actual List row. Putting them inside the macOS row Button's
+    /// label causes SwiftUI to size the reveal controls against the whole button host, producing
+    /// the enormous icons seen in the sidebar.
+    @ViewBuilder private func swipeButtons(for s: SessionInfo) -> some View {
+        let b = fleet.broker(for: s.id)
+        let muted = s.mute?.boolValue ?? false
+        Button(role: .destructive) { killTarget = s } label: {
+            Label("Kill", systemImage: "xmark.circle")
+        }
+        Button { renameText = s.name; renameTarget = s } label: {
+            Label("Rename", systemImage: "pencil")
+        }
+        .tint(.gray)
+        Button { b?.toggleMute(s) } label: {
+            Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
+        }
+        .tint(Theme.teal)
     }
 
     private func toggle(_ wd: String) {
@@ -280,15 +363,72 @@ struct SessionRow: View {
             SessionStatusRail(git: session.git, working: working, bgOpen: bgOpen)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(session.name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Text(session.name).font(titleFont.weight(.semibold)).lineLimit(1)
                     if muted { Image(systemName: "bell.slash.fill").font(.caption2).foregroundStyle(.tertiary) }
                     Spacer(minLength: 0)
                     if let host { HostBadge(host: host) }
                 }
                 Text(preview ?? session.agent)
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .font(previewFont).foregroundStyle(.secondary).lineLimit(1)
             }
         }
         .padding(.vertical, 3)
+    }
+
+    private var titleFont: Font {
+        #if os(macOS)
+        .body
+        #else
+        .subheadline
+        #endif
+    }
+
+    private var previewFont: Font {
+        #if os(macOS)
+        .callout
+        #else
+        .caption
+        #endif
+    }
+}
+
+private extension View {
+    /// iOS gets its grouped cards from `.insetGrouped`; AppKit's `.inset` has no equivalent,
+    /// so give Mac rows an explicit grouped surface and an obvious teal selection state.
+    @ViewBuilder func smMacSidebarCard(
+        position: SidebarRowPosition,
+        selected: Bool = false,
+        accented: Bool = false
+    ) -> some View {
+        #if os(macOS)
+        let radius: CGFloat = 10
+        let shape = UnevenRoundedRectangle(
+            cornerRadii: RectangleCornerRadii(
+                topLeading: position.roundsTop ? radius : 0,
+                bottomLeading: position.roundsBottom ? radius : 0,
+                bottomTrailing: position.roundsBottom ? radius : 0,
+                topTrailing: position.roundsTop ? radius : 0
+            ),
+            style: .continuous
+        )
+        self
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                selected ? Theme.teal.opacity(0.18)
+                    : (accented ? Theme.teal.opacity(0.10) : Color(nsColor: .controlBackgroundColor)),
+                in: shape
+            )
+            .overlay {
+                if selected { shape.strokeBorder(Theme.teal.opacity(0.34)) }
+            }
+            .overlay(alignment: .bottom) {
+                if position.hasDivider {
+                    Divider().padding(.leading, 10)
+                }
+            }
+        #else
+        if accented { self.padding(.vertical, 3) } else { self }
+        #endif
     }
 }

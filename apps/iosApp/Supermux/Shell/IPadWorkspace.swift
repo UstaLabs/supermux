@@ -28,9 +28,11 @@ struct IPadWorkspace<NewSessionContent: View>: View {
     // SessionChrome the compact ChatView uses. Optional: there may be no selected session.
     // It's the lifecycle owner; `WorkspaceDetail` receives the unwrapped value as `@Bindable`.
     @State private var chrome: SessionChrome?
-    // Sidebar-width drag: width captured at gesture start so the cumulative translation
-    // is applied once (no double-counting), mirroring `PaneDivider`.
+    #if !os(macOS)
+    // iPad sidebar-width drag: width captured at gesture start so the cumulative translation
+    // is applied once (no double-counting), mirroring `PaneDivider`. macOS uses NSSplitView.
     @State private var dragStartWidth: Double?
+    #endif
     // The SM_IPAD_OPEN_PANES / SM_IPAD_PRESS hooks mutate the SELECTED session's panes, but
     // `selected` is populated asynchronously (RootView's `.task(id: broker.synced)`), well after
     // onAppear. This one-shot guard defers the hooks until a session is selected, then runs them once.
@@ -53,16 +55,7 @@ struct IPadWorkspace<NewSessionContent: View>: View {
     private var liveDisplayId: String? { session.flatMap { s in broker?.runningDisplay(for: s.name)?.id } }
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-            ZStack {
-                detail
-                #if os(macOS)
-                if route == .newSession { newSessionContent() }
-                #endif
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
+        workspaceShell
         .animation(.snappy(duration: 0.25), value: layout.sidebarCollapsed)
         .workspaceShortcuts(layout: layout, session: selected) { route = .newSession }
         // The session header lives in the detail column (see `WorkspaceDetail`), so the stack's
@@ -107,6 +100,43 @@ struct IPadWorkspace<NewSessionContent: View>: View {
         }
     }
 
+    @ViewBuilder private var workspaceShell: some View {
+        #if os(macOS)
+        if layout.sidebarCollapsed {
+            HStack(spacing: 0) {
+                sidebarRail
+                Divider()
+                detailLayer
+            }
+        } else {
+            MacNativeSplit(
+                axis: .horizontal,
+                firstWidth: $layout.sidebarWidth,
+                range: WorkspaceLayoutModel.B.sidebar.min...WorkspaceLayoutModel.B.sidebar.max
+            ) {
+                expandedSidebar
+            } second: {
+                detailLayer
+            }
+        }
+        #else
+        HStack(spacing: 0) {
+            sidebar
+            detailLayer
+        }
+        #endif
+    }
+
+    private var detailLayer: some View {
+        ZStack {
+            detail
+            #if os(macOS)
+            if route == .newSession { newSessionContent() }
+            #endif
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     /// Ensure `chrome` exists for the selected session and (re)load its git/proxy state. Reuses one
     /// chrome across switches ON THE SAME HOST; rebuilds it when the selected session lives on a
     /// different host (so the chrome's broker matches the session). `load(for:)` is idempotent per id.
@@ -123,37 +153,45 @@ struct IPadWorkspace<NewSessionContent: View>: View {
     /// list at `sidebarWidth` followed by a drag-resizable divider. ⌘B toggles `sidebarCollapsed`.
     @ViewBuilder private var sidebar: some View {
         if layout.sidebarCollapsed {
-            SessionsRailView(fleet: fleet, selected: $selected,
-                             onExpand: { layout.sidebarCollapsed = false },
+            sidebarRail
+            Divider()
+        } else {
+            expandedSidebar
+            .frame(width: CGFloat(layout.sidebarWidth))
+            sidebarDivider
+        }
+    }
+
+    private var sidebarRail: some View {
+        SessionsRailView(fleet: fleet, selected: $selected,
+                         onExpand: { layout.sidebarCollapsed = false },
+                         onNewSession: { route = .newSession },
+                         onSessionSelected: { id in
+                             selected = id
+                             if route == .newSession { route = nil }
+                         })
+            .frame(width: WorkspaceLayoutModel.B.rail)
+    }
+
+    private var expandedSidebar: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text("Sessions").font(.headline)
+                Spacer(minLength: 8)
+                globalMenu
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 52)
+            .background(.bar)
+            .overlay(alignment: .bottom) { Divider() }
+            SessionsListView(fleet: fleet, selected: $selected,
                              onNewSession: { route = .newSession },
+                             onArchived: { route = .archived },
+                             onAddHost: onAddHost,
                              onSessionSelected: { id in
                                  selected = id
                                  if route == .newSession { route = nil }
                              })
-                .frame(width: WorkspaceLayoutModel.B.rail)
-            Divider()
-        } else {
-            VStack(spacing: 0) {
-                HStack(spacing: 12) {
-                    Text("Sessions").font(.headline)
-                    Spacer(minLength: 8)
-                    globalMenu
-                }
-                .padding(.horizontal, 12)
-                .frame(height: 52)
-                .background(.bar)
-                .overlay(alignment: .bottom) { Divider() }
-                SessionsListView(fleet: fleet, selected: $selected,
-                                 onNewSession: { route = .newSession },
-                                 onArchived: { route = .archived },
-                                 onAddHost: onAddHost,
-                                 onSessionSelected: { id in
-                                     selected = id
-                                     if route == .newSession { route = nil }
-                                 })
-            }
-            .frame(width: CGFloat(layout.sidebarWidth))
-            sidebarDivider
         }
     }
 
@@ -184,6 +222,9 @@ struct IPadWorkspace<NewSessionContent: View>: View {
     /// width at gesture start so the cumulative `DragGesture.translation` applies once; the model's
     /// didSet clamps to 220...560, so no manual clamp here.
     private var sidebarDivider: some View {
+        #if os(macOS)
+        EmptyView()
+        #else
         Rectangle()
             .fill(Color.secondary.opacity(0.25))
             .frame(width: 1)
@@ -202,6 +243,7 @@ struct IPadWorkspace<NewSessionContent: View>: View {
                             .onEnded { _ in dragStartWidth = nil }
                     )
             }
+        #endif
     }
 
     @ViewBuilder private var detail: some View {

@@ -86,6 +86,18 @@ extension PlatformColor {
 // MARK: - Semantic SwiftUI colors
 
 extension Color {
+    /// iOS grouped-list canvas. AppKit's `.underPageBackgroundColor` is much too dark for a
+    /// sidebar, so use an explicit adaptive neutral that matches `systemGroupedBackground`.
+    static var smGroupedBackground: Color {
+        #if canImport(UIKit)
+        Color(.systemGroupedBackground)
+        #else
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            return NSColor(calibratedWhite: dark ? 0.115 : 0.955, alpha: 1)
+        })
+        #endif
+    }
     /// iOS `.systemBackground`
     static var smBackground: Color {
         #if canImport(UIKit)
