@@ -23,15 +23,28 @@ struct AgentLogo: View {
     var body: some View {
         ZStack {
             if let assetName {
-                if normalized == "codex" || normalized == "cursor" {
+                if normalized == "codex" {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+                            .fill(Color(red: 0.075, green: 0.075, blue: 0.07))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+                                    .strokeBorder(.white.opacity(0.16), lineWidth: 0.75)
+                            }
+                        Image(assetName)
+                            .renderingMode(.template)
+                            .resizable()
+                            .scaledToFit()
+                            .foregroundStyle(.white)
+                            .padding(size * 0.17)
+                    }
+                    .padding(size * 0.02)
+                } else if normalized == "cursor" {
                     Image(assetName)
                         .renderingMode(.template)
                         .resizable()
                         .scaledToFit()
                         .foregroundStyle(.primary)
-                        // The Codex vector reaches every edge of its viewBox. Give its antialiased
-                        // outline enough breathing room at toolbar/tab sizes so it never clips.
-                        .padding(normalized == "codex" ? size * 0.04 : 0)
                 } else {
                     Image(assetName)
                         .resizable()
