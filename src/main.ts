@@ -12,6 +12,7 @@ import { handleSlash } from "./core/commands"
 import { Registry, type ProxyEntry } from "./core/session-manager/registry"
 import { makeReadAdvancer } from "./core/session-manager/read-status"
 import { ProxyLivenessMonitor, type ProxyStatus } from "./core/proxy/liveness"
+import { exposedLinksPublicUrl } from "./core/relay/public-url"
 
 function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
   return {
@@ -23,7 +24,7 @@ function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
     status,
     url: buildProxyPublicUrl(entry.domain, {
       baseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
-      publicUrl: process.env.MUX_WEB_PUBLIC_URL,
+      publicUrl: exposedProxyLinksBaseUrl(),
     }),
   }
 }
@@ -1064,6 +1065,15 @@ const relayProvider = process.env.MUX_RELAY_DOMAIN
   : new NullRelayProvider()
 void relayProvider.start()
 
+function exposedProxyLinksBaseUrl(): string | undefined {
+  return exposedLinksPublicUrl({
+    hostId: hostIdentity.hostId,
+    relayDomain: process.env.MUX_RELAY_DOMAIN,
+    relayUrl: relayProvider.status().relayUrl,
+    publicUrl: process.env.MUX_WEB_PUBLIC_URL,
+  })
+}
+
 if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   // One install job per agent; "installed" is re-probed (binary on PATH) after
   // the installer exits. Referenced lazily by the startAgentInstall closures.
@@ -1471,7 +1481,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return {
         url: buildProxyPublicUrl(entry.domain, {
           baseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
-          publicUrl: process.env.MUX_WEB_PUBLIC_URL,
+          publicUrl: exposedProxyLinksBaseUrl(),
         }),
         domain: entry.domain,
         port: entry.port,
@@ -2407,7 +2417,7 @@ const server = await startSocketServer({
             const entry = registry.addProxy({ domain, sessionId: s.id, port, isPublic })
             const url = buildProxyPublicUrl(entry.domain, {
               baseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
-              publicUrl: process.env.MUX_WEB_PUBLIC_URL,
+              publicUrl: exposedProxyLinksBaseUrl(),
             })
             webChannel?.broadcastToAll({ type: "proxy_created", proxy: proxyWsPayload(entry, proxyLivenessMonitor.getStatus(entry.domain)) })
             void proxyLivenessMonitor.refresh()
@@ -2912,7 +2922,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
         return s ? sessionEffort(s) : undefined
       },
       proxyBaseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
-      proxyPublicUrl: process.env.MUX_WEB_PUBLIC_URL,
+      proxyPublicUrl: exposedProxyLinksBaseUrl(),
       resumeFromArchive: (id: string) => resumeFromArchive(id),
       spawnPA: async (args: { name: string; agent?: AgentKind; model?: string; focus?: string }) => {
         const workdir = join(home(), ".mux", "workspace", args.name)
