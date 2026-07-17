@@ -1,4 +1,5 @@
 import type { RelayProvider, RelayStatus } from "./provider"
+import { hostRelayUrl } from "./public-url"
 
 export interface FrpChild { kill(): void; exited: Promise<unknown> }
 
@@ -106,7 +107,7 @@ export class FrpRelayProvider implements RelayProvider {
       ].join("\n")
       const cfgPath = this.o.writeConfig(toml)
       this.child = this.o.spawn(["frpc", "-c", cfgPath])
-      this.state = { state: "online", relayUrl: `https://${subdomain}.${this.o.relayDomain}` }
+      this.state = { state: "online", relayUrl: hostRelayUrl(this.o.identity.hostId, this.o.relayDomain) }
       const child = this.child
       void child.exited.then(() => {
         if (!this.desired || generation !== this.generation || this.child !== child) return
