@@ -11,11 +11,20 @@ function runner(map: Record<string, string>) {
   }
 }
 
-test("detectForgeClis reports github/gitlab availability + login", () => {
+test("detectForgeClis reports github/gitlab availability + login", async () => {
   const run = runner({ "gh auth status": "Logged in to github.com account ahmet", "gh auth token": "gho_x" })
-  const d = detectForgeClis(run)
+  const d = await detectForgeClis(run)
   expect(d.github).toMatchObject({ available: true })
   expect(d.gitlab).toMatchObject({ available: false })
+})
+
+test("detectForgeClis supports non-blocking async status probes", async () => {
+  const d = await detectForgeClis(async (cmd) => {
+    if (cmd === "gh") return "Logged in to github.com account ahmet"
+    throw new Error("not authenticated")
+  })
+  expect(d.github).toMatchObject({ available: true, login: "ahmet" })
+  expect(d.gitlab).toEqual({ available: false })
 })
 
 test("importCliToken returns the gh token", () => {

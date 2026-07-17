@@ -249,7 +249,7 @@ export interface WebChannelOpts {
   getExposure?: () => { exposureMode: string; publicUrl: string; snippets: import("../../core/settings/exposure").ExposureSnippets }
   validateExposure?: () => Promise<{ reachable: boolean; status?: number; error?: string }>
   getForgeConnections?: () => import("../../core/forge/types").ForgeConnection[]
-  getForgeCliStatus?: () => { github: { available: boolean; login?: string }; gitlab: { available: boolean; login?: string } }
+  getForgeCliStatus?: () => Promise<{ github: { available: boolean; login?: string }; gitlab: { available: boolean; login?: string } }> | { github: { available: boolean; login?: string }; gitlab: { available: boolean; login?: string } }
   addForgeConnection?: (o: { kind: string; host?: string; apiBase?: string; token: string; source: "pat" | "cli"; transport?: "https" | "ssh" }) => Promise<import("../../core/forge/types").ForgeConnection>
   importForgeCli?: (kind: string, transport?: "https" | "ssh") => Promise<import("../../core/forge/types").ForgeConnection>
   removeForgeConnection?: (id: string) => void
@@ -1589,7 +1589,7 @@ export class WebChannel implements Channel {
     // ── Forge: git connections + repo management ───────────────────────────
     if (path === "/forge/connections" && method === "GET") {
       const conns = this.opts.getForgeConnections?.(); if (!conns) return this.json({ error: "forge unavailable" }, 503)
-      let cli = null; try { cli = this.opts.getForgeCliStatus?.() ?? null } catch { cli = null }
+      let cli = null; try { cli = await this.opts.getForgeCliStatus?.() ?? null } catch { cli = null }
       return this.json({ connections: conns, cli })
     }
     if (path === "/forge/connections" && method === "POST") {

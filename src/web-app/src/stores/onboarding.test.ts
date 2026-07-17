@@ -19,9 +19,9 @@ test("setAgentLoginState stores per-kind login state", () => {
 test("step navigation: next/prev clamp within bounds", () => {
   const o = useOnboarding()
   expect(o.step).toBe(0); o.prev(); expect(o.step).toBe(0)
-  o.next(); expect(o.step).toBe(1); o.setStep(3); o.next(); expect(o.step).toBe(3)
+  o.next(); expect(o.step).toBe(1); o.setStep(4); o.next(); expect(o.step).toBe(4)
 })
-test("onboarding steps exclude assistant identity editing", () => {
-  expect([...ONBOARDING_STEP_LABELS]).toEqual(["Welcome", "Agents", "Connectivity", "Done"])
+test("onboarding steps match the macOS setup order and exclude identity editing", () => {
+  expect([...ONBOARDING_STEP_LABELS]).toEqual(["Welcome", "Agents", "Git Hosting", "Connectivity", "Done"])
   expect([...ONBOARDING_STEP_LABELS]).not.toContain("Identity")
 })

@@ -8,6 +8,7 @@ import SetupStepWelcome from "./setup/SetupStepWelcome.vue"
 import SetupStepAgents from "./setup/SetupStepAgents.vue"
 import SetupStepConnectivity from "./setup/SetupStepConnectivity.vue"
 import SetupStepDone from "./setup/SetupStepDone.vue"
+import GitHostingSettingsView from "./GitHostingSettingsView.vue"
 
 const ob = useOnboarding()
 
@@ -57,8 +58,9 @@ const nextDisabled = computed(() => {
         v-else-if="ob.step === 1"
         @update:canProceed="(v) => (agentsCanProceed = v)"
       />
-      <SetupStepConnectivity v-else-if="ob.step === 2" />
-      <SetupStepDone v-else-if="ob.step === 3" />
+      <GitHostingSettingsView v-else-if="ob.step === 2" embedded />
+      <SetupStepConnectivity v-else-if="ob.step === 3" />
+      <SetupStepDone v-else-if="ob.step === 4" />
     </div>
 
     <!-- Footer nav -->

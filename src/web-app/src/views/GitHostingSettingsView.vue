@@ -10,6 +10,10 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 type Kind = "github" | "gitlab"
 const KINDS: Kind[] = ["github", "gitlab"]
 
+withDefaults(defineProps<{ embedded?: boolean }>(), {
+  embedded: false,
+})
+
 const router = useRouter()
 const forges = useForges()
 
@@ -96,8 +100,9 @@ async function disconnect(id: string) {
 </script>
 
 <template>
-  <div class="min-h-screen bg-background text-foreground">
+  <div class="bg-background text-foreground" :class="embedded ? 'flex-1' : 'min-h-screen'">
     <header
+      v-if="!embedded"
       class="flex items-center gap-2 px-3 py-3 border-b border-border sticky top-0 bg-background/95 backdrop-blur z-10"
       style="padding-top: calc(env(safe-area-inset-top, 0px) + 0.75rem)"
     >
