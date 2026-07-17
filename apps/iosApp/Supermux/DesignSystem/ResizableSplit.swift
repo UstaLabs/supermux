@@ -152,7 +152,7 @@ struct MacNativeSplit<First: View, Second: View>: NSViewRepresentable {
 
         DispatchQueue.main.async { [weak split, weak coordinator = context.coordinator] in
             guard let split, let coordinator else { return }
-            coordinator.applyBoundPosition(to: split)
+            coordinator.finishInitialLayout(in: split)
         }
         return split
     }
@@ -169,6 +169,10 @@ struct MacNativeSplit<First: View, Second: View>: NSViewRepresentable {
         var firstHost: NSHostingView<First>?
         var secondHost: NSHostingView<Second>?
         private var applyingPosition = false
+        // NSSplitView emits resize notifications while its arranged subviews are being added,
+        // before we have restored the persisted divider position. Never feed that temporary
+        // 50/50 layout back into the binding (it previously clamped the sidebar to 560 pt).
+        private var acceptsUserResize = false
 
         init(parent: MacNativeSplit) {
             self.parent = parent
@@ -212,6 +216,11 @@ struct MacNativeSplit<First: View, Second: View>: NSViewRepresentable {
             applyingPosition = false
         }
 
+        func finishInitialLayout(in split: NSSplitView) {
+            applyBoundPosition(to: split)
+            acceptsUserResize = true
+        }
+
         func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
             false
         }
@@ -233,7 +242,7 @@ struct MacNativeSplit<First: View, Second: View>: NSViewRepresentable {
         }
 
         func splitViewDidResizeSubviews(_ notification: Notification) {
-            guard !applyingPosition,
+            guard acceptsUserResize, !applyingPosition,
                   let split = notification.object as? NSSplitView,
                   let first = split.subviews.first else { return }
             let position = split.isVertical ? first.frame.width : first.frame.height
