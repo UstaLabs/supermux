@@ -445,6 +445,19 @@ function refreshModels(discoverers: ModelDiscoverers = modelDiscoverers): Promis
   })
 }
 
+const agentModelRefreshes = new Map<AgentKind, Promise<void>>()
+
+function refreshAgentModels(agent: AgentKind): Promise<void> {
+  const running = agentModelRefreshes.get(agent)
+  if (running) return running
+  const discover = modelDiscoverers[agent]
+  if (!discover) return Promise.resolve()
+  const refresh = refreshModels({ [agent]: discover })
+    .finally(() => agentModelRefreshes.delete(agent))
+  agentModelRefreshes.set(agent, refresh)
+  return refresh
+}
+
 function lookupModels(agent: AgentKind) {
   return modelCache.get(agent)
 }
@@ -1219,6 +1232,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     setDraft: (id, text) => registry.sessions.setDraft(id, text),
     markRead: (id) => advanceRead(id),
     getModels: (agent) => modelCache.get(agent).map((m) => ({ id: m.id, displayName: m.displayName })),
+    refreshModels: (agent) => refreshAgentModels(agent),
     switchModel: async (id, model, applyNow) => {
       const s = registry.get(id)
       if (!s) return { ok: false, error: "session not found" }
@@ -1513,6 +1527,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       // takes effect for new spawns. Already-running sessions keep their old
       // env until respawn (acceptable for v1).
       applyCredentialEnv(next, process.env)
+      if ("claudeOauthToken" in patch || "anthropicApiKey" in patch) {
+        void refreshAgentModels(AgentKind.Claude)
+      }
       return next
     },
     getAgentStatuses: () => {
@@ -1636,7 +1653,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     fileExists: existsSync,
     hasCredential: (kind) => kind === AgentKind.Claude && claudeCliIsAuthenticated(),
     spawnLogin: spawnLoginProc,
-    onChange: (kind, st) => webChannel?.broadcastToAll({ type: "agent_login_state", kind, state: st }),
+    onChange: (kind, st) => {
+      webChannel?.broadcastToAll({ type: "agent_login_state", kind, state: st })
+      if (st.phase === "success") void refreshAgentModels(kind)
+    },
   })
   channels.web = webChannel as Channel
   writeClaudeHooksSettings(MUX_WEB_PORT, INTERNAL_SECRET)

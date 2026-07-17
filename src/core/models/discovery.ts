@@ -16,10 +16,10 @@ export type ModelInfo = {
 
 const CREDENTIALS_PATH = `${home()}/.claude/.credentials.json`
 
-function readOAuthToken(): string | undefined {
+function oauthTokenFromCredential(raw: string): string | undefined {
   try {
-    const raw = JSON.parse(readFileSync(CREDENTIALS_PATH, "utf8"))
-    return raw?.claudeAiOauth?.accessToken
+    const parsed = JSON.parse(raw)
+    return parsed?.claudeAiOauth?.accessToken
   } catch {
     return undefined
   }
@@ -27,27 +27,49 @@ function readOAuthToken(): string | undefined {
 
 export async function discoverClaudeModels(opts?: {
   fetch?: typeof globalThis.fetch
+  env?: Record<string, string | undefined>
+  readCredentialFile?: () => string | undefined
 }): Promise<ModelInfo[]> {
   const fetchFn = opts?.fetch ?? globalThis.fetch
-  const token = readOAuthToken()
-  if (!token) return []
-  try {
-    const res = await fetchFn("https://api.anthropic.com/v1/models?limit=100", {
-      headers: {
-        "Authorization": `Bearer ${token}`,
-        "anthropic-version": "2023-06-01",
-      },
-    })
-    if (!res.ok) return []
-    const body = await res.json() as { data?: { id: string; display_name: string }[] }
-    return (body.data ?? []).map((m) => ({
-      id: m.id,
-      displayName: m.display_name,
-      agent: Agent.Claude,
-    }))
-  } catch {
-    return []
+  const env = opts?.env ?? process.env
+  const readCredentialFile = opts?.readCredentialFile ?? (() => {
+    try {
+      return readFileSync(CREDENTIALS_PATH, "utf8")
+    } catch {
+      return undefined
+    }
+  })
+
+  const oauthTokens = [
+    env.CLAUDE_CODE_OAUTH_TOKEN,
+    oauthTokenFromCredential(readCredentialFile() ?? ""),
+  ].filter((token, i, all): token is string => Boolean(token) && all.indexOf(token) === i)
+
+  const authHeaders: Record<string, string>[] = [
+    ...oauthTokens.map((token) => ({ Authorization: `Bearer ${token}` })),
+    ...(env.ANTHROPIC_API_KEY ? [{ "x-api-key": env.ANTHROPIC_API_KEY }] : []),
+  ]
+
+  for (const auth of authHeaders) {
+    try {
+      const res = await fetchFn("https://api.anthropic.com/v1/models?limit=100", {
+        headers: {
+          ...auth,
+          "anthropic-version": "2023-06-01",
+        },
+      })
+      if (!res.ok) continue
+      const body = await res.json() as { data?: { id: string; display_name: string }[] }
+      return (body.data ?? []).map((m) => ({
+        id: m.id,
+        displayName: m.display_name,
+        agent: Agent.Claude,
+      }))
+    } catch {
+      // Try the next configured auth source.
+    }
   }
+  return []
 }
 
 // Non-blocking so the periodic model refresh never stalls the event loop.
