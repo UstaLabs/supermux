@@ -111,15 +111,37 @@ export interface SpawnCommandSyncOptions extends SpawnSyncOptions {
 // This is the quoting strategy used by mature Windows Node launchers. Quotes
 // and trailing slashes are escaped for CommandLineToArgvW, then cmd.exe
 // metacharacters are caret-escaped. Delayed expansion is explicitly disabled.
-const CMD_META = /([()%!^"<>&|;, *?])/g
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g
 
 function escapeCmdCommand(value: string): string {
   return value.replace(CMD_META, "^$1")
 }
 
+// Linear equivalent of the hardened cross-spawn lookahead forms. A small
+// state machine makes the complexity obvious and preserves the established
+// behavior: double every slash before a quote or the closing wrapper quote,
+// then add the slash that escapes an embedded quote.
+function escapeWindowsQuoteSlashes(value: string): string {
+  const escaped: string[] = []
+  let slashes = 0
+  for (const char of value) {
+    if (char === "\\") {
+      slashes++
+      continue
+    }
+    if (char === '"') {
+      escaped.push("\\".repeat(slashes * 2 + 1), char)
+    } else {
+      escaped.push("\\".repeat(slashes), char)
+    }
+    slashes = 0
+  }
+  escaped.push("\\".repeat(slashes * 2))
+  return escaped.join("")
+}
+
 function escapeCmdArgument(value: string): string {
-  let escaped = value.replace(/(\\*)"/g, "$1$1\\\"")
-  escaped = escaped.replace(/(\\*)$/, "$1$1")
+  let escaped = escapeWindowsQuoteSlashes(value)
   escaped = `"${escaped}"`
   // The first pass protects the value in the inner command; the second keeps
   // those carets intact through cmd /s /c's outer quoted-command parse.

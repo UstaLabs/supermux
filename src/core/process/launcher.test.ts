@@ -80,6 +80,43 @@ describe("spawnCommand", () => {
   })
 })
 
+describe("windowsCmdCommandLine hardening", () => {
+  test("quotes empty arguments without dropping the argv slot", () => {
+    expect(windowsCmdCommandLine("tool.cmd", [""])).toBe(String.raw`"tool.cmd ^^^"^^^""`)
+  })
+
+  test("preserves embedded quotes and doubles the backslashes that precede them", () => {
+    expect(windowsCmdCommandLine("tool.cmd", ['a\\"b'])).toBe(
+      String.raw`"tool.cmd ^^^"a\\\^^^"b^^^""`,
+    )
+  })
+
+  test("doubles trailing backslashes before the closing quote", () => {
+    expect(windowsCmdCommandLine("tool.cmd", ["trail\\\\"])).toBe(
+      String.raw`"tool.cmd ^^^"trail\\\\^^^""`,
+    )
+  })
+
+  test("double-escapes every cmd metacharacter including bracket and backtick", () => {
+    const metacharacters = ["(", ")", "[", "]", "%", "!", "^", '"', "`", "<", ">", "&", "|", ";", ",", " ", "*", "?"]
+    const output = windowsCmdCommandLine("tool.cmd", [metacharacters.join("")])
+    for (const char of metacharacters) {
+      expect(output).toContain(`^^^${char}`)
+    }
+  })
+
+  test("handles a large all-backslash argument in linear time", () => {
+    const input = "\\".repeat(20_000)
+    const started = performance.now()
+    const output = windowsCmdCommandLine("tool.cmd", [input])
+    const elapsedMs = performance.now() - started
+    expect(output.startsWith('"tool.cmd ^^^"')).toBe(true)
+    // Trailing backslashes are doubled before the escaped closing quote.
+    expect(output.length).toBeGreaterThanOrEqual(input.length * 2)
+    expect(elapsedMs).toBeLessThan(250)
+  })
+})
+
 describe("spawnCommandSync", () => {
   test("uses the same safe cmd wrapper for synchronous plugin lifecycle calls", () => {
     const calls: unknown[][] = []
