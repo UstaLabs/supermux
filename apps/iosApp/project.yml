@@ -129,7 +129,9 @@ targets:
         basedOnDependencyAnalysis: false
         script: |
           set -e
-          source ~/ios-build-env.sh 2>/dev/null || true
+          if [ -f "$HOME/ios-build-env.sh" ]; then
+            . "$HOME/ios-build-env.sh"
+          fi
           export JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home -v 17 2>/dev/null || /usr/libexec/java_home)}"
           cd "$SRCROOT/.."
           # --no-daemon: the embed step runs codesign; a detached Gradle daemon
@@ -303,7 +305,9 @@ targets:
         basedOnDependencyAnalysis: false
         script: |
           set -e
-          source ~/ios-build-env.sh 2>/dev/null || true
+          if [ -f "$HOME/ios-build-env.sh" ]; then
+            . "$HOME/ios-build-env.sh"
+          fi
           export JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home -v 17 2>/dev/null || /usr/libexec/java_home)}"
           cd "$SRCROOT/.."
           ./gradlew --no-daemon :shared:embedAndSignAppleFrameworkForXcode
