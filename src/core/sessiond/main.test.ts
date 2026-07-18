@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtemp, readdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { isAbsolute, join } from "node:path"
-import { acquireSessiondLock, parseSessiondArgs, sessiondLockEndpoint } from "./main"
+import { acquireSessiondLock, cleanupSessiondResources, parseSessiondArgs, sessiondLockEndpoint } from "./main"
 
 const dirs: string[] = []
 afterEach(async () => Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))))
@@ -72,5 +72,14 @@ describe("sessiond main", () => {
     await child.exited
     const recovered = await acquireSessiondLock(dir)
     await recovered.release()
+  })
+
+  test("shutdown attempts both server and lock cleanup and aggregates failures", async () => {
+    const calls: string[] = []
+    await expect(cleanupSessiondResources(
+      { close: async () => { calls.push("server"); throw new Error("server close failed") } },
+      { release: async () => { calls.push("lock"); throw new Error("lock release failed") } },
+    )).rejects.toBeInstanceOf(AggregateError)
+    expect(calls).toEqual(["server", "lock"])
   })
 })

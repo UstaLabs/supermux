@@ -6,7 +6,7 @@ import { createConnection, createServer, type Socket } from "node:net"
 import { createMemorySessionBackendHarness, verifySessionBackendContract } from "../runtime/session-backend.test-support"
 import { decodeFrames, encodeFrame } from "../../shared/frame-codec"
 import { SessiondBackend } from "./client"
-import { startSessiondServer, type SessiondServer } from "./server"
+import { SESSIOND_MAX_FRAME_BYTES, startSessiondServer, type SessiondServer } from "./server"
 
 const cleanup: Array<() => void | Promise<void>> = []
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close() })
@@ -32,6 +32,40 @@ describe("SessiondBackend", () => {
     server.closeConnections()
     await new Promise(resolve => setTimeout(resolve, 20))
     expect((await client.hello()).version).toBe(1)
+  })
+
+  test("destroys a timed-out hung RPC connection and reconnects for later calls", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sessiond-timeout-")); cleanup.push(() => rm(dir, { recursive: true, force: true }))
+    const endpoint = join(dir, "rpc.sock"), secret = Buffer.alloc(32, 8).toString("base64")
+    const memory = createMemorySessionBackendHarness().backend
+    let captureCalls = 0
+    const backend = { ...memory, capture: async (...args: Parameters<typeof memory.capture>) => {
+      if (captureCalls++ === 0) return await new Promise<string | null>(() => {})
+      return memory.capture(...args)
+    } }
+    const server = await startSessiondServer({ endpoint, secret, backend }); cleanup.push(() => server.close())
+    const client = new SessiondBackend({ endpoint, secret, stateDir: dir, platform: "linux", requestTimeoutMs: 25 }); cleanup.push(() => client.close())
+    const created = await client.create({ group: "g", name: "hung", cwd: dir, argv: ["fake"], env: {} })
+    await expect(client.capture(created.id)).rejects.toThrow("timed out")
+    expect((await client.hello()).healthy).toBe(true)
+    expect(await client.capture(created.id)).toBe("")
+  })
+
+  test("viewer write reports accepted even when socket signals backpressure and executes once", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sessiond-backpressure-")); cleanup.push(() => rm(dir, { recursive: true, force: true }))
+    const endpoint = join(dir, "rpc.sock"), secret = Buffer.alloc(32, 9).toString("base64")
+    const memory = createMemorySessionBackendHarness()
+    const server = await startSessiondServer({ endpoint, secret, backend: memory.backend }); cleanup.push(() => server.close())
+    let writes = 0
+    const client = new SessiondBackend({
+      endpoint, secret, stateDir: dir, platform: "linux",
+      writeUntracked: (socket, frame) => { writes++; socket.write(frame); return false },
+    }); cleanup.push(() => client.close())
+    const created = await client.create({ group: "g", name: "bp", cwd: dir, argv: ["fake"], env: {} })
+    const viewer = await client.attach(created.id, "v", () => {})
+    expect(viewer.write(new TextEncoder().encode("once"))).toBe(true)
+    expect(await client.capture(created.id)).toBe("once")
+    expect(writes).toBe(1)
   })
 
   test("shares concurrent adoption and spawns at most once only for missing endpoint", async () => {
@@ -115,6 +149,42 @@ describe("SessiondBackend", () => {
     expect(viewer.resize(80, 24)).toBe(false)
   })
 
+  test("enforces per-target viewer limits globally across connections and releases reservations", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sessiond-global-viewers-")); cleanup.push(() => rm(dir, { recursive: true, force: true }))
+    const endpoint = join(dir, "rpc.sock"), secret = Buffer.alloc(32, 11).toString("base64")
+    const server = await startSessiondServer({ endpoint, secret, backend: createMemorySessionBackendHarness().backend, maxViewersPerTarget: 1 })
+    cleanup.push(() => server.close())
+    const first = new SessiondBackend({ endpoint, secret, stateDir: dir, platform: "linux" })
+    const second = new SessiondBackend({ endpoint, secret, stateDir: dir, platform: "linux" })
+    cleanup.push(() => first.close()); cleanup.push(() => second.close())
+    const created = await first.create({ group: "g", name: "global", cwd: dir, argv: ["fake"], env: {} })
+    const viewer = await first.attach(created.id, "same-wire-id", () => {})
+    await expect(second.attach(created.id, "same-wire-id", () => {})).rejects.toThrow("target viewer limit")
+    viewer.close()
+    await first.hello()
+    const replacement = await second.attach(created.id, "same-wire-id", () => {})
+    replacement.close()
+  })
+
+  test("rolls back a global viewer reservation when attach hangs and its connection closes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sessiond-viewer-reservation-")); cleanup.push(() => rm(dir, { recursive: true, force: true }))
+    const endpoint = join(dir, "rpc.sock"), secret = Buffer.alloc(32, 13).toString("base64")
+    const memory = createMemorySessionBackendHarness().backend
+    let attaches = 0
+    const backend = { ...memory, attach: async (...args: Parameters<typeof memory.attach>) => {
+      if (attaches++ === 0) return await new Promise<Awaited<ReturnType<typeof memory.attach>>>(() => {})
+      return memory.attach(...args)
+    } }
+    const server = await startSessiondServer({ endpoint, secret, backend, maxViewersPerTarget: 1 }); cleanup.push(() => server.close())
+    const first = new SessiondBackend({ endpoint, secret, stateDir: dir, platform: "linux", requestTimeoutMs: 25 })
+    const second = new SessiondBackend({ endpoint, secret, stateDir: dir, platform: "linux" })
+    cleanup.push(() => first.close()); cleanup.push(() => second.close())
+    const created = await first.create({ group: "g", name: "reservation", cwd: dir, argv: ["fake"], env: {} })
+    await expect(first.attach(created.id, "hung", () => {})).rejects.toThrow("timed out")
+    const replacement = await second.attach(created.id, "healthy", () => {})
+    replacement.close()
+  })
+
   test("tolerates split and coalesced frames while ignoring malformed events", async () => {
     const dir = await mkdtemp(join(tmpdir(), "sessiond-framing-")); cleanup.push(() => rm(dir, { recursive: true, force: true }))
     const endpoint = join(dir, "rpc.sock"), secret = Buffer.alloc(32, 5).toString("base64")
@@ -144,5 +214,50 @@ describe("SessiondBackend", () => {
     const client = new SessiondBackend({ endpoint, secret, stateDir: dir, platform: "linux" }); cleanup.push(() => client.close())
     expect((await client.hello()).healthy).toBe(true)
     expect(responseCount).toBe(2)
+  })
+
+  test("supports large valid captures and bounds oversized inbound and outbound RPC frames", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sessiond-large-")); cleanup.push(() => rm(dir, { recursive: true, force: true }))
+    const endpoint = join(dir, "rpc.sock"), secret = Buffer.alloc(32, 10).toString("base64")
+    const memory = createMemorySessionBackendHarness().backend
+    const valid = "x".repeat(1_200_000)
+    let oversized = false
+    const backend = { ...memory, capture: async () => oversized ? "y".repeat(SESSIOND_MAX_FRAME_BYTES + 1024) : valid }
+    const server = await startSessiondServer({ endpoint, secret, backend }); cleanup.push(() => server.close())
+    const client = new SessiondBackend({ endpoint, secret, stateDir: dir, platform: "linux" }); cleanup.push(() => client.close())
+    const captured = await client.capture("target")
+    expect(captured).not.toBeNull()
+    expect(captured!.length).toBe(valid.length)
+    oversized = true
+    await expect(client.capture("target")).rejects.toThrow("frame")
+    expect((await client.hello()).healthy).toBe(true)
+    await expect(client.write("target", Buffer.alloc(SESSIOND_MAX_FRAME_BYTES))).rejects.toThrow("frame")
+    expect((await client.hello()).healthy).toBe(true)
+  })
+
+  test("rejects invalid PIDs, inconsistent targets, and non-void operation responses", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sessiond-invalid-values-")); cleanup.push(() => rm(dir, { recursive: true, force: true }))
+    const endpoint = join(dir, "rpc.sock"), secret = Buffer.alloc(32, 12).toString("base64")
+    const rawServer = createServer(socket => {
+      let buffer: Buffer = Buffer.alloc(0)
+      socket.on("data", chunk => {
+        buffer = Buffer.concat([buffer, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)])
+        const decoded = decodeFrames(buffer); buffer = decoded.rest
+        for (const input of decoded.messages) {
+          const request = input as { id: string; op: string }
+          const value = request.op === "hello" ? { version: 1, healthy: true }
+            : request.op === "livePid" ? -1
+            : request.op === "create" ? { id: "bad", name: "bad", pid: null, alive: true }
+            : "unexpected-value"
+          socket.write(encodeFrame({ id: request.id, ok: true, value }))
+        }
+      })
+    })
+    await new Promise<void>((resolveListen, reject) => { rawServer.once("error", reject); rawServer.listen(endpoint, resolveListen) })
+    cleanup.push(() => new Promise<void>(resolveClose => rawServer.close(() => resolveClose())))
+    const client = new SessiondBackend({ endpoint, secret, stateDir: dir, platform: "linux" }); cleanup.push(() => client.close())
+    await expect(client.livePid("bad")).rejects.toThrow("invalid PID")
+    await expect(client.create({ group: "g", name: "n", cwd: dir, argv: ["x"], env: {} })).rejects.toThrow("invalid runtime target")
+    await expect(client.write("bad", new Uint8Array())).rejects.toThrow("invalid write response")
   })
 })

@@ -6,7 +6,7 @@ import { decodeFrames, encodeFrame } from "../../shared/frame-codec"
 import { parseRequest, PROTOCOL_VERSION, type SessiondRequest, type SessiondResponse } from "./protocol"
 import { timingSafeSecretEqual } from "./secret"
 
-export const SESSIOND_MAX_FRAME_BYTES = 1024 * 1024
+export const SESSIOND_MAX_FRAME_BYTES = 8 * 1024 * 1024
 export const SESSIOND_MAX_BUFFER_BYTES = SESSIOND_MAX_FRAME_BYTES + 4
 
 export type SessiondServerOptions = {
@@ -16,6 +16,10 @@ export type SessiondServerOptions = {
   platform?: NodeJS.Platform
   maxViewersPerConnection?: number
   maxViewersPerTarget?: number
+  maxConnections?: number
+  handshakeTimeoutMs?: number
+  /** @internal Failure seam exercised after secure POSIX ownership setup. */
+  postListenSetup?: () => void | Promise<void>
 }
 
 export type SessiondServer = {
@@ -31,6 +35,7 @@ function isPipe(endpoint: string): boolean {
 function send(socket: Socket, value: unknown): Promise<void> {
   if (socket.destroyed || !socket.writable) return Promise.reject(new Error("connection is closed"))
   const frame = encodeFrame(value)
+  if (frame.byteLength > SESSIOND_MAX_FRAME_BYTES + 4) return Promise.reject(new Error("sessiond frame exceeds protocol limit"))
   return new Promise((resolve, reject) => socket.write(frame, error => error ? reject(error) : resolve()))
 }
 
@@ -53,7 +58,15 @@ function safeError(error: unknown, secret: string): string {
 async function endpointIsLive(endpoint: string): Promise<boolean> {
   return await new Promise(resolve => {
     const socket = createConnection(endpoint)
-    const done = (live: boolean) => { socket.destroy(); resolve(live) }
+    let settled = false
+    const timer = setTimeout(() => done(false), 250)
+    const done = (live: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      socket.destroy()
+      resolve(live)
+    }
     socket.once("connect", () => done(true))
     socket.once("error", () => done(false))
   })
@@ -91,19 +104,45 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
   const sockets = new Set<Socket>()
   const maxViewers = options.maxViewersPerConnection ?? 64
   const maxViewersPerTarget = options.maxViewersPerTarget ?? 8
+  const maxConnections = options.maxConnections ?? 128
+  const handshakeTimeoutMs = options.handshakeTimeoutMs ?? 5_000
+  const targetViewerCounts = new Map<string, number>()
+  let nextConnectionId = 0
 
   const server = createServer(socket => {
+    if (sockets.size >= maxConnections) { socket.destroy(); return }
     sockets.add(socket)
+    const connectionId = `connection-${++nextConnectionId}`
     let buffer: Buffer = Buffer.alloc(0)
     let dispatch = Promise.resolve()
     let closing = false
-    const viewers = new Map<string, RuntimeViewer>()
+    let authenticated = false
+    const handshakeTimer = setTimeout(() => { if (!authenticated) socket.destroy() }, handshakeTimeoutMs)
+    const viewers = new Map<string, { viewer: RuntimeViewer; targetId: string }>()
+    const reservations = new Set<{ targetId: string; active: boolean }>()
     const requestIds = new Set<string>()
     const requestIdOrder: string[] = []
 
     const closeViewers = () => {
-      for (const viewer of viewers.values()) viewer.close()
-      viewers.clear()
+      for (const key of [...viewers.keys()]) releaseViewer(key)
+      for (const reservation of [...reservations]) releaseReservation(reservation)
+    }
+    const releaseReservation = (reservation: { targetId: string; active: boolean }) => {
+      if (!reservation.active) return
+      reservation.active = false
+      reservations.delete(reservation)
+      const count = targetViewerCounts.get(reservation.targetId) ?? 0
+      if (count <= 1) targetViewerCounts.delete(reservation.targetId)
+      else targetViewerCounts.set(reservation.targetId, count - 1)
+    }
+    const releaseViewer = (key: string) => {
+      const entry = viewers.get(key)
+      if (!entry) return
+      viewers.delete(key)
+      entry.viewer.close()
+      const count = targetViewerCounts.get(entry.targetId) ?? 0
+      if (count <= 1) targetViewerCounts.delete(entry.targetId)
+      else targetViewerCounts.set(entry.targetId, count - 1)
     }
     const failAndClose = (id: string, error: string) => {
       if (closing) return
@@ -127,24 +166,40 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
           const key = `${request.args.targetId}\0${request.args.viewerId}`
           if (viewers.has(key)) throw new Error("viewer is already attached")
           if (viewers.size >= maxViewers) throw new Error("connection viewer limit exceeded")
-          const targetCount = [...viewers.keys()].filter(entry => entry.startsWith(`${request.args.targetId}\0`)).length
+          const targetCount = targetViewerCounts.get(request.args.targetId) ?? 0
           if (targetCount >= maxViewersPerTarget) throw new Error("target viewer limit exceeded")
-          const viewer = await backend.attach(request.args.targetId, request.args.viewerId, async data => {
-            await send(socket, {
-              event: "data",
-              targetId: request.args.targetId,
-              viewerId: request.args.viewerId,
-              dataBase64: Buffer.from(data).toString("base64"),
+          targetViewerCounts.set(request.args.targetId, targetCount + 1)
+          const reservation = { targetId: request.args.targetId, active: true }
+          reservations.add(reservation)
+          let viewer: RuntimeViewer | undefined
+          try {
+            viewer = await backend.attach(request.args.targetId, `${connectionId}:${request.args.viewerId}`, async data => {
+              try {
+                await send(socket, {
+                  event: "data",
+                  targetId: request.args.targetId,
+                  viewerId: request.args.viewerId,
+                  dataBase64: Buffer.from(data).toString("base64"),
+                })
+              } catch (error) {
+                releaseViewer(key)
+                throw error
+              }
             })
-          })
-          if (socket.destroyed || closing) { viewer.close(); throw new Error("connection is closed") }
-          viewers.set(key, viewer)
+            if (socket.destroyed || closing) throw new Error("connection is closed")
+            reservation.active = false
+            reservations.delete(reservation)
+            viewers.set(key, { viewer, targetId: request.args.targetId })
+          } catch (error) {
+            viewer?.close()
+            releaseReservation(reservation)
+            throw error
+          }
           return { attached: true }
         }
         case "detach": {
           const key = `${request.args.targetId}\0${request.args.viewerId}`
-          viewers.get(key)?.close()
-          viewers.delete(key)
+          releaseViewer(key)
           return undefined
         }
         case "interrupt": return backend.interrupt(request.args.targetId)
@@ -172,6 +227,7 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
         failAndClose(id, "authentication failed")
         return
       }
+      if (!authenticated) { authenticated = true; clearTimeout(handshakeTimer) }
       let request: SessiondRequest
       try { request = parseRequest(input) } catch { failAndClose(id, "invalid request"); return }
       if (request.id.length > 256) { failAndClose(id, "invalid request"); return }
@@ -190,6 +246,7 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
     socket.on("data", chunk => {
       if (closing) return
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      if (buffer.length + bytes.length > SESSIOND_MAX_BUFFER_BYTES) { failAndClose("", "frame buffer too large"); return }
       buffer = Buffer.concat([buffer, bytes])
       try {
         while (buffer.length >= 4) {
@@ -207,15 +264,37 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
       }
     })
     socket.on("error", () => {})
-    socket.on("close", () => { sockets.delete(socket); closeViewers() })
+    socket.on("close", () => { clearTimeout(handshakeTimer); sockets.delete(socket); closeViewers() })
   })
 
   await listen(server, options.endpoint)
   let ownedIdentity: { dev: bigint; ino: bigint } | undefined
   if (filesystemEndpoint) {
-    await chmod(options.endpoint, 0o600)
-    const stat = await lstat(options.endpoint, { bigint: true })
-    ownedIdentity = { dev: stat.dev, ino: stat.ino }
+    try {
+      const before = await lstat(options.endpoint, { bigint: true })
+      if (!before.isSocket()) throw new Error("sessiond listener endpoint is not a socket")
+      ownedIdentity = { dev: before.dev, ino: before.ino }
+      await chmod(options.endpoint, 0o600)
+      const after = await lstat(options.endpoint, { bigint: true })
+      if (!after.isSocket() || after.dev !== before.dev || after.ino !== before.ino) {
+        throw new Error("sessiond listener endpoint ownership changed during setup")
+      }
+      await options.postListenSetup?.()
+    } catch (error) {
+      for (const socket of sockets) socket.destroy()
+      await new Promise<void>(resolveClose => server.close(() => resolveClose()))
+      if (ownedIdentity) {
+        try {
+          const current = await lstat(options.endpoint, { bigint: true })
+          if (current.isSocket() && current.dev === ownedIdentity.dev && current.ino === ownedIdentity.ino) await unlink(options.endpoint)
+        } catch (cleanupError) {
+          if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") throw new AggregateError([error, cleanupError], "sessiond post-listen setup and cleanup failed")
+        }
+      }
+      throw error
+    }
+  } else {
+    await options.postListenSetup?.()
   }
   let closed = false
   return {

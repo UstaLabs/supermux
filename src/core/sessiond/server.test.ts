@@ -6,7 +6,7 @@ import { connect } from "node:net"
 import { createMemorySessionBackend } from "../runtime/session-backend.test-support"
 import { encodeFrame } from "../../shared/frame-codec"
 import { PROTOCOL_VERSION } from "./protocol"
-import { startSessiondServer, type SessiondServer } from "./server"
+import { SESSIOND_MAX_FRAME_BYTES, startSessiondServer, type SessiondServer } from "./server"
 
 const cleanup: Array<() => void | Promise<void>> = []
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close() })
@@ -33,7 +33,7 @@ describe("sessiond server", () => {
     expect(unknown.toString()).toContain("invalid request")
     const invalidJson = Buffer.from([0, 0, 0, 1, 0xff])
     expect((await exchange(invalidJson)).toString()).toContain("malformed frame")
-    const oversized = Buffer.alloc(4); oversized.writeUInt32BE(2 * 1024 * 1024)
+    const oversized = Buffer.alloc(4); oversized.writeUInt32BE(SESSIOND_MAX_FRAME_BYTES + 1)
     expect((await exchange(oversized)).toString()).toContain("frame too large")
   })
 
@@ -50,5 +50,28 @@ describe("sessiond server", () => {
     await writeFile(endpoint, "keep")
     await expect(startSessiondServer({ endpoint, secret: "a", backend: createMemorySessionBackend() })).rejects.toThrow("non-socket")
     expect(await Bun.file(endpoint).text()).toBe("keep")
+  })
+
+  test("closes and removes its own socket when post-listen setup fails", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sessiond-postlisten-")); cleanup.push(() => rm(dir, { recursive: true, force: true }))
+    const endpoint = join(dir, "rpc.sock")
+    await expect(startSessiondServer({
+      endpoint, secret: "a", backend: createMemorySessionBackend(),
+      postListenSetup: async () => { throw new Error("injected post-listen failure") },
+    })).rejects.toThrow("injected post-listen failure")
+    const successor = await startSessiondServer({ endpoint, secret: "a", backend: createMemorySessionBackend() })
+    await successor.close()
+  })
+
+  test("bounds unauthenticated connections and expires the pre-auth handshake", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sessiond-handshake-")); cleanup.push(() => rm(dir, { recursive: true, force: true }))
+    const endpoint = join(dir, "rpc.sock")
+    const server = await startSessiondServer({ endpoint, secret: "a", backend: createMemorySessionBackend(), maxConnections: 1, handshakeTimeoutMs: 30 })
+    cleanup.push(() => server.close())
+    const first = connect(endpoint)
+    await new Promise<void>((resolveConnect, reject) => { first.once("connect", resolveConnect); first.once("error", reject) })
+    const second = connect(endpoint)
+    await new Promise<void>(resolveClose => second.once("close", () => resolveClose()))
+    await new Promise<void>(resolveClose => first.once("close", () => resolveClose()))
   })
 })

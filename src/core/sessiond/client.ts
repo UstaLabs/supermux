@@ -9,6 +9,7 @@ import { createOrLoadSessiondSecret } from "./secret"
 
 type SpawnSessiond = (executable: string, stateDir: string) => void | Promise<void>
 type ConnectSocket = (endpoint: string) => Promise<Socket>
+type WriteUntracked = (socket: Socket, frame: Buffer) => boolean
 
 export type SessiondBackendOptions = {
   endpoint: string
@@ -19,6 +20,8 @@ export type SessiondBackendOptions = {
   spawnSessiond?: SpawnSessiond
   /** @internal Deterministic transport seam for connection-failure tests. */
   connectSocket?: ConnectSocket
+  /** @internal Backpressure seam; the frame is accepted even when this returns false. */
+  writeUntracked?: WriteUntracked
   adoptionTimeoutMs?: number
   adoptionPollMs?: number
   requestTimeoutMs?: number
@@ -26,7 +29,7 @@ export type SessiondBackendOptions = {
   maxOutboundBytes?: number
 }
 
-type Pending = { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
+type Pending = { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout>; socket: Socket }
 type ViewerRegistration = {
   onData: (data: Uint8Array) => void | Promise<void>
   closeLocal(): void
@@ -57,11 +60,22 @@ function validBase64(value: unknown): value is string {
 }
 
 function target(value: unknown): RuntimeTarget {
+  const pid = isRecord(value) ? value.pid : undefined
+  const alive = isRecord(value) ? value.alive : undefined
+  const pidValid = validPid(pid)
   if (!isRecord(value) || typeof value.id !== "string" || typeof value.name !== "string"
-    || !(typeof value.pid === "number" || value.pid === null) || typeof value.alive !== "boolean") {
+    || typeof alive !== "boolean" || (alive ? !pidValid : pid !== null)) {
     throw new Error("sessiond returned an invalid runtime target")
   }
-  return { id: value.id, name: value.name, pid: value.pid, alive: value.alive }
+  return { id: value.id, name: value.name, pid: pid as number | null, alive: alive as boolean }
+}
+
+function validPid(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && Number.isSafeInteger(value) && value > 0
+}
+
+function expectVoid(value: unknown, operation: string): void {
+  if (value !== undefined) throw new Error(`sessiond returned an invalid ${operation} response`)
 }
 
 function adoptable(error: unknown): boolean {
@@ -94,6 +108,7 @@ export class SessiondBackend implements SessionBackend {
   private readonly executable: string
   private readonly spawnSessiond: SpawnSessiond
   private readonly connectSocket: ConnectSocket
+  private readonly writeUntrackedFrame: WriteUntracked
   private readonly adoptionTimeoutMs: number
   private readonly adoptionPollMs: number
   private readonly requestTimeoutMs: number
@@ -108,11 +123,12 @@ export class SessiondBackend implements SessionBackend {
     this.executable = options.executable ?? defaultExecutable()
     this.spawnSessiond = options.spawnSessiond ?? defaultSpawn
     this.connectSocket = options.connectSocket ?? defaultConnectSocket
+    this.writeUntrackedFrame = options.writeUntracked ?? ((socket, frame) => socket.write(frame))
     this.adoptionTimeoutMs = options.adoptionTimeoutMs ?? 10_000
     this.adoptionPollMs = options.adoptionPollMs ?? 100
     this.requestTimeoutMs = options.requestTimeoutMs ?? 10_000
     this.maxPendingRequests = options.maxPendingRequests ?? 1024
-    this.maxOutboundBytes = options.maxOutboundBytes ?? 4 * 1024 * 1024
+    this.maxOutboundBytes = options.maxOutboundBytes ?? SESSIOND_MAX_BUFFER_BYTES
   }
 
   async ensureConnected(): Promise<void> {
@@ -151,16 +167,16 @@ export class SessiondBackend implements SessionBackend {
 
   async livePid(targetId: string): Promise<number | null> {
     const value = await this.request("livePid", { targetId })
-    if (!(typeof value === "number" || value === null)) throw new Error("sessiond returned an invalid PID")
+    if (!(validPid(value) || value === null)) throw new Error("sessiond returned an invalid PID")
     return value
   }
 
   async write(targetId: string, data: Uint8Array): Promise<void> {
-    await this.request("write", { targetId, dataBase64: Buffer.from(data).toString("base64") })
+    expectVoid(await this.request("write", { targetId, dataBase64: Buffer.from(data).toString("base64") }), "write")
   }
 
-  async sendKeys(targetId: string, keys: string[]): Promise<void> { await this.request("sendKeys", { targetId, keys }) }
-  async resize(targetId: string, cols: number, rows: number): Promise<void> { await this.request("resize", { targetId, cols, rows }) }
+  async sendKeys(targetId: string, keys: string[]): Promise<void> { expectVoid(await this.request("sendKeys", { targetId, keys }), "sendKeys") }
+  async resize(targetId: string, cols: number, rows: number): Promise<void> { expectVoid(await this.request("resize", { targetId, cols, rows }), "resize") }
 
   async capture(targetId: string, raw?: boolean): Promise<string | null> {
     const value = await this.request("capture", { targetId, ...(raw === undefined ? {} : { raw }) })
@@ -174,7 +190,10 @@ export class SessiondBackend implements SessionBackend {
     const registration: ViewerRegistration = { onData, closeLocal: () => { open = false } }
     if (this.viewers.has(key)) throw new Error(`viewer is already attached: ${viewerId}`)
     this.viewers.set(key, registration)
-    try { await this.request("attach", { targetId, viewerId }) } catch (error) { this.viewers.delete(key); open = false; throw error }
+    try {
+      const value = await this.request("attach", { targetId, viewerId })
+      if (!isRecord(value) || value.attached !== true) throw new Error("sessiond returned an invalid attach response")
+    } catch (error) { this.viewers.delete(key); open = false; throw error }
     return {
       close: () => {
         if (!open) return
@@ -187,8 +206,8 @@ export class SessiondBackend implements SessionBackend {
     }
   }
 
-  async interrupt(targetId: string): Promise<void> { await this.request("interrupt", { targetId }) }
-  async kill(targetId: string): Promise<void> { await this.request("kill", { targetId }) }
+  async interrupt(targetId: string): Promise<void> { expectVoid(await this.request("interrupt", { targetId }), "interrupt") }
+  async kill(targetId: string): Promise<void> { expectVoid(await this.request("kill", { targetId }), "kill") }
 
   close(): void {
     if (this.closed) return
@@ -242,6 +261,7 @@ export class SessiondBackend implements SessionBackend {
     socket.on("data", chunk => {
       if (this.socket !== socket) return
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      if (this.buffer.length + bytes.length > SESSIOND_MAX_BUFFER_BYTES) { socket.destroy(new Error("sessiond frame buffer too large")); return }
       this.buffer = Buffer.concat([this.buffer, bytes])
       try {
         while (this.buffer.length >= 4) {
@@ -291,15 +311,21 @@ export class SessiondBackend implements SessionBackend {
     if (this.pending.size >= this.maxPendingRequests) return Promise.reject(new Error("sessiond pending request limit exceeded"))
     const id = `rpc-${process.pid}-${++this.sequence}-${randomUUID()}`
     const frame = encodeFrame({ id, version: PROTOCOL_VERSION, secret: this.requiredSecret(), op, args })
+    if (frame.byteLength > SESSIOND_MAX_BUFFER_BYTES) return Promise.reject(new Error("sessiond request frame exceeds protocol limit"))
     const socket = this.socket
     if (!socket || socket.destroyed || !socket.writable) return Promise.reject(new Error("sessiond is disconnected"))
     if (socket.writableLength + frame.byteLength > this.maxOutboundBytes) return Promise.reject(new Error("sessiond outbound buffer limit exceeded"))
     return new Promise((resolveRequest, reject) => {
+      let entry: Pending
       const timer = setTimeout(() => {
+        if (this.pending.get(id) !== entry) return
         this.pending.delete(id)
-        reject(new Error(`sessiond request timed out after ${this.requestTimeoutMs}ms`))
+        const error = new Error(`sessiond request timed out after ${this.requestTimeoutMs}ms`)
+        if (this.socket === socket) socket.destroy(error)
+        reject(error)
       }, this.requestTimeoutMs)
-      this.pending.set(id, { resolve: resolveRequest, reject, timer })
+      entry = { resolve: resolveRequest, reject, timer, socket }
+      this.pending.set(id, entry)
       socket.write(frame, error => {
         if (!error) return
         const pending = this.pending.get(id)
@@ -315,8 +341,9 @@ export class SessiondBackend implements SessionBackend {
     if (!socket || socket.destroyed || !socket.writable) return false
     const id = `viewer-${process.pid}-${++this.sequence}`
     const frame = encodeFrame({ id, version: PROTOCOL_VERSION, secret: this.requiredSecret(), op, args })
+    if (frame.byteLength > SESSIOND_MAX_BUFFER_BYTES) return false
     if (socket.writableLength + frame.byteLength > this.maxOutboundBytes) return false
-    try { return socket.write(frame) } catch { return false }
+    try { this.writeUntrackedFrame(socket, frame); return true } catch { return false }
   }
 
   private rejectPending(error: Error): void {

@@ -1,5 +1,5 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
-import { chmod, mkdir, open, readFile } from "node:fs/promises"
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto"
+import { chmod, link, lstat, mkdir, open, readFile, unlink } from "node:fs/promises"
 import { isAbsolute, join, normalize, resolve } from "node:path"
 
 export const SESSIOND_SECRET_FILE = "sessiond.secret"
@@ -14,6 +14,8 @@ function validateSecret(value: string): string {
 }
 
 async function readValidated(path: string): Promise<string> {
+  const info = await lstat(path)
+  if (!info.isFile()) throw new Error("sessiond secret must be a regular file")
   return validateSecret(await readFile(path, "utf8"))
 }
 
@@ -21,31 +23,33 @@ async function readValidated(path: string): Promise<string> {
 export async function createOrLoadSessiondSecret(stateDir: string): Promise<string> {
   await mkdir(stateDir, { recursive: true, mode: 0o700 })
   const path = join(stateDir, SESSIOND_SECRET_FILE)
-  const value = randomBytes(32).toString("base64")
   try {
-    const file = await open(path, "wx", 0o600)
+    const existing = await readValidated(path)
+    if (process.platform !== "win32") await chmod(path, 0o600)
+    return existing
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+  }
+
+  const value = randomBytes(32).toString("base64")
+  const tempPath = join(stateDir, `${SESSIOND_SECRET_FILE}.tmp.${process.pid}.${randomUUID()}`)
+  try {
+    const file = await open(tempPath, "wx", 0o600)
     try {
       await file.writeFile(value, "utf8")
       await file.sync()
     } finally {
       await file.close()
     }
-    return value
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
-    // A competing exclusive creator may have opened the file but not completed
-    // its tiny write yet. Retry only empty/transient reads; stable bad data is
-    // rejected rather than replaced.
-    for (let attempt = 0; ; attempt++) {
-      try {
-        const loaded = await readValidated(path)
-        if (process.platform !== "win32") await chmod(path, 0o600)
-        return loaded
-      } catch (readError) {
-        const content = await readFile(path, "utf8").catch(() => "")
-        if (attempt >= 20 || content.length >= 44) throw readError
-        await new Promise(resolve => setTimeout(resolve, 5))
-      }
+    try { await link(tempPath, path) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+    }
+    const published = await readValidated(path)
+    if (process.platform !== "win32") await chmod(path, 0o600)
+    return published
+  } finally {
+    try { await unlink(tempPath) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
     }
   }
 }

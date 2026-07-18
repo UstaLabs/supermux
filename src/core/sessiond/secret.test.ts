@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createOrLoadSessiondSecret, sessiondEndpoint, timingSafeSecretEqual } from "./secret"
@@ -21,7 +21,22 @@ describe("sessiond secret", () => {
     expect(Buffer.from(values[0]!, "base64")).toHaveLength(32)
     expect(Buffer.from(values[0]!, "base64").toString("base64")).toBe(values[0]!)
     expect(await readFile(join(dir, "sessiond.secret"), "utf8")).toBe(values[0]!)
+    expect((await readdir(dir)).filter(name => name.startsWith("sessiond.secret.tmp."))).toEqual([])
     if (process.platform !== "win32") expect((await stat(join(dir, "sessiond.secret"))).mode & 0o777).toBe(0o600)
+  })
+
+  test("rejects symlink and FIFO final paths without following or reading them", async () => {
+    const dir = await stateDir()
+    const target = join(dir, "target")
+    await writeFile(target, Buffer.alloc(32).toString("base64"), { mode: 0o600 })
+    await symlink(target, join(dir, "sessiond.secret"))
+    await expect(createOrLoadSessiondSecret(dir)).rejects.toThrow("regular file")
+    await rm(join(dir, "sessiond.secret"))
+    if (process.platform !== "win32") {
+      const made = Bun.spawnSync(["mkfifo", join(dir, "sessiond.secret")])
+      expect(made.exitCode).toBe(0)
+      await expect(createOrLoadSessiondSecret(dir)).rejects.toThrow("regular file")
+    }
   })
 
   test("malformed and wrong-length existing secrets fail loudly", async () => {
