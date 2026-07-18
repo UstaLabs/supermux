@@ -328,7 +328,6 @@ jobs:
             -configuration Release \
             -destination "platform=macOS,arch=arm64" \
             -derivedDataPath build/dd-mac \
-            MARKETING_VERSION="${{ steps.ver.outputs.version }}" \
             CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}" \
             CODE_SIGNING_ALLOWED=NO \
             build
@@ -496,18 +495,12 @@ jobs:
           java-version: "17"
       - name: Install XcodeGen
         run: brew install xcodegen
-      - name: Resolve version
+      - name: Resolve build number
         id: ver
         run: |
-          # On a tag → the tag's version. On a dry run there is no version, but TestFlight
-          # requires a VALID CFBundleShortVersionString (numeric, not "0.0.0-dryrun"), so fall
-          # back to the app's own MARKETING_VERSION from project.yml.
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            V="${GITHUB_REF_NAME#v}"
-          else
-            V="$(grep -m1 'MARKETING_VERSION:' apps/iosApp/project.yml | sed -E 's/.*"([^"]+)".*/\1/')"
-          fi
-          echo "version=$V" >> "$GITHUB_OUTPUT"
+          # The iOS app keeps its OWN MARKETING_VERSION (project.yml, currently "1.2"),
+          # independent of the broker's v* release tag — same as the Android versionName.
+          # Only the build number must be CI-unique and strictly increasing for TestFlight.
           echo "build=$(( TESTFLIGHT_BUILD_OFFSET + GITHUB_RUN_NUMBER ))" >> "$GITHUB_OUTPUT"
       - name: Generate Xcode project
         working-directory: apps/iosApp
@@ -543,7 +536,6 @@ jobs:
             -configuration Release \
             -destination "generic/platform=iOS" \
             -derivedDataPath build/dd-ios \
-            MARKETING_VERSION="${{ steps.ver.outputs.version }}" \
             CURRENT_PROJECT_VERSION="${{ steps.ver.outputs.build }}" \
             CODE_SIGNING_ALLOWED=NO \
             build
@@ -583,7 +575,6 @@ jobs:
             -destination "generic/platform=iOS" \
             -archivePath build/Supermux.xcarchive \
             -derivedDataPath build/dd-ios \
-            MARKETING_VERSION="${{ steps.ver.outputs.version }}" \
             CURRENT_PROJECT_VERSION="${{ steps.ver.outputs.build }}" \
             OTHER_CODE_SIGN_FLAGS="--keychain $IOS_RELEASE_KEYCHAIN" \
             archive
