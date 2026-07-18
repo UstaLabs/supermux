@@ -32,15 +32,6 @@ export type SessionProcessFactory = (
   onData: (data: Uint8Array) => void,
 ) => { process: SessionProcess; terminal: SessionTerminal }
 
-export function mergeSessionEnvironment(
-  host: Readonly<Record<string, string | undefined>>,
-  overrides: Readonly<Record<string, string>>,
-): Record<string, string> {
-  const merged: Record<string, string> = {}
-  for (const [key, value] of Object.entries(host)) if (value !== undefined) merged[key] = value
-  return Object.assign(merged, overrides)
-}
-
 export type ExitedRuntimeTarget = RuntimeTarget & {
   group: string
   exitCode: number | null
@@ -203,7 +194,7 @@ function productionProcessFactory(
   const eof = new Promise<void>(resolve => { resolveEof = resolve })
   const spawned = Bun.spawn(options.argv, {
     cwd: options.cwd,
-    env: mergeSessionEnvironment(process.env, options.env),
+    env: options.env,
     detached: true,
     windowsHide: true,
     terminal: {

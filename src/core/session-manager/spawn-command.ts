@@ -1,5 +1,6 @@
 import { resolve, basename, join } from "path"
 import { writeFileSync, mkdirSync, existsSync } from "fs"
+import { createHash } from "node:crypto"
 import { buildMemoryPreamble } from "../memory/preamble"
 import type { AgentRole } from "../memory/injector"
 import type { SessionRole } from "./policy"
@@ -8,6 +9,7 @@ import { CLAUDE_HOOKS_SETTINGS_PATH } from "../agents/claude/hooks-settings"
 import { claudeSpawnArgs, codexSpawnArgs, cursorSpawnArgs } from "../plugins"
 import { environmentMdPath, promptsDir, replyFallbackPath } from "../runtime-assets"
 import { makeLogger } from "../../shared/log"
+import { renderPosixLoginShellCommand } from "../runtime/posix-login-shell"
 
 const log = makeLogger("spawn-command")
 
@@ -29,8 +31,8 @@ export type ClaudeSpawnSpec = { argv: string[]; env: Record<string, string> }
 // below renders them into a shell command for tmux.
 export function buildClaudeSpawnSpec(opts: ClaudeSpawnOptions): ClaudeSpawnSpec {
   const role: AgentRole = opts.role ?? (opts.sessionRole === "personal_assistant" ? "main" : "worker")
-  const memoryPreamblePath = writeSessionMemoryPreamble(opts.name, role, opts.workdir)
   const sessionId = opts.sessionId ?? opts.name
+  const memoryPreamblePath = writeSessionMemoryPreamble(sessionId, opts.name, role, opts.workdir)
   const { args: pluginArgs, coreReplyHookPresent } = buildPluginArgs(opts.name, opts.pluginsFile, opts.pluginsDir)
   // Reply rules normally arrive via mux-core's SessionStart hook. Append the
   // static fallback whenever that hook isn't actually on disk for this spawn —
@@ -73,20 +75,11 @@ export function buildClaudeSpawnSpec(opts: ClaudeSpawnOptions): ClaudeSpawnSpec 
   }
 }
 
-function quotePosix(value: string): string {
-  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value
-  return `'${value.replaceAll("'", `'"'"'`)}'`
-}
-
 // Compatibility adapter for the POSIX tmux helper. All flag and environment
 // decisions remain in buildClaudeSpawnSpec; this function only serializes them.
 export function buildClaudeSpawnCommand(opts: ClaudeSpawnOptions): string {
   const spec = buildClaudeSpawnSpec(opts)
-  const inner = [
-    ...Object.entries(spec.env).map(([key, value]) => `${key}=${quotePosix(value)}`),
-    ...spec.argv.map(quotePosix),
-  ].join(" ")
-  return `bash -lc '${inner.replaceAll("'", `'"'"'`)}'`
+  return renderPosixLoginShellCommand(spec.argv, spec.env)
 }
 
 // Single source of truth for the codex invocation broker spawns into a tmux
@@ -148,11 +141,12 @@ function buildPluginArgs(sessionName: string, file?: string, pluginsDir?: string
   return { args: out, coreReplyHookPresent }
 }
 
-function writeSessionMemoryPreamble(sessionName: string, role: AgentRole, workdir?: string): string {
+function writeSessionMemoryPreamble(sessionId: string, displayName: string, role: AgentRole, workdir?: string): string {
   const dir = resolve(STATE_DIR, "memory-preambles")
   mkdirSync(dir, { recursive: true })
-  const preamble = buildMemoryPreamble(role, sessionName, workdir)
-  const path = resolve(dir, `${sessionName}.md`)
+  const preamble = buildMemoryPreamble(role, displayName, workdir)
+  const filename = `${createHash("sha256").update(sessionId, "utf8").digest("hex")}.md`
+  const path = resolve(dir, filename)
   writeFileSync(path, preamble, "utf8")
   return path
 }

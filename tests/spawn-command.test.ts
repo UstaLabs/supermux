@@ -1,9 +1,10 @@
 import { test, expect, afterAll } from "bun:test"
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, rmdirSync } from "fs"
 import { tmpdir } from "os"
-import { dirname, join } from "path"
-import { buildClaudeSpawnCommand, buildClaudeSpawnSpec } from "../src/core/session-manager/spawn-command"
+import { basename, dirname, join, relative, resolve } from "path"
+import { buildClaudeSpawnCommand, buildClaudeSpawnSpec, type ClaudeSpawnSpec } from "../src/core/session-manager/spawn-command"
 import { writeClaudeHooksSettings, readPersistedHookSecret, CLAUDE_HOOKS_SETTINGS_PATH } from "../src/core/agents/claude/hooks-settings"
+import { STATE_DIR } from "../src/shared/paths"
 
 const HOOKS_WEB_PORT = Number(process.env.MUX_WEB_PORT ?? 9898)
 const persistedHookSecret = readPersistedHookSecret()
@@ -35,6 +36,15 @@ function pluginsFixture(): { pluginsFile: string; pluginsDir: string } {
   return { pluginsFile, pluginsDir }
 }
 
+function memoryPreamblePath(spec: ClaudeSpawnSpec): string {
+  const paths: string[] = []
+  for (let index = 0; index < spec.argv.length - 1; index++) {
+    if (spec.argv[index] === "--append-system-prompt-file") paths.push(spec.argv[index + 1]!)
+  }
+  if (paths.length < 2) throw new Error("Claude spawn spec is missing its memory preamble")
+  return paths[1]!
+}
+
 test("includes session id and requested name env vars", () => {
   const cmd = buildClaudeSpawnCommand({ name: "ana" })
   expect(cmd).toContain("MUX_SESSION_ID=ana")
@@ -64,6 +74,38 @@ test("buildClaudeSpawnSpec preserves argv boundaries without a shell wrapper", (
   expect(spec.env.MUX_SESSION_ID).toBe("session with spaces\nand a newline")
   expect(spec.env.MUX_DISPLAY_NAME).toBe(displayName)
   expect(spec.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1")
+})
+
+test("memory preambles use contained filesystem-safe paths for hostile display names", () => {
+  const preambleDir = resolve(STATE_DIR, "memory-preambles")
+  const displayNames = [
+    "../escape",
+    "foo:bar",
+    "trailing. ",
+    "CON",
+    "NUL",
+    "slash/name",
+    "back\\slash",
+    "💻".repeat(2_000),
+  ]
+
+  for (const [index, name] of displayNames.entries()) {
+    const path = memoryPreamblePath(buildClaudeSpawnSpec({ name, sessionId: `safe-session-${index}` }))
+    const contained = relative(preambleDir, path)
+    expect(contained.startsWith("..") || contained === "" || contained.includes("/") || contained.includes("\\")).toBe(false)
+    expect(dirname(path)).toBe(preambleDir)
+    expect(basename(path)).toMatch(/^[a-f0-9]{64}\.md$/)
+    expect(existsSync(path)).toBe(true)
+  }
+})
+
+test("memory preamble paths are deterministic by broker session id", () => {
+  const first = memoryPreamblePath(buildClaudeSpawnSpec({ name: "display one", sessionId: "stable-session" }))
+  const renamed = memoryPreamblePath(buildClaudeSpawnSpec({ name: "../renamed display", sessionId: "stable-session" }))
+  const distinct = memoryPreamblePath(buildClaudeSpawnSpec({ name: "display one", sessionId: "other-session" }))
+
+  expect(renamed).toBe(first)
+  expect(distinct).not.toBe(first)
 })
 
 test("buildClaudeSpawnCommand is a safely quoted POSIX adapter over the structured spec", () => {

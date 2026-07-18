@@ -12,6 +12,7 @@ import {
   TMUX_COMMAND_TIMEOUT_MS,
 } from "../session-manager/tmux"
 import type { SessionBackend } from "./session-backend"
+import { renderPosixLoginShellCommand } from "./posix-login-shell"
 
 type TmuxResult = { code: number; stdout: string; stderr: string }
 
@@ -43,18 +44,6 @@ async function runTmux(args: string[], input?: Uint8Array): Promise<TmuxResult> 
   return runCommand("tmux", args, TMUX_COMMAND_TIMEOUT_MS, input)
 }
 
-function quotePosix(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`
-}
-
-function renderCommand(argv: string[], env: Record<string, string>): string {
-  const environment = Object.entries(env).map(([key, value]) => {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`invalid environment variable name: ${key}`)
-    return quotePosix(`${key}=${value}`)
-  })
-  return ["env", "--", ...environment, ...argv.map(quotePosix)].join(" ")
-}
-
 function ensureTmux(result: TmuxResult, operation: string): void {
   if (result.code !== 0) throw new Error(`tmux ${operation} failed: ${result.stderr}`)
 }
@@ -76,7 +65,7 @@ export function createTmuxSessionBackend(deps: {
         session: opts.group,
         window: opts.name,
         workdir: opts.cwd,
-        command: renderCommand(opts.argv, opts.env),
+        command: renderPosixLoginShellCommand(opts.argv, opts.env),
       })
       if (opts.cols !== undefined || opts.rows !== undefined) {
         const args = ["resize-window", "-t", windowId]

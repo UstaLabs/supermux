@@ -92,6 +92,12 @@ function defaultConnectSocket(endpoint: string): Promise<Socket> {
   })
 }
 
+function currentProcessEnvironment(overrides: Readonly<Record<string, string>>): Record<string, string> {
+  const environment: Record<string, string> = {}
+  for (const [key, value] of Object.entries(process.env)) if (typeof value === "string") environment[key] = value
+  return Object.assign(environment, overrides)
+}
+
 export class SessiondBackend implements SessionBackend {
   private socket?: Socket
   private ready = false
@@ -150,7 +156,7 @@ export class SessiondBackend implements SessionBackend {
   }
 
   async create(options: { group: string; name: string; cwd: string; argv: string[]; env: Record<string, string>; cols?: number; rows?: number }): Promise<RuntimeTarget> {
-    return target(await this.request("create", options))
+    return target(await this.request("create", { ...options, env: currentProcessEnvironment(options.env) }))
   }
 
   async list(group?: string): Promise<RuntimeTarget[]> {

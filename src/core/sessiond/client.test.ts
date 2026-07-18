@@ -26,6 +26,63 @@ describe("SessiondBackend", () => {
     await verifySessionBackendContract(client, memory.observation)
   })
 
+  test("sends a fresh complete broker environment on every create request", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sessiond-env-")); cleanup.push(() => rm(dir, { recursive: true, force: true }))
+    const endpoint = join(dir, "rpc.sock"), secret = Buffer.alloc(32, 14).toString("base64")
+    const memory = createMemorySessionBackendHarness()
+    const requests: Array<Parameters<typeof memory.backend.create>[0]> = []
+    const backend = {
+      ...memory.backend,
+      async create(options: Parameters<typeof memory.backend.create>[0]) {
+        requests.push({ ...options, argv: [...options.argv], env: { ...options.env } })
+        return memory.backend.create(options)
+      },
+    }
+    const server = await startSessiondServer({ endpoint, secret, backend }); cleanup.push(() => server.close())
+    const client = new SessiondBackend({ endpoint, secret, stateDir: dir, platform: "linux" }); cleanup.push(() => client.close())
+    const saved = {
+      PATH: process.env.PATH,
+      CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    }
+    const restore = (key: keyof typeof saved) => {
+      const value = saved[key]
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    const snapshot = (overrides: Record<string, string>) => {
+      const environment: Record<string, string> = {}
+      for (const [key, value] of Object.entries(process.env)) if (typeof value === "string") environment[key] = value
+      return { ...environment, ...overrides }
+    }
+
+    try {
+      process.env.PATH = "broker-path-one"
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = "oauth-one"
+      process.env.ANTHROPIC_API_KEY = "api-one"
+      const firstOverrides = { MUX_SESSION_ID: "first" }
+      const firstExpected = snapshot(firstOverrides)
+      await client.create({ group: "g", name: "first", cwd: dir, argv: ["fake"], env: firstOverrides })
+
+      process.env.PATH = "broker-path-two"
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = "oauth-two"
+      delete process.env.ANTHROPIC_API_KEY
+      const secondOverrides = { PATH: "session-path", MUX_SESSION_ID: "second" }
+      const secondExpected = snapshot(secondOverrides)
+      await client.create({ group: "g", name: "second", cwd: dir, argv: ["fake"], env: secondOverrides })
+
+      expect(requests[0]?.env).toEqual(firstExpected)
+      expect(requests[1]?.env).toEqual(secondExpected)
+      expect(requests[1]?.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("oauth-two")
+      expect(requests[1]?.env).not.toHaveProperty("ANTHROPIC_API_KEY")
+      expect(requests[1]?.env.PATH).toBe("session-path")
+    } finally {
+      restore("PATH")
+      restore("CLAUDE_CODE_OAUTH_TOKEN")
+      restore("ANTHROPIC_API_KEY")
+    }
+  })
+
   test("reconnects after the server forcibly closes broker-side sockets", async () => {
     const { client, server } = await harness()
     expect((await client.hello()).version).toBe(1)

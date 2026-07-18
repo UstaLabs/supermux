@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test"
+import { spawnSync } from "node:child_process"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { createTmuxSessionBackend } from "./tmux-backend"
 
 type Result = { code: number; stdout: string; stderr: string }
@@ -25,7 +29,7 @@ function createFakeTmux() {
 }
 
 describe("tmux session backend", () => {
-  test("renders argv and env as POSIX-quoted command data", async () => {
+  test("renders argv and env through a POSIX login shell", async () => {
     const fake = createFakeTmux()
     const backend = createTmuxSessionBackend({ tmux: fake.client })
 
@@ -37,15 +41,58 @@ describe("tmux session backend", () => {
       env: { SAFE: "hello world", DANGER: "$(touch /tmp/env-pwn)" },
     })
 
-    expect(fake.calls[0]).toEqual({
-      method: "spawnSessionWindow",
-      args: [{
-        session: "mux",
-        window: "worker",
-        workdir: "/tmp/project",
-        command: "env -- 'SAFE=hello world' 'DANGER=$(touch /tmp/env-pwn)' 'agent' '$(touch /tmp/pwn); '\"'\"'quoted'\"'\"'' 'line\nbreak'",
-      }],
+    expect(fake.calls[0]?.method).toBe("spawnSessionWindow")
+    const spawn = fake.calls[0]?.args[0] as { session: string; window: string; workdir: string; command: string }
+    expect({ ...spawn, command: undefined }).toEqual({
+      session: "mux",
+      window: "worker",
+      workdir: "/tmp/project",
+      command: undefined,
     })
+    expect(spawn.command.startsWith("bash -lc ")).toBe(true)
+  })
+
+  test("preserves exact argv and env without shell injection", async () => {
+    const root = mkdtempSync(join(tmpdir(), "mux-posix-command-"))
+    try {
+      const captureScript = join(root, "capture.mjs")
+      const capturePath = join(root, "capture.json")
+      const injectedFromArg = join(root, "arg-injected")
+      const injectedFromEnv = join(root, "env-injected")
+      writeFileSync(captureScript, [
+        'import { writeFileSync } from "node:fs"',
+        'writeFileSync(process.env.CAPTURE_PATH, JSON.stringify({ argv: process.argv.slice(2), sample: process.env.SAMPLE }))',
+      ].join("\n"))
+      const argv = [
+        process.execPath,
+        captureScript,
+        "space separated",
+        "single ' quote",
+        "line\nbreak",
+        `$(touch ${injectedFromArg}); touch ${injectedFromArg}`,
+      ]
+      const sample = `env ' value\n$(touch ${injectedFromEnv}); touch ${injectedFromEnv}`
+      const fake = createFakeTmux()
+      const backend = createTmuxSessionBackend({ tmux: fake.client })
+      await backend.create({
+        group: "mux",
+        name: "worker",
+        cwd: root,
+        argv,
+        env: { CAPTURE_PATH: capturePath, SAMPLE: sample },
+      })
+      const spawn = fake.calls[0]?.args[0] as { command: string }
+
+      const executed = spawnSync("/bin/sh", ["-c", spawn.command], { encoding: "utf8" })
+
+      expect(executed.status).toBe(0)
+      expect(executed.stderr).toBe("")
+      expect(JSON.parse(readFileSync(capturePath, "utf8"))).toEqual({ argv: argv.slice(2), sample })
+      expect(existsSync(injectedFromArg)).toBe(false)
+      expect(existsSync(injectedFromEnv)).toBe(false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   test("rejects non-portable environment names before invoking tmux", async () => {
