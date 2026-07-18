@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createServer } from "node:net"
+import { createConnection, createServer, type Socket } from "node:net"
 import { createMemorySessionBackendHarness, verifySessionBackendContract } from "../runtime/session-backend.test-support"
 import { decodeFrames, encodeFrame } from "../../shared/frame-codec"
 import { SessiondBackend } from "./client"
@@ -47,11 +47,44 @@ describe("SessiondBackend", () => {
     expect(spawns).toBe(1)
   })
 
+  test("adopts after an initial connection-refused failure", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sessiond-refused-")); cleanup.push(() => rm(dir, { recursive: true, force: true }))
+    const endpoint = join(dir, "rpc.sock"), secret = Buffer.alloc(32, 7).toString("base64")
+    let attempts = 0; let spawns = 0; let server: SessiondServer | undefined
+    const connectSocket = async (): Promise<Socket> => {
+      if (attempts++ === 0) throw Object.assign(new Error("refused"), { code: "ECONNREFUSED" })
+      return await new Promise<Socket>((resolveConnect, reject) => {
+        const socket = createConnection(endpoint); socket.once("connect", () => resolveConnect(socket)); socket.once("error", reject)
+      })
+    }
+    const client = new SessiondBackend({
+      endpoint, secret, stateDir: dir, platform: "win32", connectSocket, adoptionPollMs: 5, adoptionTimeoutMs: 500,
+      spawnSessiond: async () => { spawns++; server = await startSessiondServer({ endpoint, secret, backend: createMemorySessionBackendHarness().backend }) },
+    })
+    cleanup.push(async () => { client.close(); await server?.close() })
+    await client.ensureConnected()
+    expect(spawns).toBe(1)
+  })
+
   test("bad credentials fail without spawning", async () => {
     const { endpoint, dir } = await harness(); let spawns = 0
     const client = new SessiondBackend({ endpoint, secret: "wrong", stateDir: dir, platform: "win32", spawnSessiond: async () => { spawns++ } })
     cleanup.push(() => client.close())
     await expect(client.ensureConnected()).rejects.toThrow("authentication failed")
+    expect(spawns).toBe(0)
+  })
+
+  test("does not adopt on an initial EPIPE transport failure", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sessiond-epipe-")); cleanup.push(() => rm(dir, { recursive: true, force: true }))
+    let spawns = 0
+    const failure = Object.assign(new Error("broken pipe during hello"), { code: "EPIPE" })
+    const client = new SessiondBackend({
+      endpoint: join(dir, "rpc.sock"), secret: Buffer.alloc(32, 6).toString("base64"), stateDir: dir, platform: "win32",
+      connectSocket: async () => { throw failure },
+      spawnSessiond: async () => { spawns++ },
+    })
+    cleanup.push(() => client.close())
+    await expect(client.ensureConnected()).rejects.toBe(failure)
     expect(spawns).toBe(0)
   })
 

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { mkdir, open, readFile, unlink } from "node:fs/promises"
+import { mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { STATE_DIR } from "../../shared/paths"
 import { createProcessJob } from "./job-object"
@@ -37,54 +37,97 @@ function processIsLive(pid: number): boolean {
   }
 }
 
+const LOCK_PREFIX = "sessiond.lock."
+const PENDING_LOCK_PREFIX = `${LOCK_PREFIX}pending.`
+const LOCK_STABILIZE_MS = 30
+
+type LockOwner = { pid: number; token: string }
+type Candidate = LockOwner & { name: string; path: string; raw: string }
+
+function parseLockOwner(raw: string): LockOwner | undefined {
+  try {
+    const value = JSON.parse(raw) as { pid?: unknown; token?: unknown }
+    if (!Number.isSafeInteger(value.pid) || (value.pid as number) <= 0 || typeof value.token !== "string" || value.token.length === 0) return
+    return { pid: value.pid as number, token: value.token }
+  } catch { return }
+}
+
+async function removeUniqueCandidate(path: string, expectedRaw: string): Promise<void> {
+  try {
+    if (await readFile(path, "utf8") !== expectedRaw) return
+    await unlink(path)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+  }
+}
+
+async function liveCandidates(stateDir: string): Promise<Candidate[]> {
+  const names = await readdir(stateDir)
+  const live: Candidate[] = []
+  for (const name of names) {
+    if (!name.startsWith(LOCK_PREFIX)) continue
+    const path = join(stateDir, name)
+    let raw: string
+    try { raw = await readFile(path, "utf8") } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue
+      throw error
+    }
+    const owner = parseLockOwner(raw)
+    if (name.startsWith(PENDING_LOCK_PREFIX)) {
+      const filenamePid = Number.parseInt(name.slice(PENDING_LOCK_PREFIX.length).split(".", 1)[0] ?? "", 10)
+      const pendingPid = owner?.pid ?? filenamePid
+      if (!processIsLive(pendingPid)) await removeUniqueCandidate(path, raw)
+      continue
+    }
+    if (!owner || !processIsLive(owner.pid)) {
+      await removeUniqueCandidate(path, raw)
+      continue
+    }
+    live.push({ ...owner, name, path, raw })
+  }
+  return live.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+}
+
 export async function acquireSessiondLock(stateDir: string): Promise<SessiondLock> {
   await mkdir(stateDir, { recursive: true, mode: 0o700 })
-  const path = join(stateDir, "sessiond.lock")
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const token = randomUUID()
-    try {
-      const file = await open(path, "wx", 0o600)
-      try { await file.writeFile(JSON.stringify({ pid: process.pid, token }), "utf8"); await file.sync() } finally { await file.close() }
-      let released = false
-      return {
-        async release() {
-          if (released) return
-          released = true
-          try {
-            const current = JSON.parse(await readFile(path, "utf8")) as { token?: unknown }
-            if (current.token === token) await unlink(path)
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !(error instanceof SyntaxError)) throw error
-          }
-        },
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
-      let owner: { pid?: unknown } = {}
-      let raw = ""
-      for (let readAttempt = 0; readAttempt < 20; readAttempt++) {
-        try {
-          raw = await readFile(path, "utf8")
-          owner = JSON.parse(raw) as { pid?: unknown }
-          break
-        } catch (readError) {
-          if ((readError as NodeJS.ErrnoException).code === "ENOENT") break
-          if (readError instanceof SyntaxError || raw.length === 0) {
-            await new Promise(resolveDelay => setTimeout(resolveDelay, 5))
-            continue
-          }
-          throw readError
-        }
-      }
-      if (typeof owner.pid === "number" && processIsLive(owner.pid)) {
-        throw new Error(`mux-sessiond is already running (pid ${owner.pid})`)
-      }
-      try { await unlink(path) } catch (unlinkError) {
-        if ((unlinkError as NodeJS.ErrnoException).code !== "ENOENT") throw unlinkError
-      }
+  const token = randomUUID()
+  const raw = JSON.stringify({ pid: process.pid, token })
+  const pendingName = `${PENDING_LOCK_PREFIX}${process.pid}.${token}`
+  const pendingPath = join(stateDir, pendingName)
+  let candidatePath: string | undefined
+  try {
+    const file = await open(pendingPath, "wx", 0o600)
+    try { await file.writeFile(raw, "utf8"); await file.sync() } finally { await file.close() }
+
+    // This stamp is allocated only after the unique pending file is durable.
+    // A slower contender therefore cannot later publish an earlier candidate.
+    const monotonic = process.hrtime.bigint().toString().padStart(24, "0")
+    const wall = Date.now().toString().padStart(13, "0")
+    const candidateName = `${LOCK_PREFIX}${monotonic}.${wall}.${process.pid}.${token}`
+    candidatePath = join(stateDir, candidateName)
+    await rename(pendingPath, candidatePath)
+    await new Promise(resolveDelay => setTimeout(resolveDelay, LOCK_STABILIZE_MS))
+
+    const contenders = await liveCandidates(stateDir)
+    const winner = contenders[0]
+    if (!winner || winner.token !== token || winner.path !== candidatePath) {
+      await removeUniqueCandidate(candidatePath, raw)
+      const owner = winner ? ` (pid ${winner.pid})` : ""
+      throw new Error(`mux-sessiond is already running${owner}`)
     }
+
+    let released = false
+    return {
+      async release() {
+        if (released) return
+        released = true
+        await removeUniqueCandidate(candidatePath!, raw)
+      },
+    }
+  } catch (error) {
+    await removeUniqueCandidate(candidatePath ?? pendingPath, raw).catch(() => undefined)
+    throw error
   }
-  throw new Error("could not acquire mux-sessiond single-instance lock")
 }
 
 export async function runSessiondMain(argv: string[] = process.argv.slice(2)): Promise<void> {

@@ -8,6 +8,7 @@ import { SESSIOND_MAX_BUFFER_BYTES, SESSIOND_MAX_FRAME_BYTES } from "./server"
 import { createOrLoadSessiondSecret } from "./secret"
 
 type SpawnSessiond = (executable: string, stateDir: string) => void | Promise<void>
+type ConnectSocket = (endpoint: string) => Promise<Socket>
 
 export type SessiondBackendOptions = {
   endpoint: string
@@ -16,6 +17,8 @@ export type SessiondBackendOptions = {
   platform?: NodeJS.Platform
   executable?: string
   spawnSessiond?: SpawnSessiond
+  /** @internal Deterministic transport seam for connection-failure tests. */
+  connectSocket?: ConnectSocket
   adoptionTimeoutMs?: number
   adoptionPollMs?: number
   requestTimeoutMs?: number
@@ -63,7 +66,16 @@ function target(value: unknown): RuntimeTarget {
 
 function adoptable(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException)?.code
-  return code === "ENOENT" || code === "ECONNREFUSED" || code === "EPIPE"
+  return code === "ENOENT" || code === "ECONNREFUSED"
+}
+
+function defaultConnectSocket(endpoint: string): Promise<Socket> {
+  return new Promise((resolveConnect, reject) => {
+    const candidate = createConnection(endpoint)
+    const onError = (error: Error) => { candidate.destroy(); reject(error) }
+    candidate.once("error", onError)
+    candidate.once("connect", () => { candidate.off("error", onError); resolveConnect(candidate) })
+  })
 }
 
 export class SessiondBackend implements SessionBackend {
@@ -81,6 +93,7 @@ export class SessiondBackend implements SessionBackend {
   private readonly platform: NodeJS.Platform
   private readonly executable: string
   private readonly spawnSessiond: SpawnSessiond
+  private readonly connectSocket: ConnectSocket
   private readonly adoptionTimeoutMs: number
   private readonly adoptionPollMs: number
   private readonly requestTimeoutMs: number
@@ -94,6 +107,7 @@ export class SessiondBackend implements SessionBackend {
     this.platform = options.platform ?? process.platform
     this.executable = options.executable ?? defaultExecutable()
     this.spawnSessiond = options.spawnSessiond ?? defaultSpawn
+    this.connectSocket = options.connectSocket ?? defaultConnectSocket
     this.adoptionTimeoutMs = options.adoptionTimeoutMs ?? 10_000
     this.adoptionPollMs = options.adoptionPollMs ?? 100
     this.requestTimeoutMs = options.requestTimeoutMs ?? 10_000
@@ -208,12 +222,7 @@ export class SessiondBackend implements SessionBackend {
 
   private async openAndAuthenticate(): Promise<void> {
     this.destroyCurrent(new Error("sessiond connection replaced"))
-    const socket = await new Promise<Socket>((resolveConnect, reject) => {
-      const candidate = createConnection(this.endpoint)
-      const onError = (error: Error) => { candidate.destroy(); reject(error) }
-      candidate.once("error", onError)
-      candidate.once("connect", () => { candidate.off("error", onError); resolveConnect(candidate) })
-    })
+    const socket = await this.connectSocket(this.endpoint)
     if (this.closed) { socket.destroy(); throw new Error("sessiond client is closed") }
     this.socket = socket
     this.buffer = Buffer.alloc(0)
