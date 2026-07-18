@@ -1,9 +1,8 @@
 import { expect, test } from "bun:test"
 import { createMemorySessionBackend } from "./session-backend.test-support"
-import { getSessionBackend, setSessionBackendForTests } from "./index"
+import { createPlatformSessionBackend, getSessionBackend, setSessionBackendForTests } from "./index"
 
 test("session backend test override can be reset without leaking state", () => {
-  const platformDefault = getSessionBackend()
   const memory = createMemorySessionBackend()
 
   try {
@@ -13,5 +12,18 @@ test("session backend test override can be reset without leaking state", () => {
     setSessionBackendForTests()
   }
 
-  expect(getSessionBackend()).toBe(platformDefault)
+  if (process.platform === "win32") {
+    expect(getSessionBackend).toThrow("Windows session backend is not initialized")
+  } else {
+    expect(getSessionBackend()).not.toBe(memory)
+  }
+})
+
+test("Windows platform selection throws before constructing a POSIX backend", () => {
+  let constructed = false
+  expect(() => createPlatformSessionBackend("win32", () => {
+    constructed = true
+    return createMemorySessionBackend()
+  })).toThrow("Windows session backend is not initialized")
+  expect(constructed).toBe(false)
 })

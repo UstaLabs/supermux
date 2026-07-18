@@ -9,6 +9,7 @@ import {
   runCommand,
   sendKeysToWindowId,
   spawnSessionWindow,
+  TMUX_COMMAND_TIMEOUT_MS,
 } from "../session-manager/tmux"
 import type { SessionBackend } from "./session-backend"
 
@@ -39,17 +40,7 @@ const tmuxClient: TmuxClient = {
 }
 
 async function runTmux(args: string[], input?: Uint8Array): Promise<TmuxResult> {
-  if (input === undefined) return runCommand("tmux", args)
-
-  const proc = Bun.spawn(["tmux", ...args], { stdin: "pipe", stdout: "pipe", stderr: "pipe" })
-  proc.stdin.write(input)
-  proc.stdin.end()
-  const code = await proc.exited
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ])
-  return { code, stdout, stderr }
+  return runCommand("tmux", args, TMUX_COMMAND_TIMEOUT_MS, input)
 }
 
 function quotePosix(value: string): string {
@@ -57,8 +48,11 @@ function quotePosix(value: string): string {
 }
 
 function renderCommand(argv: string[], env: Record<string, string>): string {
-  const environment = Object.entries(env).map(([key, value]) => quotePosix(`${key}=${value}`))
-  return ["env", ...environment, ...argv.map(quotePosix)].join(" ")
+  const environment = Object.entries(env).map(([key, value]) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`invalid environment variable name: ${key}`)
+    return quotePosix(`${key}=${value}`)
+  })
+  return ["env", "--", ...environment, ...argv.map(quotePosix)].join(" ")
 }
 
 function ensureTmux(result: TmuxResult, operation: string): void {
@@ -111,8 +105,16 @@ export function createTmuxSessionBackend(deps: {
     },
     async write(targetId, data) {
       const name = bufferId()
-      ensureTmux(await command(["load-buffer", "-b", name, "-"], data), "load-buffer")
-      ensureTmux(await command(["paste-buffer", "-d", "-b", name, "-t", targetId]), "paste-buffer")
+      try {
+        ensureTmux(await command(["load-buffer", "-b", name, "-"], data), "load-buffer")
+        ensureTmux(await command(["paste-buffer", "-d", "-b", name, "-t", targetId]), "paste-buffer")
+      } finally {
+        try {
+          await command(["delete-buffer", "-b", name])
+        } catch {
+          // paste-buffer -d already removes the buffer on success; cleanup is best-effort otherwise.
+        }
+      }
     },
     sendKeys(targetId, keys) {
       return tmux.sendKeysToWindowId(targetId, keys)

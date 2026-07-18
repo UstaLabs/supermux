@@ -8,11 +8,14 @@ type MemoryTarget = RuntimeTarget & {
   viewers: Map<string, (data: Uint8Array) => void | Promise<void>>
 }
 
-type MemorySessionBackend = SessionBackend & {
+export type SessionBackendContractObservation = {
   sentKeys(targetId: string): string[][]
 }
 
-export function createMemorySessionBackend(): MemorySessionBackend {
+export function createMemorySessionBackendHarness(): {
+  backend: SessionBackend
+  observation: SessionBackendContractObservation
+} {
   const targets = new Map<string, MemoryTarget>()
   let nextId = 1
 
@@ -27,7 +30,7 @@ export function createMemorySessionBackend(): MemorySessionBackend {
     await Promise.all([...found.viewers.values()].map(onData => onData(data)))
   }
 
-  return {
+  const backend: SessionBackend = {
     async create(opts) {
       const id = `memory-${nextId++}`
       const created: MemoryTarget = {
@@ -97,14 +100,21 @@ export function createMemorySessionBackend(): MemorySessionBackend {
       found.pid = null
       found.viewers.clear()
     },
-    sentKeys(targetId) {
-      return target(targetId).sentKeys.map(keys => [...keys])
-    },
   }
+  const observation: SessionBackendContractObservation = {
+    sentKeys: targetId => target(targetId).sentKeys.map(keys => [...keys]),
+  }
+  return { backend, observation }
 }
 
-export async function verifySessionBackendContract(backend: MemorySessionBackend): Promise<void> {
-  await import("./session-backend")
+export function createMemorySessionBackend(): SessionBackend {
+  return createMemorySessionBackendHarness().backend
+}
+
+export async function verifySessionBackendContract(
+  backend: SessionBackend,
+  observation: SessionBackendContractObservation,
+): Promise<void> {
   const created = await backend.create({
     group: "contract",
     name: "worker",
@@ -133,7 +143,7 @@ export async function verifySessionBackendContract(backend: MemorySessionBackend
   expect(await backend.capture(created.id, true)).toContain("\u001b[32mhello viewer")
   expect(seen).toEqual(["hello", " viewer"])
   await backend.sendKeys(created.id, ["Enter", "C-c"])
-  expect(backend.sentKeys(created.id)).toEqual([["Enter", "C-c"]])
+  expect(observation.sentKeys(created.id)).toEqual([["Enter", "C-c"]])
 
   viewer.close()
   await backend.write(created.id, new TextEncoder().encode(" detached"))

@@ -43,9 +43,23 @@ describe("tmux session backend", () => {
         session: "mux",
         window: "worker",
         workdir: "/tmp/project",
-        command: "env 'SAFE=hello world' 'DANGER=$(touch /tmp/env-pwn)' 'agent' '$(touch /tmp/pwn); '\"'\"'quoted'\"'\"'' 'line\nbreak'",
+        command: "env -- 'SAFE=hello world' 'DANGER=$(touch /tmp/env-pwn)' 'agent' '$(touch /tmp/pwn); '\"'\"'quoted'\"'\"'' 'line\nbreak'",
       }],
     })
+  })
+
+  test("rejects non-portable environment names before invoking tmux", async () => {
+    const fake = createFakeTmux()
+    const backend = createTmuxSessionBackend({ tmux: fake.client })
+
+    await expect(backend.create({
+      group: "mux",
+      name: "worker",
+      cwd: "/tmp/project",
+      argv: ["agent"],
+      env: { "-i": "option injection" },
+    })).rejects.toThrow("invalid environment variable name: -i")
+    expect(fake.calls).toEqual([])
   })
 
   test("maps target operations to the existing tmux client and command seam", async () => {
@@ -89,6 +103,27 @@ describe("tmux session backend", () => {
     expect(commands).toEqual([
       { args: ["load-buffer", "-b", "runtime-test", "-"], input: [0, 39, 10, 255] },
       { args: ["paste-buffer", "-d", "-b", "runtime-test", "-t", "@42"], input: undefined },
+      { args: ["delete-buffer", "-b", "runtime-test"], input: undefined },
+    ])
+  })
+
+  test("deletes the private buffer after paste failure and preserves the paste error", async () => {
+    const fake = createFakeTmux()
+    const commands: string[][] = []
+    const runTmux = async (args: string[]): Promise<Result> => {
+      commands.push(args)
+      if (args[0] === "paste-buffer") return { code: 1, stdout: "", stderr: "target gone" }
+      if (args[0] === "delete-buffer") throw new Error("tmux server disappeared")
+      return { code: 0, stdout: "", stderr: "" }
+    }
+    const backend = createTmuxSessionBackend({ tmux: fake.client, runTmux, bufferId: () => "sensitive" })
+
+    await expect(backend.write("@gone", new TextEncoder().encode("secret")))
+      .rejects.toThrow("tmux paste-buffer failed: target gone")
+    expect(commands).toEqual([
+      ["load-buffer", "-b", "sensitive", "-"],
+      ["paste-buffer", "-d", "-b", "sensitive", "-t", "@gone"],
+      ["delete-buffer", "-b", "sensitive"],
     ])
   })
 
