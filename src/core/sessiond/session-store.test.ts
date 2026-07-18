@@ -29,7 +29,7 @@ type HarnessOptions = {
   assignError?: Error
   factoryError?: Error
   jobFactoryError?: Error
-  writePlan?: number[]
+  writePlan?: Array<number | Error>
   terminateFailures?: number
   terminalCloseFailures?: number
   jobCloseFailures?: number
@@ -80,10 +80,11 @@ function harness(options: HarnessOptions = {}) {
       write(data: Uint8Array | string) {
         const offered = typeof data === "string" ? bytes(data) : new Uint8Array(data)
         this.offered.push(offered)
-        const acceptedBytes = Math.max(0, Math.min(offered.byteLength, writePlan.shift() ?? offered.byteLength))
-        this.accepted.push(offered.slice(0, acceptedBytes))
-        events.push(`terminal-write:${acceptedBytes}/${offered.byteLength}`)
-        return acceptedBytes
+        const result = writePlan.shift() ?? offered.byteLength
+        if (result instanceof Error) throw result
+        if (result >= 0 && result <= offered.byteLength) this.accepted.push(offered.slice(0, result))
+        events.push(`terminal-write:${result}/${offered.byteLength}`)
+        return result
       },
       resize(cols: number, rows: number) {
         this.dimensions.push([cols, rows])
@@ -314,6 +315,49 @@ describe("SessionStore", () => {
     sessions[0]!.drain()
     await tick()
     expect(acceptedText(sessions[0]!)).toBe("abc")
+  })
+
+  test("viewer writes report immediate terminal faults and leave the queue reusable", async () => {
+    for (const fault of [new Error("native write failed"), -1, 99]) {
+      const { store, sessions } = harness({ writePlan: [fault] })
+      const target = await store.create({ ...base, name: `fault-${String(fault)}` })
+      const viewer = await store.attach(target.id, "viewer", () => {})
+
+      expect(viewer.write(bytes("abc"))).toBe(false)
+      expect(viewer.write(bytes("ok"))).toBe(true)
+      expect(acceptedText(sessions[0]!)).toBe("ok")
+    }
+  })
+
+  test("async writes reject terminal throws and invalid accepted byte counts", async () => {
+    for (const [fault, message] of [
+      [new Error("native write failed"), /native write failed/i],
+      [-1, /invalid accepted byte count: -1/i],
+      [99, /invalid accepted byte count: 99/i],
+    ] as const) {
+      const { store } = harness({ writePlan: [fault] })
+      const target = await store.create({ ...base, name: `async-fault-${String(fault)}` })
+      await expect(store.write(target.id, bytes("abc"))).rejects.toThrow(message)
+    }
+  })
+
+  test("rejects oversized async input before copying and remains usable", async () => {
+    let sliceCalls = 0
+    class SliceObservedBytes extends Uint8Array {
+      override slice(start?: number, end?: number): Uint8Array<ArrayBuffer> {
+        sliceCalls++
+        return super.slice(start, end)
+      }
+    }
+    const { store, sessions } = harness({ store: { inputByteLimit: 2 } })
+    const target = await store.create(base)
+    const oversized = new SliceObservedBytes([1, 2, 3])
+
+    await expect(store.write(target.id, oversized)).rejects.toThrow(/queue exceeds 2 bytes/i)
+    expect(sliceCalls).toBe(0)
+    expect(sessions[0]!.terminal.offered).toHaveLength(0)
+    await store.write(target.id, bytes("ok"))
+    expect(acceptedText(sessions[0]!)).toBe("ok")
   })
 
   test("rejects queued async input when terminal cleanup closes the writer", async () => {

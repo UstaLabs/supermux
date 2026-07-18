@@ -63,11 +63,11 @@ class TerminalInputWriter {
   }
 
   write(data: Uint8Array): Promise<void> {
-    const snapshot = data.slice()
     if (this.closed) return Promise.reject(new Error("terminal input is closed"))
-    if (this.pendingBytes + snapshot.byteLength > this.byteLimit) {
+    if (this.pendingBytes + data.byteLength > this.byteLimit) {
       return Promise.reject(new Error(`terminal input queue exceeds ${this.byteLimit} bytes`))
     }
+    const snapshot = data.slice()
     if (snapshot.byteLength === 0) return Promise.resolve()
     return new Promise<void>((resolve, reject) => {
       this.enqueue({ data: snapshot, offset: 0, resolve, reject })
@@ -77,8 +77,7 @@ class TerminalInputWriter {
   tryWrite(data: Uint8Array): boolean {
     if (this.closed || this.pendingBytes + data.byteLength > this.byteLimit) return false
     if (data.byteLength === 0) return true
-    this.enqueue({ data: data.slice(), offset: 0 })
-    return true
+    return this.enqueue({ data: data.slice(), offset: 0 }) === undefined
   }
 
   close(): void {
@@ -88,13 +87,13 @@ class TerminalInputWriter {
     this.rejectAll(new Error("terminal input is closed"))
   }
 
-  private enqueue(entry: InputEntry): void {
+  private enqueue(entry: InputEntry): Error | undefined {
     this.queue.push(entry)
     this.pendingBytes += entry.data.byteLength
-    this.pump()
+    return this.pump()
   }
 
-  private pump(): void {
+  private pump(): Error | undefined {
     if (this.closed || this.pumping || this.waitingForDrain) return
     this.pumping = true
     try {
@@ -106,12 +105,14 @@ class TerminalInputWriter {
         try {
           accepted = this.terminal.write(remaining)
         } catch (error) {
-          this.rejectAll(asError(error, "terminal write failed"))
-          return
+          const failure = asError(error, "terminal write failed")
+          this.rejectAll(failure)
+          return failure
         }
         if (!Number.isInteger(accepted) || accepted < 0 || accepted > remaining.byteLength) {
-          this.rejectAll(new Error(`terminal write returned invalid accepted byte count: ${accepted}`))
-          return
+          const failure = new Error(`terminal write returned invalid accepted byte count: ${accepted}`)
+          this.rejectAll(failure)
+          return failure
         }
         if (accepted === 0) {
           this.waitingForDrain = true
