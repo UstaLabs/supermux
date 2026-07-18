@@ -46,3 +46,47 @@ test("dynamicToolCall uses its actual tool name", () => {
 
   expect(received).toMatchObject({ tool: "Imagegen", phase: "started", call_id: "d1" })
 })
+
+test("webSearch defers its blank started item until completion supplies the query", () => {
+  let notify: ((n: { method: string; params: any }) => void) | undefined
+  const client = {
+    request: async <T = any>() => ({} as T),
+    onNotification: (handler: (n: { method: string; params: any }) => void) => { notify = handler },
+  }
+  const adapter = new CodexAdapter({ sessionName: "s", workdir: "/w", client, persistThreadId: async () => {} })
+  const received: any[] = []
+  adapter.on("tool-call", (event) => { received.push(event) })
+
+  notify?.({ method: "item/started", params: { item: { type: "webSearch", id: "w1", query: "", action: null } } })
+  expect(received).toEqual([])
+
+  const completed = {
+    type: "webSearch",
+    id: "w1",
+    query: "official Codex docs",
+    action: { type: "search", query: "official Codex docs", queries: null },
+  }
+  notify?.({ method: "item/completed", params: { item: completed } })
+
+  expect(received).toEqual([
+    { kind: "tool-call", tool: "webSearch", phase: "started", call_id: "w1", detail: completed },
+    { kind: "tool-call", tool: "webSearch", phase: "completed", call_id: "w1", detail: completed },
+  ])
+})
+
+test("webSearch with an early query is emitted once at item start", () => {
+  let notify: ((n: { method: string; params: any }) => void) | undefined
+  const client = {
+    request: async <T = any>() => ({} as T),
+    onNotification: (handler: (n: { method: string; params: any }) => void) => { notify = handler },
+  }
+  const adapter = new CodexAdapter({ sessionName: "s", workdir: "/w", client, persistThreadId: async () => {} })
+  const received: any[] = []
+  adapter.on("tool-call", (event) => { received.push(event) })
+
+  const started = { type: "webSearch", id: "w2", query: "Codex docs", action: null }
+  notify?.({ method: "item/started", params: { item: started } })
+  notify?.({ method: "item/completed", params: { item: { ...started, action: { type: "search", query: "Codex docs" } } } })
+
+  expect(received.map((event) => event.phase)).toEqual(["started", "completed"])
+})
