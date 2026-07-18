@@ -5,16 +5,83 @@ export interface ScreenDimensions {
   rows: number
 }
 
+/** @internal Fixed-capacity storage for the newest bytes of a PTY stream. */
+export class ByteRing {
+  private storage: Uint8Array
+  private start = 0
+  private length = 0
+  private disposed = false
+
+  constructor(private readonly capacity: number) {
+    if (!Number.isInteger(capacity) || capacity < 0) {
+      throw new RangeError("capacity must be a non-negative integer")
+    }
+    this.storage = new Uint8Array(capacity)
+  }
+
+  append(data: Uint8Array): void {
+    this.assertActive()
+    if (this.capacity === 0 || data.byteLength === 0) return
+
+    if (data.byteLength >= this.capacity) {
+      this.storage.set(data.subarray(data.byteLength - this.capacity))
+      this.start = 0
+      this.length = this.capacity
+      return
+    }
+
+    const writeAt = (this.start + this.length) % this.capacity
+    const free = this.capacity - this.length
+    const evicted = Math.max(0, data.byteLength - free)
+    if (evicted > 0) this.start = (this.start + evicted) % this.capacity
+
+    this.writeAt(writeAt, data)
+    this.length = Math.min(this.capacity, this.length + data.byteLength)
+  }
+
+  bytes(): Uint8Array {
+    this.assertActive()
+    const result = new Uint8Array(this.length)
+    if (this.length === 0) return result
+
+    const firstLength = Math.min(this.length, this.capacity - this.start)
+    result.set(this.storage.subarray(this.start, this.start + firstLength))
+    if (firstLength < this.length) {
+      result.set(this.storage.subarray(0, this.length - firstLength), firstLength)
+    }
+    return result
+  }
+
+  dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    this.storage = new Uint8Array(0)
+    this.start = 0
+    this.length = 0
+  }
+
+  private writeAt(offset: number, data: Uint8Array): void {
+    const firstLength = Math.min(data.byteLength, this.capacity - offset)
+    this.storage.set(data.subarray(0, firstLength), offset)
+    if (firstLength < data.byteLength) {
+      this.storage.set(data.subarray(firstLength), 0)
+    }
+  }
+
+  private assertActive(): void {
+    if (this.disposed) throw new Error("ByteRing is disposed")
+  }
+}
+
 export class SessionScreen {
   private readonly terminal: Terminal
-  private readonly rawChunks: Uint8Array[] = []
-  private rawBytes = 0
+  private readonly raw: ByteRing
   private disposed = false
 
   constructor(
     cols: number,
     rows: number,
-    private readonly rawByteLimit: number,
+    rawByteLimit: number,
   ) {
     assertDimension("cols", cols)
     assertDimension("rows", rows)
@@ -22,6 +89,7 @@ export class SessionScreen {
       throw new RangeError("rawByteLimit must be a non-negative integer")
     }
 
+    this.raw = new ByteRing(rawByteLimit)
     this.terminal = new Terminal({ cols, rows, allowProposedApi: true })
   }
 
@@ -31,7 +99,7 @@ export class SessionScreen {
     // Both xterm and the raw ring must see an immutable snapshot. PTY read
     // buffers are commonly reused after their consumer returns.
     const snapshot = data.slice()
-    this.appendRaw(snapshot)
+    this.raw.append(snapshot)
 
     await new Promise<void>((resolve) => {
       this.terminal.write(snapshot, resolve)
@@ -58,13 +126,7 @@ export class SessionScreen {
 
   captureRaw(): string {
     this.assertActive()
-    const bytes = new Uint8Array(this.rawBytes)
-    let offset = 0
-    for (const chunk of this.rawChunks) {
-      bytes.set(chunk, offset)
-      offset += chunk.byteLength
-    }
-    return new TextDecoder().decode(bytes)
+    return new TextDecoder().decode(this.raw.bytes())
   }
 
   resize(cols: number, rows: number): void {
@@ -83,39 +145,7 @@ export class SessionScreen {
     if (this.disposed) return
     this.disposed = true
     this.terminal.dispose()
-    this.rawChunks.length = 0
-    this.rawBytes = 0
-  }
-
-  private appendRaw(data: Uint8Array): void {
-    if (this.rawByteLimit === 0 || data.byteLength === 0) return
-
-    if (data.byteLength >= this.rawByteLimit) {
-      this.rawChunks.length = 0
-      const tail = data.slice(data.byteLength - this.rawByteLimit)
-      this.rawChunks.push(tail)
-      this.rawBytes = tail.byteLength
-      return
-    }
-
-    this.rawChunks.push(data)
-    this.rawBytes += data.byteLength
-    let excess = this.rawBytes - this.rawByteLimit
-
-    while (excess > 0) {
-      const first = this.rawChunks[0]
-      if (!first) break
-      if (first.byteLength <= excess) {
-        this.rawChunks.shift()
-        this.rawBytes -= first.byteLength
-        excess -= first.byteLength
-        continue
-      }
-
-      this.rawChunks[0] = first.slice(excess)
-      this.rawBytes -= excess
-      excess = 0
-    }
+    this.raw.dispose()
   }
 
   private assertActive(): void {

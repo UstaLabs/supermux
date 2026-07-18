@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { SessionScreen } from "./screen"
+import { ByteRing, SessionScreen } from "./screen"
 
 const encoder = new TextEncoder()
 
@@ -75,6 +75,20 @@ describe("SessionScreen", () => {
     screen.dispose()
   })
 
+  test("keeps exact fixed-capacity storage semantics under many tiny writes", async () => {
+    const ring = new ByteRing(7)
+    const writes = Array.from({ length: 10_000 }, (_, index) => bytes(String(index % 10)))
+
+    for (const write of writes) ring.append(write)
+
+    expect(new TextDecoder().decode(ring.bytes())).toBe("3456789")
+
+    const screen = new SessionScreen(80, 2, 7)
+    await Promise.all(writes.map((write) => screen.write(write)))
+    expect(screen.captureRaw()).toBe("3456789")
+    screen.dispose()
+  })
+
   test("retains only the newest bytes of one oversized raw write", async () => {
     const screen = new SessionScreen(20, 2, 5)
 
@@ -100,10 +114,13 @@ describe("SessionScreen", () => {
 
     const first = screen.write(bytes("first"))
     const second = screen.write(bytes(" second"))
-    await Promise.all([first, second])
+    const mutable = bytes(" immutable")
+    const third = screen.write(mutable)
+    mutable.fill("x".charCodeAt(0))
+    await Promise.all([first, second, third])
 
-    expect(screen.captureText()).toBe("first second")
-    expect(screen.captureRaw()).toBe("first second")
+    expect(screen.captureText()).toBe("first second immutable")
+    expect(screen.captureRaw()).toBe("first second immutable")
     screen.dispose()
   })
 
