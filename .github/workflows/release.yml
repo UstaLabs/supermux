@@ -360,8 +360,11 @@ jobs:
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           security import "$CERTIFICATE" -k "$KEYCHAIN" -P "$MACOS_DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security find-identity -v -p codesigning "$KEYCHAIN" | grep -F "$DEVELOPER_ID_APPLICATION"
+          SIGNING_IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | awk -v label="$DEVELOPER_ID_APPLICATION" 'index($0, label) { print $2; exit }')
+          test -n "$SIGNING_IDENTITY"
+          security list-keychains -d user -s "$KEYCHAIN"
           echo "MACOS_RELEASE_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          echo "MACOS_SIGNING_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
       - name: Sign app inside-out
         if: steps.signing.outputs.have == '1'
         run: |
@@ -369,7 +372,7 @@ jobs:
           sign() {
             codesign --force --options runtime --timestamp \
               --keychain "$MACOS_RELEASE_KEYCHAIN" \
-              --sign "$DEVELOPER_ID_APPLICATION" "$1"
+              --sign "$MACOS_SIGNING_IDENTITY" "$1"
           }
           for helper in supermux-broker frpc tmux; do
             sign "$APP/Contents/Resources/HostResources/$helper"
@@ -419,7 +422,7 @@ jobs:
         run: |
           codesign --force --timestamp \
             --keychain "$MACOS_RELEASE_KEYCHAIN" \
-            --sign "$DEVELOPER_ID_APPLICATION" "$MACOS_DMG"
+            --sign "$MACOS_SIGNING_IDENTITY" "$MACOS_DMG"
           xcrun notarytool submit "$MACOS_DMG" \
             --key "$APPLE_NOTARY_KEY_PATH" \
             --key-id "$APPLE_NOTARY_KEY_ID" \
