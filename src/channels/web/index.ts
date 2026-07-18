@@ -430,7 +430,7 @@ export class WebChannel implements Channel {
           if (ws.data.scrcpy) { this.onScrcpyWsOpen(ws); return }
           if (ws.data.display) { this.onDisplayWsOpen(ws); return }
           if (ws.data.terminal) {
-            this.onTerminalWsOpen(ws)
+            void this.onTerminalWsOpen(ws)
             return
           }
           this.onWsOpen(ws)
@@ -629,14 +629,14 @@ export class WebChannel implements Channel {
     this.opts.viewingTracker?.clear(ws.data.deviceName)
   }
 
-  private onTerminalWsOpen(ws: import("bun").ServerWebSocket<WSData>): void {
+  private async onTerminalWsOpen(ws: import("bun").ServerWebSocket<WSData>): Promise<void> {
     const tm = this.opts.terminalManager
     if (!tm) { ws.close(1011, "terminal not configured"); return }
     const sessionName = ws.data.terminalSession!
     const terminalId = ws.data.terminalId!
     const workdir = this.opts.getSessionWorkdir?.(sessionName)
     if (!workdir) { ws.close(1011, "session not found"); return }
-    const result = tm.attach({
+    const result = await tm.attach({
       deviceName: ws.data.deviceName,
       sessionName,
       terminalId,

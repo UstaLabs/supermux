@@ -189,6 +189,21 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
             reservation.active = false
             reservations.delete(reservation)
             viewers.set(key, { viewer, targetId: request.args.targetId })
+            void viewer.exited?.then(async code => {
+              if (viewers.get(key)?.viewer !== viewer) return
+              try {
+                await send(socket, {
+                  event: "exit",
+                  targetId: request.args.targetId,
+                  viewerId: request.args.viewerId,
+                  code,
+                })
+              } catch {
+                // Socket teardown below owns viewer cleanup when delivery fails.
+              } finally {
+                releaseViewer(key)
+              }
+            }, () => { releaseViewer(key) })
           } catch (error) {
             viewer?.close()
             releaseReservation(reservation)

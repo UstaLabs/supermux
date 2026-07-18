@@ -1,5 +1,11 @@
 export type RuntimeTarget = { id: string; name: string; pid: number | null; alive: boolean }
-export type RuntimeViewer = { close(): void; write(data: Uint8Array): boolean; resize(cols: number, rows: number): boolean }
+export type RuntimeViewer = {
+  close(): void
+  write(data: Uint8Array): boolean
+  resize(cols: number, rows: number): boolean
+  /** Present when the backend can report the target process exit to a viewer. */
+  readonly exited?: Promise<number>
+}
 
 export interface SessionBackend {
   create(opts: { group: string; name: string; cwd: string; argv: string[]; env: Record<string, string>; cols?: number; rows?: number }): Promise<RuntimeTarget>

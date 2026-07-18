@@ -4,6 +4,8 @@ import { tmpdir } from "os"
 import { join } from "path"
 import { TerminalManager, type TermProc, type SpawnFn } from "../src/core/terminal/manager"
 import type { TmuxRunner } from "../src/core/terminal/tmux-term"
+import type { RuntimeTarget, RuntimeViewer, SessionBackend } from "../src/core/runtime/session-backend"
+import { sessiondTerminalGroup, sessiondTerminalName } from "../src/core/terminal/sessiond-term"
 
 // Hermetic: a fake subprocess + a fake tmux "world" sharing in-memory state, so
 // these tests spawn NOTHING real (no tmux, no shell, no pty-helper) and can't
@@ -78,7 +80,7 @@ const baseAttach = { workdir: "/tmp", cols: 80, rows: 24, onData: () => {}, onEx
 describe("TerminalManager (hermetic)", () => {
   it("attach creates a tmux session; detach keeps it; re-attach reuses it", async () => {
     const { mgr } = makeMgr()
-    expect(mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach }).ok).toBe(true)
+    expect((await mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach })).ok).toBe(true)
     expect(mgr.has("d", "s", "t1")).toBe(true)
     expect(await mgr.hasSession("s", "t1")).toBe(true)
 
@@ -86,7 +88,7 @@ describe("TerminalManager (hermetic)", () => {
     expect(mgr.has("d", "s", "t1")).toBe(false)
     expect(await mgr.hasSession("s", "t1")).toBe(true) // ← persists across detach
 
-    expect(mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach }).ok).toBe(true)
+    expect((await mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t1", ...baseAttach })).ok).toBe(true)
     expect(mgr.has("d", "s", "t1")).toBe(true)
   })
 
@@ -201,7 +203,7 @@ describe("TerminalManager (hermetic)", () => {
       agentRun: async (a) => { agentCalls.push(a); return { code: 0, stdout: "", stderr: "" } },
     })
 
-    const r = mgr.attach({
+    const r = await mgr.attach({
       deviceName: "d", sessionName: "s", terminalId: "agent",
       ...baseAttach, kind: "agent", agentTarget: "mux:s",
     })
@@ -252,5 +254,178 @@ describe("TerminalManager (hermetic)", () => {
     mgr.detach("d", "s", "t1")
     await flush()
     expect(agentCalls.flat()).not.toContain("kill-session")
+  })
+})
+
+class ManagerBackend implements SessionBackend {
+  targets = new Map<string, RuntimeTarget & { group: string }>()
+  creates = 0
+  kills: string[] = []
+  viewerCloses = 0
+  writes: string[] = []
+  resizes: Array<[number, number]> = []
+  attachGate?: Promise<void>
+  failKill?: Error
+  private next = 1
+
+  seed(group: string, name: string): RuntimeTarget {
+    const target = { id: `win-${this.next++}`, name, pid: 9000 + this.next, alive: true, group }
+    this.targets.set(target.id, target)
+    return target
+  }
+  async create(opts: Parameters<SessionBackend["create"]>[0]): Promise<RuntimeTarget> {
+    this.creates++
+    return this.seed(opts.group, opts.name)
+  }
+  async list(group?: string): Promise<RuntimeTarget[]> {
+    return [...this.targets.values()].filter(target => target.alive && (group === undefined || target.group === group))
+  }
+  async resolve(group: string, name: string): Promise<string | null> {
+    return [...this.targets.values()].find(target => target.alive && target.group === group && target.name === name)?.id ?? null
+  }
+  async livePid(targetId: string): Promise<number | null> { return this.targets.get(targetId)?.pid ?? null }
+  async write(_targetId: string, data: Uint8Array): Promise<void> { this.writes.push(new TextDecoder().decode(data)) }
+  async sendKeys(): Promise<void> {}
+  async resize(_targetId: string, cols: number, rows: number): Promise<void> { this.resizes.push([cols, rows]) }
+  async capture(): Promise<string | null> { return null }
+  async attach(targetId: string, _viewerId: string, _onData: (data: Uint8Array) => void | Promise<void>): Promise<RuntimeViewer> {
+    await this.attachGate
+    let open = true
+    return {
+      close: () => { if (open) { open = false; this.viewerCloses++ } },
+      write: data => { if (!open) return false; this.writes.push(new TextDecoder().decode(data)); return true },
+      resize: (cols, rows) => { if (!open) return false; this.resizes.push([cols, rows]); return true },
+    }
+  }
+  async interrupt(): Promise<void> {}
+  async kill(targetId: string): Promise<void> {
+    this.kills.push(targetId)
+    if (this.failKill) throw this.failKill
+    const target = this.targets.get(targetId)
+    if (target) { target.alive = false; target.pid = null }
+  }
+}
+
+function makeWindowsMgr(backend = new ManagerBackend(), spawn?: SpawnFn) {
+  return {
+    backend,
+    mgr: new TerminalManager({
+      platform: "win32",
+      sessionBackend: backend,
+      spawn: spawn ?? (() => { throw new Error("Windows must not touch pty-helper spawn") }),
+      environment: { MUX_ENV: "yes" },
+      findExecutable: () => "powershell.exe",
+    }),
+  }
+}
+
+describe("TerminalManager (Windows sessiond)", () => {
+  it("selects SessiondTerm without touching pty-helper and detaches without killing scratch", async () => {
+    let spawnCalls = 0
+    const { mgr, backend } = makeWindowsMgr(undefined, () => { spawnCalls++; throw new Error("must not spawn") })
+    expect((await mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t", ...baseAttach })).ok).toBe(true)
+    expect(spawnCalls).toBe(0)
+    expect(mgr.write("d", "s", "t", new TextEncoder().encode("dir\r"))).toBe(true)
+    expect(mgr.resize("d", "s", "t", 120, 40)).toBe(true)
+    mgr.detach("d", "s", "t")
+    expect(backend.viewerCloses).toBe(1)
+    expect(backend.kills).toEqual([])
+    expect(await mgr.hasSession("s", "t")).toBe(true)
+  })
+
+  it("explicit scratch close kills its persistent target exactly once, including after detach", async () => {
+    const { mgr, backend } = makeWindowsMgr()
+    await mgr.attach({ deviceName: "d1", sessionName: "s", terminalId: "t", ...baseAttach })
+    await mgr.attach({ deviceName: "d2", sessionName: "s", terminalId: "t", ...baseAttach })
+    mgr.detach("d1", "s", "t")
+    await mgr.close("s", "t")
+    expect(backend.kills).toEqual(["win-1"])
+    await mgr.close("s", "t")
+    expect(backend.kills).toEqual(["win-1"])
+  })
+
+  it("agent attach/close only controls viewers and never creates or kills the Claude target", async () => {
+    const backend = new ManagerBackend()
+    const agent = backend.seed("mux", "claude")
+    const { mgr } = makeWindowsMgr(backend)
+    const result = await mgr.attach({
+      deviceName: "d", sessionName: "s", terminalId: "agent", ...baseAttach,
+      kind: "agent", agentTarget: agent.id,
+    })
+    expect(result.ok).toBe(true)
+    expect(backend.creates).toBe(0)
+    await mgr.close("s", "agent")
+    expect(backend.viewerCloses).toBe(1)
+    expect(backend.kills).toEqual([])
+  })
+
+  it("lists, resolves, and removes only scratch targets owned by one broker session", async () => {
+    const { mgr, backend } = makeWindowsMgr()
+    backend.seed(sessiondTerminalGroup("s"), sessiondTerminalName("b"))
+    backend.seed(sessiondTerminalGroup("s"), sessiondTerminalName("a"))
+    backend.seed(sessiondTerminalGroup("other"), sessiondTerminalName("z"))
+    expect((await mgr.listForSession("s")).map(term => term.id)).toEqual(["a", "b"])
+    expect(await mgr.hasSession("s", "a")).toBe(true)
+    await mgr.killAllForSession("s")
+    expect(backend.kills.sort()).toEqual(["win-1", "win-2"])
+    expect(await mgr.hasSession("other", "z")).toBe(true)
+  })
+
+  it("a superseded concurrent attach closes its late viewer exactly once", async () => {
+    let release!: () => void
+    const backend = new ManagerBackend()
+    backend.attachGate = new Promise<void>(resolve => { release = resolve })
+    const { mgr } = makeWindowsMgr(backend)
+    const first = mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t", ...baseAttach })
+    const second = mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t", ...baseAttach })
+    release()
+    const [firstResult, secondResult] = await Promise.all([first, second])
+    expect(firstResult.ok).toBe(false)
+    expect(secondResult.ok).toBe(true)
+    expect(backend.viewerCloses).toBe(1)
+    expect(mgr.has("d", "s", "t")).toBe(true)
+  })
+
+  it("explicit close racing an attach detaches the late viewer and leaves no scratch target", async () => {
+    let release!: () => void
+    const backend = new ManagerBackend()
+    backend.attachGate = new Promise<void>(resolve => { release = resolve })
+    const { mgr } = makeWindowsMgr(backend)
+    const attaching = mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t", ...baseAttach })
+    await flush()
+    await mgr.close("s", "t")
+    release()
+    expect((await attaching).ok).toBe(false)
+    expect(mgr.has("d", "s", "t")).toBe(false)
+    expect(backend.viewerCloses).toBe(1)
+    expect(backend.kills).toEqual(["win-1"])
+  })
+
+  it("surfaces a scratch target kill failure after closing its viewer", async () => {
+    const { mgr, backend } = makeWindowsMgr()
+    await mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t", ...baseAttach })
+    backend.failKill = new Error("job termination denied")
+    await expect(mgr.close("s", "t")).rejects.toThrow("job termination denied")
+    expect(backend.viewerCloses).toBe(1)
+    expect(mgr.has("d", "s", "t")).toBe(false)
+  })
+
+  it("explicit close racing an agent attach never kills the Claude target", async () => {
+    let release!: () => void
+    const backend = new ManagerBackend()
+    const agent = backend.seed("mux", "claude")
+    backend.attachGate = new Promise<void>(resolve => { release = resolve })
+    const { mgr } = makeWindowsMgr(backend)
+    const attaching = mgr.attach({
+      deviceName: "d", sessionName: "s", terminalId: "agent", ...baseAttach,
+      kind: "agent", agentTarget: agent.id,
+    })
+    await flush()
+    await mgr.close("s", "agent")
+    release()
+    expect((await attaching).ok).toBe(false)
+    expect(backend.viewerCloses).toBe(1)
+    expect(backend.kills).toEqual([])
+    expect(await backend.livePid(agent.id)).not.toBeNull()
   })
 })

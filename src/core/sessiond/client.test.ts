@@ -7,6 +7,7 @@ import { createMemorySessionBackendHarness, verifySessionBackendContract } from 
 import { decodeFrames, encodeFrame } from "../../shared/frame-codec"
 import { SessiondBackend } from "./client"
 import { SESSIOND_MAX_FRAME_BYTES, startSessiondServer, type SessiondServer } from "./server"
+import type { RuntimeViewer } from "../runtime/session-backend"
 
 const cleanup: Array<() => void | Promise<void>> = []
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close() })
@@ -123,6 +124,28 @@ describe("SessiondBackend", () => {
     expect(viewer.write(new TextEncoder().encode("once"))).toBe(true)
     expect(await client.capture(created.id)).toBe("once")
     expect(writes).toBe(1)
+  })
+
+  test("forwards target exit codes to the attached viewer", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sessiond-viewer-exit-")); cleanup.push(() => rm(dir, { recursive: true, force: true }))
+    const endpoint = join(dir, "rpc.sock"), secret = Buffer.alloc(32, 15).toString("base64")
+    const memory = createMemorySessionBackendHarness().backend
+    let resolveExit!: (code: number) => void
+    const exited = new Promise<number>(resolve => { resolveExit = resolve })
+    const backend = {
+      ...memory,
+      async attach(...args: Parameters<typeof memory.attach>): Promise<RuntimeViewer> {
+        const viewer = await memory.attach(...args)
+        return { ...viewer, exited } as RuntimeViewer
+      },
+    }
+    const server = await startSessiondServer({ endpoint, secret, backend }); cleanup.push(() => server.close())
+    const client = new SessiondBackend({ endpoint, secret, stateDir: dir, platform: "linux" }); cleanup.push(() => client.close())
+    const created = await client.create({ group: "g", name: "exit", cwd: dir, argv: ["fake"], env: {} })
+    const viewer = await client.attach(created.id, "v", () => {}) as RuntimeViewer & { exited: Promise<number> }
+    expect(viewer.exited).toBeInstanceOf(Promise)
+    resolveExit(7)
+    expect(await viewer.exited).toBe(7)
   })
 
   test("shares concurrent adoption and spawns at most once only for missing endpoint", async () => {

@@ -493,6 +493,7 @@ export class SessionStore implements SessionBackend {
     target.viewers.set(viewerId, viewer)
     let closed = false
     return {
+      exited: target.process.exited,
       close: () => {
         if (closed) return
         closed = true
