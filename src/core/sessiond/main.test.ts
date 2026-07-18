@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { isAbsolute, join } from "node:path"
-import { acquireSessiondLock, parseSessiondArgs } from "./main"
+import { acquireSessiondLock, parseSessiondArgs, sessiondLockEndpoint } from "./main"
 
 const dirs: string[] = []
 afterEach(async () => Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))))
@@ -17,17 +17,24 @@ describe("sessiond main", () => {
     expect(() => parseSessiondArgs(["--state-dir=a", "--state-dir=b"])).toThrow("specified more than once")
   })
 
-  test("single-instance lock rejects a live owner and recovers a stale one", async () => {
+  test("kernel lock rejects a live owner, leaves no artifact, and recovers on handle close", async () => {
     const dir = await temp()
     const first = await acquireSessiondLock(dir)
+    expect((await readdir(dir)).filter(name => name.startsWith("sessiond.lock"))).toEqual([])
     await expect(acquireSessiondLock(dir)).rejects.toThrow("already running")
     await first.release()
-
-    const stalePath = join(dir, "sessiond.lock.00000000000000000001.0000000000001.999999999.stale")
-    await writeFile(stalePath, JSON.stringify({ pid: 999_999_999, token: "stale" }), { mode: 0o600 })
     const recovered = await acquireSessiondLock(dir)
     await recovered.release()
-    expect(await Bun.file(stalePath).exists()).toBe(false)
+    expect((await readdir(dir)).filter(name => name.startsWith("sessiond.lock"))).toEqual([])
+  })
+
+  test("derives a stable bounded Windows named-pipe lock distinct per state directory", async () => {
+    const dir = await temp()
+    const endpoint = sessiondLockEndpoint(dir)
+    expect(endpoint).toStartWith("\\\\.\\pipe\\supermux-sessiond-")
+    expect(endpoint).toEndWith("-lock")
+    expect(endpoint.length).toBeLessThan(120)
+    expect(endpoint).not.toBe(sessiondLockEndpoint(join(dir, "other")))
   })
 
   test("concurrent contenders deterministically elect exactly one owner", async () => {
@@ -41,5 +48,29 @@ describe("sessiond main", () => {
     await winners[0]!.value.release()
     const successor = await acquireSessiondLock(dir)
     await successor.release()
+  })
+
+  test("kernel automatically releases ownership when the owner process dies", async () => {
+    if (process.platform !== "linux") return
+    const dir = await temp()
+    const moduleUrl = new URL("./main.ts", import.meta.url).href
+    const script = `const m=await import(${JSON.stringify(moduleUrl)});await m.acquireSessiondLock(process.env.MUX_LOCK_TEST_DIR,{platform:"linux"});process.stdout.write("ready\\n");await new Promise(()=>{})`
+    const child = Bun.spawn([process.execPath, "-e", script], {
+      env: { ...process.env, MUX_LOCK_TEST_DIR: dir },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const reader = child.stdout.getReader()
+    let output = ""
+    while (!output.includes("ready\n")) {
+      const result = await reader.read()
+      if (result.done) throw new Error(`lock child exited before ready: ${await new Response(child.stderr).text()}`)
+      output += new TextDecoder().decode(result.value)
+    }
+    await expect(acquireSessiondLock(dir)).rejects.toThrow("already running")
+    child.kill()
+    await child.exited
+    const recovered = await acquireSessiondLock(dir)
+    await recovered.release()
   })
 })

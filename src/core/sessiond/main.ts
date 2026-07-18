@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto"
-import { mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises"
-import { isAbsolute, join, resolve } from "node:path"
+import { createHash } from "node:crypto"
+import { isAbsolute, normalize, resolve } from "node:path"
+import { connect, createServer, type Server, type Socket } from "node:net"
 import { STATE_DIR } from "../../shared/paths"
 import { createProcessJob } from "./job-object"
 import { createOrLoadSessiondSecret, sessiondEndpoint } from "./secret"
@@ -30,109 +30,107 @@ export function parseSessiondArgs(argv: string[]): { stateDir: string } {
   return { stateDir: isAbsolute(selected) ? resolve(selected) : resolve(process.cwd(), selected) }
 }
 
-function processIsLive(pid: number): boolean {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return false
-  try { process.kill(pid, 0); return true } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM"
+function stateDirHash(stateDir: string, windows = false): string {
+  const absolute = normalize(isAbsolute(stateDir) ? stateDir : resolve(stateDir))
+  const canonical = windows ? absolute.replaceAll("/", "\\").toLowerCase() : absolute
+  return createHash("sha256").update(canonical).digest("hex").slice(0, 32)
+}
+
+/** Stable Windows lock pipe; binding it is the lock and closing it releases it. */
+export function sessiondLockEndpoint(stateDir: string): string {
+  return `\\\\.\\pipe\\supermux-sessiond-${stateDirHash(stateDir, true)}-lock`
+}
+
+export type SessiondLockOptions = { platform?: NodeJS.Platform }
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolveClose, reject) => server.close(error => error ? reject(error) : resolveClose()))
+}
+
+function listenPathLock(path: string): Promise<Server> {
+  const server = createServer(socket => socket.destroy())
+  return new Promise((resolveListen, reject) => {
+    const onError = (error: Error) => { server.close(); reject(error) }
+    server.once("error", onError)
+    server.listen({ path, exclusive: true, readableAll: false, writableAll: false }, () => {
+      server.off("error", onError)
+      server.on("error", () => {})
+      resolveListen(server)
+    })
+  })
+}
+
+function tcpPorts(identity: string): number[] {
+  const ports: number[] = []
+  for (let index = 0; ports.length < 16; index++) {
+    const hash = createHash("sha256").update(`${identity}:${index}`).digest()
+    const port = 20_000 + (hash.readUInt32BE(0) % 40_000)
+    if (!ports.includes(port)) ports.push(port)
   }
+  return ports
 }
 
-const LOCK_PREFIX = "sessiond.lock."
-const PENDING_LOCK_PREFIX = `${LOCK_PREFIX}pending.`
-const LOCK_STABILIZE_MS = 30
-
-type LockOwner = { pid: number; token: string }
-type Candidate = LockOwner & { name: string; path: string; raw: string }
-
-function parseLockOwner(raw: string): LockOwner | undefined {
-  try {
-    const value = JSON.parse(raw) as { pid?: unknown; token?: unknown }
-    if (!Number.isSafeInteger(value.pid) || (value.pid as number) <= 0 || typeof value.token !== "string" || value.token.length === 0) return
-    return { pid: value.pid as number, token: value.token }
-  } catch { return }
+function probeTcpIdentity(port: number): Promise<string | undefined> {
+  return new Promise(resolveProbe => {
+    const socket = connect({ host: "127.0.0.1", port })
+    const chunks: Buffer[] = []
+    const timer = setTimeout(() => { socket.destroy(); resolveProbe(undefined) }, 100)
+    const finish = (value?: string) => { clearTimeout(timer); socket.destroy(); resolveProbe(value) }
+    socket.on("data", chunk => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+      if (chunks.reduce((sum, value) => sum + value.length, 0) > 128) finish()
+    })
+    socket.once("end", () => finish(Buffer.concat(chunks).toString("utf8")))
+    socket.once("error", () => finish())
+  })
 }
 
-async function removeUniqueCandidate(path: string, expectedRaw: string): Promise<void> {
+async function listenTcpLock(identity: string): Promise<Server> {
+  for (const port of tcpPorts(identity)) {
+    const server = createServer((socket: Socket) => socket.end(identity))
+    try {
+      await new Promise<void>((resolveListen, reject) => {
+        const onError = (error: Error) => { server.close(); reject(error) }
+        server.once("error", onError)
+        server.listen({ host: "127.0.0.1", port, exclusive: true }, () => {
+          server.off("error", onError); resolveListen()
+        })
+      })
+      server.on("error", () => {})
+      return server
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error
+      if (await probeTcpIdentity(port) === identity) throw new Error("mux-sessiond is already running")
+    }
+  }
+  throw new Error("could not acquire mux-sessiond kernel lock: all loopback candidates are occupied")
+}
+
+export async function acquireSessiondLock(stateDir: string, options: SessiondLockOptions = {}): Promise<SessiondLock> {
+  const platform = options.platform ?? process.platform
+  const identity = `supermux-sessiond-lock:${stateDirHash(stateDir, platform === "win32")}`
+  let server: Server
   try {
-    if (await readFile(path, "utf8") !== expectedRaw) return
-    await unlink(path)
+    if (platform === "win32") server = await listenPathLock(sessiondLockEndpoint(stateDir))
+    else if (platform === "linux") server = await listenPathLock(`\0${identity}`)
+    else server = await listenTcpLock(identity)
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
-  }
-}
-
-async function liveCandidates(stateDir: string): Promise<Candidate[]> {
-  const names = await readdir(stateDir)
-  const live: Candidate[] = []
-  for (const name of names) {
-    if (!name.startsWith(LOCK_PREFIX)) continue
-    const path = join(stateDir, name)
-    let raw: string
-    try { raw = await readFile(path, "utf8") } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue
-      throw error
-    }
-    const owner = parseLockOwner(raw)
-    if (name.startsWith(PENDING_LOCK_PREFIX)) {
-      const filenamePid = Number.parseInt(name.slice(PENDING_LOCK_PREFIX.length).split(".", 1)[0] ?? "", 10)
-      const pendingPid = owner?.pid ?? filenamePid
-      if (!processIsLive(pendingPid)) await removeUniqueCandidate(path, raw)
-      continue
-    }
-    if (!owner || !processIsLive(owner.pid)) {
-      await removeUniqueCandidate(path, raw)
-      continue
-    }
-    live.push({ ...owner, name, path, raw })
-  }
-  return live.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
-}
-
-export async function acquireSessiondLock(stateDir: string): Promise<SessiondLock> {
-  await mkdir(stateDir, { recursive: true, mode: 0o700 })
-  const token = randomUUID()
-  const raw = JSON.stringify({ pid: process.pid, token })
-  const pendingName = `${PENDING_LOCK_PREFIX}${process.pid}.${token}`
-  const pendingPath = join(stateDir, pendingName)
-  let candidatePath: string | undefined
-  try {
-    const file = await open(pendingPath, "wx", 0o600)
-    try { await file.writeFile(raw, "utf8"); await file.sync() } finally { await file.close() }
-
-    // This stamp is allocated only after the unique pending file is durable.
-    // A slower contender therefore cannot later publish an earlier candidate.
-    const monotonic = process.hrtime.bigint().toString().padStart(24, "0")
-    const wall = Date.now().toString().padStart(13, "0")
-    const candidateName = `${LOCK_PREFIX}${monotonic}.${wall}.${process.pid}.${token}`
-    candidatePath = join(stateDir, candidateName)
-    await rename(pendingPath, candidatePath)
-    await new Promise(resolveDelay => setTimeout(resolveDelay, LOCK_STABILIZE_MS))
-
-    const contenders = await liveCandidates(stateDir)
-    const winner = contenders[0]
-    if (!winner || winner.token !== token || winner.path !== candidatePath) {
-      await removeUniqueCandidate(candidatePath, raw)
-      const owner = winner ? ` (pid ${winner.pid})` : ""
-      throw new Error(`mux-sessiond is already running${owner}`)
-    }
-
-    let released = false
-    return {
-      async release() {
-        if (released) return
-        released = true
-        await removeUniqueCandidate(candidatePath!, raw)
-      },
-    }
-  } catch (error) {
-    await removeUniqueCandidate(candidatePath ?? pendingPath, raw).catch(() => undefined)
+    if ((error as NodeJS.ErrnoException).code === "EADDRINUSE") throw new Error("mux-sessiond is already running")
     throw error
+  }
+  let released = false
+  return {
+    async release() {
+      if (released) return
+      released = true
+      await closeServer(server)
+    },
   }
 }
 
 export async function runSessiondMain(argv: string[] = process.argv.slice(2)): Promise<void> {
   const { stateDir } = parseSessiondArgs(argv)
-  const lock = await acquireSessiondLock(stateDir)
+  const lock = await acquireSessiondLock(stateDir, { platform: process.platform })
   let server: Awaited<ReturnType<typeof startSessiondServer>> | undefined
   try {
     if (process.platform === "win32") {
