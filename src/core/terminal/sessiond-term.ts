@@ -153,46 +153,48 @@ export async function createSessiondTerm(options: SessiondTermOptions): Promise<
   created: boolean
 }> {
   const { backend } = options
-  let targetId: string
+  let targetId: string | undefined
   let created = false
+  let proc: SessiondTerm | undefined
 
-  if (options.kind === "agent") {
-    if (!options.agentTarget) throw new Error("agent target is required")
-    targetId = options.agentTarget
-    if (await backend.livePid(targetId) === null) throw new Error("agent target is not alive")
-  } else {
-    const group = sessiondTerminalGroup(options.sessionName)
-    const name = sessiondTerminalName(options.terminalId)
-    const resolved = await backend.resolve(group, name)
-    if (resolved && await backend.livePid(resolved) !== null) {
-      targetId = resolved
-    } else {
-      if (resolved) await backend.kill(resolved)
-      const shell = findPowerShell(options.findExecutable)
-      const environment = options.environment ? { ...options.environment } : processEnvironment()
-      const target = await backend.create({
-        group,
-        name,
-        cwd: options.workdir,
-        argv: [shell, "-NoLogo"],
-        env: environment,
-        cols: options.cols,
-        rows: options.rows,
-      })
-      targetId = target.id
-      created = true
-    }
-  }
-
-  const proc = new SessiondTerm(await backend.livePid(targetId) ?? undefined)
-  const viewerId = `terminal-viewer-${randomUUID().replaceAll("-", "")}`
   try {
-    const viewer = await backend.attach(targetId, viewerId, data => { proc.accept(data) })
-    proc.bind(viewer)
-    return { proc, targetId, created }
+    if (options.kind === "agent") {
+      if (!options.agentTarget) throw new Error("agent target is required")
+      targetId = options.agentTarget
+      if (await backend.livePid(targetId) === null) throw new Error("agent target is not alive")
+    } else {
+      const group = sessiondTerminalGroup(options.sessionName)
+      const name = sessiondTerminalName(options.terminalId)
+      const resolved = await backend.resolve(group, name)
+      if (resolved && await backend.livePid(resolved) !== null) {
+        targetId = resolved
+      } else {
+        if (resolved) await backend.kill(resolved)
+        const shell = findPowerShell(options.findExecutable)
+        const environment = options.environment ? { ...options.environment } : processEnvironment()
+        const target = await backend.create({
+          group,
+          name,
+          cwd: options.workdir,
+          argv: [shell, "-NoLogo"],
+          env: environment,
+          cols: options.cols,
+          rows: options.rows,
+        })
+        targetId = target.id
+        created = true
+      }
+    }
+
+    const activeProc = new SessiondTerm(await backend.livePid(targetId) ?? undefined)
+    proc = activeProc
+    const viewerId = `terminal-viewer-${randomUUID().replaceAll("-", "")}`
+    const viewer = await backend.attach(targetId, viewerId, data => { activeProc.accept(data) })
+    activeProc.bind(viewer)
+    return { proc: activeProc, targetId, created }
   } catch (error) {
-    proc.kill()
-    if (created) {
+    proc?.kill()
+    if (created && targetId) {
       try {
         await backend.kill(targetId)
       } catch (cleanupError) {

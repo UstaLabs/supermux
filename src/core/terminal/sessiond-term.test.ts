@@ -21,6 +21,7 @@ class FakeBackend implements SessionBackend {
   attachCalls: Array<{ targetId: string; viewerId: string }> = []
   failAttach?: Error
   failKill?: Error
+  failPostCreateLivePid?: Error
   private outputs = new Map<string, (data: Uint8Array) => void | Promise<void>>()
   private viewerExit?: (code: number) => void
   private next = 1
@@ -41,7 +42,10 @@ class FakeBackend implements SessionBackend {
   async resolve(group: string, name: string): Promise<string | null> {
     return [...this.targets.values()].find(target => target.group === group && target.name === name)?.id ?? null
   }
-  async livePid(targetId: string): Promise<number | null> { return this.targets.get(targetId)?.pid ?? null }
+  async livePid(targetId: string): Promise<number | null> {
+    if (this.creates.length > 0 && this.failPostCreateLivePid) throw this.failPostCreateLivePid
+    return this.targets.get(targetId)?.pid ?? null
+  }
   async write(targetId: string, data: Uint8Array): Promise<void> { this.writes.push({ targetId, data: data.slice() }) }
   async sendKeys(): Promise<void> {}
   async resize(targetId: string, cols: number, rows: number): Promise<void> { this.resizes.push({ targetId, cols, rows }) }
@@ -236,5 +240,16 @@ describe("SessiondTerm", () => {
       backend, kind: "scratch", deviceName: "d", sessionName: "s", terminalId: "t",
       workdir: "C:\\w", cols: 80, rows: 24, environment: {}, findExecutable: () => "powershell.exe",
     })).rejects.toThrow("attach denied; target cleanup failed: cleanup denied")
+  })
+
+  test("cleans a newly-created target when post-create liveness and cleanup both fail", async () => {
+    const backend = new FakeBackend()
+    backend.failPostCreateLivePid = new Error("post-create liveness denied")
+    backend.failKill = new Error("cleanup denied")
+    await expect(createSessiondTerm({
+      backend, kind: "scratch", deviceName: "d", sessionName: "s", terminalId: "t",
+      workdir: "C:\\w", cols: 80, rows: 24, environment: {}, findExecutable: () => "powershell.exe",
+    })).rejects.toThrow("post-create liveness denied; target cleanup failed: cleanup denied")
+    expect(backend.kills).toEqual(["target-1"])
   })
 })

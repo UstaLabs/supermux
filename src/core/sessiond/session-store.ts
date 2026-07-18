@@ -146,6 +146,7 @@ type Viewer = {
   inFlightBytes: number
   delivering: boolean
   active: boolean
+  drainWaiters: Set<() => void>
   detach: () => void
 }
 
@@ -166,6 +167,9 @@ type TargetRecord = {
   state: TargetState
   exitObserved: boolean
   exitCode: number | null
+  finalizedExit: Promise<number>
+  resolveFinalizedExit: (code: number) => void
+  finalizedExitSettled: boolean
   terminalClosed: boolean
   jobClosed: boolean
   removed: boolean
@@ -389,6 +393,8 @@ export class SessionStore implements SessionBackend {
       }
 
       const input = new TerminalInputWriter(spawned.terminal, this.inputByteLimit)
+      let resolveFinalizedExit!: (code: number) => void
+      const finalizedExit = new Promise<number>(resolve => { resolveFinalizedExit = resolve })
       record = {
         id,
         group: options.group,
@@ -404,6 +410,9 @@ export class SessionStore implements SessionBackend {
         state: "alive",
         exitObserved: false,
         exitCode: null,
+        finalizedExit,
+        resolveFinalizedExit,
+        finalizedExitSettled: false,
         terminalClosed: false,
         jobClosed: false,
         removed: false,
@@ -480,6 +489,7 @@ export class SessionStore implements SessionBackend {
       inFlightBytes: 0,
       delivering: false,
       active: true,
+      drainWaiters: new Set(),
       detach: () => {},
     }
     viewer.detach = () => {
@@ -489,11 +499,13 @@ export class SessionStore implements SessionBackend {
       viewer.pendingBytes = viewer.inFlightBytes
       viewer.detach = () => {}
       target.viewers.delete(viewer.id)
+      for (const resolve of viewer.drainWaiters) resolve()
+      viewer.drainWaiters.clear()
     }
     target.viewers.set(viewerId, viewer)
     let closed = false
     return {
-      exited: target.process.exited,
+      exited: target.finalizedExit,
       close: () => {
         if (closed) return
         closed = true
@@ -622,8 +634,22 @@ export class SessionStore implements SessionBackend {
       } finally {
         viewer.delivering = false
         if (viewer.active && viewer.queue.length > 0) this.pumpViewer(viewer)
+        else this.resolveViewerDrain(viewer)
       }
     })()
+  }
+
+  private waitForViewerDrain(viewer: Viewer): Promise<void> {
+    if (!viewer.active || (!viewer.delivering && viewer.queue.length === 0 && viewer.inFlightBytes === 0)) {
+      return Promise.resolve()
+    }
+    return new Promise(resolve => { viewer.drainWaiters.add(resolve) })
+  }
+
+  private resolveViewerDrain(viewer: Viewer): void {
+    if (viewer.delivering || viewer.queue.length > 0 || viewer.inFlightBytes > 0) return
+    for (const resolve of viewer.drainWaiters) resolve()
+    viewer.drainWaiters.clear()
   }
 
   private observeExit(target: TargetRecord): void {
@@ -649,8 +675,16 @@ export class SessionStore implements SessionBackend {
     const attempt = (async () => {
       await settleWithin(target.terminal.eof, this.terminalEofTimeoutMs)
       await target.outputQueue
+      await settleWithin(
+        Promise.all([...target.viewers.values()].map(viewer => this.waitForViewerDrain(viewer))),
+        this.terminalEofTimeoutMs,
+      )
       target.input.close()
       for (const viewer of [...target.viewers.values()]) viewer.detach()
+      if (!target.finalizedExitSettled) {
+        target.finalizedExitSettled = true
+        target.resolveFinalizedExit(target.exitCode ?? 1)
+      }
 
       const errors: Error[] = []
       if (!target.terminalClosed) {

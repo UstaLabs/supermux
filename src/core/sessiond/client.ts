@@ -31,6 +31,7 @@ export type SessiondBackendOptions = {
 
 type Pending = { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout>; socket: Socket }
 type ViewerRegistration = {
+  targetId: string
   onData: (data: Uint8Array) => void | Promise<void>
   exit(code: number): void
 }
@@ -196,6 +197,7 @@ export class SessiondBackend implements SessionBackend {
     let resolveExited!: (code: number) => void
     const exited = new Promise<number>(resolve => { resolveExited = resolve })
     const registration: ViewerRegistration = {
+      targetId,
       onData,
       exit: code => {
         if (!open) return
@@ -304,13 +306,20 @@ export class SessiondBackend implements SessionBackend {
       else pending.reject(new Error(typeof input.error === "string" ? input.error.slice(0, 500) : "sessiond request failed"))
       return
     }
-    if (typeof input.targetId !== "string" || typeof input.viewerId !== "string") return
-    const viewer = this.viewers.get(`${input.targetId}\0${input.viewerId}`)
-    if (!viewer) return
+    if (typeof input.targetId !== "string") return
     if (input.event === "exit" && typeof input.code === "number" && Number.isSafeInteger(input.code)) {
-      viewer.exit(input.code)
+      if (input.viewerId === undefined) {
+        for (const viewer of [...this.viewers.values()]) {
+          if (viewer.targetId === input.targetId) viewer.exit(input.code)
+        }
+      } else if (typeof input.viewerId === "string") {
+        this.viewers.get(`${input.targetId}\0${input.viewerId}`)?.exit(input.code)
+      }
       return
     }
+    if (typeof input.viewerId !== "string") return
+    const viewer = this.viewers.get(`${input.targetId}\0${input.viewerId}`)
+    if (!viewer) return
     if (input.event === "data" && validBase64(input.dataBase64)) {
       void Promise.resolve(viewer.onData(Buffer.from(input.dataBase64, "base64"))).catch(() => undefined)
     }

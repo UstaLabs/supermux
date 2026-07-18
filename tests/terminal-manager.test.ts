@@ -265,6 +265,7 @@ class ManagerBackend implements SessionBackend {
   writes: string[] = []
   resizes: Array<[number, number]> = []
   attachGate?: Promise<void>
+  killGate?: Promise<void>
   failKill?: Error
   private next = 1
 
@@ -301,6 +302,7 @@ class ManagerBackend implements SessionBackend {
   async kill(targetId: string): Promise<void> {
     this.kills.push(targetId)
     if (this.failKill) throw this.failKill
+    await this.killGate
     const target = this.targets.get(targetId)
     if (target) { target.alive = false; target.pid = null }
   }
@@ -393,8 +395,9 @@ describe("TerminalManager (Windows sessiond)", () => {
     const { mgr } = makeWindowsMgr(backend)
     const attaching = mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t", ...baseAttach })
     await flush()
-    await mgr.close("s", "t")
+    const closing = mgr.close("s", "t")
     release()
+    await closing
     expect((await attaching).ok).toBe(false)
     expect(mgr.has("d", "s", "t")).toBe(false)
     expect(backend.viewerCloses).toBe(1)
@@ -427,5 +430,22 @@ describe("TerminalManager (Windows sessiond)", () => {
     expect(backend.viewerCloses).toBe(1)
     expect(backend.kills).toEqual([])
     expect(await backend.livePid(agent.id)).not.toBeNull()
+  })
+
+  it("serializes concurrent explicit scratch closes and kills the target once", async () => {
+    let releaseKill!: () => void
+    const backend = new ManagerBackend()
+    backend.killGate = new Promise<void>(resolve => { releaseKill = resolve })
+    const { mgr } = makeWindowsMgr(backend)
+    await mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t", ...baseAttach })
+
+    const first = mgr.close("s", "t")
+    await flush()
+    const second = mgr.close("s", "t")
+    await flush()
+    expect(backend.kills).toEqual(["win-1"])
+    releaseKill()
+    await Promise.all([first, second])
+    expect(backend.kills).toEqual(["win-1"])
   })
 })

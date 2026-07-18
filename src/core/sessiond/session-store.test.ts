@@ -447,6 +447,43 @@ describe("SessionStore", () => {
     expect(jobs[0]?.closeCount).toBe(1)
   })
 
+  test("settles viewer exit only after trailing output delivery and ConPTY EOF", async () => {
+    const { store, sessions } = harness({ manualEof: true, store: { terminalEofTimeoutMs: 100 } })
+    const target = await store.create(base)
+    const delivered: string[] = []
+    const delivery = deferred<void>()
+    const viewer = await store.attach(target.id, "ordered-exit", async data => {
+      delivered.push(decoder.decode(data))
+      await delivery.promise
+    })
+    let exitCode: number | undefined
+    void viewer.exited?.then(code => { exitCode = code })
+
+    sessions[0]!.exit(7)
+    sessions[0]!.emit(bytes("trailing"))
+    sessions[0]!.eof()
+    await waitUntil(() => delivered.length === 1)
+    await tick()
+    expect(exitCode).toBeUndefined()
+    delivery.resolve()
+    expect(await viewer.exited).toBe(7)
+    expect(delivered).toEqual(["trailing"])
+  })
+
+  test("settles ordered viewer exit even when later native cleanup must be retried", async () => {
+    const { store, sessions } = harness({ terminalCloseFailures: 1 })
+    const target = await store.create(base)
+    const viewer = await store.attach(target.id, "cleanup-failure-exit", () => {})
+    sessions[0]!.exit(9)
+    const result = await Promise.race([
+      viewer.exited!,
+      Bun.sleep(30).then(() => "timeout" as const),
+    ])
+    expect(result).toBe(9)
+    await store.kill(target.id)
+    expect(store.listExited()).toEqual([expect.objectContaining({ id: target.id, exitCode: 9 })])
+  })
+
   test("uses a finite EOF and process-exit fallback", async () => {
     const eofTimeout = harness({ manualEof: true, store: { terminalEofTimeoutMs: 5 } })
     const first = await eofTimeout.store.create(base)

@@ -148,6 +148,28 @@ describe("SessiondBackend", () => {
     expect(await viewer.exited).toBe(7)
   })
 
+  test("exact exit closes one viewer and target-level exit closes every remaining target viewer", async () => {
+    const { client } = await harness()
+    const target = await client.create({ group: "g", name: "fanout", cwd: "/tmp", argv: ["fake"], env: {} })
+    const first = await client.attach(target.id, "first", () => {})
+    const second = await client.attach(target.id, "second", () => {})
+    const accept = (client as unknown as { acceptMessage(input: unknown): void }).acceptMessage.bind(client)
+    let secondExited = false
+    void second.exited?.then(() => { secondExited = true })
+
+    accept({ event: "exit", targetId: target.id, viewerId: "first", code: 3 })
+    expect(await first.exited).toBe(3)
+    await Bun.sleep(0)
+    expect(secondExited).toBe(false)
+
+    accept({ event: "exit", targetId: target.id, code: 4 })
+    const targetExit = await Promise.race([
+      second.exited!,
+      Bun.sleep(30).then(() => "timeout" as const),
+    ])
+    expect(targetExit).toBe(4)
+  })
+
   test("shares concurrent adoption and spawns at most once only for missing endpoint", async () => {
     const dir = await mkdtemp(join(tmpdir(), "sessiond-adopt-")); cleanup.push(() => rm(dir, { recursive: true, force: true }))
     const endpoint = join(dir, "missing.sock"), secret = Buffer.alloc(32, 3).toString("base64")

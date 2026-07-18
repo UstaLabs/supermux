@@ -246,31 +246,38 @@ export class TerminalManager {
       : `agent\0${opts.agentTarget}`
 
     try {
-      const attached = await this.withWindowsTargetLock(targetLock, () => createSessiondTerm({
-        backend: this.sessionBackend!,
-        kind,
-        deviceName: opts.deviceName,
-        sessionName: opts.sessionName,
-        terminalId: opts.terminalId,
-        agentTarget: opts.agentTarget,
-        workdir: opts.workdir,
-        cols: opts.cols,
-        rows: opts.rows,
-        environment: this.environment,
-        findExecutable: this.findExecutable,
-      }))
-      if (this.pendingWindowsAttaches.get(key)?.token !== token) {
-        attached.proc.kill()
-        const explicitlyClosed = this.explicitlyClosedWindowsAttaches.delete(token)
-        if (explicitlyClosed && kind === "scratch") {
-          try {
-            if (await this.sessionBackend!.livePid(attached.targetId) !== null) {
-              await this.sessionBackend!.kill(attached.targetId)
-            }
-          } catch {}
+      const result = await this.withWindowsTargetLock(targetLock, async () => {
+        const attached = await createSessiondTerm({
+          backend: this.sessionBackend!,
+          kind,
+          deviceName: opts.deviceName,
+          sessionName: opts.sessionName,
+          terminalId: opts.terminalId,
+          agentTarget: opts.agentTarget,
+          workdir: opts.workdir,
+          cols: opts.cols,
+          rows: opts.rows,
+          environment: this.environment,
+          findExecutable: this.findExecutable,
+        })
+        if (this.pendingWindowsAttaches.get(key)?.token !== token) {
+          attached.proc.kill()
+          const explicitlyClosed = this.explicitlyClosedWindowsAttaches.delete(token)
+          if (explicitlyClosed && kind === "scratch") {
+            try {
+              if (await this.sessionBackend!.livePid(attached.targetId) !== null) {
+                await this.sessionBackend!.kill(attached.targetId)
+              }
+            } catch {}
+          }
+          return { attached, canceled: true as const }
         }
+        return { attached, canceled: false as const }
+      })
+      if (result.canceled) {
         return { ok: false, error: "terminal attachment was replaced" }
       }
+      const { attached } = result
       this.pendingWindowsAttaches.delete(key)
       const inst: TerminalInstance = {
         key,
@@ -413,16 +420,15 @@ export class TerminalManager {
     log.info("terminal_close", { sessionName, terminalId })
     if (this.platform === "win32") {
       if (agentViewers.length > 0) return
-      if (scratchTargets.size === 0) {
-        const targetId = await this.sessionBackend!.resolve(
-          sessiondTerminalGroup(sessionName),
-          sessiondTerminalName(terminalId),
-        ).catch(() => null)
-        if (targetId) scratchTargets.add(targetId)
-      }
-      for (const targetId of scratchTargets) {
-        await this.sessionBackend!.kill(targetId)
-      }
+      const group = sessiondTerminalGroup(sessionName)
+      const name = sessiondTerminalName(terminalId)
+      await this.withWindowsTargetLock(`${group}\0${name}`, async () => {
+        if (scratchTargets.size === 0) {
+          const targetId = await this.sessionBackend!.resolve(group, name).catch(() => null)
+          if (targetId) scratchTargets.add(targetId)
+        }
+        for (const targetId of scratchTargets) await this.sessionBackend!.kill(targetId)
+      })
       return
     }
     if (agentViewers.length > 0) {
