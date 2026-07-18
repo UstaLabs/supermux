@@ -34,6 +34,7 @@ import { createSupervisor, reconcileOnStartup } from "./core/session-manager/sup
 import { acquirePidFile, releasePidFile } from "./core/session-manager/pid-file"
 import { ensureWindowId } from "./core/session-manager/window-id"
 import { liveWindowId } from "./core/session-manager/live-window"
+import { resumedSessionPid } from "./core/session-manager/resume-pid"
 import { spawnSession as spawnSessionHelper, spawnPA, resumeOpenCodeSession, resumeGrokSession } from "./core/session-manager/spawn-helper"
 import { RuntimeRegistry, type SessionRuntime } from "./core/session-manager/runtime"
 import { buildClaudeSpawnSpec } from "./core/session-manager/spawn-command"
@@ -1851,7 +1852,7 @@ async function resumeSuspendedSession(session: { id: string; name: string; agent
       log.warn("resume_suspended_no_path", { name: session.name, agent: session.agent })
       return false
     }
-    registry.sessions.activate(session.id, resumedRuntimePid ?? session.pid ?? process.pid)
+    registry.sessions.activate(session.id, resumedSessionPid(resumedRuntimePid, session.pid))
     return true
   } catch (err: any) {
     log.error("resume_suspended_failed", { name: session.name, err: String(err) })

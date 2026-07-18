@@ -39,6 +39,7 @@ export type LiveSwitchSeams = {
   menuRetryMs?: number
   backend?: SessionBackend
   sendKeysFn?: (targetId: string, keys: string[]) => Promise<void>
+  writeFn?: (targetId: string, data: Uint8Array) => Promise<void>
   capturePane?: (targetId: string) => Promise<string | null>
   /** Escape-preserving capture (tmux -e) for composer checks; falls back to capturePane in tests. */
   capturePaneRaw?: (targetId: string) => Promise<string | null>
@@ -126,7 +127,7 @@ function count(haystack: string, needle: string): number {
 }
 
 // Live model/effort switch on an IDLE claude TUI: type /model and/or /effort
-// into the composer via tmux send-keys and verify the TUI's confirmation line
+// into the composer via raw runtime input and verify the TUI's confirmation line
 // by pane capture. Never restarts the process; any uncertainty is an explicit
 // failure so the caller can roll back. Callers guarantee idleness (the
 // pending-reapply queue drains on the idle transition), so Escape/C-u here can
@@ -164,6 +165,7 @@ async function typeAndVerify(
   const menuRetry = seams?.menuRetryMs ?? MENU_RETRY_MS
   const backend = () => seams?.backend ?? getSessionBackend()
   const send = seams?.sendKeysFn ?? ((id: string, keys: string[]) => backend().sendKeys(id, keys))
+  const write = seams?.writeFn ?? ((id: string, data: Uint8Array) => backend().write(id, data))
   const capture = seams?.capturePane ?? ((id: string) => backend().capture(id))
   const captureRaw = seams?.capturePaneRaw ?? seams?.capturePane ?? ((id: string) => backend().capture(id, true))
 
@@ -210,7 +212,7 @@ async function typeAndVerify(
   //    typed command before submitting — makes a garbage submit impossible no
   //    matter what unknown TUI state we're in. First wait doubles as the
   //    slash-autocomplete settle delay.
-  await send(windowId, ["-l", part.command])
+  await write(windowId, new TextEncoder().encode(part.command))
   const want = "❯" + part.command.replace(/\s+/g, "")
   let verified = false
   for (let attempt = 0; attempt < TYPED_VERIFY_ATTEMPTS; attempt++) {
