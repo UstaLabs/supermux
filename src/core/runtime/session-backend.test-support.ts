@@ -4,10 +4,15 @@ import type { RuntimeTarget, RuntimeViewer, SessionBackend } from "./session-bac
 type MemoryTarget = RuntimeTarget & {
   group: string
   output: number[]
+  sentKeys: string[][]
   viewers: Map<string, (data: Uint8Array) => void | Promise<void>>
 }
 
-export function createMemorySessionBackend(): SessionBackend {
+type MemorySessionBackend = SessionBackend & {
+  sentKeys(targetId: string): string[][]
+}
+
+export function createMemorySessionBackend(): MemorySessionBackend {
   const targets = new Map<string, MemoryTarget>()
   let nextId = 1
 
@@ -32,6 +37,7 @@ export function createMemorySessionBackend(): SessionBackend {
         alive: true,
         group: opts.group,
         output: [],
+        sentKeys: [],
         viewers: new Map(),
       }
       targets.set(id, created)
@@ -53,7 +59,7 @@ export function createMemorySessionBackend(): SessionBackend {
       await publish(target(targetId), data)
     },
     async sendKeys(targetId, keys) {
-      await publish(target(targetId), new TextEncoder().encode(keys.join("")))
+      target(targetId).sentKeys.push([...keys])
     },
     async resize(targetId) {
       target(targetId)
@@ -91,10 +97,13 @@ export function createMemorySessionBackend(): SessionBackend {
       found.pid = null
       found.viewers.clear()
     },
+    sentKeys(targetId) {
+      return target(targetId).sentKeys.map(keys => [...keys])
+    },
   }
 }
 
-export async function verifySessionBackendContract(backend: SessionBackend): Promise<void> {
+export async function verifySessionBackendContract(backend: MemorySessionBackend): Promise<void> {
   await import("./session-backend")
   const created = await backend.create({
     group: "contract",
@@ -123,6 +132,8 @@ export async function verifySessionBackendContract(backend: SessionBackend): Pro
   expect(await backend.capture(created.id)).toBe("hello viewer")
   expect(await backend.capture(created.id, true)).toContain("\u001b[32mhello viewer")
   expect(seen).toEqual(["hello", " viewer"])
+  await backend.sendKeys(created.id, ["Enter", "C-c"])
+  expect(backend.sentKeys(created.id)).toEqual([["Enter", "C-c"]])
 
   viewer.close()
   await backend.write(created.id, new TextEncoder().encode(" detached"))
