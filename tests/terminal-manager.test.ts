@@ -267,6 +267,8 @@ class ManagerBackend implements SessionBackend {
   attachGate?: Promise<void>
   killGate?: Promise<void>
   failKill?: Error
+  failResolve?: Error
+  failList?: Error
   private next = 1
 
   seed(group: string, name: string): RuntimeTarget {
@@ -279,9 +281,11 @@ class ManagerBackend implements SessionBackend {
     return this.seed(opts.group, opts.name)
   }
   async list(group?: string): Promise<RuntimeTarget[]> {
+    if (this.failList) throw this.failList
     return [...this.targets.values()].filter(target => target.alive && (group === undefined || target.group === group))
   }
   async resolve(group: string, name: string): Promise<string | null> {
+    if (this.failResolve) throw this.failResolve
     return [...this.targets.values()].find(target => target.alive && target.group === group && target.name === name)?.id ?? null
   }
   async livePid(targetId: string): Promise<number | null> { return this.targets.get(targetId)?.pid ?? null }
@@ -411,6 +415,27 @@ describe("TerminalManager (Windows sessiond)", () => {
     await expect(mgr.close("s", "t")).rejects.toThrow("job termination denied")
     expect(backend.viewerCloses).toBe(1)
     expect(mgr.has("d", "s", "t")).toBe(false)
+  })
+
+  it("surfaces resolve failure when closing a detached Windows scratch terminal", async () => {
+    const { mgr, backend } = makeWindowsMgr()
+    await mgr.attach({ deviceName: "d", sessionName: "s", terminalId: "t", ...baseAttach })
+    mgr.detach("d", "s", "t")
+    backend.failResolve = new Error("resolve unavailable")
+    await expect(mgr.close("s", "t")).rejects.toThrow("resolve unavailable")
+  })
+
+  it("surfaces Windows session deletion list failures", async () => {
+    const { mgr, backend } = makeWindowsMgr()
+    backend.failList = new Error("sessiond list unavailable")
+    await expect(mgr.killAllForSession("s")).rejects.toThrow("sessiond list unavailable")
+  })
+
+  it("surfaces Windows session deletion kill failures", async () => {
+    const { mgr, backend } = makeWindowsMgr()
+    backend.seed(sessiondTerminalGroup("s"), sessiondTerminalName("t"))
+    backend.failKill = new Error("session cleanup kill denied")
+    await expect(mgr.killAllForSession("s")).rejects.toThrow("session cleanup kill denied")
   })
 
   it("explicit close racing an agent attach never kills the Claude target", async () => {

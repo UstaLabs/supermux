@@ -126,7 +126,12 @@ export class SessionScreen {
 
   captureRaw(): string {
     this.assertActive()
-    return new TextDecoder().decode(this.raw.bytes())
+    return new TextDecoder().decode(this.captureRawBytes())
+  }
+
+  captureRawBytes(): Uint8Array {
+    this.assertActive()
+    return this.raw.bytes()
   }
 
   resize(cols: number, rows: number): void {

@@ -636,31 +636,39 @@ export class WebChannel implements Channel {
     const terminalId = ws.data.terminalId!
     const workdir = this.opts.getSessionWorkdir?.(sessionName)
     if (!workdir) { ws.close(1011, "session not found"); return }
-    const result = await tm.attach({
-      deviceName: ws.data.deviceName,
-      sessionName,
-      terminalId,
-      workdir,
-      cols: 80,
-      rows: 24,
-      kind: ws.data.terminalKind ?? "scratch",
-      agentTarget: ws.data.terminalAgentTarget,
-      onData: (data) => {
-        try { ws.sendBinary(data) } catch {}
-        // Past the high-water mark: hand pumpOutput a promise that resolves on
-        // the socket's `drain`, so we stop pulling pty-helper output (→ tmux
-        // sees a slow client and redraws current state instead of replaying).
-        if (ws.getBufferedAmount() > TERMINAL_BP_HIGH_WATER) {
-          const d = ws.data._termDrain ?? makeDeferred()
-          ws.data._termDrain = d
-          return d.promise
-        }
-      },
-      onExit: (code) => { try { ws.send(JSON.stringify({ type: "exit", code })); ws.close() } catch {} },
-    })
+    let result: Awaited<ReturnType<typeof tm.attach>>
+    try {
+      result = await tm.attach({
+        deviceName: ws.data.deviceName,
+        sessionName,
+        terminalId,
+        workdir,
+        cols: 80,
+        rows: 24,
+        kind: ws.data.terminalKind ?? "scratch",
+        agentTarget: ws.data.terminalAgentTarget,
+        onData: (data) => {
+          try { ws.sendBinary(data) } catch {}
+          // Past the high-water mark: hand pumpOutput a promise that resolves on
+          // the socket's `drain`, so we stop pulling pty-helper output (→ tmux
+          // sees a slow client and redraws current state instead of replaying).
+          if (ws.getBufferedAmount() > TERMINAL_BP_HIGH_WATER) {
+            const d = ws.data._termDrain ?? makeDeferred()
+            ws.data._termDrain = d
+            return d.promise
+          }
+        },
+        onExit: (code) => { try { ws.send(JSON.stringify({ type: "exit", code })); ws.close() } catch {} },
+      })
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      try { ws.send(JSON.stringify({ type: "error", reason })) } catch {}
+      try { ws.close(1011, reason.slice(0, 120)) } catch {}
+      return
+    }
     if (!result.ok) {
-      ws.send(JSON.stringify({ type: "error", reason: result.error }))
-      ws.close(1011, result.error)
+      try { ws.send(JSON.stringify({ type: "error", reason: result.error })) } catch {}
+      try { ws.close(1011, result.error.slice(0, 120)) } catch {}
     }
   }
 

@@ -117,7 +117,7 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
     let closing = false
     let authenticated = false
     const handshakeTimer = setTimeout(() => { if (!authenticated) socket.destroy() }, handshakeTimeoutMs)
-    const viewers = new Map<string, { viewer: RuntimeViewer; targetId: string }>()
+    const viewers = new Map<string, { viewer: RuntimeViewer; targetId: string; unsubscribeExit?: () => void }>()
     const reservations = new Set<{ targetId: string; active: boolean }>()
     const requestIds = new Set<string>()
     const requestIdOrder: string[] = []
@@ -138,6 +138,7 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
       const entry = viewers.get(key)
       if (!entry) return
       viewers.delete(key)
+      entry.unsubscribeExit?.()
       entry.viewer.close()
       const count = targetViewerCounts.get(entry.targetId) ?? 0
       if (count <= 1) targetViewerCounts.delete(entry.targetId)
@@ -188,8 +189,12 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
             if (socket.destroyed || closing) throw new Error("connection is closed")
             reservation.active = false
             reservations.delete(reservation)
-            viewers.set(key, { viewer, targetId: request.args.targetId })
-            void viewer.exited?.then(async code => {
+            const entry: { viewer: RuntimeViewer; targetId: string; unsubscribeExit?: () => void } = {
+              viewer,
+              targetId: request.args.targetId,
+            }
+            viewers.set(key, entry)
+            const handleExit = async (code: number) => {
               if (viewers.get(key)?.viewer !== viewer) return
               try {
                 await send(socket, {
@@ -203,7 +208,9 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
               } finally {
                 releaseViewer(key)
               }
-            }, () => { releaseViewer(key) })
+            }
+            if (viewer.onExit) entry.unsubscribeExit = viewer.onExit(code => { void handleExit(code) })
+            else void viewer.exited?.then(handleExit, () => { releaseViewer(key) })
           } catch (error) {
             viewer?.close()
             releaseReservation(reservation)

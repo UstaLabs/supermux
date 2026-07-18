@@ -424,7 +424,7 @@ export class TerminalManager {
       const name = sessiondTerminalName(terminalId)
       await this.withWindowsTargetLock(`${group}\0${name}`, async () => {
         if (scratchTargets.size === 0) {
-          const targetId = await this.sessionBackend!.resolve(group, name).catch(() => null)
+          const targetId = await this.sessionBackend!.resolve(group, name)
           if (targetId) scratchTargets.add(targetId)
         }
         for (const targetId of scratchTargets) await this.sessionBackend!.kill(targetId)
@@ -475,10 +475,8 @@ export class TerminalManager {
       }
     }
     if (this.platform === "win32") {
-      try {
-        const targets = await this.sessionBackend!.list(sessiondTerminalGroup(sessionName))
-        for (const target of targets) await this.sessionBackend!.kill(target.id)
-      } catch {}
+      const targets = await this.sessionBackend!.list(sessiondTerminalGroup(sessionName))
+      for (const target of targets) await this.sessionBackend!.kill(target.id)
     } else {
       try { await this.term!.killAllTerminals(sessionName) } catch {}
     }

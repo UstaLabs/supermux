@@ -105,6 +105,40 @@ test("agent terminal: rejects non-claude, accepts claude and attaches with targe
   ws.close()
 })
 
+test("terminal attach rejection reports an error and closes with 1011", async () => {
+  await ch.stop()
+  ch = new WebChannel({
+    port: PORT,
+    devicesFile: DEV_PATH,
+    publicUrl: "http://127.0.0.1:" + PORT,
+    getSessionsSnapshot: () => [],
+    getSessionLog: () => [],
+    setMute: () => {},
+    onSendFromWeb: () => {},
+    getSessionWorkdir: () => "/w",
+    terminalManager: {
+      attach: async () => { throw new Error("attach exploded") },
+      detach: () => {},
+    } as any,
+  })
+  await ch.start()
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${PORT}/ws/term?session=ana&kind=scratch`,
+    { headers: { Cookie: `cmux_token=${token}` } },
+  )
+  const opened = new Promise<void>((resolve, reject) => {
+    ws.onopen = () => resolve()
+    ws.onerror = event => reject(event)
+  })
+  const message = nextMessage(ws)
+  const closed = new Promise<number>(resolve => {
+    ws.onclose = event => { resolve(event.code) }
+  })
+  await opened
+  expect(await message).toEqual({ type: "error", reason: "attach exploded" })
+  expect(await closed).toBe(1011)
+})
+
 test("ws send frame triggers onSendFromWeb callback", async () => {
   const received: any[] = []
   await ch.stop()

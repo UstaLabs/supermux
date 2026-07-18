@@ -1691,7 +1691,7 @@ async function killSession(id: string) {
   if (!s) return
   const displayName = s.name
 
-  terminalManager.killAllForSession(displayName)
+  await terminalManager.killAllForSession(displayName)
   void displayManager.killAllForSession(displayName)
   fsWatcher.killSession(displayName)
 

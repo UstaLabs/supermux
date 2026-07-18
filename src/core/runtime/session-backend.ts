@@ -5,6 +5,8 @@ export type RuntimeViewer = {
   resize(cols: number, rows: number): boolean
   /** Present when the backend can report the target process exit to a viewer. */
   readonly exited?: Promise<number>
+  /** Cancellable alternative for long-lived viewers. */
+  onExit?(handler: (code: number) => void): () => void
 }
 
 export interface SessionBackend {

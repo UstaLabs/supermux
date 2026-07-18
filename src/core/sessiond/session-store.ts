@@ -147,6 +147,7 @@ type Viewer = {
   delivering: boolean
   active: boolean
   drainWaiters: Set<() => void>
+  exitHandlers: Set<(code: number) => void>
   detach: () => void
 }
 
@@ -480,49 +481,88 @@ export class SessionStore implements SessionBackend {
     onData: (data: Uint8Array) => void | Promise<void>,
   ): Promise<RuntimeViewer> {
     const target = this.activeTarget(targetId)
-    if (target.viewers.has(viewerId)) throw new Error(`viewer is already attached: ${viewerId}`)
-    const viewer: Viewer = {
-      id: viewerId,
-      onData,
-      queue: [],
-      pendingBytes: 0,
-      inFlightBytes: 0,
-      delivering: false,
-      active: true,
-      drainWaiters: new Set(),
-      detach: () => {},
-    }
-    viewer.detach = () => {
-      if (!viewer.active) return
-      viewer.active = false
-      viewer.queue.length = 0
-      viewer.pendingBytes = viewer.inFlightBytes
-      viewer.detach = () => {}
-      target.viewers.delete(viewer.id)
-      for (const resolve of viewer.drainWaiters) resolve()
-      viewer.drainWaiters.clear()
-    }
-    target.viewers.set(viewerId, viewer)
-    let closed = false
-    return {
-      exited: target.finalizedExit,
-      close: () => {
-        if (closed) return
-        closed = true
-        viewer.detach()
-      },
-      write: data => !closed && target.state === "alive" && target.input.tryWrite(data),
-      resize: (cols, rows) => {
-        if (closed || target.state !== "alive") return false
-        try {
-          target.screen.resize(cols, rows)
-          target.terminal.resize(cols, rows)
-          return true
-        } catch {
-          return false
+    let attached: RuntimeViewer | undefined
+    let failure: unknown
+    const barrier = target.outputQueue.then(async () => {
+      try {
+        if (target.removed || target.state !== "alive" || target.exitObserved) {
+          throw new Error(`live session target not found: ${targetId}`)
         }
-      },
-    }
+        if (target.viewers.has(viewerId)) throw new Error(`viewer is already attached: ${viewerId}`)
+        const viewer: Viewer = {
+          id: viewerId,
+          onData,
+          queue: [],
+          pendingBytes: 0,
+          inFlightBytes: 0,
+          delivering: false,
+          active: true,
+          drainWaiters: new Set(),
+          exitHandlers: new Set(),
+          detach: () => {},
+        }
+        viewer.detach = () => {
+          if (!viewer.active) return
+          viewer.active = false
+          viewer.queue.length = 0
+          viewer.pendingBytes = viewer.inFlightBytes
+          viewer.detach = () => {}
+          target.viewers.delete(viewer.id)
+          viewer.exitHandlers.clear()
+          for (const resolve of viewer.drainWaiters) resolve()
+          viewer.drainWaiters.clear()
+        }
+        const history = target.screen.captureRawBytes()
+        const replay = history.byteLength > this.viewerByteLimit
+          ? history.slice(history.byteLength - this.viewerByteLimit)
+          : history
+        // Replay is the attach barrier itself. Output accepted after attach was
+        // requested is chained behind it, so history cannot consume the live
+        // viewer queue budget or interleave with later PTY bytes.
+        if (replay.byteLength > 0) await onData(replay.slice())
+        if (target.removed || target.state !== "alive" || target.exitObserved) {
+          throw new Error(`live session target not found: ${targetId}`)
+        }
+        target.viewers.set(viewerId, viewer)
+        let closed = false
+        attached = {
+          exited: target.finalizedExit,
+          onExit: handler => {
+            if (target.finalizedExitSettled) {
+              try { handler(target.exitCode ?? 1) } catch {}
+              return () => {}
+            }
+            if (!viewer.active) return () => {}
+            viewer.exitHandlers.add(handler)
+            return () => { viewer.exitHandlers.delete(handler) }
+          },
+          close: () => {
+            if (closed) return
+            closed = true
+            viewer.detach()
+          },
+          write: data => !closed && target.state === "alive" && target.input.tryWrite(data),
+          resize: (cols, rows) => {
+            if (closed || target.state !== "alive") return false
+            try {
+              target.screen.resize(cols, rows)
+              target.terminal.resize(cols, rows)
+              return true
+            } catch {
+              return false
+            }
+          },
+        }
+      } catch (error) {
+        failure = error
+      }
+    })
+    // The barrier becomes the predecessor for later output, while attach errors
+    // are reported only to this caller and cannot poison the target queue.
+    target.outputQueue = barrier
+    await barrier
+    if (failure) throw failure
+    return attached!
   }
 
   async detach(targetId: string, viewerId: string): Promise<void> {
@@ -680,11 +720,18 @@ export class SessionStore implements SessionBackend {
         this.terminalEofTimeoutMs,
       )
       target.input.close()
-      for (const viewer of [...target.viewers.values()]) viewer.detach()
       if (!target.finalizedExitSettled) {
         target.finalizedExitSettled = true
-        target.resolveFinalizedExit(target.exitCode ?? 1)
+        const code = target.exitCode ?? 1
+        target.resolveFinalizedExit(code)
+        for (const viewer of [...target.viewers.values()]) {
+          for (const handler of [...viewer.exitHandlers]) {
+            try { handler(code) } catch {}
+          }
+          viewer.exitHandlers.clear()
+        }
       }
+      for (const viewer of [...target.viewers.values()]) viewer.detach()
 
       const errors: Error[] = []
       if (!target.terminalClosed) {

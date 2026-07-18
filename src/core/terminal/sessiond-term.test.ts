@@ -169,6 +169,25 @@ describe("SessiondTerm", () => {
     proc.kill()
   })
 
+  test("bounds unread output and detaches the viewer without killing its target", async () => {
+    const backend = new FakeBackend()
+    const { proc } = await createSessiondTerm({
+      backend, kind: "scratch", deviceName: "d", sessionName: "s", terminalId: "bounded",
+      workdir: "C:\\w", cols: 80, rows: 24, environment: {}, findExecutable: () => "powershell.exe",
+      outputByteLimit: 5,
+    })
+    const reader = proc.stdout.getReader()
+    const first = reader.read()
+    await backend.emit("x")
+    expect(text((await first).value!)).toBe("x")
+    await backend.emit("abc")
+    await backend.emit("de")
+    await backend.emit("f")
+    expect(await proc.exited).toBe(1)
+    expect(backend.viewerCloses).toBe(1)
+    expect(backend.kills).toEqual([])
+  })
+
   test("stream cancellation and repeated detach close the viewer exactly once without killing the target", async () => {
     const backend = new FakeBackend()
     const { proc } = await createSessiondTerm({

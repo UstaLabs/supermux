@@ -170,6 +170,54 @@ describe("SessiondBackend", () => {
     expect(targetExit).toBe(4)
   })
 
+  test("orders inbound viewer data and detaches deterministically on bounded overflow", async () => {
+    const { endpoint, secret, dir, memory } = await harness()
+    const client = new SessiondBackend({
+      endpoint, secret, stateDir: dir, platform: "linux", viewerInboundByteLimit: 5,
+    })
+    cleanup.push(() => client.close())
+    const target = await client.create({ group: "g", name: "bounded-viewer", cwd: dir, argv: ["fake"], env: {} })
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const seen: string[] = []
+    const viewer = await client.attach(target.id, "held", async data => {
+      seen.push(new TextDecoder().decode(data))
+      await held
+    })
+    const accept = (client as unknown as { acceptMessage(input: unknown): void }).acceptMessage.bind(client)
+    accept({ event: "data", targetId: target.id, viewerId: "held", dataBase64: Buffer.from("abc").toString("base64") })
+    accept({ event: "data", targetId: target.id, viewerId: "held", dataBase64: Buffer.from("de").toString("base64") })
+    accept({ event: "data", targetId: target.id, viewerId: "held", dataBase64: Buffer.from("f").toString("base64") })
+    expect(await viewer.exited).toBe(1)
+    expect(seen).toEqual(["abc"])
+    expect(await memory.backend.livePid(target.id)).not.toBeNull()
+    release()
+  })
+
+  test("awaits each inbound viewer callback and preserves below-limit chunk order", async () => {
+    const { client } = await harness()
+    const target = await client.create({ group: "g", name: "ordered-viewer", cwd: "/tmp", argv: ["fake"], env: {} })
+    let release!: () => void
+    const firstDelivery = new Promise<void>(resolve => { release = resolve })
+    const seen: string[] = []
+    await client.attach(target.id, "ordered", async data => {
+      seen.push(new TextDecoder().decode(data))
+      if (seen.length === 1) await firstDelivery
+    })
+    const accept = (client as unknown as { acceptMessage(input: unknown): void }).acceptMessage.bind(client)
+    for (const value of ["one", "two"]) {
+      accept({
+        event: "data", targetId: target.id, viewerId: "ordered",
+        dataBase64: Buffer.from(value).toString("base64"),
+      })
+    }
+    await Bun.sleep(0)
+    expect(seen).toEqual(["one"])
+    release()
+    for (let attempt = 0; attempt < 50 && seen.length < 2; attempt++) await Bun.sleep(1)
+    expect(seen).toEqual(["one", "two"])
+  })
+
   test("shares concurrent adoption and spawns at most once only for missing endpoint", async () => {
     const dir = await mkdtemp(join(tmpdir(), "sessiond-adopt-")); cleanup.push(() => rm(dir, { recursive: true, force: true }))
     const endpoint = join(dir, "missing.sock"), secret = Buffer.alloc(32, 3).toString("base64")

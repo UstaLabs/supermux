@@ -241,6 +241,55 @@ describe("SessionStore", () => {
     await store.detach(target.id, "a")
   })
 
+  test("replays full-limit raw history before racing live output without detaching", async () => {
+    const { store, sessions } = harness({ store: { rawByteLimit: 5, viewerByteLimit: 5 } })
+    const target = await store.create(base)
+    sessions[0]!.emit(bytes("discard"))
+    sessions[0]!.emit(bytes("12345"))
+    const seen: string[] = []
+    const replayDelivery = deferred<void>()
+    const attaching = store.attach(target.id, "late", async data => {
+      seen.push(decoder.decode(data))
+      if (seen.length === 1) await replayDelivery.promise
+    })
+    await waitUntil(() => seen.length === 1)
+    sessions[0]!.emit(bytes("live"))
+    replayDelivery.resolve()
+    const viewer = await attaching
+    await waitUntil(() => seen.join("") === "12345live")
+    expect(seen.join("")).toBe("12345live")
+    expect(viewer.write(bytes("input"))).toBe(true)
+  })
+
+  test("reattach replays output produced while detached", async () => {
+    const { store, sessions } = harness()
+    const target = await store.create(base)
+    const first: string[] = []
+    const viewer = await store.attach(target.id, "phone", data => { first.push(decoder.decode(data)) })
+    sessions[0]!.emit(bytes("one"))
+    await waitUntil(() => first.join("") === "one")
+    viewer.close()
+    sessions[0]!.emit(bytes("-away"))
+    const replayed: string[] = []
+    await store.attach(target.id, "phone", data => { replayed.push(decoder.decode(data)) })
+    await waitUntil(() => replayed.join("") === "one-away")
+  })
+
+  test("serializes an attach with racing output without gaps or duplicates", async () => {
+    const { store, sessions } = harness()
+    const target = await store.create(base)
+    sessions[0]!.emit(bytes("before"))
+    const seen: string[] = []
+    const attaching = store.attach(target.id, "racing", async data => {
+      await Promise.resolve()
+      seen.push(decoder.decode(data))
+    })
+    sessions[0]!.emit(bytes("after"))
+    await attaching
+    await waitUntil(() => seen.join("") === "beforeafter")
+    expect(seen.join("")).toBe("beforeafter")
+  })
+
   test("isolates and bounds a hanging viewer without blocking capture, healthy viewers, or cleanup", async () => {
     const { store, sessions, jobs } = harness({ store: { viewerByteLimit: 5 } })
     const target = await store.create(base)
@@ -544,5 +593,29 @@ describe("SessionStore", () => {
     viewer.close()
     await store.detach(target.id, "viewer")
     expect(jobs[0]?.terminateCount).toBe(0)
+  })
+
+  test("detaching removes cancellable target-exit handlers from long-lived targets", async () => {
+    const { store, sessions } = harness()
+    const target = await store.create(base)
+    const viewer = await store.attach(target.id, "temporary", () => {})
+    let exitCalls = 0
+    viewer.onExit?.(() => { exitCalls++ })
+    viewer.close()
+    sessions[0]!.exit(0)
+    await waitUntil(() => store.listExited().length === 1)
+    expect(exitCalls).toBe(0)
+  })
+
+  test("late cancellable exit subscriptions observe an already-finalized target once", async () => {
+    const { store, sessions } = harness()
+    const target = await store.create(base)
+    const viewer = await store.attach(target.id, "late-exit-subscription", () => {})
+    sessions[0]!.exit(7)
+    expect(await viewer.exited).toBe(7)
+    const codes: number[] = []
+    const unsubscribe = viewer.onExit?.(code => { codes.push(code) })
+    unsubscribe?.()
+    expect(codes).toEqual([7])
   })
 })

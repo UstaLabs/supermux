@@ -16,6 +16,7 @@ export type SessiondTermOptions = {
   rows: number
   environment?: Readonly<Record<string, string>>
   findExecutable?: FindExecutable
+  outputByteLimit?: number
 }
 
 const encoder = new TextEncoder()
@@ -79,16 +80,31 @@ export class SessiondTerm {
 
   private viewer?: RuntimeViewer
   private controller?: ReadableStreamDefaultController<Uint8Array>
+  private readonly outputQueue: Uint8Array[] = []
+  private pendingOutputBytes = 0
+  private waitingForPull = false
   private resolveExited!: (code: number) => void
   private closed = false
 
-  constructor(pid?: number) {
+  constructor(pid?: number, private readonly outputByteLimit = 1024 * 1024) {
+    if (!Number.isInteger(outputByteLimit) || outputByteLimit < 0) {
+      throw new RangeError("outputByteLimit must be a non-negative integer")
+    }
     this.pid = pid
     this.exited = new Promise(resolve => { this.resolveExited = resolve })
     this.stdout = new ReadableStream<Uint8Array>({
       start: controller => { this.controller = controller },
+      pull: controller => {
+        const data = this.outputQueue.shift()
+        if (!data) {
+          this.waitingForPull = true
+          return
+        }
+        this.pendingOutputBytes -= data.byteLength
+        controller.enqueue(data)
+      },
       cancel: () => { this.detach(143) },
-    })
+    }, { highWaterMark: 0 })
     this.stdin = {
       write: data => {
         if (this.closed || !this.viewer) return false
@@ -104,11 +120,23 @@ export class SessiondTerm {
 
   accept(data: Uint8Array): void {
     if (this.closed) return
-    try {
-      this.controller?.enqueue(data.slice())
-    } catch {
-      this.detach(143)
+    if (data.byteLength === 0) return
+    if (data.byteLength > this.outputByteLimit) {
+      this.detach(1)
+      return
     }
+    const snapshot = data.slice()
+    if (this.waitingForPull) {
+      this.waitingForPull = false
+      try { this.controller?.enqueue(snapshot) } catch { this.detach(1) }
+      return
+    }
+    if (this.pendingOutputBytes + data.byteLength > this.outputByteLimit) {
+      this.detach(1)
+      return
+    }
+    this.outputQueue.push(snapshot)
+    this.pendingOutputBytes += data.byteLength
   }
 
   bind(viewer: RuntimeViewer): void {
@@ -141,6 +169,9 @@ export class SessiondTerm {
     this.closed = true
     const viewer = this.viewer
     this.viewer = undefined
+    this.outputQueue.length = 0
+    this.pendingOutputBytes = 0
+    this.waitingForPull = false
     try { viewer?.close() } catch {}
     try { this.controller?.close() } catch {}
     this.resolveExited(code)
@@ -186,7 +217,7 @@ export async function createSessiondTerm(options: SessiondTermOptions): Promise<
       }
     }
 
-    const activeProc = new SessiondTerm(await backend.livePid(targetId) ?? undefined)
+    const activeProc = new SessiondTerm(await backend.livePid(targetId) ?? undefined, options.outputByteLimit)
     proc = activeProc
     const viewerId = `terminal-viewer-${randomUUID().replaceAll("-", "")}`
     const viewer = await backend.attach(targetId, viewerId, data => { activeProc.accept(data) })

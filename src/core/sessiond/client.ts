@@ -27,13 +27,20 @@ export type SessiondBackendOptions = {
   requestTimeoutMs?: number
   maxPendingRequests?: number
   maxOutboundBytes?: number
+  viewerInboundByteLimit?: number
 }
 
 type Pending = { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout>; socket: Socket }
 type ViewerRegistration = {
   targetId: string
+  viewerId: string
   onData: (data: Uint8Array) => void | Promise<void>
-  exit(code: number): void
+  queue: Uint8Array[]
+  pendingBytes: number
+  delivering: boolean
+  open: boolean
+  requestedExit?: number
+  resolveExited(code: number): void
 }
 
 function defaultExecutable(): string {
@@ -121,6 +128,7 @@ export class SessiondBackend implements SessionBackend {
   private readonly requestTimeoutMs: number
   private readonly maxPendingRequests: number
   private readonly maxOutboundBytes: number
+  private readonly viewerInboundByteLimit: number
 
   constructor(options: SessiondBackendOptions) {
     this.endpoint = options.endpoint
@@ -136,6 +144,10 @@ export class SessiondBackend implements SessionBackend {
     this.requestTimeoutMs = options.requestTimeoutMs ?? 10_000
     this.maxPendingRequests = options.maxPendingRequests ?? 1024
     this.maxOutboundBytes = options.maxOutboundBytes ?? SESSIOND_MAX_BUFFER_BYTES
+    this.viewerInboundByteLimit = options.viewerInboundByteLimit ?? 1024 * 1024
+    if (!Number.isInteger(this.viewerInboundByteLimit) || this.viewerInboundByteLimit < 0) {
+      throw new RangeError("viewerInboundByteLimit must be a non-negative integer")
+    }
   }
 
   async ensureConnected(): Promise<void> {
@@ -193,34 +205,31 @@ export class SessiondBackend implements SessionBackend {
 
   async attach(targetId: string, viewerId: string, onData: (data: Uint8Array) => void | Promise<void>): Promise<RuntimeViewer> {
     const key = `${targetId}\0${viewerId}`
-    let open = true
     let resolveExited!: (code: number) => void
     const exited = new Promise<number>(resolve => { resolveExited = resolve })
     const registration: ViewerRegistration = {
       targetId,
+      viewerId,
       onData,
-      exit: code => {
-        if (!open) return
-        open = false
-        this.viewers.delete(key)
-        resolveExited(code)
-      },
+      queue: [],
+      pendingBytes: 0,
+      delivering: false,
+      open: true,
+      resolveExited,
     }
     if (this.viewers.has(key)) throw new Error(`viewer is already attached: ${viewerId}`)
     this.viewers.set(key, registration)
     try {
       const value = await this.request("attach", { targetId, viewerId })
       if (!isRecord(value) || value.attached !== true) throw new Error("sessiond returned an invalid attach response")
-    } catch (error) { this.viewers.delete(key); open = false; throw error }
+    } catch (error) { this.viewers.delete(key); registration.open = false; throw error }
     return {
       exited,
       close: () => {
-        if (!open) return
-        registration.exit(143)
-        this.sendUntracked("detach", { targetId, viewerId })
+        this.closeViewer(key, registration, 143, true)
       },
-      write: data => open && this.sendUntracked("write", { targetId, dataBase64: Buffer.from(data).toString("base64") }),
-      resize: (cols, rows) => open && this.sendUntracked("resize", { targetId, cols, rows }),
+      write: data => registration.open && this.sendUntracked("write", { targetId, dataBase64: Buffer.from(data).toString("base64") }),
+      resize: (cols, rows) => registration.open && this.sendUntracked("resize", { targetId, cols, rows }),
     }
   }
 
@@ -310,10 +319,11 @@ export class SessiondBackend implements SessionBackend {
     if (input.event === "exit" && typeof input.code === "number" && Number.isSafeInteger(input.code)) {
       if (input.viewerId === undefined) {
         for (const viewer of [...this.viewers.values()]) {
-          if (viewer.targetId === input.targetId) viewer.exit(input.code)
+          if (viewer.targetId === input.targetId) this.requestViewerExit(viewer, input.code)
         }
       } else if (typeof input.viewerId === "string") {
-        this.viewers.get(`${input.targetId}\0${input.viewerId}`)?.exit(input.code)
+        const viewer = this.viewers.get(`${input.targetId}\0${input.viewerId}`)
+        if (viewer) this.requestViewerExit(viewer, input.code)
       }
       return
     }
@@ -321,8 +331,66 @@ export class SessiondBackend implements SessionBackend {
     const viewer = this.viewers.get(`${input.targetId}\0${input.viewerId}`)
     if (!viewer) return
     if (input.event === "data" && validBase64(input.dataBase64)) {
-      void Promise.resolve(viewer.onData(Buffer.from(input.dataBase64, "base64"))).catch(() => undefined)
+      this.enqueueViewerData(viewer, Buffer.from(input.dataBase64, "base64"))
     }
+  }
+
+  private enqueueViewerData(viewer: ViewerRegistration, data: Uint8Array): void {
+    if (!viewer.open || viewer.requestedExit !== undefined || data.byteLength === 0) return
+    const key = `${viewer.targetId}\0${viewer.viewerId}`
+    if (viewer.pendingBytes + data.byteLength > this.viewerInboundByteLimit) {
+      this.closeViewer(key, viewer, 1, true)
+      return
+    }
+    viewer.queue.push(data.slice())
+    viewer.pendingBytes += data.byteLength
+    this.pumpViewerData(viewer)
+  }
+
+  private pumpViewerData(viewer: ViewerRegistration): void {
+    if (viewer.delivering || !viewer.open) return
+    const key = `${viewer.targetId}\0${viewer.viewerId}`
+    viewer.delivering = true
+    void (async () => {
+      try {
+        while (viewer.open) {
+          const chunk = viewer.queue.shift()
+          if (!chunk) break
+          try {
+            await viewer.onData(chunk)
+          } catch {
+            this.closeViewer(key, viewer, 1, true)
+            return
+          } finally {
+            viewer.pendingBytes = Math.max(0, viewer.pendingBytes - chunk.byteLength)
+          }
+        }
+      } finally {
+        viewer.delivering = false
+        if (viewer.open && viewer.queue.length > 0) this.pumpViewerData(viewer)
+        else if (viewer.open && viewer.requestedExit !== undefined) {
+          this.closeViewer(key, viewer, viewer.requestedExit, false)
+        }
+      }
+    })()
+  }
+
+  private requestViewerExit(viewer: ViewerRegistration, code: number): void {
+    if (!viewer.open) return
+    viewer.requestedExit ??= code
+    if (!viewer.delivering && viewer.queue.length === 0) {
+      this.closeViewer(`${viewer.targetId}\0${viewer.viewerId}`, viewer, viewer.requestedExit, false)
+    }
+  }
+
+  private closeViewer(key: string, viewer: ViewerRegistration, code: number, detach: boolean): void {
+    if (!viewer.open) return
+    viewer.open = false
+    viewer.queue.length = 0
+    viewer.pendingBytes = 0
+    this.viewers.delete(key)
+    viewer.resolveExited(code)
+    if (detach) this.sendUntracked("detach", { targetId: viewer.targetId, viewerId: viewer.viewerId })
   }
 
   private async request(op: string, args: unknown): Promise<unknown> {
@@ -389,7 +457,9 @@ export class SessiondBackend implements SessionBackend {
   }
 
   private clearViewers(): void {
-    for (const viewer of [...this.viewers.values()]) viewer.exit(1)
+    for (const viewer of [...this.viewers.values()]) {
+      this.closeViewer(`${viewer.targetId}\0${viewer.viewerId}`, viewer, 1, false)
+    }
     this.viewers.clear()
   }
 }
