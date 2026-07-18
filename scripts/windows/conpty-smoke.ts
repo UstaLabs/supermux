@@ -30,6 +30,14 @@ function processExists(pid: number): boolean {
   return check.exitCode === 0
 }
 
+export function buildNestedChildCommand(): string {
+  return [
+    "$child = Start-Process -FilePath powershell.exe",
+    "-ArgumentList @('-NoLogo','-NoProfile','-Command','Start-Sleep -Seconds 600')",
+    "-PassThru",
+  ].join(" ") + "; Write-Output ('SUPERMUX_CHILD_PID=' + $child.Id)\r"
+}
+
 async function waitForTreeExit(pids: number[], timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -65,13 +73,7 @@ async function main(): Promise<void> {
     await store.resize(target.id, 120, 40)
     await waitForCapture(store, target.id, /SUPERMUX_CONPTY_OK/u, 10_000)
 
-    const childCommand = [
-      "$child = Start-Process -FilePath powershell.exe",
-      "-ArgumentList @('-NoLogo','-NoProfile','-Command','Start-Sleep -Seconds 600')",
-      "-PassThru",
-      "Write-Output ('SUPERMUX_CHILD_PID=' + $child.Id)",
-    ].join("; ") + "\r"
-    await store.write(target.id, encoder.encode(childCommand))
+    await store.write(target.id, encoder.encode(buildNestedChildCommand()))
     const childMatch = await waitForCapture(store, target.id, /SUPERMUX_CHILD_PID=(\d+)/u, 10_000)
     const childPid = Number(childMatch[1])
     if (!Number.isSafeInteger(childPid) || childPid <= 0) throw new Error("ConPTY smoke returned an invalid child PID")
@@ -87,7 +89,9 @@ async function main(): Promise<void> {
   }
 }
 
-await main().catch(error => {
-  console.error(error instanceof Error ? error.stack ?? error.message : String(error))
-  process.exit(1)
-})
+if (import.meta.main) {
+  await main().catch(error => {
+    console.error(error instanceof Error ? error.stack ?? error.message : String(error))
+    process.exit(1)
+  })
+}
