@@ -1,7 +1,7 @@
 # Native Windows Host — Single-Broker Architecture
 
 **Date:** 2026-07-18
-**Status:** Architecture approved by Ahmet; awaiting review of this written spec
+**Status:** Written spec approved by Ahmet; implementation authorized
 **Supersedes:** The deferred Windows-host summary in `2026-07-11-desktop-host-multihost-design.md`
 
 ## 1. Goal and boundaries
