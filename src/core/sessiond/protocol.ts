@@ -85,7 +85,7 @@ function requireStringArray(record: UnknownRecord, field: string, nonempty = fal
   if (nonempty && value.length === 0) throw new Error(`${field} must be a nonempty array of strings`)
   if (!value.every((entry): entry is string => typeof entry === "string"))
     throw new Error(`${field} must contain only string entries`)
-  return value
+  return [...value]
 }
 
 function requireStringRecord(record: UnknownRecord, field: string): Record<string, string> {
@@ -125,7 +125,8 @@ function optionalBoolean(record: UnknownRecord, field: string): boolean | undefi
 function requireBase64(record: UnknownRecord, field: string): string {
   const value = requireString(record, field)
   const base64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
-  if (!base64.test(value)) throw new Error(`${field} must be valid base64`)
+  if (!base64.test(value) || Buffer.from(value, "base64").toString("base64") !== value)
+    throw new Error(`${field} must be valid base64`)
   return value
 }
 

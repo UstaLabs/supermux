@@ -149,6 +149,27 @@ describe("sessiond request protocol", () => {
     expect(() => parseRequest({ ...base, args: { ...args, argv: ["pwsh", 1] } })).toThrow(/argv.*string/i)
   })
 
+  test("copies untrusted argv and keys arrays into the parsed request", () => {
+    const argv = ["pwsh", "-NoLogo"]
+    const keys = ["Enter"]
+    const create = parseRequest({
+      ...envelope,
+      op: "create",
+      args: { group: "g", name: "n", cwd: "c", argv, env: {} },
+    })
+    const sendKeys = parseRequest({ ...envelope, op: "sendKeys", args: { targetId: "target-1", keys } })
+
+    argv.push("-Command")
+    keys[0] = "C-c"
+
+    expect(create.op).toBe("create")
+    if (create.op !== "create") throw new Error("expected parsed create request")
+    expect(create.args.argv).toEqual(["pwsh", "-NoLogo"])
+    expect(sendKeys.op).toBe("sendKeys")
+    if (sendKeys.op !== "sendKeys") throw new Error("expected parsed sendKeys request")
+    expect(sendKeys.args.keys).toEqual(["Enter"])
+  })
+
   test("rejects invalid create environments", () => {
     const base = { ...envelope, op: "create" }
     const args = { group: "g", name: "n", cwd: "c", argv: ["pwsh"] }
@@ -159,8 +180,17 @@ describe("sessiond request protocol", () => {
 
   test("rejects malformed base64 write data", () => {
     expect(() => parseRequest({ ...envelope, op: "write", args: { targetId: "target-1", dataBase64: 4 } })).toThrow(/dataBase64.*string/i)
-    for (const dataBase64 of ["abc", "aGVsbG8", "aGV=bG8=", "!!!!", "YW Jj"])
+    for (const dataBase64 of ["abc", "aGVsbG8", "aGV=bG8=", "!!!!", "YW Jj", "AB==", "AAB="])
       expect(() => parseRequest({ ...envelope, op: "write", args: { targetId: "target-1", dataBase64 } })).toThrow(/dataBase64.*base64/i)
+  })
+
+  test("accepts canonical and empty base64 write data", () => {
+    for (const dataBase64 of ["", "AA==", "AAA=", "aGVsbG8="]) {
+      const parsed = parseRequest({ ...envelope, op: "write", args: { targetId: "target-1", dataBase64 } })
+      expect(parsed.op).toBe("write")
+      if (parsed.op !== "write") throw new Error("expected parsed write request")
+      expect(parsed.args.dataBase64).toBe(dataBase64)
+    }
   })
 })
 
