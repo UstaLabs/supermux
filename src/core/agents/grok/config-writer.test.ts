@@ -78,3 +78,9 @@ test("resolveGrokAuth does not fail-closed when the user has never logged in", (
   expect(res.env.HOME).toBe(sessionHome)
   expect(existsSync(join(sessionHome, ".grok"))).toBe(true)
 })
+
+test("resolveGrokAuth redirects USERPROFILE as well as HOME on Windows", () => {
+  const sessionHome = home()
+  const res = resolveGrokAuth({ userGrokDir: join(tmpdir(), "missing-grok"), sessionHome, platform: "win32" })
+  expect(res.env).toEqual({ HOME: sessionHome, USERPROFILE: sessionHome })
+})

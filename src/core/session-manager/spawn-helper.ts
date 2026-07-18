@@ -230,7 +230,7 @@ export async function spawnPA(opts: {
 
     const auth = await (opts.codexResolveAuth ?? resolveCodexAuth)({
       apiKey: process.env.OPENAI_API_KEY,
-      userCodexHome: `${HOME}/.codex`,
+      userCodexHome: join(HOME, ".codex"),
       sessionCodexHome: sessionHome,
     })
 
@@ -288,7 +288,7 @@ export async function spawnPA(opts: {
 
     const auth: CursorAuthResult = await (opts.cursorResolveAuth ?? resolveCursorAuth)({
       apiKey: process.env.CURSOR_API_KEY,
-      userCursorDir: `${HOME}/.cursor`,
+      userCursorDir: join(HOME, ".cursor"),
       sessionHome,
     })
 
@@ -395,7 +395,7 @@ export async function spawnPA(opts: {
     // HOME is redirected to sessionHome so grok reads a private config.toml and
     // does NOT auto-import the user's ~/.claude.json MCP servers (which would pull
     // the global mux-shim/mux-channel into this session).
-    const auth = resolveGrokAuth({ userGrokDir: `${HOME}/.grok`, sessionHome })
+    const auth = resolveGrokAuth({ userGrokDir: join(HOME, ".grok"), sessionHome })
     writeGrokConfig({
       sessionHome,
       ...shimSpawnSpec(),
@@ -494,7 +494,7 @@ export async function spawnCodexSession(deps: SpawnDeps, args: SpawnArgs): Promi
 
     const auth = await (deps.codexResolveAuth ?? resolveCodexAuth)({
       apiKey: process.env.OPENAI_API_KEY,
-      userCodexHome: `${HOME}/.codex`,
+      userCodexHome: join(HOME, ".codex"),
       sessionCodexHome: sessionHome,
     })
 
@@ -568,7 +568,7 @@ export async function spawnCursorSession(deps: SpawnDeps, args: SpawnArgs): Prom
 
     const auth: CursorAuthResult = await (deps.cursorResolveAuth ?? resolveCursorAuth)({
       apiKey: process.env.CURSOR_API_KEY,
-      userCursorDir: `${HOME}/.cursor`,
+      userCursorDir: join(HOME, ".cursor"),
       sessionHome,
     })
 
@@ -624,14 +624,16 @@ export async function spawnCursorSession(deps: SpawnDeps, args: SpawnArgs): Prom
 // and the env-isolated HOME is readable. Anything else (auth failures, model
 // access) will surface on the first user message — which is the right time.
 async function smokeCursorAgent(opts: { home: string; authEnv: Record<string, string> }): Promise<void> {
-  const { spawn } = await import("child_process")
+  const { resolveCommand, spawnCommand } = await import("../process/launcher")
   await new Promise<void>((resolve, reject) => {
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
       ...opts.authEnv,
       HOME: opts.home,
+      ...(process.platform === "win32" ? { USERPROFILE: opts.home } : {}),
     }
-    const child = spawn("cursor-agent", ["--version"], { env, stdio: ["ignore", "pipe", "pipe"] })
+    const command = resolveCommand(["cursor-agent", "agent"], env, process.platform) ?? "cursor-agent"
+    const child = spawnCommand(command, ["--version"], { env, stdio: ["ignore", "pipe", "pipe"] })
     let out = ""
     child.stdout!.on("data", (c: Buffer) => { out += c.toString("utf8") })
     child.stderr!.on("data", () => {})  // drain
@@ -789,7 +791,7 @@ export async function spawnGrokSession(deps: SpawnDeps, args: SpawnArgs): Promis
   const sessionHome = join(STATE_DIR, "agents", "grok", name)
   mkdirSync(sessionHome, { recursive: true, mode: 0o700 })
 
-  const auth = resolveGrokAuth({ userGrokDir: `${HOME}/.grok`, sessionHome })
+  const auth = resolveGrokAuth({ userGrokDir: join(HOME, ".grok"), sessionHome })
   writeGrokConfig({
     sessionHome,
     ...shimSpawnSpec(),
@@ -849,7 +851,7 @@ export async function resumeGrokSession(
   session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string },
 ): Promise<{ adapter: GrokAdapter }> {
   const sessionHome = session.agent_home
-  const auth = resolveGrokAuth({ userGrokDir: `${HOME}/.grok`, sessionHome })
+  const auth = resolveGrokAuth({ userGrokDir: join(HOME, ".grok"), sessionHome })
   writeGrokConfig({
     sessionHome,
     ...shimSpawnSpec(),

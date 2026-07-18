@@ -90,6 +90,7 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chm
 import { randomBytes, randomUUID } from "crypto"
 import { execSync as _execSync, spawn as nodeSpawn, execFileSync } from "child_process"
 import { makeLogger } from "./shared/log"
+import { resolveCommand, spawnCommand } from "./core/process/launcher"
 import { checkPreflight, hasBinary } from "./shared/preflight"
 import { detectAllAgents, detectAgent } from "./core/agents/detect"
 import { createInstallManager } from "./core/agents/install"
@@ -969,15 +970,15 @@ function spawnLoginProc(kind: string) {
   let cmd: string, args: string[]
   let detached = false
   const env = { ...process.env } as Record<string, string>
-  if (kind === "codex") { cmd = "codex"; args = ["login", "--device-auth"]; env.CODEX_HOME = `${h}/.codex` }
-  else if (kind === "cursor") { cmd = "cursor-agent"; args = ["login"]; env.NO_OPEN_BROWSER = "1" }
+  if (kind === "codex") { cmd = resolveCommand(["codex"], env, process.platform) ?? "codex"; args = ["login", "--device-auth"]; env.CODEX_HOME = join(h, ".codex") }
+  else if (kind === "cursor") { cmd = resolveCommand(["cursor-agent", "agent"], env, process.platform) ?? "cursor-agent"; args = ["login"]; env.NO_OPEN_BROWSER = "1" }
   else if (kind === "claude") {
     const spec = claudeLoginSpawnCommand()
     ;({ cmd, args } = spec)
     detached = spec.detached ?? false
   }
   // grok prints the device URL + code on plain stdout (no PTY needed, same as codex).
-  else if (kind === "grok") { cmd = "grok"; args = ["login", "--device-auth"] }
+  else if (kind === "grok") { cmd = resolveCommand(["grok"], env, process.platform) ?? "grok"; args = ["login", "--device-auth"] }
   else { cmd = ""; args = [] } // unknown kind handled below
   let outCb: (c: string) => void = () => {}
   let exitCb: (code: number | null) => void = () => {}
@@ -987,7 +988,9 @@ function spawnLoginProc(kind: string) {
   }
   let child: ReturnType<typeof nodeSpawn>
   try {
-    child = nodeSpawn(cmd, args, { env, detached })
+    child = (kind === "claude")
+      ? nodeSpawn(cmd, args, { env, detached })
+      : spawnCommand(cmd, args, { env, detached })
   } catch (err: any) {
     // Missing binary (ENOENT) etc — report failure instead of crashing the broker.
     log.warn("login_spawn_failed", { kind, cmd, err: err?.message ?? String(err) })
@@ -1554,7 +1557,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         : false
       return detectAllAgents(
         { hasBinary, fileExists: existsSync, hasCredential },
-        { home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME },
+        {
+          home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
+          appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
+        },
       )
     },
     startAgentLogin: (kind) => loginManager.start(kind as any),
@@ -1804,7 +1810,7 @@ async function resumeSuspendedSession(session: { id: string; name: string; agent
       await server.bind(session.id)
       const auth = await resolveCodexAuth({
         apiKey: process.env.OPENAI_API_KEY,
-        userCodexHome: `${home()}/.codex`,
+        userCodexHome: join(home(), ".codex"),
         sessionCodexHome: session.agent_home,
       })
       await codexPrepareSessionHome(session.agent_home)
@@ -1831,7 +1837,7 @@ async function resumeSuspendedSession(session: { id: string; name: string; agent
     } else if (session.agent === "cursor" && session.agent_home) {
       const auth = await resolveCursorAuth({
         apiKey: process.env.CURSOR_API_KEY,
-        userCursorDir: `${home()}/.cursor`,
+        userCursorDir: join(home(), ".cursor"),
         sessionHome: session.agent_home,
       })
       const runner = makeRealCursorRunner({ home: session.agent_home, authEnv: auth.env })
@@ -1896,7 +1902,7 @@ async function resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name
       await server.bind(sessionId)
       const auth = await resolveCodexAuth({
         apiKey: process.env.OPENAI_API_KEY,
-        userCodexHome: `${home()}/.codex`,
+        userCodexHome: join(home(), ".codex"),
         sessionCodexHome: session.agent_home,
       })
       await codexPrepareSessionHome(session.agent_home)
@@ -1923,7 +1929,7 @@ async function resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name
     } else if (session.agent === "cursor" && session.agent_home) {
       const auth = await resolveCursorAuth({
         apiKey: process.env.CURSOR_API_KEY,
-        userCursorDir: `${home()}/.cursor`,
+        userCursorDir: join(home(), ".cursor"),
         sessionHome: session.agent_home,
       })
       const runner = makeRealCursorRunner({ home: session.agent_home, authEnv: auth.env })
@@ -2727,7 +2733,7 @@ async function reapplySessionAgentConfig(sessionId: string, changed?: { model: b
 
       const auth = await resolveCodexAuth({
         apiKey: process.env.OPENAI_API_KEY,
-        userCodexHome: `${home()}/.codex`,
+        userCodexHome: join(home(), ".codex"),
         sessionCodexHome: sessionHome,
       })
       await codexPrepareSessionHome(sessionHome)
@@ -3245,7 +3251,7 @@ async function resumeNonClaudeAdapters(): Promise<void> {
       try {
         const auth = await resolveCodexAuth({
           apiKey: process.env.OPENAI_API_KEY,
-          userCodexHome: `${home()}/.codex`,
+          userCodexHome: join(home(), ".codex"),
           sessionCodexHome: s.agent_home,
         })
         await codexPrepareSessionHome(s.agent_home)
@@ -3287,7 +3293,7 @@ async function resumeNonClaudeAdapters(): Promise<void> {
       try {
         const auth = await resolveCursorAuth({
           apiKey: process.env.CURSOR_API_KEY,
-          userCursorDir: `${home()}/.cursor`,
+          userCursorDir: join(home(), ".cursor"),
           sessionHome: s.agent_home,
         })
         const runner = makeRealCursorRunner({ home: s.agent_home, authEnv: auth.env })

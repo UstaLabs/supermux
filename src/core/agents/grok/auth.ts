@@ -26,7 +26,7 @@ export type GrokAuthResult = {
  * NOT fail-closed: a session with no credential still spawns; grok reports the auth
  * error on the first turn, which is the right place to surface it.
  */
-export function resolveGrokAuth(opts: { userGrokDir: string; sessionHome: string }): GrokAuthResult {
+export function resolveGrokAuth(opts: { userGrokDir: string; sessionHome: string; platform?: NodeJS.Platform }): GrokAuthResult {
   const sessionGrokDir = join(opts.sessionHome, ".grok")
   mkdirSync(sessionGrokDir, { recursive: true, mode: 0o700 })
 
@@ -41,5 +41,8 @@ export function resolveGrokAuth(opts: { userGrokDir: string; sessionHome: string
       // fall through as unauthenticated — grok surfaces it on the first turn
     }
   }
-  return { mode, env: { HOME: opts.sessionHome } }
+  return { mode, env: {
+    HOME: opts.sessionHome,
+    ...((opts.platform ?? process.platform) === "win32" ? { USERPROFILE: opts.sessionHome } : {}),
+  } }
 }
