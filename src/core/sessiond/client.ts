@@ -48,8 +48,13 @@ type ViewerRegistration = {
   resolveExited(code: number): void
 }
 
-function defaultExecutable(): string {
-  return process.env.MUX_SESSIOND_EXE ?? join(dirname(process.execPath), "mux-sessiond.exe")
+export function resolveSessiondExecutable(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+  execPath = process.execPath,
+): string {
+  return environment.MUX_SESSIOND_PATH
+    ?? environment.MUX_SESSIOND_EXE
+    ?? join(dirname(execPath), "mux-sessiond.exe")
 }
 
 function defaultSpawn(executable: string, stateDir: string): void {
@@ -140,7 +145,7 @@ export class SessiondBackend implements SessionBackend {
     this.secret = options.secret
     this.stateDir = isAbsolute(options.stateDir) ? options.stateDir : resolve(options.stateDir)
     this.platform = options.platform ?? process.platform
-    this.executable = options.executable ?? defaultExecutable()
+    this.executable = options.executable ?? resolveSessiondExecutable()
     this.spawnSessiond = options.spawnSessiond ?? defaultSpawn
     this.connectSocket = options.connectSocket ?? defaultConnectSocket
     this.writeUntrackedFrame = options.writeUntracked ?? ((socket, frame) => socket.write(frame))

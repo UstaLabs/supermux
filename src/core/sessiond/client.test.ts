@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { createConnection, createServer, type Socket } from "node:net"
 import { createMemorySessionBackendHarness, verifySessionBackendContract } from "../runtime/session-backend.test-support"
 import { decodeFrames, encodeFrame } from "../../shared/frame-codec"
-import { SessiondBackend } from "./client"
+import { resolveSessiondExecutable, SessiondBackend } from "./client"
 import { SESSIOND_MAX_FRAME_BYTES, startSessiondServer, type SessiondServer } from "./server"
 import type { RuntimeViewer } from "../runtime/session-backend"
 
@@ -22,6 +22,20 @@ async function harness() {
 }
 
 describe("SessiondBackend", () => {
+  test("resolves the desktop-provided sessiond path before the legacy executable override", () => {
+    expect(resolveSessiondExecutable({
+      MUX_SESSIOND_PATH: "C:\\Users\\test\\.mux\\mux-sessiond.exe",
+      MUX_SESSIOND_EXE: "C:\\legacy\\sessiond.exe",
+    }, "/opt/supermux-broker")).toBe("C:\\Users\\test\\.mux\\mux-sessiond.exe")
+  })
+
+  test("retains the legacy override and executable-sibling fallbacks", () => {
+    expect(resolveSessiondExecutable({ MUX_SESSIOND_EXE: "/legacy/sessiond" }, "/opt/supermux-broker"))
+      .toBe("/legacy/sessiond")
+    expect(resolveSessiondExecutable({}, "/opt/supermux-broker"))
+      .toBe("/opt/mux-sessiond.exe")
+  })
+
   test("satisfies the reusable backend contract over a real framed socket", async () => {
     const { client, memory } = await harness()
     await verifySessionBackendContract(client, memory.observation)
