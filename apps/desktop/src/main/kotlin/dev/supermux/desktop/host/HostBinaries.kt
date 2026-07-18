@@ -9,8 +9,8 @@ import java.nio.file.attribute.PosixFilePermissions
 
 /**
  * Resolves the host helper binaries the desktop-as-host needs — the bundled Bun **broker**, a
- * static **tmux** (Linux/macOS), and **frpc** (all platforms) — for BOTH a dev checkout and a
- * packaged app image, then materializes them to a per-user dir with exec perms on first use
+ * static **tmux** (Linux/macOS) or **sessiond** (Windows), and **frpc** (all platforms) — for BOTH
+ * a dev checkout and a packaged app image, then materializes them to a per-user dir on first use
  * (Plan 3 Task 5 / spec §6, D7, D11).
  *
  * ### The broker: one binary, the canonical compile path
@@ -25,9 +25,8 @@ import java.nio.file.attribute.PosixFilePermissions
  * The broker execs bare `tmux` / `frpc` (see `src/core/session-manager/tmux.ts`,
  * `src/core/relay/frp-provider.ts`). So rather than teach the broker new paths, the desktop
  * materializes the bundled `tmux`/`frpc` into ONE bin dir and prepends it to the spawned broker's
- * `PATH` ([prependPath]); the broker then finds them with no change. Windows ships only `frpc`
- * (client-only for now — it can't host, but carries frpc for when it later does); it bundles no
- * broker and no tmux.
+ * `PATH` ([prependPath]); the broker then finds them with no change. Windows ships the broker,
+ * sessiond, and frpc; `MUX_SESSIOND_PATH` points the broker at the materialized sessiond executable.
  *
  * ### Dev vs packaged
  * Packaged apps expose their resources via Compose Desktop's `compose.application.resources.dir`
@@ -57,12 +56,13 @@ object HostBinaries {
 
     enum class Os { LINUX, MAC, WINDOWS, OTHER }
 
-    enum class Binary { Broker, Tmux, Frpc }
+    enum class Binary { Broker, Sessiond, Tmux, Frpc }
 
     /** The materialized host binaries handed to the sidecar. Nulls = not bundled / not found. */
     data class SidecarBinaries(
         val brokerPath: Path?, // packaged: the bundled broker exec; dev: null (→ bun src/main.ts)
-        val binDir: Path?,     // the dir to prepend to the broker's PATH (holds tmux + frpc), or null
+        val binDir: Path?,     // the dir to prepend to the broker's PATH (holds platform helpers), or null
+        val sessiondPath: Path?, // Windows session runtime helper
         val frpcPath: Path?,   // resolved frpc (feeds the broker's relay provider via PATH)
         val tmuxPath: Path?,   // resolved tmux (Linux/macOS)
     )
@@ -82,14 +82,15 @@ object HostBinaries {
     /** File name of [binary] inside the resources / bin dir. `.exe` on Windows for the execs. */
     fun fileName(binary: Binary, os: Os): String = when (binary) {
         Binary.Broker -> "supermux-broker" + exeSuffix(os)
+        Binary.Sessiond -> "mux-sessiond" + exeSuffix(os)
         Binary.Frpc -> "frpc" + exeSuffix(os)
         Binary.Tmux -> "tmux" // Linux/macOS only; never suffixed
     }
 
-    /** Whether [os]'s shipped app image carries [binary] (Windows is client-only: frpc only). */
+    /** Whether [os]'s shipped app image carries [binary]. */
     fun isBundled(binary: Binary, os: Os): Boolean = when (os) {
-        Os.LINUX, Os.MAC -> true
-        Os.WINDOWS -> binary == Binary.Frpc
+        Os.LINUX, Os.MAC -> binary == Binary.Broker || binary == Binary.Tmux || binary == Binary.Frpc
+        Os.WINDOWS -> binary == Binary.Broker || binary == Binary.Sessiond || binary == Binary.Frpc
         Os.OTHER -> false
     }
 
@@ -123,6 +124,7 @@ object HostBinaries {
             return SidecarBinaries(
                 brokerPath = null,
                 binDir = null,
+                sessiondPath = if (isBundled(Binary.Sessiond, os)) onPath(fileName(Binary.Sessiond, os)) else null,
                 frpcPath = if (isBundled(Binary.Frpc, os)) onPath("frpc") else null,
                 tmuxPath = if (isBundled(Binary.Tmux, os)) onPath("tmux") else null,
             )
@@ -135,11 +137,13 @@ object HostBinaries {
             return runCatching { materialize(src, binDir, fileName(b, os), executable = true) }.getOrNull()
         }
         val broker = mat(Binary.Broker)
+        val sessiond = mat(Binary.Sessiond)
         val frpc = mat(Binary.Frpc)
         val tmux = mat(Binary.Tmux)
         return SidecarBinaries(
             brokerPath = broker,
-            binDir = if (broker != null || frpc != null || tmux != null) binDir else null,
+            binDir = if (broker != null || sessiond != null || frpc != null || tmux != null) binDir else null,
+            sessiondPath = sessiond,
             frpcPath = frpc,
             tmuxPath = tmux,
         )

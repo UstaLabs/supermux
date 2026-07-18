@@ -11,7 +11,8 @@ import java.nio.file.Path
  *    bootstrapped via `launchctl` into the user's GUI domain.
  *  - **Linux** → a systemd `--user` unit `supermux-host.service` enabled with `systemctl --user`,
  *    falling back to an XDG autostart `.desktop` file when systemd `--user` isn't usable.
- *  - **Windows / other** → no-op (client-only; native hosting is a preview, Task 6).
+ *  - **Windows** → native host; Scheduled Task persistence is added separately.
+ *  - **Other** → no-op.
  *
  * Every `getuid` / `launchctl` / `systemctl` touch is behind the platform check in [install]/[remove]
  * (they no-op on the wrong OS). The plist / unit / autostart STRING generation is pure and unit-tested
@@ -26,7 +27,7 @@ object KeepAlive {
     const val SYSTEMD_NAME = "supermux-host" // the enable/disable target (unit minus .service)
     const val XDG_AUTOSTART_FILE = "supermux-host.desktop"
 
-    enum class Os { MAC, LINUX, OTHER }
+    enum class Os { MAC, LINUX, WINDOWS, OTHER }
 
     /**
      * What the login agent launches to keep hosting: the host-launcher [exec] argv (the packaged app
@@ -139,10 +140,11 @@ Terminal=false
 
     // ── OS-gated install / remove (real work behind the injected env) ────────────────
 
-    /** Install the login agent for the current OS. No-op (Unsupported) on Windows/other. */
+    /** Install the login agent for the current OS. Windows is implemented in the next host task. */
     fun install(spec: Spec, env: KeepAliveEnv = SystemKeepAliveEnv): Result = when (env.os) {
         Os.MAC -> installLaunchd(spec, env)
         Os.LINUX -> installSystemd(spec, env)
+        Os.WINDOWS -> Result.Unsupported
         Os.OTHER -> Result.Unsupported
     }
 
@@ -150,6 +152,7 @@ Terminal=false
     fun remove(env: KeepAliveEnv = SystemKeepAliveEnv): Result = when (env.os) {
         Os.MAC -> removeLaunchd(env)
         Os.LINUX -> removeSystemd(env)
+        Os.WINDOWS -> Result.Unsupported
         Os.OTHER -> Result.Unsupported
     }
 
@@ -243,6 +246,7 @@ object SystemKeepAliveEnv : KeepAliveEnv {
         val name = System.getProperty("os.name")?.lowercase() ?: ""
         when {
             name.contains("mac") || name.contains("darwin") -> KeepAlive.Os.MAC
+            name.contains("win") -> KeepAlive.Os.WINDOWS
             name.contains("nux") || name.contains("nix") -> KeepAlive.Os.LINUX
             else -> KeepAlive.Os.OTHER
         }
@@ -252,7 +256,7 @@ object SystemKeepAliveEnv : KeepAliveEnv {
 
     override val uid: Long? by lazy {
         // getuid is macOS/Linux-only; guarded so it never runs on Windows.
-        if (os == KeepAlive.Os.OTHER) null
+        if (os != KeepAlive.Os.MAC && os != KeepAlive.Os.LINUX) null
         else runCatching { com.sun.security.auth.module.UnixSystem().uid }.getOrNull()
     }
 
@@ -260,7 +264,7 @@ object SystemKeepAliveEnv : KeepAliveEnv {
 
     override fun hasCommand(name: String): Boolean =
         runCatching {
-            val which = if (os == KeepAlive.Os.OTHER) "where" else "which"
+            val which = if (os == KeepAlive.Os.WINDOWS) "where" else "which"
             ProcessBuilder(which, name)
                 .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                 .redirectError(ProcessBuilder.Redirect.DISCARD)
