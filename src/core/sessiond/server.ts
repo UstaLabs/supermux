@@ -2,12 +2,11 @@ import { chmod, lstat, mkdir, unlink } from "node:fs/promises"
 import { dirname } from "node:path"
 import { createConnection, createServer, type Server, type Socket } from "node:net"
 import type { RuntimeViewer, SessionBackend } from "../runtime/session-backend"
-import { decodeFrames, encodeFrame } from "../../shared/frame-codec"
+import { encodeFrame } from "../../shared/frame-codec"
 import { parseRequest, PROTOCOL_VERSION, type SessiondRequest, type SessiondResponse } from "./protocol"
 import { timingSafeSecretEqual } from "./secret"
-
-export const SESSIOND_MAX_FRAME_BYTES = 8 * 1024 * 1024
-export const SESSIOND_MAX_BUFFER_BYTES = SESSIOND_MAX_FRAME_BYTES + 4
+import { SESSIOND_MAX_FRAME_BYTES, SessiondFrameAccumulator, SessiondFrameError } from "./framing"
+export { SESSIOND_MAX_BUFFER_BYTES, SESSIOND_MAX_FRAME_BYTES } from "./framing"
 
 export type SessiondServerOptions = {
   endpoint: string
@@ -113,7 +112,7 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
     if (sockets.size >= maxConnections) { socket.destroy(); return }
     sockets.add(socket)
     const connectionId = `connection-${++nextConnectionId}`
-    let buffer: Buffer = Buffer.alloc(0)
+    const frames = new SessiondFrameAccumulator()
     let dispatch = Promise.resolve()
     let closing = false
     let authenticated = false
@@ -246,21 +245,10 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
     socket.on("data", chunk => {
       if (closing) return
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-      if (buffer.length + bytes.length > SESSIOND_MAX_BUFFER_BYTES) { failAndClose("", "frame buffer too large"); return }
-      buffer = Buffer.concat([buffer, bytes])
       try {
-        while (buffer.length >= 4) {
-          const length = buffer.readUInt32BE(0)
-          if (length > SESSIOND_MAX_FRAME_BYTES) { failAndClose("", "frame too large"); return }
-          if (buffer.length < length + 4) break
-          const framed = buffer.subarray(0, length + 4)
-          buffer = buffer.subarray(length + 4)
-          const decoded = decodeFrames(framed)
-          for (const message of decoded.messages) dispatch = dispatch.then(() => accept(message))
-        }
-        if (buffer.length > SESSIOND_MAX_BUFFER_BYTES) failAndClose("", "frame buffer too large")
-      } catch {
-        failAndClose("", "malformed frame")
+        for (const message of frames.push(bytes)) dispatch = dispatch.then(() => accept(message))
+      } catch (error) {
+        failAndClose("", error instanceof SessiondFrameError && error.reason === "oversized" ? "frame too large" : "malformed frame")
       }
     })
     socket.on("error", () => {})
@@ -269,8 +257,8 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
 
   await listen(server, options.endpoint)
   let ownedIdentity: { dev: bigint; ino: bigint } | undefined
-  if (filesystemEndpoint) {
-    try {
+  try {
+    if (filesystemEndpoint) {
       const before = await lstat(options.endpoint, { bigint: true })
       if (!before.isSocket()) throw new Error("sessiond listener endpoint is not a socket")
       ownedIdentity = { dev: before.dev, ino: before.ino }
@@ -279,22 +267,22 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
       if (!after.isSocket() || after.dev !== before.dev || after.ino !== before.ino) {
         throw new Error("sessiond listener endpoint ownership changed during setup")
       }
-      await options.postListenSetup?.()
-    } catch (error) {
-      for (const socket of sockets) socket.destroy()
-      await new Promise<void>(resolveClose => server.close(() => resolveClose()))
-      if (ownedIdentity) {
-        try {
-          const current = await lstat(options.endpoint, { bigint: true })
-          if (current.isSocket() && current.dev === ownedIdentity.dev && current.ino === ownedIdentity.ino) await unlink(options.endpoint)
-        } catch (cleanupError) {
-          if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") throw new AggregateError([error, cleanupError], "sessiond post-listen setup and cleanup failed")
+    }
+    await options.postListenSetup?.()
+  } catch (error) {
+    for (const socket of sockets) socket.destroy()
+    await new Promise<void>(resolveClose => server.close(() => resolveClose()))
+    if (filesystemEndpoint && ownedIdentity) {
+      try {
+        const current = await lstat(options.endpoint, { bigint: true })
+        if (current.isSocket() && current.dev === ownedIdentity.dev && current.ino === ownedIdentity.ino) await unlink(options.endpoint)
+      } catch (cleanupError) {
+        if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw new AggregateError([error, cleanupError], "sessiond post-listen setup and cleanup failed")
         }
       }
-      throw error
     }
-  } else {
-    await options.postListenSetup?.()
+    throw error
   }
   let closed = false
   return {

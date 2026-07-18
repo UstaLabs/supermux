@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 import { createConnection, type Socket } from "node:net"
 import type { RuntimeTarget, RuntimeViewer, SessionBackend } from "../runtime/session-backend"
-import { decodeFrames, encodeFrame } from "../../shared/frame-codec"
+import { encodeFrame } from "../../shared/frame-codec"
 import { PROTOCOL_VERSION } from "./protocol"
-import { SESSIOND_MAX_BUFFER_BYTES, SESSIOND_MAX_FRAME_BYTES } from "./server"
+import { SESSIOND_MAX_BUFFER_BYTES, SessiondFrameAccumulator, SessiondFrameError } from "./framing"
 import { createOrLoadSessiondSecret } from "./secret"
 
 type SpawnSessiond = (executable: string, stateDir: string) => void | Promise<void>
@@ -97,7 +97,7 @@ export class SessiondBackend implements SessionBackend {
   private ready = false
   private closed = false
   private connectionAttempt?: Promise<void>
-  private buffer: Buffer = Buffer.alloc(0)
+  private frames = new SessiondFrameAccumulator()
   private sequence = 0
   private readonly pending = new Map<string, Pending>()
   private readonly viewers = new Map<string, ViewerRegistration>()
@@ -244,7 +244,7 @@ export class SessiondBackend implements SessionBackend {
     const socket = await this.connectSocket(this.endpoint)
     if (this.closed) { socket.destroy(); throw new Error("sessiond client is closed") }
     this.socket = socket
-    this.buffer = Buffer.alloc(0)
+    this.frames = new SessiondFrameAccumulator()
     this.wire(socket)
     try {
       const value = await this.rawRequest("hello", {})
@@ -261,27 +261,18 @@ export class SessiondBackend implements SessionBackend {
     socket.on("data", chunk => {
       if (this.socket !== socket) return
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-      if (this.buffer.length + bytes.length > SESSIOND_MAX_BUFFER_BYTES) { socket.destroy(new Error("sessiond frame buffer too large")); return }
-      this.buffer = Buffer.concat([this.buffer, bytes])
       try {
-        while (this.buffer.length >= 4) {
-          const length = this.buffer.readUInt32BE(0)
-          if (length > SESSIOND_MAX_FRAME_BYTES) { socket.destroy(new Error("sessiond frame too large")); return }
-          if (this.buffer.length < length + 4) break
-          const framed = this.buffer.subarray(0, length + 4)
-          this.buffer = this.buffer.subarray(length + 4)
-          const decoded = decodeFrames(framed)
-          for (const message of decoded.messages) this.acceptMessage(message)
-        }
-        if (this.buffer.length > SESSIOND_MAX_BUFFER_BYTES) socket.destroy(new Error("sessiond frame buffer too large"))
-      } catch { socket.destroy(new Error("malformed sessiond frame")) }
+        for (const message of this.frames.push(bytes)) this.acceptMessage(message)
+      } catch (error) {
+        socket.destroy(error instanceof SessiondFrameError ? error : new Error("malformed sessiond frame"))
+      }
     })
     socket.on("error", () => {})
     socket.on("close", () => {
       if (this.socket !== socket) return
       this.socket = undefined
       this.ready = false
-      this.buffer = Buffer.alloc(0)
+      this.frames = new SessiondFrameAccumulator()
       this.rejectPending(new Error("sessiond disconnected"))
       this.clearViewers()
     })

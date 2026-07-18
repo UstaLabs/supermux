@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { connect } from "node:net"
 import { createMemorySessionBackend } from "../runtime/session-backend.test-support"
-import { encodeFrame } from "../../shared/frame-codec"
+import { decodeFrames, encodeFrame } from "../../shared/frame-codec"
 import { PROTOCOL_VERSION } from "./protocol"
 import { SESSIOND_MAX_FRAME_BYTES, startSessiondServer, type SessiondServer } from "./server"
 
@@ -63,6 +63,18 @@ describe("sessiond server", () => {
     await successor.close()
   })
 
+  test("closes a non-filesystem listener when post-listen setup fails", async () => {
+    if (process.platform !== "linux") return
+    const dir = await mkdtemp(join(tmpdir(), "sessiond-abstract-failure-")); cleanup.push(() => rm(dir, { recursive: true, force: true }))
+    const endpoint = `\0sessiond-test-${dir.slice(-12)}`
+    await expect(startSessiondServer({
+      endpoint, platform: "win32", secret: "a", backend: createMemorySessionBackend(),
+      postListenSetup: async () => { throw new Error("abstract setup failure") },
+    })).rejects.toThrow("abstract setup failure")
+    const successor = await startSessiondServer({ endpoint, platform: "win32", secret: "a", backend: createMemorySessionBackend() })
+    await successor.close()
+  })
+
   test("bounds unauthenticated connections and expires the pre-auth handshake", async () => {
     const dir = await mkdtemp(join(tmpdir(), "sessiond-handshake-")); cleanup.push(() => rm(dir, { recursive: true, force: true }))
     const endpoint = join(dir, "rpc.sock")
@@ -73,5 +85,28 @@ describe("sessiond server", () => {
     const second = connect(endpoint)
     await new Promise<void>(resolveClose => second.once("close", () => resolveClose()))
     await new Promise<void>(resolveClose => first.once("close", () => resolveClose()))
+  })
+
+  test("accepts a near-limit request coalesced with a second valid request", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sessiond-coalesced-")); cleanup.push(() => rm(dir, { recursive: true, force: true }))
+    const endpoint = join(dir, "rpc.sock"), secret = Buffer.alloc(32, 14).toString("base64")
+    const server = await startSessiondServer({ endpoint, secret, backend: createMemorySessionBackend() }); cleanup.push(() => server.close())
+    const base = { id: "large", version: PROTOCOL_VERSION, secret, op: "hello", args: {} }
+    const overhead = Buffer.byteLength(JSON.stringify({ ...base, padding: "" }))
+    const large = encodeFrame({ ...base, padding: "x".repeat(SESSIOND_MAX_FRAME_BYTES - overhead) })
+    const small = encodeFrame({ id: "small", version: PROTOCOL_VERSION, secret, op: "hello", args: {} })
+    const responses = await new Promise<unknown[]>((resolveResponses, reject) => {
+      const socket = connect(endpoint); let buffer: Buffer = Buffer.alloc(0); const messages: unknown[] = []
+      socket.once("connect", () => socket.write(Buffer.concat([large, small])))
+      socket.on("data", chunk => {
+        buffer = Buffer.concat([buffer, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)])
+        const decoded = decodeFrames(buffer); buffer = decoded.rest
+        messages.push(...decoded.messages)
+        if (messages.length === 2) { socket.destroy(); resolveResponses(messages) }
+      })
+      socket.once("error", reject)
+      socket.once("close", () => { if (messages.length < 2) reject(new Error("server disconnected before both responses")) })
+    })
+    expect(responses.map(value => (value as { id: string }).id)).toEqual(["large", "small"])
   })
 })

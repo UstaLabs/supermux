@@ -202,7 +202,10 @@ describe("SessiondBackend", () => {
             socket.write(reply.subarray(0, 2))
             setTimeout(() => socket.write(reply.subarray(2)), 2)
           } else {
-            socket.write(Buffer.concat([encodeFrame({ event: "data", targetId: 7, viewerId: null, dataBase64: "%%%" }), reply]))
+            const largeBase = { id: "unmatched-large", ok: true }
+            const overhead = Buffer.byteLength(JSON.stringify({ ...largeBase, padding: "" }))
+            const large = encodeFrame({ ...largeBase, padding: "x".repeat(SESSIOND_MAX_FRAME_BYTES - overhead) })
+            socket.write(Buffer.concat([large, encodeFrame({ event: "data", targetId: 7, viewerId: null, dataBase64: "%%%" }), reply]))
           }
         }
       })
