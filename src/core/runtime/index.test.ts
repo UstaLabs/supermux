@@ -19,11 +19,12 @@ test("session backend test override can be reset without leaking state", () => {
   }
 })
 
-test("Windows platform selection throws before constructing a POSIX backend", () => {
-  let constructed = false
-  expect(() => createPlatformSessionBackend("win32", () => {
-    constructed = true
+test("Windows platform selection constructs only the native sessiond backend", () => {
+  let posixConstructed = false
+  const windows = createMemorySessionBackend()
+  expect(createPlatformSessionBackend("win32", () => {
+    posixConstructed = true
     return createMemorySessionBackend()
-  })).toThrow("Windows session backend is not initialized")
-  expect(constructed).toBe(false)
+  }, () => windows)).toBe(windows)
+  expect(posixConstructed).toBe(false)
 })
