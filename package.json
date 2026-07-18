@@ -21,6 +21,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@opencode-ai/sdk": "^1.16.2",
+    "@xterm/headless": "^6.0.0",
     "croner": "^10.0.1",
     "grammy": "^1.36.0",
     "qrcode-terminal": "^0.12.0",
