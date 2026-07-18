@@ -8,6 +8,11 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      ios_testflight_upload:
+        description: "Sign + upload the iOS app to TestFlight on this dry run (default: iOS is only compile-validated, nothing is uploaded)"
+        type: boolean
+        default: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -443,6 +448,177 @@ jobs:
       - name: Remove temporary keychain
         if: always() && steps.signing.outputs.have == '1'
         run: security delete-keychain "$MACOS_RELEASE_KEYCHAIN" || true
+
+  build-ios-testflight:
+    # Signed iOS app (with the embedded watch app + both notification extensions)
+    # archived, exported as an App Store .ipa, and uploaded to TestFlight. Unlike the
+    # mac host app the iOS app bundles NO broker/tmux/frpc (its sources exclude Host/**
+    # and HostResources/**), so there's no bun/stage-desktop-binaries step here.
+    #
+    # Runs on tag pushes AND workflow_dispatch dry runs. Whether it uploads to TestFlight is
+    # the `upload` flag computed below = signing secrets present AND (a v* tag OR a dry run
+    # launched with the ios_testflight_upload input checked). What each path does:
+    #   - upload=0 (plain dry run, or missing secrets) → build UNSIGNED to validate the
+    #     archive compiles; export + upload are skipped (a dry run never surprises TestFlight).
+    #   - upload=1 → import the Apple Distribution cert, install the four App Store provisioning
+    #     profiles, archive, export the .ipa, and upload it to TestFlight via the ASC API key.
+    # Absent secrets on a tag WARN (they do not fail the release) so binary/docker releases
+    # keep shipping until the iOS signing material is configured.
+    #
+    # Build number: TestFlight requires CFBundleVersion to strictly increase across uploads,
+    # so we override CURRENT_PROJECT_VERSION (hardcoded "52" in project.yml) with a value
+    # derived from GITHUB_RUN_NUMBER plus TESTFLIGHT_BUILD_OFFSET. The offset guarantees the
+    # first CI upload lands above the highest build uploaded from the old headless-Mac flow —
+    # raise it if App Store Connect rejects a build as "already used / not higher".
+    runs-on: macos-26
+    env:
+      TESTFLIGHT_BUILD_OFFSET: "1000"
+      # Apple Distribution signing certificate (App Store), exported as a password-protected
+      # .p12 and base64-encoded. This is a DIFFERENT cert from the mac job's Developer ID.
+      APPLE_DISTRIBUTION_P12_BASE64: ${{ secrets.APPLE_DISTRIBUTION_P12_BASE64 }}
+      APPLE_DISTRIBUTION_P12_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_P12_PASSWORD }}
+      # The four App Store provisioning profiles (.mobileprovision), each base64-encoded.
+      IOS_PP_APP_BASE64: ${{ secrets.IOS_PP_APP_BASE64 }}
+      IOS_PP_WATCH_BASE64: ${{ secrets.IOS_PP_WATCH_BASE64 }}
+      IOS_PP_PUSH_NSE_BASE64: ${{ secrets.IOS_PP_PUSH_NSE_BASE64 }}
+      IOS_PP_NOTIF_CONTENT_BASE64: ${{ secrets.IOS_PP_NOTIF_CONTENT_BASE64 }}
+      # App Store Connect API key used for the TestFlight upload. Dedicated key (App Manager
+      # role) rather than the mac job's notary key, which may be notarization-scoped and would
+      # 403 on an upload.
+      ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
+      ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+      ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Resolve version
+        id: ver
+        run: |
+          # On a tag → the tag's version. On a dry run there is no version, but TestFlight
+          # requires a VALID CFBundleShortVersionString (numeric, not "0.0.0-dryrun"), so fall
+          # back to the app's own MARKETING_VERSION from project.yml.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            V="${GITHUB_REF_NAME#v}"
+          else
+            V="$(grep -m1 'MARKETING_VERSION:' apps/iosApp/project.yml | sed -E 's/.*"([^"]+)".*/\1/')"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "build=$(( TESTFLIGHT_BUILD_OFFSET + GITHUB_RUN_NUMBER ))" >> "$GITHUB_OUTPUT"
+      - name: Generate Xcode project
+        working-directory: apps/iosApp
+        run: xcodegen generate
+      - name: Check App Store signing credentials
+        id: signing
+        run: |
+          have=1
+          for v in APPLE_DISTRIBUTION_P12_BASE64 APPLE_DISTRIBUTION_P12_PASSWORD \
+                   IOS_PP_APP_BASE64 IOS_PP_WATCH_BASE64 IOS_PP_PUSH_NSE_BASE64 IOS_PP_NOTIF_CONTENT_BASE64 \
+                   ASC_API_KEY_P8_BASE64 ASC_API_KEY_ID ASC_API_ISSUER_ID; do
+            [ -n "${!v}" ] || have=0
+          done
+          if [ "$have" = 0 ]; then
+            echo "::warning::iOS App Store secrets are absent — building UNSIGNED (no TestFlight upload). Set them to enable the TestFlight lane."
+          fi
+          # Upload only when secrets exist AND this run is meant to publish: a v* tag, or a
+          # workflow_dispatch where the operator ticked the ios_testflight_upload input.
+          upload=0
+          if [ "$have" = 1 ] && { [ "${GITHUB_REF_TYPE}" = "tag" ] || [ "${{ inputs.ios_testflight_upload }}" = "true" ]; }; then
+            upload=1
+          fi
+          echo "have=$have" >> "$GITHUB_OUTPUT"
+          echo "upload=$upload" >> "$GITHUB_OUTPUT"
+      - name: Validate compile (unsigned)
+        # Dry runs and secret-less tag builds stop here: a device build with signing off
+        # proves the archive compiles without needing any Apple credentials.
+        if: steps.signing.outputs.upload != '1'
+        working-directory: apps/iosApp
+        run: |
+          xcodebuild \
+            -scheme Supermux \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build/dd-ios \
+            MARKETING_VERSION="${{ steps.ver.outputs.version }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.ver.outputs.build }}" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+      - name: Import Apple Distribution certificate
+        if: steps.signing.outputs.upload == '1'
+        env:
+          KEYCHAIN_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/supermux-ios-release.keychain-db"
+          CERTIFICATE="$RUNNER_TEMP/apple-distribution.p12"
+          printf '%s' "$APPLE_DISTRIBUTION_P12_BASE64" | base64 --decode > "$CERTIFICATE"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERTIFICATE" -k "$KEYCHAIN" -P "$APPLE_DISTRIBUTION_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          # Keep the temp keychain in the search list alongside login so xcodebuild finds the identity.
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          echo "IOS_RELEASE_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+      - name: Install provisioning profiles
+        if: steps.signing.outputs.upload == '1'
+        run: |
+          PP_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PP_DIR"
+          install_pp() { printf '%s' "$1" | base64 --decode > "$PP_DIR/$(uuidgen).mobileprovision"; }
+          install_pp "$IOS_PP_APP_BASE64"
+          install_pp "$IOS_PP_WATCH_BASE64"
+          install_pp "$IOS_PP_PUSH_NSE_BASE64"
+          install_pp "$IOS_PP_NOTIF_CONTENT_BASE64"
+      - name: Archive
+        if: steps.signing.outputs.upload == '1'
+        working-directory: apps/iosApp
+        run: |
+          xcodebuild \
+            -scheme Supermux \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath build/Supermux.xcarchive \
+            -derivedDataPath build/dd-ios \
+            MARKETING_VERSION="${{ steps.ver.outputs.version }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.ver.outputs.build }}" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $IOS_RELEASE_KEYCHAIN" \
+            archive
+      - name: Export .ipa
+        if: steps.signing.outputs.upload == '1'
+        working-directory: apps/iosApp
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath build/Supermux.xcarchive \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath build/ios-export \
+            OTHER_CODE_SIGN_FLAGS="--keychain $IOS_RELEASE_KEYCHAIN"
+          mkdir -p ../../dist
+          cp build/ios-export/*.ipa ../../dist/supermux-ios.ipa
+      - name: Upload to TestFlight
+        if: steps.signing.outputs.upload == '1'
+        run: |
+          KEY_DIR="$HOME/.appstoreconnect/private_keys"
+          mkdir -p "$KEY_DIR"
+          printf '%s' "$ASC_API_KEY_P8_BASE64" | base64 --decode > "$KEY_DIR/AuthKey_${ASC_API_KEY_ID}.p8"
+          xcrun altool --upload-app \
+            --type ios \
+            --file dist/supermux-ios.ipa \
+            --apiKey "$ASC_API_KEY_ID" \
+            --apiIssuer "$ASC_API_ISSUER_ID"
+          rm -f "$KEY_DIR/AuthKey_${ASC_API_KEY_ID}.p8"
+      - uses: actions/upload-artifact@v4
+        if: steps.signing.outputs.upload == '1'
+        with:
+          name: supermux-ios
+          path: dist/supermux-ios.ipa
+          if-no-files-found: error
+      - name: Remove temporary keychain
+        if: always() && steps.signing.outputs.upload == '1'
+        run: security delete-keychain "$IOS_RELEASE_KEYCHAIN" || true
 
   release:
     if: github.ref_type == 'tag'
