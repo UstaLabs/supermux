@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { buildNestedChildCommand } from "./conpty-smoke"
+import { buildNestedChildCommand, withTimeout } from "./conpty-smoke"
 
 describe("ConPTY smoke command", () => {
   test("keeps Start-Process parameters in one statement and delimits only the output statement", () => {
@@ -16,5 +16,10 @@ describe("ConPTY smoke command", () => {
 
   test("can import command construction without executing the Windows-only smoke", () => {
     expect(typeof buildNestedChildCommand).toBe("function")
+  })
+
+  test("bounds a stalled cleanup promise", async () => {
+    await expect(withTimeout(new Promise<void>(() => {}), 5, "cleanup")).rejects.toThrow(/cleanup.*5ms/i)
+    await expect(withTimeout(Promise.resolve("ok"), 5, "cleanup")).resolves.toBe("ok")
   })
 })

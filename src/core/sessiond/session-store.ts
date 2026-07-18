@@ -4,6 +4,8 @@ import { createProcessJob, type ProcessJob } from "./job-object"
 import { SessionScreen } from "./screen"
 
 export interface SessionTerminal {
+  readonly eof: Promise<void>
+  setDrainHandler(handler: () => void): void
   write(data: Uint8Array | string): number
   resize(cols: number, rows: number): void
   close(): void
@@ -30,11 +32,123 @@ export type SessionProcessFactory = (
   onData: (data: Uint8Array) => void,
 ) => { process: SessionProcess; terminal: SessionTerminal }
 
-type Viewer = {
-  onData: (data: Uint8Array) => void | Promise<void>
+export type ExitedRuntimeTarget = RuntimeTarget & {
+  group: string
+  exitCode: number | null
+  exitedAt: number
 }
 
-type TargetState = "alive" | "killing" | "exited"
+type InputEntry = {
+  data: Uint8Array
+  offset: number
+  resolve?: () => void
+  reject?: (error: Error) => void
+}
+
+class TerminalInputWriter {
+  private readonly queue: InputEntry[] = []
+  private pendingBytes = 0
+  private closed = false
+  private pumping = false
+  private waitingForDrain = false
+
+  constructor(
+    private readonly terminal: SessionTerminal,
+    private readonly byteLimit: number,
+  ) {
+    terminal.setDrainHandler(() => {
+      this.waitingForDrain = false
+      this.pump()
+    })
+  }
+
+  write(data: Uint8Array): Promise<void> {
+    const snapshot = data.slice()
+    if (this.closed) return Promise.reject(new Error("terminal input is closed"))
+    if (this.pendingBytes + snapshot.byteLength > this.byteLimit) {
+      return Promise.reject(new Error(`terminal input queue exceeds ${this.byteLimit} bytes`))
+    }
+    if (snapshot.byteLength === 0) return Promise.resolve()
+    return new Promise<void>((resolve, reject) => {
+      this.enqueue({ data: snapshot, offset: 0, resolve, reject })
+    })
+  }
+
+  tryWrite(data: Uint8Array): boolean {
+    if (this.closed || this.pendingBytes + data.byteLength > this.byteLimit) return false
+    if (data.byteLength === 0) return true
+    this.enqueue({ data: data.slice(), offset: 0 })
+    return true
+  }
+
+  close(): void {
+    if (this.closed) return
+    this.closed = true
+    this.terminal.setDrainHandler(() => {})
+    this.rejectAll(new Error("terminal input is closed"))
+  }
+
+  private enqueue(entry: InputEntry): void {
+    this.queue.push(entry)
+    this.pendingBytes += entry.data.byteLength
+    this.pump()
+  }
+
+  private pump(): void {
+    if (this.closed || this.pumping || this.waitingForDrain) return
+    this.pumping = true
+    try {
+      while (!this.closed) {
+        const entry = this.queue[0]
+        if (!entry) return
+        const remaining = entry.data.subarray(entry.offset)
+        let accepted: number
+        try {
+          accepted = this.terminal.write(remaining)
+        } catch (error) {
+          this.rejectAll(asError(error, "terminal write failed"))
+          return
+        }
+        if (!Number.isInteger(accepted) || accepted < 0 || accepted > remaining.byteLength) {
+          this.rejectAll(new Error(`terminal write returned invalid accepted byte count: ${accepted}`))
+          return
+        }
+        if (accepted === 0) {
+          this.waitingForDrain = true
+          return
+        }
+        entry.offset += accepted
+        this.pendingBytes -= accepted
+        if (entry.offset === entry.data.byteLength) {
+          this.queue.shift()
+          entry.resolve?.()
+        }
+      }
+    } finally {
+      this.pumping = false
+    }
+  }
+
+  private rejectAll(error: Error): void {
+    const entries = this.queue.splice(0)
+    this.pendingBytes = 0
+    this.waitingForDrain = false
+    for (const entry of entries) entry.reject?.(error)
+  }
+}
+
+type Viewer = {
+  id: string
+  onData: (data: Uint8Array) => void | Promise<void>
+  queue: Uint8Array[]
+  pendingBytes: number
+  inFlightBytes: number
+  delivering: boolean
+  active: boolean
+  detach: () => void
+}
+
+type TargetState = "alive" | "terminating" | "exiting"
 
 type TargetRecord = {
   id: string
@@ -43,13 +157,17 @@ type TargetRecord = {
   pid: number
   process: SessionProcess
   terminal: SessionTerminal
+  input: TerminalInputWriter
   job: ProcessJob
   screen: SessionScreen
   viewers: Map<string, Viewer>
   outputQueue: Promise<void>
   state: TargetState
+  exitObserved: boolean
+  exitCode: number | null
   terminalClosed: boolean
   jobClosed: boolean
+  removed: boolean
   finalizePromise?: Promise<void>
   killPromise?: Promise<void>
 }
@@ -59,12 +177,20 @@ export type SessionStoreOptions = {
   jobFactory?: () => ProcessJob
   idFactory?: () => string
   rawByteLimit?: number
+  inputByteLimit?: number
+  viewerByteLimit?: number
+  terminalEofTimeoutMs?: number
+  processExitTimeoutMs?: number
+  maxExitedHistory?: number
 }
 
 function productionProcessFactory(
   options: SessionSpawnOptions,
   onData: (data: Uint8Array) => void,
 ): { process: SessionProcess; terminal: SessionTerminal } {
+  let notifyDrain = () => {}
+  let resolveEof!: () => void
+  const eof = new Promise<void>(resolve => { resolveEof = resolve })
   const spawned = Bun.spawn(options.argv, {
     cwd: options.cwd,
     env: options.env,
@@ -76,12 +202,33 @@ function productionProcessFactory(
       data(_terminal, data) {
         onData(data)
       },
+      drain() {
+        notifyDrain()
+      },
+      exit() {
+        resolveEof()
+      },
     },
   })
-  const terminal = spawned.terminal
-  if (!terminal) {
+  const nativeTerminal = spawned.terminal
+  if (!nativeTerminal) {
     spawned.kill()
     throw new Error("Bun.spawn did not create a ConPTY terminal")
+  }
+  const terminal: SessionTerminal = {
+    eof,
+    setDrainHandler(handler) {
+      notifyDrain = handler
+    },
+    write(data) {
+      return nativeTerminal.write(data)
+    },
+    resize(cols, rows) {
+      nativeTerminal.resize(cols, rows)
+    },
+    close() {
+      nativeTerminal.close()
+    },
   }
   return {
     process: {
@@ -91,6 +238,10 @@ function productionProcessFactory(
     },
     terminal,
   }
+}
+
+function asError(value: unknown, fallback: string): Error {
+  return value instanceof Error ? value : new Error(`${fallback}: ${String(value)}`)
 }
 
 function encodeKey(key: string): Uint8Array {
@@ -111,7 +262,6 @@ function encodeKey(key: string): Uint8Array {
   }
   const known = named[key]
   if (known !== undefined) return new TextEncoder().encode(known)
-
   const control = /^C-(.)$/iu.exec(key)
   if (control) {
     const character = control[1]!
@@ -119,7 +269,6 @@ function encodeKey(key: string): Uint8Array {
     const code = character.toUpperCase().charCodeAt(0)
     if (code >= 0x40 && code <= 0x5f) return new Uint8Array([code & 0x1f])
   }
-
   const meta = /^M-(.*)$/su.exec(key)
   if (meta) {
     const suffix = new TextEncoder().encode(meta[1]!)
@@ -133,8 +282,7 @@ function encodeKey(key: string): Uint8Array {
 
 function encodeKeys(keys: string[]): Uint8Array {
   const encoded = keys.map(encodeKey)
-  const size = encoded.reduce((total, value) => total + value.byteLength, 0)
-  const result = new Uint8Array(size)
+  const result = new Uint8Array(encoded.reduce((total, value) => total + value.byteLength, 0))
   let offset = 0
   for (const value of encoded) {
     result.set(value, offset)
@@ -143,21 +291,54 @@ function encodeKeys(keys: string[]): Uint8Array {
   return result
 }
 
+function validateLimit(name: string, value: number): number {
+  if (!Number.isInteger(value) || value < 0) throw new RangeError(`${name} must be a non-negative integer`)
+  return value
+}
+
+function validateTimeout(name: string, value: number): number {
+  if (!Number.isFinite(value) || value < 0) throw new RangeError(`${name} must be a non-negative number`)
+  return value
+}
+
+async function settleWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<{ settled: true; value: T | null } | { settled: false }> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await new Promise(resolve => {
+      timer = setTimeout(() => resolve({ settled: false as const }), timeoutMs)
+      promise.then(
+        value => resolve({ settled: true as const, value }),
+        () => resolve({ settled: true as const, value: null }),
+      )
+    })
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 export class SessionStore implements SessionBackend {
   private readonly processFactory: SessionProcessFactory
   private readonly jobFactory: () => ProcessJob
   private readonly idFactory: () => string
   private readonly rawByteLimit: number
+  private readonly inputByteLimit: number
+  private readonly viewerByteLimit: number
+  private readonly terminalEofTimeoutMs: number
+  private readonly processExitTimeoutMs: number
+  private readonly maxExitedHistory: number
   private readonly targets = new Map<string, TargetRecord>()
+  private readonly exitedHistory: ExitedRuntimeTarget[] = []
 
   constructor(options: SessionStoreOptions = {}) {
     this.processFactory = options.processFactory ?? productionProcessFactory
     this.jobFactory = options.jobFactory ?? createProcessJob
     this.idFactory = options.idFactory ?? (() => `session-${randomUUID()}`)
-    this.rawByteLimit = options.rawByteLimit ?? 1024 * 1024
-    if (!Number.isInteger(this.rawByteLimit) || this.rawByteLimit < 0) {
-      throw new RangeError("rawByteLimit must be a non-negative integer")
-    }
+    this.rawByteLimit = validateLimit("rawByteLimit", options.rawByteLimit ?? 1024 * 1024)
+    this.inputByteLimit = validateLimit("inputByteLimit", options.inputByteLimit ?? 1024 * 1024)
+    this.viewerByteLimit = validateLimit("viewerByteLimit", options.viewerByteLimit ?? 1024 * 1024)
+    this.terminalEofTimeoutMs = validateTimeout("terminalEofTimeoutMs", options.terminalEofTimeoutMs ?? 2_000)
+    this.processExitTimeoutMs = validateTimeout("processExitTimeoutMs", options.processExitTimeoutMs ?? 5_000)
+    this.maxExitedHistory = validateLimit("maxExitedHistory", options.maxExitedHistory ?? 100)
   }
 
   async create(options: {
@@ -169,7 +350,8 @@ export class SessionStore implements SessionBackend {
     cols?: number
     rows?: number
   }): Promise<RuntimeTarget> {
-    if ([...this.targets.values()].some(target => target.group === options.group && target.name === options.name)) {
+    if ([...this.targets.values()].some(target =>
+      !target.exitObserved && target.group === options.group && target.name === options.name)) {
       throw new Error(`duplicate session target in group ${options.group}: ${options.name}`)
     }
 
@@ -192,27 +374,20 @@ export class SessionStore implements SessionBackend {
         { ...options, argv: [...options.argv], env: { ...options.env }, cols, rows },
         data => {
           if (!record) pendingOutput.push(data.slice())
-          else if (record.state !== "exited") void this.enqueueOutput(record, data)
+          else if (!record.removed) void this.enqueueOutput(record, data)
         },
       )
       try {
         job.assign(spawned.process.pid)
       } catch (error) {
-        try {
-          spawned.process.kill()
-        } catch {
-          // Assignment failed, so the process is not protected by the job. A
-          // best-effort direct kill is the only remaining cleanup route.
-        }
-        try {
-          spawned.terminal.close()
-        } catch {
-          // Preserve the assignment error.
-        }
+        try { job.terminate(1) } catch { /* Preserve assignment failure. */ }
+        try { spawned.process.kill() } catch { /* Best-effort unassigned root cleanup. */ }
+        try { spawned.terminal.close() } catch { /* Preserve assignment failure. */ }
         void spawned.process.exited.catch(() => undefined)
         throw error
       }
 
+      const input = new TerminalInputWriter(spawned.terminal, this.inputByteLimit)
       record = {
         id,
         group: options.group,
@@ -220,13 +395,17 @@ export class SessionStore implements SessionBackend {
         pid: spawned.process.pid,
         process: spawned.process,
         terminal: spawned.terminal,
+        input,
         job,
         screen,
         viewers: new Map(),
         outputQueue: Promise.resolve(),
         state: "alive",
+        exitObserved: false,
+        exitCode: null,
         terminalClosed: false,
         jobClosed: false,
+        removed: false,
       }
       this.targets.set(id, record)
       for (const data of pendingOutput) void this.enqueueOutput(record, data)
@@ -234,11 +413,7 @@ export class SessionStore implements SessionBackend {
       return this.publicTarget(record)
     } catch (error) {
       if (!record) {
-        try {
-          job.close()
-        } catch {
-          // Preserve the spawn/assignment error that made creation fail.
-        }
+        try { job.close() } catch { /* Preserve creation failure. */ }
         screen.dispose()
       }
       throw error
@@ -247,37 +422,45 @@ export class SessionStore implements SessionBackend {
 
   async list(group?: string): Promise<RuntimeTarget[]> {
     return [...this.targets.values()]
-      .filter(target => group === undefined || target.group === group)
+      .filter(target => !target.exitObserved && (group === undefined || target.group === group))
       .map(target => this.publicTarget(target))
   }
 
+  listExited(group?: string): ExitedRuntimeTarget[] {
+    return this.exitedHistory
+      .filter(target => group === undefined || target.group === group)
+      .map(target => ({ ...target }))
+  }
+
   async resolve(group: string, name: string): Promise<string | null> {
-    return [...this.targets.values()].find(target => target.group === group && target.name === name)?.id ?? null
+    return [...this.targets.values()].find(target =>
+      !target.exitObserved && target.group === group && target.name === name)?.id ?? null
   }
 
   async livePid(targetId: string): Promise<number | null> {
     const target = this.targets.get(targetId)
-    return target?.state === "alive" ? target.pid : null
+    return target && !target.exitObserved ? target.pid : null
   }
 
   async write(targetId: string, data: Uint8Array): Promise<void> {
-    this.activeTarget(targetId).terminal.write(data)
+    return this.activeTarget(targetId).input.write(data)
   }
 
   async sendKeys(targetId: string, keys: string[]): Promise<void> {
-    this.activeTarget(targetId).terminal.write(encodeKeys(keys))
+    return this.activeTarget(targetId).input.write(encodeKeys(keys))
   }
 
   async resize(targetId: string, cols: number, rows: number): Promise<void> {
     const target = this.activeTarget(targetId)
-    target.terminal.resize(cols, rows)
     target.screen.resize(cols, rows)
+    target.terminal.resize(cols, rows)
   }
 
   async capture(targetId: string, raw = false): Promise<string | null> {
     const target = this.targets.get(targetId)
-    if (!target) return null
+    if (!target || target.exitObserved) return null
     await target.outputQueue
+    if (target.exitObserved) return null
     return raw ? target.screen.captureRaw() : target.screen.captureText()
   }
 
@@ -288,28 +471,38 @@ export class SessionStore implements SessionBackend {
   ): Promise<RuntimeViewer> {
     const target = this.activeTarget(targetId)
     if (target.viewers.has(viewerId)) throw new Error(`viewer is already attached: ${viewerId}`)
-    target.viewers.set(viewerId, { onData })
+    const viewer: Viewer = {
+      id: viewerId,
+      onData,
+      queue: [],
+      pendingBytes: 0,
+      inFlightBytes: 0,
+      delivering: false,
+      active: true,
+      detach: () => {},
+    }
+    viewer.detach = () => {
+      if (!viewer.active) return
+      viewer.active = false
+      viewer.queue.length = 0
+      viewer.pendingBytes = viewer.inFlightBytes
+      viewer.detach = () => {}
+      target.viewers.delete(viewer.id)
+    }
+    target.viewers.set(viewerId, viewer)
     let closed = false
     return {
       close: () => {
         if (closed) return
         closed = true
-        target.viewers.delete(viewerId)
+        viewer.detach()
       },
-      write: data => {
-        if (closed || target.state !== "alive") return false
-        try {
-          target.terminal.write(data)
-          return true
-        } catch {
-          return false
-        }
-      },
+      write: data => !closed && target.state === "alive" && target.input.tryWrite(data),
       resize: (cols, rows) => {
         if (closed || target.state !== "alive") return false
         try {
-          target.terminal.resize(cols, rows)
           target.screen.resize(cols, rows)
+          target.terminal.resize(cols, rows)
           return true
         } catch {
           return false
@@ -319,112 +512,185 @@ export class SessionStore implements SessionBackend {
   }
 
   async detach(targetId: string, viewerId: string): Promise<void> {
-    this.targets.get(targetId)?.viewers.delete(viewerId)
+    const target = this.targets.get(targetId)
+    const viewer = target?.viewers.get(viewerId)
+    if (target && viewer) viewer.detach()
   }
 
   async interrupt(targetId: string): Promise<void> {
-    this.activeTarget(targetId).terminal.write(new Uint8Array([0x03]))
+    return this.activeTarget(targetId).input.write(new Uint8Array([0x03]))
   }
 
   async kill(targetId: string): Promise<void> {
     const target = this.targets.get(targetId)
     if (!target) return
     if (target.killPromise) return target.killPromise
-    if (target.state === "exited") {
-      await target.finalizePromise
-      return
-    }
+    if (target.exitObserved) return this.finalizeExit(target)
 
-    target.killPromise = (async () => {
-      target.state = "killing"
-      target.job.terminate(1)
-      this.closeTerminal(target)
-      let exitCode: number | null = null
+    const attempt = (async () => {
+      target.state = "terminating"
       try {
-        exitCode = await target.process.exited
-      } catch {
-        // A rejected wait still means this process can no longer be observed as
-        // live. Cleanup is deterministic and the rejection is contained.
+        target.job.terminate(1)
+      } catch (error) {
+        await Promise.resolve()
+        if (!target.exitObserved) target.state = "alive"
+        throw error
       }
-      await this.finalizeExit(target, exitCode)
+
+      const result = await settleWithin(target.process.exited, this.processExitTimeoutMs)
+      if (!target.exitObserved) this.markExited(target, result.settled ? result.value : null)
+      await this.finalizeExit(target)
     })()
-    return target.killPromise
+    target.killPromise = attempt
+    try {
+      await attempt
+    } finally {
+      if (target.killPromise === attempt) target.killPromise = undefined
+    }
   }
 
   /** Accept one immutable PTY output chunk. Public for native smoke tooling. */
   acceptOutput(targetId: string, data: Uint8Array): Promise<void> {
     const target = this.targets.get(targetId)
-    if (!target || target.state === "exited") return Promise.resolve()
+    if (!target || target.removed) return Promise.resolve()
     return this.enqueueOutput(target, data)
   }
 
   private uniqueId(): string {
     for (let attempt = 0; attempt < 100; attempt++) {
       const id = this.idFactory()
-      if (id.length > 0 && !this.targets.has(id)) return id
+      if (id.length > 0 && !this.targets.has(id) && !this.exitedHistory.some(target => target.id === id)) return id
     }
     throw new Error("could not allocate a unique session target ID")
   }
 
   private activeTarget(targetId: string): TargetRecord {
     const target = this.targets.get(targetId)
-    if (!target || target.state !== "alive") throw new Error(`live session target not found: ${targetId}`)
+    if (!target || target.state !== "alive" || target.exitObserved) {
+      throw new Error(`live session target not found: ${targetId}`)
+    }
     return target
   }
 
   private publicTarget(target: TargetRecord): RuntimeTarget {
-    const alive = target.state === "alive"
+    const alive = !target.exitObserved
     return { id: target.id, name: target.name, pid: alive ? target.pid : null, alive }
   }
 
   private enqueueOutput(target: TargetRecord, data: Uint8Array): Promise<void> {
     const snapshot = data.slice()
     target.outputQueue = target.outputQueue.then(async () => {
+      if (target.removed) return
       await target.screen.write(snapshot)
-      for (const viewer of [...target.viewers.values()]) {
-        try {
-          await viewer.onData(snapshot.slice())
-        } catch {
-          // One disconnected viewer must not poison terminal capture or other
-          // viewers, and callback rejections must never become unhandled.
-        }
-      }
+      for (const viewer of [...target.viewers.values()]) this.enqueueViewer(viewer, snapshot)
     })
     return target.outputQueue
   }
 
+  private enqueueViewer(viewer: Viewer, data: Uint8Array): void {
+    if (!viewer.active) return
+    if (viewer.pendingBytes + data.byteLength > this.viewerByteLimit) {
+      viewer.detach()
+      return
+    }
+    viewer.queue.push(data.slice())
+    viewer.pendingBytes += data.byteLength
+    this.pumpViewer(viewer)
+  }
+
+  private pumpViewer(viewer: Viewer): void {
+    if (viewer.delivering || !viewer.active) return
+    viewer.delivering = true
+    void (async () => {
+      try {
+        while (viewer.active) {
+          const data = viewer.queue.shift()
+          if (!data) return
+          viewer.inFlightBytes = data.byteLength
+          try {
+            await viewer.onData(data)
+          } catch {
+            viewer.detach()
+            return
+          } finally {
+            viewer.pendingBytes = Math.max(0, viewer.pendingBytes - data.byteLength)
+            viewer.inFlightBytes = 0
+          }
+        }
+      } finally {
+        viewer.delivering = false
+        if (viewer.active && viewer.queue.length > 0) this.pumpViewer(viewer)
+      }
+    })()
+  }
+
   private observeExit(target: TargetRecord): void {
     void target.process.exited.then(
-      code => this.finalizeExit(target, code),
-      () => this.finalizeExit(target, null),
-    ).catch(() => {
-      // Natural-exit cleanup has no request to report through. Native close
-      // failures are contained here; explicit kill still reports them to its
-      // caller through killPromise.
+      code => this.markExited(target, code),
+      () => this.markExited(target, null),
+    )
+  }
+
+  private markExited(target: TargetRecord, exitCode: number | null): void {
+    if (target.exitObserved || target.removed) return
+    target.exitObserved = true
+    target.exitCode = exitCode
+    target.state = "exiting"
+    void this.finalizeExit(target).catch(() => {
+      // A later kill/cleanup request can retry each close independently.
     })
   }
 
-  private finalizeExit(target: TargetRecord, _exitCode: number | null): Promise<void> {
+  private finalizeExit(target: TargetRecord): Promise<void> {
+    if (target.removed) return Promise.resolve()
     if (target.finalizePromise) return target.finalizePromise
-    target.state = "exited"
-    target.finalizePromise = (async () => {
+    const attempt = (async () => {
+      await settleWithin(target.terminal.eof, this.terminalEofTimeoutMs)
       await target.outputQueue
-      this.closeTerminal(target)
-      this.closeJob(target)
-      target.viewers.clear()
+      target.input.close()
+      for (const viewer of [...target.viewers.values()]) viewer.detach()
+
+      const errors: Error[] = []
+      if (!target.terminalClosed) {
+        try {
+          target.terminal.close()
+          target.terminalClosed = true
+        } catch (error) {
+          errors.push(asError(error, "terminal close failed"))
+        }
+      }
+      if (!target.jobClosed) {
+        try {
+          target.job.close()
+          target.jobClosed = true
+        } catch (error) {
+          errors.push(asError(error, "Job Object close failed"))
+        }
+      }
+      if (errors.length > 0) {
+        throw new AggregateError(errors, `session cleanup failed: ${errors.map(error => error.message).join("; ")}`)
+      }
+
+      target.screen.dispose()
+      target.removed = true
+      this.targets.delete(target.id)
+      if (this.maxExitedHistory > 0) {
+        this.exitedHistory.push({
+          id: target.id,
+          group: target.group,
+          name: target.name,
+          pid: null,
+          alive: false,
+          exitCode: target.exitCode,
+          exitedAt: Date.now(),
+        })
+        while (this.exitedHistory.length > this.maxExitedHistory) this.exitedHistory.shift()
+      }
     })()
-    return target.finalizePromise
-  }
-
-  private closeTerminal(target: TargetRecord): void {
-    if (target.terminalClosed) return
-    target.terminalClosed = true
-    target.terminal.close()
-  }
-
-  private closeJob(target: TargetRecord): void {
-    if (target.jobClosed) return
-    target.jobClosed = true
-    target.job.close()
+    target.finalizePromise = attempt
+    void attempt.finally(() => {
+      if (target.finalizePromise === attempt) target.finalizePromise = undefined
+    }).catch(() => undefined)
+    return attempt
   }
 }

@@ -1,6 +1,19 @@
 import { SessionStore } from "../../src/core/sessiond/session-store"
 
 const encoder = new TextEncoder()
+const KILL_TIMEOUT_MS = 12_000
+
+export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs)
+      promise.then(resolve, reject)
+    })
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
 
 async function waitForCapture(
   store: SessionStore,
@@ -81,11 +94,11 @@ async function main(): Promise<void> {
       throw new Error("root or nested child exited before Job Object termination could be exercised")
     }
 
-    await store.kill(target.id)
+    await withTimeout(store.kill(target.id), KILL_TIMEOUT_MS, "Job Object cleanup")
     await waitForTreeExit([target.pid!, childPid], 10_000)
     console.log("SUPERMUX_CONPTY_SMOKE_OK")
   } finally {
-    await store.kill(target.id).catch(() => undefined)
+    await withTimeout(store.kill(target.id), KILL_TIMEOUT_MS, "final Job Object cleanup").catch(() => undefined)
   }
 }
 

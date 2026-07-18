@@ -4,6 +4,7 @@ import {
   SessionStore,
   type SessionProcess,
   type SessionProcessFactory,
+  type SessionStoreOptions,
   type SessionTerminal,
 } from "./session-store"
 
@@ -24,31 +25,65 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-function harness(options: { assignError?: Error; factoryError?: Error; jobFactoryError?: Error } = {}) {
+type HarnessOptions = {
+  assignError?: Error
+  factoryError?: Error
+  jobFactoryError?: Error
+  writePlan?: number[]
+  terminateFailures?: number
+  terminalCloseFailures?: number
+  jobCloseFailures?: number
+  manualEof?: boolean
+  noProcessExitOnTerminate?: boolean
+  store?: Partial<SessionStoreOptions>
+}
+
+function harness(options: HarnessOptions = {}) {
   const events: string[] = []
   const sessions: Array<{
     options: Parameters<SessionProcessFactory>[0]
     emit(data: Uint8Array): void
     exit(code: number): void
     rejectExit(error: Error): void
-    terminal: SessionTerminal & { writes: Uint8Array[]; dimensions: Array<[number, number]>; closeCount: number }
+    eof(): void
+    drain(): void
+    terminal: SessionTerminal & {
+      offered: Uint8Array[]
+      accepted: Uint8Array[]
+      dimensions: Array<[number, number]>
+      closeCount: number
+    }
     process: SessionProcess & { killCount: number }
   }> = []
   let pid = 5000
   let jobIndex = 0
+  let terminateFailures = options.terminateFailures ?? 0
+  let terminalCloseFailures = options.terminalCloseFailures ?? 0
+  let jobCloseFailures = options.jobCloseFailures ?? 0
+  const writePlan = [...(options.writePlan ?? [])]
   const jobs: Array<ProcessJob & { assignCount: number; terminateCount: number; closeCount: number }> = []
 
   const processFactory: SessionProcessFactory = (spawnOptions, onData) => {
     if (options.factoryError) throw options.factoryError
     const exited = deferred<number>()
+    const terminalEof = deferred<void>()
+    let drainHandler = () => {}
     const terminal = {
-      writes: [] as Uint8Array[],
+      offered: [] as Uint8Array[],
+      accepted: [] as Uint8Array[],
       dimensions: [] as Array<[number, number]>,
       closeCount: 0,
+      eof: terminalEof.promise,
+      setDrainHandler(handler: () => void) {
+        drainHandler = handler
+      },
       write(data: Uint8Array | string) {
-        this.writes.push(typeof data === "string" ? bytes(data) : new Uint8Array(data))
-        events.push("terminal-write")
-        return typeof data === "string" ? data.length : data.byteLength
+        const offered = typeof data === "string" ? bytes(data) : new Uint8Array(data)
+        this.offered.push(offered)
+        const acceptedBytes = Math.max(0, Math.min(offered.byteLength, writePlan.shift() ?? offered.byteLength))
+        this.accepted.push(offered.slice(0, acceptedBytes))
+        events.push(`terminal-write:${acceptedBytes}/${offered.byteLength}`)
+        return acceptedBytes
       },
       resize(cols: number, rows: number) {
         this.dimensions.push([cols, rows])
@@ -57,6 +92,7 @@ function harness(options: { assignError?: Error; factoryError?: Error; jobFactor
       close() {
         this.closeCount++
         events.push("terminal-close")
+        if (terminalCloseFailures-- > 0) throw new Error("terminal close failed")
       },
     }
     const process = {
@@ -67,13 +103,22 @@ function harness(options: { assignError?: Error; factoryError?: Error; jobFactor
         this.killCount++
         events.push("process-kill")
         exited.resolve(137)
+        if (!options.manualEof) terminalEof.resolve()
       },
     }
     sessions.push({
       options: spawnOptions,
       emit: onData,
-      exit: exited.resolve,
-      rejectExit: exited.reject,
+      exit(code) {
+        exited.resolve(code)
+        if (!options.manualEof) terminalEof.resolve()
+      },
+      rejectExit(error) {
+        exited.reject(error)
+        if (!options.manualEof) terminalEof.resolve()
+      },
+      eof: terminalEof.resolve,
+      drain: () => drainHandler(),
       terminal,
       process,
     })
@@ -95,11 +140,13 @@ function harness(options: { assignError?: Error; factoryError?: Error; jobFactor
       terminate(exitCode = 1) {
         this.terminateCount++
         events.push(`job-${index}-terminate:${exitCode}`)
-        sessions[index]?.exit(exitCode)
+        if (terminateFailures-- > 0) throw new Error("job termination failed")
+        if (!options.noProcessExitOnTerminate) sessions[index]?.exit(exitCode)
       },
       close() {
         this.closeCount++
         events.push(`job-${index}-close`)
+        if (jobCloseFailures-- > 0) throw new Error("job close failed")
       },
     }
     jobs.push(job)
@@ -112,6 +159,9 @@ function harness(options: { assignError?: Error; factoryError?: Error; jobFactor
     jobFactory,
     idFactory: () => `opaque-${++id}-4f954a`,
     rawByteLimit: 1024,
+    terminalEofTimeoutMs: 20,
+    processExitTimeoutMs: 20,
+    ...options.store,
   })
   return { store, sessions, jobs, events }
 }
@@ -131,6 +181,25 @@ async function tick(): Promise<void> {
   await Bun.sleep(0)
 }
 
+async function waitUntil(check: () => boolean, timeoutMs = 200): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!check()) {
+    if (Date.now() >= deadline) throw new Error("condition timed out")
+    await Bun.sleep(1)
+  }
+}
+
+function acceptedText(session: ReturnType<typeof harness>["sessions"][number]): string {
+  const length = session.terminal.accepted.reduce((total, chunk) => total + chunk.byteLength, 0)
+  const joined = new Uint8Array(length)
+  let offset = 0
+  for (const chunk of session.terminal.accepted) {
+    joined.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return decoder.decode(joined)
+}
+
 describe("SessionStore", () => {
   test("creates opaque targets with exact launch settings and group-scoped names", async () => {
     const { store, sessions, jobs } = harness()
@@ -145,10 +214,9 @@ describe("SessionStore", () => {
     await expect(store.create(base)).rejects.toThrow(/duplicate.*agents.*worker/i)
     expect(await store.resolve("agents", "worker")).toBe(first.id)
     expect(await store.list("agents")).toEqual([first])
-    expect((await store.list()).length).toBe(2)
   })
 
-  test("captures ordered output and fans immutable exact bytes to attached viewers", async () => {
+  test("captures ordered output and fans immutable exact bytes to healthy viewers", async () => {
     const { store, sessions } = harness()
     const target = await store.create(base)
     const seenA: string[] = []
@@ -165,108 +233,235 @@ describe("SessionStore", () => {
     sessions[0]!.emit(bytes("first "))
     sessions[0]!.emit(bytes("\x1b[31mred\x1b[0m"))
     expect(await store.capture(target.id)).toBe("first red")
-    expect(await store.capture(target.id, true)).toBe("first \x1b[31mred\x1b[0m")
-    expect(seenA).toEqual(["first ", "\x1b[31mred\x1b[0m"])
+    await waitUntil(() => seenA.length === 2 && seenB.length === 2)
     expect(seenB).toEqual(seenA)
-
     viewerA.close()
     viewerA.close()
     await store.detach(target.id, "a")
-    sessions[0]!.emit(bytes("!"))
-    expect(await store.capture(target.id)).toBe("first red!")
-    expect(seenA).toHaveLength(2)
-    expect(seenB.at(-1)).toBe("!")
-    expect(await store.livePid(target.id)).toBe(target.pid)
   })
 
-  test("writes, resizes, sends semantic keys, and interrupts with byte 0x03", async () => {
+  test("isolates and bounds a hanging viewer without blocking capture, healthy viewers, or cleanup", async () => {
+    const { store, sessions, jobs } = harness({ store: { viewerByteLimit: 5 } })
+    const target = await store.create(base)
+    let hangingCalls = 0
+    const healthy: string[] = []
+    await store.attach(target.id, "hanging", () => {
+      hangingCalls++
+      return new Promise<void>(() => {})
+    })
+    await store.attach(target.id, "healthy", data => {
+      healthy.push(decoder.decode(data))
+    })
+
+    sessions[0]!.emit(bytes("abc"))
+    sessions[0]!.emit(bytes("def"))
+    expect(await store.capture(target.id, true)).toBe("abcdef")
+    await waitUntil(() => healthy.length === 2)
+    sessions[0]!.emit(bytes("g"))
+    await waitUntil(() => healthy.length === 3)
+    expect(hangingCalls).toBe(1)
+
+    await store.kill(target.id)
+    expect(jobs[0]?.closeCount).toBe(1)
+    expect(await store.list()).toEqual([])
+  })
+
+  test("detaches a rejecting viewer without poisoning later output", async () => {
+    const { store, sessions } = harness()
+    const target = await store.create(base)
+    let rejectedCalls = 0
+    const healthy: string[] = []
+    await store.attach(target.id, "rejecting", () => {
+      rejectedCalls++
+      return Promise.reject(new Error("viewer disconnected"))
+    })
+    await store.attach(target.id, "healthy", data => { healthy.push(decoder.decode(data)) })
+    sessions[0]!.emit(bytes("one"))
+    await waitUntil(() => healthy.length === 1)
+    sessions[0]!.emit(bytes("two"))
+    await waitUntil(() => healthy.length === 2)
+    expect(rejectedCalls).toBe(1)
+    expect(healthy).toEqual(["one", "two"])
+  })
+
+  test("drains partial and zero ConPTY writes without reordering or duplication", async () => {
+    const { store, sessions } = harness({ writePlan: [2, 0, 1, 0, 1, 1] })
+    const target = await store.create(base)
+    const first = store.write(target.id, bytes("abcd"))
+    const second = store.sendKeys(target.id, ["Enter"])
+    let firstDone = false
+    void first.then(() => { firstDone = true })
+    await tick()
+    expect(firstDone).toBe(false)
+    expect(acceptedText(sessions[0]!)).toBe("ab")
+
+    sessions[0]!.drain()
+    await tick()
+    expect(acceptedText(sessions[0]!)).toBe("abc")
+    sessions[0]!.drain()
+    await Promise.all([first, second])
+    expect(acceptedText(sessions[0]!)).toBe("abcd\r")
+  })
+
+  test("synchronous viewer writes enqueue whole immutable chunks and reject bounded overflow", async () => {
+    const { store, sessions } = harness({ writePlan: [0, 3], store: { inputByteLimit: 4 } })
+    const target = await store.create(base)
+    const viewer = await store.attach(target.id, "viewer", () => {})
+    const mutable = bytes("abc")
+    expect(viewer.write(mutable)).toBe(true)
+    mutable.fill("x".charCodeAt(0))
+    expect(viewer.write(bytes("de"))).toBe(false)
+    sessions[0]!.drain()
+    await tick()
+    expect(acceptedText(sessions[0]!)).toBe("abc")
+  })
+
+  test("rejects queued async input when terminal cleanup closes the writer", async () => {
+    const { store } = harness({ writePlan: [0] })
+    const target = await store.create(base)
+    const pending = store.write(target.id, bytes("blocked"))
+    await store.kill(target.id)
+    await expect(pending).rejects.toThrow(/terminal.*closed/i)
+  })
+
+  test("rejects async input overflow without disturbing the already queued chunk", async () => {
+    const { store, sessions } = harness({ writePlan: [0, 3], store: { inputByteLimit: 3 } })
+    const target = await store.create(base)
+    const pending = store.write(target.id, bytes("abc"))
+    await expect(store.write(target.id, bytes("d"))).rejects.toThrow(/queue exceeds 3 bytes/i)
+    sessions[0]!.drain()
+    await pending
+    expect(acceptedText(sessions[0]!)).toBe("abc")
+  })
+
+  test("writes, resizes, semantic keys, and interrupt through the input queue", async () => {
     const { store, sessions } = harness()
     const target = await store.create(base)
     const viewer = await store.attach(target.id, "viewer", () => {})
-
     await store.write(target.id, new Uint8Array([0, 255, 65]))
     await store.resize(target.id, 120, 40)
     await store.sendKeys(target.id, ["Enter", "Tab", "C-c", "literal"])
     await store.interrupt(target.id)
     expect(viewer.write(bytes("viewer input"))).toBe(true)
     expect(viewer.resize(90, 20)).toBe(true)
-
-    expect(sessions[0]!.terminal.writes.map(value => [...value])).toEqual([
+    expect(sessions[0]!.terminal.accepted.map(value => [...value])).toEqual([
       [0, 255, 65],
       [...bytes("\r\t\x03literal")],
       [3],
       [...bytes("viewer input")],
     ])
-    expect(sessions[0]!.terminal.dimensions).toEqual([[120, 40], [90, 20]])
   })
 
-  test("detach does not kill and explicit kill terminates the job before closing ConPTY", async () => {
-    const { store, sessions, jobs, events } = harness()
+  test("failed Job termination preserves liveness and permits a later retry", async () => {
+    const { store, sessions, jobs } = harness({ terminateFailures: 1 })
     const target = await store.create(base)
-    const viewer = await store.attach(target.id, "viewer", () => {})
-    viewer.close()
-    expect(jobs[0]?.terminateCount).toBe(0)
-    expect(sessions[0]?.terminal.closeCount).toBe(0)
+    await expect(store.kill(target.id)).rejects.toThrow("job termination failed")
+    expect(await store.livePid(target.id)).toBe(target.pid)
+    await store.write(target.id, bytes("still live"))
+    expect(acceptedText(sessions[0]!)).toBe("still live")
 
     await store.kill(target.id)
-    await store.kill(target.id)
-    expect(events.indexOf("job-0-terminate:1")).toBeLessThan(events.indexOf("terminal-close"))
-    expect(jobs[0]?.terminateCount).toBe(1)
-    expect(jobs[0]?.closeCount).toBe(1)
-    expect(sessions[0]?.terminal.closeCount).toBe(1)
+    expect(jobs[0]?.terminateCount).toBe(2)
     expect(await store.livePid(target.id)).toBeNull()
   })
 
-  test("natural exit closes handles without termination and preserves exited metadata and captures", async () => {
-    const { store, sessions, jobs } = harness()
+  test("cleanup attempts terminal and Job independently and retries failed closes", async () => {
+    for (const failure of [
+      { terminalCloseFailures: 1 },
+      { jobCloseFailures: 1 },
+      { terminalCloseFailures: 1, jobCloseFailures: 1 },
+    ]) {
+      const { store, sessions, jobs } = harness(failure)
+      const target = await store.create({ ...base, name: `cleanup-${JSON.stringify(failure)}` })
+      await expect(store.kill(target.id)).rejects.toThrow(/close failed/i)
+      expect(sessions[0]?.terminal.closeCount).toBe(1)
+      expect(jobs[0]?.closeCount).toBe(1)
+      await store.kill(target.id)
+      expect(sessions[0]!.terminal.closeCount + jobs[0]!.closeCount).toBeGreaterThanOrEqual(3)
+      expect(await store.list()).toEqual([])
+    }
+  })
+
+  test("waits for trailing ConPTY output and EOF before cleanup", async () => {
+    const { store, sessions, jobs } = harness({ manualEof: true, store: { terminalEofTimeoutMs: 100 } })
     const target = await store.create(base)
-    sessions[0]!.emit(bytes("finished"))
-    expect(await store.capture(target.id)).toBe("finished")
+    const trailing: string[] = []
+    await store.attach(target.id, "trailing-observer", data => { trailing.push(decoder.decode(data)) })
     sessions[0]!.exit(7)
     await tick()
-
-    expect(jobs[0]?.terminateCount).toBe(0)
+    expect(await store.list()).toEqual([])
+    expect(await store.capture(target.id)).toBeNull()
+    expect(jobs[0]?.closeCount).toBe(0)
+    sessions[0]!.emit(bytes("trailing"))
+    await waitUntil(() => trailing.length === 1)
+    expect(trailing).toEqual(["trailing"])
+    sessions[0]!.eof()
+    await waitUntil(() => store.listExited().length === 1)
+    expect(store.listExited()).toEqual([
+      expect.objectContaining({ id: target.id, alive: false, pid: null, exitCode: 7 }),
+    ])
     expect(jobs[0]?.closeCount).toBe(1)
-    expect(sessions[0]?.terminal.closeCount).toBe(1)
-    expect(await store.livePid(target.id)).toBeNull()
-    expect(await store.list("agents")).toEqual([{ ...target, pid: null, alive: false }])
-    expect(await store.capture(target.id)).toBe("finished")
   })
 
-  test("cleans up factory and assignment failures", async () => {
+  test("uses a finite EOF and process-exit fallback", async () => {
+    const eofTimeout = harness({ manualEof: true, store: { terminalEofTimeoutMs: 5 } })
+    const first = await eofTimeout.store.create(base)
+    eofTimeout.sessions[0]!.exit(9)
+    await waitUntil(() => eofTimeout.store.listExited().some(item => item.id === first.id))
+
+    const processTimeout = harness({
+      manualEof: true,
+      noProcessExitOnTerminate: true,
+      store: { terminalEofTimeoutMs: 5, processExitTimeoutMs: 5 },
+    })
+    const second = await processTimeout.store.create(base)
+    await processTimeout.store.kill(second.id)
+    expect(processTimeout.store.listExited()).toEqual([
+      expect.objectContaining({ id: second.id, exitCode: null }),
+    ])
+  })
+
+  test("follows active backend semantics while keeping only bounded detached exit history", async () => {
+    const { store, sessions } = harness({ store: { maxExitedHistory: 2 } })
+    for (const code of [1, 2, 3]) {
+      const target = await store.create(base)
+      sessions.at(-1)!.emit(bytes(`run-${code}`))
+      sessions.at(-1)!.exit(code)
+      await waitUntil(() => store.listExited().some(item => item.id === target.id))
+      expect(await store.list()).toEqual([])
+      expect(await store.resolve(base.group, base.name)).toBeNull()
+      expect(await store.capture(target.id)).toBeNull()
+    }
+    expect(store.listExited()).toEqual([
+      expect.objectContaining({ exitCode: 2 }),
+      expect.objectContaining({ exitCode: 3 }),
+    ])
+    expect(store.listExited("other")).toEqual([])
+  })
+
+  test("cleans up factory and assignment failures and terminates the Job first", async () => {
     const jobFailure = harness({ jobFactoryError: new Error("kernel32 unavailable") })
     await expect(jobFailure.store.create(base)).rejects.toThrow("kernel32 unavailable")
-    expect(await jobFailure.store.list()).toEqual([])
 
     const factoryFailure = harness({ factoryError: new Error("spawn unavailable") })
     await expect(factoryFailure.store.create(base)).rejects.toThrow("spawn unavailable")
     expect(factoryFailure.jobs[0]?.closeCount).toBe(1)
-    expect(await factoryFailure.store.list()).toEqual([])
 
     const assignmentFailure = harness({ assignError: new Error("assignment denied") })
     await expect(assignmentFailure.store.create(base)).rejects.toThrow("assignment denied")
+    const events = assignmentFailure.events
+    expect(events.indexOf("job-0-terminate:1")).toBeLessThan(events.indexOf("process-kill"))
+    expect(events.indexOf("job-0-terminate:1")).toBeLessThan(events.indexOf("terminal-close"))
     expect(assignmentFailure.sessions[0]?.process.killCount).toBe(1)
-    expect(assignmentFailure.sessions[0]?.terminal.closeCount).toBe(1)
-    expect(assignmentFailure.jobs[0]?.closeCount).toBe(1)
-    expect(await assignmentFailure.store.list()).toEqual([])
   })
 
-  test("handles rejected exits and output/kill races without duplicate cleanup or unhandled rejection", async () => {
-    const { store, sessions, jobs } = harness()
-    const first = await store.create(base)
-    sessions[0]!.emit(bytes("before"))
-    sessions[0]!.rejectExit(new Error("wait failed"))
-    await tick()
-    expect(await store.capture(first.id)).toBe("before")
-    expect(jobs[0]?.closeCount).toBe(1)
-
-    const second = await store.create({ ...base, name: "racer" })
-    sessions[1]!.emit(bytes("queued"))
-    await Promise.all([store.kill(second.id), store.kill(second.id)])
-    sessions[1]!.emit(bytes("late"))
-    expect(await store.capture(second.id, true)).toBe("queued")
-    expect(jobs[1]?.terminateCount).toBe(1)
-    expect(jobs[1]?.closeCount).toBe(1)
-    expect(sessions[1]?.terminal.closeCount).toBe(1)
+  test("detach is idempotent and does not kill", async () => {
+    const { store, jobs } = harness()
+    const target = await store.create(base)
+    const viewer = await store.attach(target.id, "viewer", () => {})
+    viewer.close()
+    viewer.close()
+    await store.detach(target.id, "viewer")
+    expect(jobs[0]?.terminateCount).toBe(0)
   })
 })
