@@ -458,10 +458,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          assets="dist/supermux-linux-x64 dist/supermux-linux-x64.sha256 dist/supermux-linux-arm64 dist/supermux-linux-arm64.sha256 dist/supermux-darwin-arm64 dist/supermux-darwin-arm64.sha256 dist/supermux-android.apk dist/supermux-android.apk.sha256 dist/supermux-linux.deb dist/supermux-linux.deb.sha256 dist/supermux-windows.msi dist/supermux-windows.msi.sha256 dist/supermux-macos.dmg dist/supermux-macos.dmg.sha256"
-          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 \
-            && gh release upload "${GITHUB_REF_NAME}" --clobber $assets \
-            || gh release create "${GITHUB_REF_NAME}" --generate-notes $assets
+          assets=(
+            dist/supermux-linux-x64
+            dist/supermux-linux-x64.sha256
+            dist/supermux-linux-arm64
+            dist/supermux-linux-arm64.sha256
+            dist/supermux-darwin-arm64
+            dist/supermux-darwin-arm64.sha256
+            dist/supermux-android.apk
+            dist/supermux-android.apk.sha256
+            dist/supermux-linux.deb
+            dist/supermux-linux.deb.sha256
+            dist/supermux-windows.msi
+            dist/supermux-windows.msi.sha256
+            dist/supermux-macos.dmg
+            dist/supermux-macos.dmg.sha256
+          )
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" --clobber "${assets[@]}"
+          else
+            gh release create "${GITHUB_REF_NAME}" --generate-notes "${assets[@]}"
+          fi
 
   publish-website:
     if: github.ref_type == 'tag'
