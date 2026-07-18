@@ -27,6 +27,26 @@ test("shim connects, registers, gets a name back", async () => {
   await client.close()
 })
 
+test("shim connects through an explicit local endpoint", async () => {
+  const handler = {
+    onRegister: async () => ({ name: "endpoint-name", session_id: "sess-endpoint" }),
+    onOutbound: async () => ({ ok: true }),
+    onOrchestration: async () => ({ ok: false, error: "denied" }),
+  }
+  server = await startSocketServer({ socketsDir: dir, handler })
+  await server.bind("sess-endpoint")
+
+  const client = await connectShim({
+    socketsDir: join(dir, "wrong"),
+    socketPath: join(dir, "sess-endpoint.sock"),
+    sessionId: "sess-endpoint",
+    workdir: "/tmp/foo",
+    pid: process.pid,
+  })
+  expect(client.assignedName).toBe("endpoint-name")
+  await client.close()
+})
+
 test("broker delivers inbound; shim receives via callback", async () => {
   let receivedInbound: any = null
   const handler = {

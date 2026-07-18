@@ -1,6 +1,6 @@
 import { createServer, Server, Socket } from "net"
 import { mkdirSync, chmodSync, existsSync, unlinkSync } from "fs"
-import { join } from "path"
+import { localEndpoint } from "../local-endpoint"
 import { encodeFrame, decodeFrames } from "../../shared/frame-codec"
 import { makeLogger } from "../../shared/log"
 import { parseSocketFrame, type OrchestrationFrame, type OutboundFrame, type RegisterFrame, type SocketFrame } from "../../shared/socket-frames"
@@ -33,7 +33,9 @@ export async function startSocketServer(opts: {
   onUndeliverable?: (session_id: string, payload: { content: string; meta: Record<string, string> }) => void
   deliveryGraceMs?: number
 }): Promise<SocketServer> {
-  mkdirSync(opts.socketsDir, { recursive: true, mode: 0o700 })
+  if (process.platform !== "win32") {
+    mkdirSync(opts.socketsDir, { recursive: true, mode: 0o700 })
+  }
   // A single Claude session has MORE THAN ONE shim connection on the same
   // session_id: Claude loads mux-shim both as a tools MCP server
   // (~/.claude.json) and as a channel provider
@@ -154,12 +156,15 @@ export async function startSocketServer(opts: {
   }
 
   async function bindOne(session_id: string): Promise<void> {
-    const sockPath = join(opts.socketsDir, `${session_id}.sock`)
-    if (existsSync(sockPath)) unlinkSync(sockPath)
+    const sockPath = localEndpoint(session_id, { socketsDir: opts.socketsDir })
+    if (process.platform !== "win32" && existsSync(sockPath)) unlinkSync(sockPath)
     const s = createServer(socket => handleConnection(session_id, socket))
     await new Promise<void>((res, rej) => {
       s.once("error", rej)
-      s.listen(sockPath, () => { chmodSync(sockPath, 0o600); res() })
+      s.listen(sockPath, () => {
+        if (process.platform !== "win32") chmodSync(sockPath, 0o600)
+        res()
+      })
     })
     servers.set(session_id, s)
   }
