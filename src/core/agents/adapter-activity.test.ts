@@ -75,6 +75,44 @@ test("codex web_search started -> WebFetch with query", () => {
   expect(toActivityEvents("codex", ev, NOW, WD)[0]).toMatchObject({ kind: "tool", tool: "WebFetch", title: "WebFetch: how to npm" })
 })
 
+test("codex webSearch shows every query from the completed action in its input preview", () => {
+  const ev = {
+    kind: "tool-call",
+    tool: "webSearch",
+    phase: "started",
+    call_id: "c4",
+    detail: {
+      type: "webSearch",
+      query: "first query ...",
+      action: { type: "search", query: null, queries: ["first query", "second query"] },
+    },
+  } as const
+  expect(toActivityEvents("codex", ev, NOW, WD)[0]).toMatchObject({
+    kind: "tool",
+    tool: "WebFetch",
+    title: "WebFetch: first query ...",
+    detail: "first query\nsecond query",
+  })
+})
+
+test("codex webSearch open-page action previews its URL", () => {
+  const ev = {
+    kind: "tool-call",
+    tool: "webSearch",
+    phase: "started",
+    call_id: "c5",
+    detail: {
+      type: "webSearch",
+      query: "https://developers.openai.com/codex/",
+      action: { type: "openPage", url: "https://developers.openai.com/codex/" },
+    },
+  } as const
+  expect(toActivityEvents("codex", ev, NOW, WD)[0]).toMatchObject({
+    title: "WebFetch: https://developers.openai.com/codex/",
+    detail: "https://developers.openai.com/codex/",
+  })
+})
+
 // --- codex MCP tools ---
 
 // "/tmp" is the mcp-tool argument, not the session workdir — strip is a no-op

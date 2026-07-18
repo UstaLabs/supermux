@@ -278,9 +278,172 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  build-desktop-macos:
+    # Native SwiftUI/KMP macOS host app. Tag builds require Developer ID + App
+    # Store Connect notary credentials and publish a notarized, stapled DMG.
+    # workflow_dispatch remains useful before those secrets are configured: it
+    # builds the complete unsigned app and uploads an explicitly unsigned DMG.
+    runs-on: macos-26
+    env:
+      DEVELOPER_ID_APPLICATION: "Developer ID Application: AHMET HUSEYIN DOK (57L7J9XA89)"
+      MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+      MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+      APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+      APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+      APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: oven-sh/setup-bun@v2
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0-dryrun"; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Build portable tmux
+        run: scripts/build-portable-tmux.sh "$RUNNER_TEMP/tmux"
+      - name: Stage host helper binaries
+        env:
+          SUPERMUX_TMUX: ${{ runner.temp }}/tmux
+        run: scripts/stage-desktop-binaries.sh macos-arm64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
+      - name: Generate Xcode project
+        working-directory: apps/iosApp
+        run: xcodegen generate
+      - name: Build unsigned release app
+        working-directory: apps/iosApp
+        run: |
+          xcodebuild \
+            -scheme SupermuxMac \
+            -configuration Release \
+            -destination "platform=macOS,arch=arm64" \
+            -derivedDataPath build/dd-mac \
+            MARKETING_VERSION="${{ steps.ver.outputs.version }}" \
+            CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+          test -x build/dd-mac/Build/Products/Release/Supermux.app/Contents/Resources/HostResources/supermux-broker
+          test -x build/dd-mac/Build/Products/Release/Supermux.app/Contents/Resources/HostResources/frpc
+          test -x build/dd-mac/Build/Products/Release/Supermux.app/Contents/Resources/HostResources/tmux
+      - name: Check release credentials
+        id: signing
+        run: |
+          have=1
+          [ -n "$MACOS_DEVELOPER_ID_P12_BASE64" ] || have=0
+          [ -n "$MACOS_DEVELOPER_ID_P12_PASSWORD" ] || have=0
+          [ -n "$APPLE_NOTARY_KEY_P8_BASE64" ] || have=0
+          [ -n "$APPLE_NOTARY_KEY_ID" ] || have=0
+          [ -n "$APPLE_NOTARY_ISSUER_ID" ] || have=0
+          if [ "$have" = 0 ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "::error::macOS signing/notarization secrets are required for tag releases"
+            exit 1
+          fi
+          if [ "$have" = 0 ]; then
+            echo "::warning::macOS release secrets are absent; uploading an unsigned dry-run DMG"
+          fi
+          echo "have=$have" >> "$GITHUB_OUTPUT"
+      - name: Import Developer ID certificate
+        if: steps.signing.outputs.have == '1'
+        env:
+          KEYCHAIN_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/supermux-release.keychain-db"
+          CERTIFICATE="$RUNNER_TEMP/developer-id.p12"
+          printf '%s' "$MACOS_DEVELOPER_ID_P12_BASE64" | base64 --decode > "$CERTIFICATE"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERTIFICATE" -k "$KEYCHAIN" -P "$MACOS_DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security find-identity -v -p codesigning "$KEYCHAIN" | grep -F "$DEVELOPER_ID_APPLICATION"
+          echo "MACOS_RELEASE_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+      - name: Sign app inside-out
+        if: steps.signing.outputs.have == '1'
+        run: |
+          APP="apps/iosApp/build/dd-mac/Build/Products/Release/Supermux.app"
+          sign() {
+            codesign --force --options runtime --timestamp \
+              --keychain "$MACOS_RELEASE_KEYCHAIN" \
+              --sign "$DEVELOPER_ID_APPLICATION" "$1"
+          }
+          for helper in supermux-broker frpc tmux; do
+            sign "$APP/Contents/Resources/HostResources/$helper"
+          done
+          sign "$APP/Contents/Frameworks/Shared.framework"
+          sign "$APP/Contents/PlugIns/SupermuxMacPushNSE.appex"
+          sign "$APP/Contents/MacOS/Supermux"
+          sign "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+      - name: Notarize and staple app
+        if: steps.signing.outputs.have == '1'
+        run: |
+          APP="apps/iosApp/build/dd-mac/Build/Products/Release/Supermux.app"
+          NOTARY_KEY="$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
+          printf '%s' "$APPLE_NOTARY_KEY_P8_BASE64" | base64 --decode > "$NOTARY_KEY"
+          ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/Supermux.app.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/Supermux.app.zip" \
+            --key "$NOTARY_KEY" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            --wait
+          xcrun stapler staple "$APP"
+          xcrun stapler validate "$APP"
+          spctl --assess --type execute --verbose=2 "$APP"
+          echo "APPLE_NOTARY_KEY_PATH=$NOTARY_KEY" >> "$GITHUB_ENV"
+      - name: Create DMG
+        run: |
+          APP="apps/iosApp/build/dd-mac/Build/Products/Release/Supermux.app"
+          DMG_ROOT="$RUNNER_TEMP/dmg-root"
+          mkdir -p "$DMG_ROOT" dist
+          ditto "$APP" "$DMG_ROOT/Supermux.app"
+          ln -s /Applications "$DMG_ROOT/Applications"
+          if [ "${{ steps.signing.outputs.have }}" = "1" ]; then
+            DMG="dist/supermux-macos.dmg"
+          else
+            DMG="dist/supermux-macos-unsigned.dmg"
+          fi
+          hdiutil create \
+            -volname Supermux \
+            -srcfolder "$DMG_ROOT" \
+            -format UDZO \
+            -imagekey zlib-level=9 \
+            "$DMG"
+          echo "MACOS_DMG=$DMG" >> "$GITHUB_ENV"
+      - name: Sign, notarize, and staple DMG
+        if: steps.signing.outputs.have == '1'
+        run: |
+          codesign --force --timestamp \
+            --keychain "$MACOS_RELEASE_KEYCHAIN" \
+            --sign "$DEVELOPER_ID_APPLICATION" "$MACOS_DMG"
+          xcrun notarytool submit "$MACOS_DMG" \
+            --key "$APPLE_NOTARY_KEY_PATH" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            --wait
+          xcrun stapler staple "$MACOS_DMG"
+          xcrun stapler validate "$MACOS_DMG"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$MACOS_DMG"
+      - name: Checksum
+        run: |
+          cd dist
+          shasum -a 256 "$(basename "$MACOS_DMG")" > "$(basename "$MACOS_DMG").sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: supermux-desktop-macos
+          path: dist/*
+          if-no-files-found: error
+      - name: Remove temporary keychain
+        if: always() && steps.signing.outputs.have == '1'
+        run: security delete-keychain "$MACOS_RELEASE_KEYCHAIN" || true
+
   release:
     if: github.ref_type == 'tag'
-    needs: [build-binaries, docker, build-android, build-desktop-linux, build-desktop-windows]
+    needs: [build-binaries, docker, build-android, build-desktop-linux, build-desktop-windows, build-desktop-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -295,10 +458,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          assets="dist/supermux-linux-x64 dist/supermux-linux-x64.sha256 dist/supermux-linux-arm64 dist/supermux-linux-arm64.sha256 dist/supermux-darwin-arm64 dist/supermux-darwin-arm64.sha256 dist/supermux-android.apk dist/supermux-android.apk.sha256 dist/supermux-linux.deb dist/supermux-linux.deb.sha256 dist/supermux-windows.msi dist/supermux-windows.msi.sha256"
-          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 \
-            && gh release upload "${GITHUB_REF_NAME}" --clobber $assets \
-            || gh release create "${GITHUB_REF_NAME}" --generate-notes $assets
+          assets=(
+            dist/supermux-linux-x64
+            dist/supermux-linux-x64.sha256
+            dist/supermux-linux-arm64
+            dist/supermux-linux-arm64.sha256
+            dist/supermux-darwin-arm64
+            dist/supermux-darwin-arm64.sha256
+            dist/supermux-android.apk
+            dist/supermux-android.apk.sha256
+            dist/supermux-linux.deb
+            dist/supermux-linux.deb.sha256
+            dist/supermux-windows.msi
+            dist/supermux-windows.msi.sha256
+            dist/supermux-macos.dmg
+            dist/supermux-macos.dmg.sha256
+          )
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" --clobber "${assets[@]}"
+          else
+            gh release create "${GITHUB_REF_NAME}" --generate-notes "${assets[@]}"
+          fi
 
   publish-website:
     if: github.ref_type == 'tag'

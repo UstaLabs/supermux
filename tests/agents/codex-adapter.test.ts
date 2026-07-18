@@ -91,7 +91,7 @@ describe("CodexAdapter", () => {
     while (!c.requests[2]) await new Promise(r => setImmediate(r))
     expect(c.requests[2]?.method).toBe("turn/start")
     expect(c.requests[2]?.params.input).toEqual([{ type: "text", text: "hello" }])
-    c.requests[2]!.resolve({ turnId: "turn1" })
+    c.requests[2]!.resolve({ turn: { id: "turn1" } })
     await sendP
 
     c.emit({ method: "item/completed", params: { item: { type: "agentMessage", text: "hi there" } } })
@@ -261,7 +261,7 @@ describe("CodexAdapter", () => {
     await sendP
   })
 
-  test("interrupt() sends turn/interrupt", async () => {
+  test("interrupt() sends the active turnId required by the current protocol", async () => {
     const c = mockClient()
     const a = new CodexAdapter({
       sessionName: "s5",
@@ -272,10 +272,50 @@ describe("CodexAdapter", () => {
     })
     await driveStart(c, a)
 
+    const sendP = a.send("keep working")
+    while (!c.requests[2]) await new Promise(r => setImmediate(r))
+    c.requests[2]!.resolve({ turn: { id: "turn-current" } })
+    await sendP
+
+    const ipP = a.interrupt()
+    while (!c.requests[3]) await new Promise(r => setImmediate(r))
+    expect(c.requests[3]?.method).toBe("turn/interrupt")
+    expect(c.requests[3]?.params).toEqual({ threadId: "t", turnId: "turn-current" })
+    c.requests[3]!.resolve({})
+    await ipP
+  })
+
+  test("turn/started notification records the active turn from turn.id", async () => {
+    const c = mockClient()
+    const a = new CodexAdapter({
+      sessionName: "s6",
+      workdir: "/w",
+      client: c as any,
+      persistThreadId: async () => {},
+      initialThreadId: undefined,
+    })
+    await driveStart(c, a)
+
+    c.emit({ method: "turn/started", params: { threadId: "t", turn: { id: "turn-notified" } } })
     const ipP = a.interrupt()
     while (!c.requests[2]) await new Promise(r => setImmediate(r))
-    expect(c.requests[2]?.method).toBe("turn/interrupt")
+    expect(c.requests[2]?.params).toEqual({ threadId: "t", turnId: "turn-notified" })
     c.requests[2]!.resolve({})
     await ipP
+  })
+
+  test("interrupt() is a no-op between turns", async () => {
+    const c = mockClient()
+    const a = new CodexAdapter({
+      sessionName: "s7",
+      workdir: "/w",
+      client: c as any,
+      persistThreadId: async () => {},
+      initialThreadId: undefined,
+    })
+    await driveStart(c, a)
+
+    await a.interrupt()
+    expect(c.requests).toHaveLength(2)
   })
 })

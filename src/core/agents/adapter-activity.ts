@@ -141,6 +141,23 @@ function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike, workdir: strin
   }
 
   if (agent === "codex") {
+    if (obj.type === "webSearch" || obj.type === "web_search") {
+      const action = obj.action && typeof obj.action === "object"
+        ? obj.action as Record<string, unknown>
+        : undefined
+      const queries = Array.isArray(action?.queries)
+        ? action.queries.filter((value): value is string => typeof value === "string" && !!value.trim())
+        : []
+      const actionValue = pickString(action ?? {}, ["query", "url", "pattern"])
+      const rawSummary = pickString(obj, ["query"]) || queries[0] || actionValue
+      const inputDetail = queries.length > 1 ? queries.join("\n") : rawSummary
+      return {
+        summary: rawSummary,
+        rawSummary,
+        inputDetail,
+        resultDetail: "",
+      }
+    }
     if (obj.type === "mcpToolCall" || obj.type === "mcp_tool_call") {
       const toolName = (typeof obj.tool === "string" && obj.tool)
         || (typeof obj.toolName === "string" && obj.toolName)

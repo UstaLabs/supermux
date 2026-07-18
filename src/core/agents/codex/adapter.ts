@@ -19,6 +19,19 @@ export function isCodexToolItem(type: string | undefined): boolean {
   return typeof type === "string" && CODEX_TOOL_ITEM_TYPES.has(type)
 }
 
+function isCodexWebSearchItem(type: string | undefined): boolean {
+  return type === "webSearch" || type === "web_search"
+}
+
+function hasCodexWebSearchPreview(item: Record<string, unknown>): boolean {
+  if (typeof item.query === "string" && item.query.trim()) return true
+  const action = item.action
+  if (!action || typeof action !== "object") return false
+  const row = action as Record<string, unknown>
+  return [row.query, row.url, row.pattern].some((value) => typeof value === "string" && value.trim())
+    || (Array.isArray(row.queries) && row.queries.some((value) => typeof value === "string" && value.trim()))
+}
+
 type JsonRpcLike = {
   request<T = any>(method: string, params: any): Promise<T>
   onNotification(h: (n: { method: string; params: any }) => void): void
@@ -39,6 +52,11 @@ export type CodexAdapterOpts = {
 
 type CodexInputItem = { type: "text"; text: string } | { type: "localImage"; path: string }
 
+function turnIdFrom(value: any): string | undefined {
+  const id = value?.turn?.id ?? value?.turnId
+  return typeof id === "string" && id ? id : undefined
+}
+
 export class CodexAdapter extends EventEmitter implements AgentAdapter {
   readonly kind: AgentKind = "codex"
   readonly sessionName: string
@@ -51,6 +69,7 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
   private initialThreadId?: string
   private lastChatId?: string
   private resolveAttachment?: (file_id: string) => Promise<string>
+  private deferredWebSearchStarts = new Set<string>()
 
   /** The live app-server JSON-RPC client, for read-only queries like skills/list. */
   get rpc(): JsonRpcLike {
@@ -72,11 +91,14 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
     this.client.onNotification(({ method, params }) => {
       switch (method) {
         case "turn/started":
-          this.currentTurnId = params?.turnId
+          this.currentTurnId = turnIdFrom(params)
           this.emit("turn-start", { kind: "turn-start" })
           break
         case "turn/completed":
-          this.currentTurnId = undefined
+          if (!this.currentTurnId || this.currentTurnId === turnIdFrom(params)) {
+            this.currentTurnId = undefined
+            this.deferredWebSearchStarts.clear()
+          }
           this.emit("turn-complete", { kind: "turn-complete" })
           break
         case "item/completed":
@@ -84,23 +106,37 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
             this.emit("assistant-message", { kind: "assistant-message", text: params.item.text, chat_id: this.lastChatId })
           }
           if (isCodexToolItem(params?.item?.type)) {
+            const callId = String(params.item.id ?? "")
             const exitCode = params.item.exitCode ?? params.item.exit_code
             const failed = params.item.status === "failed" || params.item.status === "declined"
               || (exitCode != null && exitCode !== 0)
             const tool = params.item.type === "dynamicToolCall" || params.item.type === "dynamic_tool_call"
               ? String(params.item.tool || params.item.type)
               : String(params.item.type)
+            // Codex 0.144 starts webSearch items as { query:"", action:null } and
+            // only fills the query/action on item/completed. Defer that tool card
+            // until the useful snapshot arrives, otherwise every search preview is
+            // permanently blank even though the completed item has the query.
+            if (this.deferredWebSearchStarts.delete(callId)) {
+              this.emit("tool-call", { kind: "tool-call", tool, phase: "started",
+                call_id: callId, detail: params.item })
+            }
             this.emit("tool-call", { kind: "tool-call", tool, phase: failed ? "failed" : "completed",
-              call_id: String(params.item.id ?? ""), detail: params.item })
+              call_id: callId, detail: params.item })
           }
           break
         case "item/started":
           if (isCodexToolItem(params?.item?.type)) {
+            const callId = String(params.item.id ?? "")
+            if (isCodexWebSearchItem(params.item.type) && !hasCodexWebSearchPreview(params.item)) {
+              this.deferredWebSearchStarts.add(callId)
+              break
+            }
             const tool = params.item.type === "dynamicToolCall" || params.item.type === "dynamic_tool_call"
               ? String(params.item.tool || params.item.type)
               : String(params.item.type)
             this.emit("tool-call", { kind: "tool-call", tool, phase: "started",
-              call_id: String(params.item.id ?? ""), detail: params.item })
+              call_id: callId, detail: params.item })
           }
           break
         case "error":
@@ -153,8 +189,10 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
     if (this.currentTurnId) {
       await this.client.request("turn/steer", { threadId: this.threadId, expectedTurnId: this.currentTurnId, input })
     } else {
-      const r = await this.client.request<{ turnId?: string }>("turn/start", { threadId: this.threadId, input })
-      if (r?.turnId) this.currentTurnId = r.turnId
+      const r = await this.client.request<{ turn?: { id?: string }; turnId?: string }>(
+        "turn/start", { threadId: this.threadId, input },
+      )
+      this.currentTurnId = turnIdFrom(r) ?? this.currentTurnId
     }
   }
 
@@ -186,7 +224,10 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
   }
 
   async interrupt(): Promise<void> {
-    if (!this.threadId) return
-    await this.client.request("turn/interrupt", { threadId: this.threadId })
+    if (!this.threadId || !this.currentTurnId) return
+    await this.client.request("turn/interrupt", {
+      threadId: this.threadId,
+      turnId: this.currentTurnId,
+    })
   }
 }
