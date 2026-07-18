@@ -1,4 +1,7 @@
-import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "child_process"
+import {
+  spawn as nodeSpawn, spawnSync as nodeSpawnSync, type ChildProcess, type SpawnOptions,
+  type SpawnSyncOptions, type SpawnSyncReturns,
+} from "child_process"
 import { accessSync, constants, statSync } from "fs"
 import { posix, win32 } from "path"
 
@@ -95,6 +98,16 @@ export interface SpawnCommandOptions extends SpawnOptions {
   fileExists?: FileExists
 }
 
+export type SpawnSyncLike = (
+  command: string, args: readonly string[], options: SpawnSyncOptions,
+) => SpawnSyncReturns<Buffer>
+
+export interface SpawnCommandSyncOptions extends SpawnSyncOptions {
+  platform?: NodeJS.Platform
+  spawnSync?: SpawnSyncLike
+  fileExists?: FileExists
+}
+
 // This is the quoting strategy used by mature Windows Node launchers. Quotes
 // and trailing slashes are escaped for CommandLineToArgvW, then cmd.exe
 // metacharacters are caret-escaped. Delayed expansion is explicitly disabled.
@@ -119,28 +132,53 @@ export function windowsCmdCommandLine(command: string, args: readonly string[]):
   return `"${inner}"`
 }
 
+function wrappedWindowsCommand(
+  command: string,
+  args: readonly string[],
+  env: CommandEnvironment,
+  fileExists?: FileExists,
+): { command: string; args: string[]; windowsVerbatimArguments?: boolean } {
+  const extension = win32.extname(command).toLowerCase()
+  if (extension === ".cmd" || extension === ".bat") {
+    return {
+      command: envValue(env, "ComSpec", "win32") || "cmd.exe",
+      args: ["/d", "/v:off", "/s", "/c", windowsCmdCommandLine(command, args)],
+      windowsVerbatimArguments: true,
+    }
+  }
+  if (extension === ".ps1") {
+    const powerShell = resolveCommand(["pwsh", "powershell"], env, "win32", { fileExists })
+    if (!powerShell) throw new Error("PowerShell was not found on PATH (tried pwsh.exe and powershell.exe)")
+    return {
+      command: powerShell,
+      args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", command, ...args],
+    }
+  }
+  return { command, args: [...args] }
+}
+
 /** Spawn an already-resolved command without ever passing user argv through a
  * general-purpose shell. Only Windows shim file formats receive fixed wrappers. */
 export function spawnCommand(command: string, args: readonly string[], options: SpawnCommandOptions = {}): ChildProcess {
   const { platform = process.platform, spawn = nodeSpawn as unknown as SpawnLike, fileExists, ...spawnOptions } = options
   const env = (spawnOptions.env ?? process.env) as CommandEnvironment
-  const extension = platform === "win32" ? win32.extname(command).toLowerCase() : ""
+  const wrapped = platform === "win32" ? wrappedWindowsCommand(command, args, env, fileExists) : { command, args: [...args] }
+  return spawn(wrapped.command, wrapped.args, {
+    ...spawnOptions,
+    ...(wrapped.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+  })
+}
 
-  if (extension === ".cmd" || extension === ".bat") {
-    const comSpec = envValue(env, "ComSpec", "win32") || "cmd.exe"
-    return spawn(comSpec, ["/d", "/v:off", "/s", "/c", windowsCmdCommandLine(command, args)], {
-      ...spawnOptions,
-      // The command line is already quoted for cmd.exe. Letting Node quote it
-      // a second time changes argv at the batch-script boundary.
-      windowsVerbatimArguments: true,
-    })
-  }
-  if (extension === ".ps1") {
-    const powerShell = resolveCommand(["pwsh", "powershell"], env, "win32", { fileExists })
-    if (!powerShell) throw new Error("PowerShell was not found on PATH (tried pwsh.exe and powershell.exe)")
-    return spawn(powerShell, [
-      "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", command, ...args,
-    ], spawnOptions)
-  }
-  return spawn(command, args, spawnOptions)
+/** Synchronous twin used by boot/plugin lifecycle paths that historically used
+ * execFileSync. It shares the exact Windows wrappers and never enables a shell. */
+export function spawnCommandSync(
+  command: string, args: readonly string[], options: SpawnCommandSyncOptions = {},
+): SpawnSyncReturns<Buffer> {
+  const { platform = process.platform, spawnSync = nodeSpawnSync as unknown as SpawnSyncLike, fileExists, ...spawnOptions } = options
+  const env = (spawnOptions.env ?? process.env) as CommandEnvironment
+  const wrapped = platform === "win32" ? wrappedWindowsCommand(command, args, env, fileExists) : { command, args: [...args] }
+  return spawnSync(wrapped.command, wrapped.args, {
+    ...spawnOptions,
+    ...(wrapped.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+  })
 }

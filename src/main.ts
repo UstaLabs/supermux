@@ -1668,7 +1668,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   // The startAgentLogin/getAgentLogin/cancelAgentLogin closures above close over `loginManager`
   // (the `let` binding) — they run at request time, by which point loginManager is assigned.
   loginManager = new LoginManager({
-    paths: { home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME },
+    paths: {
+      home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
+      appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
+    },
     fileExists: existsSync,
     hasCredential: (kind) => kind === AgentKind.Claude && claudeCliIsAuthenticated(),
     spawnLogin: spawnLoginProc,

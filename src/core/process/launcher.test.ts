@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { resolveCommand, spawnCommand, windowsCmdCommandLine } from "./launcher"
+import { resolveCommand, spawnCommand, spawnCommandSync, windowsCmdCommandLine } from "./launcher"
 
 const windowsFs = (...files: string[]) => ({
   fileExists: (path: string) => files.some((file) => file.toLowerCase() === path.toLowerCase()),
@@ -77,5 +77,29 @@ describe("spawnCommand", () => {
       "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
       "-File", "C:\\Tools\\opencode.ps1", "serve", "value; Remove-Item C:\\\\*",
     ])
+  })
+})
+
+describe("spawnCommandSync", () => {
+  test("uses the same safe cmd wrapper for synchronous plugin lifecycle calls", () => {
+    const calls: unknown[][] = []
+    const spawnSync = (...args: unknown[]) => { calls.push(args); return { status: 0 } as never }
+    spawnCommandSync("C:\\Tools\\codex.cmd", ["plugin", "add", "mux@mux"], {
+      platform: "win32", env: { ComSpec: "C:\\Windows\\System32\\cmd.exe" }, spawnSync,
+    })
+    expect(calls[0]?.[0]).toBe("C:\\Windows\\System32\\cmd.exe")
+    expect(calls[0]?.[1]).toEqual([
+      "/d", "/v:off", "/s", "/c", windowsCmdCommandLine("C:\\Tools\\codex.cmd", ["plugin", "add", "mux@mux"]),
+    ])
+    expect((calls[0]?.[2] as any).windowsVerbatimArguments).toBe(true)
+  })
+
+  test("preserves direct POSIX argv synchronously", () => {
+    const calls: unknown[][] = []
+    spawnCommandSync("/usr/local/bin/codex", ["plugin", "remove", "mux@mux"], {
+      platform: "linux", env: { PATH: "/usr/local/bin" },
+      spawnSync: ((...args: unknown[]) => { calls.push(args); return { status: 0 } }) as never,
+    })
+    expect(calls).toEqual([["/usr/local/bin/codex", ["plugin", "remove", "mux@mux"], { env: { PATH: "/usr/local/bin" } }]])
   })
 })

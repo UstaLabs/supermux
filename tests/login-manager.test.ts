@@ -69,3 +69,20 @@ test("Claude login succeeds when the macOS CLI reports a Keychain credential", (
 
   expect(mgr.get("claude")?.phase).toBe("success")
 })
+
+test("Cursor login polling uses the supplied Windows APPDATA root", () => {
+  let poll: () => void = () => {}
+  const checked: string[] = []
+  const mgr = new LoginManager({
+    paths: {
+      home: "C:\\Users\\u", appData: "D:\\Roaming", localAppData: "D:\\Local", platform: "win32",
+    },
+    fileExists: (path) => { checked.push(path); return true },
+    spawnLogin: () => ({ onStdout: () => {}, onExit: () => {}, kill: () => {}, write: () => {} }),
+    onChange: () => {}, setInterval: (fn) => { poll = fn; return 1 }, clearInterval: () => {},
+  })
+  mgr.start("cursor")
+  poll()
+  expect(checked).toEqual(["D:\\Roaming\\cursor\\auth.json"])
+  expect(mgr.get("cursor")?.phase).toBe("success")
+})
