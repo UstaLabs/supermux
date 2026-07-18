@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { ProcessJob } from "./job-object"
 import {
   SessionStore,
+  mergeSessionEnvironment,
   type SessionProcess,
   type SessionProcessFactory,
   type SessionStoreOptions,
@@ -202,6 +203,13 @@ function acceptedText(session: ReturnType<typeof harness>["sessions"][number]): 
 }
 
 describe("SessionStore", () => {
+  test("native launch inherits the host environment and applies session overrides", () => {
+    expect(mergeSessionEnvironment(
+      { PATH: "host-path", HOME: "host-home" },
+      { PATH: "session-path", MUX_SESSION_ID: "session-1" },
+    )).toEqual({ PATH: "session-path", HOME: "host-home", MUX_SESSION_ID: "session-1" })
+  })
+
   test("creates opaque targets with exact launch settings and group-scoped names", async () => {
     const { store, sessions, jobs } = harness()
     const first = await store.create(base)

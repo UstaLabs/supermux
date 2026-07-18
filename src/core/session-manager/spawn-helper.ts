@@ -1,9 +1,10 @@
 import { Registry } from "./registry"
 import { deriveName, ensureUnique } from "./naming"
-import { buildClaudeSpawnCommand } from "./spawn-command"
+import { buildClaudeSpawnSpec } from "./spawn-command"
 import { preAcceptTrust } from "./trust"
 import { sendChannelConsentEnter } from "./post-spawn-keys"
-import { listSessionWindows } from "./tmux"
+import { getSessionBackend } from "../runtime"
+import type { SessionBackend } from "../runtime/session-backend"
 import { resolveCodexAuth } from "../agents/codex/auth"
 import { writeCodexConfig } from "../agents/codex/config-writer"
 import { writeCodexPreamble } from "../agents/codex/preamble-writer"
@@ -61,10 +62,9 @@ type GrokSpawnHandle = { onExit: (cb: (code: number | null) => void) => void }
 export type SpawnDeps = {
   registry: Registry
   bind: (session_id: string) => Promise<void>
-  spawnTmux: (opts: { session: string; window: string; workdir: string; command: string }) => Promise<{ windowId?: string } | void>
+  spawnTmux?: (opts: { session: string; window: string; workdir: string; command: string }) => Promise<{ windowId?: string } | void>
+  sessionBackend?: SessionBackend
   tmuxSession: string
-  /** Lists existing tmux window names; injectable for tests. Defaults to real tmux. */
-  listWindows?: (session: string) => Promise<string[]>
   resolveAttachment?: (file_id: string) => Promise<string>
   postSpawnReady?: (target: string) => Promise<void>
   codexResolveAuth?: typeof resolveCodexAuth
@@ -89,7 +89,7 @@ export type SpawnDeps = {
   onOpenCodeSessionId?: (name: string, sessionId: string) => void
   onGrokSessionId?: (name: string, sessionId: string) => void
   onClaudeSessionId?: (name: string, claudeSessionId: string) => void
-  onTmuxWindowId?: (brokerSessionId: string, windowId: string) => void
+  onRuntimeTargetId?: (brokerSessionId: string, targetId: string) => void
 }
 
 export type SpawnArgs = {
@@ -147,7 +147,8 @@ export async function spawnPA(opts: {
   model?: string
   reasoningLevel?: string
   bind: (session_id: string) => Promise<void>
-  spawnTmux: (opts: { session: string; window: string; workdir: string; command: string }) => Promise<{ windowId?: string } | void>
+  spawnTmux?: (opts: { session: string; window: string; workdir: string; command: string }) => Promise<{ windowId?: string } | void>
+  sessionBackend?: SessionBackend
   tmuxSession: string
   onClaudeSessionId?: (brokerSessionId: string, claudeSessionId: string) => void
   onCodexSessionId?: (brokerSessionId: string, sessionId: string) => void
@@ -202,24 +203,26 @@ export async function spawnPA(opts: {
         is_default: registry.listPAs().length === 0,
       })
     }
-    const tmuxWindow = await opts.spawnTmux({
-      session: opts.tmuxSession,
-      window: name,
+    const spec = buildClaudeSpawnSpec({
+      name,
+      sessionId: id,
+      claudeSessionId,
+      sessionRole: "personal_assistant",
+      model,
+      effort: opts.resolveEffort?.({ agent, model, reasoningLevel }),
       workdir,
-      command: buildClaudeSpawnCommand({
-        name,
-        sessionId: id,
-        claudeSessionId,
-        sessionRole: "personal_assistant",
-        model,
-        effort: opts.resolveEffort?.({ agent, model, reasoningLevel }),
-        workdir,
-      }),
     })
-    if (tmuxWindow?.windowId) {
-      registry.sessions.setTmuxWindowId(id, tmuxWindow.windowId)
-      void sendChannelConsentEnter(tmuxWindow.windowId)
-    }
+    const target = await (opts.sessionBackend ?? getSessionBackend()).create({
+      group: opts.tmuxSession,
+      name,
+      cwd: workdir,
+      ...spec,
+      cols: 80,
+      rows: 24,
+    })
+    registry.sessions.setTmuxWindowId(id, target.id)
+    finalPid = target.pid ?? process.pid
+    void sendChannelConsentEnter(target.id, { backend: opts.sessionBackend })
     opts.onClaudeSessionId?.(id, claudeSessionId)
   } else if (agent === AgentKind.Codex) {
     const sessionHome = join(STATE_DIR, "agents", "codex", name)
@@ -434,14 +437,14 @@ export async function spawnPA(opts: {
     opts.registerAdapter?.(name, adapter, { onExit: () => {} })
   }
 
-  if (skipRegister) {
+  if (skipRegister || agent === AgentKind.Claude) {
     registry.sessions.activate(id, finalPid)
   }
   return { name, id }
 }
 
 async function spawnClaudeSession(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
-  const listWindows = deps.listWindows ?? listSessionWindows
+  const backend = deps.sessionBackend ?? getSessionBackend()
   const base = args.requestedName ?? deriveName(args.workdir)
   // Resolve a window name unique against BOTH taken display names AND existing
   // tmux window names. Worker windows are named after the repo base (e.g.
@@ -452,7 +455,7 @@ async function spawnClaudeSession(deps: SpawnDeps, args: SpawnArgs): Promise<Spa
   // session — i.e. creating a new session silently killed the previously-active
   // one on the same repo. Uniquifying against live window names means we never
   // collide, so we never need to (and never do) kill a sibling's window.
-  const existingWindows = await listWindows(deps.tmuxSession)
+  const existingWindows = (await backend.list(deps.tmuxSession)).map(target => target.name)
   const name = ensureUnique(base, new Set([...deps.registry.takenNames(), ...existingWindows]))
   const id = randomUUID()
   const claudeSessionId = randomUUID()
@@ -460,14 +463,17 @@ async function spawnClaudeSession(deps: SpawnDeps, args: SpawnArgs): Promise<Spa
   preAcceptTrust(args.workdir)
   try {
     await deps.bind(id)
-    const tmuxWindow = await deps.spawnTmux({
-      session: deps.tmuxSession,
-      window: name,
-      workdir: args.workdir,
-      command: buildClaudeSpawnCommand({ name, model: args.model, effort: args.effort, sessionId: id, claudeSessionId, workdir: args.workdir, rpcMcpConfig: args.rpcMcpConfig }),
+    const spec = buildClaudeSpawnSpec({ name, model: args.model, effort: args.effort, sessionId: id, claudeSessionId, workdir: args.workdir, rpcMcpConfig: args.rpcMcpConfig })
+    const target = await backend.create({
+      group: deps.tmuxSession,
+      name,
+      cwd: args.workdir,
+      ...spec,
+      cols: 80,
+      rows: 24,
     })
-    if (tmuxWindow?.windowId) deps.onTmuxWindowId?.(id, tmuxWindow.windowId)
-    if (tmuxWindow?.windowId) await (deps.postSpawnReady ?? sendChannelConsentEnter)(tmuxWindow.windowId)
+    deps.onRuntimeTargetId?.(id, target.id)
+    await (deps.postSpawnReady ?? ((targetId) => sendChannelConsentEnter(targetId, { backend })))(target.id)
   } catch (err) {
     // Free the reserved name so a retry can reclaim it (see the function doc).
     deps.registry.releaseName(name)

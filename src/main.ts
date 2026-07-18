@@ -32,12 +32,12 @@ function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
 import { startSocketServer } from "./core/session-manager/socket-server"
 import { createSupervisor, reconcileOnStartup } from "./core/session-manager/supervisor"
 import { acquirePidFile, releasePidFile } from "./core/session-manager/pid-file"
-import { spawnSessionWindow, killWindowById, listSessionWindows, livePanePid, sendKeysToWindowId, resolveWindowIdByName } from "./core/session-manager/tmux"
 import { ensureWindowId } from "./core/session-manager/window-id"
 import { liveWindowId } from "./core/session-manager/live-window"
 import { spawnSession as spawnSessionHelper, spawnPA, resumeOpenCodeSession, resumeGrokSession } from "./core/session-manager/spawn-helper"
 import { RuntimeRegistry, type SessionRuntime } from "./core/session-manager/runtime"
-import { buildClaudeSpawnCommand } from "./core/session-manager/spawn-command"
+import { buildClaudeSpawnSpec } from "./core/session-manager/spawn-command"
+import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
 import { transcribeAudio } from "./core/transcription/whisper"
@@ -524,24 +524,25 @@ const gcInterval = setInterval(() => {
 }, 60 * 60 * 1000)
 
 const TMUX_SESSION = process.env.MUX_TMUX_SESSION ?? "mux"
-// The addressable tmux window id for a session, healing a missing id once via a
+const sessionBackend = getSessionBackend()
+// The addressable persistent runtime target ID for a session, healing a missing ID once via a
 // name->id resolve (then persisted), so every kill/interrupt/liveness/consent
 // path routes by id — never by window name. Returns null when no live window
 // can be found, so callers no-op + log instead of routing by a stale name.
-const widOf = (s: { id: string; name: string; tmux_window_id?: string }) =>
+const runtimeTargetIdOf = (s: { id: string; name: string; tmux_window_id?: string }) =>
   ensureWindowId(s, {
     tmuxSession: TMUX_SESSION,
-    resolve: resolveWindowIdByName,
+    resolve: (group, name) => sessionBackend.resolve(group, name),
     persist: (id, wid) => registry.sessions.setTmuxWindowId(id, wid),
   })
 const replyOwner = new Map<string, string>()              // key: `${chat_id}:${message_id}`
 const pendingSpawnActive = new Map<string, string>()      // expectedName → channelChatId
 const pendingClaudeSessionId = new Map<string, string>()  // brokerSessionId → claudeSessionId
-const pendingTmuxWindowId = new Map<string, string>()      // brokerSessionId → tmux window id
+const pendingRuntimeTargetId = new Map<string, string>()      // brokerSessionId → opaque runtime target ID
 // Claude sessions register asynchronously via the shim's onRegister (not in the
 // spawn helper), so a worker that must be marked broker-internal records the
 // intent here keyed by broker session id; onRegister consumes it. Same deferred
-// pattern as pendingTmuxWindowId/pendingClaudeSessionId above.
+// pattern as pendingRuntimeTargetId/pendingClaudeSessionId above.
 const pendingInternal = new Set<string>()                  // brokerSessionId (internal=true)
 // agent-rpc registry. Assigned once below, after spawnSession/killSession/
 // deliverInbound (its deps) are all defined; declared here so it's in scope for
@@ -814,16 +815,16 @@ async function notifyAgentError(sessionId: string, sessionName: string, errorTyp
   } catch (err) { log.warn("agent_error_push_failed", { session: sessionName, err: String(err) }) }
 }
 
-// Soft-interrupt a Claude session by sending a single Esc to its tmux pane —
+// Soft-interrupt a Claude session by sending a single Esc to its persistent terminal —
 // Claude's native "stop generating" key. The pane runs Claude as the foreground
 // process, so send-keys to its window reaches the REPL. Addressed strictly by
 // window id (healed from the registry) so a rename can't aim us at a stale name.
 async function interruptClaudePane(sessionId: string): Promise<void> {
   const s = registry.get(sessionId)
   if (!s || s.agent !== AgentKind.Claude) return
-  const wid = await widOf(s)
-  if (!wid) { log.warn("claude_interrupt_no_tmux", { sessionId }); return }
-  await sendKeysToWindowId(wid, ["Escape"])
+  const wid = await runtimeTargetIdOf(s)
+  if (!wid) { log.warn("claude_interrupt_no_runtime_target", { sessionId }); return }
+  await sessionBackend.sendKeys(wid, ["Escape"])
 }
 
 // The one funnel every Stop surface (web button, /stop command) routes through:
@@ -1337,7 +1338,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         model: args.model,
         reasoningLevel: args.reasoningLevel,
         bind: (sid: string) => server.bind(sid),
-        spawnTmux: spawnSessionWindow,
+        sessionBackend,
         tmuxSession: TMUX_SESSION,
         resolveEffort: (s) => sessionEffort(s),
         registerAdapter: (name, adapter, handle) => {
@@ -1512,10 +1513,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const s = registry.get(id)
       if (!s || s.agent !== AgentKind.Claude) return undefined
       // Heal-on-read: resolve and persist the window-id if not yet stored.
-      // For sessions that already have tmux_window_id, widOf short-circuits with
+      // For sessions that already have tmux_window_id, runtimeTargetIdOf short-circuits with
       // no tmux call. Legacy/unhealed sessions resolve by name once, then persist,
       // so the agent terminal no longer 404s on first attach.
-      return (await widOf(s)) ?? undefined
+      return (await runtimeTargetIdOf(s)) ?? undefined
     },
     getSessionBaseCommits: (id) => registry.get(id)?.base_commits,
     getSessionCreatedAt: (id) => registry.get(id)?.created_at,
@@ -1701,9 +1702,9 @@ async function killSession(id: string) {
   }
 
   if (s.agent === "claude") {
-    const wid = await widOf(s)
-    if (wid) await killWindowById(wid)
-    else log.warn("kill_session_no_tmux", { name: displayName })
+    const wid = await runtimeTargetIdOf(s)
+    if (wid) await sessionBackend.kill(wid)
+    else log.warn("kill_session_no_runtime_target", { name: displayName })
   } else if (s.agent === "codex") {
     const runtime = runtimes.get(s.id)
     if (runtime?.kind === AgentKind.Codex) runtime.handle.kill()
@@ -1765,6 +1766,7 @@ async function ensureSessionWorktree(session: { id: string; name: string; workdi
 }
 
 async function resumeSuspendedSession(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string; tmux_window_id?: string | null; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<boolean> {
+  let resumedRuntimePid: number | null = null
   try {
     log.info("resume_suspended_begin", {
       name: session.name,
@@ -1782,24 +1784,20 @@ async function resumeSuspendedSession(session: { id: string; name: string; agent
       // loop could kill a sibling window that happens to share this display name;
       // 65b1049 removed the same destructive pattern from the new-spawn path. Then
       // pick a window name that doesn't collide with any live window (mirrors it).
-      if (session.tmux_window_id) await killWindowById(session.tmux_window_id).catch(() => {})
+      if (session.tmux_window_id) await sessionBackend.kill(session.tmux_window_id).catch(() => {})
       const { ensureUnique } = await import("./core/session-manager/naming")
-      const windowName = ensureUnique(session.name, new Set(await listSessionWindows(TMUX_SESSION)))
+      const windowName = ensureUnique(session.name, new Set((await sessionBackend.list(TMUX_SESSION)).map(target => target.name)))
       log.info("resume_suspended_claude", { name: session.name, window: windowName })
       const effort = sessionEffort(session as any)
-      const cmd = buildClaudeSpawnCommand({
+      const spec = buildClaudeSpawnSpec({
         name: session.name, model: session.model, effort, sessionId: session.id,
         claudeSessionId: session.agent_session_id, resume: !!session.agent_session_id,
         workdir: session.workdir,
       })
-      const tmuxWindow = await spawnSessionWindow({
-        session: TMUX_SESSION,
-        window: windowName,
-        workdir: session.workdir,
-        command: cmd,
-      })
-      if (tmuxWindow.windowId) registry.sessions.setTmuxWindowId(session.id, tmuxWindow.windowId)
-      if (tmuxWindow.windowId) await sendChannelConsentEnter(tmuxWindow.windowId)
+      const target = await sessionBackend.create({ group: TMUX_SESSION, name: windowName, cwd: session.workdir, ...spec, cols: 80, rows: 24 })
+      registry.sessions.setTmuxWindowId(session.id, target.id)
+      resumedRuntimePid = target.pid
+      await sendChannelConsentEnter(target.id, { backend: sessionBackend })
       await waitForSessionConnected(session.id, 25_000)
     } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
       await server.bind(session.id)
@@ -1853,7 +1851,7 @@ async function resumeSuspendedSession(session: { id: string; name: string; agent
       log.warn("resume_suspended_no_path", { name: session.name, agent: session.agent })
       return false
     }
-    registry.sessions.activate(session.id, session.pid || process.pid)
+    registry.sessions.activate(session.id, resumedRuntimePid ?? session.pid ?? process.pid)
     return true
   } catch (err: any) {
     log.error("resume_suspended_failed", { name: session.name, err: String(err) })
@@ -1869,29 +1867,30 @@ async function resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name
 
   let name = session.name
   const { ensureUnique } = await import("./core/session-manager/naming")
-  if (registry.takenNames().has(name)) {
-    name = ensureUnique(name, registry.takenNames())
+  const takenRuntimeNames = session.agent === AgentKind.Claude
+    ? new Set((await sessionBackend.list(TMUX_SESSION)).map(target => target.name))
+    : new Set<string>()
+  const takenNames = new Set([...registry.takenNames(), ...takenRuntimeNames])
+  if (takenNames.has(name)) {
+    name = ensureUnique(name, takenNames)
   }
 
-  let resumedTmuxWindowId: string | undefined
+  let resumedRuntimeTargetId: string | undefined
+  let resumedRuntimePid: number | null = null
   try {
     await ensureSessionWorktree(session)
     if (session.agent === "claude") {
       await server.bind(sessionId)
       const effort = sessionEffort(session)
-      const cmd = buildClaudeSpawnCommand({
+      const spec = buildClaudeSpawnSpec({
         name, model: session.model, effort, sessionId,
         claudeSessionId: session.agent_session_id, resume: !!session.agent_session_id,
         workdir: session.workdir,
       })
-      const tmuxWindow = await spawnSessionWindow({
-        session: TMUX_SESSION,
-        window: name,
-        workdir: session.workdir,
-        command: cmd,
-      })
-      resumedTmuxWindowId = tmuxWindow.windowId
-      if (tmuxWindow.windowId) void sendChannelConsentEnter(tmuxWindow.windowId)
+      const target = await sessionBackend.create({ group: TMUX_SESSION, name, cwd: session.workdir, ...spec, cols: 80, rows: 24 })
+      resumedRuntimeTargetId = target.id
+      resumedRuntimePid = target.pid
+      void sendChannelConsentEnter(target.id, { backend: sessionBackend })
     } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
       await server.bind(sessionId)
       const auth = await resolveCodexAuth({
@@ -1966,8 +1965,8 @@ async function resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name
       return { ok: false, error: `Cannot resume agent type: ${session.agent}` }
     }
 
-    registry.sessions.resume(sessionId, name, process.pid)
-    if (resumedTmuxWindowId) registry.sessions.setTmuxWindowId(sessionId, resumedTmuxWindowId)
+    registry.sessions.resume(sessionId, name, resumedRuntimePid ?? process.pid)
+    if (resumedRuntimeTargetId) registry.sessions.setTmuxWindowId(sessionId, resumedRuntimeTargetId)
 
     webChannel?.broadcastToAll({
       type: "session_added",
@@ -2072,10 +2071,10 @@ const server = await startSocketServer({
         if (agentSessionId) {
           registry.sessions.setAgentSessionId(sessionUuid, agentSessionId)
         }
-        const pendingWindow = pendingTmuxWindowId.get(sessionUuid)
+        const pendingWindow = pendingRuntimeTargetId.get(sessionUuid)
         if (pendingWindow) {
           registry.sessions.setTmuxWindowId(sessionUuid, pendingWindow)
-          pendingTmuxWindowId.delete(sessionUuid)
+          pendingRuntimeTargetId.delete(sessionUuid)
         }
         // Rebuild adapter if missing (after broker restart)
         if (!adapters.has(sessionUuid) && (existing.agent ?? "claude") === "claude") {
@@ -2177,10 +2176,10 @@ const server = await startSocketServer({
         pendingClaudeSessionId.delete(sessionUuid)
         pendingClaudeSessionId.delete(finalName)
       }
-      const pendingWindow = pendingTmuxWindowId.get(sessionUuid)
+      const pendingWindow = pendingRuntimeTargetId.get(sessionUuid)
       if (pendingWindow) {
         registry.sessions.setTmuxWindowId(sessionUuid, pendingWindow)
-        pendingTmuxWindowId.delete(sessionUuid)
+        pendingRuntimeTargetId.delete(sessionUuid)
       }
       // Start transcript tailer for Claude sessions
       ensureClaudeTailer(sessionUuid, finalName, workdir)
@@ -2594,7 +2593,7 @@ async function spawnSession(args: { workdir: string; requestedName?: string; age
     {
       registry,
       bind: (sid: string) => server.bind(sid),
-      spawnTmux: spawnSessionWindow,
+      sessionBackend,
       tmuxSession: TMUX_SESSION,
       resolveAttachment: resolveAttachmentPath,
       registerAdapter: (name, adapter, handle) => {
@@ -2635,10 +2634,10 @@ async function spawnSession(args: { workdir: string; requestedName?: string; age
         if (session) registry.sessions.setAgentSessionId(session.id, claudeSessionId)
         else pendingClaudeSessionId.set(name, claudeSessionId)
       },
-      onTmuxWindowId: (brokerSessionId: string, windowId: string) => {
+      onRuntimeTargetId: (brokerSessionId: string, targetId: string) => {
         const session = registry.get(brokerSessionId)
-        if (session) registry.sessions.setTmuxWindowId(brokerSessionId, windowId)
-        else pendingTmuxWindowId.set(brokerSessionId, windowId)
+        if (session) registry.sessions.setTmuxWindowId(brokerSessionId, targetId)
+        else pendingRuntimeTargetId.set(brokerSessionId, targetId)
       },
     },
     // Worktree-backed: derive the session name from the ORIGINAL repo, not the
@@ -2660,14 +2659,14 @@ async function spawnSession(args: { workdir: string; requestedName?: string; age
       lookup: (id, name) => registry.get(id) ?? registry.resolveName(name),
       stillAlive: async () => {
         // Pre-registration the row isn't in the registry yet — the freshly
-        // spawned window id lives in pendingTmuxWindowId until onRegister drains
+        // spawned window id lives in pendingRuntimeTargetId until onRegister drains
         // it. Check both, else liveness fails on every claude spawn (~50ms in).
         const wid = liveWindowId(
           r.session_id,
           (id) => registry.get(id)?.tmux_window_id,
-          (id) => pendingTmuxWindowId.get(id),
+          (id) => pendingRuntimeTargetId.get(id),
         )
-        return wid ? (await livePanePid(wid)) !== null : false
+        return wid ? (await sessionBackend.livePid(wid)) !== null : false
       },
     }).catch((err) => {
       log.warn("spawn_post_check_failed", { name: r.name, workdir })
@@ -2700,12 +2699,12 @@ async function reapplySessionAgentConfig(sessionId: string, changed?: { model: b
     // kill+respawn (user decision 2026-07-10). Failure is an explicit error;
     // callers roll the registry back. `changed` narrows to what the user
     // actually touched so a model-only switch doesn't re-type /effort.
-    const wid = await widOf(session)
+    const wid = await runtimeTargetIdOf(session)
     if (!wid) return { ok: false, error: "session window not found" }
     const result = await applyClaudeLiveSwitch(wid, {
       model: changed?.model === false ? undefined : session.model,
       effort: changed?.effort === false ? undefined : effort,
-    })
+    }, { backend: sessionBackend })
     if (!result.ok) return result
     webChannel?.broadcastToAll({
       type: "session_state",
@@ -2938,7 +2937,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
           workdir,
           model: args.model,
           bind: (sid: string) => server.bind(sid),
-          spawnTmux: spawnSessionWindow,
+          sessionBackend,
           tmuxSession: TMUX_SESSION,
           resolveEffort: (s) => sessionEffort(s),
           registerAdapter: (name, adapter, handle) => {
@@ -3216,6 +3215,7 @@ agentRpc = createAgentRpc({
 const supervisor = createSupervisor({
   registry,
   bindSocket: (sid) => server.bind(sid),
+  sessionBackend,
   onClaudeSessionId: (brokerSessionId, claudeSessionId) => {
     pendingClaudeSessionId.set(brokerSessionId, claudeSessionId)
   },
@@ -3232,7 +3232,7 @@ if (!settings.getAppConfig(appConfigEnv).onboarded &&
   settings.setAppConfig({ onboarded: true })
   log.info("onboarded_seeded_existing_install", {})
 }
-await reconcileOnStartup({ registry, bindSocket: (sid) => server.bind(sid), supervisor, livePanePid: (wid) => livePanePid(wid) })
+await reconcileOnStartup({ registry, bindSocket: (sid) => server.bind(sid), supervisor, sessionBackend })
 
 async function resumeNonClaudeAdapters(): Promise<void> {
   for (const s of registry.list()) {

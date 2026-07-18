@@ -6,6 +6,7 @@ import { STATE_DIR } from "../../shared/paths"
 import { openDb, runMigrations } from "../storage/db"
 import { Registry } from "./registry"
 import { spawnSession } from "./spawn-helper"
+import type { SessionBackend } from "../runtime/session-backend"
 
 // Regression test for the "new session kills the prior same-repo session" bug.
 //
@@ -45,8 +46,10 @@ describe("Claude spawn — tmux window-name collision", () => {
       bind: async () => {},
       tmuxSession: "mux",
       // Injected so the test never touches the real tmux server.
-      listWindows: async () => existingWindows,
-      spawnTmux: async (opts) => { spawnedWindows.push(opts.window); return { windowId: "@test" } },
+      sessionBackend: {
+        list: async () => existingWindows.map((name, i) => ({ id: `target-${i}`, name, pid: i + 1, alive: true })),
+        create: async (opts: Parameters<SessionBackend["create"]>[0]) => { spawnedWindows.push(opts.name); return { id: "target-new", name: opts.name, pid: 99, alive: true } },
+      } as unknown as SessionBackend,
       postSpawnReady: async () => {},
     }, {
       workdir: process.cwd(),
@@ -67,8 +70,10 @@ describe("Claude spawn — tmux window-name collision", () => {
       registry: reg,
       bind: async () => {},
       tmuxSession: "mux",
-      listWindows: async () => [],
-      spawnTmux: async (opts) => { spawnedWindows.push(opts.window); return { windowId: "@test" } },
+      sessionBackend: {
+        list: async () => [],
+        create: async (opts: Parameters<SessionBackend["create"]>[0]) => { spawnedWindows.push(opts.name); return { id: "target-new", name: opts.name, pid: 99, alive: true } },
+      } as unknown as SessionBackend,
       postSpawnReady: async () => {},
     }, {
       workdir: process.cwd(),

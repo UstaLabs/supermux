@@ -1,6 +1,6 @@
 /**
- * The tmux window id to use for a session that may not be registered yet.
- * During spawn, the id is captured into `pendingTmuxWindowId` BEFORE the
+ * The persistent runtime target ID to use for a session that may not be registered yet.
+ * During spawn, the id is captured into `pendingRuntimeTargetId` BEFORE the
  * registry row exists (onRegister drains it later) — so liveness checks during
  * the spawn wait must consult the pending map too, not just the registry.
  */

@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test"
 import { applyClaudeLiveSwitch } from "./live-switch"
+import type { SessionBackend } from "../../runtime/session-backend"
 
 const WID = "@42"
 const ESC = "\x1b"
@@ -83,6 +84,29 @@ test("model switch happy path: C-u, type, verify composer, Enter, success on mar
   ])
   const r = await applyClaudeLiveSwitch(WID, { model: "claude-opus-4-8" }, s)
   expect(r).toEqual({ ok: true })
+  expect(sent).toEqual([["C-u"], ["-l", "/model claude-opus-4-8"], ["Enter"]])
+})
+
+test("uses an injected session backend for semantic keys and raw/plain capture", async () => {
+  const captures = [IDLE_PANE, IDLE_PANE, typed("/model claude-opus-4-8"), MODEL_OK]
+  const rawFlags: boolean[] = []
+  const sent: string[][] = []
+  const backend = {
+    capture: async (_targetId: string, raw = false) => {
+      rawFlags.push(raw)
+      return captures.shift() ?? null
+    },
+    sendKeys: async (_targetId: string, keys: string[]) => { sent.push(keys) },
+  } as SessionBackend
+
+  const result = await applyClaudeLiveSwitch(WID, { model: "claude-opus-4-8" }, {
+    backend,
+    pollIntervalMs: 0,
+    typeDelayMs: 0,
+  })
+
+  expect(result).toEqual({ ok: true })
+  expect(rawFlags).toEqual([false, true, true, false])
   expect(sent).toEqual([["C-u"], ["-l", "/model claude-opus-4-8"], ["Enter"]])
 })
 

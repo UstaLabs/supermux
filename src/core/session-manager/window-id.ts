@@ -8,10 +8,10 @@ export type EnsureWindowIdDeps = {
 }
 
 /**
- * The addressable tmux window id for a claude session. Heals a missing id once
+ * The addressable persistent runtime target ID for a Claude session. Heals a missing ID once
  * via a name->id lookup (legacy/pre-migration-014 rows, or a spawn whose id
  * capture failed), persists it, then returns it. Never returns a name-string
- * target: callers address tmux strictly by id. Returns null when no live window
+ * target: callers address the runtime strictly by ID. Returns null when no live target
  * can be found, so callers no-op + log instead of routing by name.
  *
  * Concurrent callers on the same missing-id session may both resolve+persist;

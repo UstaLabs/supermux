@@ -1,4 +1,5 @@
-import { sendKeysToWindowId, capturePaneById, capturePaneRawById } from "../../session-manager/tmux"
+import { getSessionBackend } from "../../runtime"
+import type { SessionBackend } from "../../runtime/session-backend"
 import { makeLogger } from "../../../shared/log"
 
 const log = makeLogger("claude-live-switch")
@@ -36,10 +37,11 @@ export type LiveSwitchSeams = {
   safetyWaitMs?: number
   typeDelayMs?: number
   menuRetryMs?: number
-  sendKeysFn?: (windowId: string, keys: string[]) => Promise<void>
-  capturePane?: (windowId: string) => Promise<string | null>
+  backend?: SessionBackend
+  sendKeysFn?: (targetId: string, keys: string[]) => Promise<void>
+  capturePane?: (targetId: string) => Promise<string | null>
   /** Escape-preserving capture (tmux -e) for composer checks; falls back to capturePane in tests. */
-  capturePaneRaw?: (windowId: string) => Promise<string | null>
+  capturePaneRaw?: (targetId: string) => Promise<string | null>
 }
 
 type Result = { ok: true } | { ok: false; error: string }
@@ -160,9 +162,10 @@ async function typeAndVerify(
   const safetyWait = seams?.safetyWaitMs ?? SAFETY_WAIT_MS
   const typeDelay = seams?.typeDelayMs ?? TYPE_TO_ENTER_DELAY_MS
   const menuRetry = seams?.menuRetryMs ?? MENU_RETRY_MS
-  const send = seams?.sendKeysFn ?? sendKeysToWindowId
-  const capture = seams?.capturePane ?? capturePaneById
-  const captureRaw = seams?.capturePaneRaw ?? seams?.capturePane ?? capturePaneRawById
+  const backend = () => seams?.backend ?? getSessionBackend()
+  const send = seams?.sendKeysFn ?? ((id: string, keys: string[]) => backend().sendKeys(id, keys))
+  const capture = seams?.capturePane ?? ((id: string) => backend().capture(id))
+  const captureRaw = seams?.capturePaneRaw ?? seams?.capturePane ?? ((id: string) => backend().capture(id, true))
 
   // 1. Pane safety gate: composer visible, no dialog/menu. Poll briefly — a
   //    transient repaint can hide the prompt for a frame.
