@@ -7,6 +7,7 @@ export type RuntimeViewer = {
   readonly exited?: Promise<number>
   /** Cancellable alternative for long-lived viewers. */
   onExit?(handler: (code: number) => void): () => void
+  onFailure?(handler: (reason: string) => void): () => void
 }
 
 export interface SessionBackend {

@@ -141,14 +141,18 @@ class TerminalInputWriter {
 type Viewer = {
   id: string
   onData: (data: Uint8Array) => void | Promise<void>
-  queue: Uint8Array[]
+  queue: Array<{ data: Uint8Array; replayBytes: number }>
   pendingBytes: number
   inFlightBytes: number
+  replayAllowance: number
   delivering: boolean
   active: boolean
   drainWaiters: Set<() => void>
   exitHandlers: Set<(code: number) => void>
+  failureHandlers: Set<(reason: string) => void>
+  failureReason?: string
   detach: () => void
+  fail: (reason: string) => void
 }
 
 type TargetState = "alive" | "terminating" | "exiting"
@@ -483,7 +487,7 @@ export class SessionStore implements SessionBackend {
     const target = this.activeTarget(targetId)
     let attached: RuntimeViewer | undefined
     let failure: unknown
-    const barrier = target.outputQueue.then(async () => {
+    const barrier = target.outputQueue.then(() => {
       try {
         if (target.removed || target.state !== "alive" || target.exitObserved) {
           throw new Error(`live session target not found: ${targetId}`)
@@ -495,11 +499,14 @@ export class SessionStore implements SessionBackend {
           queue: [],
           pendingBytes: 0,
           inFlightBytes: 0,
+          replayAllowance: 0,
           delivering: false,
           active: true,
           drainWaiters: new Set(),
           exitHandlers: new Set(),
+          failureHandlers: new Set(),
           detach: () => {},
+          fail: () => {},
         }
         viewer.detach = () => {
           if (!viewer.active) return
@@ -509,21 +516,31 @@ export class SessionStore implements SessionBackend {
           viewer.detach = () => {}
           target.viewers.delete(viewer.id)
           viewer.exitHandlers.clear()
+          viewer.failureHandlers.clear()
           for (const resolve of viewer.drainWaiters) resolve()
           viewer.drainWaiters.clear()
+        }
+        viewer.fail = reason => {
+          if (!viewer.active) return
+          viewer.failureReason = reason
+          for (const handler of [...viewer.failureHandlers]) {
+            try { handler(reason) } catch {}
+          }
+          viewer.failureHandlers.clear()
+          viewer.detach()
         }
         const history = target.screen.captureRawBytes()
         const replay = history.byteLength > this.viewerByteLimit
           ? history.slice(history.byteLength - this.viewerByteLimit)
           : history
-        // Replay is the attach barrier itself. Output accepted after attach was
-        // requested is chained behind it, so history cannot consume the live
-        // viewer queue budget or interleave with later PTY bytes.
-        if (replay.byteLength > 0) await onData(replay.slice())
-        if (target.removed || target.state !== "alive" || target.exitObserved) {
-          throw new Error(`live session target not found: ${targetId}`)
-        }
         target.viewers.set(viewerId, viewer)
+        // Replay is queued synchronously inside the output-order barrier, but its
+        // delivery is isolated from target output/capture. Its bytes temporarily
+        // reserve a separate bounded allowance until that first chunk drains.
+        if (replay.byteLength > 0) {
+          viewer.replayAllowance = replay.byteLength
+          this.enqueueViewer(viewer, replay, replay.byteLength)
+        }
         let closed = false
         attached = {
           exited: target.finalizedExit,
@@ -535,6 +552,15 @@ export class SessionStore implements SessionBackend {
             if (!viewer.active) return () => {}
             viewer.exitHandlers.add(handler)
             return () => { viewer.exitHandlers.delete(handler) }
+          },
+          onFailure: handler => {
+            if (viewer.failureReason !== undefined) {
+              try { handler(viewer.failureReason) } catch {}
+              return () => {}
+            }
+            if (!viewer.active) return () => {}
+            viewer.failureHandlers.add(handler)
+            return () => { viewer.failureHandlers.delete(handler) }
           },
           close: () => {
             if (closed) return
@@ -641,13 +667,13 @@ export class SessionStore implements SessionBackend {
     return target.outputQueue
   }
 
-  private enqueueViewer(viewer: Viewer, data: Uint8Array): void {
+  private enqueueViewer(viewer: Viewer, data: Uint8Array, replayBytes = 0): void {
     if (!viewer.active) return
-    if (viewer.pendingBytes + data.byteLength > this.viewerByteLimit) {
-      viewer.detach()
+    if (viewer.pendingBytes + data.byteLength > this.viewerByteLimit + viewer.replayAllowance) {
+      viewer.fail(`terminal viewer output queue exceeds ${this.viewerByteLimit} live bytes`)
       return
     }
-    viewer.queue.push(data.slice())
+    viewer.queue.push({ data: data.slice(), replayBytes })
     viewer.pendingBytes += data.byteLength
     this.pumpViewer(viewer)
   }
@@ -658,17 +684,19 @@ export class SessionStore implements SessionBackend {
     void (async () => {
       try {
         while (viewer.active) {
-          const data = viewer.queue.shift()
-          if (!data) return
+          const entry = viewer.queue.shift()
+          if (!entry) return
+          const { data } = entry
           viewer.inFlightBytes = data.byteLength
           try {
             await viewer.onData(data)
-          } catch {
-            viewer.detach()
+          } catch (error) {
+            viewer.fail(asError(error, "terminal viewer delivery failed").message)
             return
           } finally {
             viewer.pendingBytes = Math.max(0, viewer.pendingBytes - data.byteLength)
             viewer.inFlightBytes = 0
+            viewer.replayAllowance = Math.max(0, viewer.replayAllowance - entry.replayBytes)
           }
         }
       } finally {

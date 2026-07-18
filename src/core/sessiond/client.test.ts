@@ -188,10 +188,56 @@ describe("SessiondBackend", () => {
     accept({ event: "data", targetId: target.id, viewerId: "held", dataBase64: Buffer.from("abc").toString("base64") })
     accept({ event: "data", targetId: target.id, viewerId: "held", dataBase64: Buffer.from("de").toString("base64") })
     accept({ event: "data", targetId: target.id, viewerId: "held", dataBase64: Buffer.from("f").toString("base64") })
-    expect(await viewer.exited).toBe(1)
+    const failures: string[] = []
+    viewer.onFailure?.(reason => { failures.push(reason) })
+    for (let attempt = 0; attempt < 50 && failures.length === 0; attempt++) await Bun.sleep(1)
+    expect(failures[0]).toMatch(/queue.*exceed/i)
+    expect(await Promise.race([viewer.exited!.then(() => "exit"), Bun.sleep(20).then(() => "pending")])).toBe("pending")
     expect(seen).toEqual(["abc"])
     expect(await memory.backend.livePid(target.id)).not.toBeNull()
     release()
+  })
+
+  test("routes a sessiond viewer-failure event separately from target exit", async () => {
+    const { client } = await harness()
+    const target = await client.create({ group: "g", name: "failed-viewer", cwd: "/tmp", argv: ["fake"], env: {} })
+    const viewer = await client.attach(target.id, "failure", () => {})
+    const failures: string[] = []
+    viewer.onFailure?.(reason => { failures.push(reason) })
+    const accept = (client as unknown as { acceptMessage(input: unknown): void }).acceptMessage.bind(client)
+    accept({ event: "viewerFailure", targetId: target.id, viewerId: "failure", reason: "downstream overflow" })
+    expect(failures).toEqual(["downstream overflow"])
+    expect(await Promise.race([viewer.exited!.then(() => "exit"), Bun.sleep(20).then(() => "pending")])).toBe("pending")
+  })
+
+  test("server forwards backend viewer failure to the client without a target exit", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sessiond-viewer-failure-")); cleanup.push(() => rm(dir, { recursive: true, force: true }))
+    const endpoint = join(dir, "rpc.sock"), secret = Buffer.alloc(32, 16).toString("base64")
+    const memory = createMemorySessionBackendHarness().backend
+    let failViewer!: (reason: string) => void
+    const backend = {
+      ...memory,
+      async attach(...args: Parameters<typeof memory.attach>): Promise<RuntimeViewer> {
+        const viewer = await memory.attach(...args)
+        return {
+          ...viewer,
+          onFailure(handler: (reason: string) => void) {
+            failViewer = handler
+            return () => { failViewer = () => {} }
+          },
+        }
+      },
+    }
+    const server = await startSessiondServer({ endpoint, secret, backend }); cleanup.push(() => server.close())
+    const client = new SessiondBackend({ endpoint, secret, stateDir: dir, platform: "linux" }); cleanup.push(() => client.close())
+    const target = await client.create({ group: "g", name: "server-failure", cwd: dir, argv: ["fake"], env: {} })
+    const viewer = await client.attach(target.id, "v", () => {})
+    const failures: string[] = []
+    viewer.onFailure?.(reason => { failures.push(reason) })
+    failViewer("backend viewer overflow")
+    for (let attempt = 0; attempt < 50 && failures.length === 0; attempt++) await Bun.sleep(1)
+    expect(failures).toEqual(["backend viewer overflow"])
+    expect(await Promise.race([viewer.exited!.then(() => "exit"), Bun.sleep(20).then(() => "pending")])).toBe("pending")
   })
 
   test("awaits each inbound viewer callback and preserves below-limit chunk order", async () => {

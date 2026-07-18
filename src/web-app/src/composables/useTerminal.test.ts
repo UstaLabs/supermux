@@ -3,10 +3,11 @@ import { useTerminal } from "./useTerminal"
 
 class FakeWS {
   static OPEN = 1
+  static instances: FakeWS[] = []
   readyState = 0
   binaryType = ""
   onopen: any; onclose: any; onmessage: any; onerror: any
-  constructor(public url: string) { FakeWS.urls.push(url) }
+  constructor(public url: string) { FakeWS.urls.push(url); FakeWS.instances.push(this) }
   send() {}
   close() {}
   static urls: string[] = []
@@ -60,5 +61,26 @@ test("re-sends the pending resize once the socket opens", () => {
   ws.onopen?.()
   expect(ws.sent).toEqual([JSON.stringify({ type: "resize", cols: 73, rows: 50 })])
 
+  term.disconnect()
+})
+
+test("distinguishes reset, attach error, and a transport close", () => {
+  FakeWS.urls = []
+  FakeWS.instances = []
+  ;(globalThis as any).WebSocket = FakeWS as any
+  ;(globalThis as any).window = { location: { protocol: "http:", host: "h" } }
+  const term = useTerminal(() => "sess", () => "t1")
+  const events: string[] = []
+  term.onReset(() => { events.push("reset") })
+  term.onData(data => { events.push(new TextDecoder().decode(data)) })
+  term.onExit(code => { events.push(`exit:${code}`) })
+  term.connect()
+  const ws = FakeWS.instances[0]!
+  ws.onmessage?.({ data: JSON.stringify({ type: "reset" }) })
+  ws.onmessage?.({ data: new TextEncoder().encode("snapshot").buffer })
+  ws.onclose?.()
+  expect(events).toEqual(["reset", "snapshot"])
+  ws.onmessage?.({ data: JSON.stringify({ type: "error", reason: "attach rejected" }) })
+  expect(events).toEqual(["reset", "snapshot", "exit:-1"])
   term.disconnect()
 })

@@ -24,6 +24,7 @@ export interface TermProc {
   stdin: { write(data: Uint8Array | string): void | boolean }
   stdout: ReadableStream<Uint8Array>
   exited: Promise<number>
+  viewerFailed?: Promise<string>
   kill(signal?: number): void
   resize?(cols: number, rows: number): boolean
 }
@@ -71,6 +72,7 @@ export interface TerminalInstance {
   lastInputAt: number
   onData: (data: Uint8Array) => void | Promise<void>
   onExit: (code: number) => void
+  onFailure: (reason: string) => void
 }
 
 /**
@@ -138,6 +140,7 @@ export class TerminalManager {
     rows: number
     onData: (data: Uint8Array) => void | Promise<void>
     onExit: (code: number) => void
+    onFailure?: (reason: string) => void
     kind?: "scratch" | "agent"
     agentTarget?: string
   }): { ok: true } | { ok: false; error: string } | Promise<{ ok: true } | { ok: false; error: string }> {
@@ -188,6 +191,7 @@ export class TerminalManager {
       lastInputAt: Date.now(),
       onData: opts.onData,
       onExit: opts.onExit,
+      onFailure: opts.onFailure ?? (() => {}),
     }
 
     this.terminals.set(key, inst)
@@ -221,6 +225,7 @@ export class TerminalManager {
     rows: number
     onData: (data: Uint8Array) => void | Promise<void>
     onExit: (code: number) => void
+    onFailure?: (reason: string) => void
     kind?: "scratch" | "agent"
     agentTarget?: string
   }): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -293,6 +298,7 @@ export class TerminalManager {
         lastInputAt: Date.now(),
         onData: opts.onData,
         onExit: opts.onExit,
+        onFailure: opts.onFailure ?? (() => {}),
       }
       this.terminals.set(key, inst)
       log.info("terminal_attached", { key, workdir: opts.workdir, pid: attached.proc.pid })
@@ -306,6 +312,13 @@ export class TerminalManager {
         log.info("terminal_exited", { key, code })
         try { inst.onExit(code) } catch {}
       }).catch(() => undefined)
+      void attached.proc.viewerFailed.then(reason => {
+        if (this.terminals.get(key) !== inst) return
+        this.terminals.delete(key)
+        if (inst.intentional) return
+        log.warn("terminal_viewer_failed", { key, reason })
+        try { inst.onFailure(reason) } catch {}
+      })
       return { ok: true }
     } catch (error) {
       this.explicitlyClosedWindowsAttaches.delete(token)

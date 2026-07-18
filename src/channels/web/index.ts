@@ -636,6 +636,12 @@ export class WebChannel implements Channel {
     const terminalId = ws.data.terminalId!
     const workdir = this.opts.getSessionWorkdir?.(sessionName)
     if (!workdir) { ws.close(1011, "session not found"); return }
+    try {
+      ws.send(JSON.stringify({ type: "reset" }))
+    } catch {
+      try { ws.close(1011, "terminal reset failed") } catch {}
+      return
+    }
     let result: Awaited<ReturnType<typeof tm.attach>>
     try {
       result = await tm.attach({
@@ -659,6 +665,7 @@ export class WebChannel implements Channel {
           }
         },
         onExit: (code) => { try { ws.send(JSON.stringify({ type: "exit", code })); ws.close() } catch {} },
+        onFailure: (reason) => { try { ws.close(1011, reason.slice(0, 120)) } catch {} },
       })
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)

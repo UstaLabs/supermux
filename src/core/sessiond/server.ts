@@ -117,7 +117,12 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
     let closing = false
     let authenticated = false
     const handshakeTimer = setTimeout(() => { if (!authenticated) socket.destroy() }, handshakeTimeoutMs)
-    const viewers = new Map<string, { viewer: RuntimeViewer; targetId: string; unsubscribeExit?: () => void }>()
+    const viewers = new Map<string, {
+      viewer: RuntimeViewer
+      targetId: string
+      unsubscribeExit?: () => void
+      unsubscribeFailure?: () => void
+    }>()
     const reservations = new Set<{ targetId: string; active: boolean }>()
     const requestIds = new Set<string>()
     const requestIdOrder: string[] = []
@@ -139,6 +144,7 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
       if (!entry) return
       viewers.delete(key)
       entry.unsubscribeExit?.()
+      entry.unsubscribeFailure?.()
       entry.viewer.close()
       const count = targetViewerCounts.get(entry.targetId) ?? 0
       if (count <= 1) targetViewerCounts.delete(entry.targetId)
@@ -189,7 +195,12 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
             if (socket.destroyed || closing) throw new Error("connection is closed")
             reservation.active = false
             reservations.delete(reservation)
-            const entry: { viewer: RuntimeViewer; targetId: string; unsubscribeExit?: () => void } = {
+            const entry: {
+              viewer: RuntimeViewer
+              targetId: string
+              unsubscribeExit?: () => void
+              unsubscribeFailure?: () => void
+            } = {
               viewer,
               targetId: request.args.targetId,
             }
@@ -211,6 +222,25 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
             }
             if (viewer.onExit) entry.unsubscribeExit = viewer.onExit(code => { void handleExit(code) })
             else void viewer.exited?.then(handleExit, () => { releaseViewer(key) })
+            if (viewer.onFailure) {
+              entry.unsubscribeFailure = viewer.onFailure(reason => {
+                void (async () => {
+                  if (viewers.get(key)?.viewer !== viewer) return
+                  try {
+                    await send(socket, {
+                      event: "viewerFailure",
+                      targetId: request.args.targetId,
+                      viewerId: request.args.viewerId,
+                      reason: reason.slice(0, 500),
+                    })
+                  } catch {
+                    // Socket cleanup owns detachment.
+                  } finally {
+                    releaseViewer(key)
+                  }
+                })()
+              })
+            }
           } catch (error) {
             viewer?.close()
             releaseReservation(reservation)

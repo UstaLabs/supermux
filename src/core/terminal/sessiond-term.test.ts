@@ -24,6 +24,7 @@ class FakeBackend implements SessionBackend {
   failPostCreateLivePid?: Error
   private outputs = new Map<string, (data: Uint8Array) => void | Promise<void>>()
   private viewerExit?: (code: number) => void
+  private viewerFailure?: (reason: string) => void
   private next = 1
 
   seed(group: string, name: string, alive = true): RuntimeTarget {
@@ -76,6 +77,10 @@ class FakeBackend implements SessionBackend {
         return true
       },
       exited,
+      onFailure: handler => {
+        this.viewerFailure = handler
+        return () => { if (this.viewerFailure === handler) this.viewerFailure = undefined }
+      },
     } as RuntimeViewer
   }
   async interrupt(): Promise<void> {}
@@ -90,6 +95,7 @@ class FakeBackend implements SessionBackend {
     for (const output of this.outputs.values()) await output(bytes(value))
   }
   exit(code: number): void { this.viewerExit?.(code) }
+  failViewer(reason: string): void { this.viewerFailure?.(reason) }
 }
 
 describe("SessiondTerm", () => {
@@ -183,7 +189,8 @@ describe("SessiondTerm", () => {
     await backend.emit("abc")
     await backend.emit("de")
     await backend.emit("f")
-    expect(await proc.exited).toBe(1)
+    expect(await proc.viewerFailed).toMatch(/queue.*exceed/i)
+    expect(await Promise.race([proc.exited.then(() => "exit"), Bun.sleep(20).then(() => "pending")])).toBe("pending")
     expect(backend.viewerCloses).toBe(1)
     expect(backend.kills).toEqual([])
   })
@@ -214,6 +221,19 @@ describe("SessiondTerm", () => {
     expect(await proc.exited).toBe(7)
     expect((await reader.read()).done).toBe(true)
     expect(backend.viewerCloses).toBe(1)
+  })
+
+  test("viewer failure is distinct from target process exit and keeps the target live", async () => {
+    const backend = new FakeBackend()
+    const { proc, targetId } = await createSessiondTerm({
+      backend, kind: "scratch", deviceName: "d", sessionName: "s", terminalId: "failed-viewer",
+      workdir: "C:\\w", cols: 80, rows: 24, environment: {}, findExecutable: () => "powershell.exe",
+    })
+    backend.failViewer("viewer queue overflow")
+    expect(await proc.viewerFailed).toBe("viewer queue overflow")
+    expect(await Promise.race([proc.exited.then(() => "exit"), Bun.sleep(20).then(() => "pending")])).toBe("pending")
+    expect(await backend.livePid(targetId)).not.toBeNull()
+    expect(backend.kills).toEqual([])
   })
 
   test("attaches an agent target without creating or killing it", async () => {

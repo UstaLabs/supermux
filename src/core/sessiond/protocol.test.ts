@@ -198,7 +198,10 @@ test("response and event types expose the wire contract", () => {
   const response: SessiondResponse = { id: "request-1", ok: false, error: "not found" }
   const dataEvent: SessiondEvent = { event: "data", targetId: "target-1", viewerId: "viewer-1", dataBase64: "YQ==" }
   const exitEvent: SessiondEvent = { event: "exit", targetId: "target-1", code: 0 }
+  const failureEvent: SessiondEvent = {
+    event: "viewerFailure", targetId: "target-1", viewerId: "viewer-1", reason: "queue overflow",
+  }
 
   expect(PROTOCOL_VERSION).toBe(1)
-  expect([response, dataEvent, exitEvent]).toHaveLength(3)
+  expect([response, dataEvent, exitEvent, failureEvent]).toHaveLength(4)
 })

@@ -618,4 +618,54 @@ describe("SessionStore", () => {
     unsubscribe?.()
     expect(codes).toEqual([7])
   })
+
+  test("held replay is isolated from capture, healthy viewers, and target finalization", async () => {
+    const { store, sessions } = harness({ store: { rawByteLimit: 5, viewerByteLimit: 5 } })
+    const target = await store.create(base)
+    sessions[0]!.emit(bytes("12345"))
+    await expect(store.capture(target.id, true)).resolves.toBe("12345")
+    const held = deferred<void>()
+    const slow = await Promise.race([
+      store.attach(target.id, "slow-replay", () => held.promise),
+      Bun.sleep(30).then(() => "timeout" as const),
+    ])
+    expect(slow).not.toBe("timeout")
+    const healthy: string[] = []
+    await store.attach(target.id, "healthy-replay", data => { healthy.push(decoder.decode(data)) })
+    sessions[0]!.emit(bytes("x"))
+    await expect(store.capture(target.id, true)).resolves.toBe("2345x")
+    await waitUntil(() => healthy.join("") === "12345x")
+    sessions[0]!.exit(0)
+    await waitUntil(() => store.listExited().length === 1, 100)
+    expect(await store.livePid(target.id)).toBeNull()
+  })
+
+  test("replay reserves a separate bounded allowance and viewer overflow is not target exit", async () => {
+    const { store, sessions } = harness({ store: { rawByteLimit: 3, viewerByteLimit: 2 } })
+    const target = await store.create(base)
+    sessions[0]!.emit(bytes("abc"))
+    await expect(store.capture(target.id, true)).resolves.toBe("abc")
+    const held = deferred<void>()
+    const viewer = await store.attach(target.id, "bounded-replay", () => held.promise)
+    const failures: string[] = []
+    viewer.onFailure?.(reason => { failures.push(reason) })
+    sessions[0]!.emit(bytes("de"))
+    sessions[0]!.emit(bytes("f"))
+    await waitUntil(() => failures.length === 1)
+    expect(failures[0]).toMatch(/queue.*exceed/i)
+    expect(await store.livePid(target.id)).not.toBeNull()
+    expect(await Promise.race([viewer.exited!.then(() => "exit"), Bun.sleep(20).then(() => "pending")])).toBe("pending")
+  })
+
+  test("rejecting viewer delivery reports viewer failure without ending the target", async () => {
+    const { store, sessions } = harness()
+    const target = await store.create(base)
+    const viewer = await store.attach(target.id, "rejecting-failure", () => Promise.reject(new Error("socket stalled")))
+    const failures: string[] = []
+    viewer.onFailure?.(reason => { failures.push(reason) })
+    sessions[0]!.emit(bytes("live"))
+    await waitUntil(() => failures.length === 1)
+    expect(failures).toEqual(["socket stalled"])
+    expect(await store.livePid(target.id)).not.toBeNull()
+  })
 })

@@ -76,6 +76,7 @@ export class SessiondTerm {
   readonly pid?: number
   readonly stdout: ReadableStream<Uint8Array>
   readonly exited: Promise<number>
+  readonly viewerFailed: Promise<string>
   readonly stdin: { write(data: Uint8Array | string): boolean }
 
   private viewer?: RuntimeViewer
@@ -84,6 +85,9 @@ export class SessiondTerm {
   private pendingOutputBytes = 0
   private waitingForPull = false
   private resolveExited!: (code: number) => void
+  private resolveViewerFailed!: (reason: string) => void
+  private unsubscribeExit?: () => void
+  private unsubscribeFailure?: () => void
   private closed = false
 
   constructor(pid?: number, private readonly outputByteLimit = 1024 * 1024) {
@@ -92,6 +96,7 @@ export class SessiondTerm {
     }
     this.pid = pid
     this.exited = new Promise(resolve => { this.resolveExited = resolve })
+    this.viewerFailed = new Promise(resolve => { this.resolveViewerFailed = resolve })
     this.stdout = new ReadableStream<Uint8Array>({
       start: controller => { this.controller = controller },
       pull: controller => {
@@ -122,17 +127,17 @@ export class SessiondTerm {
     if (this.closed) return
     if (data.byteLength === 0) return
     if (data.byteLength > this.outputByteLimit) {
-      this.detach(1)
+      this.fail(`terminal viewer output queue exceeds ${this.outputByteLimit} bytes`)
       return
     }
     const snapshot = data.slice()
     if (this.waitingForPull) {
       this.waitingForPull = false
-      try { this.controller?.enqueue(snapshot) } catch { this.detach(1) }
+      try { this.controller?.enqueue(snapshot) } catch { this.fail("terminal viewer output stream failed") }
       return
     }
     if (this.pendingOutputBytes + data.byteLength > this.outputByteLimit) {
-      this.detach(1)
+      this.fail(`terminal viewer output queue exceeds ${this.outputByteLimit} bytes`)
       return
     }
     this.outputQueue.push(snapshot)
@@ -145,10 +150,9 @@ export class SessiondTerm {
       return
     }
     this.viewer = viewer
-    void viewer.exited?.then(
-      code => { this.detach(code) },
-      () => { this.detach(1) },
-    )
+    if (viewer.onExit) this.unsubscribeExit = viewer.onExit(code => { this.detach(code) })
+    else void viewer.exited?.then(code => { this.detach(code) }, () => { this.fail("viewer exit subscription failed") })
+    this.unsubscribeFailure = viewer.onFailure?.(reason => { this.fail(reason) })
   }
 
   resize(cols: number, rows: number): boolean {
@@ -169,12 +173,33 @@ export class SessiondTerm {
     this.closed = true
     const viewer = this.viewer
     this.viewer = undefined
+    this.unsubscribeExit?.()
+    this.unsubscribeExit = undefined
+    this.unsubscribeFailure?.()
+    this.unsubscribeFailure = undefined
     this.outputQueue.length = 0
     this.pendingOutputBytes = 0
     this.waitingForPull = false
     try { viewer?.close() } catch {}
     try { this.controller?.close() } catch {}
     this.resolveExited(code)
+  }
+
+  private fail(reason: string): void {
+    if (this.closed) return
+    this.closed = true
+    const viewer = this.viewer
+    this.viewer = undefined
+    this.unsubscribeExit?.()
+    this.unsubscribeExit = undefined
+    this.unsubscribeFailure?.()
+    this.unsubscribeFailure = undefined
+    this.outputQueue.length = 0
+    this.pendingOutputBytes = 0
+    this.waitingForPull = false
+    try { viewer?.close() } catch {}
+    try { this.controller?.close() } catch {}
+    this.resolveViewerFailed(reason)
   }
 }
 

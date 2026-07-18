@@ -40,6 +40,11 @@ type ViewerRegistration = {
   delivering: boolean
   open: boolean
   requestedExit?: number
+  requestedFailure?: string
+  exitCode?: number
+  failureReason?: string
+  exitHandlers: Set<(code: number) => void>
+  failureHandlers: Set<(reason: string) => void>
   resolveExited(code: number): void
 }
 
@@ -215,6 +220,8 @@ export class SessiondBackend implements SessionBackend {
       pendingBytes: 0,
       delivering: false,
       open: true,
+      exitHandlers: new Set(),
+      failureHandlers: new Set(),
       resolveExited,
     }
     if (this.viewers.has(key)) throw new Error(`viewer is already attached: ${viewerId}`)
@@ -225,8 +232,20 @@ export class SessiondBackend implements SessionBackend {
     } catch (error) { this.viewers.delete(key); registration.open = false; throw error }
     return {
       exited,
+      onExit: handler => {
+        if (registration.exitCode !== undefined) { handler(registration.exitCode); return () => {} }
+        if (!registration.open) return () => {}
+        registration.exitHandlers.add(handler)
+        return () => { registration.exitHandlers.delete(handler) }
+      },
+      onFailure: handler => {
+        if (registration.failureReason !== undefined) { handler(registration.failureReason); return () => {} }
+        if (!registration.open) return () => {}
+        registration.failureHandlers.add(handler)
+        return () => { registration.failureHandlers.delete(handler) }
+      },
       close: () => {
-        this.closeViewer(key, registration, 143, true)
+        this.detachViewer(key, registration, true)
       },
       write: data => registration.open && this.sendUntracked("write", { targetId, dataBase64: Buffer.from(data).toString("base64") }),
       resize: (cols, rows) => registration.open && this.sendUntracked("resize", { targetId, cols, rows }),
@@ -327,6 +346,11 @@ export class SessiondBackend implements SessionBackend {
       }
       return
     }
+    if (input.event === "viewerFailure" && typeof input.viewerId === "string" && typeof input.reason === "string") {
+      const viewer = this.viewers.get(`${input.targetId}\0${input.viewerId}`)
+      if (viewer) this.requestViewerFailure(viewer, input.reason.slice(0, 500))
+      return
+    }
     if (typeof input.viewerId !== "string") return
     const viewer = this.viewers.get(`${input.targetId}\0${input.viewerId}`)
     if (!viewer) return
@@ -336,10 +360,10 @@ export class SessiondBackend implements SessionBackend {
   }
 
   private enqueueViewerData(viewer: ViewerRegistration, data: Uint8Array): void {
-    if (!viewer.open || viewer.requestedExit !== undefined || data.byteLength === 0) return
+    if (!viewer.open || viewer.requestedExit !== undefined || viewer.requestedFailure !== undefined || data.byteLength === 0) return
     const key = `${viewer.targetId}\0${viewer.viewerId}`
     if (viewer.pendingBytes + data.byteLength > this.viewerInboundByteLimit) {
-      this.closeViewer(key, viewer, 1, true)
+      this.failViewer(key, viewer, `sessiond viewer delivery queue exceeds ${this.viewerInboundByteLimit} bytes`, true)
       return
     }
     viewer.queue.push(data.slice())
@@ -359,7 +383,7 @@ export class SessiondBackend implements SessionBackend {
           try {
             await viewer.onData(chunk)
           } catch {
-            this.closeViewer(key, viewer, 1, true)
+            this.failViewer(key, viewer, "sessiond viewer data handler failed", true)
             return
           } finally {
             viewer.pendingBytes = Math.max(0, viewer.pendingBytes - chunk.byteLength)
@@ -368,9 +392,8 @@ export class SessiondBackend implements SessionBackend {
       } finally {
         viewer.delivering = false
         if (viewer.open && viewer.queue.length > 0) this.pumpViewerData(viewer)
-        else if (viewer.open && viewer.requestedExit !== undefined) {
-          this.closeViewer(key, viewer, viewer.requestedExit, false)
-        }
+        else if (viewer.open && viewer.requestedFailure !== undefined) this.failViewer(key, viewer, viewer.requestedFailure, false)
+        else if (viewer.open && viewer.requestedExit !== undefined) this.finishViewerExit(key, viewer, viewer.requestedExit)
       }
     })()
   }
@@ -379,17 +402,52 @@ export class SessiondBackend implements SessionBackend {
     if (!viewer.open) return
     viewer.requestedExit ??= code
     if (!viewer.delivering && viewer.queue.length === 0) {
-      this.closeViewer(`${viewer.targetId}\0${viewer.viewerId}`, viewer, viewer.requestedExit, false)
+      this.finishViewerExit(`${viewer.targetId}\0${viewer.viewerId}`, viewer, viewer.requestedExit)
     }
   }
 
-  private closeViewer(key: string, viewer: ViewerRegistration, code: number, detach: boolean): void {
+  private requestViewerFailure(viewer: ViewerRegistration, reason: string): void {
+    if (!viewer.open) return
+    viewer.requestedFailure ??= reason
+    if (!viewer.delivering && viewer.queue.length === 0) {
+      this.failViewer(`${viewer.targetId}\0${viewer.viewerId}`, viewer, viewer.requestedFailure, false)
+    }
+  }
+
+  private finishViewerExit(key: string, viewer: ViewerRegistration, code: number): void {
     if (!viewer.open) return
     viewer.open = false
+    viewer.exitCode = code
     viewer.queue.length = 0
     viewer.pendingBytes = 0
     this.viewers.delete(key)
     viewer.resolveExited(code)
+    for (const handler of [...viewer.exitHandlers]) { try { handler(code) } catch {} }
+    viewer.exitHandlers.clear()
+    viewer.failureHandlers.clear()
+  }
+
+  private failViewer(key: string, viewer: ViewerRegistration, reason: string, detach: boolean): void {
+    if (!viewer.open) return
+    viewer.open = false
+    viewer.failureReason = reason
+    viewer.queue.length = 0
+    viewer.pendingBytes = 0
+    this.viewers.delete(key)
+    for (const handler of [...viewer.failureHandlers]) { try { handler(reason) } catch {} }
+    viewer.failureHandlers.clear()
+    viewer.exitHandlers.clear()
+    if (detach) this.sendUntracked("detach", { targetId: viewer.targetId, viewerId: viewer.viewerId })
+  }
+
+  private detachViewer(key: string, viewer: ViewerRegistration, detach: boolean): void {
+    if (!viewer.open) return
+    viewer.open = false
+    viewer.queue.length = 0
+    viewer.pendingBytes = 0
+    viewer.exitHandlers.clear()
+    viewer.failureHandlers.clear()
+    this.viewers.delete(key)
     if (detach) this.sendUntracked("detach", { targetId: viewer.targetId, viewerId: viewer.viewerId })
   }
 
@@ -458,7 +516,7 @@ export class SessiondBackend implements SessionBackend {
 
   private clearViewers(): void {
     for (const viewer of [...this.viewers.values()]) {
-      this.closeViewer(`${viewer.targetId}\0${viewer.viewerId}`, viewer, 1, false)
+      this.failViewer(`${viewer.targetId}\0${viewer.viewerId}`, viewer, "sessiond connection closed", false)
     }
     this.viewers.clear()
   }

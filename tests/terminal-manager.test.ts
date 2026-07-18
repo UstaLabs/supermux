@@ -269,6 +269,7 @@ class ManagerBackend implements SessionBackend {
   failKill?: Error
   failResolve?: Error
   failList?: Error
+  viewerFailure?: (reason: string) => void
   private next = 1
 
   seed(group: string, name: string): RuntimeTarget {
@@ -300,6 +301,10 @@ class ManagerBackend implements SessionBackend {
       close: () => { if (open) { open = false; this.viewerCloses++ } },
       write: data => { if (!open) return false; this.writes.push(new TextDecoder().decode(data)); return true },
       resize: (cols, rows) => { if (!open) return false; this.resizes.push([cols, rows]); return true },
+      onFailure: handler => {
+        this.viewerFailure = handler
+        return () => { if (this.viewerFailure === handler) this.viewerFailure = undefined }
+      },
     }
   }
   async interrupt(): Promise<void> {}
@@ -310,6 +315,7 @@ class ManagerBackend implements SessionBackend {
     const target = this.targets.get(targetId)
     if (target) { target.alive = false; target.pid = null }
   }
+  failViewer(reason: string): void { this.viewerFailure?.(reason) }
 }
 
 function makeWindowsMgr(backend = new ManagerBackend(), spawn?: SpawnFn) {
@@ -436,6 +442,23 @@ describe("TerminalManager (Windows sessiond)", () => {
     backend.seed(sessiondTerminalGroup("s"), sessiondTerminalName("t"))
     backend.failKill = new Error("session cleanup kill denied")
     await expect(mgr.killAllForSession("s")).rejects.toThrow("session cleanup kill denied")
+  })
+
+  it("reports Windows viewer failure without reporting target exit or killing the target", async () => {
+    const { mgr, backend } = makeWindowsMgr()
+    const exits: number[] = []
+    const failures: string[] = []
+    await mgr.attach({
+      deviceName: "d", sessionName: "s", terminalId: "t", ...baseAttach,
+      onExit: code => { exits.push(code) },
+      onFailure: reason => { failures.push(reason) },
+    })
+    backend.failViewer("viewer queue overflow")
+    await flush()
+    expect(failures).toEqual(["viewer queue overflow"])
+    expect(exits).toEqual([])
+    expect(backend.kills).toEqual([])
+    expect(await mgr.hasSession("s", "t")).toBe(true)
   })
 
   it("explicit close racing an agent attach never kills the Claude target", async () => {

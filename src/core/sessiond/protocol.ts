@@ -41,11 +41,12 @@ export type SessiondResponse<T = unknown> = {
 }
 
 export type SessiondEvent = {
-  event: "data" | "exit"
+  event: "data" | "exit" | "viewerFailure"
   targetId: string
   viewerId?: string
   dataBase64?: string
   code?: number
+  reason?: string
 }
 
 type UnknownRecord = Record<string, unknown>
