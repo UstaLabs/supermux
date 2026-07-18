@@ -39,6 +39,11 @@ export type CodexAdapterOpts = {
 
 type CodexInputItem = { type: "text"; text: string } | { type: "localImage"; path: string }
 
+function turnIdFrom(value: any): string | undefined {
+  const id = value?.turn?.id ?? value?.turnId
+  return typeof id === "string" && id ? id : undefined
+}
+
 export class CodexAdapter extends EventEmitter implements AgentAdapter {
   readonly kind: AgentKind = "codex"
   readonly sessionName: string
@@ -72,11 +77,13 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
     this.client.onNotification(({ method, params }) => {
       switch (method) {
         case "turn/started":
-          this.currentTurnId = params?.turnId
+          this.currentTurnId = turnIdFrom(params)
           this.emit("turn-start", { kind: "turn-start" })
           break
         case "turn/completed":
-          this.currentTurnId = undefined
+          if (!this.currentTurnId || this.currentTurnId === turnIdFrom(params)) {
+            this.currentTurnId = undefined
+          }
           this.emit("turn-complete", { kind: "turn-complete" })
           break
         case "item/completed":
@@ -153,8 +160,10 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
     if (this.currentTurnId) {
       await this.client.request("turn/steer", { threadId: this.threadId, expectedTurnId: this.currentTurnId, input })
     } else {
-      const r = await this.client.request<{ turnId?: string }>("turn/start", { threadId: this.threadId, input })
-      if (r?.turnId) this.currentTurnId = r.turnId
+      const r = await this.client.request<{ turn?: { id?: string }; turnId?: string }>(
+        "turn/start", { threadId: this.threadId, input },
+      )
+      this.currentTurnId = turnIdFrom(r) ?? this.currentTurnId
     }
   }
 
@@ -186,7 +195,10 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
   }
 
   async interrupt(): Promise<void> {
-    if (!this.threadId) return
-    await this.client.request("turn/interrupt", { threadId: this.threadId })
+    if (!this.threadId || !this.currentTurnId) return
+    await this.client.request("turn/interrupt", {
+      threadId: this.threadId,
+      turnId: this.currentTurnId,
+    })
   }
 }
