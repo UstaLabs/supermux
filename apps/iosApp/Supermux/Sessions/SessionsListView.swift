@@ -1,5 +1,31 @@
 import SwiftUI
 import Shared
+import Observation
+
+@Observable
+@MainActor
+final class SidebarArchiveRevealState {
+    static let maximumHeight: CGFloat = 52
+    static let latchThreshold: CGFloat = 46
+
+    var visibleHeight: CGFloat = 0
+    var isLatched = false
+
+    func track(top: CGFloat) {
+        guard !isLatched else { return }
+        visibleHeight = min(Self.maximumHeight, max(0, -top))
+    }
+
+    func latch() {
+        isLatched = true
+        visibleHeight = Self.maximumHeight
+    }
+
+    func close() {
+        isLatched = false
+        visibleHeight = 0
+    }
+}
 
 private enum SidebarRowPosition {
     case only, first, middle, last
@@ -34,15 +60,12 @@ struct SessionsListView: View {
     #endif
 
     @State private var collapsed: Set<String> = SessionsListView.loadCollapsed()
-    // Continuous pull-to-reveal: bar height tracks the live overscroll; latches open past a threshold.
-    @State private var revealHeight: CGFloat = 0
-    @State private var archivedLatched = false
+    // Keep high-frequency overscroll state out of this view's own observation graph. On macOS,
+    // rebuilding the AppKit-backed List on every trackpad tick makes its rows visibly shudder.
+    @State private var archiveReveal = SidebarArchiveRevealState()
     @State private var renameTarget: SessionInfo?
     @State private var renameText = ""
     @State private var killTarget: SessionInfo?
-
-    private let archivedRevealMax: CGFloat = 52
-    private let archivedLatchAt: CGFloat = 46
 
     var body: some View {
         let owner = fleet.sessionHost
@@ -114,23 +137,29 @@ struct SessionsListView: View {
         .smInsetGroupedListStyle()
         #endif
         #if os(macOS)
-        // The reveal must not participate in scroll layout on AppKit. A changing safe-area
-        // inset feeds its own height back into contentOffset and makes the row oscillate.
-        .overlay(alignment: .top) { archivedBar }
+        // The reveal must not participate in scroll layout on AppKit. The overlay also keeps a
+        // fixed frame while its contents translate into view, so rubber-banding never changes
+        // the List's geometry.
+        .overlay(alignment: .top) {
+            SidebarArchiveRevealBar(state: archiveReveal, onArchived: onArchived)
+        }
         #else
-        .safeAreaInset(edge: .top, spacing: 0) { archivedBar }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            SidebarArchiveRevealBar(state: archiveReveal, onArchived: onArchived)
+        }
         #endif
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             geo.contentOffset.y + geo.contentInsets.top
         } action: { _, top in
             let pull = max(0, -top)
-            if archivedLatched {
-                if top > 24 { withAnimation(.snappy(duration: 0.25)) { archivedLatched = false; revealHeight = 0 } }
-            } else if pull >= archivedLatchAt {
-                archivedLatched = true
-                withAnimation(.snappy(duration: 0.2)) { revealHeight = archivedRevealMax }
+            if archiveReveal.isLatched {
+                if top > 24 {
+                    withAnimation(.snappy(duration: 0.25)) { archiveReveal.close() }
+                }
+            } else if pull >= SidebarArchiveRevealState.latchThreshold {
+                withAnimation(.snappy(duration: 0.2)) { archiveReveal.latch() }
             } else {
-                revealHeight = pull
+                archiveReveal.track(top: top)
             }
         }
         .navigationTitle("supermux")
@@ -195,31 +224,6 @@ struct SessionsListView: View {
             }
         } header: {
             offlineHeader(host)
-        }
-    }
-
-    // The reveal bar itself. Empty (zero-height) until pulled, so there's no resting footprint.
-    @ViewBuilder private var archivedBar: some View {
-        if revealHeight > 0.5 {
-            Button {
-                withAnimation(.snappy(duration: 0.2)) { archivedLatched = false; revealHeight = 0 }
-                onArchived()
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "archivebox").font(.title3).foregroundStyle(.secondary).frame(width: 26)
-                    Text("Archived").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
-                }
-                .padding(.horizontal, 20)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .frame(height: revealHeight)
-                .opacity(min(1, revealHeight / archivedLatchAt))
-                .contentShape(Rectangle())
-                .clipped()
-            }
-            .buttonStyle(.plain)
-            .background(.bar)
         }
     }
 
@@ -336,6 +340,55 @@ struct SessionsListView: View {
     }
     private static func saveCollapsed(_ s: Set<String>) {
         UserDefaults.standard.set(Array(s), forKey: collapsedKey)
+    }
+}
+
+private struct SidebarArchiveRevealBar: View {
+    let state: SidebarArchiveRevealState
+    let onArchived: () -> Void
+
+    var body: some View {
+        #if os(macOS)
+        ZStack(alignment: .top) {
+            button
+                .frame(height: SidebarArchiveRevealState.maximumHeight)
+                .offset(y: visibleHeight - SidebarArchiveRevealState.maximumHeight)
+        }
+        .frame(height: SidebarArchiveRevealState.maximumHeight)
+        .clipped()
+        // Do not replace the List's scroll hit target while a trackpad gesture is in progress.
+        .allowsHitTesting(state.isLatched)
+        #else
+        if visibleHeight > 0.5 {
+            button
+                .frame(height: visibleHeight)
+                .clipped()
+        }
+        #endif
+    }
+
+    private var visibleHeight: CGFloat {
+        min(SidebarArchiveRevealState.maximumHeight, max(0, state.visibleHeight))
+    }
+
+    private var button: some View {
+        Button {
+            withAnimation(.snappy(duration: 0.2)) { state.close() }
+            onArchived()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "archivebox").font(.title3).foregroundStyle(.secondary).frame(width: 26)
+                Text("Archived").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .opacity(min(1, visibleHeight / SidebarArchiveRevealState.latchThreshold))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(.bar)
     }
 }
 

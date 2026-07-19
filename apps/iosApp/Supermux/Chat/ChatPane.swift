@@ -491,8 +491,7 @@ struct SessionTranscript: View, Equatable {
             // per session so each open builds fresh and defaultScrollAnchor lands at bottom.
             .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)
-            .scrollEdgeEffectStyle(.soft, for: .top)
-            .scrollEdgeEffectStyle(.soft, for: .bottom)
+            .softScrollEdges()
             .onChange(of: log.count) { _, _ in scrollToBottom(proxy) }
             .task(id: session.id) {
                 // List needs an explicit initial scroll to the bottom — it doesn't honor
