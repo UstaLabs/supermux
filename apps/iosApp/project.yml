@@ -275,7 +275,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app
         PRODUCT_NAME: Supermux
         PRODUCT_MODULE_NAME: Supermux
-        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
         ARCHS: arm64
         EXCLUDED_ARCHS: x86_64
         ENABLE_HARDENED_RUNTIME: "YES"
@@ -346,7 +346,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app.mac-push-nse
-        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
         ARCHS: arm64
         EXCLUDED_ARCHS: x86_64
         ENABLE_HARDENED_RUNTIME: "YES"
@@ -395,7 +395,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: "YES"
-        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
         ARCHS: arm64
         EXCLUDED_ARCHS: x86_64
         # XcodeGen guesses TEST_HOST from the dependency's TARGET name ("SupermuxMac"), but that
@@ -426,7 +426,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: "YES"
-        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
         ARCHS: arm64
         EXCLUDED_ARCHS: x86_64
         TEST_TARGET_NAME: SupermuxMac

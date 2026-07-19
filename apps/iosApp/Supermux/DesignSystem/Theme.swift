@@ -14,9 +14,33 @@ enum Theme {
 }
 
 extension View {
+    /// Liquid Glass on Tahoe (macOS 26 / iOS 26); on older macOS, a material fill in the same
+    /// shape. Liquid Glass is unavailable before macOS 26, and glass renders near-invisible on
+    /// the Mac's flat window background anyway (see `composerSurface`). The iOS deployment floor
+    /// is 26, so the `*` keeps iOS on the glass branch unconditionally.
+    @ViewBuilder func glassEffectCompat(in shape: some InsettableShape) -> some View {
+        if #available(macOS 26.0, *) {
+            glassEffect(.regular, in: shape)
+        } else {
+            background(.regularMaterial, in: shape)
+                .overlay(shape.strokeBorder(Theme.hairline, lineWidth: 1))
+        }
+    }
+
     /// Liquid Glass surface for floating chrome (composer, clusters, pills).
     func glassSurface(cornerRadius: CGFloat = Theme.barCorner) -> some View {
-        glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        glassEffectCompat(in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+
+    /// The soft scroll-edge fade — a Tahoe-only (macOS 26 / iOS 26) effect. No-op on older
+    /// macOS; iOS (floor 26) always applies it via the `*`.
+    @ViewBuilder func softScrollEdges() -> some View {
+        if #available(macOS 26.0, *) {
+            scrollEdgeEffectStyle(.soft, for: .top)
+                .scrollEdgeEffectStyle(.soft, for: .bottom)
+        } else {
+            self
+        }
     }
 
     /// The composer card. iOS: Liquid Glass. macOS: glass renders near-invisible against the

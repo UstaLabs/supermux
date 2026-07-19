@@ -406,7 +406,7 @@ private struct DisplayControlBar<Leading: View>: View {
             .foregroundStyle(Theme.teal)
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .glassEffect(.regular, in: Capsule())
+            .glassEffectCompat(in: Capsule())
             .fixedSize(horizontal: true, vertical: false)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
