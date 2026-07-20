@@ -9,16 +9,22 @@ type PromptInputTextareaProps = InstanceType<typeof InputGroupTextarea>['$props'
 
 interface Props extends /* @vue-ignore */ PromptInputTextareaProps {
   class?: HTMLAttributes['class']
+  enterSends?: boolean
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  enterSends: true,
+})
 
 const { textInput, setTextInput, addFiles, files, removeFile, focused } = usePromptInput()
 const isComposing = ref(false)
 
 function handleKeyDown(e: KeyboardEvent) {
   if (e.key === 'Enter') {
-    if (isComposing.value || e.isComposing || e.shiftKey)
+    if (isComposing.value || e.isComposing)
+      return
+
+    if (!props.enterSends || e.shiftKey)
       return
 
     e.preventDefault()
