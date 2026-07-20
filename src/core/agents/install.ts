@@ -4,8 +4,10 @@
 // non-interactive branch and can never hang waiting for a prompt. Dependency-
 // injected (spawn + isInstalled) so it unit-tests without real installs.
 import { spawn as defaultSpawn, type ChildProcess } from "child_process"
+import { homedir } from "os"
 import type { AgentKind } from "../../shared/agents"
 import { makeLogger } from "../../shared/log"
+import { withNodeBinDirs } from "./bin-dirs"
 
 const log = makeLogger("agents/install")
 
@@ -37,6 +39,8 @@ export interface InstallDeps {
   spawn?: InstallSpawnFn
   /** Re-probe whether the agent's binary is on PATH (after the installer ran). */
   isInstalled: (kind: AgentKind) => boolean
+  /** Home dir for resolving node version-manager paths. Defaults to homedir(). */
+  home?: string
 }
 
 const MAX_LOG = 64 * 1024 // keep the tail bounded; installers can be chatty
@@ -59,6 +63,7 @@ export function startInstall(kind: AgentKind, deps: InstallDeps): { job: Install
     DEBIAN_FRONTEND: "noninteractive",
     npm_config_yes: "true",
   }
+  env.PATH = withNodeBinDirs(env.PATH, deps.home ?? homedir())
 
   const job: InstallJob = { state: "running", log: "", exitCode: null }
   // stdio[0] = "ignore" → the installer's stdin is NOT a TTY.
