@@ -32,6 +32,8 @@ export class LoginManager {
 
   start(kind: AgentKind): LoginState {
     this.cancel(kind)
+    const alreadyAuthed = this.deps.fileExists(authCredPath(kind, this.deps.paths))
+      || (this.deps.hasCredential?.(kind) ?? false)
     const session = new LoginSession({
       kind,
       spawn: () => this.deps.spawnLogin(kind),
@@ -40,6 +42,7 @@ export class LoginManager {
         || (this.deps.hasCredential?.(kind) ?? false),
       onChange: (st) => { this.states.set(kind, st); this.deps.onChange(kind, st) },
       needsCode: kind === Agent.Claude,
+      alreadyAuthed,
       setInterval: this.deps.setInterval,
       clearInterval: this.deps.clearInterval,
     })

@@ -91,7 +91,7 @@ import dev.supermux.android.theme.SupermuxTheme
 import dev.supermux.ui.ThemeDefaults
 import dev.supermux.android.DevConfig
 import dev.supermux.android.host.HostStores
-import dev.supermux.android.pairing.OnboardingScreen
+import dev.supermux.android.pairing.OnboardingFlow
 import dev.supermux.android.push.PushPermission
 import dev.supermux.android.push.SupermuxMessagingService
 import dev.supermux.auth.SecureTokenStore
@@ -165,7 +165,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 if (!paired) {
-                    OnboardingScreen(
+                    OnboardingFlow(
                         onPaired = { paired = true },
                         initialDeepLink = deepLink,
                     )

@@ -30,6 +30,8 @@ import dev.supermux.desktop.host.DesktopHostBootstrap
 import dev.supermux.desktop.host.DesktopHostStores
 import dev.supermux.desktop.host.FleetState
 import dev.supermux.desktop.host.HostWizard
+import dev.supermux.desktop.intro.FirstRunIntroOverlay
+import dev.supermux.desktop.intro.IntroStateStore
 import dev.supermux.desktop.notify.NotificationController
 import dev.supermux.desktop.notify.TrayNotificationManager
 import dev.supermux.desktop.pairing.OnboardingScreen
@@ -128,6 +130,12 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //                                  log line NotificationController prints right before it would
 //                                  raise a tray toast. Off by default; harmless in production.  [main]
 //   SMX_KCEF_EXTRA_ARGS="…"       — extra CEF switches for headless CI                   [KcefRuntime]
+//   SM_INTRO=1 / SM_INTRO=0       — force-show / force-suppress the first-run intro cinematic.
+//                                  Default: plays once ever (intro-seen marker), and NEVER in
+//                                  SM_PAIR_TOKEN-seeded runs so headless verification shots are
+//                                  unaffected. A forced (SM_INTRO=1) run does NOT mark seen.  [main]
+//   SM_INTRO_FREEZE=<t 0..1>      — freeze the intro timeline at <t> (no auto-advance/finish)
+//                                  for deterministic phase screenshots              [FirstRunIntro]
 fun main() {
     val store = DesktopTokenStore()
     // Dev override, mirrors the mac app's SM_PAIR_TOKEN/SM_PAIR_BASE guard (SupermuxApp.swift
@@ -1088,6 +1096,28 @@ fun main() {
                         )
                     }
                 }
+            }
+
+            // First-run intro cinematic ("mux boot": boot log → 2×2 agent-pane split → particle
+            // converge → the logo mark draws itself → fade into the app). Emitted LAST inside
+            // SupermuxTheme so it stacks above the already-composed wizard/workspace — the exit
+            // fade is a real reveal, not a cut. Shown once ever; SM_INTRO/SM_INTRO_FREEZE hooks
+            // in the catalog at the top of this file.
+            val introStore = remember { IntroStateStore() }
+            var introVisible by remember {
+                mutableStateOf(
+                    IntroStateStore.shouldShow(
+                        envIntro = System.getenv("SM_INTRO"),
+                        envPairToken = System.getenv("SM_PAIR_TOKEN"),
+                        store = introStore,
+                    ),
+                )
+            }
+            if (introVisible) {
+                FirstRunIntroOverlay(onFinished = {
+                    introVisible = false
+                    if (System.getenv("SM_INTRO") != "1") runCatching { introStore.markSeen() }
+                })
             }
         }
     }
