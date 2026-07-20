@@ -403,7 +403,7 @@ private struct DisplayViewerSheet: View {
                     .foregroundStyle(.white)
                     .frame(width: 44, height: 44)
                     .contentShape(Circle())
-                    .glassEffect(.regular, in: Circle())
+                    .glassEffectCompat(in: Circle())
             }
             .buttonStyle(.plain)
             .padding(.top, 8)
