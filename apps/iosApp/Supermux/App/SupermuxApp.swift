@@ -19,6 +19,7 @@ struct SupermuxApp: App {
     @State private var macSetupChecked: Bool
     @State private var macNeedsOnboarding = false
     @State private var macOpenNewSessionAfterOnboarding = false
+    @State private var introVisible: Bool
     #endif
 
     init() {
@@ -49,6 +50,8 @@ struct SupermuxApp: App {
         _paired = State(initialValue: initiallyPaired)
         _macSetupChecked = State(initialValue: forceOnboarding || !initiallyPaired)
         _macNeedsOnboarding = State(initialValue: forceOnboarding && initiallyPaired)
+        // First-run intro cinematic — once ever, never in seeded dev runs (see IntroPolicy).
+        _introVisible = State(initialValue: IntroPolicy.shouldShow())
         #else
         HostStore.migrateFromLegacyIfNeeded()
         _paired = State(initialValue: BrokerConfig.isPaired)
@@ -133,6 +136,16 @@ struct SupermuxApp: App {
             // The Mac is always the wide multi-pane workspace (`isRegularWidth` is a constant),
             // so there's no compact fallback — floor the window so the panes can't be crushed.
             .frame(minWidth: 1100, minHeight: 700)
+            // First-run intro cinematic ("The Manifesto", Intro/ManifestoIntroView.swift): covers
+            // the wizard/workspace as an overlay so the exit fade is a real reveal, not a cut.
+            .overlay {
+                if introVisible {
+                    ManifestoIntroView(onFinished: {
+                        introVisible = false
+                        IntroPolicy.markSeen()
+                    })
+                }
+            }
             #endif
         }
         // Menu-bar commands + default size on the main window (separate `#if` from the second
