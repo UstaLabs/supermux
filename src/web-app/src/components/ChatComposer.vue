@@ -81,7 +81,7 @@ const cardClass = computed(() =>
     </PromptInputHeader>
     <PromptInputBody>
       <VoiceRecorder v-if="isRecording" :session-id="sessionId" @done="onRecordingDone" />
-      <PromptInputTextarea v-else placeholder="Message…" />
+      <PromptInputTextarea v-else placeholder="Message…" :enter-sends="isDesktop" />
     </PromptInputBody>
     <PromptInputFooter>
       <PromptInputTools>
@@ -111,6 +111,7 @@ const cardClass = computed(() =>
         <ComposerAttachMenu v-if="!expanded" :trigger-class="ROUND_BTN" />
         <PromptInputTextarea
           placeholder="Message…"
+          :enter-sends="isDesktop"
           :class="expanded ? 'min-h-[2.5rem] max-h-44 py-2' : 'min-h-0 max-h-[2.25rem] py-1.5'"
         />
         <MicButton v-if="!expanded" class="shrink-0" :disabled="actionsDisabled" @start="startRecording" />

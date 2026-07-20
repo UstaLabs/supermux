@@ -44,6 +44,7 @@ import PaneSwitcher from "@/components/PaneSwitcher.vue"
 import { Conversation, ConversationContent } from "@/components/ai-elements/conversation"
 import { Message, MessageContent } from "@/components/ai-elements/message"
 import MessageText from "@/components/MessageText.vue"
+import MessageCopyButton from "@/components/MessageCopyButton.vue"
 import AttachmentList from "@/components/attachments/AttachmentList.vue"
 import { PromptInput } from "@/components/ai-elements/prompt-input"
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input"
@@ -567,6 +568,10 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
                   <MessageContent>
                     <MessageText v-if="block.entry.text" :content="block.entry.text" @open-file="handleOpenFile" />
                     <AttachmentList :attachments="block.entry.attachments" />
+                    <MessageCopyButton
+                      v-if="block.entry.direction !== 'outbound' && block.entry.text"
+                      :text="block.entry.text"
+                    />
                   </MessageContent>
                 </Message>
                 <div v-else class="flex flex-col gap-1.5">
