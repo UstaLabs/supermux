@@ -68,3 +68,52 @@ test("cancel() kills the proc and transitions to cancelled", () => {
   expect(f.killed).toBe(true)
   expect(states.at(-1)!.phase).toBe("cancelled")
 })
+
+test("alreadyAuthed: poll does NOT auto-succeed (reauth)", () => {
+  const states: LoginState[] = []
+  let tick: () => void = () => {}
+  const f = fakeProc()
+  const s = new LoginSession({
+    kind: "claude", spawn: () => f.proc, parse: () => null,
+    isAuthed: () => true,
+    alreadyAuthed: true,
+    onChange: (st) => states.push({ ...st }),
+    setInterval: (fn) => { tick = fn; return 1 }, clearInterval: () => {},
+  })
+  s.start()
+  tick()
+  tick()
+  expect(states.at(-1)!.phase).toBe("starting")
+})
+
+test("alreadyAuthed: exit code 0 → success (reauth completed)", () => {
+  const states: LoginState[] = []
+  const f = fakeProc()
+  const s = new LoginSession({
+    kind: "claude", spawn: () => f.proc, parse: () => null,
+    isAuthed: () => true,
+    alreadyAuthed: true,
+    onChange: (st) => states.push({ ...st }),
+    setInterval: () => 1, clearInterval: () => {},
+  })
+  s.start()
+  f.exit(0)
+  expect(states.at(-1)!.phase).toBe("success")
+})
+
+test("alreadyAuthed: non-zero exit → failed (reauth aborted)", () => {
+  const states: LoginState[] = []
+  const f = fakeProc()
+  const s = new LoginSession({
+    kind: "claude", spawn: () => f.proc, parse: () => null,
+    isAuthed: () => true,
+    alreadyAuthed: true,
+    onChange: (st) => states.push({ ...st }),
+    setInterval: () => 1, clearInterval: () => {},
+  })
+  s.start()
+  f.emit("user cancelled")
+  f.exit(1)
+  expect(states.at(-1)!.phase).toBe("failed")
+  expect(states.at(-1)!.error).toContain("user cancelled")
+})

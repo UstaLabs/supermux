@@ -69,3 +69,50 @@ test("Claude login succeeds when the macOS CLI reports a Keychain credential", (
 
   expect(mgr.get("claude")?.phase).toBe("success")
 })
+
+test("reauth: already-authed agent does not poll-succeed; exits 0 → success", () => {
+  let exitCb: (code: number | null) => void = () => {}
+  let tick: () => void = () => {}
+  const mgr = new LoginManager({
+    paths: { home: "/home/u" },
+    fileExists: () => true,
+    spawnLogin: () => ({
+      onStdout: () => {},
+      onExit: (cb) => { exitCb = cb },
+      kill: () => {},
+      write: () => {},
+    }),
+    onChange: () => {},
+    setInterval: (fn) => { tick = fn; return 1 },
+    clearInterval: () => {},
+  })
+
+  mgr.start("claude")
+  tick()
+  tick()
+  expect(mgr.get("claude")?.phase).toBe("starting")
+
+  exitCb(0)
+  expect(mgr.get("claude")?.phase).toBe("success")
+})
+
+test("reauth: already-authed agent exits non-zero → failed", () => {
+  let exitCb: (code: number | null) => void = () => {}
+  const mgr = new LoginManager({
+    paths: { home: "/home/u" },
+    fileExists: () => true,
+    spawnLogin: () => ({
+      onStdout: () => {},
+      onExit: (cb) => { exitCb = cb },
+      kill: () => {},
+      write: () => {},
+    }),
+    onChange: () => {},
+    setInterval: () => 1,
+    clearInterval: () => {},
+  })
+
+  mgr.start("claude")
+  exitCb(1)
+  expect(mgr.get("claude")?.phase).toBe("failed")
+})

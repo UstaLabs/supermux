@@ -15,6 +15,7 @@ export interface LoginSessionDeps {
   isAuthed: () => boolean
   onChange: (state: LoginState) => void
   needsCode?: boolean
+  alreadyAuthed?: boolean
   pollMs?: number
   setInterval?: (fn: () => void, ms: number) => any
   clearInterval?: (h: any) => void
@@ -68,11 +69,17 @@ export class LoginSession {
       // kill() is called. The synchronous kill() → onExit path must yield to
       // cancel(), so we bail out here and let cancel() call finish().
       if (this.done || this.cancelling) return
-      if (this.deps.isAuthed()) this.finish("success")
-      else this.finish("failed", `login exited (${code}). ${this.acc.slice(-400)}`)
+      if (this.deps.alreadyAuthed) {
+        if (code === 0) this.finish("success")
+        else this.finish("failed", `login exited (${code}). ${this.acc.slice(-400)}`)
+      } else {
+        if (this.deps.isAuthed()) this.finish("success")
+        else this.finish("failed", `login exited (${code}). ${this.acc.slice(-400)}`)
+      }
     })
     this.pollHandle = this.setI(() => {
       if (this.done) return
+      if (this.deps.alreadyAuthed) return
       if (this.deps.isAuthed()) this.finish("success")
     }, this.deps.pollMs ?? 1500)
   }
