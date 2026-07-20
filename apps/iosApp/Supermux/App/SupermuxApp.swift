@@ -101,11 +101,9 @@ struct SupermuxApp: App {
                         macWizard
                     }
                     #else
-                    PairingView { _ in
+                    OnboardingView { _ in
                         paired = true
-                        #if os(iOS)
                         PhoneWatchProvisioner.shared.pushCurrent()
-                        #endif
                         PushManager.shared.registerIfPaired()
                     }
                     #endif
