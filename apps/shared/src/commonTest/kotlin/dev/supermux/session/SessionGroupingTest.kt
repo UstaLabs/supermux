@@ -20,7 +20,7 @@ class SessionGroupingTest {
         assertEquals(2, byWorkdir.getValue("/home/user/claudehome").sessions.size)
         assertEquals(1, byWorkdir.getValue("/home/user/projects/claudemux").sessions.size)
         assertEquals(
-            setOf("~/claudehome", "~/projects/claudemux"),
+            setOf("~/claudehome", "…/projects/claudemux"),
             groups.map { it.label }.toSet(),
         )
     }
@@ -69,8 +69,13 @@ class SessionGroupingTest {
         assertEquals(listOf("dated", "undated"), groups[0].sessions.map { it.name })
     }
 
-    @Test fun formatWorkdir_under_home() {
-        assertEquals("~/projects/x", formatWorkdir("/home/user/projects/x", "/home/user"))
+    @Test fun formatWorkdir_under_home_shows_last_two_segments() {
+        assertEquals("…/projects/x", formatWorkdir("/home/user/projects/x", "/home/user"))
+        assertEquals("…/c/d", formatWorkdir("/home/user/a/b/c/d", "/home/user"))
+    }
+
+    @Test fun formatWorkdir_one_level_under_home_keeps_tilde() {
+        assertEquals("~/foo", formatWorkdir("/home/user/foo", "/home/user"))
     }
 
     @Test fun formatWorkdir_exactly_home() {
@@ -78,14 +83,18 @@ class SessionGroupingTest {
     }
 
     @Test fun formatWorkdir_deep_non_home_shortens() {
-        assertEquals(".../b/c", formatWorkdir("/var/www/a/b/c", "/home/user"))
+        assertEquals("…/b/c", formatWorkdir("/var/www/a/b/c", "/home/user"))
     }
 
-    @Test fun formatWorkdir_shallow_non_home_unchanged() {
-        assertEquals("/etc/foo", formatWorkdir("/etc/foo", "/home/user"))
+    @Test fun formatWorkdir_shallow_non_home_two_levels() {
+        assertEquals("etc/foo", formatWorkdir("/etc/foo", "/home/user"))
+    }
+
+    @Test fun formatWorkdir_single_segment_unchanged() {
+        assertEquals("/acme", formatWorkdir("/acme", "/home/user"))
     }
 
     @Test fun formatWorkdir_empty_home_infers_from_workdir() {
-        assertEquals("~/projects/x", formatWorkdir("/home/user/projects/x", ""))
+        assertEquals("…/projects/x", formatWorkdir("/home/user/projects/x", ""))
     }
 }

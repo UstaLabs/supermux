@@ -48,14 +48,23 @@ fun groupSessions(
     return result
 }
 
-/** Format a workdir for display: ~/… when under home, otherwise a shortened absolute path. */
+/**
+ * Format a workdir for display as its last two path segments (parent/folder):
+ *  - `~` for home itself, `~/leaf` one level under home
+ *  - `…/parent/leaf` when deeper (whether under home or not)
+ *  - `parent/leaf` for a shallow two-segment absolute path; a single segment is unchanged
+ */
 fun formatWorkdir(workdir: String, home: String?): String {
     val h = if (!home.isNullOrEmpty()) home else inferHomeDir(workdir)
-    if (!h.isNullOrEmpty() && (workdir == h || workdir.startsWith("$h/"))) {
-        val rest = workdir.substring(h.length)
-        return if (rest.isNotEmpty()) "~$rest" else "~"
-    }
-    return shortenAbsolute(workdir)
+    if (!h.isNullOrEmpty() && workdir == h) return "~"
+    val segments = workdir.split("/").filter { it.isNotEmpty() }
+    if (segments.size <= 1) return workdir
+    val leaf = segments[segments.size - 1]
+    val parent = segments[segments.size - 2]
+    val parentPath = "/" + segments.dropLast(1).joinToString("/")
+    if (!h.isNullOrEmpty() && parentPath == h) return "~/$leaf"
+    val base = "$parent/$leaf"
+    return if (segments.size > 2) "…/$base" else base
 }
 
 /** Best-effort home dir (/home/<user> or /Users/<user>) when none was supplied. */
@@ -63,10 +72,4 @@ fun inferHomeDir(workdir: String?): String? {
     val probe = workdir ?: ""
     val m = Regex("^(/(?:home|Users)/[^/]+)").find(probe)
     return m?.groupValues?.getOrNull(1)
-}
-
-private fun shortenAbsolute(path: String): String {
-    val parts = path.split("/").filter { it.isNotEmpty() }
-    if (parts.size <= 2) return path
-    return ".../" + parts.takeLast(2).joinToString("/")
 }
