@@ -1,4 +1,4 @@
-import { inferHomeDir, normalizeWorkdirKey } from "./workdir-display"
+import { normalizeWorkdirKey, workdirDisplay } from "./workdir-display"
 
 /** Minimal shape needed to derive a project — a subset of the store's ArchivedSession. */
 export interface ArchivedLike {
@@ -22,21 +22,11 @@ function projectPath(s: ArchivedLike): string {
 }
 
 /**
- * Shortened path with parent folder: `parent/leaf`, prefixed with `…/` when
- * deeper, `~/leaf` directly under home, `~` for home itself.
+ * Shortened path with parent folder — delegates to the shared workdir label so
+ * archived projects, session groups, and chat headers all format identically.
  */
 export function projectLabel(workdir: string, homeDir?: string | null): string {
-  const key = normalizeWorkdirKey(workdir, homeDir)
-  const home = homeDir ? normalizeWorkdirKey(homeDir) : inferHomeDir(key)
-  if (home && key === home) return "~"
-  const segments = key.split("/").filter(Boolean)
-  if (segments.length <= 1) return key
-  const leaf = segments[segments.length - 1]!
-  const parent = segments[segments.length - 2]!
-  const parentPath = "/" + segments.slice(0, -1).join("/")
-  if (home && parentPath === home) return `~/${leaf}`
-  const base = `${parent}/${leaf}`
-  return segments.length > 2 ? `…/${base}` : base
+  return workdirDisplay(workdir, homeDir).label
 }
 
 /** Distinct projects across archived sessions, most-recently-archived first. */
