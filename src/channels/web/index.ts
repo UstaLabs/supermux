@@ -1162,7 +1162,7 @@ export class WebChannel implements Channel {
     // is an entry point and must revalidate every request. Resolution (disk-first, then
     // embedded PWA for compiled binaries, then SPA fallback) lives in serveStatic.
     if (method === "GET" && !API_PREFIXES.some((p) => path === p || path.startsWith(p + "/"))) {
-      const res = serveStatic({ staticDir: this.opts.staticDir, embedded: this.opts.staticEmbedded ?? {}, path })
+      const res = serveStatic({ staticDir: this.opts.staticDir, embedded: this.opts.staticEmbedded ?? {}, path, acceptEncoding: req.headers.get("accept-encoding") ?? undefined })
       if (res) return res
     }
 
