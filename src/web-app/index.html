@@ -13,7 +13,12 @@
   <script>
     (function(){var m=localStorage.getItem('color-mode');if(m==='dark'||(m!=='light'&&matchMedia('(prefers-color-scheme:dark)').matches))document.documentElement.classList.add('dark')})()
   </script>
-  <div id="app"></div>
+  <div id="app">
+    <div id="app-loading" style="display:flex;align-items:center;justify-content:center;height:100dvh;background:#0b0b0b">
+      <div style="width:28px;height:28px;border:3px solid #333;border-top-color:#888;border-radius:50%;animation:spin .7s linear infinite"></div>
+    </div>
+    <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+  </div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

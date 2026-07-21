@@ -372,6 +372,32 @@ describe("rename", () => {
   })
 })
 
+describe("self_renamed", () => {
+  test("register defaults self_renamed to false", () => {
+    const session = store.register(BASE_INPUT)
+    expect(session.self_renamed).toBe(false)
+    const row = db.query("SELECT self_renamed FROM sessions WHERE id = ?").get(session.id)
+    expect(row.self_renamed).toBe(0)
+  })
+
+  test("markSelfRenamed persists to SQLite and updates the cache", () => {
+    const session = store.register(BASE_INPUT)
+    store.markSelfRenamed(session.id)
+
+    expect(store.getById(session.id)!.self_renamed).toBe(true)
+    const row = db.query("SELECT self_renamed FROM sessions WHERE id = ?").get(session.id)
+    expect(row.self_renamed).toBe(1)
+  })
+
+  test("self_renamed survives a restart", () => {
+    const session = store.register(BASE_INPUT)
+    store.markSelfRenamed(session.id)
+
+    const store2 = new SessionStore(db)
+    expect(store2.getById(session.id)!.self_renamed).toBe(true)
+  })
+})
+
 describe("loadFromDb (simulates restart)", () => {
   test("new SessionStore loads active and suspended sessions from DB", () => {
     const s1 = store.register({ ...BASE_INPUT, name: "s1" })

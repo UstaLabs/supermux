@@ -1,45 +1,28 @@
 import { createRouter, createWebHistory } from "vue-router"
-import HomeView from "./views/HomeView.vue"
-import ArchivedListView from "./views/ArchivedListView.vue"
-import ChatView from "./views/ChatView.vue"
-import DevicesView from "./views/DevicesView.vue"
-import UsageView from "./views/UsageView.vue"
-import ProxiesView from "./views/ProxiesView.vue"
-import DisplaysView from "./views/DisplaysView.vue"
-import EditorSettingsView from "./views/EditorSettingsView.vue"
-import SettingsIndexView from "./views/SettingsIndexView.vue"
-import AssistantSettingsView from "./views/AssistantSettingsView.vue"
-import CuratorSettingsView from "./views/CuratorSettingsView.vue"
-import VoiceSettingsView from "./views/VoiceSettingsView.vue"
-import AgentSettingsView from "./views/AgentSettingsView.vue"
 import { useOnboarding } from "./stores/onboarding"
 
-import KeyboardSettingsView from "./views/KeyboardSettingsView.vue"
-import SystemSettingsView from "./views/SystemSettingsView.vue"
-import SessionLauncherView from "./views/SessionLauncherView.vue"
-import PersonalAssistantsView from "./views/PersonalAssistantsView.vue"
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: "/", component: HomeView },
-    { path: "/new", component: SessionLauncherView },
-    { path: "/archived", component: ArchivedListView, meta: { fullScreen: true } },
-    { path: "/s/:id", name: "session-chat", component: ChatView, props: true },
-    { path: "/devices", component: DevicesView, meta: { fullScreen: true } },
-    { path: "/usage", component: UsageView, meta: { fullScreen: true } },
-    { path: "/proxies", component: ProxiesView, meta: { fullScreen: true } },
-    { path: "/displays", component: DisplaysView, meta: { fullScreen: true } },
-    { path: "/settings", component: SettingsIndexView, meta: { fullScreen: true } },
-    { path: "/settings/assistant", component: AssistantSettingsView, meta: { fullScreen: true } },
-    { path: "/settings/agents", component: AgentSettingsView, meta: { fullScreen: true } },
-    { path: "/settings/curator", component: CuratorSettingsView, meta: { fullScreen: true } },
-    { path: "/settings/voice", component: VoiceSettingsView, meta: { fullScreen: true } },
-    { path: "/settings/editor", component: EditorSettingsView, meta: { fullScreen: true } },
+    { path: "/", component: () => import("./views/HomeView.vue") },
+    { path: "/new", component: () => import("./views/SessionLauncherView.vue") },
+    { path: "/archived", component: () => import("./views/ArchivedListView.vue"), meta: { fullScreen: true } },
+    { path: "/s/:id", name: "session-chat", component: () => import("./views/ChatView.vue"), props: true },
+    { path: "/devices", component: () => import("./views/DevicesView.vue"), meta: { fullScreen: true } },
+    { path: "/usage", component: () => import("./views/UsageView.vue"), meta: { fullScreen: true } },
+    { path: "/proxies", component: () => import("./views/ProxiesView.vue"), meta: { fullScreen: true } },
+    { path: "/displays", component: () => import("./views/DisplaysView.vue"), meta: { fullScreen: true } },
+    { path: "/settings", component: () => import("./views/SettingsIndexView.vue"), meta: { fullScreen: true } },
+    { path: "/settings/assistant", component: () => import("./views/AssistantSettingsView.vue"), meta: { fullScreen: true } },
+    { path: "/settings/agents", component: () => import("./views/AgentSettingsView.vue"), meta: { fullScreen: true } },
+    { path: "/settings/curator", component: () => import("./views/CuratorSettingsView.vue"), meta: { fullScreen: true } },
+    { path: "/settings/voice", component: () => import("./views/VoiceSettingsView.vue"), meta: { fullScreen: true } },
+    { path: "/settings/editor", component: () => import("./views/EditorSettingsView.vue"), meta: { fullScreen: true } },
     { path: "/setup", component: () => import("./views/SetupView.vue"), meta: { fullScreen: true } },
     { path: "/settings/git-hosting", component: () => import("./views/GitHostingSettingsView.vue"), meta: { fullScreen: true } },
-    { path: "/settings/keyboard", component: KeyboardSettingsView, meta: { fullScreen: true } },
-    { path: "/settings/system", component: SystemSettingsView, meta: { fullScreen: true } },
-    { path: "/personal-assistants", component: PersonalAssistantsView, meta: { fullScreen: true } },
+    { path: "/settings/keyboard", component: () => import("./views/KeyboardSettingsView.vue"), meta: { fullScreen: true } },
+    { path: "/settings/system", component: () => import("./views/SystemSettingsView.vue"), meta: { fullScreen: true } },
+    { path: "/personal-assistants", component: () => import("./views/PersonalAssistantsView.vue"), meta: { fullScreen: true } },
   ],
 })
 

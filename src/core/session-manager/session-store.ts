@@ -71,6 +71,7 @@ export class SessionStore {
       repo_root: input.repo_root,
       base_branch: input.base_branch,
       session_branch: input.session_branch,
+      self_renamed: false,
       pid: input.pid,
       connected: false,
     }
@@ -152,6 +153,12 @@ export class SessionStore {
     if (!session) return
     this.db.run("UPDATE sessions SET name = ? WHERE id = ?", [newName, id])
     session.name = newName
+  }
+
+  markSelfRenamed(id: string): void {
+    this.db.run("UPDATE sessions SET self_renamed = 1 WHERE id = ?", [id])
+    const session = this.cache.get(id)
+    if (session) session.self_renamed = true
   }
 
   setConnectionStatus(id: string, connected: boolean, last_pong_at?: number): void {

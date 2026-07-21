@@ -21,6 +21,27 @@ function guessMime(p: string): string {
   return "application/octet-stream"
 }
 
+const COMPRESSIBLE = /\.(html|js|css|json|svg|webmanifest)$/
+const gzipCache = new Map<string, { body: Buffer; mtime: number }>()
+
+function maybeGzip(candidate: string, body: Buffer, acceptEncoding: string | undefined): { body: Buffer | Uint8Array; encoding?: string } {
+  if (!acceptEncoding?.includes("gzip") || !COMPRESSIBLE.test(candidate)) return { body }
+  // Only cache content-addressed /assets/ files (hashed filenames change with
+  // content). Entry points (index.html, sw.js) are small and may change on
+  // live-deploy, so always re-compress them.
+  const cacheable = candidate.startsWith("/assets/")
+  if (cacheable) {
+    const cached = gzipCache.get(candidate)
+    if (cached) return { body: cached.body, encoding: "gzip" }
+  }
+  const compressed = Bun.gzipSync(new Uint8Array(body.buffer as ArrayBuffer, body.byteOffset, body.byteLength))
+  if (compressed.byteLength < body.byteLength * 0.85) {
+    if (cacheable) gzipCache.set(candidate, { body: Buffer.from(compressed), mtime: Date.now() })
+    return { body: compressed, encoding: "gzip" }
+  }
+  return { body }
+}
+
 function cacheControlFor(candidate: string): string {
   // Vite emits hashed filenames under /assets/ — those are content-addressed
   // (changing the bundle changes the URL) and safe to cache forever.
@@ -30,7 +51,7 @@ function cacheControlFor(candidate: string): string {
   return "no-cache, must-revalidate"
 }
 
-export function serveStatic(opts: { staticDir: string | undefined; embedded: Record<string, string>; path: string }): Response | null {
+export function serveStatic(opts: { staticDir: string | undefined; embedded: Record<string, string>; path: string; acceptEncoding?: string }): Response | null {
   const candidate = opts.path === "/" ? "/index.html" : opts.path
 
   // Defensive: callers pass normalized URL pathnames (Bun's HTTP layer +
@@ -43,29 +64,41 @@ export function serveStatic(opts: { staticDir: string | undefined; embedded: Rec
   if (opts.staticDir) {
     const filePath = join(opts.staticDir, candidate)
     if (existsSync(filePath) && statSync(filePath).isFile()) {
-      return new Response(readFileSync(filePath), {
-        headers: { "content-type": guessMime(filePath), "cache-control": cacheControlFor(candidate) },
-      })
+      const raw = readFileSync(filePath)
+      const { body, encoding } = maybeGzip(candidate, raw, opts.acceptEncoding)
+      const headers: Record<string, string> = { "content-type": guessMime(filePath), "cache-control": cacheControlFor(candidate) }
+      if (encoding) headers["content-encoding"] = encoding
+      return new Response(body, { headers })
     }
   }
 
   const embeddedPath = opts.embedded[candidate]
   if (embeddedPath) {
-    return new Response(Bun.file(embeddedPath), {
-      headers: { "content-type": guessMime(candidate), "cache-control": cacheControlFor(candidate) },
-    })
+    const raw = readFileSync(embeddedPath)
+    const { body, encoding } = maybeGzip(candidate, raw, opts.acceptEncoding)
+    const headers: Record<string, string> = { "content-type": guessMime(candidate), "cache-control": cacheControlFor(candidate) }
+    if (encoding) headers["content-encoding"] = encoding
+    return new Response(body, { headers })
   }
 
   // SPA fallback (vue-router paths like /devices, /s/ana)
   if (opts.staticDir) {
     const idx = join(opts.staticDir, "index.html")
     if (existsSync(idx)) {
-      return new Response(readFileSync(idx), { headers: { "content-type": "text/html", "cache-control": "no-cache, must-revalidate" } })
+      const raw = readFileSync(idx)
+      const { body, encoding } = maybeGzip("/index.html", raw, opts.acceptEncoding)
+      const headers: Record<string, string> = { "content-type": "text/html", "cache-control": "no-cache, must-revalidate" }
+      if (encoding) headers["content-encoding"] = encoding
+      return new Response(body, { headers })
     }
   }
   const embIdx = opts.embedded["/index.html"]
   if (embIdx) {
-    return new Response(Bun.file(embIdx), { headers: { "content-type": "text/html", "cache-control": "no-cache, must-revalidate" } })
+    const raw = readFileSync(embIdx)
+    const { body, encoding } = maybeGzip("/index.html", raw, opts.acceptEncoding)
+    const headers: Record<string, string> = { "content-type": "text/html", "cache-control": "no-cache, must-revalidate" }
+    if (encoding) headers["content-encoding"] = encoding
+    return new Response(body, { headers })
   }
   return null
 }

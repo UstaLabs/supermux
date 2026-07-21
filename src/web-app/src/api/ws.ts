@@ -9,7 +9,7 @@ import { useActivity } from "../stores/activity"
 import { useAgentState } from "../stores/agentState"
 import { useBgTasks } from "../stores/bgTasks"
 import { useCommandsStore } from "../stores/commands"
-import { useLsp } from "../stores/lsp"
+
 import { useOnboarding } from "../stores/onboarding"
 import { useSessionCache } from "../stores/sessionCache"
 import { useFinishJob } from "../stores/finishJob"
@@ -145,8 +145,7 @@ export const useWS = defineStore("ws", () => {
     }
     else if (frame.type === "agent_login_state") onboarding.setAgentLoginState(frame.kind, frame.state)
     else if (typeof frame.type === "string" && frame.type.startsWith("lsp_")) {
-      // Lazy import avoids a store init cycle (lsp store calls back into useWS).
-      useLsp().handleFrame(frame)
+      import("../stores/lsp").then(({ useLsp }) => useLsp().handleFrame(frame))
     }
   }
 
