@@ -32,10 +32,32 @@ test("resolveSelfRename errors when name is empty", () => {
   if (!r.ok) expect(r.error).toMatch(/empty/i)
 })
 
+test("resolveSelfRename blocks a name change once already renamed", () => {
+  const r = resolveSelfRename("brand-new", "descriptive-name", ["descriptive-name"], true)
+  expect(r.ok).toBe(false)
+  if (!r.ok) expect(r.error).toMatch(/only.*once|already/i)
+})
+
+test("resolveSelfRename still allows a no-op rename once already renamed", () => {
+  const r = resolveSelfRename("descriptive-name", "descriptive-name", ["descriptive-name"], true)
+  expect(r).toEqual({ ok: true, name: "descriptive-name" })
+})
+
+test("resolveSelfRename allows the first name change when not yet renamed", () => {
+  const r = resolveSelfRename("descriptive-name", "project-api", ["project-api"], false)
+  expect(r).toEqual({ ok: true, name: "descriptive-name" })
+})
+
 // --- buildNamingRule --------------------------------------------------------
 
 test("buildNamingRule names the current session and points at rename_session", () => {
   const rule = buildNamingRule("My Cool 🎉")
   expect(rule).toContain("My Cool 🎉")
   expect(rule).toContain("rename_session")
+})
+
+test("buildNamingRule tells the agent it may rename only once", () => {
+  const rule = buildNamingRule("My Cool 🎉")
+  expect(rule).toMatch(/only.*once|once/i)
+  expect(rule).not.toMatch(/rename again/i)
 })

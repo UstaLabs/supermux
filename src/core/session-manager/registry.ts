@@ -156,6 +156,10 @@ export class Registry {
     this.sessions.rename(id, newName)
   }
 
+  markSelfRenamed(id: string): void {
+    this.sessions.markSelfRenamed(id)
+  }
+
   setConnectionStatus(id: string, connected: boolean, last_pong_at?: number): void {
     const s = this.sessions.getById(id)
     if (!s) return
