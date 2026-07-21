@@ -34,10 +34,11 @@ import { usePendingFirstMessage } from "@/stores/pendingFirstMessage"
 import { useComposerSubmit } from "@/composables/useComposerSubmit"
 import { useRenameRequest } from "@/composables/useRenameRequest"
 import { api } from "@/api/client"
-import TerminalPanel from "@/components/TerminalPanel.vue"
-import EditorPane from "@/components/editor/EditorPane.vue"
-import SessionDisplayPanel from "@/components/SessionDisplayPanel.vue"
-import TerminalPane from "@/components/TerminalPane.vue"
+import { defineAsyncComponent } from "vue"
+const TerminalPanel = defineAsyncComponent(() => import("@/components/TerminalPanel.vue"))
+const EditorPane = defineAsyncComponent(() => import("@/components/editor/EditorPane.vue"))
+const SessionDisplayPanel = defineAsyncComponent(() => import("@/components/SessionDisplayPanel.vue"))
+const TerminalPane = defineAsyncComponent(() => import("@/components/TerminalPane.vue"))
 import AgentViewToggle from "@/components/AgentViewToggle.vue"
 import PaneSwitcher from "@/components/PaneSwitcher.vue"
 
