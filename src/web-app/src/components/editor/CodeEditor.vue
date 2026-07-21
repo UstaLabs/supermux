@@ -3,7 +3,9 @@ import { ref, watch, onMounted, onUnmounted, nextTick } from "vue"
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection } from "@codemirror/view"
 import { EditorState, Compartment } from "@codemirror/state"
 import { LSPPlugin } from "@codemirror/lsp-client"
-import { getLSPPlugin } from "@/lib/lsp-plugin"
+import { getLSPPlugin, patchLSPPluginGet } from "@/lib/lsp-plugin"
+
+patchLSPPluginGet()
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands"
 import { syntaxHighlighting, defaultHighlightStyle, foldGutter, bracketMatching, indentOnInput, LanguageDescription } from "@codemirror/language"
 import { closeBrackets, closeBracketsKeymap, completionKeymap } from "@codemirror/autocomplete"

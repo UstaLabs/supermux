@@ -80,27 +80,6 @@ export default defineConfig({
     outDir: "../channels/web/static",
     emptyOutDir: true,
     target: "es2022",
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          codemirror: [
-            "codemirror",
-            "@codemirror/view",
-            "@codemirror/state",
-            "@codemirror/commands",
-            "@codemirror/language",
-            "@codemirror/autocomplete",
-            "@codemirror/lint",
-            "@codemirror/search",
-            "@codemirror/lsp-client",
-            "@codemirror/theme-one-dark",
-            "@codemirror/language-data",
-          ],
-          xterm: ["@xterm/xterm", "@xterm/addon-fit", "@xterm/addon-web-links", "@xterm/addon-webgl"],
-          novnc: ["@novnc/novnc/core/rfb"],
-        },
-      },
-    },
   },
   optimizeDeps: {
     esbuildOptions: {
