@@ -64,16 +64,19 @@ export function inferHomeDir(workdir?: string): string | null {
   return m?.[1] ?? null
 }
 
+/**
+ * Last two path segments (parent/folder): `~` for home itself, `~/leaf` one
+ * level under home, `…/parent/leaf` when deeper, `parent/leaf` for a shallow
+ * two-segment absolute path; a single segment is unchanged.
+ */
 function labelForWorkdirKey(key: string, homeDir?: string | null): string {
-  if (homeDir && (key === homeDir || key.startsWith(homeDir + "/"))) {
-    const rest = key.slice(homeDir.length)
-    return rest ? `~${rest}` : "~"
-  }
-  return shortenAbsolute(key)
-}
-
-function shortenAbsolute(path: string): string {
-  const parts = path.split("/").filter(Boolean)
-  if (parts.length <= 2) return path
-  return ".../" + parts.slice(-2).join("/")
+  if (homeDir && key === homeDir) return "~"
+  const segments = key.split("/").filter(Boolean)
+  if (segments.length <= 1) return key
+  const leaf = segments[segments.length - 1]!
+  const parent = segments[segments.length - 2]!
+  const parentPath = "/" + segments.slice(0, -1).join("/")
+  if (homeDir && parentPath === homeDir) return `~/${leaf}`
+  const base = `${parent}/${leaf}`
+  return segments.length > 2 ? `…/${base}` : base
 }

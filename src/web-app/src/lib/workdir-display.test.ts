@@ -8,8 +8,8 @@ describe("workdirDisplay", () => {
 
     expect(a.key).toBe("/home/user/projects/app")
     expect(b.key).toBe("/home/user/projects/app")
-    expect(a.label).toBe("~/projects/app")
-    expect(b.label).toBe("~/projects/app")
+    expect(a.label).toBe("…/projects/app")
+    expect(b.label).toBe("…/projects/app")
   })
 
   it("repairs persisted home-prefixed tilde paths", () => {
@@ -22,7 +22,7 @@ describe("workdirDisplay", () => {
   it("shortens paths outside home", () => {
     expect(workdirDisplay("/var/log/syslog", "/home/user")).toEqual({
       key: "/var/log/syslog",
-      label: ".../log/syslog",
+      label: "…/log/syslog",
     })
   })
 })
