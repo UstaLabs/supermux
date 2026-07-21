@@ -31,6 +31,7 @@ export type SessionRecord = {
   base_branch?: string
   session_branch?: string
   finish_job?: FinishJob
+  self_renamed?: boolean
 }
 
 export type TmuxRef = {
@@ -63,6 +64,7 @@ export type SessionRow = {
   base_branch: string | null
   session_branch: string | null
   finish_job: string | null
+  self_renamed: number
 }
 
 export type Session = SessionRecord & {
@@ -102,6 +104,7 @@ export function rowToRecord(row: SessionRow): SessionRecord {
     base_branch: row.base_branch ?? undefined,
     session_branch: row.session_branch ?? undefined,
     finish_job: row.finish_job ? JSON.parse(row.finish_job) : undefined,
+    self_renamed: row.self_renamed === 1,
   }
 }
 

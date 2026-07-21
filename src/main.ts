@@ -2352,11 +2352,12 @@ const server = await startSocketServer({
           // workers — can name itself.
           if (!s) return { ok: false, error: "unknown session" }
           const { resolveSelfRename } = await import("./core/session-manager/naming")
-          const res = resolveSelfRename(stringArg(op.args, "name"), s.name, registry.list().map((x) => x.name))
+          const res = resolveSelfRename(stringArg(op.args, "name"), s.name, registry.list().map((x) => x.name), !!s.self_renamed)
           if (!res.ok) return { ok: false, error: res.error }
           const oldName = s.name
           if (res.name !== oldName) {
             registry.rename(s.id, res.name)
+            registry.markSelfRenamed(s.id)
             await refreshTelegramMenu()
             webChannel?.broadcastToAll({ type: "session_renamed", id: s.id, old: oldName, new: res.name })
           }
