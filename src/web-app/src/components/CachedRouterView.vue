@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { defineAsyncComponent, watch } from "vue"
+import { watch } from "vue"
 import { useRoute } from "vue-router"
+import ChatView from "@/views/ChatView.vue"
 import { useSessionCache } from "@/stores/sessionCache"
-
-const ChatView = defineAsyncComponent(() => import("@/views/ChatView.vue"))
 
 const route = useRoute()
 const sessionCache = useSessionCache()
