@@ -2,9 +2,11 @@ import { createHmac, timingSafeEqual } from "crypto"
 
 export interface MintLeaseArgs { hostId: string; secret: string; ttlMs: number; now?: number }
 export type VerifyFailureReason = "missing" | "malformed" | "invalid_expiry" | "invalid_signature" | "expired"
+type UnverifiedReason = Exclude<VerifyFailureReason, "expired">
 export type VerifyResult =
   | { ok: true; hostId: string; expiresAt: number }
-  | { ok: false; reason: VerifyFailureReason; hostId?: string; expiresAt?: number }
+  | { ok: false; reason: "expired"; hostId: string; expiresAt: number }
+  | { ok: false; reason: UnverifiedReason }
 
 function mac(payload: string, secret: string): string {
   return createHmac("sha256", secret).update(payload).digest("base64url")

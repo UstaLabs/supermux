@@ -6,7 +6,9 @@ const SECRET = "relay-hmac-secret"
 test("missing and malformed leases report distinct failures", () => {
   expect(verifyLease("", { secret: SECRET, now: 2_000 })).toEqual({ ok: false, reason: "missing" })
   expect(verifyLease("not-a-lease", { secret: SECRET, now: 2_000 })).toEqual({ ok: false, reason: "malformed" })
-  expect(verifyLease("habc..sig", { secret: SECRET, now: 2_000 })).toEqual({ ok: false, reason: "malformed" })
+  for (const lease of [".2000.sig", "habc..sig", "habc.2000."]) {
+    expect(verifyLease(lease, { secret: SECRET, now: 2_000 })).toEqual({ ok: false, reason: "malformed" })
+  }
 })
 
 test("a freshly minted lease includes its verified host and expiry", () => {
@@ -16,6 +18,17 @@ test("a freshly minted lease includes its verified host and expiry", () => {
     hostId: "habc",
     expiresAt: 6_000,
   })
+})
+
+test("correctly signed positive safe-integer expiry boundaries are valid through their expiry", () => {
+  for (const expiresAt of [1, Number.MAX_SAFE_INTEGER]) {
+    const valid = mintLease({ hostId: "habc", secret: SECRET, ttlMs: expiresAt, now: 0 })
+    expect(verifyLease(valid, { secret: SECRET, now: expiresAt })).toEqual({
+      ok: true,
+      hostId: "habc",
+      expiresAt,
+    })
+  }
 })
 
 test("a correctly signed expired lease includes verified metadata", () => {
