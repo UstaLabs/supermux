@@ -1,5 +1,6 @@
 import type { RelayProvider, RelayStatus } from "./provider"
 import { hostRelayUrl } from "./public-url"
+import type { Logger } from "../../shared/log"
 
 export interface FrpChild { kill(): void; exited: Promise<unknown> }
 
@@ -31,47 +32,140 @@ export interface FrpProviderOpts {
   now?: () => number
   setTimer?: (fn: () => void, delayMs: number) => ReturnType<typeof setTimeout>
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void
+  log?: Pick<Logger, "info" | "warn">
+}
+
+type AcquireTrigger = "startup" | "renewal" | "audit" | "child_exit" | "retry"
+
+const AUDIT_INTERVAL_MS = 300_000
+const RETRY_DELAYS_MS = [5_000, 10_000, 20_000, 30_000, 60_000, 120_000, 300_000] as const
+const MAX_TIMER_DELAY_MS = 2_147_000_000
+
+class LeaseHttpError extends Error {
+  constructor(readonly status: number) {
+    super(`lease ${status}`)
+  }
 }
 
 export class FrpRelayProvider implements RelayProvider {
   private child: FrpChild | undefined
   private state: RelayStatus = { state: "disabled" }
   private desired = false
-  private connecting = false
+  private acquiring = false
   private generation = 0
-  private timer: ReturnType<typeof setTimeout> | undefined
+  private renewTimer: ReturnType<typeof setTimeout> | undefined
+  private auditTimer: ReturnType<typeof setTimeout> | undefined
+  private retryTimer: ReturnType<typeof setTimeout> | undefined
+  private leaseExpiry: number | undefined
+  private renewalDueAt: number | undefined
+  private retryIndex = 0
   constructor(private readonly o: FrpProviderOpts) {}
 
   status(): RelayStatus { return this.state }
 
   async start(): Promise<void> {
+    if (this.desired) return
     this.desired = true
-    await this.connect()
-  }
-
-  private clearScheduled(): void {
-    if (!this.timer) return
-    ;(this.o.clearTimer ?? clearTimeout)(this.timer)
-    this.timer = undefined
-  }
-
-  private schedule(fn: () => void, delayMs: number): void {
-    this.clearScheduled()
-    if (this.o.setTimer) this.timer = this.o.setTimer(fn, delayMs)
-    else {
-      this.timer = setTimeout(fn, delayMs)
-      this.timer.unref()
-    }
-  }
-
-  private async connect(): Promise<void> {
-    if (!this.desired || this.connecting) return
-    this.connecting = true
-    const generation = ++this.generation
-    this.clearScheduled()
-    try { this.child?.kill() } catch { /* already gone */ }
-    this.child = undefined
+    this.generation++
     this.state = { state: "connecting" }
+    await this.acquire("startup")
+  }
+
+  private emit(level: "info" | "warn", event: string, fields?: Record<string, unknown>): void {
+    try { this.o.log?.[level](event, fields) } catch { /* observers cannot disrupt relay recovery */ }
+  }
+
+  private makeTimer(fn: () => void, delayMs: number): ReturnType<typeof setTimeout> {
+    if (this.o.setTimer) return this.o.setTimer(fn, delayMs)
+    const timer = setTimeout(fn, delayMs)
+    timer.unref()
+    return timer
+  }
+
+  private clearRenewTimer(): void {
+    if (this.renewTimer === undefined) return
+    ;(this.o.clearTimer ?? clearTimeout)(this.renewTimer)
+    this.renewTimer = undefined
+  }
+
+  private clearAuditTimer(): void {
+    if (this.auditTimer === undefined) return
+    ;(this.o.clearTimer ?? clearTimeout)(this.auditTimer)
+    this.auditTimer = undefined
+  }
+
+  private clearRetryTimer(): void {
+    if (this.retryTimer === undefined) return
+    ;(this.o.clearTimer ?? clearTimeout)(this.retryTimer)
+    this.retryTimer = undefined
+  }
+
+  private scheduleRenewal(delayMs: number): void {
+    this.clearRenewTimer()
+    let timer: ReturnType<typeof setTimeout>
+    timer = this.makeTimer(() => {
+      if (this.renewTimer !== timer) return
+      this.renewTimer = undefined
+      void this.acquire("renewal")
+    }, delayMs)
+    this.renewTimer = timer
+  }
+
+  private scheduleAudit(): void {
+    this.clearAuditTimer()
+    let timer: ReturnType<typeof setTimeout>
+    timer = this.makeTimer(() => {
+      if (this.auditTimer !== timer) return
+      this.auditTimer = undefined
+      if (!this.desired || this.renewalDueAt === undefined) return
+      if ((this.o.now?.() ?? Date.now()) < this.renewalDueAt || this.acquiring || this.retryTimer !== undefined) {
+        this.scheduleAudit()
+        return
+      }
+      this.emit("warn", "relay_lease_audit_recovery", { hostId: this.o.identity.hostId })
+      void this.acquire("audit")
+    }, AUDIT_INTERVAL_MS)
+    this.auditTimer = timer
+  }
+
+  private scheduleRetry(delayMs: number, trigger: AcquireTrigger): void {
+    this.clearRetryTimer()
+    let timer: ReturnType<typeof setTimeout>
+    timer = this.makeTimer(() => {
+      if (this.retryTimer !== timer) return
+      this.retryTimer = undefined
+      void this.acquire(trigger)
+    }, delayMs)
+    this.retryTimer = timer
+  }
+
+  private scheduleFailureRetry(): number {
+    const delay = RETRY_DELAYS_MS[Math.min(this.retryIndex, RETRY_DELAYS_MS.length - 1)]!
+    this.retryIndex = Math.min(this.retryIndex + 1, RETRY_DELAYS_MS.length - 1)
+    this.scheduleRetry(delay, "retry")
+    return delay
+  }
+
+  private attachChildExit(child: FrpChild, generation: number): void {
+    const onExit = () => {
+      if (!this.desired || generation !== this.generation || this.child !== child) return
+      this.child = undefined
+      this.state = { state: "connecting" }
+      this.clearRenewTimer()
+      this.clearAuditTimer()
+      this.leaseExpiry = undefined
+      this.renewalDueAt = undefined
+      this.emit("warn", "relay_frpc_exited", { hostId: this.o.identity.hostId })
+      this.scheduleRetry(1_000, "child_exit")
+    }
+    void child.exited.then(onExit, onExit)
+  }
+
+  private async acquire(trigger: AcquireTrigger): Promise<void> {
+    if (!this.desired || this.acquiring) return
+    this.acquiring = true
+    const generation = this.generation
+    this.emit("info", "relay_lease_acquire_started", { trigger })
     const f = this.o.fetchImpl ?? fetch
     try {
       const nonce = await this.o.getNonce()
@@ -86,8 +180,15 @@ export class FrpRelayProvider implements RelayProvider {
           signature,
         }),
       })
-      if (!res.ok) { this.state = { state: "error", detail: `lease ${res.status}` }; return }
-      const { lease, expiresAt } = (await res.json()) as { lease: string; expiresAt?: number }
+      if (!res.ok) throw new LeaseHttpError(res.status)
+      const body = (await res.json()) as { lease?: unknown; expiresAt?: unknown }
+      const lease = body.lease
+      if (typeof lease !== "string" || lease.trim().length === 0) throw new Error("invalid lease response")
+      const now = this.o.now?.() ?? Date.now()
+      const expiresAt = body.expiresAt === undefined ? Number(lease.split(".")[1]) : body.expiresAt
+      if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || expiresAt <= now) {
+        throw new Error("invalid lease expiry")
+      }
       if (!this.desired || generation !== this.generation) return
       const subdomain = `h-${this.o.identity.hostId}`
       const serverHost = new URL(this.o.relayBase).hostname
@@ -106,34 +207,53 @@ export class FrpRelayProvider implements RelayProvider {
         `metadatas.lease = ${JSON.stringify(lease)}`,
       ].join("\n")
       const cfgPath = this.o.writeConfig(toml)
-      this.child = this.o.spawn(["frpc", "-c", cfgPath])
+      if (!this.desired || generation !== this.generation) return
+
+      const previousChild = this.child
+      this.child = undefined
+      try { previousChild?.kill() } catch { /* already gone */ }
+      const child = this.o.spawn(["frpc", "-c", cfgPath])
+      this.generation++
+      const childGeneration = this.generation
+      this.child = child
       this.state = { state: "online", relayUrl: hostRelayUrl(this.o.identity.hostId, this.o.relayDomain) }
-      const child = this.child
-      void child.exited.then(() => {
-        if (!this.desired || generation !== this.generation || this.child !== child) return
-        this.child = undefined
-        this.state = { state: "connecting" }
-        this.schedule(() => { void this.connect() }, 1_000)
-      })
-      const leaseExpiry = expiresAt ?? Number(lease.split(".")[1])
-      if (Number.isFinite(leaseExpiry)) {
-        const renewIn = Math.min(2_147_000_000, Math.max(30_000, leaseExpiry - (this.o.now?.() ?? Date.now()) - 5 * 60_000))
-        this.schedule(() => { void this.connect() }, renewIn)
-      }
+      this.leaseExpiry = expiresAt
+      this.renewalDueAt = expiresAt - AUDIT_INTERVAL_MS
+      this.retryIndex = 0
+      this.clearRetryTimer()
+      this.attachChildExit(child, childGeneration)
+      const renewIn = Math.min(MAX_TIMER_DELAY_MS, Math.max(30_000, this.renewalDueAt - now))
+      this.scheduleRenewal(renewIn)
+      this.scheduleAudit()
+      this.emit("info", "relay_lease_acquired", { hostId: this.o.identity.hostId, expiresAt, trigger })
+      this.emit("info", "relay_frpc_started", { hostId: this.o.identity.hostId })
     } catch (e) {
-      this.state = { state: "error", detail: String(e) }
-      if (this.desired && generation === this.generation) this.schedule(() => { void this.connect() }, 5_000)
+      if (!this.desired || generation !== this.generation) return
+      const preservedChild = this.child !== undefined
+      const detail = e instanceof Error ? e.message : String(e)
+      if (!preservedChild) this.state = { state: "error", detail }
+      const nextRetryMs = this.scheduleFailureRetry()
+      const failure = e instanceof LeaseHttpError
+        ? { trigger, status: e.status, preservedChild, nextRetryMs }
+        : { trigger, error: detail, preservedChild, nextRetryMs }
+      this.emit("warn", "relay_lease_acquire_failed", failure)
     } finally {
-      this.connecting = false
+      this.acquiring = false
     }
   }
 
   async stop(): Promise<void> {
     this.desired = false
     this.generation++
-    this.clearScheduled()
+    this.clearRenewTimer()
+    this.clearAuditTimer()
+    this.clearRetryTimer()
+    this.leaseExpiry = undefined
+    this.renewalDueAt = undefined
+    this.retryIndex = 0
     try { this.child?.kill() } catch { /* already gone */ }
     this.child = undefined
     this.state = { state: "disabled" }
+    this.emit("info", "relay_stopped", { hostId: this.o.identity.hostId })
   }
 }

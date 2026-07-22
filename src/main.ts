@@ -168,6 +168,7 @@ import { GitStatusService, type ServiceSession } from "./core/worktree/git-statu
 import { deriveName } from "./core/session-manager/naming"
 
 const log = makeLogger("main")
+const relayLog = makeLogger("core/relay/frp-provider")
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const STATIC_DIR = join(__dirname, "channels/web/static")
@@ -1061,6 +1062,7 @@ const relayProvider = process.env.MUX_RELAY_DOMAIN
       },
       spawn: (argv) => Bun.spawn(parentBoundFrpcCommand([frpcPath(STATE_DIR), ...argv.slice(1)]), { stdout: "ignore", stderr: "ignore" }),
       writeConfig: (toml) => { const p = join(STATE_DIR, "frpc.toml"); writeFileSync(p, toml, { mode: 0o600 }); return p },
+      log: relayLog,
     })
   : new NullRelayProvider()
 void relayProvider.start()
