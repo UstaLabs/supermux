@@ -160,6 +160,22 @@ test("the control handler forwards structured auth rejection events", async () =
   expect(JSON.stringify(events)).not.toContain(validLease)
 })
 
+test("throwing auth rejection observers do not break the control handler response", async () => {
+  const control = createRelayControl({
+    secret: SECRET,
+    domain: "relay.supermux.dev",
+    onAuthRejected: () => { throw new Error("observer failed") },
+  })
+
+  const response = await control.handle(new Request("http://relay/handler", {
+    method: "POST",
+    body: JSON.stringify({ op: "Login", content: { metas: {} } }),
+  }))
+
+  expect(response.status).toBe(200)
+  expect(await response.json()).toEqual({ reject: true, reject_reason: "invalid or missing lease" })
+})
+
 test("known host registry persists verified keys across restarts", () => {
   const dir = mkdtempSync(join(tmpdir(), "mux-relay-registry-"))
   const path = join(dir, "hosts.json")

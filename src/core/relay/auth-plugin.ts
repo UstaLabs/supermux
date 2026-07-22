@@ -45,7 +45,9 @@ const leaseRejectionReasons: Record<VerifyFailureReason, AuthRejectionReason> = 
 }
 
 function deny(ctx: AuthOpCtx, event: AuthRejectionEvent, externalReason: string): AuthResponse {
-  ctx.onReject?.(event)
+  try {
+    ctx.onReject?.(event)
+  } catch {}
   return { reject: true, reject_reason: externalReason }
 }
 
