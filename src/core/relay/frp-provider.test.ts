@@ -132,6 +132,24 @@ test("successful startup schedules independent proactive renewal and recurring l
   await provider.stop()
 })
 
+test("proactive renewal clamps to the exact minimum and maximum timer delays", async () => {
+  const cases = [
+    { expiresAt: 200_000, expectedDelay: 30_000 },
+    { expiresAt: 100_000 + 300_000 + 2_147_483_647 + 1, expectedDelay: 2_147_483_647 },
+  ]
+  for (const { expiresAt, expectedDelay } of cases) {
+    const timers = fakeTimers()
+    const provider = new FrpRelayProvider(providerOpts({
+      fetchImpl: async () => jsonResponse({ lease: `habc.${expiresAt}.sig`, expiresAt }),
+      setTimer: timers.setTimer,
+      clearTimer: timers.clearTimer,
+    }))
+    await provider.start()
+    expect(timers.active(expectedDelay)).toHaveLength(1)
+    await provider.stop()
+  }
+})
+
 test("healthy audits are silent and network-free, while an overdue audit starts one recovery", async () => {
   let now = 100_000
   let nonceCalls = 0
@@ -162,6 +180,26 @@ test("healthy audits are silent and network-free, while an overdue audit starts 
   await provider.stop()
 })
 
+test("an overdue audit keeps recurring when its acquisition fails", async () => {
+  let now = 100_000
+  let leaseCalls = 0
+  const timers = fakeTimers()
+  const provider = new FrpRelayProvider(providerOpts({
+    now: () => now,
+    fetchImpl: async () => ++leaseCalls === 1
+      ? jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 })
+      : jsonResponse({}, 503),
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  }))
+  await provider.start()
+  now = 3_400_000
+  await fire(timers.active(300_000)[0]!)
+  expect(timers.active(300_000)).toHaveLength(1)
+  expect(timers.active(5_000)).toHaveLength(1)
+  await provider.stop()
+})
+
 test("failed renewal preserves the child and URL, logs safely, and schedules a five-second retry", async () => {
   const child = fakeChild()
   const timers = fakeTimers()
@@ -186,7 +224,7 @@ test("failed renewal preserves the child and URL, logs safely, and schedules a f
   expect(logger.records).toContainEqual({
     level: "warn",
     event: "relay_lease_acquire_failed",
-    fields: { trigger: "renewal", status: 503, preservedChild: true, nextRetryMs: 5_000 },
+    fields: { trigger: "renewal", error: "lease_http_error", status: 503, preservedChild: true, nextRetryMs: 5_000 },
   })
   await provider.stop()
 })
@@ -237,7 +275,7 @@ test("a thrown nonce error uses the same preserve-and-retry path", async () => {
   expect(timers.active(5_000)).toHaveLength(1)
   expect(logger.records.find((record) => record.event === "relay_lease_acquire_failed")?.fields).toEqual({
     trigger: "renewal",
-    error: "network unavailable",
+    error: "nonce_failed",
     preservedChild: true,
     nextRetryMs: 5_000,
   })
@@ -288,7 +326,7 @@ test("eventual retry success writes config before replacing the old child and re
   events.length = 0
   await fire(timers.active(6_900_000)[0]!)
   await fire(timers.active(5_000)[0]!)
-  expect(events).toEqual(["write", "kill", "spawn"])
+  expect(events).toEqual(["write", "spawn", "kill"])
   expect(oldChild.killed).toBe(true)
   expect(spawns).toBe(2)
   expect(provider.status().state).toBe("online")
@@ -296,6 +334,26 @@ test("eventual retry success writes config before replacing the old child and re
   expect(timers.active(300_000)).toHaveLength(1)
 
   await fire(timers.active(6_900_000)[0]!)
+  expect(timers.active(5_000)).toHaveLength(1)
+  await provider.stop()
+})
+
+test("a replacement spawn failure preserves the old child and online state", async () => {
+  const child = fakeChild()
+  const timers = fakeTimers()
+  let spawns = 0
+  const provider = new FrpRelayProvider(providerOpts({
+    spawn: () => {
+      if (++spawns > 1) throw new Error("spawn failed")
+      return child
+    },
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  }))
+  await provider.start()
+  await fire(timers.active(3_300_000)[0]!)
+  expect(child.killed).toBe(false)
+  expect(provider.status()).toEqual({ state: "online", relayUrl: "https://h-habc.relay.supermux.dev" })
   expect(timers.active(5_000)).toHaveLength(1)
   await provider.stop()
 })
@@ -396,6 +454,51 @@ test("stop clears every timer and stale callbacks cannot fetch or spawn", async 
   expect(provider.status().state).toBe("disabled")
 })
 
+test("stop invalidates an acquisition blocked on nonce before it can fetch or spawn", async () => {
+  const nonce = deferred<string>()
+  let fetches = 0
+  let spawns = 0
+  const provider = new FrpRelayProvider(providerOpts({
+    getNonce: () => nonce.promise,
+    fetchImpl: async () => { fetches++; return jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 }) },
+    spawn: () => { spawns++; return fakeChild() },
+  }))
+  const starting = provider.start()
+  await settle()
+  await provider.stop()
+  nonce.resolve("stale")
+  await starting
+  expect(fetches).toBe(0)
+  expect(spawns).toBe(0)
+  expect(provider.status().state).toBe("disabled")
+})
+
+test("restart can acquire while a stopped generation is still blocked on nonce", async () => {
+  const staleNonce = deferred<string>()
+  let nonceCalls = 0
+  let fetches = 0
+  let spawns = 0
+  const provider = new FrpRelayProvider(providerOpts({
+    getNonce: () => ++nonceCalls === 1 ? staleNonce.promise : Promise.resolve("fresh"),
+    fetchImpl: async () => { fetches++; return jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 }) },
+    spawn: () => { spawns++; return fakeChild() },
+  }))
+  const staleStart = provider.start()
+  await settle()
+  await provider.stop()
+  await provider.start()
+  expect(fetches).toBe(1)
+  expect(spawns).toBe(1)
+  expect(provider.status().state).toBe("online")
+
+  staleNonce.resolve("stale")
+  await staleStart
+  expect(fetches).toBe(1)
+  expect(spawns).toBe(1)
+  expect(provider.status().state).toBe("online")
+  await provider.stop()
+})
+
 test("audit and retry callbacks never create concurrent acquisitions", async () => {
   let now = 100_000
   let nonceCalls = 0
@@ -451,6 +554,83 @@ test("initial acquisition failure reports error and retries without spawning", a
   expect(spawns).toBe(0)
   expect(timers.active(5_000)).toHaveLength(1)
   await provider.stop()
+})
+
+test("acquisition failure logs use stable codes and never serialize external secrets", async () => {
+  const secret = "TOP_SECRET_LEASE_AND_CONFIG"
+  const lease = `habc.3700000.${secret}`
+  const cases: Array<{
+    expectedCode: string
+    overrides: (logger: ReturnType<typeof fakeLogger>) => Partial<FrpProviderOpts>
+  }> = [
+    {
+      expectedCode: "nonce_failed",
+      overrides: (logger) => ({
+        getNonce: async () => { throw new Error(secret) },
+        log: logger.log,
+      }),
+    },
+    {
+      expectedCode: "config_write_failed",
+      overrides: (logger) => ({
+        fetchImpl: async () => jsonResponse({ lease, expiresAt: 3_700_000 }),
+        writeConfig: (toml) => { throw new Error(`${secret}:${lease}:${toml}`) },
+        log: logger.log,
+      }),
+    },
+    {
+      expectedCode: "frpc_spawn_failed",
+      overrides: (logger) => ({
+        fetchImpl: async () => jsonResponse({ lease, expiresAt: 3_700_000 }),
+        spawn: () => { throw new Error(`${secret}:${lease}:serverAddr = secret`) },
+        log: logger.log,
+      }),
+    },
+  ]
+
+  for (const { expectedCode, overrides } of cases) {
+    const logger = fakeLogger()
+    const provider = new FrpRelayProvider(providerOpts(overrides(logger)))
+    await provider.start()
+    const serialized = JSON.stringify(logger.records)
+    expect(serialized).not.toContain(secret)
+    expect(serialized).not.toContain(lease)
+    expect(serialized).not.toContain("serverAddr")
+    expect(logger.records.find((record) => record.event === "relay_lease_acquire_failed")?.fields?.error).toBe(expectedCode)
+    await provider.stop()
+  }
+})
+
+test("successful acquisition and shutdown emit the specified lifecycle fields", async () => {
+  const timers = fakeTimers()
+  const logger = fakeLogger()
+  const provider = new FrpRelayProvider(providerOpts({
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    log: logger.log,
+  }))
+  await provider.start()
+  expect(logger.records).toContainEqual({
+    level: "info",
+    event: "relay_lease_acquire_started",
+    fields: { trigger: "startup" },
+  })
+  expect(logger.records).toContainEqual({
+    level: "info",
+    event: "relay_lease_acquired",
+    fields: { hostId: "habc", expiresAt: 3_700_000, trigger: "startup" },
+  })
+  expect(logger.records).toContainEqual({
+    level: "info",
+    event: "relay_frpc_started",
+    fields: { hostId: "habc" },
+  })
+  await provider.stop()
+  expect(logger.records).toContainEqual({
+    level: "info",
+    event: "relay_stopped",
+    fields: { hostId: "habc" },
+  })
 })
 
 test("stop kills the sidecar, reports disabled, and logs without observer failures escaping", async () => {

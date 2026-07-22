@@ -36,10 +36,18 @@ export interface FrpProviderOpts {
 }
 
 type AcquireTrigger = "startup" | "renewal" | "audit" | "child_exit" | "retry"
+type AcquireFailureCode =
+  | "nonce_failed"
+  | "lease_request_failed"
+  | "lease_http_error"
+  | "lease_response_invalid"
+  | "config_write_failed"
+  | "frpc_spawn_failed"
+type AcquireAttempt = { generation: number; token: symbol }
 
 const AUDIT_INTERVAL_MS = 300_000
 const RETRY_DELAYS_MS = [5_000, 10_000, 20_000, 30_000, 60_000, 120_000, 300_000] as const
-const MAX_TIMER_DELAY_MS = 2_147_000_000
+const MAX_TIMER_DELAY_MS = 2_147_483_647
 
 class LeaseHttpError extends Error {
   constructor(readonly status: number) {
@@ -51,7 +59,7 @@ export class FrpRelayProvider implements RelayProvider {
   private child: FrpChild | undefined
   private state: RelayStatus = { state: "disabled" }
   private desired = false
-  private acquiring = false
+  private activeAttempt: AcquireAttempt | undefined
   private generation = 0
   private renewTimer: ReturnType<typeof setTimeout> | undefined
   private auditTimer: ReturnType<typeof setTimeout> | undefined
@@ -118,10 +126,11 @@ export class FrpRelayProvider implements RelayProvider {
       if (this.auditTimer !== timer) return
       this.auditTimer = undefined
       if (!this.desired || this.renewalDueAt === undefined) return
-      if ((this.o.now?.() ?? Date.now()) < this.renewalDueAt || this.acquiring || this.retryTimer !== undefined) {
+      if ((this.o.now?.() ?? Date.now()) < this.renewalDueAt || this.hasCurrentAttempt() || this.retryTimer !== undefined) {
         this.scheduleAudit()
         return
       }
+      this.scheduleAudit()
       this.emit("warn", "relay_lease_audit_recovery", { hostId: this.o.identity.hostId })
       void this.acquire("audit")
     }, AUDIT_INTERVAL_MS)
@@ -161,14 +170,25 @@ export class FrpRelayProvider implements RelayProvider {
     void child.exited.then(onExit, onExit)
   }
 
+  private hasCurrentAttempt(): boolean {
+    return this.activeAttempt?.generation === this.generation
+  }
+
+  private ownsAttempt(attempt: AcquireAttempt): boolean {
+    return this.desired && attempt.generation === this.generation && this.activeAttempt === attempt
+  }
+
   private async acquire(trigger: AcquireTrigger): Promise<void> {
-    if (!this.desired || this.acquiring) return
-    this.acquiring = true
-    const generation = this.generation
+    if (!this.desired || this.hasCurrentAttempt()) return
+    const attempt = { generation: this.generation, token: Symbol("relay-acquire") }
+    this.activeAttempt = attempt
+    let failureCode: AcquireFailureCode = "nonce_failed"
     this.emit("info", "relay_lease_acquire_started", { trigger })
     const f = this.o.fetchImpl ?? fetch
     try {
       const nonce = await this.o.getNonce()
+      if (!this.ownsAttempt(attempt)) return
+      failureCode = "lease_request_failed"
       const signature = this.o.identity.sign(Buffer.from(nonce)).toString("base64url")
       const res = await f(`${this.o.relayBase}/relay/lease`, {
         method: "POST",
@@ -180,8 +200,11 @@ export class FrpRelayProvider implements RelayProvider {
           signature,
         }),
       })
+      if (!this.ownsAttempt(attempt)) return
       if (!res.ok) throw new LeaseHttpError(res.status)
+      failureCode = "lease_response_invalid"
       const body = (await res.json()) as { lease?: unknown; expiresAt?: unknown }
+      if (!this.ownsAttempt(attempt)) return
       const lease = body.lease
       if (typeof lease !== "string" || lease.trim().length === 0) throw new Error("invalid lease response")
       const now = this.o.now?.() ?? Date.now()
@@ -189,7 +212,7 @@ export class FrpRelayProvider implements RelayProvider {
       if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || expiresAt <= now) {
         throw new Error("invalid lease expiry")
       }
-      if (!this.desired || generation !== this.generation) return
+      if (!this.ownsAttempt(attempt)) return
       const subdomain = `h-${this.o.identity.hostId}`
       const serverHost = new URL(this.o.relayBase).hostname
       const toml = [
@@ -206,16 +229,21 @@ export class FrpRelayProvider implements RelayProvider {
         `subdomain = ${JSON.stringify(subdomain)}`,
         `metadatas.lease = ${JSON.stringify(lease)}`,
       ].join("\n")
+      failureCode = "config_write_failed"
       const cfgPath = this.o.writeConfig(toml)
-      if (!this.desired || generation !== this.generation) return
+      if (!this.ownsAttempt(attempt)) return
 
       const previousChild = this.child
-      this.child = undefined
-      try { previousChild?.kill() } catch { /* already gone */ }
+      failureCode = "frpc_spawn_failed"
       const child = this.o.spawn(["frpc", "-c", cfgPath])
+      if (!this.ownsAttempt(attempt)) {
+        try { child.kill() } catch { /* lifecycle already moved on */ }
+        return
+      }
       this.generation++
       const childGeneration = this.generation
       this.child = child
+      try { previousChild?.kill() } catch { /* already gone */ }
       this.state = { state: "online", relayUrl: hostRelayUrl(this.o.identity.hostId, this.o.relayDomain) }
       this.leaseExpiry = expiresAt
       this.renewalDueAt = expiresAt - AUDIT_INTERVAL_MS
@@ -228,23 +256,24 @@ export class FrpRelayProvider implements RelayProvider {
       this.emit("info", "relay_lease_acquired", { hostId: this.o.identity.hostId, expiresAt, trigger })
       this.emit("info", "relay_frpc_started", { hostId: this.o.identity.hostId })
     } catch (e) {
-      if (!this.desired || generation !== this.generation) return
+      if (!this.ownsAttempt(attempt)) return
       const preservedChild = this.child !== undefined
-      const detail = e instanceof Error ? e.message : String(e)
-      if (!preservedChild) this.state = { state: "error", detail }
+      const error: AcquireFailureCode = e instanceof LeaseHttpError ? "lease_http_error" : failureCode
+      if (!preservedChild) this.state = { state: "error", detail: error }
       const nextRetryMs = this.scheduleFailureRetry()
       const failure = e instanceof LeaseHttpError
-        ? { trigger, status: e.status, preservedChild, nextRetryMs }
-        : { trigger, error: detail, preservedChild, nextRetryMs }
+        ? { trigger, error, status: e.status, preservedChild, nextRetryMs }
+        : { trigger, error, preservedChild, nextRetryMs }
       this.emit("warn", "relay_lease_acquire_failed", failure)
     } finally {
-      this.acquiring = false
+      if (this.activeAttempt === attempt) this.activeAttempt = undefined
     }
   }
 
   async stop(): Promise<void> {
     this.desired = false
     this.generation++
+    this.activeAttempt = undefined
     this.clearRenewTimer()
     this.clearAuditTimer()
     this.clearRetryTimer()
