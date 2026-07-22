@@ -591,6 +591,7 @@ class MainActivity : ComponentActivity() {
                             forgeRemove = { vm.forgeRemove(it) },
                             // System
                             updateStatus = { vm.updateStatus() },
+                            runUpdate = { vm.runUpdate() },
                             restartBroker = { vm.restartBroker() },
                         ) } }
                     }

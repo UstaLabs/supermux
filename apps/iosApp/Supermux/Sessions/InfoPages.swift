@@ -82,7 +82,9 @@ struct DevicesView: View {
                 ProgressView().tint(Theme.teal).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if items.isEmpty {
                 ContentUnavailableView("No devices paired", systemImage: "iphone",
-                    description: Text("Tap ＋ to mint a one-time pairing link."))
+                    description: Text("Mint a one-time pairing link to add a device.")) {
+                    newDeviceButton.frame(maxWidth: 240)
+                }
             } else {
                 List {
                     ForEach(items, id: \.name) { d in
@@ -103,6 +105,15 @@ struct DevicesView: View {
                         }
                     }
                 }
+                // macOS presents this page in a sheet where the toolbar "+" is an
+                // easy-to-miss icon; keep a labeled button in the list itself so "add
+                // a device" is always one obvious tap away (iOS gets it too).
+                .safeAreaInset(edge: .bottom) {
+                    newDeviceButton
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(.bar)
+                }
             }
         }
         .navigationTitle("Devices").smInlineNavigationTitle()
@@ -122,6 +133,16 @@ struct DevicesView: View {
         .task { await load() }
     }
     private func load() async { loading = true; items = (try? await broker.api.devices()) ?? []; loading = false }
+    private var newDeviceButton: some View {
+        Button { adding = true } label: {
+            Label("New device", systemImage: "plus")
+                .fontWeight(.semibold)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(Theme.teal)
+    }
     private func subtitle(_ d: DeviceDto) -> String {
         var parts: [String] = []
         if let c = d.created_at { parts.append("paired \(String(c.prefix(10)))") }

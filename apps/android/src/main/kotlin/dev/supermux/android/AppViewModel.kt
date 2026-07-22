@@ -53,6 +53,7 @@ import dev.supermux.net.SpawnRequest
 import dev.supermux.net.UpdateCommentBody
 import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalSummary
+import dev.supermux.net.RunUpdateResult
 import dev.supermux.net.UpdateStatus
 import dev.supermux.net.VerifySaveResult
 import dev.supermux.net.VerifySuggestResult
@@ -1177,6 +1178,7 @@ class AppViewModel(
     // ── System ─────────────────────────────────────────────────────────────────
 
     suspend fun updateStatus(): UpdateStatus? = runCatching { activeApi()?.updateStatus() }.getOrNull()
+    suspend fun runUpdate(): RunUpdateResult? = runCatching { activeApi()?.runUpdate() }.getOrNull()
     fun restartBroker() { viewModelScope.launch { runCatching { activeApi()?.restartBroker() } } }
 
     suspend fun fileBytes(fileId: String): ByteArray? = activeApi()?.fileBytes(fileId)

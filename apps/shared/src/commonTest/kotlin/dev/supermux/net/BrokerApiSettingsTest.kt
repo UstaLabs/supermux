@@ -165,6 +165,25 @@ class BrokerApiSettingsTest {
         assertNull(r.lastChecked)
     }
 
+    @Test fun run_update_started_decodes() {
+        val r = json.decodeFromString<RunUpdateResult>("""{"started":true}""")
+        assertTrue(r.started)
+        assertNull(r.error)
+    }
+
+    @Test fun run_update_busy_decodes() {
+        val r = json.decodeFromString<RunUpdateResult>("""{"error":"busy"}""")
+        assertFalse(r.started)
+        assertEquals("busy", r.error)
+    }
+
+    @Test fun run_update_instruction_decodes() {
+        val r = json.decodeFromString<RunUpdateResult>(
+            """{"error":"self-update not available in source mode","instruction":"Source install — update via git."}""")
+        assertFalse(r.started)
+        assertEquals("Source install — update via git.", r.instruction)
+    }
+
     // ── request shapes via MockEngine ──────────────────────────────────────────
 
     @Test fun finish_sends_action_in_body() = runTest {
