@@ -2,14 +2,17 @@ import type { RelayProvider, RelayStatus } from "./provider"
 import { hostRelayUrl } from "./public-url"
 import type { Logger } from "../../shared/log"
 
-export interface FrpChild { kill(): void; exited: Promise<unknown> }
+export interface FrpChild { kill(): void; activate(): void | Promise<void>; exited: Promise<unknown> }
 
 const PARENT_BOUND_SH = [
   "parent=$PPID",
+  'child=""',
+  'stop() { trap - TERM INT EXIT; if [ -n "$child" ]; then kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; fi; exit 0; }',
+  "trap stop TERM INT EXIT",
+  'IFS= read -r activation || exit 0',
+  '[ "$activation" = "activate" ] || exit 0',
   '"$@" &',
   "child=$!",
-  'stop() { trap - TERM INT EXIT; kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; }',
-  "trap stop TERM INT EXIT",
   'while kill -0 "$parent" 2>/dev/null && kill -0 "$child" 2>/dev/null; do sleep 1; done',
   "stop",
 ].join("\n")
@@ -28,6 +31,7 @@ export interface FrpProviderOpts {
   fetchImpl?: (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<Response>
   getNonce: () => Promise<string>
   spawn: (argv: string[]) => FrpChild
+  activationGated?: boolean // defaults true; Windows sets false and replaces kill-before-spawn
   writeConfig: (toml: string) => string  // writes frpc.toml, returns path
   now?: () => number
   setTimer?: (fn: () => void, delayMs: number) => ReturnType<typeof setTimeout>
@@ -42,8 +46,11 @@ type AcquireFailureCode =
   | "lease_http_error"
   | "lease_response_invalid"
   | "config_write_failed"
+  | "timer_schedule_failed"
   | "frpc_spawn_failed"
-type AcquireAttempt = { generation: number; token: symbol }
+  | "frpc_activation_failed"
+type AcquireAttempt = { generation: number }
+type ScheduledTimer = { handle: ReturnType<typeof setTimeout>; native: boolean }
 
 const AUDIT_INTERVAL_MS = 300_000
 const RETRY_DELAYS_MS = [5_000, 10_000, 20_000, 30_000, 60_000, 120_000, 300_000] as const
@@ -55,16 +62,28 @@ class LeaseHttpError extends Error {
   }
 }
 
+function validatedLeaseExpiry(lease: string, bodyExpiry: unknown, hostId: string, now: number): number | undefined {
+  const components = lease.split(".")
+  if (components.length !== 3 || components.some((component) => component.length === 0)) return undefined
+  const [leaseHostId, expiryComponent] = components
+  if (leaseHostId !== hostId || !/^[1-9]\d*$/.test(expiryComponent!)) return undefined
+  const tokenExpiry = Number(expiryComponent)
+  if (!Number.isSafeInteger(tokenExpiry) || tokenExpiry <= now) return undefined
+  if (bodyExpiry !== undefined) {
+    if (!Number.isSafeInteger(bodyExpiry) || (bodyExpiry as number) <= 0 || bodyExpiry !== tokenExpiry) return undefined
+  }
+  return tokenExpiry
+}
+
 export class FrpRelayProvider implements RelayProvider {
   private child: FrpChild | undefined
   private state: RelayStatus = { state: "disabled" }
   private desired = false
   private activeAttempt: AcquireAttempt | undefined
   private generation = 0
-  private renewTimer: ReturnType<typeof setTimeout> | undefined
-  private auditTimer: ReturnType<typeof setTimeout> | undefined
-  private retryTimer: ReturnType<typeof setTimeout> | undefined
-  private leaseExpiry: number | undefined
+  private renewTimer: ScheduledTimer | undefined
+  private auditTimer: ScheduledTimer | undefined
+  private retryTimer: ScheduledTimer | undefined
   private renewalDueAt: number | undefined
   private retryIndex = 0
   constructor(private readonly o: FrpProviderOpts) {}
@@ -83,34 +102,56 @@ export class FrpRelayProvider implements RelayProvider {
     try { this.o.log?.[level](event, fields) } catch { /* observers cannot disrupt relay recovery */ }
   }
 
-  private makeTimer(fn: () => void, delayMs: number): ReturnType<typeof setTimeout> {
-    if (this.o.setTimer) return this.o.setTimer(fn, delayMs)
-    const timer = setTimeout(fn, delayMs)
-    timer.unref()
-    return timer
+  private nativeTimer(fn: () => void, delayMs: number): ScheduledTimer {
+    const handle = setTimeout(fn, delayMs)
+    handle.unref()
+    return { handle, native: true }
+  }
+
+  private makeTimer(fn: () => void, delayMs: number): ScheduledTimer {
+    if (!this.o.setTimer) return this.nativeTimer(fn, delayMs)
+    try {
+      return { handle: this.o.setTimer(fn, delayMs), native: false }
+    } catch {
+      this.emit("warn", "relay_timer_adapter_failed", { operation: "set" })
+      return this.nativeTimer(fn, delayMs)
+    }
+  }
+
+  private clearScheduledTimer(timer: ScheduledTimer): void {
+    try {
+      if (timer.native || !this.o.clearTimer) clearTimeout(timer.handle)
+      else this.o.clearTimer(timer.handle)
+    } catch {
+      this.emit("warn", "relay_timer_adapter_failed", { operation: "clear" })
+      try { clearTimeout(timer.handle) } catch { /* timer cleanup remains best effort */ }
+    }
   }
 
   private clearRenewTimer(): void {
     if (this.renewTimer === undefined) return
-    ;(this.o.clearTimer ?? clearTimeout)(this.renewTimer)
+    const timer = this.renewTimer
     this.renewTimer = undefined
+    this.clearScheduledTimer(timer)
   }
 
   private clearAuditTimer(): void {
     if (this.auditTimer === undefined) return
-    ;(this.o.clearTimer ?? clearTimeout)(this.auditTimer)
+    const timer = this.auditTimer
     this.auditTimer = undefined
+    this.clearScheduledTimer(timer)
   }
 
   private clearRetryTimer(): void {
     if (this.retryTimer === undefined) return
-    ;(this.o.clearTimer ?? clearTimeout)(this.retryTimer)
+    const timer = this.retryTimer
     this.retryTimer = undefined
+    this.clearScheduledTimer(timer)
   }
 
   private scheduleRenewal(delayMs: number): void {
     this.clearRenewTimer()
-    let timer: ReturnType<typeof setTimeout>
+    let timer: ScheduledTimer
     timer = this.makeTimer(() => {
       if (this.renewTimer !== timer) return
       this.renewTimer = undefined
@@ -121,7 +162,7 @@ export class FrpRelayProvider implements RelayProvider {
 
   private scheduleAudit(): void {
     this.clearAuditTimer()
-    let timer: ReturnType<typeof setTimeout>
+    let timer: ScheduledTimer
     timer = this.makeTimer(() => {
       if (this.auditTimer !== timer) return
       this.auditTimer = undefined
@@ -139,7 +180,7 @@ export class FrpRelayProvider implements RelayProvider {
 
   private scheduleRetry(delayMs: number, trigger: AcquireTrigger): void {
     this.clearRetryTimer()
-    let timer: ReturnType<typeof setTimeout>
+    let timer: ScheduledTimer
     timer = this.makeTimer(() => {
       if (this.retryTimer !== timer) return
       this.retryTimer = undefined
@@ -162,7 +203,6 @@ export class FrpRelayProvider implements RelayProvider {
       this.state = { state: "connecting" }
       this.clearRenewTimer()
       this.clearAuditTimer()
-      this.leaseExpiry = undefined
       this.renewalDueAt = undefined
       this.emit("warn", "relay_frpc_exited", { hostId: this.o.identity.hostId })
       this.scheduleRetry(1_000, "child_exit")
@@ -180,7 +220,7 @@ export class FrpRelayProvider implements RelayProvider {
 
   private async acquire(trigger: AcquireTrigger): Promise<void> {
     if (!this.desired || this.hasCurrentAttempt()) return
-    const attempt = { generation: this.generation, token: Symbol("relay-acquire") }
+    const attempt = { generation: this.generation }
     this.activeAttempt = attempt
     let failureCode: AcquireFailureCode = "nonce_failed"
     this.emit("info", "relay_lease_acquire_started", { trigger })
@@ -208,10 +248,8 @@ export class FrpRelayProvider implements RelayProvider {
       const lease = body.lease
       if (typeof lease !== "string" || lease.trim().length === 0) throw new Error("invalid lease response")
       const now = this.o.now?.() ?? Date.now()
-      const expiresAt = body.expiresAt === undefined ? Number(lease.split(".")[1]) : body.expiresAt
-      if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || expiresAt <= now) {
-        throw new Error("invalid lease expiry")
-      }
+      const expiresAt = validatedLeaseExpiry(lease, body.expiresAt, this.o.identity.hostId, now)
+      if (expiresAt === undefined) throw new Error("invalid lease expiry")
       if (!this.ownsAttempt(attempt)) return
       const subdomain = `h-${this.o.identity.hostId}`
       const serverHost = new URL(this.o.relayBase).hostname
@@ -233,26 +271,48 @@ export class FrpRelayProvider implements RelayProvider {
       const cfgPath = this.o.writeConfig(toml)
       if (!this.ownsAttempt(attempt)) return
 
+      this.renewalDueAt = expiresAt - AUDIT_INTERVAL_MS
+      const renewIn = Math.min(MAX_TIMER_DELAY_MS, Math.max(30_000, this.renewalDueAt - now))
+      failureCode = "timer_schedule_failed"
+      this.scheduleRenewal(renewIn)
+      this.scheduleAudit()
+      if (!this.ownsAttempt(attempt)) return
+
       const previousChild = this.child
+      const activationGated = this.o.activationGated !== false
+      if (previousChild && !activationGated) {
+        this.child = undefined
+        try { previousChild.kill() } catch { /* already gone */ }
+        try { await previousChild.exited } catch { /* exit still confirms termination */ }
+        if (!this.ownsAttempt(attempt)) return
+      }
       failureCode = "frpc_spawn_failed"
       const child = this.o.spawn(["frpc", "-c", cfgPath])
       if (!this.ownsAttempt(attempt)) {
         try { child.kill() } catch { /* lifecycle already moved on */ }
         return
       }
+      this.child = child
+      if (previousChild && activationGated) {
+        try { previousChild.kill() } catch { /* already gone */ }
+        try { await previousChild.exited } catch { /* exit still confirms termination */ }
+        if (!this.ownsAttempt(attempt)) return
+      }
+      failureCode = "frpc_activation_failed"
+      try {
+        await child.activate()
+      } catch {
+        if (this.child === child) this.child = undefined
+        try { child.kill() } catch { /* failed provisional child cleanup */ }
+        throw new Error("frpc activation failed")
+      }
+      if (!this.ownsAttempt(attempt)) return
       this.generation++
       const childGeneration = this.generation
-      this.child = child
-      try { previousChild?.kill() } catch { /* already gone */ }
       this.state = { state: "online", relayUrl: hostRelayUrl(this.o.identity.hostId, this.o.relayDomain) }
-      this.leaseExpiry = expiresAt
-      this.renewalDueAt = expiresAt - AUDIT_INTERVAL_MS
       this.retryIndex = 0
       this.clearRetryTimer()
       this.attachChildExit(child, childGeneration)
-      const renewIn = Math.min(MAX_TIMER_DELAY_MS, Math.max(30_000, this.renewalDueAt - now))
-      this.scheduleRenewal(renewIn)
-      this.scheduleAudit()
       this.emit("info", "relay_lease_acquired", { hostId: this.o.identity.hostId, expiresAt, trigger })
       this.emit("info", "relay_frpc_started", { hostId: this.o.identity.hostId })
     } catch (e) {
@@ -271,18 +331,18 @@ export class FrpRelayProvider implements RelayProvider {
   }
 
   async stop(): Promise<void> {
+    const transitioned = this.desired || this.state.state !== "disabled"
     this.desired = false
     this.generation++
     this.activeAttempt = undefined
     this.clearRenewTimer()
     this.clearAuditTimer()
     this.clearRetryTimer()
-    this.leaseExpiry = undefined
     this.renewalDueAt = undefined
     this.retryIndex = 0
     try { this.child?.kill() } catch { /* already gone */ }
     this.child = undefined
     this.state = { state: "disabled" }
-    this.emit("info", "relay_stopped", { hostId: this.o.identity.hostId })
+    if (transitioned) this.emit("info", "relay_stopped", { hostId: this.o.identity.hostId })
   }
 }

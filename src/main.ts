@@ -1060,7 +1060,26 @@ const relayProvider = process.env.MUX_RELAY_DOMAIN
         const r = await fetch(`${process.env.MUX_RELAY_BASE ?? `https://control.${process.env.MUX_RELAY_DOMAIN}`}/relay/nonce`)
         return ((await r.json()) as { nonce: string }).nonce
       },
-      spawn: (argv) => Bun.spawn(parentBoundFrpcCommand([frpcPath(STATE_DIR), ...argv.slice(1)]), { stdout: "ignore", stderr: "ignore" }),
+      activationGated: process.platform !== "win32",
+      spawn: (argv) => {
+        const command = parentBoundFrpcCommand([frpcPath(STATE_DIR), ...argv.slice(1)])
+        if (process.platform === "win32") {
+          const proc = Bun.spawn(command, { stdin: "ignore", stdout: "ignore", stderr: "ignore" })
+          return { kill: () => proc.kill(), activate: () => {}, exited: proc.exited }
+        }
+        const proc = Bun.spawn(command, { stdin: "pipe", stdout: "ignore", stderr: "ignore" })
+        let activated = false
+        return {
+          kill: () => proc.kill(),
+          activate: async () => {
+            if (activated) return
+            activated = true
+            await proc.stdin.write("activate\n")
+            await proc.stdin.end()
+          },
+          exited: proc.exited,
+        }
+      },
       writeConfig: (toml) => { const p = join(STATE_DIR, "frpc.toml"); writeFileSync(p, toml, { mode: 0o600 }); return p },
       log: relayLog,
     })
