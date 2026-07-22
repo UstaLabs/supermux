@@ -81,8 +81,11 @@ struct DevicesView: View {
             if loading && items.isEmpty {
                 ProgressView().tint(Theme.teal).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if items.isEmpty {
-                ContentUnavailableView("No devices paired", systemImage: "iphone",
-                    description: Text("Mint a one-time pairing link to add a device.")) {
+                ContentUnavailableView {
+                    Label("No devices paired", systemImage: "iphone")
+                } description: {
+                    Text("Mint a one-time pairing link to add a device.")
+                } actions: {
                     newDeviceButton.frame(maxWidth: 240)
                 }
             } else {
