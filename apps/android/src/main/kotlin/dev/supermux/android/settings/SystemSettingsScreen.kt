@@ -43,21 +43,26 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
+import dev.supermux.net.RunUpdateResult
 import dev.supermux.net.UpdateStatus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 // ─── System settings (update status + restart broker) ──────────────────────────
 //
-// Parity with iOS SystemSettingsView: read-only update-status display (no "check now"
-// button — the app updates out-of-band; the broker self-updater is just surfaced) plus
-// a destructive Restart-broker action with a confirm dialog.
+// Parity with iOS SystemSettingsView: broker update-status display plus, for binary
+// installs with an update available, an "Update broker" button that triggers the
+// broker's self-updater and polls until it settles. Source/docker installs can't
+// self-update (the broker's instruction is shown instead). A destructive
+// Restart-broker action with a confirm dialog rounds it out. (The *app* updates
+// out-of-band; this updates the *broker*.)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SystemSettingsPage(
     onBack: () -> Unit,
     updateStatus: suspend () -> UpdateStatus?,
+    runUpdate: suspend () -> RunUpdateResult?,
     restartBroker: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -69,6 +74,7 @@ fun SystemSettingsPage(
     var loadError by remember { mutableStateOf<String?>(null) }
     var showRestartConfirm by remember { mutableStateOf(false) }
     var restarting by remember { mutableStateOf(false) }
+    var runError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         val s = updateStatus()
@@ -158,6 +164,38 @@ fun SystemSettingsPage(
                             )
                         }
                     }
+
+                    // Update broker — binary self-updater only. Source/docker can't
+                    // self-update; hide while an update is in flight (the state row
+                    // shows progress) and once staged (restart-required needs a restart).
+                    if (s.mode == "binary" &&
+                        (s.updateAvailable || s.state == "failed") &&
+                        !isRunningState(s.state) &&
+                        s.state != "restart-required"
+                    ) {
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    runError = null
+                                    val result = runUpdate()
+                                    when {
+                                        result == null -> runError = "Couldn't reach the broker."
+                                        result.started -> for (i in 0 until 120) {
+                                            delay(1500)
+                                            val fresh = updateStatus() ?: continue
+                                            status = fresh
+                                            if (!isRunningState(fresh.state)) break
+                                        }
+                                        else -> runError = result.instruction ?: result.error
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (s.state == "failed") "Retry update" else "Update broker")
+                        }
+                    }
+                    runError?.let { Text(it, color = cs.error, fontSize = 12.sp) }
                 } else {
                     Text("Status unavailable", color = cs.onSurfaceVariant, fontSize = 13.sp)
                 }
@@ -214,6 +252,9 @@ fun SystemSettingsPage(
         )
     }
 }
+
+private fun isRunningState(state: String): Boolean =
+    state == "checking" || state == "downloading" || state == "swapping"
 
 @Composable
 private fun UpdateAvailabilityRow(s: UpdateStatus) {
