@@ -2,7 +2,7 @@ import { createPublicKey, randomBytes, verify as verifySignature } from "crypto"
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs"
 import { dirname } from "path"
 import { hostIdFromPublicKey } from "../host-identity"
-import { handleAuthOp } from "./auth-plugin"
+import { handleAuthOp, type AuthRejectionEvent } from "./auth-plugin"
 import { mintLease } from "./lease"
 
 const HOST_ID = /^[a-z2-7]{26}$/
@@ -60,6 +60,7 @@ export interface RelayControlOpts {
   ratePerMinute?: number
   now?: () => number
   random?: () => string
+  onAuthRejected?: (event: AuthRejectionEvent) => void
 }
 
 function json(value: unknown, status = 200): Response {
@@ -162,7 +163,11 @@ export function createRelayControl(opts: RelayControlOpts) {
     if (path === "/handler" && req.method === "POST") {
       const operation = await req.json().catch(() => null)
       if (!operation || typeof operation !== "object") return json({ reject: true, reject_reason: "invalid request" })
-      return json(handleAuthOp(operation as Parameters<typeof handleAuthOp>[0], { secret: opts.secret, now }))
+      return json(handleAuthOp(operation as Parameters<typeof handleAuthOp>[0], {
+        secret: opts.secret,
+        now,
+        onReject: opts.onAuthRejected,
+      }))
     }
 
     return json({ error: "not found" }, 404)

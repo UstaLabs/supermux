@@ -13,14 +13,15 @@ if (Buffer.byteLength(secret) < 32) throw new Error("set MUX_CONNECTIVITY_RELAY_
 const port = positiveInt(env.MUX_CONNECTIVITY_RELAY_PORT, 7200)
 const domain = env.MUX_CONNECTIVITY_RELAY_DOMAIN ?? "relay.supermux.dev"
 const registryPath = env.MUX_CONNECTIVITY_RELAY_HOSTS ?? "/var/lib/supermux-relay/hosts.json"
+const log = makeLogger("connectivity-relay")
 const control = createRelayControl({
   secret,
   domain,
   knownHosts: new FileKnownHostRegistry(registryPath),
   leaseTtlMs: positiveInt(env.MUX_CONNECTIVITY_RELAY_LEASE_HOURS, 24) * 60 * 60 * 1000,
   ratePerMinute: positiveInt(env.MUX_CONNECTIVITY_RELAY_RATE_PER_MIN, 60),
+  onAuthRejected: (event) => log.warn("relay_auth_rejected", event),
 })
-const log = makeLogger("connectivity-relay")
 
 Bun.serve({
   hostname: "127.0.0.1",
