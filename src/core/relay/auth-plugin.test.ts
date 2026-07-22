@@ -143,7 +143,7 @@ for (const scenario of leaseFailureCases) {
 
 for (const kind of ["missing", "expired"] as const) {
   test(`throwing observers do not escape ${kind} Login denials`, () => {
-    const metas = kind === "missing"
+    const metas: Record<string, string> = kind === "missing"
       ? {}
       : { lease: mintLease({ hostId: "habc", secret: SECRET, ttlMs: 5_000, now: 1_000 }) }
     let response: ReturnType<typeof handleAuthOp> | undefined
