@@ -20,7 +20,7 @@ const control = createRelayControl({
   knownHosts: new FileKnownHostRegistry(registryPath),
   leaseTtlMs: positiveInt(env.MUX_CONNECTIVITY_RELAY_LEASE_HOURS, 24) * 60 * 60 * 1000,
   ratePerMinute: positiveInt(env.MUX_CONNECTIVITY_RELAY_RATE_PER_MIN, 60),
-  onAuthRejected: (event) => log.warn("relay_auth_rejected", event),
+  onAuthRejected: (event) => log.warn("relay_auth_rejected", { ...event }),
 })
 
 Bun.serve({
