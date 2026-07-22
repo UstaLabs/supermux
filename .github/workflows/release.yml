@@ -405,21 +405,14 @@ jobs:
       - name: Create DMG
         run: |
           APP="apps/iosApp/build/dd-mac/Build/Products/Release/Supermux.app"
-          DMG_ROOT="$RUNNER_TEMP/dmg-root"
-          mkdir -p "$DMG_ROOT" dist
-          ditto "$APP" "$DMG_ROOT/Supermux.app"
-          ln -s /Applications "$DMG_ROOT/Applications"
           if [ "${{ steps.signing.outputs.have }}" = "1" ]; then
             DMG="dist/supermux-macos.dmg"
           else
             DMG="dist/supermux-macos-unsigned.dmg"
           fi
-          hdiutil create \
-            -volname Supermux \
-            -srcfolder "$DMG_ROOT" \
-            -format UDZO \
-            -imagekey zlib-level=9 \
-            "$DMG"
+          # Styled installer: Supermux.app + Applications symlink + drag-arrow background.
+          chmod +x scripts/package-macos-dmg.sh
+          scripts/package-macos-dmg.sh "$APP" "$DMG"
           echo "MACOS_DMG=$DMG" >> "$GITHUB_ENV"
       - name: Sign, notarize, and staple DMG
         if: steps.signing.outputs.have == '1'

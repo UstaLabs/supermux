@@ -756,6 +756,17 @@ data class UpdateStatus(
     val disabled: Boolean = false,
 )
 
+/** Result of POST /api/update/run. `started=true` (HTTP 202) means the broker
+ *  began self-updating — poll [UpdateStatus] for progress. `error="busy"` (409)
+ *  means an update is already in flight. For source/docker/disabled installs the
+ *  broker returns 400 with `error` + a human-readable `instruction`. */
+@Serializable
+data class RunUpdateResult(
+    val started: Boolean = false,
+    val error: String? = null,
+    val instruction: String? = null,
+)
+
 // ─── Exceptions ────────────────────────────────────────────────────────────────
 
 class FsException(val status: Int, message: String) : Exception(message)
@@ -1308,6 +1319,21 @@ class BrokerApi(
     /** GET /api/update/status → in-app updater state. */
     suspend fun updateStatus(): UpdateStatus =
         getJson("$httpBase/api/update/status")
+
+    /** POST /api/update/run → start the broker's self-update (binary mode only).
+     *  The broker returns 202 `{started:true}` and updates asynchronously (poll
+     *  [updateStatus] for downloading→swapping→restart-required), 409 `{error:"busy"}`
+     *  if an update is already running, or 400 `{error,instruction}` for
+     *  source/docker/disabled installs. The body is decoded for every status. */
+    suspend fun runUpdate(): RunUpdateResult {
+        val resp = http.post("$httpBase/api/update/run") { header("Authorization", bearerHeader()) }
+        val text = resp.bodyAsText()
+        return try {
+            json.decodeFromString<RunUpdateResult>(text)
+        } catch (e: Throwable) {
+            RunUpdateResult(error = text.ifBlank { "HTTP ${resp.status.value}" })
+        }
+    }
 
     /** GET /settings/curator → {config:{enabled,hour,minute}, nextRun} */
     suspend fun getCuratorSettings(): CuratorSettingsResponse =

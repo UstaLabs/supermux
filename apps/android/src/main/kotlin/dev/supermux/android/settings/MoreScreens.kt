@@ -58,6 +58,7 @@ import dev.supermux.net.OpenCodeOAuthStart
 import dev.supermux.net.OpenCodeProvider
 import dev.supermux.net.PADto
 import dev.supermux.net.ProxyDto
+import dev.supermux.net.RunUpdateResult
 import dev.supermux.net.UpdateStatus
 import dev.supermux.android.session.relTime
 import dev.supermux.session.archivedProjects
@@ -135,6 +136,7 @@ fun SettingsScreen(
     forgeRemove: (id: String) -> Unit,
     // System
     updateStatus: suspend () -> UpdateStatus?,
+    runUpdate: suspend () -> RunUpdateResult?,
     restartBroker: () -> Unit,
 ) {
     var opened by remember { mutableStateOf<String?>(null) }
@@ -202,6 +204,7 @@ fun SettingsScreen(
         "system" -> SystemSettingsPage(
             onBack = { opened = null },
             updateStatus = updateStatus,
+            runUpdate = runUpdate,
             restartBroker = restartBroker,
         )
         else -> SettingsIndexPage(

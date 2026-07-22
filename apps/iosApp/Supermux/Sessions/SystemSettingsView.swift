@@ -3,11 +3,16 @@ import Shared
 
 /// System settings — mirrors `SystemSettingsView.vue` on the web PWA.
 ///
-/// iOS shows update **status only** (no "run update" button — the app updates
-/// via TestFlight, not the broker's self-updater). Restart broker is kept.
+/// Shows broker update status and, for `binary` installs with an update
+/// available, an **Update broker** button that triggers the broker's
+/// self-updater (`POST /api/update/run`) and polls until it settles. Source /
+/// docker installs can't self-update, so the broker's instruction is shown
+/// instead. Restart broker is kept. (The *app* itself still updates via
+/// TestFlight; this updates the *broker* it talks to.)
 ///
 /// Broker calls used:
 ///   `broker.updateStatus()` — async → `UpdateStatus?`
+///   `broker.runUpdate()` — async → `RunUpdateResult?`
 ///   `broker.restartBroker()` — fire-and-forget
 struct SystemSettingsView: View {
     let broker: BrokerSession
@@ -18,6 +23,9 @@ struct SystemSettingsView: View {
 
     @State private var showRestartConfirm = false
     @State private var restarting = false
+
+    @State private var runError: String?
+    @State private var pollTask: Task<Void, Never>?
 
     var body: some View {
         Group {
@@ -32,6 +40,7 @@ struct SystemSettingsView: View {
         .smInlineNavigationTitle()
         .tint(Theme.teal)
         .task { await load() }
+        .onDisappear { pollTask?.cancel() }
     }
 
     // MARK: - Form
@@ -95,6 +104,30 @@ struct SystemSettingsView: View {
                         .font(.subheadline)
                         .foregroundStyle(Theme.teal)
                     }
+                }
+
+                // Update broker — binary self-updater only. Source/docker can't
+                // self-update (the broker says so); hide while an update is in
+                // flight (the state row above shows progress) and once staged
+                // (restart-required needs a restart, not a re-run).
+                if s.mode == "binary",
+                   (s.updateAvailable || s.state == "failed"),
+                   !isRunning(s.state),
+                   s.state != "restart-required" {
+                    Button {
+                        Task { await startUpdate() }
+                    } label: {
+                        HStack {
+                            Text(s.state == "failed" ? "Retry update" : "Update broker")
+                            Spacer()
+                        }
+                    }
+                    .tint(Theme.teal)
+                }
+                if let runError {
+                    Text(runError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
                 }
             } else {
                 // Should only hit this if load() returns status=nil without error.
@@ -206,6 +239,46 @@ struct SystemSettingsView: View {
         } else {
             loadError = "Couldn't load update status."
         }
+    }
+
+    /// Silent status refresh used while polling an in-flight update (keeps the
+    /// form on screen instead of flashing the full-screen loading state).
+    private func refresh() async {
+        if let s = await broker.updateStatus() {
+            status = s
+            loadError = nil
+        }
+    }
+
+    private func startUpdate() async {
+        runError = nil
+        guard let result = await broker.runUpdate() else {
+            runError = "Couldn't reach the broker."
+            return
+        }
+        if result.started {
+            pollUntilSettled()
+        } else if let err = result.error {
+            runError = result.instruction ?? err
+        }
+    }
+
+    /// Poll the update status every 1.5s until the broker leaves the
+    /// downloading/swapping states (idle / restart-required / failed).
+    private func pollUntilSettled() {
+        pollTask?.cancel()
+        pollTask = Task {
+            for _ in 0..<120 {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                if Task.isCancelled { return }
+                await refresh()
+                if let s = status, !isRunning(s.state) { return }
+            }
+        }
+    }
+
+    private func isRunning(_ state: String) -> Bool {
+        state == "checking" || state == "downloading" || state == "swapping"
     }
 
     /// Formats epoch-ms Double? (from SKIE-bridged Kotlin `Double?` → `KotlinDouble?`)
