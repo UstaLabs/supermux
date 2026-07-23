@@ -2,6 +2,7 @@ import { test, expect } from "bun:test"
 import { Database } from "bun:sqlite"
 import { MIGRATIONS } from "../src/core/storage/migrations"
 import { SessionStore } from "../src/core/session-manager/session-store"
+import { isDraftSession } from "../src/core/session-manager/supervisor"
 
 function store(): SessionStore {
   const db = new Database(":memory:")
@@ -27,4 +28,12 @@ test("resume restores user_status to in_progress", () => {
   const rec = s.getById(sess.id)!
   expect(rec.status).toBe("active")
   expect(rec.user_status).toBe("in_progress")
+})
+
+test("isDraftSession identifies drafts the reconcile loop must skip", () => {
+  const s = store()
+  const draft = s.register({ name: "sd1", agent: "claude", workdir: "/tmp", pid: 0, user_status: "draft" })
+  const live = s.register({ name: "sd2", agent: "claude", workdir: "/tmp", pid: 7 })
+  expect(isDraftSession(s.getById(draft.id)!)).toBe(true)
+  expect(isDraftSession(s.getById(live.id)!)).toBe(false)
 })
