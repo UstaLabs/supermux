@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, provide, onMounted } from "vue"
+import { computed, ref, reactive, provide, onMounted } from "vue"
 import { useRoute, useRouter } from "vue-router"
-import { PanelLeftClose } from "lucide-vue-next"
+import { PanelLeftClose, ChevronDown } from "lucide-vue-next"
+import type { PathGroup, PathGroupSection as PathGroupSectionType } from "@/composables/usePathGroups"
 import { useSessions } from "@/stores/sessions"
 import { useUnread } from "@/stores/unread"
 import { useLayout } from "@/stores/layout"
@@ -93,6 +94,43 @@ function navigateToSession(id: string) {
   router.push(`/s/${id}`)
 }
 
+// Count only non-settled sessions for the group badge. PA groups have no
+// sections, so fall back to their flat session list.
+function activeCount(group: PathGroup): number {
+  return group.sections.length
+    ? group.sections.filter((s) => s.key !== "settled").reduce((n, s) => n + s.sessions.length, 0)
+    : group.sessions.length
+}
+
+// Settled sub-sections start collapsed, expanded per project (keyed by workdir).
+const settledExpanded = reactive(new Set<string>())
+function toggleSettled(workdir: string) {
+  if (settledExpanded.has(workdir)) settledExpanded.delete(workdir)
+  else settledExpanded.add(workdir)
+}
+function sectionVisible(group: PathGroup, section: PathGroupSectionType): boolean {
+  return section.key !== "settled" || settledExpanded.has(group.workdir)
+}
+
+const dragId = ref<string | null>(null)
+function onDragStart(id: string) {
+  dragId.value = id
+}
+async function onDrop(section: { key: string; sessions: { id: string }[] }, targetId: string) {
+  const from = dragId.value
+  dragId.value = null
+  if (!from || from === targetId || section.key === "settled") return
+  const ids = section.sessions.map((s) => s.id)
+  const toIdx = ids.indexOf(targetId)
+  if (toIdx < 0) return
+  sessions.setLocalOrder(from, toIdx) // optimistic
+  try {
+    await api.setSessionOrder(from, toIdx)
+  } catch (e: any) {
+    toast.error(e?.message ?? "Reorder failed")
+  }
+}
+
 </script>
 
 <template>
@@ -126,38 +164,105 @@ function navigateToSession(id: string) {
         <PathGroupSection
           :label="group.label"
           :collapsed="group.collapsed"
-          :count="group.sessions.length"
+          :count="activeCount(group)"
           @toggle="toggle(group.workdir)"
         >
-          <template v-for="s in group.sessions" :key="s.id">
-            <SessionContextMenu
-              :name="s.name"
-              :mute="s.mute"
-              @kill="requestKill(s.id)"
-              @mute="handleMute(s.id)"
-              @rename="renamingRow = s.name"
-            >
-              <template #default="{ onContextmenu }">
-                <div @contextmenu="onContextmenu">
-                  <SessionRow
-                    :id="s.id"
+          <!-- PA group (no sections): render its flat session list. -->
+          <template v-if="!group.sections.length">
+            <template v-for="s in group.sessions" :key="s.id">
+              <SessionContextMenu
+                :name="s.name"
+                :mute="s.mute"
+                @kill="requestKill(s.id)"
+                @mute="handleMute(s.id)"
+                @rename="renamingRow = s.name"
+              >
+                <template #default="{ onContextmenu }">
+                  <div @contextmenu="onContextmenu">
+                    <SessionRow
+                      :id="s.id"
+                      :name="s.name"
+                      :workdir="s.workdir"
+                      :connected="s.connected"
+                      :reserve-menu-space="true"
+                      :active="s.id === activeId"
+                      :unread="unread.isUnread(s.id)"
+                      :agent="s.agent"
+                      :model="s.model"
+                      :status="s.status"
+                      :renaming="renamingRow === s.name"
+                      @navigate="navigateToSession(s.id)"
+                      @rename="(newName) => handleRename(s.id, newName)"
+                      @rename-cancel="renamingRow = null"
+                    />
+                  </div>
+                </template>
+              </SessionContextMenu>
+            </template>
+          </template>
+
+          <!-- Path group: render each user-status section with a sub-header. -->
+          <template v-else>
+            <div v-for="section in group.sections" :key="section.key">
+              <button
+                v-if="section.key === 'settled'"
+                type="button"
+                class="flex items-center gap-1.5 w-full px-3 py-1 text-left hover:bg-muted/40 transition-colors"
+                :aria-expanded="settledExpanded.has(group.workdir)"
+                @click="toggleSettled(group.workdir)"
+              >
+                <ChevronDown
+                  class="size-3 shrink-0 text-muted-foreground/70 transition-transform duration-150"
+                  :class="{ '-rotate-90': !settledExpanded.has(group.workdir) }"
+                />
+                <span class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 truncate">{{ section.label }}</span>
+                <span class="text-[10px] tabular-nums text-muted-foreground/50">{{ section.sessions.length }}</span>
+              </button>
+              <div v-else class="flex items-center gap-1.5 px-3 py-1">
+                <span class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 truncate">{{ section.label }}</span>
+                <span v-if="section.sessions.length > 1" class="text-[10px] tabular-nums text-muted-foreground/50">{{ section.sessions.length }}</span>
+              </div>
+
+              <template v-if="sectionVisible(group, section)">
+                <div
+                  v-for="s in section.sessions"
+                  :key="s.id"
+                  :draggable="section.key !== 'settled'"
+                  @dragstart="onDragStart(s.id)"
+                  @dragover.prevent
+                  @drop="onDrop(section, s.id)"
+                >
+                  <SessionContextMenu
                     :name="s.name"
-                    :workdir="s.workdir"
-                    :connected="s.connected"
-                    :reserve-menu-space="true"
-                    :active="s.id === activeId"
-                    :unread="unread.isUnread(s.id)"
-                    :agent="s.agent"
-                    :model="s.model"
-                    :status="s.status"
-                    :renaming="renamingRow === s.name"
-                    @navigate="navigateToSession(s.id)"
-                    @rename="(newName) => handleRename(s.id, newName)"
-                    @rename-cancel="renamingRow = null"
-                  />
+                    :mute="s.mute"
+                    @kill="requestKill(s.id)"
+                    @mute="handleMute(s.id)"
+                    @rename="renamingRow = s.name"
+                  >
+                    <template #default="{ onContextmenu }">
+                      <div @contextmenu="onContextmenu">
+                        <SessionRow
+                          :id="s.id"
+                          :name="s.name"
+                          :workdir="s.workdir"
+                          :connected="s.connected"
+                          :reserve-menu-space="true"
+                          :active="s.id === activeId"
+                          :unread="unread.isUnread(s.id)"
+                          :agent="s.agent"
+                          :model="s.model"
+                          :status="s.status"
+                          :renaming="renamingRow === s.name"
+                          @navigate="navigateToSession(s.id)"
+                          @rename="(newName) => handleRename(s.id, newName)"
+                          @rename-cancel="renamingRow = null"
+                        />
+                      </div>
+                    </template>
+                  </SessionContextMenu>
                 </div>
               </template>
-            </SessionContextMenu>
+            </div>
           </template>
         </PathGroupSection>
       </template>
@@ -196,25 +301,78 @@ function navigateToSession(id: string) {
       <PathGroupSection
         :label="group.label"
         :collapsed="group.collapsed"
-        :count="group.sessions.length"
+        :count="activeCount(group)"
         @toggle="toggle(group.workdir)"
       >
-        <SwipeableSessionRow
-          v-for="s in group.sessions"
-          :key="s.id"
-          :id="s.id"
-          :name="s.name"
-          :workdir="s.workdir"
-          :connected="s.connected"
-          :mute="s.mute"
-          :unread="unread.isUnread(s.id)"
-          :agent="s.agent"
-          :model="s.model"
-          :status="s.status"
-          @kill="requestKill"
-          @mute="handleMute"
-          @rename="handleRename"
-        />
+        <!-- PA group (no sections): render its flat session list. -->
+        <template v-if="!group.sections.length">
+          <SwipeableSessionRow
+            v-for="s in group.sessions"
+            :key="s.id"
+            :id="s.id"
+            :name="s.name"
+            :workdir="s.workdir"
+            :connected="s.connected"
+            :mute="s.mute"
+            :unread="unread.isUnread(s.id)"
+            :agent="s.agent"
+            :model="s.model"
+            :status="s.status"
+            @kill="requestKill"
+            @mute="handleMute"
+            @rename="handleRename"
+          />
+        </template>
+
+        <!-- Path group: render each user-status section with a sub-header. -->
+        <template v-else>
+          <div v-for="section in group.sections" :key="section.key">
+            <button
+              v-if="section.key === 'settled'"
+              type="button"
+              class="flex items-center gap-1.5 w-full px-4 py-1 text-left hover:bg-muted/40 transition-colors"
+              :aria-expanded="settledExpanded.has(group.workdir)"
+              @click="toggleSettled(group.workdir)"
+            >
+              <ChevronDown
+                class="size-3 shrink-0 text-muted-foreground/70 transition-transform duration-150"
+                :class="{ '-rotate-90': !settledExpanded.has(group.workdir) }"
+              />
+              <span class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 truncate">{{ section.label }}</span>
+              <span class="text-[10px] tabular-nums text-muted-foreground/50">{{ section.sessions.length }}</span>
+            </button>
+            <div v-else class="flex items-center gap-1.5 px-4 py-1">
+              <span class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 truncate">{{ section.label }}</span>
+              <span v-if="section.sessions.length > 1" class="text-[10px] tabular-nums text-muted-foreground/50">{{ section.sessions.length }}</span>
+            </div>
+
+            <template v-if="sectionVisible(group, section)">
+              <div
+                v-for="s in section.sessions"
+                :key="s.id"
+                :draggable="section.key !== 'settled'"
+                @dragstart="onDragStart(s.id)"
+                @dragover.prevent
+                @drop="onDrop(section, s.id)"
+              >
+                <SwipeableSessionRow
+                  :id="s.id"
+                  :name="s.name"
+                  :workdir="s.workdir"
+                  :connected="s.connected"
+                  :mute="s.mute"
+                  :unread="unread.isUnread(s.id)"
+                  :agent="s.agent"
+                  :model="s.model"
+                  :status="s.status"
+                  @kill="requestKill"
+                  @mute="handleMute"
+                  @rename="handleRename"
+                />
+              </div>
+            </template>
+          </div>
+        </template>
       </PathGroupSection>
     </template>
 
