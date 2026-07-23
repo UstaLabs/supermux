@@ -132,3 +132,33 @@ test("reconcile invokes the internal-worker reaper each tick", async () => {
   await sup.reconcile()
   expect(reapCalls).toBe(1)
 })
+
+test("reconcile never suspends a draft (pid 0 reads as dead but the guard skips it)", async () => {
+  const registry = new Registry(db)
+  // A draft: cached claude row with no process. pid 0 → isProcessAlive returns
+  // false, so WITHOUT the isDraftSession guard the live reconcile loop (which
+  // suspends dead claude sessions) would suspend it. This pins that guard.
+  // Mirror main.ts createDraft: the draft row is written via the store's
+  // register (registry.register drops user_status), so a draft is claude + pid 0.
+  const draft = registry.sessions.register({
+    name: "draft-1",
+    agent: AgentKind.Claude,
+    workdir: "/tmp",
+    pid: 0,
+    user_status: "draft",
+  })
+  const sup = createSupervisor({
+    registry,
+    bindSocket: async () => {},
+    spawnTmux: async () => {},
+  })
+  try {
+    await sup.reconcile()
+  } finally {
+    sup.stop()
+  }
+  const after = registry.get(draft.id)
+  expect(after).toBeDefined()
+  expect(after?.status).toBe("active")
+  expect(after?.user_status).toBe("draft")
+})
