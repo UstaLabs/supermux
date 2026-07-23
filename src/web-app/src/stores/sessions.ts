@@ -84,6 +84,13 @@ export const useSessions = defineStore("sessions", () => {
     archivedLoaded.value = true
   }
 
+  function addArchived(a: ArchivedSession) {
+    if (!archivedSessions.value.some((x) => x.id === a.id)) archivedSessions.value.push(a)
+  }
+  function removeArchived(id: string) {
+    archivedSessions.value = archivedSessions.value.filter((x) => x.id !== id)
+  }
+
   async function resumeSession(id: string) {
     await api.resumeSession(id)
     archivedSessions.value = archivedSessions.value.filter((s) => s.id !== id)
@@ -92,6 +99,6 @@ export const useSessions = defineStore("sessions", () => {
   return {
     list, archivedSessions, archivedLoaded, homeDir,
     replace, add, remove, rename, updateState, setLocalOrder, setHomeDir,
-    byId, displayName, fetchArchived, resumeSession,
+    byId, displayName, fetchArchived, resumeSession, addArchived, removeArchived,
   }
 })

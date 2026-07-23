@@ -99,12 +99,39 @@ function navigateToSession(id: string) {
   router.push(`/s/${id}`)
 }
 
-// Mark an in_progress session settled. Backend archives + settles it.
+// Mark an in_progress session settled. Backend archives + settles it and
+// broadcasts session_removed (dropping it from `list`). The Settled section is
+// built from archivedSessions, which is only fetched on mount — so add it
+// optimistically here to show it under Settled immediately, rolling back on
+// failure.
 async function handleSettle(id: string) {
+  const s = sessions.list.find((x) => x.id === id)
+  if (s) {
+    sessions.addArchived({
+      id: s.id,
+      name: s.name,
+      workdir: s.workdir,
+      agent: s.agent ?? "claude",
+      model: s.model,
+      repo_root: s.repo_root,
+      killed_at: new Date().toISOString(),
+    })
+  }
   try {
     await api.killSession(id)
   } catch (e: any) {
+    sessions.removeArchived(id) // rollback
     toast.error(e?.message ?? "Failed to settle")
+  }
+}
+
+// Discard a draft entirely. Backend hard-deletes it (removed via
+// session_removed); it must NOT appear under Settled.
+async function handleDeleteDraft(id: string) {
+  try {
+    await api.killSession(id)
+  } catch (e: any) {
+    toast.error(e?.message ?? "Failed to delete draft")
   }
 }
 
@@ -278,7 +305,7 @@ async function onDrop(section: { key: string; sessions: { id: string }[] }, targ
                     @settle="handleSettle(s.id)"
                     @resume="handleResume(s.id)"
                     @open-draft="handleOpenDraft(s.id)"
-                    @delete-draft="handleSettle(s.id)"
+                    @delete-draft="handleDeleteDraft(s.id)"
                   >
                     <template #default="{ onContextmenu }">
                       <div @contextmenu="onContextmenu">
@@ -413,7 +440,7 @@ async function onDrop(section: { key: string; sessions: { id: string }[] }, targ
                   @settle="handleSettle"
                   @resume="handleResume"
                   @open-draft="handleOpenDraft"
-                  @delete-draft="handleSettle"
+                  @delete-draft="handleDeleteDraft"
                 />
               </div>
             </template>
