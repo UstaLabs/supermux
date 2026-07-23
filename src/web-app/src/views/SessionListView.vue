@@ -49,6 +49,7 @@ const activeId = computed(() => (typeof route.params.id === "string" ? route.par
 onMounted(() => {
   const name = consumeRenameRequest()
   if (name) renamingRow.value = name
+  if (!sessions.archivedLoaded) void sessions.fetchArchived()
 })
 
 function requestKill(id: string) {

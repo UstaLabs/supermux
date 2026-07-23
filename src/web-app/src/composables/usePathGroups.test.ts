@@ -100,3 +100,13 @@ test("groups split into in_progress/draft/settled sections ordered by sortOrder"
   expect(ip.sessions.map((s) => s.id)).toEqual(["p2", "p1"])
   expect(g.sections.find((s) => s.key === "draft")!.sessions.map((s) => s.id)).toEqual(["d1"])
 })
+
+test("archived sessions appear under the project's Settled section", () => {
+  const sessions = useSessions()
+  sessions.replace([{ id: "p1", name: "live", workdir: "/w", mute: false, connected: false, userStatus: "in_progress", sortOrder: 0 }])
+  sessions.archivedSessions = [{ id: "s1", name: "done", workdir: "/w", agent: "claude" } as any]
+  const sorted = computed(() => sessions.list)
+  const { groups } = usePathGroups(sorted as any)
+  const g = groups.value.find((x) => x.sessions.some((s) => s.id === "p1"))!
+  expect(g.sections.find((s) => s.key === "settled")!.sessions.map((s) => s.id)).toContain("s1")
+})

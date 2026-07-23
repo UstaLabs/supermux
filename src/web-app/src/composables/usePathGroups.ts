@@ -100,7 +100,20 @@ export function usePathGroups(sortedSessions: ComputedRef<Session[]>) {
   const groups = computed<PathGroup[]>(() => {
     const byPath = new Map<string, Session[]>()
     const homeDir = sessionsStore.homeDir
-    for (const s of sortedSessions.value) {
+    const archivedAsSessions: Session[] = sessionsStore.archivedSessions.map((a) => ({
+      id: a.id,
+      name: a.name,
+      workdir: a.workdir,
+      mute: false,
+      connected: false,
+      agent: a.agent,
+      repo_root: a.repo_root,
+      status: "archived",
+      userStatus: "settled",
+      sortOrder: 0,
+    }))
+    const combined = [...sortedSessions.value, ...archivedAsSessions]
+    for (const s of combined) {
       if (s.role === "personal_assistant") continue
       // Worktree-backed sessions group under their project (repo_root), not the
       // internal worktree path.
