@@ -128,6 +128,12 @@ export class SessionStore {
     this.cache.delete(id)
   }
 
+  /** Hard-delete a session row (used to consume a draft when it starts). */
+  deleteById(id: string): void {
+    this.db.run("DELETE FROM sessions WHERE id = ?", [id])
+    this.cache.delete(id)
+  }
+
   suspend(id: string): void {
     const session = this.cache.get(id)
     if (!session) return

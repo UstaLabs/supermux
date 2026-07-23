@@ -3202,7 +3202,71 @@ if (webChannel) {
         return
       }
     }
-    handleWebInbound(msg, {
+    // First message to a draft: spawn its agent, then deliver to the now-live
+    // session. spawnSession/spawnClaudeSession always mint a NEW row (for claude
+    // the row is created async by the shim's onRegister with a fresh uuid), so
+    // there is no way to adopt the draft's id here. Instead we HARD-DELETE the
+    // vestigial draft row FIRST — that frees its display name in the registry so
+    // the spawned agent claims the SAME name (otherwise ensureUnique would
+    // uniquify it to "<name>-2") and leaves no archived "settled" ghost — then
+    // spawn a fresh in_progress session and route the message to it. On spawn
+    // failure the draft is restored verbatim (same id) so nothing is lost. The
+    // spawn's own onRegister emits session_added for the new live row; we only
+    // add the draft's session_removed here (and session_added on the restore
+    // path). Net result: exactly one session, no orphan/ghost draft.
+    let inbound = msg
+    if (targetSession && targetSession.user_status === "draft") {
+      const draftSnapshot = {
+        id: targetSession.id,
+        name: targetSession.name,
+        agent: targetSession.agent,
+        workdir: targetSession.workdir,
+        model: targetSession.model,
+        reasoningLevel: targetSession.reasoningLevel,
+        pid: 0,
+        user_status: "draft" as const,
+        draft_payload: targetSession.draft_payload,
+      }
+      registry.sessions.deleteById(targetSession.id)   // frees the name, no ghost
+      webChannel?.broadcastToAll({ type: "session_removed", id: draftSnapshot.id })
+      let started: ReturnType<typeof registry.resolveName>
+      try {
+        const spawned = await spawnSession({
+          workdir: draftSnapshot.workdir,
+          requestedName: draftSnapshot.name,
+          agent: draftSnapshot.agent,
+          model: draftSnapshot.model,
+          reasoningLevel: draftSnapshot.reasoningLevel,
+        })
+        started = registry.resolveName(spawned.name)
+      } catch (err: any) {
+        log.error("draft_spawn_failed", { id: draftSnapshot.id, name: draftSnapshot.name, err: err?.message ?? String(err) })
+      }
+      if (!started) {
+        // Restore the draft (same id, still a draft) and re-add it client-side.
+        registry.sessions.register(draftSnapshot)
+        webChannel?.broadcastToAll({
+          type: "session_added",
+          session: {
+            id: draftSnapshot.id,
+            name: draftSnapshot.name,
+            workdir: draftSnapshot.workdir,
+            mute: false,
+            connected: false,
+            agent: draftSnapshot.agent,
+            model: draftSnapshot.model,
+            reasoningLevel: draftSnapshot.reasoningLevel,
+            status: "active",
+            user_status: "draft",
+            sort_order: 0,
+          },
+        })
+        webChannel!.send({ op: "reply", chat_id: msg.chat_id, text: `Failed to start session "${draftSnapshot.name}".` })
+        return
+      }
+      inbound = { ...msg, target_session_id: started.id }
+    }
+    handleWebInbound(inbound, {
       messageLog,
       sendInbound: (sid, payload) => server.sendInbound(sid, payload),
       hasSession: (id) => !!registry.get(id),

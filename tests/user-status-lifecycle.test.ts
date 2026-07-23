@@ -37,3 +37,10 @@ test("isDraftSession identifies drafts the reconcile loop must skip", () => {
   expect(isDraftSession(s.getById(draft.id)!)).toBe(true)
   expect(isDraftSession(s.getById(live.id)!)).toBe(false)
 })
+
+test("deleteById removes a draft row entirely (no archived ghost)", () => {
+  const s = store()
+  const d = s.register({ name: "m1", agent: "claude", workdir: "/tmp", pid: 0, user_status: "draft", draft_payload: { text: "go" } })
+  s.deleteById(d.id)
+  expect(s.getById(d.id)).toBeUndefined()
+})
