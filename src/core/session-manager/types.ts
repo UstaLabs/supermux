@@ -6,6 +6,19 @@ export type SessionStatus = "active" | "suspended" | "archived"
 export type { AgentKind }
 export type { SessionRole }
 
+export type UserStatus = "draft" | "in_progress" | "settled"
+
+export type DraftAttachment = {
+  file_id: string
+  name?: string
+  mime?: string
+}
+
+export type DraftPayload = {
+  text?: string
+  attachments?: DraftAttachment[]
+}
+
 export type SessionRecord = {
   id: string
   name: string
@@ -32,6 +45,9 @@ export type SessionRecord = {
   session_branch?: string
   finish_job?: FinishJob
   self_renamed?: boolean
+  user_status: UserStatus
+  sort_order: number
+  draft_payload?: DraftPayload
 }
 
 export type TmuxRef = {
@@ -65,6 +81,9 @@ export type SessionRow = {
   session_branch: string | null
   finish_job: string | null
   self_renamed: number
+  user_status?: string
+  sort_order?: number
+  draft_payload?: string | null
 }
 
 export type Session = SessionRecord & {
@@ -105,6 +124,9 @@ export function rowToRecord(row: SessionRow): SessionRecord {
     session_branch: row.session_branch ?? undefined,
     finish_job: row.finish_job ? JSON.parse(row.finish_job) : undefined,
     self_renamed: row.self_renamed === 1,
+    user_status: (row.user_status as UserStatus) ?? "in_progress",
+    sort_order: row.sort_order ?? 0,
+    draft_payload: row.draft_payload ? JSON.parse(row.draft_payload) : undefined,
   }
 }
 

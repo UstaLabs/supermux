@@ -1,6 +1,7 @@
 import { test, expect } from "bun:test"
 import { Database } from "bun:sqlite"
 import { MIGRATIONS } from "../src/core/storage/migrations"
+import { rowToRecord, type SessionRow } from "../src/core/session-manager/types"
 
 function migratedDb(upTo: number = Infinity): Database {
   const db = new Database(":memory:")
@@ -46,4 +47,36 @@ test("migration 026 defaults non-archived rows to in_progress", () => {
   db.exec(m026.sql)
   const row = db.query("SELECT user_status FROM sessions WHERE id='b1'").get() as { user_status: string }
   expect(row.user_status).toBe("in_progress")
+})
+
+test("rowToRecord maps user_status, sort_order, draft_payload", () => {
+  const row = {
+    id: "s1", name: "n", status: "active", agent: "claude", workdir: "/tmp",
+    model: null, reasoning_level: null, mute: 0, can_orchestrate: 0, role: "worker",
+    is_default: 0, internal: 0, tmux_target: null, tmux_window_id: null,
+    agent_session_id: null, agent_home: null, created_at: "2026-01-01T00:00:00Z",
+    killed_at: null, base_commit: null, base_commits: null, repo_root: null,
+    base_branch: null, session_branch: null, finish_job: null, self_renamed: 0,
+    user_status: "draft", sort_order: 3,
+    draft_payload: JSON.stringify({ text: "hi", attachments: [] }),
+  } as unknown as SessionRow
+  const rec = rowToRecord(row)
+  expect(rec.user_status).toBe("draft")
+  expect(rec.sort_order).toBe(3)
+  expect(rec.draft_payload).toEqual({ text: "hi", attachments: [] })
+})
+
+test("rowToRecord defaults user_status to in_progress when column absent", () => {
+  const row = {
+    id: "s2", name: "n", status: "active", agent: "claude", workdir: "/tmp",
+    model: null, reasoning_level: null, mute: 0, can_orchestrate: 0, role: "worker",
+    is_default: 0, internal: 0, tmux_target: null, tmux_window_id: null,
+    agent_session_id: null, agent_home: null, created_at: "2026-01-01T00:00:00Z",
+    killed_at: null, base_commit: null, base_commits: null, repo_root: null,
+    base_branch: null, session_branch: null, finish_job: null, self_renamed: 0,
+  } as unknown as SessionRow
+  const rec = rowToRecord(row)
+  expect(rec.user_status).toBe("in_progress")
+  expect(rec.sort_order).toBe(0)
+  expect(rec.draft_payload).toBeUndefined()
 })
