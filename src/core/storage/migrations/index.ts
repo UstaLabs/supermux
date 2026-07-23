@@ -30,6 +30,7 @@ import m022 from "./022_memory_search.sql" with { type: "text" }
 import m023 from "./023_pending_uploads.sql" with { type: "text" }
 import m024 from "./024_grok_agent.sql" with { type: "text" }
 import m025 from "./025_self_renamed.sql" with { type: "text" }
+import m026 from "./026_user_status.sql" with { type: "text" }
 
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "001_init", sql: m001 },
@@ -56,4 +57,5 @@ export const MIGRATIONS: Migration[] = [
   { version: 23, name: "023_pending_uploads", sql: m023 },
   { version: 24, name: "024_grok_agent", sql: m024 },
   { version: 25, name: "025_self_renamed", sql: m025 },
+  { version: 26, name: "026_user_status", sql: m026 },
 ].sort((a, b) => a.version - b.version)
