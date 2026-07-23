@@ -172,6 +172,8 @@ export const api = {
     request("DELETE", `/sessions/${encodeURIComponent(id)}`),
   renameSession: (id: string, newName: string) =>
     request("POST", `/sessions/${encodeURIComponent(id)}/rename`, { name: newName }),
+  setSessionOrder: (id: string, order: number) =>
+    request("PATCH", `/sessions/${encodeURIComponent(id)}`, { order }) as Promise<{ ok: boolean }>,
   toggleMute: (id: string, muted: boolean) =>
     request("POST", `/sessions/${encodeURIComponent(id)}/mute`, { muted }),
   interrupt: (id: string) =>
