@@ -91,7 +91,35 @@ async function handleRename(id: string, newName: string) {
 }
 
 function navigateToSession(id: string) {
+  const s = sessions.list.find((x) => x.id === id)
+  if (s?.userStatus === "draft") {
+    router.push({ path: "/new", query: { draft: id } })
+    return
+  }
   router.push(`/s/${id}`)
+}
+
+// Mark an in_progress session settled. Backend archives + settles it.
+async function handleSettle(id: string) {
+  try {
+    await api.killSession(id)
+  } catch (e: any) {
+    toast.error(e?.message ?? "Failed to settle")
+  }
+}
+
+// Resume a settled session back to active.
+async function handleResume(id: string) {
+  try {
+    await sessions.resumeSession(id)
+  } catch (e: any) {
+    toast.error(e?.message ?? "Failed to resume")
+  }
+}
+
+// Open a draft in the launcher for editing / starting.
+function handleOpenDraft(id: string) {
+  router.push({ path: "/new", query: { draft: id } })
 }
 
 // Count only non-settled sessions for the group badge. PA groups have no
@@ -113,13 +141,21 @@ function sectionVisible(group: PathGroup, section: PathGroupSectionType): boolea
 }
 
 const dragId = ref<string | null>(null)
-function onDragStart(id: string) {
+const dragSection = ref<string | null>(null)
+function onDragStart(id: string, key: string) {
   dragId.value = id
+  dragSection.value = key
 }
 async function onDrop(section: { key: string; sessions: { id: string }[] }, targetId: string) {
   const from = dragId.value
   dragId.value = null
   if (!from || from === targetId || section.key === "settled") return
+  // Guard: forbid dropping a row into a different section.
+  if (dragSection.value !== section.key) {
+    dragSection.value = null
+    return
+  }
+  dragSection.value = null
   const ids = section.sessions.map((s) => s.id)
   const toIdx = ids.indexOf(targetId)
   if (toIdx < 0) return
@@ -228,16 +264,21 @@ async function onDrop(section: { key: string; sessions: { id: string }[] }, targ
                   v-for="s in section.sessions"
                   :key="s.id"
                   :draggable="section.key !== 'settled'"
-                  @dragstart="onDragStart(s.id)"
+                  @dragstart="onDragStart(s.id, section.key)"
                   @dragover.prevent
                   @drop="onDrop(section, s.id)"
                 >
                   <SessionContextMenu
                     :name="s.name"
                     :mute="s.mute"
+                    :variant="section.key"
                     @kill="requestKill(s.id)"
                     @mute="handleMute(s.id)"
                     @rename="renamingRow = s.name"
+                    @settle="handleSettle(s.id)"
+                    @resume="handleResume(s.id)"
+                    @open-draft="handleOpenDraft(s.id)"
+                    @delete-draft="handleSettle(s.id)"
                   >
                     <template #default="{ onContextmenu }">
                       <div @contextmenu="onContextmenu">
@@ -351,7 +392,7 @@ async function onDrop(section: { key: string; sessions: { id: string }[] }, targ
                 v-for="s in section.sessions"
                 :key="s.id"
                 :draggable="section.key !== 'settled'"
-                @dragstart="onDragStart(s.id)"
+                @dragstart="onDragStart(s.id, section.key)"
                 @dragover.prevent
                 @drop="onDrop(section, s.id)"
               >
@@ -365,9 +406,14 @@ async function onDrop(section: { key: string; sessions: { id: string }[] }, targ
                   :agent="s.agent"
                   :model="s.model"
                   :status="s.status"
+                  :variant="section.key"
                   @kill="requestKill"
                   @mute="handleMute"
                   @rename="handleRename"
+                  @settle="handleSettle"
+                  @resume="handleResume"
+                  @open-draft="handleOpenDraft"
+                  @delete-draft="handleSettle"
                 />
               </div>
             </template>
