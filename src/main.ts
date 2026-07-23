@@ -3250,6 +3250,7 @@ if (webChannel) {
         reasoningLevel: targetSession.reasoningLevel,
         pid: 0,
         user_status: "draft" as const,
+        sort_order: targetSession.sort_order,
         draft_payload: targetSession.draft_payload,
       }
       registry.sessions.deleteById(targetSession.id)   // frees the name, no ghost
@@ -3283,7 +3284,7 @@ if (webChannel) {
             reasoningLevel: draftSnapshot.reasoningLevel,
             status: "active",
             user_status: "draft",
-            sort_order: 0,
+            sort_order: draftSnapshot.sort_order,
             draft_payload: draftSnapshot.draft_payload,
           },
         })
