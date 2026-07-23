@@ -288,6 +288,24 @@ export class SessionStore {
     session.is_default = value
   }
 
+  setUserStatus(id: string, status: import("./types").UserStatus): void {
+    this.db.run("UPDATE sessions SET user_status = ? WHERE id = ?", [status, id])
+    const cached = this.cache.get(id)
+    if (cached) cached.user_status = status
+  }
+
+  setSortOrder(id: string, order: number): void {
+    this.db.run("UPDATE sessions SET sort_order = ? WHERE id = ?", [order, id])
+    const cached = this.cache.get(id)
+    if (cached) cached.sort_order = order
+  }
+
+  setDraftPayload(id: string, payload: import("./types").DraftPayload | null): void {
+    this.db.run("UPDATE sessions SET draft_payload = ? WHERE id = ?", [payload ? JSON.stringify(payload) : null, id])
+    const cached = this.cache.get(id)
+    if (cached) cached.draft_payload = payload ?? undefined
+  }
+
   listActive(): Session[] {
     return [...this.cache.values()].filter(s => s.status === "active")
   }

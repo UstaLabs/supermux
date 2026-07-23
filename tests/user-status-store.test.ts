@@ -103,3 +103,26 @@ test("register can create a draft with a payload and no persisted default", () =
   expect(row.user_status).toBe("draft")
   expect(JSON.parse(row.draft_payload)).toEqual({ text: "plan", attachments: [] })
 })
+
+test("setUserStatus updates DB and cache", () => {
+  const store = new SessionStore(migratedDb())
+  const s = store.register({ name: "u1", agent: "claude", workdir: "/tmp", pid: 1 })
+  store.setUserStatus(s.id, "settled")
+  expect(store.getById(s.id)!.user_status).toBe("settled")
+})
+
+test("setDraftPayload writes and clears", () => {
+  const store = new SessionStore(migratedDb())
+  const s = store.register({ name: "u2", agent: "claude", workdir: "/tmp", pid: 0, user_status: "draft" })
+  store.setDraftPayload(s.id, { text: "edited" })
+  expect(store.getById(s.id)!.draft_payload).toEqual({ text: "edited" })
+  store.setDraftPayload(s.id, null)
+  expect(store.getById(s.id)!.draft_payload).toBeUndefined()
+})
+
+test("setSortOrder updates a single moved item's order", () => {
+  const store = new SessionStore(migratedDb())
+  const a = store.register({ name: "r-a", agent: "claude", workdir: "/w", pid: 1 })
+  store.setSortOrder(a.id, 4)
+  expect(store.getById(a.id)!.sort_order).toBe(4)
+})
