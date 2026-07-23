@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue"
-import { useRouter } from "vue-router"
+import { useRouter, useRoute } from "vue-router"
 import { ArrowUp, ChevronLeft, FolderOpen, Loader2Icon } from "lucide-vue-next"
 import { toast } from "vue-sonner"
 import { api } from "@/api/client"
@@ -46,6 +46,7 @@ import { useLauncherCommands } from "@/composables/useLauncherCommands"
 import type { AttachmentFile, PromptInputMessage } from "@/components/ai-elements/prompt-input"
 
 const router = useRouter()
+const route = useRoute()
 const ws = useWS()
 const sessions = useSessions()
 const pending = usePendingFirstMessage()
@@ -68,6 +69,11 @@ const repoInfo = ref<{ isGitRepo: boolean; eligible: boolean; repoRoot?: string;
 const useWorktree = ref(true)
 const baseBranch = ref("")
 
+// When the launcher is opened from a draft (`/new?draft=<id>`), this holds the
+// draft's session id so onPromptSubmit can discard it before spawning the real
+// session. Null for a normal new-session launch.
+const activeDraftId = ref<string | null>(null)
+
 const launcherDraft = useLauncherDraft()
 if (launcherDraft.state.workdir) {
   workdir.value = launcherDraft.state.workdir
@@ -75,6 +81,33 @@ if (launcherDraft.state.workdir) {
 }
 useWorktree.value = launcherDraft.state.useWorktree
 baseBranch.value = launcherDraft.state.baseBranch
+
+// Prefill the launcher from a reopened draft (`/new?draft=<id>`). This MUST run
+// synchronously in setup (not onMounted): the child PromptInput reads
+// `:initial-input="launcherDraft.state.text"` once during ITS setup, which fires
+// before the parent's onMounted — so setText must land here to be picked up.
+// Runs after the launcherDraft-based workdir restore above so the draft's values
+// win. The draft session is expected to already be in the store from the list
+// view; a hard navigation before the store hydrates makes prefill a best-effort
+// no-op.
+{
+  const draftId = route.query.draft
+  if (typeof draftId === "string") {
+    const s = sessions.list.find((x) => x.id === draftId)
+    if (s) {
+      activeDraftId.value = draftId
+      workdir.value = s.workdir
+      workdirTouched.value = true
+      if (s.agent) agent.value = s.agent as typeof agent.value
+      if (s.model) model.value = s.model
+      if (s.reasoningLevel) reasoningLevel.value = s.reasoningLevel
+      // Restore the composer TEXT only. Draft attachments store LOCAL composer
+      // ids (never uploaded), so they can't be reliably re-materialized — known
+      // limitation; text is restored, attachments are dropped.
+      launcherDraft.setText(s.draftPayload?.text ?? "")
+    }
+  }
+}
 
 // True once refreshRepoInfo has resolved at least once. Gates the "default to the
 // repo's current branch" reset so a restored draft's baseBranch survives the first,
@@ -280,6 +313,14 @@ async function onPromptSubmit(payload: PromptInputMessage) {
     if (!validation.ok || !validation.path) {
       toast.error(validation.error ?? "Invalid working directory")
       return
+    }
+    // Starting a reopened draft: the backend hard-deletes a draft on send and
+    // spawns a brand-new session under a different id, so we can't send to the
+    // draft directly. Instead discard the draft first (freeing its name), then
+    // fall through to the normal createSession + pending + navigate flow.
+    if (activeDraftId.value) {
+      try { await api.killSession(activeDraftId.value) } catch { /* draft may already be gone; proceed */ }
+      activeDraftId.value = null
     }
     const result = await api.createSession({
       workdir: validation.path,
