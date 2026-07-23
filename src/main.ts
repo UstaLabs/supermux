@@ -30,7 +30,7 @@ function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
 }
 
 import { startSocketServer } from "./core/session-manager/socket-server"
-import { createSupervisor, reconcileOnStartup } from "./core/session-manager/supervisor"
+import { createSupervisor, reconcileOnStartup, isDraftSession } from "./core/session-manager/supervisor"
 import { acquirePidFile, releasePidFile } from "./core/session-manager/pid-file"
 import { spawnSessionWindow, killWindowById, listSessionWindows, livePanePid, sendKeysToWindowId, resolveWindowIdByName } from "./core/session-manager/tmux"
 import { ensureWindowId } from "./core/session-manager/window-id"
@@ -1733,6 +1733,16 @@ async function refreshTelegramMenu() {
 async function killSession(id: string) {
   const s = registry.get(id)
   if (!s) return
+
+  // A draft is a cached session row with no process, no tmux window, and no
+  // proxies. Deleting it must DISCARD (hard-delete) the row — never archive it
+  // to user_status='settled', which would leave a phantom settled session.
+  if (isDraftSession(s)) {
+    registry.sessions.deleteById(s.id)
+    webChannel?.broadcastToAll({ type: "session_removed", id: s.id })
+    return
+  }
+
   const displayName = s.name
 
   terminalManager.killAllForSession(displayName)

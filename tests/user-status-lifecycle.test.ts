@@ -45,6 +45,26 @@ test("deleteById removes a draft row entirely (no archived ghost)", () => {
   expect(s.getById(d.id)).toBeUndefined()
 })
 
+// killSession() branches on isDraftSession(): drafts are hard-deleted (discard),
+// non-drafts go through archive() → user_status='settled'. killSession itself is a
+// non-exported closure in main.ts with many runtime deps (tmux/proxy/display), so we
+// pin the discard-vs-settle DECISION at the store layer that the branch relies on.
+test("discard (deleteById) leaves nothing, whereas archive would leave a settled ghost", () => {
+  const s = store()
+  const draft = s.register({ name: "disc", agent: "claude", workdir: "/tmp", pid: 0, user_status: "draft" })
+  expect(isDraftSession(s.getById(draft.id)!)).toBe(true)
+  // The draft path in killSession:
+  s.deleteById(draft.id)
+  expect(s.getById(draft.id)).toBeUndefined()
+
+  // The non-draft path in killSession would archive → a lingering settled row.
+  const live = s.register({ name: "livekill", agent: "claude", workdir: "/tmp", pid: 9 })
+  expect(isDraftSession(s.getById(live.id)!)).toBe(false)
+  s.archive(live.id)
+  const ghost = s.getById(live.id)!
+  expect(ghost.user_status).toBe("settled")
+})
+
 test("lifecycle: a draft is consumed on start (hard-deleted), leaving no ghost", () => {
   const s = store()
   const d = s.register({ name: "e2e-draft", agent: "claude", workdir: "/tmp", pid: 0, user_status: "draft", draft_payload: { text: "x" } })
