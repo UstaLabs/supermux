@@ -13,6 +13,7 @@ import kotlin.test.assertTrue
 class DesktopHostPersistenceTest {
     private class FakeKeepAliveEnv(override val os: KeepAlive.Os) : KeepAliveEnv {
         override val home: Path = Path.of(".")
+        override val localAppData: Path = home.resolve("AppData/Local")
         override val uid: Long? = null
         override val xdgRuntimeDir: String? = null
         override fun hasCommand(name: String) = false

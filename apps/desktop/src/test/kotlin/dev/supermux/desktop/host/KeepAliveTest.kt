@@ -22,6 +22,13 @@ class KeepAliveTest {
         hostId = "abcdefghijklmnopqrstuvwxyz".take(26),
         hostName = "Ahmet's MacBook Air",
     )
+    private val windowsSpec = KeepAlive.Spec(
+        exec = listOf(
+            "C:\\Program Files\\Supermux\\Supermux.exe",
+            "--keep-hosting",
+            "--name=Ahmet & Windows",
+        ),
+    )
 
     // ── string generators ───────────────────────────────────────────────────────────
 
@@ -60,6 +67,31 @@ class KeepAliveTest {
         assertTrue(d.contains("X-GNOME-Autostart-enabled=true"))
     }
 
+    @Test fun windowsTaskXml_isPerUserLeastPrivilegeAndEscapesTheLauncher() {
+        val xml = KeepAlive.windowsTaskXml(windowsSpec)
+        assertTrue(xml.contains("<LogonTrigger>"), "starts at user logon")
+        assertTrue(xml.contains("<LogonType>InteractiveToken</LogonType>"), "runs in the logged-in desktop session")
+        assertTrue(xml.contains("<RunLevel>LeastPrivilege</RunLevel>"), "does not request elevation")
+        assertTrue(xml.contains("<RestartOnFailure>"), "restarts a crashed host")
+        assertTrue(
+            xml.contains("<Command>powershell.exe</Command>"),
+            "uses a fixed non-interactive PowerShell launcher for the env assignment",
+        )
+        assertTrue(
+            xml.contains("\$env:SUPERMUX_KEEP_ALIVE = '1'"),
+            "passes the keep-alive environment through the launcher command",
+        )
+        assertTrue(
+            xml.contains("'C:\\Program Files\\Supermux\\Supermux.exe'"),
+            "PowerShell-quotes the executable",
+        )
+        assertTrue(xml.contains("Ahmet &amp; Windows"), "XML-escapes arguments")
+        assertTrue(
+            xml.contains("<WorkingDirectory>C:\\Program Files\\Supermux</WorkingDirectory>"),
+            "uses the executable directory",
+        )
+    }
+
     @Test fun spec_rejectsEmptyExec() {
         var threw = false
         try { KeepAlive.Spec(exec = emptyList()) } catch (_: IllegalArgumentException) { threw = true }
@@ -71,6 +103,7 @@ class KeepAliveTest {
     private class FakeEnv(
         override val os: KeepAlive.Os,
         override val home: Path,
+        override val localAppData: Path = home.resolve("AppData/Local"),
         override val uid: Long? = 501L,
         override val xdgRuntimeDir: String? = "/run/user/501",
         private val commands: Set<String> = setOf("launchctl", "systemctl", "loginctl"),
@@ -111,11 +144,47 @@ class KeepAliveTest {
         assertTrue(env.ran.any { it.contains("bootstrap") && it.any { a -> a == "gui/501" } }, "bootstrapped into gui/<uid>")
     }
 
-    @Test fun install_onWindows_isNoOp() {
+    @Test fun install_onWindows_writesXmlAndCreatesTheCurrentUserTask() {
         val home = createTempDirectory("ka-win").also { it.toFile().deleteOnExit() }
-        val env = FakeEnv(KeepAlive.Os.OTHER, home)
-        assertEquals(KeepAlive.Result.Unsupported, KeepAlive.install(spec, env))
-        assertTrue(env.ran.isEmpty(), "nothing runs on an unsupported OS")
+        val localAppData = home.resolve("LocalAppData")
+        val env = FakeEnv(KeepAlive.Os.WINDOWS, home, localAppData)
+        val installed = assertIs<KeepAlive.Result.Installed>(KeepAlive.install(windowsSpec, env))
+        val taskXml = localAppData.resolve("Supermux/supermux-host-task.xml")
+        assertEquals(taskXml, installed.path)
+        assertTrue(Files.readString(taskXml, Charsets.UTF_16).contains("<LogonTrigger>"))
+        assertTrue(
+            env.ran.any {
+                it == listOf(
+                    "schtasks.exe", "/Create",
+                    "/TN", KeepAlive.WINDOWS_TASK_NAME,
+                    "/XML", taskXml.toString(),
+                    "/F",
+                )
+            },
+            "creates the idempotent current-user task from the generated XML",
+        )
+    }
+
+    @Test fun remove_onWindows_deletesTheTaskAndGeneratedXml() {
+        val home = createTempDirectory("ka-win-rm").also { it.toFile().deleteOnExit() }
+        val localAppData = home.resolve("LocalAppData")
+        val env = FakeEnv(KeepAlive.Os.WINDOWS, home, localAppData)
+        KeepAlive.install(windowsSpec, env)
+
+        val removed = assertIs<KeepAlive.Result.Removed>(KeepAlive.remove(env))
+        val taskXml = localAppData.resolve("Supermux/supermux-host-task.xml")
+        assertEquals(taskXml, removed.path)
+        assertFalse(Files.exists(taskXml))
+        assertTrue(
+            env.ran.any {
+                it == listOf(
+                    "schtasks.exe", "/Delete",
+                    "/TN", KeepAlive.WINDOWS_TASK_NAME,
+                    "/F",
+                )
+            },
+            "deletes only the per-user Supermux task",
+        )
     }
 
     @Test fun remove_onLinux_deletesUnitAndDisables() {
