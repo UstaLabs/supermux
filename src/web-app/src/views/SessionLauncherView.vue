@@ -35,6 +35,7 @@ import {
   PromptInputActionMenuContent,
   PromptInputActionAddAttachments,
   PromptInputAttachments,
+  PromptInputSaveDraft,
 } from "@/components/ai-elements/prompt-input"
 import PromptInputActionAddCamera from "@/components/ai-elements/prompt-input/PromptInputActionAddCamera.vue"
 import PromptInputActionAddRecordVideo from "@/components/ai-elements/prompt-input/PromptInputActionAddRecordVideo.vue"
@@ -42,7 +43,7 @@ import SlashCommandMenu from "@/components/SlashCommandMenu.vue"
 import LauncherComposeLock from "@/components/LauncherComposeLock.vue"
 import LauncherDraftSync from "@/components/LauncherDraftSync.vue"
 import { useLauncherCommands } from "@/composables/useLauncherCommands"
-import type { PromptInputMessage } from "@/components/ai-elements/prompt-input"
+import type { AttachmentFile, PromptInputMessage } from "@/components/ai-elements/prompt-input"
 
 const router = useRouter()
 const ws = useWS()
@@ -309,6 +310,70 @@ async function onPromptSubmit(payload: PromptInputMessage) {
   }
 }
 
+// Persist the current composer content as a DRAFT (no agent spawned) instead of
+// starting a session. Mirrors onPromptSubmit's workdir validation, but POSTs
+// userStatus:"draft" with the composer text + attachment metadata, then returns
+// to the list. `payload` is the current composer content emitted by
+// PromptInputSaveDraft (same PromptInputMessage shape @submit receives).
+async function saveAsDraft(payload: PromptInputMessage) {
+  const text = payload?.text?.trim() ?? ""
+  const hasFiles = (payload?.files?.length ?? 0) > 0
+  if (!text && !hasFiles) {
+    toast.error("Enter a message or attach a file")
+    return
+  }
+
+  const w = workdir.value.trim()
+  if (!w) {
+    toast.error("Select a project path")
+    return
+  }
+
+  submitting.value = true
+  try {
+    const validation = await api.validatePath(w)
+    if (!validation.ok || !validation.path) {
+      toast.error(validation.error ?? "Invalid working directory")
+      return
+    }
+    // Composer files are AttachmentFile (extends FileUIPart): { id, filename,
+    // mediaType, url, file } — no uploaded file_id yet, so capture the local id
+    // plus name/mime metadata for the draft payload.
+    const files = (payload?.files ?? []) as AttachmentFile[]
+    const attachments = files.map((f) => ({
+      file_id: f.id,
+      name: f.filename,
+      mime: f.mediaType,
+    }))
+    const draftPayload = { text: payload?.text ?? "", attachments }
+    const result = await api.createSession({
+      workdir: validation.path,
+      agent: agent.value,
+      model: model.value || undefined,
+      reasoningLevel: reasoningLevel.value || undefined,
+      userStatus: "draft",
+      draftPayload,
+    })
+    sessions.add({
+      id: result.id,
+      name: result.name,
+      workdir: result.workdir,
+      mute: false,
+      connected: false,
+      agent: result.agent,
+      userStatus: "draft",
+      draftPayload,
+    })
+    launcherDraft.clear()
+    await router.push("/")
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    toast.error(msg || "Failed to save draft")
+  } finally {
+    submitting.value = false
+  }
+}
+
 function goBack() {
   if (isDesktop.value) return
   void router.push("/")
@@ -404,6 +469,10 @@ function goBack() {
               />
             </PromptInputTools>
             <PromptInputTools class="ml-auto">
+              <PromptInputSaveDraft
+                :disabled="!canSubmit || isRecording"
+                @save-draft="saveAsDraft"
+              />
               <PromptInputSubmit
                 :disabled="!canSubmit || hasPendingUploads || isRecording"
                 class="rounded-full size-8 bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"
