@@ -387,6 +387,13 @@ async function saveAsDraft(payload: PromptInputMessage) {
       mime: f.mediaType,
     }))
     const draftPayload = { text: payload?.text ?? "", attachments }
+    // Re-saving a reopened draft replaces it: there's no update endpoint, so
+    // discard the original before creating the replacement (mirrors
+    // onPromptSubmit) — otherwise a second draft is created alongside it.
+    if (activeDraftId.value) {
+      try { await api.killSession(activeDraftId.value) } catch { /* already gone; proceed */ }
+      activeDraftId.value = null
+    }
     const result = await api.createSession({
       workdir: validation.path,
       agent: agent.value,
