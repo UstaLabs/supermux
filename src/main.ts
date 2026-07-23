@@ -1163,6 +1163,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         repo_root: s.repo_root || undefined,
         git: gitStatusService.get(s.id),
         finish_job: s.finish_job,
+        user_status: s.user_status,
+        sort_order: s.sort_order,
       }))
     },
     getSessionLog: (id) => {
@@ -1315,6 +1317,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             repo_root: entry.repo_root || undefined,
             session_branch: entry.session_branch || undefined,
             finish_job: entry.finish_job,
+            user_status: entry.user_status,
+            sort_order: entry.sort_order,
           },
         })
       }
@@ -1438,6 +1442,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             repo_root: entry.repo_root || undefined,
             session_branch: entry.session_branch || undefined,
             finish_job: entry.finish_job,
+            user_status: entry.user_status,
+            sort_order: entry.sort_order,
           },
         })
       }
@@ -1462,6 +1468,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       model: s.model,
       reasoningLevel: s.reasoningLevel,
       status: s.status,
+      user_status: s.user_status,
+      sort_order: s.sort_order,
     })),
     updatePA: async (name, patch) => {
       const s = registry.resolveName(name)
@@ -2009,7 +2017,7 @@ async function resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name
 
     webChannel?.broadcastToAll({
       type: "session_added",
-      session: { id: sessionId, name, workdir: session.workdir, agent: session.agent, status: "active", repo_root: session.repo_root || undefined, session_branch: session.session_branch || undefined, finish_job: session.finish_job },
+      session: { id: sessionId, name, workdir: session.workdir, agent: session.agent, status: "active", repo_root: session.repo_root || undefined, session_branch: session.session_branch || undefined, finish_job: session.finish_job, user_status: session.user_status, sort_order: session.sort_order },
     })
 
     await refreshTelegramMenu()
@@ -2183,7 +2191,7 @@ const server = await startSocketServer({
 
       if (!wasInternal) webChannel?.broadcastToAll({
         type: "session_added",
-        session: { id: session.id, name: finalName, workdir, mute: false, connected: true, agent: session.agent },
+        session: { id: session.id, name: finalName, workdir, mute: false, connected: true, agent: session.agent, user_status: session.user_status, sort_order: session.sort_order },
       })
 
       if (!adapters.has(sessionUuid)) {
@@ -2348,7 +2356,7 @@ const server = await startSocketServer({
             if (entry) {
               webChannel?.broadcastToAll({
                 type: "session_added",
-                session: { id: entry.id, name: entry.name, workdir: entry.workdir, mute: !!entry.mute, connected: true, agent: entry.agent, model: entry.model, repo_root: entry.repo_root || undefined, session_branch: entry.session_branch || undefined, finish_job: entry.finish_job },
+                session: { id: entry.id, name: entry.name, workdir: entry.workdir, mute: !!entry.mute, connected: true, agent: entry.agent, model: entry.model, repo_root: entry.repo_root || undefined, session_branch: entry.session_branch || undefined, finish_job: entry.finish_job, user_status: entry.user_status, sort_order: entry.sort_order },
               })
             }
             // Auto-bind the requesting chat to the new session if the
@@ -3039,6 +3047,8 @@ ch.on("inbound", async (msg: InboundMessage) => {
               repo_root: entry.repo_root || undefined,
               session_branch: entry.session_branch || undefined,
               finish_job: entry.finish_job,
+              user_status: entry.user_status,
+              sort_order: entry.sort_order,
             },
           })
         }
