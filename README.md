@@ -22,15 +22,6 @@
 </p>
 
 <p align="center">
-  <a href="https://www.producthunt.com/products/supermux-the-mobile-first-ade?utm_source=badge-featured&utm_medium=badge" target="_blank">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=109827&theme=dark">
-      <img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=109827&theme=light" alt="Supermux on Product Hunt" width="250" height="54">
-    </picture>
-  </a>
-</p>
-
-<p align="center">
   <a href="https://supermux.dev"><strong>Website</strong></a> ·
   <a href="#start-here"><strong>Get started</strong></a> ·
   <a href="./SETUP.md"><strong>Setup guide</strong></a> ·
