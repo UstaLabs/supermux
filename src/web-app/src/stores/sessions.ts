@@ -17,6 +17,9 @@ export interface Session {
   session_branch?: string
   repo_root?: string
   finish_job?: import("./finishJob").FinishJob
+  userStatus?: "draft" | "in_progress" | "settled"
+  sortOrder?: number
+  draftPayload?: { text?: string; attachments?: Array<{ file_id: string; name?: string; mime?: string }> }
 }
 
 export interface ArchivedSession {
@@ -62,6 +65,10 @@ export const useSessions = defineStore("sessions", () => {
     const s = list.value.find((x) => x.id === id)
     if (s) Object.assign(s, patch)
   }
+  function setLocalOrder(id: string, order: number) {
+    const s = list.value.find((x) => x.id === id)
+    if (s) s.sortOrder = order
+  }
 
   function byId(id: string): Session | ArchivedSession | undefined {
     return list.value.find((s) => s.id === id) ?? archivedSessions.value.find((s) => s.id === id)
@@ -84,7 +91,7 @@ export const useSessions = defineStore("sessions", () => {
 
   return {
     list, archivedSessions, archivedLoaded, homeDir,
-    replace, add, remove, rename, updateState, setHomeDir,
+    replace, add, remove, rename, updateState, setLocalOrder, setHomeDir,
     byId, displayName, fetchArchived, resumeSession,
   }
 })

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 import { createPinia, setActivePinia } from "pinia"
 import { useSessionCache } from "./sessionCache"
+import { useSessions } from "./sessions"
 
 beforeEach(() => setActivePinia(createPinia()))
 
@@ -27,5 +28,15 @@ describe("sessionCache", () => {
     cache.visit("x")
     expect(cache.liveIds).toEqual([])
     expect(cache.isDropped("x")).toBe(true)
+  })
+
+  test("store carries userStatus/sortOrder and sets a single item's order", () => {
+    const s = useSessions()
+    s.replace([
+      { id: "a", name: "A", workdir: "/w", mute: false, connected: false, userStatus: "in_progress", sortOrder: 0 },
+      { id: "b", name: "B", workdir: "/w", mute: false, connected: false, userStatus: "in_progress", sortOrder: 1 },
+    ])
+    s.setLocalOrder("b", 0)
+    expect(s.list.find((x) => x.id === "b")!.sortOrder).toBe(0)
   })
 })
