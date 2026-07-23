@@ -44,3 +44,28 @@ test("deleteById removes a draft row entirely (no archived ghost)", () => {
   s.deleteById(d.id)
   expect(s.getById(d.id)).toBeUndefined()
 })
+
+test("lifecycle: a draft is consumed on start (hard-deleted), leaving no ghost", () => {
+  const s = store()
+  const d = s.register({ name: "e2e-draft", agent: "claude", workdir: "/tmp", pid: 0, user_status: "draft", draft_payload: { text: "x" } })
+  expect(s.getById(d.id)!.user_status).toBe("draft")
+  // Starting a draft (main.ts layer) hard-deletes the draft row before spawning a fresh session.
+  s.deleteById(d.id)
+  expect(s.getById(d.id)).toBeUndefined()
+})
+
+test("lifecycle: in_progress → settled (archived) → resumed → in_progress", () => {
+  const s = store()
+  const sess = s.register({ name: "e2e-live", agent: "claude", workdir: "/tmp", pid: 10 })
+  expect(s.getById(sess.id)!.user_status).toBe("in_progress")
+
+  s.archive(sess.id)
+  const settled = s.getById(sess.id)!
+  expect(settled.user_status).toBe("settled")
+  expect(settled.status).toBe("archived")
+
+  s.resume(sess.id, "e2e-live", 22)
+  const resumed = s.getById(sess.id)!
+  expect(resumed.user_status).toBe("in_progress")
+  expect(resumed.status).toBe("active")
+})
