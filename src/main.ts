@@ -165,7 +165,7 @@ import { suggestVerify } from "./core/worktree/verify-suggest"
 import { loadFinishConfig } from "./core/worktree/finish-config"
 import { computeLiteStatus } from "./core/worktree/lite-status"
 import { GitStatusService, type ServiceSession } from "./core/worktree/git-status-service"
-import { deriveName } from "./core/session-manager/naming"
+import { deriveName, ensureUnique } from "./core/session-manager/naming"
 
 const log = makeLogger("main")
 
@@ -1326,6 +1326,45 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         model: entry?.model,
         reasoningLevel: entry ? sessionEffort(entry) : undefined,
       }
+    },
+    createDraft: async (args) => {
+      // Drafts have no process, so they never get a tmux window; a unique
+      // DISPLAY name is all we need. Derive one exactly like the spawn path
+      // (requestedName ?? deriveName(workdir)) and uniquify against every
+      // taken name plus outstanding reservations so a draft can't collide
+      // with a live session or an in-flight spawn.
+      const base = args.name ?? deriveName(args.workdir)
+      const name = ensureUnique(base, registry.takenNames())
+      const s = registry.sessions.register({
+        name,
+        agent: (args.agent ?? "claude"),
+        workdir: args.workdir,
+        pid: 0,
+        model: args.model,
+        reasoningLevel: args.reasoningLevel,
+        user_status: "draft",
+        draft_payload: args.draftPayload as import("./core/session-manager/types").DraftPayload | undefined,
+      })
+      await refreshTelegramMenu()
+      webChannel?.broadcastToAll({
+        type: "session_added",
+        session: {
+          id: s.id,
+          name: s.name,
+          workdir: s.workdir,
+          mute: !!s.mute,
+          connected: false,
+          agent: s.agent,
+          model: s.model,
+          reasoningLevel: sessionEffort(s),
+          repo_root: s.repo_root || undefined,
+          session_branch: s.session_branch || undefined,
+          finish_job: s.finish_job,
+          user_status: s.user_status,
+          sort_order: s.sort_order,
+        },
+      })
+      return { id: s.id, name: s.name, workdir: s.workdir, agent: s.agent }
     },
     spawnPA: async (args) => {
       const r = await spawnPA({

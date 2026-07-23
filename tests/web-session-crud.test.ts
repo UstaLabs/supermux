@@ -12,6 +12,7 @@ let token: string
 let spawnCalls: any[] = []
 let killCalls: string[] = []
 let renameCalls: Array<{ old: string; new: string }> = []
+let draftCalls: any[] = []
 let tmpRoot: string
 let oldHome: string | undefined
 
@@ -20,6 +21,7 @@ beforeEach(async () => {
   spawnCalls = []
   killCalls = []
   renameCalls = []
+  draftCalls = []
   tmpRoot = mkdtempSync(join(tmpdir(), "mux-web-session-"))
   oldHome = process.env.HOME
   process.env.HOME = tmpRoot
@@ -39,6 +41,10 @@ beforeEach(async () => {
     spawnSession: async (args: any) => {
       spawnCalls.push(args)
       return { id: "new-id", name: args.name ?? "derived-name", workdir: args.workdir, agent: args.agent ?? "claude", model: args.model }
+    },
+    createDraft: async (args: any) => {
+      draftCalls.push(args)
+      return { id: "draft-id", name: args.name ?? "draft-name", workdir: args.workdir, agent: args.agent ?? "claude" }
     },
     killSession: async (name: string) => { killCalls.push(name) },
     renameSession: async (oldName: string, newName: string) => { renameCalls.push({ old: oldName, new: newName }) },
@@ -72,6 +78,34 @@ test("POST /sessions → spawns and returns session", async () => {
   expect(body.workdir).toBe(join(tmpRoot, "project-b"))
   expect(spawnCalls).toHaveLength(1)
   expect(spawnCalls[0].workdir).toBe(join(tmpRoot, "project-b"))
+})
+
+test("POST /sessions with userStatus:draft → creates draft, does not spawn", async () => {
+  const res = await fetch(`http://127.0.0.1:${PORT}/sessions`, {
+    method: "POST",
+    headers: authed(),
+    body: JSON.stringify({ workdir: "~/project-b/", agent: "claude", userStatus: "draft", draftPayload: { text: "hello" } }),
+  })
+  expect(res.status).toBe(200)
+  const body = await res.json() as any
+  expect(body.id).toBe("draft-id")
+  expect(body.name).toBe("draft-name")
+  expect(body.workdir).toBe(join(tmpRoot, "project-b"))
+  expect(draftCalls).toHaveLength(1)
+  expect(draftCalls[0].workdir).toBe(join(tmpRoot, "project-b"))
+  expect(draftCalls[0].draftPayload).toEqual({ text: "hello" })
+  expect(spawnCalls).toHaveLength(0)
+})
+
+test("POST /sessions with userStatus:in_progress → spawns as usual", async () => {
+  const res = await fetch(`http://127.0.0.1:${PORT}/sessions`, {
+    method: "POST",
+    headers: authed(),
+    body: JSON.stringify({ workdir: "~/project-b/", agent: "claude", userStatus: "in_progress" }),
+  })
+  expect(res.status).toBe(200)
+  expect(spawnCalls).toHaveLength(1)
+  expect(draftCalls).toHaveLength(0)
 })
 
 test("POST /sessions without workdir → 400", async () => {

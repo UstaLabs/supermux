@@ -182,6 +182,7 @@ export interface WebChannelOpts {
   verifySuggest?: (id: string) => { content: string; source: string } | undefined
   verifySave?: (id: string, content: string) => { ok: boolean; reason?: string }
   spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string }>
+  createDraft?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; draftPayload?: { text?: string; attachments?: unknown[] } }) => Promise<{ id: string; name: string; workdir: string; agent: AgentKind }>
   killSession?: (name: string) => Promise<void>
   renameSession?: (oldName: string, newName: string) => Promise<void>
   transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string }) => Promise<{ text: string; degraded?: boolean }>
@@ -2213,6 +2214,19 @@ export class WebChannel implements Channel {
           return this.json({ error: `unknown agent: ${String(requestedAgent)}` }, 400)
         }
         const agent = requestedAgent == null ? undefined : requestedAgent
+        const userStatus = body.userStatus as string | undefined
+        if (userStatus === "draft") {
+          if (!this.opts.createDraft) return this.json({ error: "not configured" }, 503)
+          const draft = await this.opts.createDraft({
+            name: body.name as string | undefined,
+            workdir: normalizedWorkdir,
+            agent,
+            model: body.model as string | undefined,
+            reasoningLevel: body.reasoningLevel as string | undefined,
+            draftPayload: body.draftPayload as { text?: string; attachments?: unknown[] } | undefined,
+          })
+          return this.json(draft)
+        }
         const result = await this.opts.spawnSession({
           name: body.name as string | undefined,
           workdir: normalizedWorkdir,

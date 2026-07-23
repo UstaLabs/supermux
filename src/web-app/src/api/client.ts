@@ -164,7 +164,7 @@ export const api = {
     role?: "personal_assistant" | "worker"
     isDefault?: boolean
   }>>,
-  createSession: (args: { name?: string; workdir: string; agent?: string; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string }) =>
+  createSession: (args: { name?: string; workdir: string; agent?: string; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string; userStatus?: "draft" | "in_progress"; draftPayload?: { text?: string; attachments?: unknown[] } }) =>
     request("POST", "/sessions", args),
   getSessionMessages: (id: string) =>
     request("GET", `/sessions/${encodeURIComponent(id)}/messages`),
