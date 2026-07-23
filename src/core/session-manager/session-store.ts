@@ -24,6 +24,9 @@ export type RegisterInput = {
   repo_root?: string
   base_branch?: string
   session_branch?: string
+  user_status?: import("./types").UserStatus
+  sort_order?: number
+  draft_payload?: import("./types").DraftPayload
 }
 
 export class SessionStore {
@@ -72,18 +75,23 @@ export class SessionStore {
       base_branch: input.base_branch,
       session_branch: input.session_branch,
       self_renamed: false,
+      user_status: input.user_status ?? "in_progress",
+      sort_order: input.sort_order ?? 0,
+      draft_payload: input.draft_payload,
       pid: input.pid,
       connected: false,
     }
     this.db.run(
-      `INSERT INTO sessions (id, name, status, agent, workdir, model, reasoning_level, mute, can_orchestrate, role, is_default, internal, tmux_target, tmux_window_id, agent_session_id, agent_home, created_at, base_commit, base_commits, repo_root, base_branch, session_branch)
-       VALUES (?, ?, 'active', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO sessions (id, name, status, agent, workdir, model, reasoning_level, mute, can_orchestrate, role, is_default, internal, tmux_target, tmux_window_id, agent_session_id, agent_home, created_at, base_commit, base_commits, repo_root, base_branch, session_branch, user_status, sort_order, draft_payload)
+       VALUES (?, ?, 'active', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [id, input.name, input.agent, input.workdir, input.model ?? null, input.reasoningLevel ?? null,
        input.can_orchestrate ? 1 : 0, role, is_default ? 1 : 0, input.internal ? 1 : 0, input.tmux_target ?? null,
        input.tmux_window_id ?? null, input.agent_session_id ?? null, input.agent_home ?? null, now,
        input.base_commit ?? null,
        input.base_commits ? JSON.stringify(input.base_commits) : null,
-       input.repo_root ?? null, input.base_branch ?? null, input.session_branch ?? null]
+       input.repo_root ?? null, input.base_branch ?? null, input.session_branch ?? null,
+       input.user_status ?? "in_progress", input.sort_order ?? 0,
+       input.draft_payload ? JSON.stringify(input.draft_payload) : null]
     )
     this.cache.set(id, session)
     return session

@@ -80,3 +80,26 @@ test("rowToRecord defaults user_status to in_progress when column absent", () =>
   expect(rec.sort_order).toBe(0)
   expect(rec.draft_payload).toBeUndefined()
 })
+
+import { SessionStore } from "../src/core/session-manager/session-store"
+
+test("register defaults new sessions to in_progress with sort_order 0", () => {
+  const store = new SessionStore(migratedDb())
+  const s = store.register({ name: "t1", agent: "claude", workdir: "/tmp", pid: 100 })
+  expect(s.user_status).toBe("in_progress")
+  expect(s.sort_order).toBe(0)
+  expect(s.draft_payload).toBeUndefined()
+})
+
+test("register can create a draft with a payload and no persisted default", () => {
+  const db = migratedDb()
+  const store = new SessionStore(db)
+  const s = store.register({
+    name: "d1", agent: "claude", workdir: "/tmp", pid: 0,
+    user_status: "draft", draft_payload: { text: "plan", attachments: [] },
+  })
+  expect(s.user_status).toBe("draft")
+  const row = db.query("SELECT user_status, draft_payload FROM sessions WHERE id=?").get(s.id) as { user_status: string; draft_payload: string }
+  expect(row.user_status).toBe("draft")
+  expect(JSON.parse(row.draft_payload)).toEqual({ text: "plan", attachments: [] })
+})
