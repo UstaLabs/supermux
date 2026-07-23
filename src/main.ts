@@ -1165,6 +1165,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         finish_job: s.finish_job,
         user_status: s.user_status,
         sort_order: s.sort_order,
+        draft_payload: s.draft_payload,
       }))
     },
     getSessionLog: (id) => {
@@ -1319,6 +1320,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             finish_job: entry.finish_job,
             user_status: entry.user_status,
             sort_order: entry.sort_order,
+            draft_payload: entry.draft_payload,
           },
         })
       }
@@ -1366,6 +1368,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           finish_job: s.finish_job,
           user_status: s.user_status,
           sort_order: s.sort_order,
+          draft_payload: s.draft_payload,
         },
       })
       return { id: s.id, name: s.name, workdir: s.workdir, agent: s.agent }
@@ -1444,6 +1447,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             finish_job: entry.finish_job,
             user_status: entry.user_status,
             sort_order: entry.sort_order,
+            draft_payload: entry.draft_payload,
           },
         })
       }
@@ -2027,7 +2031,7 @@ async function resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name
 
     webChannel?.broadcastToAll({
       type: "session_added",
-      session: { id: sessionId, name, workdir: session.workdir, agent: session.agent, status: "active", repo_root: session.repo_root || undefined, session_branch: session.session_branch || undefined, finish_job: session.finish_job, user_status: session.user_status, sort_order: session.sort_order },
+      session: { id: sessionId, name, workdir: session.workdir, agent: session.agent, status: "active", repo_root: session.repo_root || undefined, session_branch: session.session_branch || undefined, finish_job: session.finish_job, user_status: session.user_status, sort_order: session.sort_order, draft_payload: session.draft_payload },
     })
 
     await refreshTelegramMenu()
@@ -2201,7 +2205,7 @@ const server = await startSocketServer({
 
       if (!wasInternal) webChannel?.broadcastToAll({
         type: "session_added",
-        session: { id: session.id, name: finalName, workdir, mute: false, connected: true, agent: session.agent, user_status: session.user_status, sort_order: session.sort_order },
+        session: { id: session.id, name: finalName, workdir, mute: false, connected: true, agent: session.agent, user_status: session.user_status, sort_order: session.sort_order, draft_payload: session.draft_payload },
       })
 
       if (!adapters.has(sessionUuid)) {
@@ -2366,7 +2370,7 @@ const server = await startSocketServer({
             if (entry) {
               webChannel?.broadcastToAll({
                 type: "session_added",
-                session: { id: entry.id, name: entry.name, workdir: entry.workdir, mute: !!entry.mute, connected: true, agent: entry.agent, model: entry.model, repo_root: entry.repo_root || undefined, session_branch: entry.session_branch || undefined, finish_job: entry.finish_job, user_status: entry.user_status, sort_order: entry.sort_order },
+                session: { id: entry.id, name: entry.name, workdir: entry.workdir, mute: !!entry.mute, connected: true, agent: entry.agent, model: entry.model, repo_root: entry.repo_root || undefined, session_branch: entry.session_branch || undefined, finish_job: entry.finish_job, user_status: entry.user_status, sort_order: entry.sort_order, draft_payload: entry.draft_payload },
               })
             }
             // Auto-bind the requesting chat to the new session if the
@@ -3059,6 +3063,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
               finish_job: entry.finish_job,
               user_status: entry.user_status,
               sort_order: entry.sort_order,
+              draft_payload: entry.draft_payload,
             },
           })
         }
@@ -3279,6 +3284,7 @@ if (webChannel) {
             status: "active",
             user_status: "draft",
             sort_order: 0,
+            draft_payload: draftSnapshot.draft_payload,
           },
         })
         webChannel!.send({ op: "reply", chat_id: msg.chat_id, text: `Failed to start session "${draftSnapshot.name}".` })
