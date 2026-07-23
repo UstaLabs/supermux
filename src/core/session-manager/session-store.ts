@@ -119,8 +119,9 @@ export class SessionStore {
     const session = this.cache.get(id)
     if (!session) return
     const now = new Date().toISOString()
-    this.db.run("UPDATE sessions SET status = 'archived', killed_at = ? WHERE id = ?", [now, id])
+    this.db.run("UPDATE sessions SET status = 'archived', user_status = 'settled', killed_at = ? WHERE id = ?", [now, id])
     session.status = "archived"
+    session.user_status = "settled"
     session.killed_at = now
     session.pid = 0
     session.connected = false
@@ -146,7 +147,7 @@ export class SessionStore {
 
   resume(id: string, name: string, pid: number): void {
     this.db.run(
-      "UPDATE sessions SET status = 'active', killed_at = NULL, name = ? WHERE id = ?",
+      "UPDATE sessions SET status = 'active', user_status = 'in_progress', killed_at = NULL, name = ? WHERE id = ?",
       [name, id]
     )
     const row = this.db.query("SELECT * FROM sessions WHERE id = ?").get(id) as SessionRow | null
