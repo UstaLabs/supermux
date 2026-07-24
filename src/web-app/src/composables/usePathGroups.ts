@@ -53,6 +53,13 @@ function lastMessageTs(session: Session, messages: ReturnType<typeof useMessages
   return messages.bySession[session.id]?.slice(-1)[0]?.ts ?? ""
 }
 
+/** Short repo label for a session's project tag (leaf folder of repo_root/workdir). */
+export function projectLabel(session: Session, homeDir?: string | null): string {
+  const label = workdirDisplay(session.repo_root ?? session.workdir, homeDir).label
+  const leaf = label.split("/").filter(Boolean).pop() ?? label
+  return leaf === "~" ? "home" : leaf
+}
+
 function buildSections(list: Session[], messages: ReturnType<typeof useMessages>): PathGroupSection[] {
   const byKey: Record<SectionKey, Session[]> = { in_progress: [], draft: [], settled: [] }
   for (const s of list) {
@@ -97,9 +104,9 @@ export function usePathGroups(sortedSessions: ComputedRef<Session[]>) {
     }
   })
 
-  const groups = computed<PathGroup[]>(() => {
-    const byPath = new Map<string, Session[]>()
-    const homeDir = sessionsStore.homeDir
+  // All non-PA sessions (live + archived-as-settled), the source for both the
+  // grouped view and the flat view.
+  const combinedSessions = computed<Session[]>(() => {
     const archivedAsSessions: Session[] = sessionsStore.archivedSessions.map((a) => ({
       id: a.id,
       name: a.name,
@@ -112,9 +119,16 @@ export function usePathGroups(sortedSessions: ComputedRef<Session[]>) {
       userStatus: "settled",
       sortOrder: 0,
     }))
-    const combined = [...sortedSessions.value, ...archivedAsSessions]
-    for (const s of combined) {
-      if (s.role === "personal_assistant") continue
+    return [...sortedSessions.value, ...archivedAsSessions].filter((s) => s.role !== "personal_assistant")
+  })
+
+  // Flat view: the three task sections built across every project at once.
+  const flatSections = computed<PathGroupSection[]>(() => buildSections(combinedSessions.value, messages))
+
+  const groups = computed<PathGroup[]>(() => {
+    const byPath = new Map<string, Session[]>()
+    const homeDir = sessionsStore.homeDir
+    for (const s of combinedSessions.value) {
       // Worktree-backed sessions group under their project (repo_root), not the
       // internal worktree path.
       const key = workdirDisplay(s.repo_root ?? s.workdir, homeDir).key
@@ -146,5 +160,5 @@ export function usePathGroups(sortedSessions: ComputedRef<Session[]>) {
     return result
   })
 
-  return { groups, paGroup, toggle }
+  return { groups, paGroup, flatSections, toggle }
 }

@@ -19,6 +19,7 @@ const props = withDefaults(
     model?: string
     status?: string
     variant?: "in_progress" | "draft" | "settled"
+    projectLabel?: string
   }>(),
   { variant: "in_progress" },
 )
@@ -182,6 +183,8 @@ function handleNavigate() {
         :agent="props.agent"
         :model="props.model"
         :status="props.status"
+        :variant="props.variant"
+        :project-label="props.projectLabel"
         :renaming="renaming"
         @rename="handleRename"
         @rename-cancel="handleRenameCancel"

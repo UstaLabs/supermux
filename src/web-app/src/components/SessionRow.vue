@@ -2,9 +2,7 @@
 import { computed, ref, nextTick } from "vue"
 import { useMessages } from "@/stores/messages"
 import { useAgentState, isAgentWorking } from "@/stores/agentState"
-import { useGitStatus } from "@/stores/gitStatus"
-import { gitBadge, sessionStatus } from "@/lib/gitBadge"
-import { GitBranch, Check, Cloud, CloudCheck, Loader2Icon } from "lucide-vue-next"
+import { Check, Pencil, Play, Loader2Icon } from "lucide-vue-next"
 
 const props = defineProps<{
   id: string
@@ -17,6 +15,8 @@ const props = defineProps<{
   model?: string
   renaming?: boolean
   status?: string
+  variant?: "in_progress" | "draft" | "settled"
+  projectLabel?: string
   reserveMenuSpace?: boolean
   flush?: boolean
 }>()
@@ -42,9 +42,8 @@ const working = computed(() => isAgentWorking(agentState.get(props.id)))
 // Pulses while nothing else moves (waiting); steady alongside the spinner.
 const bgOpen = computed(() => agentState.get(props.id).bgOpen ?? 0)
 
-const gitStatus = useGitStatus()
-const badge = computed(() => gitBadge(gitStatus.get(props.id)))
-const status = computed(() => sessionStatus(gitStatus.get(props.id)))
+const isDraft = computed(() => props.variant === "draft")
+const isSettled = computed(() => props.variant === "settled")
 
 const renameValue = ref(props.name)
 const renameInput = ref<HTMLInputElement | null>(null)
@@ -85,7 +84,49 @@ defineExpose({ startRename })
 </script>
 
 <template>
+  <!-- Draft: no process, so a compact row — the saved plan plus a Start action. -->
   <a
+    v-if="isDraft"
+    href="#"
+    class="group/row block rounded-md border border-transparent transition-colors hover:bg-card/70 active:bg-card"
+    :class="[
+      props.flush ? 'mx-0 my-0' : 'mx-2 my-0.5',
+      props.reserveMenuSpace ? 'pl-3 pr-9 py-1.5' : 'px-3 py-1.5',
+      props.active ? 'bg-card' : '',
+    ]"
+    @click="handleNavigate"
+  >
+    <div class="flex items-center gap-3">
+      <div class="flex w-5 shrink-0 items-center justify-center">
+        <Pencil class="size-3.5 text-primary/70" aria-label="draft" />
+      </div>
+      <template v-if="props.renaming">
+        <input
+          ref="renameInput"
+          v-model="renameValue"
+          class="font-medium truncate bg-transparent border-b border-primary outline-none text-foreground flex-1 min-w-0"
+          @keydown.enter="commitRename"
+          @keydown.escape="emit('rename-cancel')"
+          @blur="commitRename"
+        />
+      </template>
+      <span v-else class="text-[13px] font-medium truncate min-w-0 flex-1">{{ props.name }}</span>
+      <span
+        v-if="props.projectLabel"
+        class="shrink-0 rounded border border-border/60 px-1.5 py-px font-mono text-[10px] text-muted-foreground/70"
+      >{{ props.projectLabel }}</span>
+      <span
+        class="grid size-[22px] shrink-0 place-items-center rounded-md border border-primary/35 text-primary opacity-90"
+        aria-label="Start"
+      >
+        <Play class="size-3" />
+      </span>
+    </div>
+  </a>
+
+  <!-- In-progress / settled: the full row, agent working-state only (no git). -->
+  <a
+    v-else
     href="#"
     class="block rounded-md border transition-colors"
     :class="[
@@ -94,8 +135,6 @@ defineExpose({ startRename })
         ? 'bg-card border-border shadow-sm'
         : 'border-transparent hover:bg-card/70 active:bg-card',
       props.reserveMenuSpace ? 'pl-3 pr-9 py-2.5' : 'px-3 py-2.5',
-      status?.level === 'done' ? 'border-l-2 border-l-emerald-500'
-        : status?.level === 'not-done' ? 'border-l-2 border-l-amber-500' : '',
     ]"
     @click="handleNavigate"
   >
@@ -108,10 +147,7 @@ defineExpose({ startRename })
           aria-label="background tasks"
         >⧗{{ bgOpen }}</span>
         <Loader2Icon v-if="working" class="size-4 animate-spin text-primary" aria-label="working" />
-        <Check v-else-if="status?.kind === 'worktree' && status.level === 'done'" :title="badge?.title" class="size-4 text-emerald-400" />
-        <GitBranch v-else-if="status?.kind === 'worktree' && status.level === 'not-done'" :title="badge?.title" class="size-4 text-amber-500" />
-        <CloudCheck v-else-if="status?.kind === 'remote' && status.level === 'done'" :title="badge?.title" class="size-4 text-emerald-400" />
-        <Cloud v-else-if="status?.kind === 'remote'" :title="badge?.title" class="size-4 text-amber-500" />
+        <Check v-else-if="isSettled" class="size-4 text-emerald-400/80" aria-label="settled" />
         <span v-else class="size-1.5 rounded-full bg-muted-foreground/30" aria-hidden="true" />
       </div>
 
@@ -127,21 +163,20 @@ defineExpose({ startRename })
               @blur="commitRename"
             />
           </template>
-          <span v-else class="font-medium truncate">{{ props.name }}</span>
+          <span v-else class="font-medium truncate" :class="{ 'text-muted-foreground': isSettled }">{{ props.name }}</span>
           <span v-if="lastTs" class="text-[11px] text-muted-foreground shrink-0">{{ rel(lastTs) }}</span>
         </div>
-        <div class="flex items-center justify-between gap-2 mt-0.5">
+        <div class="flex items-center gap-2 mt-0.5">
+          <span
+            v-if="props.projectLabel"
+            class="shrink-0 rounded border border-border/60 px-1.5 py-px font-mono text-[10px] text-muted-foreground/70"
+          >{{ props.projectLabel }}</span>
           <div
-            class="text-[11px] truncate"
+            class="text-[11px] truncate min-w-0 flex-1"
             :class="lastText ? 'text-muted-foreground/65' : 'text-muted-foreground/50 italic'"
           >
             {{ lastText || "no messages yet" }}
           </div>
-          <span
-            v-if="status?.kind === 'remote' && status.level === 'not-done' && badge"
-            :title="badge.title"
-            class="shrink-0 font-mono text-[10px] tabular-nums text-amber-500"
-          >{{ badge.text }}</span>
           <span
             v-if="props.unread"
             class="h-5 w-1 rounded-full bg-primary/70 shrink-0"
