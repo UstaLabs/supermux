@@ -1504,7 +1504,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       await refreshTelegramMenu()
       webChannel?.broadcastToAll({ type: "session_renamed", id: s.id, old: oldName, new: newName })
     },
-    setSessionOrder: (id, order) => registry.sessions.setSortOrder(id, order),
+    reorderSessions: (orderedIds) => registry.sessions.reorder(orderedIds),
     proxyBaseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
     proxyMainHost: MUX_WEB_PUBLIC_URL ? new URL(MUX_WEB_PUBLIC_URL).host : undefined,
     proxyLookup: (domain: string) => {

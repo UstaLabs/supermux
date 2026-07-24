@@ -175,23 +175,17 @@ function onDragStart(id: string, key: string) {
 }
 async function onDrop(section: { key: string; sessions: { id: string }[] }, targetId: string) {
   const from = dragId.value
+  const fromSec = dragSection.value
   dragId.value = null
-  if (!from || from === targetId || section.key === "settled") return
-  // Guard: forbid dropping a row into a different section.
-  if (dragSection.value !== section.key) {
-    dragSection.value = null
-    return
-  }
   dragSection.value = null
+  if (!from || from === targetId || section.key === "settled" || fromSec !== section.key) return
   const ids = section.sessions.map((s) => s.id)
+  const fromIdx = ids.indexOf(from)
   const toIdx = ids.indexOf(targetId)
-  if (toIdx < 0) return
-  sessions.setLocalOrder(from, toIdx) // optimistic
-  try {
-    await api.setSessionOrder(from, toIdx)
-  } catch (e: any) {
-    toast.error(e?.message ?? "Reorder failed")
-  }
+  if (fromIdx < 0 || toIdx < 0) return
+  ids.splice(toIdx, 0, ids.splice(fromIdx, 1)[0]!)
+  sessions.applyReorder(ids)                       // optimistic full-section renumber
+  try { await api.reorderSessions(ids) } catch (e: any) { toast.error(e?.message ?? "Reorder failed") }
 }
 
 </script>

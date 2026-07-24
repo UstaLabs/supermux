@@ -301,10 +301,16 @@ export class SessionStore {
     if (cached) cached.user_status = status
   }
 
-  setSortOrder(id: string, order: number): void {
-    this.db.run("UPDATE sessions SET sort_order = ? WHERE id = ?", [order, id])
-    const cached = this.cache.get(id)
-    if (cached) cached.sort_order = order
+  /** Assign sort_order 0..n-1 in the given id order (a reordered section). */
+  reorder(orderedIds: string[]): void {
+    const tx = this.db.transaction((ids: string[]) => {
+      ids.forEach((id, i) => {
+        this.db.run("UPDATE sessions SET sort_order = ? WHERE id = ?", [i, id])
+        const cached = this.cache.get(id)
+        if (cached) cached.sort_order = i
+      })
+    })
+    tx(orderedIds)
   }
 
   setDraftPayload(id: string, payload: import("./types").DraftPayload | null): void {

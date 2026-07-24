@@ -12,7 +12,7 @@ let token: string
 let spawnCalls: any[] = []
 let killCalls: string[] = []
 let renameCalls: Array<{ old: string; new: string }> = []
-let orderCalls: Array<{ id: string; order: number }> = []
+let reorderCalls: Array<string[]> = []
 let draftCalls: any[] = []
 let tmpRoot: string
 let oldHome: string | undefined
@@ -22,7 +22,7 @@ beforeEach(async () => {
   spawnCalls = []
   killCalls = []
   renameCalls = []
-  orderCalls = []
+  reorderCalls = []
   draftCalls = []
   tmpRoot = mkdtempSync(join(tmpdir(), "mux-web-session-"))
   oldHome = process.env.HOME
@@ -50,7 +50,7 @@ beforeEach(async () => {
     },
     killSession: async (name: string) => { killCalls.push(name) },
     renameSession: async (oldName: string, newName: string) => { renameCalls.push({ old: oldName, new: newName }) },
-    setSessionOrder: (id: string, order: number) => { orderCalls.push({ id, order }) },
+    reorderSessions: (orderedIds: string[]) => { reorderCalls.push(orderedIds) },
     listArchivedSessions: () => [{ id: "archived-a", name: "archived-a", workdir: join(tmpRoot, "project-a"), agent: "claude" as const }],
   } as any)
   await ch.start()
@@ -205,24 +205,14 @@ test("POST /sessions/:name/rename without name → 400", async () => {
   expect(res.status).toBe(400)
 })
 
-test("PATCH /sessions/:id { order } → sets sort order", async () => {
-  const res = await fetch(`http://127.0.0.1:${PORT}/sessions/sess-a`, {
+test("PATCH /sessions/reorder → renumbers the section", async () => {
+  const res = await fetch(`http://127.0.0.1:${PORT}/sessions/reorder`, {
     method: "PATCH",
     headers: authed(),
-    body: JSON.stringify({ order: 2 }),
+    body: JSON.stringify({ orderedIds: ["x", "y"] }),
   })
   expect(res.status).toBe(200)
   const body = await res.json() as any
   expect(body.ok).toBe(true)
-  expect(orderCalls).toEqual([{ id: "sess-a", order: 2 }])
-})
-
-test("PATCH /sessions/:id with non-number order → 400", async () => {
-  const res = await fetch(`http://127.0.0.1:${PORT}/sessions/sess-a`, {
-    method: "PATCH",
-    headers: authed(),
-    body: JSON.stringify({ order: "nope" }),
-  })
-  expect(res.status).toBe(400)
-  expect(orderCalls).toHaveLength(0)
+  expect(reorderCalls).toEqual([["x", "y"]])
 })

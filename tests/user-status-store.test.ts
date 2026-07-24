@@ -120,9 +120,13 @@ test("setDraftPayload writes and clears", () => {
   expect(store.getById(s.id)!.draft_payload).toBeUndefined()
 })
 
-test("setSortOrder updates a single moved item's order", () => {
+test("reorder assigns sort_order by array position", () => {
   const store = new SessionStore(migratedDb())
-  const a = store.register({ name: "r-a", agent: "claude", workdir: "/w", pid: 1 })
-  store.setSortOrder(a.id, 4)
-  expect(store.getById(a.id)!.sort_order).toBe(4)
+  const a = store.register({ name: "ra", agent: "claude", workdir: "/w", pid: 1 })
+  const b = store.register({ name: "rb", agent: "claude", workdir: "/w", pid: 2 })
+  const c = store.register({ name: "rc", agent: "claude", workdir: "/w", pid: 3 })
+  store.reorder([c.id, a.id, b.id])
+  expect(store.getById(c.id)!.sort_order).toBe(0)
+  expect(store.getById(a.id)!.sort_order).toBe(1)
+  expect(store.getById(b.id)!.sort_order).toBe(2)
 })

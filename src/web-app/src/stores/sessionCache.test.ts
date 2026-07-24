@@ -30,13 +30,14 @@ describe("sessionCache", () => {
     expect(cache.isDropped("x")).toBe(true)
   })
 
-  test("store carries userStatus/sortOrder and sets a single item's order", () => {
+  test("store carries userStatus/sortOrder and renumbers a whole section", () => {
     const s = useSessions()
     s.replace([
       { id: "a", name: "A", workdir: "/w", mute: false, connected: false, userStatus: "in_progress", sortOrder: 0 },
       { id: "b", name: "B", workdir: "/w", mute: false, connected: false, userStatus: "in_progress", sortOrder: 1 },
     ])
-    s.setLocalOrder("b", 0)
+    s.applyReorder(["b", "a"])
     expect(s.list.find((x) => x.id === "b")!.sortOrder).toBe(0)
+    expect(s.list.find((x) => x.id === "a")!.sortOrder).toBe(1)
   })
 })

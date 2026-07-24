@@ -185,7 +185,7 @@ export interface WebChannelOpts {
   createDraft?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; draftPayload?: { text?: string; attachments?: unknown[] } }) => Promise<{ id: string; name: string; workdir: string; agent: AgentKind }>
   killSession?: (name: string) => Promise<void>
   renameSession?: (oldName: string, newName: string) => Promise<void>
-  setSessionOrder?: (id: string, order: number) => void
+  reorderSessions?: (orderedIds: string[]) => void
   transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string }) => Promise<{ text: string; degraded?: boolean }>
   spawnPA?: (args: { name: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string }>
   listPAs?: () => SessionSnapshot[]
@@ -2258,14 +2258,11 @@ export class WebChannel implements Channel {
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
     }
-    if (method === "PATCH" && path.match(/^\/sessions\/[^/]+$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      const body = await req.json().catch(() => ({})) as { order?: unknown }
-      if (typeof body.order !== "number" || !Number.isFinite(body.order)) {
-        return this.json({ error: "order (number) required" }, 400)
-      }
-      if (!this.opts.setSessionOrder) return this.json({ error: "not configured" }, 503)
-      this.opts.setSessionOrder(id, body.order)
+    if (method === "PATCH" && path === "/sessions/reorder") {
+      const body = await req.json().catch(() => ({})) as { orderedIds?: unknown }
+      const ids = Array.isArray(body.orderedIds) ? body.orderedIds.filter((x): x is string => typeof x === "string") : []
+      if (!this.opts.reorderSessions) return this.json({ error: "not configured" }, 503)
+      this.opts.reorderSessions(ids)
       return this.json({ ok: true })
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/rename$/)) {

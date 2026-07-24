@@ -65,9 +65,11 @@ export const useSessions = defineStore("sessions", () => {
     const s = list.value.find((x) => x.id === id)
     if (s) Object.assign(s, patch)
   }
-  function setLocalOrder(id: string, order: number) {
-    const s = list.value.find((x) => x.id === id)
-    if (s) s.sortOrder = order
+  function applyReorder(orderedIds: string[]) {
+    orderedIds.forEach((id, i) => {
+      const s = list.value.find((x) => x.id === id)
+      if (s) s.sortOrder = i
+    })
   }
 
   function byId(id: string): Session | ArchivedSession | undefined {
@@ -98,7 +100,7 @@ export const useSessions = defineStore("sessions", () => {
 
   return {
     list, archivedSessions, archivedLoaded, homeDir,
-    replace, add, remove, rename, updateState, setLocalOrder, setHomeDir,
+    replace, add, remove, rename, updateState, applyReorder, setHomeDir,
     byId, displayName, fetchArchived, resumeSession, addArchived, removeArchived,
   }
 })
