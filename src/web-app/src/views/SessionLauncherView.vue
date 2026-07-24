@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue"
-import { useRouter } from "vue-router"
+import { useRouter, useRoute } from "vue-router"
 import { ArrowUp, ChevronLeft, FolderOpen, Loader2Icon } from "lucide-vue-next"
 import { toast } from "vue-sonner"
 import { api } from "@/api/client"
@@ -35,6 +35,7 @@ import {
   PromptInputActionMenuContent,
   PromptInputActionAddAttachments,
   PromptInputAttachments,
+  PromptInputSaveDraft,
 } from "@/components/ai-elements/prompt-input"
 import PromptInputActionAddCamera from "@/components/ai-elements/prompt-input/PromptInputActionAddCamera.vue"
 import PromptInputActionAddRecordVideo from "@/components/ai-elements/prompt-input/PromptInputActionAddRecordVideo.vue"
@@ -42,9 +43,10 @@ import SlashCommandMenu from "@/components/SlashCommandMenu.vue"
 import LauncherComposeLock from "@/components/LauncherComposeLock.vue"
 import LauncherDraftSync from "@/components/LauncherDraftSync.vue"
 import { useLauncherCommands } from "@/composables/useLauncherCommands"
-import type { PromptInputMessage } from "@/components/ai-elements/prompt-input"
+import type { AttachmentFile, PromptInputMessage } from "@/components/ai-elements/prompt-input"
 
 const router = useRouter()
+const route = useRoute()
 const ws = useWS()
 const sessions = useSessions()
 const pending = usePendingFirstMessage()
@@ -67,6 +69,11 @@ const repoInfo = ref<{ isGitRepo: boolean; eligible: boolean; repoRoot?: string;
 const useWorktree = ref(true)
 const baseBranch = ref("")
 
+// When the launcher is opened from a draft (`/new?draft=<id>`), this holds the
+// draft's session id so onPromptSubmit can discard it before spawning the real
+// session. Null for a normal new-session launch.
+const activeDraftId = ref<string | null>(null)
+
 const launcherDraft = useLauncherDraft()
 if (launcherDraft.state.workdir) {
   workdir.value = launcherDraft.state.workdir
@@ -74,6 +81,33 @@ if (launcherDraft.state.workdir) {
 }
 useWorktree.value = launcherDraft.state.useWorktree
 baseBranch.value = launcherDraft.state.baseBranch
+
+// Prefill the launcher from a reopened draft (`/new?draft=<id>`). This MUST run
+// synchronously in setup (not onMounted): the child PromptInput reads
+// `:initial-input="launcherDraft.state.text"` once during ITS setup, which fires
+// before the parent's onMounted — so setText must land here to be picked up.
+// Runs after the launcherDraft-based workdir restore above so the draft's values
+// win. The draft session is expected to already be in the store from the list
+// view; a hard navigation before the store hydrates makes prefill a best-effort
+// no-op.
+{
+  const draftId = route.query.draft
+  if (typeof draftId === "string") {
+    const s = sessions.list.find((x) => x.id === draftId)
+    if (s) {
+      activeDraftId.value = draftId
+      workdir.value = s.workdir
+      workdirTouched.value = true
+      if (s.agent) agent.value = s.agent as typeof agent.value
+      if (s.model) model.value = s.model
+      if (s.reasoningLevel) reasoningLevel.value = s.reasoningLevel
+      // Restore the composer TEXT only. Draft attachments store LOCAL composer
+      // ids (never uploaded), so they can't be reliably re-materialized — known
+      // limitation; text is restored, attachments are dropped.
+      launcherDraft.setText(s.draftPayload?.text ?? "")
+    }
+  }
+}
 
 // True once refreshRepoInfo has resolved at least once. Gates the "default to the
 // repo's current branch" reset so a restored draft's baseBranch survives the first,
@@ -280,6 +314,14 @@ async function onPromptSubmit(payload: PromptInputMessage) {
       toast.error(validation.error ?? "Invalid working directory")
       return
     }
+    // Starting a reopened draft: the backend hard-deletes a draft on send and
+    // spawns a brand-new session under a different id, so we can't send to the
+    // draft directly. Instead discard the draft first (freeing its name), then
+    // fall through to the normal createSession + pending + navigate flow.
+    if (activeDraftId.value) {
+      try { await api.killSession(activeDraftId.value) } catch { /* draft may already be gone; proceed */ }
+      activeDraftId.value = null
+    }
     const result = await api.createSession({
       workdir: validation.path,
       agent: agent.value,
@@ -304,6 +346,77 @@ async function onPromptSubmit(payload: PromptInputMessage) {
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
     toast.error(msg || "Failed to create session")
+  } finally {
+    submitting.value = false
+  }
+}
+
+// Persist the current composer content as a DRAFT (no agent spawned) instead of
+// starting a session. Mirrors onPromptSubmit's workdir validation, but POSTs
+// userStatus:"draft" with the composer text + attachment metadata, then returns
+// to the list. `payload` is the current composer content emitted by
+// PromptInputSaveDraft (same PromptInputMessage shape @submit receives).
+async function saveAsDraft(payload: PromptInputMessage) {
+  const text = payload?.text?.trim() ?? ""
+  const hasFiles = (payload?.files?.length ?? 0) > 0
+  if (!text && !hasFiles) {
+    toast.error("Enter a message or attach a file")
+    return
+  }
+
+  const w = workdir.value.trim()
+  if (!w) {
+    toast.error("Select a project path")
+    return
+  }
+
+  submitting.value = true
+  try {
+    const validation = await api.validatePath(w)
+    if (!validation.ok || !validation.path) {
+      toast.error(validation.error ?? "Invalid working directory")
+      return
+    }
+    // Composer files are AttachmentFile (extends FileUIPart): { id, filename,
+    // mediaType, url, file } — no uploaded file_id yet, so capture the local id
+    // plus name/mime metadata for the draft payload.
+    const files = (payload?.files ?? []) as AttachmentFile[]
+    const attachments = files.map((f) => ({
+      file_id: f.id,
+      name: f.filename,
+      mime: f.mediaType,
+    }))
+    const draftPayload = { text: payload?.text ?? "", attachments }
+    // Re-saving a reopened draft replaces it: there's no update endpoint, so
+    // discard the original before creating the replacement (mirrors
+    // onPromptSubmit) — otherwise a second draft is created alongside it.
+    if (activeDraftId.value) {
+      try { await api.killSession(activeDraftId.value) } catch { /* already gone; proceed */ }
+      activeDraftId.value = null
+    }
+    const result = await api.createSession({
+      workdir: validation.path,
+      agent: agent.value,
+      model: model.value || undefined,
+      reasoningLevel: reasoningLevel.value || undefined,
+      userStatus: "draft",
+      draftPayload,
+    })
+    sessions.add({
+      id: result.id,
+      name: result.name,
+      workdir: result.workdir,
+      mute: false,
+      connected: false,
+      agent: result.agent,
+      userStatus: "draft",
+      draftPayload,
+    })
+    launcherDraft.clear()
+    await router.push("/")
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    toast.error(msg || "Failed to save draft")
   } finally {
     submitting.value = false
   }
@@ -404,6 +517,10 @@ function goBack() {
               />
             </PromptInputTools>
             <PromptInputTools class="ml-auto">
+              <PromptInputSaveDraft
+                :disabled="!canSubmit || isRecording"
+                @save-draft="saveAsDraft"
+              />
               <PromptInputSubmit
                 :disabled="!canSubmit || hasPendingUploads || isRecording"
                 class="rounded-full size-8 bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"

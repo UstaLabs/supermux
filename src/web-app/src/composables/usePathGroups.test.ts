@@ -1,5 +1,6 @@
 import { beforeEach, expect, test } from "bun:test"
 import { createPinia, setActivePinia } from "pinia"
+import { computed } from "vue"
 
 const mem = new Map<string, string>()
 ;(globalThis as any).localStorage = {
@@ -83,4 +84,29 @@ test("zero PAs yields an empty paGroup and untouched path groups", () => {
   expect(paGroup.value.sessions).toHaveLength(0)
   expect(groups.value).toHaveLength(1)
   expect(groups.value[0]?.sessions).toHaveLength(2)
+})
+
+test("groups split into in_progress/draft/settled sections ordered by sortOrder", () => {
+  const sessions = useSessions()
+  sessions.replace([
+    { id: "p1", name: "second", workdir: "/w", mute: false, connected: false, userStatus: "in_progress", sortOrder: 1 },
+    { id: "p2", name: "first",  workdir: "/w", mute: false, connected: false, userStatus: "in_progress", sortOrder: 0 },
+    { id: "d1", name: "draft",  workdir: "/w", mute: false, connected: false, userStatus: "draft", sortOrder: 0 },
+  ])
+  const sorted = computed(() => sessions.list)
+  const { groups } = usePathGroups(sorted as any)
+  const g = groups.value[0]!
+  const ip = g.sections.find((s) => s.key === "in_progress")!
+  expect(ip.sessions.map((s) => s.id)).toEqual(["p2", "p1"])
+  expect(g.sections.find((s) => s.key === "draft")!.sessions.map((s) => s.id)).toEqual(["d1"])
+})
+
+test("archived sessions appear under the project's Settled section", () => {
+  const sessions = useSessions()
+  sessions.replace([{ id: "p1", name: "live", workdir: "/w", mute: false, connected: false, userStatus: "in_progress", sortOrder: 0 }])
+  sessions.archivedSessions = [{ id: "s1", name: "done", workdir: "/w", agent: "claude" } as any]
+  const sorted = computed(() => sessions.list)
+  const { groups } = usePathGroups(sorted as any)
+  const g = groups.value.find((x) => x.sessions.some((s) => s.id === "p1"))!
+  expect(g.sections.find((s) => s.key === "settled")!.sessions.map((s) => s.id)).toContain("s1")
 })

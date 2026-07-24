@@ -19,6 +19,11 @@ import { makeLogger } from "../../shared/log"
 const TMUX_SESSION = process.env.MUX_TMUX_SESSION ?? "mux"
 const log = makeLogger("supervisor")
 
+/** Drafts are cached (status='active') but have no process — never suspend them. */
+export function isDraftSession(s: Pick<Session, "user_status">): boolean {
+  return s.user_status === "draft"
+}
+
 export type Supervisor = {
   ensurePersonalAssistants: () => Promise<void>
   bootstrapPA: (name: string, bootstrapOpts?: BootstrapPAOpts) => Promise<void>
@@ -215,6 +220,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 
   async function reconcile() {
     for (const s of opts.registry.list()) {
+      if (isDraftSession(s)) continue
       if (s.status === "suspended") continue
       if (s.agent !== "claude") continue
       if (!isProcessAlive(s.pid)) {
@@ -263,6 +269,7 @@ export async function reconcileOnStartup(deps: {
   const livePanePid = deps.livePanePid ?? (async () => null)
   for (const s of deps.registry.list()) {
     if (alive(s.pid)) continue
+    if (isDraftSession(s)) continue
     // PA special-case: leave the stale row in place so ensurePersonalAssistants'
     // own respawn path runs (single source of truth for the PA lifecycle).
     if (s.role === "personal_assistant") continue

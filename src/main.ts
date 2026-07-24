@@ -30,7 +30,7 @@ function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
 }
 
 import { startSocketServer } from "./core/session-manager/socket-server"
-import { createSupervisor, reconcileOnStartup } from "./core/session-manager/supervisor"
+import { createSupervisor, reconcileOnStartup, isDraftSession } from "./core/session-manager/supervisor"
 import { acquirePidFile, releasePidFile } from "./core/session-manager/pid-file"
 import { spawnSessionWindow, killWindowById, listSessionWindows, livePanePid, sendKeysToWindowId, resolveWindowIdByName } from "./core/session-manager/tmux"
 import { ensureWindowId } from "./core/session-manager/window-id"
@@ -165,7 +165,7 @@ import { suggestVerify } from "./core/worktree/verify-suggest"
 import { loadFinishConfig } from "./core/worktree/finish-config"
 import { computeLiteStatus } from "./core/worktree/lite-status"
 import { GitStatusService, type ServiceSession } from "./core/worktree/git-status-service"
-import { deriveName } from "./core/session-manager/naming"
+import { deriveName, ensureUnique } from "./core/session-manager/naming"
 
 const log = makeLogger("main")
 const relayLog = makeLogger("core/relay/frp-provider")
@@ -1184,6 +1184,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         repo_root: s.repo_root || undefined,
         git: gitStatusService.get(s.id),
         finish_job: s.finish_job,
+        user_status: s.user_status,
+        sort_order: s.sort_order,
+        draft_payload: s.draft_payload,
       }))
     },
     getSessionLog: (id) => {
@@ -1336,6 +1339,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             repo_root: entry.repo_root || undefined,
             session_branch: entry.session_branch || undefined,
             finish_job: entry.finish_job,
+            user_status: entry.user_status,
+            sort_order: entry.sort_order,
+            draft_payload: entry.draft_payload,
           },
         })
       }
@@ -1347,6 +1353,46 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         model: entry?.model,
         reasoningLevel: entry ? sessionEffort(entry) : undefined,
       }
+    },
+    createDraft: async (args) => {
+      // Drafts have no process, so they never get a tmux window; a unique
+      // DISPLAY name is all we need. Derive one exactly like the spawn path
+      // (requestedName ?? deriveName(workdir)) and uniquify against every
+      // taken name plus outstanding reservations so a draft can't collide
+      // with a live session or an in-flight spawn.
+      const base = args.name ?? deriveName(args.workdir)
+      const name = ensureUnique(base, registry.takenNames())
+      const s = registry.sessions.register({
+        name,
+        agent: (args.agent ?? "claude"),
+        workdir: args.workdir,
+        pid: 0,
+        model: args.model,
+        reasoningLevel: args.reasoningLevel,
+        user_status: "draft",
+        draft_payload: args.draftPayload as import("./core/session-manager/types").DraftPayload | undefined,
+      })
+      await refreshTelegramMenu()
+      webChannel?.broadcastToAll({
+        type: "session_added",
+        session: {
+          id: s.id,
+          name: s.name,
+          workdir: s.workdir,
+          mute: !!s.mute,
+          connected: false,
+          agent: s.agent,
+          model: s.model,
+          reasoningLevel: sessionEffort(s),
+          repo_root: s.repo_root || undefined,
+          session_branch: s.session_branch || undefined,
+          finish_job: s.finish_job,
+          user_status: s.user_status,
+          sort_order: s.sort_order,
+          draft_payload: s.draft_payload,
+        },
+      })
+      return { id: s.id, name: s.name, workdir: s.workdir, agent: s.agent }
     },
     spawnPA: async (args) => {
       const r = await spawnPA({
@@ -1420,6 +1466,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             repo_root: entry.repo_root || undefined,
             session_branch: entry.session_branch || undefined,
             finish_job: entry.finish_job,
+            user_status: entry.user_status,
+            sort_order: entry.sort_order,
+            draft_payload: entry.draft_payload,
           },
         })
       }
@@ -1444,6 +1493,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       model: s.model,
       reasoningLevel: s.reasoningLevel,
       status: s.status,
+      user_status: s.user_status,
+      sort_order: s.sort_order,
     })),
     updatePA: async (name, patch) => {
       const s = registry.resolveName(name)
@@ -1474,6 +1525,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       await refreshTelegramMenu()
       webChannel?.broadcastToAll({ type: "session_renamed", id: s.id, old: oldName, new: newName })
     },
+    reorderSessions: (orderedIds) => registry.sessions.reorder(orderedIds),
     proxyBaseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
     proxyMainHost: MUX_WEB_PUBLIC_URL ? new URL(MUX_WEB_PUBLIC_URL).host : undefined,
     proxyLookup: (domain: string) => {
@@ -1707,6 +1759,16 @@ async function refreshTelegramMenu() {
 async function killSession(id: string) {
   const s = registry.get(id)
   if (!s) return
+
+  // A draft is a cached session row with no process, no tmux window, and no
+  // proxies. Deleting it must DISCARD (hard-delete) the row — never archive it
+  // to user_status='settled', which would leave a phantom settled session.
+  if (isDraftSession(s)) {
+    registry.sessions.deleteById(s.id)
+    webChannel?.broadcastToAll({ type: "session_removed", id: s.id })
+    return
+  }
+
   const displayName = s.name
 
   terminalManager.killAllForSession(displayName)
@@ -1991,7 +2053,7 @@ async function resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name
 
     webChannel?.broadcastToAll({
       type: "session_added",
-      session: { id: sessionId, name, workdir: session.workdir, agent: session.agent, status: "active", repo_root: session.repo_root || undefined, session_branch: session.session_branch || undefined, finish_job: session.finish_job },
+      session: { id: sessionId, name, workdir: session.workdir, agent: session.agent, status: "active", repo_root: session.repo_root || undefined, session_branch: session.session_branch || undefined, finish_job: session.finish_job, user_status: session.user_status, sort_order: session.sort_order, draft_payload: session.draft_payload },
     })
 
     await refreshTelegramMenu()
@@ -2165,7 +2227,7 @@ const server = await startSocketServer({
 
       if (!wasInternal) webChannel?.broadcastToAll({
         type: "session_added",
-        session: { id: session.id, name: finalName, workdir, mute: false, connected: true, agent: session.agent },
+        session: { id: session.id, name: finalName, workdir, mute: false, connected: true, agent: session.agent, user_status: session.user_status, sort_order: session.sort_order, draft_payload: session.draft_payload },
       })
 
       if (!adapters.has(sessionUuid)) {
@@ -2330,7 +2392,7 @@ const server = await startSocketServer({
             if (entry) {
               webChannel?.broadcastToAll({
                 type: "session_added",
-                session: { id: entry.id, name: entry.name, workdir: entry.workdir, mute: !!entry.mute, connected: true, agent: entry.agent, model: entry.model, repo_root: entry.repo_root || undefined, session_branch: entry.session_branch || undefined, finish_job: entry.finish_job },
+                session: { id: entry.id, name: entry.name, workdir: entry.workdir, mute: !!entry.mute, connected: true, agent: entry.agent, model: entry.model, repo_root: entry.repo_root || undefined, session_branch: entry.session_branch || undefined, finish_job: entry.finish_job, user_status: entry.user_status, sort_order: entry.sort_order, draft_payload: entry.draft_payload },
               })
             }
             // Auto-bind the requesting chat to the new session if the
@@ -3021,6 +3083,9 @@ ch.on("inbound", async (msg: InboundMessage) => {
               repo_root: entry.repo_root || undefined,
               session_branch: entry.session_branch || undefined,
               finish_job: entry.finish_job,
+              user_status: entry.user_status,
+              sort_order: entry.sort_order,
+              draft_payload: entry.draft_payload,
             },
           })
         }
@@ -3184,7 +3249,73 @@ if (webChannel) {
         return
       }
     }
-    handleWebInbound(msg, {
+    // First message to a draft: spawn its agent, then deliver to the now-live
+    // session. spawnSession/spawnClaudeSession always mint a NEW row (for claude
+    // the row is created async by the shim's onRegister with a fresh uuid), so
+    // there is no way to adopt the draft's id here. Instead we HARD-DELETE the
+    // vestigial draft row FIRST — that frees its display name in the registry so
+    // the spawned agent claims the SAME name (otherwise ensureUnique would
+    // uniquify it to "<name>-2") and leaves no archived "settled" ghost — then
+    // spawn a fresh in_progress session and route the message to it. On spawn
+    // failure the draft is restored verbatim (same id) so nothing is lost. The
+    // spawn's own onRegister emits session_added for the new live row; we only
+    // add the draft's session_removed here (and session_added on the restore
+    // path). Net result: exactly one session, no orphan/ghost draft.
+    let inbound = msg
+    if (targetSession && targetSession.user_status === "draft") {
+      const draftSnapshot = {
+        id: targetSession.id,
+        name: targetSession.name,
+        agent: targetSession.agent,
+        workdir: targetSession.workdir,
+        model: targetSession.model,
+        reasoningLevel: targetSession.reasoningLevel,
+        pid: 0,
+        user_status: "draft" as const,
+        sort_order: targetSession.sort_order,
+        draft_payload: targetSession.draft_payload,
+      }
+      registry.sessions.deleteById(targetSession.id)   // frees the name, no ghost
+      webChannel?.broadcastToAll({ type: "session_removed", id: draftSnapshot.id })
+      let started: ReturnType<typeof registry.resolveName>
+      try {
+        const spawned = await spawnSession({
+          workdir: draftSnapshot.workdir,
+          requestedName: draftSnapshot.name,
+          agent: draftSnapshot.agent,
+          model: draftSnapshot.model,
+          reasoningLevel: draftSnapshot.reasoningLevel,
+        })
+        started = registry.resolveName(spawned.name)
+      } catch (err: any) {
+        log.error("draft_spawn_failed", { id: draftSnapshot.id, name: draftSnapshot.name, err: err?.message ?? String(err) })
+      }
+      if (!started) {
+        // Restore the draft (same id, still a draft) and re-add it client-side.
+        registry.sessions.register(draftSnapshot)
+        webChannel?.broadcastToAll({
+          type: "session_added",
+          session: {
+            id: draftSnapshot.id,
+            name: draftSnapshot.name,
+            workdir: draftSnapshot.workdir,
+            mute: false,
+            connected: false,
+            agent: draftSnapshot.agent,
+            model: draftSnapshot.model,
+            reasoningLevel: draftSnapshot.reasoningLevel,
+            status: "active",
+            user_status: "draft",
+            sort_order: draftSnapshot.sort_order,
+            draft_payload: draftSnapshot.draft_payload,
+          },
+        })
+        webChannel!.send({ op: "reply", chat_id: msg.chat_id, text: `Failed to start session "${draftSnapshot.name}".` })
+        return
+      }
+      inbound = { ...msg, target_session_id: started.id }
+    }
+    handleWebInbound(inbound, {
       messageLog,
       sendInbound: (sid, payload) => server.sendInbound(sid, payload),
       hasSession: (id) => !!registry.get(id),

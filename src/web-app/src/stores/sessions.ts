@@ -17,6 +17,9 @@ export interface Session {
   session_branch?: string
   repo_root?: string
   finish_job?: import("./finishJob").FinishJob
+  userStatus?: "draft" | "in_progress" | "settled"
+  sortOrder?: number
+  draftPayload?: { text?: string; attachments?: Array<{ file_id: string; name?: string; mime?: string }> }
 }
 
 export interface ArchivedSession {
@@ -62,6 +65,12 @@ export const useSessions = defineStore("sessions", () => {
     const s = list.value.find((x) => x.id === id)
     if (s) Object.assign(s, patch)
   }
+  function applyReorder(orderedIds: string[]) {
+    orderedIds.forEach((id, i) => {
+      const s = list.value.find((x) => x.id === id)
+      if (s) s.sortOrder = i
+    })
+  }
 
   function byId(id: string): Session | ArchivedSession | undefined {
     return list.value.find((s) => s.id === id) ?? archivedSessions.value.find((s) => s.id === id)
@@ -77,6 +86,13 @@ export const useSessions = defineStore("sessions", () => {
     archivedLoaded.value = true
   }
 
+  function addArchived(a: ArchivedSession) {
+    if (!archivedSessions.value.some((x) => x.id === a.id)) archivedSessions.value.push(a)
+  }
+  function removeArchived(id: string) {
+    archivedSessions.value = archivedSessions.value.filter((x) => x.id !== id)
+  }
+
   async function resumeSession(id: string) {
     await api.resumeSession(id)
     archivedSessions.value = archivedSessions.value.filter((s) => s.id !== id)
@@ -84,7 +100,7 @@ export const useSessions = defineStore("sessions", () => {
 
   return {
     list, archivedSessions, archivedLoaded, homeDir,
-    replace, add, remove, rename, updateState, setHomeDir,
-    byId, displayName, fetchArchived, resumeSession,
+    replace, add, remove, rename, updateState, applyReorder, setHomeDir,
+    byId, displayName, fetchArchived, resumeSession, addArchived, removeArchived,
   }
 })
