@@ -11,6 +11,22 @@ export function moveId(ids: string[], fromId: string, toId: string): string[] | 
   return next
 }
 
+const ARMED_CLASS = "cmux-session-reorder-armed"
+const REORDERING_CLASS = "cmux-session-reordering"
+
+function clearSystemSelection() {
+  try {
+    const sel = window.getSelection?.()
+    if (sel && sel.rangeCount > 0) sel.removeAllRanges()
+  } catch {
+    /* ignore */
+  }
+}
+
+function blockBrowserChrome(e: Event) {
+  e.preventDefault()
+}
+
 /**
  * Whole-row reorder for a vertical list of session ids.
  *
@@ -23,6 +39,9 @@ export function moveId(ids: string[], fromId: string, toId: string): string[] | 
  * - Fine pointer (mouse): press + move past a small threshold starts a drag.
  * - Coarse pointer (touch): long-press (~350ms) without moving, then drag.
  * Horizontal swipe / scroll still win if the finger moves before long-press.
+ *
+ * Mobile also kills system text-selection / iOS callouts while a long-press
+ * reorder is pending or active so the OS chrome doesn't steal the gesture.
  */
 export function useSectionReorder(opts: {
   /** Current ordered ids for the section being reordered. */
@@ -45,8 +64,12 @@ export function useSectionReorder(opts: {
   let startY = 0
   let longPressTimer: ReturnType<typeof setTimeout> | null = null
   let pendingId: string | null = null
+  let captureEl: HTMLElement | null = null
   // Coarse pointers need a long-press; fine pointers drag immediately after move.
   let requireLongPress = false
+  // "armed" = long-press pending (selection blocked, scroll still ok).
+  // "reordering" = active drag (selection + page scroll locked).
+  let guardsPhase: "off" | "armed" | "reordering" = "off"
 
   const LONG_PRESS_MS = 350
   const MOVE_CANCEL_PX = 10
@@ -59,20 +82,49 @@ export function useSectionReorder(opts: {
     }
   }
 
+  function bindChromeListeners() {
+    document.addEventListener("selectstart", blockBrowserChrome, true)
+    document.addEventListener("contextmenu", blockBrowserChrome, true)
+    document.addEventListener("selectionchange", clearSystemSelection, true)
+  }
+
+  function unbindChromeListeners() {
+    document.removeEventListener("selectstart", blockBrowserChrome, true)
+    document.removeEventListener("contextmenu", blockBrowserChrome, true)
+    document.removeEventListener("selectionchange", clearSystemSelection, true)
+  }
+
+  function setGuardsPhase(phase: "off" | "armed" | "reordering") {
+    if (typeof document === "undefined") {
+      guardsPhase = phase
+      return
+    }
+    const root = document.documentElement
+    if (guardsPhase === "off" && phase !== "off") bindChromeListeners()
+    if (guardsPhase !== "off" && phase === "off") unbindChromeListeners()
+    root.classList.toggle(ARMED_CLASS, phase === "armed")
+    root.classList.toggle(REORDERING_CLASS, phase === "reordering")
+    guardsPhase = phase
+  }
+
   function setActive(next: boolean) {
     if (active.value === next) return
     active.value = next
     opts.onActiveChange?.(next)
+    if (next) setGuardsPhase("reordering")
+    else setGuardsPhase("off")
   }
 
   function beginDrag(id: string, el?: HTMLElement | null) {
     if (!opts.enabled()) return
+    clearSystemSelection()
     dragId.value = id
     overId.value = id
     setActive(true)
-    if (el && pointerId != null) {
+    const target = el ?? captureEl
+    if (target && pointerId != null) {
       try {
-        el.setPointerCapture(pointerId)
+        target.setPointerCapture(pointerId)
       } catch {
         /* ignore */
       }
@@ -92,7 +144,9 @@ export function useSectionReorder(opts: {
     overId.value = null
     pendingId = null
     pointerId = null
+    captureEl = null
     setActive(false)
+    clearSystemSelection()
 
     if (commit && from) {
       // Always suppress the synthetic click after a real drag, even if order unchanged.
@@ -118,13 +172,18 @@ export function useSectionReorder(opts: {
     if (t?.closest("input, textarea, button, [data-no-reorder]")) return
 
     clearTimer()
+    clearSystemSelection()
     pendingId = id
     pointerId = e.pointerId
     startX = e.clientX
     startY = e.clientY
+    captureEl = el
     requireLongPress = isCoarsePointer(e)
 
     if (requireLongPress) {
+      // Install guards early so iOS doesn't start a text-selection callout
+      // while the long-press timer is running.
+      setGuardsPhase("armed")
       longPressTimer = setTimeout(() => {
         longPressTimer = null
         if (pendingId !== id) return
@@ -150,6 +209,9 @@ export function useSectionReorder(opts: {
           clearTimer()
           pendingId = null
           pointerId = null
+          captureEl = null
+          // Finger moved before long-press → scroll/swipe; drop the guards.
+          setGuardsPhase("off")
         }
         return
       }
@@ -160,6 +222,7 @@ export function useSectionReorder(opts: {
     }
 
     e.preventDefault()
+    clearSystemSelection()
     const stack = document.elementsFromPoint(e.clientX, e.clientY)
     for (const node of stack) {
       if (!(node instanceof HTMLElement)) continue
@@ -174,6 +237,8 @@ export function useSectionReorder(opts: {
   function onPointerUp(e: PointerEvent) {
     if (pointerId == null || e.pointerId !== pointerId) return
     const wasActive = active.value
+    // If the long-press never fired, drop temporary guards.
+    if (!wasActive) setGuardsPhase("off")
     endDrag(wasActive)
   }
 
@@ -188,11 +253,14 @@ export function useSectionReorder(opts: {
       onPointerup: onPointerUp,
       onPointercancel: onPointerUp,
       onDragstart: (e: DragEvent) => e.preventDefault(),
+      onContextmenu: (e: Event) => e.preventDefault(),
+      onSelectstart: (e: Event) => e.preventDefault(),
     }
   }
 
   onUnmounted(() => {
     clearTimer()
+    setGuardsPhase("off")
     endDrag(false)
   })
 

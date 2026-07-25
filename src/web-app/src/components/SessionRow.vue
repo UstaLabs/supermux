@@ -106,7 +106,7 @@ defineExpose({ startRename })
     v-if="isDraft"
     role="button"
     tabindex="0"
-    class="group/row block rounded-md border border-transparent transition-colors hover:bg-card/70 active:bg-card cursor-pointer"
+    class="group/row block rounded-md border border-transparent transition-colors hover:bg-card/70 active:bg-card cursor-pointer select-none [-webkit-touch-callout:none]"
     :class="[
       props.flush ? 'mx-0 my-0' : 'mx-2 my-0.5',
       props.reserveMenuSpace ? 'pl-3 pr-9 py-1.5' : 'px-3 py-1.5',
@@ -151,7 +151,7 @@ defineExpose({ startRename })
     v-else
     role="button"
     tabindex="0"
-    class="block rounded-md border transition-colors cursor-pointer"
+    class="block rounded-md border transition-colors cursor-pointer select-none [-webkit-touch-callout:none]"
     :class="[
       props.flush ? 'mx-0 my-0' : 'mx-2 my-1',
       props.active

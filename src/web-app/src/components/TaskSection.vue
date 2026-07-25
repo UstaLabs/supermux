@@ -95,9 +95,13 @@ const mobile = toRef(props, "mobile")
         v-bind="canDrag ? rowProps(s.id) : { 'data-reorder-id': s.id }"
         class="touch-manipulation transition-[box-shadow,opacity,background-color] duration-100"
         :class="{
-          'opacity-40 cursor-grabbing': dragId === s.id,
+          // Always block system text selection / iOS long-press callout on
+          // reorderable rows so mobile sort can own the press.
+          'select-none [-webkit-user-select:none] [-webkit-touch-callout:none] [-webkit-user-drag:none]': canDrag,
+          'opacity-40 cursor-grabbing touch-none': dragId === s.id,
           'ring-1 ring-inset ring-primary/35 bg-primary/5': overId === s.id && dragId !== s.id,
-          'cursor-grab select-none': canDrag && !reorderActive,
+          'cursor-grab': canDrag && !reorderActive,
+          'cursor-grabbing touch-none': reorderActive,
         }"
       >
         <TaskRow
