@@ -43,10 +43,16 @@ const rowRef = ref<InstanceType<typeof SessionRow> | null>(null)
 const renaming = ref(false)
 
 const openRow = inject<Ref<string | null>>("openSwipeRow", ref(null))
+// TaskSection sets this while a long-press reorder is active so swipe-to-
+// reveal does not steal the gesture mid-drag.
+const sectionReordering = inject<Ref<boolean>>("sectionReordering", ref(false))
+const sectionShouldSuppressClick = inject<() => boolean>("sectionShouldSuppressClick", () => false)
 
 const { state, close } = useSwipeReveal(containerRef, {
   leftWidth: 140,
   rightWidth: 80,
+  // When the parent section is reordering, freeze swipe at idle.
+  paused: sectionReordering,
 })
 
 watch(openRow, (current) => {
@@ -101,6 +107,7 @@ function handleRenameCancel() {
 }
 
 function handleNavigate() {
+  if (sectionReordering.value || sectionShouldSuppressClick()) return
   if (state.value !== "idle") {
     close()
     return

@@ -6,6 +6,8 @@ export interface SwipeRevealOptions {
   rightWidth?: number
   threshold?: number
   velocityThreshold?: number
+  /** When true (or a ref that is true), ignore new swipe gestures. */
+  paused?: { value: boolean } | boolean
 }
 
 export type SwipeTargetState = "idle" | "open-left" | "open-right"
@@ -54,6 +56,12 @@ export function resolveSwipeTarget(
   return settle(0)
 }
 
+function isPaused(p: SwipeRevealOptions["paused"]): boolean {
+  if (p == null) return false
+  if (typeof p === "boolean") return p
+  return !!p.value
+}
+
 export function useSwipeReveal(
   el: Ref<HTMLElement | null>,
   options: SwipeRevealOptions = {},
@@ -65,6 +73,7 @@ export function useSwipeReveal(
     // Flick speed in px/ms (~300 px/s). A deliberate swipe clears this easily,
     // so swiping back toward centre reliably closes the row.
     velocityThreshold = 0.3,
+    paused,
   } = options
 
   const offset = ref(0)
@@ -107,6 +116,7 @@ export function useSwipeReveal(
 
   function onPointerDown(e: PointerEvent) {
     if (isFinePointer.value) return
+    if (isPaused(paused)) return
     if (e.button !== 0) return
     startX = e.clientX
     startY = e.clientY
@@ -116,7 +126,9 @@ export function useSwipeReveal(
     baseOffset = offset.value
     committed = false
     pointerId = e.pointerId
-    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    // Do NOT capture yet — a still finger may be a long-press reorder on the
+    // parent section, and vertical motion is a scroll. Capture only once we
+    // commit to a horizontal swipe below.
   }
 
   function onPointerMove(e: PointerEvent) {
@@ -127,11 +139,22 @@ export function useSwipeReveal(
     if (!committed) {
       if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
       if (Math.abs(dy) > Math.abs(dx)) {
+        // Vertical intent (scroll / reorder) — release swipe tracking.
+        pointerId = null
+        return
+      }
+      // Parent section is mid-reorder (long-press held) — don't steal the gesture.
+      if (isPaused(paused)) {
         pointerId = null
         return
       }
       committed = true
       state.value = "dragging"
+      try {
+        el.value?.setPointerCapture(e.pointerId)
+      } catch {
+        /* ignore */
+      }
       e.preventDefault()
     }
 

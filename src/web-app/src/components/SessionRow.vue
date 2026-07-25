@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, nextTick } from "vue"
+import { computed, ref, nextTick, inject } from "vue"
 import { useMessages } from "@/stores/messages"
 import { useAgentState, isAgentWorking } from "@/stores/agentState"
 import { Check, Pencil, Play, Loader2Icon } from "lucide-vue-next"
@@ -32,6 +32,9 @@ const emit = defineEmits<{
 const messages = useMessages()
 const agentState = useAgentState()
 
+// When the section just finished (or is mid) a reorder, ignore the synthetic click.
+const sectionShouldSuppressClick = inject<() => boolean>("sectionShouldSuppressClick", () => false)
+
 // Drives the chat-list running spinner: true while this session's agent is
 // actively working (thinking/running). Reads the same agent_state — and uses
 // the same condition — as the chat view's "Working…" indicator, so the two
@@ -61,7 +64,16 @@ function commitRename() {
 
 function handleNavigate(e: Event) {
   e.preventDefault()
+  if (sectionShouldSuppressClick()) return
   emit("navigate")
+}
+
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault()
+    if (sectionShouldSuppressClick()) return
+    emit("navigate")
+  }
 }
 
 const lastEntry = computed(() => {
@@ -84,19 +96,26 @@ defineExpose({ startRename })
 </script>
 
 <template>
-  <!-- Draft: no process, so a compact row — the saved plan plus a Start action. -->
-  <a
+  <!--
+    Use a div (not <a>) so whole-row reorder can own the pointer. Anchors are
+    draggable-by-default in browsers and hijack drag as a URL drag, which made
+    reorder feel like it only worked from a thin "handle".
+  -->
+  <!-- Draft: compact row — saved plan plus a Start action. -->
+  <div
     v-if="isDraft"
-    href="#"
-    class="group/row block rounded-md border border-transparent transition-colors hover:bg-card/70 active:bg-card"
+    role="button"
+    tabindex="0"
+    class="group/row block rounded-md border border-transparent transition-colors hover:bg-card/70 active:bg-card cursor-pointer"
     :class="[
       props.flush ? 'mx-0 my-0' : 'mx-2 my-0.5',
       props.reserveMenuSpace ? 'pl-3 pr-9 py-1.5' : 'px-3 py-1.5',
       props.active ? 'bg-card' : '',
     ]"
     @click="handleNavigate"
+    @keydown="handleKeydown"
   >
-    <div class="flex items-center gap-3">
+    <div class="flex items-center gap-2.5 min-w-0">
       <div class="flex w-5 shrink-0 items-center justify-center">
         <Pencil class="size-3.5 text-primary/70" aria-label="draft" />
       </div>
@@ -108,13 +127,16 @@ defineExpose({ startRename })
           @keydown.enter="commitRename"
           @keydown.escape="emit('rename-cancel')"
           @blur="commitRename"
+          @click.stop
         />
       </template>
-      <span v-else class="text-[13px] font-medium truncate min-w-0 flex-1">{{ props.name }}</span>
-      <span
-        v-if="props.projectLabel"
-        class="shrink-0 rounded border border-border/60 px-1.5 py-px font-mono text-[10px] text-muted-foreground/70"
-      >{{ props.projectLabel }}</span>
+      <div v-else class="min-w-0 flex-1 flex items-center gap-1.5">
+        <span class="text-[13px] font-medium truncate min-w-0">{{ props.name }}</span>
+        <span
+          v-if="props.projectLabel"
+          class="shrink-0 max-w-[40%] truncate rounded border border-border/60 px-1.5 py-px font-mono text-[10px] text-muted-foreground/70"
+        >{{ props.projectLabel }}</span>
+      </div>
       <span
         class="grid size-[22px] shrink-0 place-items-center rounded-md border border-primary/35 text-primary opacity-90"
         aria-label="Start"
@@ -122,13 +144,14 @@ defineExpose({ startRename })
         <Play class="size-3" />
       </span>
     </div>
-  </a>
+  </div>
 
-  <!-- In-progress / settled: the full row, agent working-state only (no git). -->
-  <a
+  <!-- In-progress / settled: full row, agent working-state only (no git). -->
+  <div
     v-else
-    href="#"
-    class="block rounded-md border transition-colors"
+    role="button"
+    tabindex="0"
+    class="block rounded-md border transition-colors cursor-pointer"
     :class="[
       props.flush ? 'mx-0 my-0' : 'mx-2 my-1',
       props.active
@@ -137,8 +160,9 @@ defineExpose({ startRename })
       props.reserveMenuSpace ? 'pl-3 pr-9 py-2.5' : 'px-3 py-2.5',
     ]"
     @click="handleNavigate"
+    @keydown="handleKeydown"
   >
-    <div class="flex items-start gap-3">
+    <div class="flex items-start gap-2.5 min-w-0">
       <div class="flex w-5 shrink-0 items-center justify-center self-stretch pt-0.5">
         <span
           v-if="bgOpen > 0"
@@ -152,7 +176,7 @@ defineExpose({ startRename })
       </div>
 
       <div class="min-w-0 flex-1">
-        <div class="flex items-baseline justify-between gap-2">
+        <div class="flex items-baseline justify-between gap-2 min-w-0">
           <template v-if="props.renaming">
             <input
               ref="renameInput"
@@ -161,16 +185,19 @@ defineExpose({ startRename })
               @keydown.enter="commitRename"
               @keydown.escape="emit('rename-cancel')"
               @blur="commitRename"
+              @click.stop
             />
           </template>
-          <span v-else class="font-medium truncate" :class="{ 'text-muted-foreground': isSettled }">{{ props.name }}</span>
+          <div v-else class="min-w-0 flex-1 flex items-baseline gap-1.5">
+            <span class="font-medium truncate min-w-0" :class="{ 'text-muted-foreground': isSettled }">{{ props.name }}</span>
+            <span
+              v-if="props.projectLabel"
+              class="shrink-0 max-w-[36%] truncate rounded border border-border/60 px-1.5 py-px font-mono text-[10px] text-muted-foreground/70"
+            >{{ props.projectLabel }}</span>
+          </div>
           <span v-if="lastTs" class="text-[11px] text-muted-foreground shrink-0">{{ rel(lastTs) }}</span>
         </div>
-        <div class="flex items-center gap-2 mt-0.5">
-          <span
-            v-if="props.projectLabel"
-            class="shrink-0 rounded border border-border/60 px-1.5 py-px font-mono text-[10px] text-muted-foreground/70"
-          >{{ props.projectLabel }}</span>
+        <div class="flex items-center gap-2 mt-0.5 min-w-0">
           <div
             class="text-[11px] truncate min-w-0 flex-1"
             :class="lastText ? 'text-muted-foreground/65' : 'text-muted-foreground/50 italic'"
@@ -185,5 +212,5 @@ defineExpose({ startRename })
         </div>
       </div>
     </div>
-  </a>
+  </div>
 </template>

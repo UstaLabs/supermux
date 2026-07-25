@@ -159,15 +159,19 @@ async function handleReorder(ids: string[]) {
 
 <template>
   <!-- Group by project toggle -->
-  <div class="flex items-center justify-between gap-2 px-3 py-2 border-b border-border/60">
-    <span class="flex items-center gap-2 text-xs text-muted-foreground">
-      <Folder class="size-3.5" />
-      Group by project
+  <div
+    class="flex items-center justify-between gap-2 border-b border-border/60"
+    :class="mobile ? 'px-3 py-2.5' : 'px-3 py-2'"
+  >
+    <span class="flex items-center gap-2 text-xs text-muted-foreground min-w-0">
+      <Folder class="size-3.5 shrink-0" />
+      <span class="truncate">Group by project</span>
     </span>
     <button
       type="button"
       role="switch"
       :aria-checked="groupByProject"
+      :aria-label="groupByProject ? 'Group by project on' : 'Group by project off'"
       class="relative h-[22px] w-[38px] shrink-0 rounded-full transition-colors"
       :class="groupByProject ? 'bg-primary' : 'bg-muted-foreground/35'"
       @click="layout.toggleGroupByProject()"
@@ -213,7 +217,7 @@ async function handleReorder(ids: string[]) {
       :active-id="activeId"
       :renaming-name="renamingRow"
       :expanded="flatSettledExpanded"
-      :reorderable="!mobile"
+      :reorderable="true"
       @navigate="navigateToSession"
       @reorder="handleReorder"
       @kill="requestKill"
@@ -232,7 +236,7 @@ async function handleReorder(ids: string[]) {
   <!-- GROUPED: per-project header + soft-tinted body -->
   <template v-else>
     <div v-for="group in groups" :key="group.workdir">
-      <div class="flex items-baseline gap-2 px-3 pt-3 pb-1">
+      <div class="flex items-baseline gap-2 px-3" :class="mobile ? 'pt-2.5 pb-1' : 'pt-3 pb-1'">
         <button
           type="button"
           class="flex min-w-0 flex-1 items-baseline gap-2 text-left"
@@ -243,13 +247,14 @@ async function handleReorder(ids: string[]) {
             class="size-3 shrink-0 self-center text-muted-foreground/70 transition-transform duration-150"
             :class="{ '-rotate-90': group.collapsed }"
           />
-          <span class="truncate text-[13px] font-bold tracking-tight">{{ group.label }}</span>
+          <span class="truncate font-bold tracking-tight" :class="mobile ? 'text-[14px]' : 'text-[13px]'">{{ group.label }}</span>
           <span class="shrink-0 font-mono text-[10px] text-muted-foreground/60">{{ activeCount(group) }}</span>
         </button>
       </div>
       <div
         v-show="!group.collapsed"
-        class="mx-2 mb-1 rounded-[10px] pb-1"
+        class="mb-1 rounded-[10px] pb-1"
+        :class="mobile ? 'mx-1.5' : 'mx-2'"
         style="background: color-mix(in oklab, var(--primary) 4%, transparent)"
       >
         <TaskSection
@@ -261,7 +266,7 @@ async function handleReorder(ids: string[]) {
           :active-id="activeId"
           :renaming-name="renamingRow"
           :expanded="settledExpanded.has(group.workdir)"
-          :reorderable="!mobile"
+          :reorderable="true"
           @navigate="navigateToSession"
           @kill="requestKill"
           @mute="handleMute"

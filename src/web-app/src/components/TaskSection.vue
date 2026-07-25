@@ -1,12 +1,13 @@
 <script setup lang="ts">
 // One task-state section (In Progress / Drafts / Settled): a small header plus
-// its rows. Settled collapses; non-settled sections are drag-reorderable on
-// desktop. Row actions bubble up carrying the session id so the list view's
-// handlers stay in one place.
-import { ref } from "vue"
+// its rows. Settled collapses; non-settled sections are whole-row reorderable
+// (mouse drag or touch long-press). Row actions bubble up carrying the session
+// id so the list view's handlers stay in one place.
+import { computed, provide, toRef } from "vue"
 import { ChevronDown } from "lucide-vue-next"
 import type { PathGroupSection, SectionKey } from "@/composables/usePathGroups"
 import { projectLabel } from "@/composables/usePathGroups"
+import { useSectionReorder } from "@/composables/useSectionReorder"
 import { useUnread } from "@/stores/unread"
 import type { Session } from "@/stores/sessions"
 import TaskRow from "./TaskRow.vue"
@@ -40,33 +41,34 @@ const emit = defineEmits<{
 const unread = useUnread()
 
 const isSettled = (k: SectionKey) => k === "settled"
-const canDrag = (k: SectionKey) => props.reorderable && !isSettled(k)
+const canDrag = computed(() => props.reorderable && !isSettled(props.section.key))
 function tagFor(s: Session): string | undefined {
   return props.showProjectLabel ? projectLabel(s, props.homeDir) : undefined
 }
 
-const dragId = ref<string | null>(null)
-function onDragStart(id: string) { dragId.value = id }
-function onDrop(targetId: string) {
-  const from = dragId.value
-  dragId.value = null
-  if (!from || from === targetId) return
-  const ids = props.section.sessions.map((s) => s.id)
-  const fromIdx = ids.indexOf(from)
-  const toIdx = ids.indexOf(targetId)
-  if (fromIdx < 0 || toIdx < 0) return
-  ids.splice(toIdx, 0, ids.splice(fromIdx, 1)[0]!)
-  emit("reorder", ids)
-}
+const { dragId, overId, active: reorderActive, shouldSuppressClick, rowProps } = useSectionReorder({
+  ids: () => props.section.sessions.map((s) => s.id),
+  enabled: () => canDrag.value,
+  onReorder: (ids) => emit("reorder", ids),
+})
+
+// Swipeable rows pause while a reorder is in flight so long-press-then-drag
+// doesn't fight horizontal swipe-to-reveal.
+provide("sectionReordering", reorderActive)
+// Rows consult this on click so a completed drag doesn't navigate.
+provide("sectionShouldSuppressClick", shouldSuppressClick)
+
+const mobile = toRef(props, "mobile")
 </script>
 
 <template>
-  <div>
+  <div :class="{ 'touch-none': reorderActive }">
     <!-- Settled: collapsible. Other sections: a plain label. -->
     <button
       v-if="isSettled(props.section.key)"
       type="button"
-      class="flex w-full items-center gap-1.5 px-3 py-1 text-left transition-colors hover:bg-muted/40"
+      class="flex w-full items-center gap-1.5 text-left transition-colors hover:bg-muted/40"
+      :class="mobile ? 'px-3 py-1.5' : 'px-3 py-1'"
       :aria-expanded="props.expanded"
       @click="emit('toggle-expanded')"
     >
@@ -77,7 +79,11 @@ function onDrop(targetId: string) {
       <span class="truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">{{ props.section.label }}</span>
       <span class="text-[10px] tabular-nums text-muted-foreground/50">{{ props.section.sessions.length }}</span>
     </button>
-    <div v-else class="flex items-center gap-1.5 px-3 pt-2 pb-1">
+    <div
+      v-else
+      class="flex items-center gap-1.5"
+      :class="mobile ? 'px-3 pt-2.5 pb-0.5' : 'px-3 pt-2 pb-1'"
+    >
       <span class="truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">{{ props.section.label }}</span>
       <span v-if="props.section.sessions.length > 1" class="text-[10px] tabular-nums text-muted-foreground/50">{{ props.section.sessions.length }}</span>
     </div>
@@ -86,10 +92,13 @@ function onDrop(targetId: string) {
       <div
         v-for="s in props.section.sessions"
         :key="s.id"
-        :draggable="canDrag(props.section.key)"
-        @dragstart="onDragStart(s.id)"
-        @dragover.prevent
-        @drop="onDrop(s.id)"
+        v-bind="canDrag ? rowProps(s.id) : { 'data-reorder-id': s.id }"
+        class="touch-manipulation transition-[box-shadow,opacity,background-color] duration-100"
+        :class="{
+          'opacity-40 cursor-grabbing': dragId === s.id,
+          'ring-1 ring-inset ring-primary/35 bg-primary/5': overId === s.id && dragId !== s.id,
+          'cursor-grab select-none': canDrag && !reorderActive,
+        }"
       >
         <TaskRow
           :session="s"
