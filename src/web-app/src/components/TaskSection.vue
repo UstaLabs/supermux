@@ -1,7 +1,8 @@
 <script setup lang="ts">
-// One task-state section (In Progress / Drafts / Settled): a small header plus
+// One task-state section (In Progress / Drafts / Settled): optional header plus
 // its rows. Settled collapses; non-settled sections are whole-row reorderable
 // (mouse drag or touch long-press with floating ghost + live insert).
+// Grouped mode uses hideHeader + quietSettled to flatten under the project.
 import { computed, provide, toRef } from "vue"
 import { ChevronDown } from "lucide-vue-next"
 import type { PathGroupSection, SectionKey } from "@/composables/usePathGroups"
@@ -11,7 +12,7 @@ import { useUnread } from "@/stores/unread"
 import type { Session } from "@/stores/sessions"
 import TaskRow from "./TaskRow.vue"
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   section: PathGroupSection
   mobile: boolean
   showProjectLabel: boolean
@@ -20,7 +21,14 @@ const props = defineProps<{
   renamingName: string | null
   expanded: boolean
   reorderable: boolean
-}>()
+  /** Hide the non-settled section label (In Progress / Drafts). Used in grouped mode. */
+  hideHeader?: boolean
+  /** Settled fold: quiet "Show N settled" instead of uppercase section chrome. */
+  quietSettled?: boolean
+}>(), {
+  hideHeader: false,
+  quietSettled: false,
+})
 
 const emit = defineEmits<{
   (e: "navigate", id: string): void
@@ -81,6 +89,7 @@ const mobile = toRef(props, "mobile")
 
 <template>
   <div :class="{ 'touch-none': reorderActive }">
+    <!-- Settled fold -->
     <button
       v-if="isSettled(props.section.key)"
       type="button"
@@ -93,11 +102,19 @@ const mobile = toRef(props, "mobile")
         class="size-3 shrink-0 text-muted-foreground/70 transition-transform duration-150"
         :class="{ '-rotate-90': !props.expanded }"
       />
-      <span class="truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">{{ props.section.label }}</span>
-      <span class="text-[10px] tabular-nums text-muted-foreground/50">{{ props.section.sessions.length }}</span>
+      <template v-if="props.quietSettled">
+        <span class="truncate text-[11px] text-muted-foreground/80">
+          {{ props.expanded ? "Hide" : "Show" }} {{ props.section.sessions.length }} settled
+        </span>
+      </template>
+      <template v-else>
+        <span class="truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">{{ props.section.label }}</span>
+        <span class="text-[10px] tabular-nums text-muted-foreground/50">{{ props.section.sessions.length }}</span>
+      </template>
     </button>
+    <!-- Non-settled section label (hidden in grouped flat-under-project mode) -->
     <div
-      v-else
+      v-else-if="!props.hideHeader"
       class="flex items-center gap-1.5"
       :class="mobile ? 'px-3 pt-2.5 pb-0.5' : 'px-3 pt-2 pb-1'"
     >

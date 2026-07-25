@@ -1,7 +1,8 @@
 <script setup lang="ts">
-// The task list itself: PA rows pinned on top, then the three task-state
-// sections — either flat (states only, a project tag per row) or nested under
-// per-project headers with a soft-tinted body. Toggled by "Group by project".
+// The task list itself: PA rows pinned on top, then either flat task-state
+// sections (In Progress / Drafts / Settled with a project tag per row) or
+// grouped-by-project (project header → flat sessions, no nested section chrome).
+// Toggled by "Group by project".
 import { computed, ref, reactive, provide, onMounted } from "vue"
 import { useRoute, useRouter } from "vue-router"
 import { ChevronDown, Folder } from "lucide-vue-next"
@@ -233,10 +234,10 @@ async function handleReorder(ids: string[]) {
     />
   </template>
 
-  <!-- GROUPED: per-project header + soft-tinted body -->
+  <!-- GROUPED: project header → flat sessions (no nested section chrome, no tint) -->
   <template v-else>
-    <div v-for="group in groups" :key="group.workdir">
-      <div class="flex items-baseline gap-2 px-3" :class="mobile ? 'pt-2.5 pb-1' : 'pt-3 pb-1'">
+    <div v-for="group in groups" :key="group.workdir" class="pb-1">
+      <div class="flex items-baseline gap-2 px-3" :class="mobile ? 'pt-2.5 pb-1.5' : 'pt-3 pb-1.5'">
         <button
           type="button"
           class="flex min-w-0 flex-1 items-baseline gap-2 text-left"
@@ -251,12 +252,7 @@ async function handleReorder(ids: string[]) {
           <span class="shrink-0 font-mono text-[10px] text-muted-foreground/60">{{ activeCount(group) }}</span>
         </button>
       </div>
-      <div
-        v-show="!group.collapsed"
-        class="mb-1 rounded-[10px] pb-1"
-        :class="mobile ? 'mx-1.5' : 'mx-2'"
-        style="background: color-mix(in oklab, var(--primary) 4%, transparent)"
-      >
+      <div v-show="!group.collapsed">
         <TaskSection
           v-for="section in group.sections"
           :key="section.key"
@@ -267,6 +263,8 @@ async function handleReorder(ids: string[]) {
           :renaming-name="renamingRow"
           :expanded="settledExpanded.has(group.workdir)"
           :reorderable="true"
+          :hide-header="true"
+          :quiet-settled="true"
           @navigate="navigateToSession"
           @kill="requestKill"
           @mute="handleMute"
