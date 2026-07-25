@@ -170,9 +170,11 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
 
   // grok streams `agent_message_chunk` as token-level DELTAS ("gro", "k", "-", "live"),
   // not cumulative snapshots. Emitting each chunk as its own assistant-message would
-  // push one chat message per token, so accumulate and emit once per turn (cursor does
-  // the same for a different reason — its chunks are cumulative, so it keeps the last
-  // rather than concatenating).
+  // push one chat message per token. Accumulate deltas, then flush at natural speech
+  // boundaries: (1) a new tool_call (commentary before tools) and (2) turn end.
+  // Live-verified (grok 0.2.101): multi-step turns interleave
+  //   agent_message_chunk* → tool_call → … → agent_message_chunk* → end_turn
+  // ACP's optional messageId on chunks is NOT emitted by grok today.
   private pendingAssistantText = ""
 
   private onNotification(method: string, params: unknown): void {
@@ -181,13 +183,16 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
       if (ev.kind === "assistant-message") {
         this.pendingAssistantText += ev.text
       } else if (ev.kind === "tool-call") {
+        // Flush any pre-tool narration so the user sees it while tools run,
+        // instead of waiting for the whole turn to finish.
+        if (ev.phase === "started") this.flushAssistant()
         this.emit("tool-call", { kind: "tool-call", tool: ev.tool, phase: ev.phase, call_id: ev.call_id, detail: ev.detail })
       }
     }
   }
 
-  /** Emit the turn's accumulated text as ONE message. Called on turn end — including
-   * an interrupted turn, so a partial answer still reaches the user. */
+  /** Emit buffered assistant text as one chat message. Safe to call with an empty
+   * buffer (no-op). Used on tool boundaries and turn end (incl. interrupt/crash). */
   private flushAssistant(): void {
     const text = this.pendingAssistantText.trim()
     this.pendingAssistantText = ""
