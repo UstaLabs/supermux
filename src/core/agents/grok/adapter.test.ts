@@ -40,7 +40,7 @@ test("start() handshakes and send() streams reply + tool events then completes",
   expect(events.find((e) => e.kind === "turn-complete")).toBeTruthy()
 })
 
-test("accumulates streamed chunk deltas into ONE assistant message per turn", async () => {
+test("accumulates streamed chunk deltas into ONE assistant message when no tools run", async () => {
   // Regression guard: grok streams agent_message_chunk token-by-token ("Hel","lo","!").
   // Emitting per chunk would push one chat message per token.
   const fr = fakeRunner()
@@ -58,13 +58,50 @@ test("accumulates streamed chunk deltas into ONE assistant message per turn", as
   for (const t of ["Hel", "lo", ", wor", "ld!"]) {
     fr.feed({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: t } } } })
   }
-  // No message may be emitted mid-stream.
+  // No message may be emitted mid-stream (only at tool boundary / turn end).
   expect(msgs.length).toBe(0)
   fr.feed({ jsonrpc: "2.0", id: 3, result: { stopReason: "EndTurn" } })
   await sent
 
   expect(msgs.length).toBe(1)
   expect(msgs[0].text).toBe("Hello, world!")
+})
+
+test("flushes pending text on each new tool_call, then final text on turn end", async () => {
+  // Live-verified multi-step shape: msg → tool → msg → tool → msg → end_turn.
+  // Without tool-boundary flush, the user only sees everything after tools finish.
+  const fr = fakeRunner()
+  const events: any[] = []
+  const adapter = new GrokAdapter({ sessionName: "s1", workdir: "/w", runner: fr.runner, persistSessionId: async () => {} })
+  for (const k of ["assistant-message", "tool-call"]) adapter.on(k, (e) => events.push(e))
+
+  const started = adapter.start()
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 1, result: { protocolVersion: 1 } })
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 2, result: { sessionId: "sess-1" } })
+  await started
+
+  const sent = adapter.send("do steps")
+  await tick()
+  fr.feed({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Step 1." } } } })
+  fr.feed({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call", toolCallId: "c1", title: "write" } } })
+  fr.feed({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "c1", kind: "edit", status: "completed" } } })
+  fr.feed({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Step 2." } } } })
+  fr.feed({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call", toolCallId: "c2", title: "bash" } } })
+  fr.feed({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "c2", kind: "execute", status: "completed" } } })
+  fr.feed({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Done." } } } })
+  // After first tool_call, pre-tool text must already be visible.
+  expect(events.filter((e) => e.kind === "assistant-message").map((e) => e.text)).toEqual(["Step 1.", "Step 2."])
+  fr.feed({ jsonrpc: "2.0", id: 3, result: { stopReason: "EndTurn" } })
+  await sent
+
+  expect(events.filter((e) => e.kind === "assistant-message").map((e) => e.text)).toEqual(["Step 1.", "Step 2.", "Done."])
+  // Tool events still fire after the flush (order: text, tool-started, tool-completed, …).
+  const kinds = events.map((e) => e.kind === "tool-call" ? `tool:${e.phase}` : e.kind)
+  expect(kinds).toEqual([
+    "assistant-message", "tool:started", "tool:completed",
+    "assistant-message", "tool:started", "tool:completed",
+    "assistant-message",
+  ])
 })
 
 test("flushes the partial answer when a turn is interrupted", async () => {
