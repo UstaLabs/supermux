@@ -1,8 +1,7 @@
 <script setup lang="ts">
 // One task-state section (In Progress / Drafts / Settled): a small header plus
 // its rows. Settled collapses; non-settled sections are whole-row reorderable
-// (mouse drag or touch long-press). Row actions bubble up carrying the session
-// id so the list view's handlers stay in one place.
+// (mouse drag or touch long-press with floating ghost + live insert).
 import { computed, provide, toRef } from "vue"
 import { ChevronDown } from "lucide-vue-next"
 import type { PathGroupSection, SectionKey } from "@/composables/usePathGroups"
@@ -46,16 +45,35 @@ function tagFor(s: Session): string | undefined {
   return props.showProjectLabel ? projectLabel(s, props.homeDir) : undefined
 }
 
-const { dragId, overId, active: reorderActive, shouldSuppressClick, rowProps } = useSectionReorder({
-  ids: () => props.section.sessions.map((s) => s.id),
-  enabled: () => canDrag.value,
-  onReorder: (ids) => emit("reorder", ids),
+const byId = computed(() => {
+  const m = new Map<string, Session>()
+  for (const s of props.section.sessions) m.set(s.id, s)
+  return m
 })
 
-// Swipeable rows pause while a reorder is in flight so long-press-then-drag
-// doesn't fight horizontal swipe-to-reveal.
+const { dragId, active: reorderActive, orderedIds, ghost, shouldSuppressClick, rowProps } =
+  useSectionReorder({
+    ids: () => props.section.sessions.map((s) => s.id),
+    enabled: () => canDrag.value,
+    onReorder: (ids) => emit("reorder", ids),
+    labelFor: (id) => byId.value.get(id)?.name ?? id,
+  })
+
+// While dragging, render the live-reordered sequence; otherwise the store order.
+const displaySessions = computed<Session[]>(() => {
+  if (!reorderActive.value || orderedIds.value.length === 0) return props.section.sessions
+  const out: Session[] = []
+  for (const id of orderedIds.value) {
+    const s = byId.value.get(id)
+    if (s) out.push(s)
+  }
+  for (const s of props.section.sessions) {
+    if (!orderedIds.value.includes(s.id)) out.push(s)
+  }
+  return out
+})
+
 provide("sectionReordering", reorderActive)
-// Rows consult this on click so a completed drag doesn't navigate.
 provide("sectionShouldSuppressClick", shouldSuppressClick)
 
 const mobile = toRef(props, "mobile")
@@ -63,7 +81,6 @@ const mobile = toRef(props, "mobile")
 
 <template>
   <div :class="{ 'touch-none': reorderActive }">
-    <!-- Settled: collapsible. Other sections: a plain label. -->
     <button
       v-if="isSettled(props.section.key)"
       type="button"
@@ -90,16 +107,13 @@ const mobile = toRef(props, "mobile")
 
     <template v-if="!isSettled(props.section.key) || props.expanded">
       <div
-        v-for="s in props.section.sessions"
+        v-for="s in displaySessions"
         :key="s.id"
         v-bind="canDrag ? rowProps(s.id) : { 'data-reorder-id': s.id }"
-        class="touch-manipulation transition-[box-shadow,opacity,background-color] duration-100"
+        class="touch-manipulation transition-[transform,opacity,box-shadow,background-color] duration-150 ease-out"
         :class="{
-          // Always block system text selection / iOS long-press callout on
-          // reorderable rows so mobile sort can own the press.
           'select-none [-webkit-user-select:none] [-webkit-touch-callout:none] [-webkit-user-drag:none]': canDrag,
-          'opacity-40 cursor-grabbing touch-none': dragId === s.id,
-          'ring-1 ring-inset ring-primary/35 bg-primary/5': overId === s.id && dragId !== s.id,
+          'opacity-30 scale-[0.98]': dragId === s.id,
           'cursor-grab': canDrag && !reorderActive,
           'cursor-grabbing touch-none': reorderActive,
         }"
@@ -125,5 +139,26 @@ const mobile = toRef(props, "mobile")
         />
       </div>
     </template>
+
+    <Teleport to="body">
+      <div
+        v-if="ghost"
+        class="pointer-events-none fixed z-[9999] rounded-md border border-primary/40 bg-card px-3 py-2.5 shadow-xl ring-1 ring-primary/20"
+        :style="{
+          left: ghost.x + 'px',
+          top: ghost.y + 'px',
+          width: ghost.width + 'px',
+          minHeight: ghost.height + 'px',
+          transform: 'scale(1.03)',
+        }"
+        aria-hidden="true"
+      >
+        <div class="flex items-center gap-2">
+          <span class="size-1.5 shrink-0 rounded-full bg-primary" />
+          <span class="truncate text-[13px] font-medium text-foreground">{{ ghost.label }}</span>
+        </div>
+        <div class="mt-0.5 text-[10px] text-muted-foreground/70">Release to drop</div>
+      </div>
+    </Teleport>
   </div>
 </template>
