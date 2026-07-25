@@ -2,7 +2,7 @@
 // One task-state section (In Progress / Drafts / Settled): optional header plus
 // its rows. Settled collapses; non-settled sections are whole-row reorderable
 // (mouse drag or touch long-press with floating ghost + live insert).
-// Grouped mode uses hideHeader + quietSettled to flatten under the project.
+// Grouped mode uses hideHeader + quietSettled + card (Android-style group surface).
 import { computed, provide, toRef } from "vue"
 import { ChevronDown } from "lucide-vue-next"
 import type { PathGroupSection, SectionKey } from "@/composables/usePathGroups"
@@ -25,9 +25,16 @@ const props = withDefaults(defineProps<{
   hideHeader?: boolean
   /** Settled fold: quiet "Show N settled" instead of uppercase section chrome. */
   quietSettled?: boolean
+  /**
+   * Android-style group card: flush rows, no floating row chrome. Live/draft
+   * sections render as multi-root fragments so the parent card's divide-y draws
+   * hairlines; settled is a single muted footer block.
+   */
+  card?: boolean
 }>(), {
   hideHeader: false,
   quietSettled: false,
+  card: false,
 })
 
 const emit = defineEmits<{
@@ -85,13 +92,127 @@ provide("sectionReordering", reorderActive)
 provide("sectionShouldSuppressClick", shouldSuppressClick)
 
 const mobile = toRef(props, "mobile")
+
+const settledSection = computed(() => isSettled(props.section.key))
+// Card live/draft: multi-root fragment so parent divide-y draws hairlines.
+const cardLiveFragment = computed(() => props.card && !settledSection.value)
+
+function rowClass(sId: string) {
+  return {
+    "touch-none": reorderActive.value,
+    "select-none [-webkit-user-select:none] [-webkit-touch-callout:none] [-webkit-user-drag:none]": canDrag.value,
+    "opacity-30 scale-[0.98]": dragId.value === sId,
+    "cursor-grab": canDrag.value && !reorderActive.value,
+    "cursor-grabbing touch-none": reorderActive.value,
+  }
+}
 </script>
 
 <template>
-  <div :class="{ 'touch-none': reorderActive }">
+  <!-- ===== Grouped card · live/draft: multi-root rows (parent card owns divide-y) ===== -->
+  <template v-if="cardLiveFragment">
+    <div
+      v-for="s in displaySessions"
+      :key="s.id"
+      v-bind="canDrag ? rowProps(s.id) : { 'data-reorder-id': s.id }"
+      class="touch-manipulation transition-[transform,opacity,box-shadow,background-color] duration-150 ease-out"
+      :class="rowClass(s.id)"
+    >
+      <TaskRow
+        :session="s"
+        :mobile="props.mobile"
+        :variant="props.section.key"
+        :active="s.id === props.activeId"
+        :unread="unread.isUnread(s.id)"
+        :project-label="tagFor(s)"
+        :renaming="props.renamingName === s.name"
+        flush
+        @navigate="emit('navigate', s.id)"
+        @kill="emit('kill', s.id)"
+        @mute="emit('mute', s.id)"
+        @rename-start="emit('rename-start', s.name)"
+        @rename="(newName) => emit('rename', s.id, newName)"
+        @rename-cancel="emit('rename-cancel')"
+        @settle="emit('settle', s.id)"
+        @resume="emit('resume', s.id)"
+        @open-draft="emit('open-draft', s.id)"
+        @delete-draft="emit('delete-draft', s.id)"
+      />
+    </div>
+    <Teleport to="body">
+      <div
+        v-if="ghost"
+        class="pointer-events-none fixed z-[9999] rounded-md border border-primary/40 bg-card px-3 py-2.5 shadow-xl ring-1 ring-primary/20"
+        :style="{
+          left: ghost.x + 'px',
+          top: ghost.y + 'px',
+          width: ghost.width + 'px',
+          minHeight: ghost.height + 'px',
+          transform: 'scale(1.03)',
+        }"
+        aria-hidden="true"
+      >
+        <div class="flex items-center gap-2">
+          <span class="size-1.5 shrink-0 rounded-full bg-primary" />
+          <span class="truncate text-[13px] font-medium text-foreground">{{ ghost.label }}</span>
+        </div>
+        <div class="mt-0.5 text-[10px] text-muted-foreground/70">Release to drop</div>
+      </div>
+    </Teleport>
+  </template>
+
+  <!-- ===== Grouped card · settled: recessed footer block inside the card ===== -->
+  <div v-else-if="props.card && settledSection" class="bg-muted/40">
+    <button
+      type="button"
+      class="flex w-full items-center gap-1.5 text-left transition-colors hover:bg-muted/50"
+      :class="mobile ? 'px-3 py-2' : 'px-3 py-1.5'"
+      :aria-expanded="props.expanded"
+      @click="emit('toggle-expanded')"
+    >
+      <ChevronDown
+        class="size-3 shrink-0 text-muted-foreground/70 transition-transform duration-150"
+        :class="{ '-rotate-90': !props.expanded }"
+      />
+      <span class="truncate text-[11px] text-muted-foreground/80">
+        {{ props.expanded ? "Hide" : "Show" }} {{ props.section.sessions.length }} settled
+      </span>
+    </button>
+    <div v-if="props.expanded" class="divide-y divide-border/40 border-t border-border/40">
+      <div
+        v-for="s in displaySessions"
+        :key="s.id"
+        class="touch-manipulation"
+      >
+        <TaskRow
+          :session="s"
+          :mobile="props.mobile"
+          :variant="props.section.key"
+          :active="s.id === props.activeId"
+          :unread="unread.isUnread(s.id)"
+          :project-label="tagFor(s)"
+          :renaming="props.renamingName === s.name"
+          flush
+          @navigate="emit('navigate', s.id)"
+          @kill="emit('kill', s.id)"
+          @mute="emit('mute', s.id)"
+          @rename-start="emit('rename-start', s.name)"
+          @rename="(newName) => emit('rename', s.id, newName)"
+          @rename-cancel="emit('rename-cancel')"
+          @settle="emit('settle', s.id)"
+          @resume="emit('resume', s.id)"
+          @open-draft="emit('open-draft', s.id)"
+          @delete-draft="emit('delete-draft', s.id)"
+        />
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Flat / non-card (unchanged layout) ===== -->
+  <div v-else :class="{ 'touch-none': reorderActive }">
     <!-- Settled fold -->
     <button
-      v-if="isSettled(props.section.key)"
+      v-if="settledSection"
       type="button"
       class="flex w-full items-center gap-1.5 text-left transition-colors hover:bg-muted/40"
       :class="mobile ? 'px-3 py-1.5' : 'px-3 py-1'"
@@ -112,7 +233,7 @@ const mobile = toRef(props, "mobile")
         <span class="text-[10px] tabular-nums text-muted-foreground/50">{{ props.section.sessions.length }}</span>
       </template>
     </button>
-    <!-- Non-settled section label (hidden in grouped flat-under-project mode) -->
+    <!-- Non-settled section label -->
     <div
       v-else-if="!props.hideHeader"
       class="flex items-center gap-1.5"
@@ -122,18 +243,13 @@ const mobile = toRef(props, "mobile")
       <span v-if="props.section.sessions.length > 1" class="text-[10px] tabular-nums text-muted-foreground/50">{{ props.section.sessions.length }}</span>
     </div>
 
-    <template v-if="!isSettled(props.section.key) || props.expanded">
+    <template v-if="!settledSection || props.expanded">
       <div
         v-for="s in displaySessions"
         :key="s.id"
         v-bind="canDrag ? rowProps(s.id) : { 'data-reorder-id': s.id }"
         class="touch-manipulation transition-[transform,opacity,box-shadow,background-color] duration-150 ease-out"
-        :class="{
-          'select-none [-webkit-user-select:none] [-webkit-touch-callout:none] [-webkit-user-drag:none]': canDrag,
-          'opacity-30 scale-[0.98]': dragId === s.id,
-          'cursor-grab': canDrag && !reorderActive,
-          'cursor-grabbing touch-none': reorderActive,
-        }"
+        :class="rowClass(s.id)"
       >
         <TaskRow
           :session="s"

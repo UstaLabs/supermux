@@ -15,6 +15,8 @@ const props = defineProps<{
   variant: "in_progress" | "draft" | "settled"
   projectLabel?: string
   renaming?: boolean
+  /** In-group card: no floating row chrome (Android-style flush rows). */
+  flush?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -45,6 +47,7 @@ const emit = defineEmits<{
     :model="props.session.model"
     :variant="props.variant"
     :project-label="props.projectLabel"
+    :flush="props.flush"
     @kill="emit('kill')"
     @mute="emit('mute')"
     @rename="(_id, newName) => emit('rename', newName)"
@@ -81,6 +84,7 @@ const emit = defineEmits<{
           :variant="props.variant"
           :project-label="props.projectLabel"
           :renaming="props.renaming"
+          :flush="props.flush"
           @navigate="emit('navigate')"
           @rename="(newName) => emit('rename', newName)"
           @rename-cancel="emit('rename-cancel')"

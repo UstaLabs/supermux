@@ -20,8 +20,10 @@ const props = withDefaults(
     status?: string
     variant?: "in_progress" | "draft" | "settled"
     projectLabel?: string
+    /** In-group card: match card surface, no outer padding. */
+    flush?: boolean
   }>(),
-  { variant: "in_progress" },
+  { variant: "in_progress", flush: false },
 )
 
 const emit = defineEmits<{
@@ -177,7 +179,13 @@ function handleNavigate() {
       </button>
     </div>
 
-    <div data-swipe-content class="relative bg-[var(--cmux-session-list)] px-2 py-1">
+    <div
+      data-swipe-content
+      class="relative"
+      :class="props.flush
+        ? 'bg-card'
+        : 'bg-[var(--cmux-session-list)] px-2 py-1'"
+    >
       <SessionRow
         ref="rowRef"
         flush

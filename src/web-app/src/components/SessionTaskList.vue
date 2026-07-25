@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // The task list itself: PA rows pinned on top, then either flat task-state
 // sections (In Progress / Drafts / Settled with a project tag per row) or
-// grouped-by-project (project header → flat sessions, no nested section chrome).
+// grouped-by-project (project header above an Android-style group card:
+// flush rows + hairline dividers, settled as a recessed in-card footer).
 // Toggled by "Group by project".
 import { computed, ref, reactive, provide, onMounted } from "vue"
 import { useRoute, useRouter } from "vue-router"
@@ -234,25 +235,33 @@ async function handleReorder(ids: string[]) {
     />
   </template>
 
-  <!-- GROUPED: project header → flat sessions (no nested section chrome, no tint) -->
+  <!-- GROUPED: path header above Android-style group card (flush rows + settled footer) -->
   <template v-else>
-    <div v-for="group in groups" :key="group.workdir" class="pb-1">
-      <div class="flex items-baseline gap-2 px-3" :class="mobile ? 'pt-2.5 pb-1.5' : 'pt-3 pb-1.5'">
+    <div v-for="group in groups" :key="group.workdir" class="px-3 pb-2" :class="mobile ? 'pt-1' : 'pt-1.5'">
+      <div class="flex items-center gap-1.5 min-h-[32px] py-1">
         <button
           type="button"
-          class="flex min-w-0 flex-1 items-baseline gap-2 text-left"
+          class="flex min-w-0 flex-1 items-center gap-1.5 text-left"
           :aria-expanded="!group.collapsed"
           @click="toggle(group.workdir)"
         >
           <ChevronDown
-            class="size-3 shrink-0 self-center text-muted-foreground/70 transition-transform duration-150"
+            class="size-3 shrink-0 text-muted-foreground/70 transition-transform duration-150"
             :class="{ '-rotate-90': group.collapsed }"
           />
-          <span class="truncate font-bold tracking-tight" :class="mobile ? 'text-[14px]' : 'text-[13px]'">{{ group.label }}</span>
+          <span class="min-w-0 flex-1 truncate font-mono text-[11px] font-medium text-muted-foreground">{{ group.label }}</span>
           <span class="shrink-0 font-mono text-[10px] text-muted-foreground/60">{{ activeCount(group) }}</span>
         </button>
       </div>
-      <div v-show="!group.collapsed">
+      <!--
+        One surface per project (Android PathGroup Surface). Live/draft rows are
+        multi-root fragment children so divide-y paints hairlines between them;
+        settled is a single muted footer block inside the same card.
+      -->
+      <div
+        v-show="!group.collapsed"
+        class="overflow-hidden rounded-xl border border-border/70 bg-card divide-y divide-border/50"
+      >
         <TaskSection
           v-for="section in group.sections"
           :key="section.key"
@@ -265,6 +274,7 @@ async function handleReorder(ids: string[]) {
           :reorderable="true"
           :hide-header="true"
           :quiet-settled="true"
+          :card="true"
           @navigate="navigateToSession"
           @kill="requestKill"
           @mute="handleMute"
