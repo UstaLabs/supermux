@@ -456,6 +456,7 @@ struct UsageView: View {
                     codexCard(d.codex, err: d.errors["codex"])
                     cursorCard(d.cursor, err: d.errors["cursor"])
                     opencodeCard(d.opencode, err: d.errors["opencode"])
+                    grokCard(d.grok, err: d.errors["grok"])
                 } else {
                     ContentUnavailableView("Usage unavailable", systemImage: "chart.bar")
                         .padding(.top, 40)
@@ -577,6 +578,26 @@ struct UsageView: View {
                 HStack(spacing: 16) { tokenStat("Cache read", u.cacheReadTokens); tokenStat("Cache write", u.cacheWriteTokens) }
                 Divider()
                 Text("\(u.sessions) sessions · \(u.messages) messages").font(.caption2).foregroundStyle(.secondary)
+            } else { unavailable(err) }
+        }
+    }
+
+    @ViewBuilder private func grokCard(_ u: GrokUsage?, err: String?) -> some View {
+        UsageCard(title: "Grok", subtitle: u?.plan ?? "unknown", dimmed: u == nil) {
+            if let u {
+                usageBar("Monthly credits", u.percentUsed, reset: resetClaude(u.billingPeriodEnd))
+                if u.monthlyLimit > 0 {
+                    Divider()
+                    rowLine("Credits", "\(Int(u.used.rounded())) / \(Int(u.monthlyLimit.rounded()))")
+                }
+                if u.onDemandCap > 0 {
+                    Divider()
+                    rowLine("On-demand", "\(Int(u.onDemandUsed.rounded())) / \(Int(u.onDemandCap.rounded()))")
+                }
+                if u.prepaidBalance > 0 {
+                    Divider()
+                    rowLine("Prepaid balance", "\(Int(u.prepaidBalance.rounded()))")
+                }
             } else { unavailable(err) }
         }
     }

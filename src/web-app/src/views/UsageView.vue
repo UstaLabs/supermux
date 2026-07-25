@@ -11,7 +11,8 @@ interface CodexWindow extends UsageWindow { id: string; label: string; windowSec
 interface CodexUsage { plan: string; windows: CodexWindow[]; credits: { hasCredits: boolean; balance: string } | null; limitReached: boolean; resetCredits: number }
 interface CursorUsage { totalPercentUsed: number; totalSpendCents: number; includedCents: number; limitCents: number; spendAvailable: boolean; billingCycleStart: string; billingCycleEnd: string }
 interface OpenCodeUsage { sessions: number; messages: number; totalCostUsd: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
-interface UsageResponse { claude: ClaudeUsage | null; codex: CodexUsage | null; cursor: CursorUsage | null; opencode: OpenCodeUsage | null; errors: Record<string, string> }
+interface GrokUsage { plan: string; percentUsed: number; used: number; monthlyLimit: number; onDemandCap: number; onDemandUsed: number; prepaidBalance: number; billingPeriodStart: string; billingPeriodEnd: string }
+interface UsageResponse { claude: ClaudeUsage | null; codex: CodexUsage | null; cursor: CursorUsage | null; opencode: OpenCodeUsage | null; grok: GrokUsage | null; errors: Record<string, string> }
 
 const data = ref<UsageResponse | null>(null)
 const loading = ref(false)
@@ -47,10 +48,10 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
-function formatReset(resetsAt: string | number | null, kind: "claude" | "codex" | "cursor"): string {
+function formatReset(resetsAt: string | number | null, kind: "claude" | "codex" | "cursor" | "grok"): string {
   if (resetsAt == null) return ""
   let ms: number
-  if (kind === "claude") {
+  if (kind === "claude" || kind === "grok") {
     ms = new Date(resetsAt as string).getTime()
   } else if (kind === "codex") {
     ms = Number(resetsAt) * 1000
@@ -76,6 +77,7 @@ const claudeFable = computed(() => claude.value?.sevenDayFable ?? null)
 const codex = computed(() => data.value?.codex ?? null)
 const cursor = computed(() => data.value?.cursor ?? null)
 const opencode = computed(() => data.value?.opencode ?? null)
+const grok = computed(() => data.value?.grok ?? null)
 const errors = computed(() => data.value?.errors ?? {})
 
 const confirmingReset = ref(false)
@@ -324,6 +326,48 @@ async function useReset() {
           </template>
           <p v-else class="text-xs text-muted-foreground">{{ errors.opencode || 'Not available' }}</p>
         </div>
+
+        <!-- Grok card — SuperGrok subscription monthly credit pool -->
+        <div class="rounded-xl border border-border bg-card p-4" :class="{ 'opacity-50': !grok }">
+          <div class="flex items-center justify-between mb-3">
+            <div>
+              <h2 class="font-semibold text-sm">Grok</h2>
+              <p class="text-xs text-muted-foreground">{{ grok?.plan ?? 'unknown' }}</p>
+            </div>
+          </div>
+          <template v-if="grok">
+            <div class="mb-3">
+              <div class="flex items-center justify-between text-xs mb-1">
+                <span class="text-muted-foreground">Monthly credits</span>
+                <span>{{ Math.round(grok.percentUsed) }}% used</span>
+              </div>
+              <div class="h-2 rounded-full bg-muted overflow-hidden">
+                <div :class="barColor(grok.percentUsed)" class="h-full rounded-full transition-all" :style="{ width: clamp(grok.percentUsed) + '%' }" />
+              </div>
+              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(grok.billingPeriodEnd, 'grok') }}</p>
+            </div>
+            <div v-if="grok.monthlyLimit > 0" class="pt-2 border-t border-border">
+              <div class="flex items-center justify-between text-xs">
+                <span class="text-muted-foreground">Credits</span>
+                <span>{{ Math.round(grok.used) }} / {{ Math.round(grok.monthlyLimit) }}</span>
+              </div>
+            </div>
+            <div v-if="grok.onDemandCap > 0" class="pt-2 mt-2 border-t border-border">
+              <div class="flex items-center justify-between text-xs">
+                <span class="text-muted-foreground">On-demand</span>
+                <span>{{ Math.round(grok.onDemandUsed) }} / {{ Math.round(grok.onDemandCap) }}</span>
+              </div>
+            </div>
+            <div v-if="grok.prepaidBalance > 0" class="pt-2 mt-2 border-t border-border">
+              <div class="flex items-center justify-between text-xs">
+                <span class="text-muted-foreground">Prepaid balance</span>
+                <span>{{ Math.round(grok.prepaidBalance) }}</span>
+              </div>
+            </div>
+          </template>
+          <p v-else class="text-xs text-muted-foreground">{{ errors.grok || 'Not available' }}</p>
+        </div>
+
       </template>
     </div>
   </div>

@@ -8,6 +8,7 @@ import {
   fetchCodexUsage,
   fetchCursorUsage,
   fetchOpenCodeUsage,
+  fetchGrokUsage,
   fetchAllUsage,
   redeemCodexReset,
 } from "../src/core/usage"
@@ -422,16 +423,19 @@ test("fetchAllUsage assembles all providers, captures errors when all creds miss
     codexAuthPath: join(tmpDir, "no-codex.json"),
     cursorDbPath: join(tmpDir, "no-cursor.vscdb"),
     opencodeDbPath: join(tmpDir, "no-opencode.db"),
+    grokAuthPath: join(tmpDir, "no-grok.json"),
   })
 
   expect(result.claude).toBeNull()
   expect(result.codex).toBeNull()
   expect(result.cursor).toBeNull()
   expect(result.opencode).toBeNull()
+  expect(result.grok).toBeNull()
   expect(result.errors.claude).toBe("credentials not found or token expired")
   expect(result.errors.codex).toBe("credentials not found")
   expect(result.errors.cursor).toBe("credentials not found")
   expect(result.errors.opencode).toBe("no usage recorded yet")
+  expect(result.errors.grok).toBe("credentials not found or token expired")
 })
 
 // ── Codex reset redemption ──
@@ -473,4 +477,88 @@ test("redeemCodexReset throws on API error", async () => {
   writeFileSync(authPath, JSON.stringify({ tokens: { access_token: "t" } }))
   globalThis.fetch = (async () => new Response("boom", { status: 500 })) as unknown as typeof fetch
   await expect(redeemCodexReset(authPath, "k")).rejects.toThrow()
+})
+
+
+// ── Grok ──
+
+test("fetchGrokUsage maps monthly credits and plan from cli-chat-proxy", async () => {
+  const authPath = join(tmpDir, "grok-auth.json")
+  writeFileSync(authPath, JSON.stringify({
+    "https://auth.x.ai::client": {
+      key: "grok-token-xyz",
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+    },
+  }))
+
+  const seen: string[] = []
+  globalThis.fetch = (async (url: any) => {
+    const u = String(url)
+    seen.push(u)
+    if (u.endsWith("/billing") && !u.includes("format=")) {
+      return new Response(JSON.stringify({
+        config: {
+          monthlyLimit: { val: 150000 },
+          used: { val: 15000 },
+          onDemandCap: { val: 0 },
+          billingPeriodStart: "2026-07-01T00:00:00+00:00",
+          billingPeriodEnd: "2026-08-01T00:00:00+00:00",
+        },
+      }))
+    }
+    if (u.includes("/user?include=subscription")) {
+      return new Response(JSON.stringify({ subscriptionTier: "SuperGrokPro" }))
+    }
+    if (u.includes("format=credits")) {
+      return new Response(JSON.stringify({
+        config: {
+          prepaidBalance: { val: 500 },
+          onDemandCap: { val: 1000 },
+          onDemandUsed: { val: 25 },
+        },
+      }))
+    }
+    return new Response("not found", { status: 404 })
+  }) as typeof fetch
+
+  const result = await fetchGrokUsage(authPath, "https://cli-chat-proxy.test/v1")
+  expect(result).not.toBeNull()
+  expect(result!.plan).toBe("SuperGrokPro")
+  expect(result!.used).toBe(15000)
+  expect(result!.monthlyLimit).toBe(150000)
+  expect(result!.percentUsed).toBe(10)
+  expect(result!.prepaidBalance).toBe(500)
+  expect(result!.onDemandCap).toBe(1000)
+  expect(result!.onDemandUsed).toBe(25)
+  expect(result!.billingPeriodEnd).toBe("2026-08-01T00:00:00+00:00")
+  expect(seen.some((u) => u.includes("/billing"))).toBe(true)
+})
+
+test("fetchGrokUsage returns null when auth missing", async () => {
+  const result = await fetchGrokUsage(join(tmpDir, "no-grok-auth.json"))
+  expect(result).toBeNull()
+})
+
+test("fetchGrokUsage returns null when token expired", async () => {
+  const authPath = join(tmpDir, "grok-expired.json")
+  writeFileSync(authPath, JSON.stringify({
+    "https://auth.x.ai::client": {
+      key: "old",
+      expires_at: new Date(Date.now() - 60_000).toISOString(),
+    },
+  }))
+  const result = await fetchGrokUsage(authPath)
+  expect(result).toBeNull()
+})
+
+test("fetchGrokUsage throws on billing API error", async () => {
+  const authPath = join(tmpDir, "grok-auth-err.json")
+  writeFileSync(authPath, JSON.stringify({
+    "https://auth.x.ai::client": {
+      key: "t",
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+    },
+  }))
+  globalThis.fetch = (async () => new Response("boom", { status: 500 })) as unknown as typeof fetch
+  await expect(fetchGrokUsage(authPath, "https://cli-chat-proxy.test/v1")).rejects.toThrow()
 })

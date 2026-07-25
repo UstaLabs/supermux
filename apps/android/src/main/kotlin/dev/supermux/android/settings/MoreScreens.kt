@@ -1048,6 +1048,7 @@ fun UsageScreen(
                         ClaudeUsageCard(u?.claude, u?.errors?.get("claude"))
                         CodexUsageCard(u?.codex, u?.errors?.get("codex"), onRedeem = onRedeem, onRefresh = { reloadKey++ })
                         CursorUsageCard(u?.cursor, u?.errors?.get("cursor"))
+                        GrokUsageCard(u?.grok, u?.errors?.get("grok"))
                     }
                 }
             }
@@ -1088,10 +1089,22 @@ private data class CursorUsageData(
     val billingCycleStart: String?,
     val billingCycleEnd: String?,
 )
+private data class GrokUsageData(
+    val plan: String?,
+    val percentUsed: Double,
+    val used: Double,
+    val monthlyLimit: Double,
+    val onDemandCap: Double,
+    val onDemandUsed: Double,
+    val prepaidBalance: Double,
+    val billingPeriodStart: String?,
+    val billingPeriodEnd: String?,
+)
 private data class UsageData(
     val claude: ClaudeUsageData?,
     val codex: CodexUsageData?,
     val cursor: CursorUsageData?,
+    val grok: GrokUsageData?,
     val errors: Map<String, String>,
 )
 
@@ -1116,7 +1129,7 @@ private fun parseWindow(o: JSONObject?): UsageWindowData? {
 
 private fun parseUsage(raw: String): UsageData {
     val root = runCatching { JSONObject(raw) }.getOrNull()
-        ?: return UsageData(null, null, null, emptyMap())
+        ?: return UsageData(null, null, null, null, emptyMap())
 
     val claude = root.objOrNull("claude")?.let { o ->
         ClaudeUsageData(
@@ -1168,6 +1181,20 @@ private fun parseUsage(raw: String): UsageData {
         )
     }
 
+    val grok = root.objOrNull("grok")?.let { o ->
+        GrokUsageData(
+            plan = o.strOrNull("plan"),
+            percentUsed = o.numOr("percentUsed"),
+            used = o.numOr("used"),
+            monthlyLimit = o.numOr("monthlyLimit"),
+            onDemandCap = o.numOr("onDemandCap"),
+            onDemandUsed = o.numOr("onDemandUsed"),
+            prepaidBalance = o.numOr("prepaidBalance"),
+            billingPeriodStart = o.strOrNull("billingPeriodStart"),
+            billingPeriodEnd = o.strOrNull("billingPeriodEnd"),
+        )
+    }
+
     val errors = root.objOrNull("errors")?.let { e ->
         buildMap {
             for (key in e.keys()) {
@@ -1176,12 +1203,12 @@ private fun parseUsage(raw: String): UsageData {
         }
     } ?: emptyMap()
 
-    return UsageData(claude, codex, cursor, errors)
+    return UsageData(claude, codex, cursor, grok, errors)
 }
 
 // ─── Usage rendering helpers ───────────────────────────────────────────────────
 
-private enum class ResetKind { CLAUDE, CODEX, CURSOR }
+private enum class ResetKind { CLAUDE, CODEX, CURSOR, GROK }
 
 private fun clampPct(v: Double): Double = v.coerceIn(0.0, 100.0)
 
@@ -1211,7 +1238,7 @@ private fun formatReset(resetsAt: String?, kind: ResetKind): String {
             val secs = s.toDoubleOrNull() ?: return ""
             (secs * 1000.0).toLong()
         }
-        ResetKind.CLAUDE, ResetKind.CURSOR -> {
+        ResetKind.CLAUDE, ResetKind.CURSOR, ResetKind.GROK -> {
             // Try epoch-millis numeric first, else parse ISO-8601.
             s.toLongOrNull() ?: runCatching {
                 Instant.parse(s).toEpochMilli()
@@ -1437,6 +1464,27 @@ private fun CursorUsageCard(cursor: CursorUsageData?, error: String?) {
             UsageWindowRow("Usage", cursor.totalPercentUsed, cursor.billingCycleEnd, ResetKind.CURSOR)
             if (cursor.spendAvailable) {
                 UsageFooterRow("Spend", "${money(cursor.totalSpendCents)} / ${money(cursor.includedCents)} included")
+            }
+        }
+    }
+}
+
+@Composable
+private fun GrokUsageCard(grok: GrokUsageData?, error: String?) {
+    val cs = MaterialTheme.colorScheme
+    UsageCard(title = "Grok", subtitle = grok?.plan ?: "unknown", enabled = grok != null) {
+        if (grok == null) {
+            Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
+        } else {
+            UsageWindowRow("Monthly credits", grok.percentUsed, grok.billingPeriodEnd, ResetKind.GROK)
+            if (grok.monthlyLimit > 0) {
+                UsageFooterRow("Credits", "${grok.used.toLong()} / ${grok.monthlyLimit.toLong()}")
+            }
+            if (grok.onDemandCap > 0) {
+                UsageFooterRow("On-demand", "${grok.onDemandUsed.toLong()} / ${grok.onDemandCap.toLong()}")
+            }
+            if (grok.prepaidBalance > 0) {
+                UsageFooterRow("Prepaid balance", "${grok.prepaidBalance.toLong()}")
             }
         }
     }

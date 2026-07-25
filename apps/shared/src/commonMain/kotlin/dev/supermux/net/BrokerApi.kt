@@ -293,12 +293,27 @@ data class OpenCodeUsage(
     val cacheWriteTokens: Long = 0,
 )
 
+/** SuperGrok subscription credit pool from cli-chat-proxy `/billing`. */
+@Serializable
+data class GrokUsage(
+    val plan: String = "",
+    val percentUsed: Double = 0.0,
+    val used: Double = 0.0,
+    val monthlyLimit: Double = 0.0,
+    val onDemandCap: Double = 0.0,
+    val onDemandUsed: Double = 0.0,
+    val prepaidBalance: Double = 0.0,
+    val billingPeriodStart: String? = null,
+    val billingPeriodEnd: String? = null,
+)
+
 @Serializable
 data class UsageResponse(
     val claude: ClaudeUsage? = null,
     val codex: CodexUsage? = null,
     val cursor: CursorUsage? = null,
     val opencode: OpenCodeUsage? = null,
+    val grok: GrokUsage? = null,
     val errors: Map<String, String> = emptyMap(),
 )
 
@@ -1360,7 +1375,7 @@ class BrokerApi(
             header("Authorization", bearerHeader())
         }.bodyAsText()
 
-    /** GET /usage → typed per-provider usage (Claude / Codex / Cursor / opencode) */
+    /** GET /usage → typed per-provider usage (Claude / Codex / Cursor / opencode / grok) */
     suspend fun usage(): UsageResponse = getJson("$httpBase/usage")
 
     /** POST /usage/codex/reset → redeem one banked Codex rate-limit reset. */

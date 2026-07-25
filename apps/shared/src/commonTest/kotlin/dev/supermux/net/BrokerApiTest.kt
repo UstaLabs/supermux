@@ -62,6 +62,18 @@ class BrokerApiTest {
     }
 
     @Test
+    fun grok_usage_parses_credit_pool() {
+        val u = json.decodeFromString<GrokUsage>(
+            """{"plan":"SuperGrokPro","percentUsed":10.0,"used":15000.0,"monthlyLimit":150000.0,"onDemandCap":0.0,"onDemandUsed":0.0,"prepaidBalance":500.0,"billingPeriodStart":"2026-07-01T00:00:00Z","billingPeriodEnd":"2026-08-01T00:00:00Z"}"""
+        )
+        assertEquals("SuperGrokPro", u.plan)
+        assertEquals(10.0, u.percentUsed)
+        assertEquals(15000.0, u.used)
+        assertEquals(150000.0, u.monthlyLimit)
+        assertEquals(500.0, u.prepaidBalance)
+    }
+
+    @Test
     fun codex_reset_result_parses() {
         val r = json.decodeFromString<CodexResetResult>(
             """{"code":"reset","windowsReset":2,"codex":{"plan":"plus","resetCredits":2}}"""

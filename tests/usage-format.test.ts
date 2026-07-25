@@ -54,6 +54,7 @@ test("formatUsageTelegram renders all three providers", () => {
     codex: makeCodex(),
     cursor: makeCursor(),
     opencode: null,
+    grok: null,
     errors: {},
   }
   const out = formatUsageTelegram(data)
@@ -70,7 +71,8 @@ test("formatUsageTelegram renders all three providers", () => {
 
 test("formatUsageTelegram omits per-model rows when the caps are null", () => {
   const claude: ClaudeUsage = { ...makeClaude(), sevenDaySonnet: null, sevenDayFable: null }
-  const out = formatUsageTelegram({ claude, codex: null, cursor: null, opencode: null, errors: {} })
+  const out = formatUsageTelegram({ claude, codex: null, cursor: null, opencode: null,
+    grok: null, errors: {} })
   expect(out).toContain("Claude")
   expect(out).not.toContain("Sonnet")
   expect(out).not.toContain("Fable")
@@ -82,6 +84,7 @@ test("formatUsageTelegram omits null providers", () => {
     codex: null,
     cursor: makeCursor(),
     opencode: null,
+    grok: null,
     errors: {},
   }
   const out = formatUsageTelegram(data)
@@ -96,6 +99,7 @@ test("formatUsageTelegram returns fallback when all null", () => {
     codex: null,
     cursor: null,
     opencode: null,
+    grok: null,
     errors: {},
   }
   const out = formatUsageTelegram(data)
@@ -103,12 +107,14 @@ test("formatUsageTelegram returns fallback when all null", () => {
 })
 
 test("formatUsageTelegram shows Codex banked resets when > 0", () => {
-  const out = formatUsageTelegram({ claude: null, codex: codexFixture(3), cursor: null, opencode: null, errors: {} } as any)
+  const out = formatUsageTelegram({ claude: null, codex: codexFixture(3), cursor: null, opencode: null,
+    grok: null, errors: {} } as any)
   expect(out).toContain("Resets banked: 3")
 })
 
 test("formatUsageTelegram omits banked resets when 0", () => {
-  const out = formatUsageTelegram({ claude: null, codex: codexFixture(0), cursor: null, opencode: null, errors: {} } as any)
+  const out = formatUsageTelegram({ claude: null, codex: codexFixture(0), cursor: null, opencode: null,
+    grok: null, errors: {} } as any)
   expect(out).not.toContain("Resets banked")
 })
 
@@ -116,7 +122,33 @@ test("formatUsageTelegram renders only the Codex windows returned by the API", (
   const codex = { ...codexFixture(0), windows: [
     { id: "primary", used: 25, resetsAt: null, label: "7-day window", windowSeconds: 604800 },
   ] }
-  const out = formatUsageTelegram({ claude: null, codex, cursor: null, opencode: null, errors: {} })
+  const out = formatUsageTelegram({ claude: null, codex, cursor: null, opencode: null,
+    grok: null, errors: {} })
   expect(out).toContain("7-day window: 25% used")
   expect(out).not.toContain("5-hour window")
+})
+
+test("formatUsageTelegram renders Grok credits", () => {
+  const data: UsageResponse = {
+    claude: null,
+    codex: null,
+    cursor: null,
+    opencode: null,
+    grok: {
+      plan: "SuperGrokPro",
+      percentUsed: 12.5,
+      used: 18750,
+      monthlyLimit: 150000,
+      onDemandCap: 0,
+      onDemandUsed: 0,
+      prepaidBalance: 0,
+      billingPeriodStart: new Date(Date.now() - 10 * 24 * 3_600_000).toISOString(),
+      billingPeriodEnd: new Date(Date.now() + 20 * 24 * 3_600_000).toISOString(),
+    },
+    errors: {},
+  }
+  const out = formatUsageTelegram(data)
+  expect(out).toContain("Grok (SuperGrokPro)")
+  expect(out).toContain("13% used")
+  expect(out).toContain("18750 / 150000")
 })

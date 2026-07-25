@@ -59,11 +59,26 @@ export interface OpenCodeUsage {
   cacheWriteTokens: number
 }
 
+// Grok Build (xAI SuperGrok) subscription credits via cli-chat-proxy.
+// Vals are opaque credit units from the billing API (not USD cents).
+export interface GrokUsage {
+  plan: string
+  percentUsed: number
+  used: number
+  monthlyLimit: number
+  onDemandCap: number
+  onDemandUsed: number
+  prepaidBalance: number
+  billingPeriodStart: string
+  billingPeriodEnd: string
+}
+
 export interface UsageResponse {
   claude: ClaudeUsage | null
   codex: CodexUsage | null
   cursor: CursorUsage | null
   opencode: OpenCodeUsage | null
+  grok: GrokUsage | null
   errors: Record<string, string>
 }
 
@@ -73,6 +88,12 @@ const CLAUDE_CREDS = join(homedir(), ".claude", ".credentials.json")
 const CODEX_AUTH   = join(homedir(), ".codex", "auth.json")
 const CURSOR_DB   = join(homedir(), ".config", "Cursor", "User", "globalStorage", "state.vscdb")
 const OPENCODE_DB = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "opencode", "opencode.db")
+const GROK_AUTH   = join(homedir(), ".grok", "auth.json")
+
+// Undocumented but what `grok /usage` hits (cli-chat-proxy). Override via env for tests/mirrors.
+const GROK_BILLING_BASE =
+  process.env.GROK_CLI_CHAT_PROXY_BASE_URL?.replace(/\/$/, "") ||
+  "https://cli-chat-proxy.grok.com/v1"
 
 const TIMEOUT_MS = 10_000
 
@@ -352,6 +373,143 @@ export async function fetchOpenCodeUsage(
   }
 }
 
+
+// ── Grok ──
+//
+// SuperGrok subscription credit pool lives on the Grok Build cli-chat-proxy, not
+// api.x.ai. Auth is the OIDC access token in ~/.grok/auth.json (any entry's
+// `key` field). Two companion GETs:
+//   /billing                        → monthly used / limit + billing period
+//   /user?include=subscription      → plan name (subscriptionTier, singular)
+//   /billing?format=credits         → prepaid balance + on-demand caps
+// All three are best-effort; billing alone is enough for a card.
+
+function grokMoneyVal(v: any): number {
+  if (v == null) return 0
+  if (typeof v === "number" && Number.isFinite(v)) return v
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v)
+    return Number.isFinite(n) ? n : 0
+  }
+  if (typeof v === "object") {
+    if (typeof v.val === "number" && Number.isFinite(v.val)) return v.val
+    if (typeof v.val === "string") {
+      const n = Number(v.val)
+      return Number.isFinite(n) ? n : 0
+    }
+  }
+  return 0
+}
+
+/** Pull a still-valid OIDC access token from ~/.grok/auth.json. The file is a
+ * map of provider-key → credential; each credential has `key` + optional
+ * `expires_at`. Prefer a non-expired entry; fall back to any key if no expiry. */
+export function readGrokAccessToken(authPath: string = GROK_AUTH): string | null {
+  if (!existsSync(authPath)) return null
+  let raw: any
+  try {
+    raw = JSON.parse(readFileSync(authPath, "utf-8"))
+  } catch {
+    return null
+  }
+  if (!raw || typeof raw !== "object") return null
+
+  const entries = Object.values(raw).filter(
+    (v): v is Record<string, any> => !!v && typeof v === "object" && typeof (v as any).key === "string",
+  )
+  if (entries.length === 0) return null
+
+  const now = Date.now()
+  for (const e of entries) {
+    const exp = e.expires_at
+    if (typeof exp === "string" && new Date(exp).getTime() < now) continue
+    if (typeof exp === "number" && exp < now) continue
+    return e.key as string
+  }
+  // All expired (or no expires_at field) — still try the first key; the API
+  // will 401 if it's truly dead, matching Claude's "return null on expired".
+  return null
+}
+
+export async function fetchGrokUsage(
+  authPath: string = GROK_AUTH,
+  baseUrl: string = GROK_BILLING_BASE,
+): Promise<GrokUsage | null> {
+  const token = readGrokAccessToken(authPath)
+  if (!token) return null
+
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/json",
+  }
+  const signal = AbortSignal.timeout(TIMEOUT_MS)
+  const base = baseUrl.replace(/\/$/, "")
+
+  const [billingRes, userRes, creditsRes] = await Promise.all([
+    fetch(`${base}/billing`, { headers, signal }),
+    fetch(`${base}/user?include=subscription`, { headers, signal }).catch(() => null),
+    fetch(`${base}/billing?format=credits`, { headers, signal }).catch(() => null),
+  ])
+
+  if (!billingRes.ok) {
+    throw new Error(`Grok billing API ${billingRes.status}: ${await billingRes.text()}`)
+  }
+  const billing = (await billingRes.json()) as any
+  const cfg = billing?.config ?? billing ?? {}
+
+  let plan = "unknown"
+  if (userRes && userRes.ok) {
+    try {
+      // Prefer text→JSON.parse: Bun's Response.json() has returned a host object
+      // where some fields are only reachable via bracket access (dot access and
+      // JSON.stringify drop them). Bracket + plain parse is the reliable path.
+      const user = JSON.parse(await userRes.text()) as any
+      // Field is singular `subscriptionTier` (not Tiers) on cli-chat-proxy.
+      const tiers =
+        user?.["subscriptionTier"] ??
+        user?.["subscriptionTiers"] ??
+        user?.["subscription_tier"] ??
+        user?.["subscription_tiers"]
+      if (typeof tiers === "string" && tiers.trim()) plan = tiers
+    } catch {
+      // plan stays unknown
+    }
+  }
+
+  let prepaidBalance = 0
+  let onDemandCap = grokMoneyVal(cfg.onDemandCap)
+  let onDemandUsed = grokMoneyVal(cfg.onDemandUsed)
+  if (creditsRes && creditsRes.ok) {
+    try {
+      const credits = (await creditsRes.json()) as any
+      const ccfg = credits?.config ?? credits ?? {}
+      prepaidBalance = grokMoneyVal(ccfg.prepaidBalance)
+      // credits format is the authoritative source for on-demand when present
+      if (ccfg.onDemandCap != null) onDemandCap = grokMoneyVal(ccfg.onDemandCap)
+      if (ccfg.onDemandUsed != null) onDemandUsed = grokMoneyVal(ccfg.onDemandUsed)
+    } catch {
+      // ignore credits parse failures
+    }
+  }
+
+  const used = grokMoneyVal(cfg.used)
+  const monthlyLimit = grokMoneyVal(cfg.monthlyLimit)
+  const percentUsed =
+    monthlyLimit > 0 ? Math.min(100, (used / monthlyLimit) * 100) : 0
+
+  return {
+    plan,
+    percentUsed,
+    used,
+    monthlyLimit,
+    onDemandCap,
+    onDemandUsed,
+    prepaidBalance,
+    billingPeriodStart: cfg.billingPeriodStart ?? "",
+    billingPeriodEnd: cfg.billingPeriodEnd ?? "",
+  }
+}
+
 // ── All ──
 
 export interface UsagePaths {
@@ -359,14 +517,17 @@ export interface UsagePaths {
   codexAuthPath?: string
   cursorDbPath?: string
   opencodeDbPath?: string
+  grokAuthPath?: string
+  grokBillingBase?: string
 }
 
 export async function fetchAllUsage(paths?: UsagePaths): Promise<UsageResponse> {
-  const [claudeResult, codexResult, cursorResult, opencodeResult] = await Promise.allSettled([
+  const [claudeResult, codexResult, cursorResult, opencodeResult, grokResult] = await Promise.allSettled([
     fetchClaudeUsage(paths?.claudeCredsPath),
     fetchCodexUsage(paths?.codexAuthPath),
     fetchCursorUsage(paths?.cursorDbPath),
     fetchOpenCodeUsage(paths?.opencodeDbPath),
+    fetchGrokUsage(paths?.grokAuthPath, paths?.grokBillingBase),
   ])
 
   const errors: Record<string, string> = {}
@@ -403,5 +564,13 @@ export async function fetchAllUsage(paths?: UsagePaths): Promise<UsageResponse> 
     errors.opencode = opencodeResult.reason?.message ?? String(opencodeResult.reason)
   }
 
-  return { claude, codex, cursor, opencode, errors }
+  let grok: GrokUsage | null = null
+  if (grokResult.status === "fulfilled") {
+    grok = grokResult.value
+    if (!grok) errors.grok = "credentials not found or token expired"
+  } else {
+    errors.grok = grokResult.reason?.message ?? String(grokResult.reason)
+  }
+
+  return { claude, codex, cursor, opencode, grok, errors }
 }
