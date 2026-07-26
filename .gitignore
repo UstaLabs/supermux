@@ -22,3 +22,4 @@ apps/android/google-services.json
 apps/iosApp/Supermux/HostResources/supermux-broker
 apps/iosApp/Supermux/HostResources/frpc
 apps/iosApp/Supermux/HostResources/tmux
+__pycache__/
