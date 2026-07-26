@@ -62,4 +62,24 @@ describe("spawnCodexAppServer", () => {
     expect(calls[0].args).toContain('model="gpt-5.5"')
     expect(calls[0].args).toContain('model_reasoning_effort="xhigh"')
   })
+
+  test("resolves and safely wraps a Windows codex.cmd shim", () => {
+    const calls: any[] = []
+    const fakeSpawn = (cmd: string, args: string[], opts: any) => {
+      calls.push({ cmd, args, opts })
+      return {
+        stdin: new Writable({ write(_c, _e, cb) { cb() } }),
+        stdout: new Readable({ read() {} }), stderr: new Readable({ read() {} }),
+        on: () => {}, kill: () => {}, pid: 1234,
+      } as any
+    }
+    spawnCodexAppServer({
+      codexHome: "C:\\State", workdir: "C:\\Repo", authEnv: { Path: "C:\\Tools" },
+      platform: "win32", fileExists: (p) => p.toLowerCase() === "c:\\tools\\codex.cmd",
+      spawn: fakeSpawn,
+    })
+    expect(calls[0].cmd.toLowerCase()).toContain("cmd.exe")
+    expect(calls[0].args.slice(0, 4)).toEqual(["/d", "/v:off", "/s", "/c"])
+    expect(calls[0].opts.windowsVerbatimArguments).toBe(true)
+  })
 })

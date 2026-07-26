@@ -38,6 +38,7 @@ class HostBinariesTest {
         assertEquals("supermux-broker", HostBinaries.fileName(Binary.Broker, Os.LINUX))
         assertEquals("supermux-broker", HostBinaries.fileName(Binary.Broker, Os.MAC))
         assertEquals("supermux-broker.exe", HostBinaries.fileName(Binary.Broker, Os.WINDOWS))
+        assertEquals("mux-sessiond.exe", HostBinaries.fileName(Binary.Sessiond, Os.WINDOWS))
         assertEquals("frpc", HostBinaries.fileName(Binary.Frpc, Os.LINUX))
         assertEquals("frpc.exe", HostBinaries.fileName(Binary.Frpc, Os.WINDOWS))
         assertEquals("tmux", HostBinaries.fileName(Binary.Tmux, Os.MAC))
@@ -51,10 +52,12 @@ class HostBinariesTest {
             assertTrue(HostBinaries.isBundled(Binary.Broker, os))
             assertTrue(HostBinaries.isBundled(Binary.Tmux, os))
             assertTrue(HostBinaries.isBundled(Binary.Frpc, os))
+            assertFalse(HostBinaries.isBundled(Binary.Sessiond, os))
         }
-        // Windows: frpc only — no bundled broker, no tmux (client-only for now).
+        // Windows: the native broker uses sessiond instead of tmux.
+        assertTrue(HostBinaries.isBundled(Binary.Broker, Os.WINDOWS))
+        assertTrue(HostBinaries.isBundled(Binary.Sessiond, Os.WINDOWS))
         assertTrue(HostBinaries.isBundled(Binary.Frpc, Os.WINDOWS))
-        assertFalse(HostBinaries.isBundled(Binary.Broker, Os.WINDOWS))
         assertFalse(HostBinaries.isBundled(Binary.Tmux, Os.WINDOWS))
         // Unknown OS ships nothing.
         assertFalse(HostBinaries.isBundled(Binary.Frpc, Os.OTHER))
@@ -120,21 +123,26 @@ class HostBinariesTest {
         assertTrue(Files.isExecutable(bins.frpcPath), "materialized frpc must be executable")
     }
 
-    // ── resolve PACKAGED (Windows): frpc only, broker/tmux omitted ────────────────────
+    // ── resolve PACKAGED (Windows): broker + sessiond + frpc, no tmux ────────────────
 
-    @Test fun resolvePackagedWindowsShipsOnlyFrpc() {
+    @Test fun resolvePackagedWindowsMaterializesNativeHostHelpers() {
         val resDir = tmp()
-        // A Windows image would carry frpc.exe (and NOT a broker/tmux) — but even if extra files
-        // are present, the client-only policy must not surface a broker/tmux to host with.
         Files.writeString(resDir.resolve("frpc.exe"), "frpc-win")
         Files.writeString(resDir.resolve("supermux-broker.exe"), "broker-win")
+        Files.writeString(resDir.resolve("mux-sessiond.exe"), "sessiond-win")
         Files.writeString(resDir.resolve("tmux"), "tmux-win")
         val bins = HostBinaries.resolve(stateDir = tmp(), os = Os.WINDOWS, resourcesDir = resDir, onPath = { null })
 
+        assertNotNull(bins.brokerPath)
+        assertNotNull(bins.sessiondPath)
         assertNotNull(bins.frpcPath)
+        assertEquals("supermux-broker.exe", bins.brokerPath.fileName.toString())
+        assertEquals("mux-sessiond.exe", bins.sessiondPath.fileName.toString())
         assertEquals("frpc.exe", bins.frpcPath.fileName.toString())
-        assertNull(bins.brokerPath, "Windows is client-only: no bundled broker")
-        assertNull(bins.tmuxPath, "Windows is client-only: no tmux")
+        assertEquals(bins.binDir, bins.brokerPath.parent)
+        assertEquals(bins.binDir, bins.sessiondPath.parent)
+        assertEquals(bins.binDir, bins.frpcPath.parent)
+        assertNull(bins.tmuxPath, "native Windows uses sessiond, never tmux")
     }
 
     // ── resolve PACKAGED tolerates an unfilled slot (e.g. tmux the packager didn't stage) ─

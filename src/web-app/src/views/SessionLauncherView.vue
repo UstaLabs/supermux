@@ -9,6 +9,7 @@ import { useSessions } from "@/stores/sessions"
 import { usePendingFirstMessage } from "@/stores/pendingFirstMessage"
 import { useLauncherDraft } from "@/stores/launcherDraft"
 import { useUploads } from "@/stores/uploads"
+import { useUploader } from "@/composables/useUploader"
 import { useIsDesktop } from "@/composables/useIsDesktop"
 import { useSortedSessions } from "@/composables/useSortedSessions"
 import { formatWorkdir } from "@/lib/format-workdir"
@@ -42,6 +43,7 @@ import PromptInputActionAddRecordVideo from "@/components/ai-elements/prompt-inp
 import SlashCommandMenu from "@/components/SlashCommandMenu.vue"
 import LauncherComposeLock from "@/components/LauncherComposeLock.vue"
 import LauncherDraftSync from "@/components/LauncherDraftSync.vue"
+import LauncherDraftAttachments from "@/components/LauncherDraftAttachments.vue"
 import { useLauncherCommands } from "@/composables/useLauncherCommands"
 import type { AttachmentFile, PromptInputMessage } from "@/components/ai-elements/prompt-input"
 
@@ -51,6 +53,7 @@ const ws = useWS()
 const sessions = useSessions()
 const pending = usePendingFirstMessage()
 const uploads = useUploads()
+const uploader = useUploader()
 const isDesktop = useIsDesktop()
 const sortedSessions = useSortedSessions()
 
@@ -73,6 +76,9 @@ const baseBranch = ref("")
 // draft's session id so onPromptSubmit can discard it before spawning the real
 // session. Null for a normal new-session launch.
 const activeDraftId = ref<string | null>(null)
+// Attachments from a reopened draft — handed to <LauncherDraftAttachments>
+// (inside PromptInput) so they rehydrate after the composer mounts.
+const draftAttachments = ref<Array<{ file_id: string; name?: string; mime?: string; size?: number }>>([])
 
 const launcherDraft = useLauncherDraft()
 if (launcherDraft.state.workdir) {
@@ -101,10 +107,22 @@ baseBranch.value = launcherDraft.state.baseBranch
       if (s.agent) agent.value = s.agent as typeof agent.value
       if (s.model) model.value = s.model
       if (s.reasoningLevel) reasoningLevel.value = s.reasoningLevel
-      // Restore the composer TEXT only. Draft attachments store LOCAL composer
-      // ids (never uploaded), so they can't be reliably re-materialized — known
-      // limitation; text is restored, attachments are dropped.
+      // Restore composer text + durable attachment refs. Attachments were
+      // uploaded when the draft was saved, so file_ids are real server ids
+      // that <LauncherDraftAttachments> rehydrates into the composer.
       launcherDraft.setText(s.draftPayload?.text ?? "")
+      const atts = s.draftPayload?.attachments
+      if (Array.isArray(atts) && atts.length) {
+        draftAttachments.value = atts
+          .filter((a): a is { file_id: string; name?: string; mime?: string; size?: number } =>
+            !!a && typeof (a as { file_id?: unknown }).file_id === "string")
+          .map((a) => ({
+            file_id: a.file_id,
+            name: a.name,
+            mime: a.mime,
+            size: typeof (a as { size?: unknown }).size === "number" ? (a as { size: number }).size : undefined,
+          }))
+      }
     }
   }
 }
@@ -377,15 +395,55 @@ async function saveAsDraft(payload: PromptInputMessage) {
       toast.error(validation.error ?? "Invalid working directory")
       return
     }
-    // Composer files are AttachmentFile (extends FileUIPart): { id, filename,
-    // mediaType, url, file } — no uploaded file_id yet, so capture the local id
-    // plus name/mime metadata for the draft payload.
+    // Upload composer files so draft_payload holds durable server file_ids
+    // (not ephemeral local composer ids). Reuses already-uploaded results when
+    // re-saving a restored draft.
     const files = (payload?.files ?? []) as AttachmentFile[]
-    const attachments = files.map((f) => ({
-      file_id: f.id,
-      name: f.filename,
-      mime: f.mediaType,
-    }))
+    const attachments: Array<{ file_id: string; name?: string; mime?: string; size?: number }> = []
+    for (const f of files) {
+      const kindHint = (f.file as { _cmuxKind?: "photo" | "document" | "voice" | "audio" | "video" | "video_note" } | undefined)?._cmuxKind
+      const current = uploads.get(f.id)
+      if (current?.status === "uploaded") {
+        attachments.push({
+          file_id: current.result.file_id,
+          name: current.result.name ?? f.filename,
+          mime: current.result.mime ?? f.mediaType,
+          size: current.result.size,
+        })
+        continue
+      }
+      if (!f.file) {
+        toast.error("Attachment missing", { description: f.filename ?? "file" })
+        return
+      }
+      uploads.start(f.id)
+      const fileName = f.file.name || f.filename || "file"
+      const uploadingToastId = toast.loading(`Uploading ${fileName}…`)
+      try {
+        // Session id is metadata on the attachment row; the draft row is
+        // created after uploads complete. Use a stable provisional label.
+        const result = await uploader.upload(
+          activeDraftId.value ?? "draft",
+          f.file,
+          kindHint,
+          (sent, total) => { uploads.setProgress(f.id, total > 0 ? sent / total : 0) },
+        )
+        toast.dismiss(uploadingToastId)
+        uploads.succeed(f.id, result)
+        attachments.push({
+          file_id: result.file_id,
+          name: result.name,
+          mime: result.mime,
+          size: result.size,
+        })
+      } catch (err: unknown) {
+        toast.dismiss(uploadingToastId)
+        const msg = err instanceof Error ? err.message : String(err)
+        uploads.fail(f.id, msg)
+        toast.error("Upload failed", { description: `${fileName}: ${msg}` })
+        return
+      }
+    }
     const draftPayload = { text: payload?.text ?? "", attachments }
     // Re-saving a reopened draft replaces it: there's no update endpoint, so
     // discard the original before creating the replacement (mirrors
@@ -413,6 +471,7 @@ async function saveAsDraft(payload: PromptInputMessage) {
       draftPayload,
     })
     launcherDraft.clear()
+    uploads.clearAll()
     await router.push("/")
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -483,6 +542,7 @@ function goBack() {
         >
           <LauncherComposeLock @engaged="composeStarted = true" />
           <LauncherDraftSync />
+          <LauncherDraftAttachments :attachments="draftAttachments" />
           <SlashCommandMenu
             :commands="launcherCommands"
             :loading="launcherCommandsLoading"
@@ -518,7 +578,7 @@ function goBack() {
             </PromptInputTools>
             <PromptInputTools class="ml-auto">
               <PromptInputSaveDraft
-                :disabled="!canSubmit || isRecording"
+                :disabled="!canSubmit || hasPendingUploads || isRecording || submitting"
                 @save-draft="saveAsDraft"
               />
               <PromptInputSubmit
@@ -541,7 +601,7 @@ function goBack() {
             <span class="inline-flex items-center gap-1.5">
               <Loader2Icon v-if="submitting" class="size-3 animate-spin" />
               <span v-if="ws.status !== 'connected'">Connecting…</span>
-              <span v-else-if="submitting">Creating session…</span>
+              <span v-else-if="submitting">Saving…</span>
             </span>
           </template>
         </div>

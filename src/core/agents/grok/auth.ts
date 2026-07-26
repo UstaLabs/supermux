@@ -1,5 +1,18 @@
-import { copyFileSync, existsSync, mkdirSync } from "fs"
-import { join } from "path"
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  type Stats,
+} from "fs"
+import { randomUUID } from "crypto"
+import { dirname, join } from "path"
 
 export type GrokAuthResult = {
   mode: "cached_token" | "none"
@@ -19,27 +32,114 @@ export type GrokAuthResult = {
  * mux-shim in — the same isolation cursor gets from HOME=<sessionHome>, codex from
  * CODEX_HOME, and opencode from XDG_CONFIG_HOME.
  *
- * The credential is copied (not symlinked): grok rewrites auth.json on token
- * refresh, and a symlink would write the refreshed token back into the user's real
- * ~/.grok. Copy is one-way — the session reuses the login without mutating it.
+ * The credential stays canonical in the user's ~/.grok/auth.json. Each private
+ * home symlinks only that file, so a token refresh is immediately shared without
+ * exposing the user's global config.toml or Claude-compat files to the session.
+ *
+ * Older supermux versions copied auth.json. Before replacing such a copy with a
+ * symlink, preserve it when it has a later token expiry than the canonical file.
+ * This matters during migration: a private Grok process may already have rotated
+ * the refresh token while the user's original credential stayed stale.
  *
  * NOT fail-closed: a session with no credential still spawns; grok reports the auth
  * error on the first turn, which is the right place to surface it.
  */
-export function resolveGrokAuth(opts: { userGrokDir: string; sessionHome: string }): GrokAuthResult {
+export function resolveGrokAuth(opts: { userGrokDir: string; sessionHome: string; platform?: NodeJS.Platform }): GrokAuthResult {
   const sessionGrokDir = join(opts.sessionHome, ".grok")
   mkdirSync(sessionGrokDir, { recursive: true, mode: 0o700 })
 
   const src = join(opts.userGrokDir, "auth.json")
   const dest = join(sessionGrokDir, "auth.json")
-  let mode: GrokAuthResult["mode"] = "none"
-  if (existsSync(src)) {
+  try {
+    const current = lstatSafe(dest)
+    if (current?.isFile() && (!existsSync(src) || credentialExpiry(dest) > credentialExpiry(src))) {
+      try {
+        promoteCredential(dest, src)
+      } catch {
+        // Keep the usable private credential if promotion fails. A later resume
+        // can retry without losing the only refreshed token.
+        return sessionEnv(opts.sessionHome, "cached_token", opts.platform)
+      }
+    }
+
+    if (!existsSync(src)) {
+      return sessionEnv(opts.sessionHome, "none", opts.platform)
+    }
+
+    if (current?.isSymbolicLink()) {
+      try {
+        if (readlinkSync(dest) === src) {
+          return sessionEnv(opts.sessionHome, "cached_token", opts.platform)
+        }
+      } catch {
+        // Replace a broken link below.
+      }
+    }
+
+    if (current) rmSync(dest, { force: true })
+    symlinkSync(src, dest, "file")
+    return sessionEnv(opts.sessionHome, "cached_token", opts.platform)
+  } catch {
+    // Some Windows hosts disallow file symlinks. Retain the old copy behavior as
+    // a fail-open fallback there; Grok will still surface an auth error normally.
     try {
-      copyFileSync(src, dest)
-      mode = "cached_token"
+      if (existsSync(src)) {
+        rmSync(dest, { force: true })
+        copyFileSync(src, dest)
+        return sessionEnv(opts.sessionHome, "cached_token", opts.platform)
+      }
     } catch {
-      // fall through as unauthenticated — grok surfaces it on the first turn
+      // fall through as unauthenticated
     }
   }
-  return { mode, env: { HOME: opts.sessionHome } }
+  return sessionEnv(opts.sessionHome, "none", opts.platform)
+}
+
+function sessionEnv(sessionHome: string, mode: GrokAuthResult["mode"], platform?: NodeJS.Platform): GrokAuthResult {
+  const plat = platform ?? process.platform
+  return {
+    mode,
+    env: {
+      HOME: sessionHome,
+      ...(plat === "win32" ? { USERPROFILE: sessionHome } : {}),
+    },
+  }
+}
+
+function lstatSafe(path: string): Stats | undefined {
+  try {
+    return lstatSync(path)
+  } catch {
+    return undefined
+  }
+}
+
+function credentialExpiry(path: string): number {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8"))
+    if (!parsed || typeof parsed !== "object") return Number.NEGATIVE_INFINITY
+    let latest = Number.NEGATIVE_INFINITY
+    for (const credential of Object.values(parsed)) {
+      if (!credential || typeof credential !== "object") continue
+      const raw = (credential as { expires_at?: unknown }).expires_at
+      if (typeof raw !== "string" && typeof raw !== "number") continue
+      const expiry = typeof raw === "number" ? raw : Date.parse(raw)
+      if (Number.isFinite(expiry)) latest = Math.max(latest, expiry)
+    }
+    return latest
+  } catch {
+    return Number.NEGATIVE_INFINITY
+  }
+}
+
+function promoteCredential(from: string, canonical: string): void {
+  mkdirSync(dirname(canonical), { recursive: true, mode: 0o700 })
+  const temp = `${canonical}.mux-${process.pid}-${randomUUID()}.tmp`
+  try {
+    copyFileSync(from, temp)
+    chmodSync(temp, 0o600)
+    renameSync(temp, canonical)
+  } finally {
+    rmSync(temp, { force: true })
+  }
 }

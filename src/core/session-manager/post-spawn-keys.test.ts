@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test"
 import { sendChannelConsentEnter } from "./post-spawn-keys"
+import type { SessionBackend } from "../runtime/session-backend"
 
 const WINDOW_ID = "@7"
 
@@ -53,6 +54,33 @@ test("returns immediately when Listening marker is already present", async () =>
   expect(captureIds).toEqual([WINDOW_ID])
   // No keys sent
   expect(sentIds).toHaveLength(0)
+})
+
+test("uses the injected session backend for capture and semantic keys", async () => {
+  const calls: Array<{ method: string; targetId: string; keys?: string[] }> = []
+  const captures = ["Enter to confirm", "Listening for channel messages"]
+  const backend = {
+    capture: async (targetId: string) => {
+      calls.push({ method: "capture", targetId })
+      return captures.shift() ?? null
+    },
+    sendKeys: async (targetId: string, keys: string[]) => {
+      calls.push({ method: "sendKeys", targetId, keys })
+    },
+  } as SessionBackend
+
+  await sendChannelConsentEnter(WINDOW_ID, {
+    backend,
+    pollIntervalMs: 0,
+    maxWaitMs: 100,
+    retryAfterMs: 0,
+  })
+
+  expect(calls).toEqual([
+    { method: "capture", targetId: WINDOW_ID },
+    { method: "sendKeys", targetId: WINDOW_ID, keys: ["Enter"] },
+    { method: "capture", targetId: WINDOW_ID },
+  ])
 })
 
 test("sends Enter (and retries) when consent marker present, returns when it clears", async () => {

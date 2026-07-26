@@ -33,11 +33,31 @@ test("detectAgent: not installed ⇒ authed false even if a cred file exists", (
   expect(detectAgent("cursor", probes, PATHS)).toEqual({ kind: "cursor", installed: false, authed: false })
 })
 
-test("detectAgent checks the RIGHT binary name per kind (cursor-agent, not cursor)", () => {
+test("detectAgent checks Cursor's official names, never the IDE's cursor binary", () => {
   const seen: string[] = []
   const probes: DetectProbes = { hasBinary: (b) => { seen.push(b); return false }, fileExists: () => false }
   detectAgent("cursor", probes, PATHS)
-  expect(seen).toEqual(["cursor-agent"])
+  expect(seen).toEqual(["cursor-agent", "agent"])
+})
+
+test("detectAgent accepts Cursor's official agent.exe alias after cursor-agent", () => {
+  const seen: string[] = []
+  const probes: DetectProbes = { hasBinary: (b) => { seen.push(b); return b === "agent" }, fileExists: () => false }
+  expect(detectAgent("cursor", probes, PATHS).installed).toBe(true)
+  expect(seen).toEqual(["cursor-agent", "agent"])
+})
+
+test("authCredPath uses native Windows credential roots", () => {
+  const paths = {
+    home: "C:\\Users\\u",
+    appData: "C:\\Users\\u\\AppData\\Roaming",
+    localAppData: "C:\\Users\\u\\AppData\\Local",
+    platform: "win32" as const,
+  }
+  expect(authCredPath("cursor", paths)).toBe("C:\\Users\\u\\AppData\\Roaming\\cursor\\auth.json")
+  expect(authCredPath("opencode", paths)).toBe("C:\\Users\\u\\AppData\\Local\\opencode\\auth.json")
+  expect(authCredPath("codex", paths)).toBe("C:\\Users\\u\\.codex\\auth.json")
+  expect(authCredPath("grok", paths)).toBe("C:\\Users\\u\\.grok\\auth.json")
 })
 
 test("detectAllAgents returns every kind", () => {

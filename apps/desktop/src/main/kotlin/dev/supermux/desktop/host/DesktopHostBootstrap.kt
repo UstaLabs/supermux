@@ -28,9 +28,9 @@ object DesktopHostBootstrap {
     private val json = Json { ignoreUnknownKeys = true }
     private const val AUTH_COOKIE = "cmux_token" // matches the broker's src/channels/web/cookies.ts
 
-    /** macOS/Linux host natively (first-run shows the host wizard); Windows/other do not (Task 6 card). */
+    /** Every supported desktop OS hosts natively; unknown platforms fall back to client onboarding. */
     fun isNativeHostPlatform(env: KeepAliveEnv = SystemKeepAliveEnv): Boolean =
-        env.os == KeepAlive.Os.MAC || env.os == KeepAlive.Os.LINUX
+        env.os == KeepAlive.Os.MAC || env.os == KeepAlive.Os.LINUX || env.os == KeepAlive.Os.WINDOWS
 
     /**
      * Walk up from the working dir to find the dev repo root (the dir containing `src/main.ts`) so a
@@ -50,18 +50,23 @@ object DesktopHostBootstrap {
 
     /**
      * A sidecar pointed at the local broker, aware of BOTH modes (Plan 3 Task 5). In a packaged app
-     * it spawns the BUNDLED broker binary and prepends the materialized bin dir (bundled tmux/frpc)
+     * it spawns the BUNDLED broker binary and prepends the materialized bin dir (bundled runtime/frpc)
      * to the broker's `PATH` so the broker's bare `tmux`/`frpc` execs resolve to our copies; in a
      * dev checkout it runs `bun <repo>/src/main.ts` and the helpers come off the ambient `$PATH`.
      * Caller owns start()/stop().
      */
     fun sidecar(port: Int = 9898): BrokerSidecar {
         val bins = runCatching { HostBinaries.resolve(BrokerSidecar.defaultStateDir()) }
-            .getOrDefault(HostBinaries.SidecarBinaries(null, null, null, null))
-        val extraEnv = buildMap {
-            bins.binDir?.let { put("PATH", HostBinaries.prependPath(it)) }
-            put("MUX_HOST_NAME", defaultHostName())
-        }
+            .getOrDefault(
+                HostBinaries.SidecarBinaries(
+                    brokerPath = null,
+                    binDir = null,
+                    sessiondPath = null,
+                    frpcPath = null,
+                    tmuxPath = null,
+                ),
+            )
+        val extraEnv = buildSidecarEnvironment(bins, defaultHostName())
         return BrokerSidecar(
             SidecarConfig(
                 port = port,
@@ -70,6 +75,16 @@ object DesktopHostBootstrap {
                 extraEnv = extraEnv,
             ),
         )
+    }
+
+    internal fun buildSidecarEnvironment(
+        bins: HostBinaries.SidecarBinaries,
+        hostName: String,
+        existingPath: String? = System.getenv("PATH"),
+    ): Map<String, String> = buildMap {
+        bins.binDir?.let { put("PATH", HostBinaries.prependPath(it, existingPath)) }
+        bins.sessiondPath?.let { put("MUX_SESSIOND_PATH", it.toString()) }
+        put("MUX_HOST_NAME", hostName)
     }
 
     /**

@@ -240,7 +240,7 @@ jobs:
           if-no-files-found: error
 
   build-desktop-windows:
-    # Windows .msi installer (Compose Desktop client). jpackage's MSI backend needs the
+    # Windows .msi installer and native host. jpackage's MSI backend needs the
     # WiX Toolset, which is preinstalled on windows-latest — jpackage CANNOT cross-build
     # MSI, so this is the only place it's produced. Same Gradle task + JDK 17 as the .deb.
     # Unsigned v1 (SmartScreen "unknown publisher" warning accepted). Stable asset name:
@@ -255,6 +255,13 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Bun's ConPTY/EOF behavior is a native-Windows release gate.
+          bun-version: "1.3.14"
+      - name: Install broker dependencies
+        working-directory: .
+        run: bun install
       - name: Resolve version
         id: ver
         shell: bash
@@ -262,14 +269,55 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0-dryrun"; fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-      - name: Stage host helper binary (frpc)
-        # Plan 3 Task 5: Windows is client-only, so stage only frpc.exe (no broker, no tmux) into
-        # apps/desktop/resources/windows-x64/ for jpackage to bundle — carried for when Windows
-        # later hosts. Git Bash provides sh/curl/tar for the script.
+      - name: Test native Windows broker seams
+        working-directory: .
+        shell: bash
+        run: >
+          bun test
+          tests/windows-staging.test.ts
+          tests/release-workflow.test.ts
+          src/core/local-endpoint.test.ts
+          src/core/process/launcher.test.ts
+          src/core/sessiond/protocol.test.ts
+          src/core/sessiond/screen.test.ts
+          src/core/sessiond/session-store.test.ts
+      - name: Typecheck broker
+        # Fresh installs currently have a documented TS 5.9/@types-bun baseline
+        # outside the Windows work. Keep the report visible without making an
+        # otherwise-valid MSI lane permanently red; focused tests/builds gate it.
+        continue-on-error: true
+        working-directory: .
+        run: bun run typecheck
+      - name: Test desktop native-host integration
+        run: ./gradlew.bat :desktop:test --tests 'dev.supermux.desktop.host.*' --console=plain --no-daemon
+      - name: Stage native host helpers
+        # Git Bash provides sh/curl/tar; the canonical staging path compiles the
+        # Windows x64 broker + sessiond and fetches the pinned frpc.exe.
         shell: bash
         run: ../scripts/stage-desktop-binaries.sh windows-x64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
-      - name: Build .msi
-        run: ./gradlew.bat :desktop:packageMsi --console=plain --no-daemon
+      - name: Assert staged host helpers
+        shell: pwsh
+        run: |
+          $broker = Get-Item desktop/resources/windows-x64/supermux-broker.exe
+          $sessiond = Get-Item desktop/resources/windows-x64/mux-sessiond.exe
+          $frpc = Get-Item desktop/resources/windows-x64/frpc.exe
+          foreach ($helper in @($broker, $sessiond, $frpc)) {
+            if ($helper.Length -le 0) { throw "empty host helper: $($helper.FullName)" }
+          }
+      - name: Build distributable image and .msi
+        run: ./gradlew.bat :desktop:createDistributable :desktop:packageMsi --console=plain --no-daemon
+      - name: Assert packaged host helpers
+        shell: pwsh
+        run: |
+          $imageRoot = "desktop/build/compose/binaries/main/app"
+          foreach ($name in @("supermux-broker.exe", "mux-sessiond.exe", "frpc.exe")) {
+            $matches = @(Get-ChildItem $imageRoot -Recurse -File -Filter $name)
+            if ($matches.Count -ne 1) {
+              throw "expected one $name in application image, found $($matches.Count)"
+            }
+            if ($matches[0].Length -le 0) { throw "empty packaged host helper: $name" }
+            Write-Host "$name $($matches[0].Length) $($matches[0].FullName)"
+          }
       - name: Stage .msi + checksum
         shell: bash
         run: |

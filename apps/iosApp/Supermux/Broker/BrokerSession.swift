@@ -260,7 +260,10 @@ final class BrokerSession {
                     reasoningLevel: incoming.reasoningLevel ?? old.reasoningLevel,
                     repo_root: incoming.repo_root ?? old.repo_root,
                     role: incoming.role ?? old.role, session_branch: incoming.session_branch ?? old.session_branch,
-                    git: incoming.git ?? old.git, finish_job: incoming.finish_job ?? old.finish_job)
+                    git: incoming.git ?? old.git, finish_job: incoming.finish_job ?? old.finish_job,
+                    userStatus: incoming.userStatus ?? old.userStatus,
+                    sortOrder: incoming.sortOrder != 0 ? incoming.sortOrder : old.sortOrder,
+                    draftPayload: incoming.draftPayload ?? old.draftPayload)
             } else {
                 sessions.append(incoming)
             }
@@ -295,7 +298,8 @@ final class BrokerSession {
                     status: old.status, mute: old.mute, connected: old.connected,
                     model: old.model, reasoningLevel: old.reasoningLevel,
                     repo_root: old.repo_root, role: old.role, session_branch: old.session_branch,
-                    git: old.git, finish_job: old.finish_job)
+                    git: old.git, finish_job: old.finish_job,
+                    userStatus: old.userStatus, sortOrder: old.sortOrder, draftPayload: old.draftPayload)
             }
         case .sessionState(let st):
             // Per-session patch (model/effort switch, mute, shim connect): merge only the
@@ -310,7 +314,8 @@ final class BrokerSession {
                     model: st.model ?? old.model,
                     reasoningLevel: st.reasoningLevel ?? old.reasoningLevel,
                     repo_root: old.repo_root, role: old.role, session_branch: old.session_branch,
-                    git: old.git, finish_job: old.finish_job)
+                    git: old.git, finish_job: old.finish_job,
+                    userStatus: old.userStatus, sortOrder: old.sortOrder, draftPayload: old.draftPayload)
             }
         case .messageAppend(let m):
             // Drop the optimistic local echo when the real inbound message arrives.
@@ -361,7 +366,9 @@ final class BrokerSession {
                     reasoningLevel: sessions[idx].reasoningLevel,
                     repo_root: sessions[idx].repo_root, role: sessions[idx].role,
                     session_branch: sessions[idx].session_branch, git: g.git,
-                    finish_job: sessions[idx].finish_job)
+                    finish_job: sessions[idx].finish_job,
+                    userStatus: sessions[idx].userStatus, sortOrder: sessions[idx].sortOrder,
+                    draftPayload: sessions[idx].draftPayload)
             }
         }
     }
@@ -446,11 +453,11 @@ final class BrokerSession {
     }
 
     /// PWA-identical grouping (Personal Assistants + per-workdir) via the shared helper.
-    func groups() -> [SessionGroup] {
+        func groups() -> [SessionGroup] {
         let home = inferHomeDir(workdir: sessions.first?.workdir) ?? ""
         return groupSessions(sessions: sessions, home: home, lastTs: { [messages] s in
             messages[s.id]?.last?.ts ?? ""
-        })
+        }, archived: [])
     }
 
     // MARK: - Displays (live via display_added/removed frames; seeded by listDisplays)
@@ -509,7 +516,8 @@ final class BrokerSession {
         // Resolve ~ to an absolute path so the worktree is cut from the real repo root (web parity).
         let resolved = (try? await api.validatePath(path: workdir)).flatMap { $0.ok ? $0.path : nil } ?? workdir
         let req = SpawnRequest(workdir: resolved, name: name, agent: agent, model: model,
-                               worktree: worktree?.kb, baseBranch: baseBranch, reasoningLevel: reasoningLevel)
+                               worktree: worktree?.kb, baseBranch: baseBranch, reasoningLevel: reasoningLevel,
+                               userStatus: nil, draftPayload: nil)
         return (try? await api.spawn(req: req))?.id
     }
 
@@ -562,6 +570,43 @@ final class BrokerSession {
 
     func archived() async -> [ArchivedDto] { (try? await api.archived()) ?? [] }
     func resume(_ id: String) { Task { [api] in try? await api.resume(id: id) } }
+    func reorderSessions(_ orderedIds: [String]) {
+        // Optimistic sort_order so List.onMove doesn't snap back (PATCH has no WS broadcast).
+        let order = Dictionary(uniqueKeysWithValues: orderedIds.enumerated().map { ($1, $0) })
+        sessions = sessions.map { s in
+            guard let i = order[s.id] else { return s }
+            return s.doCopy(
+                id: s.id, name: s.name, workdir: s.workdir, agent: s.agent,
+                status: s.status, mute: s.mute, connected: s.connected,
+                model: s.model, reasoningLevel: s.reasoningLevel,
+                repo_root: s.repo_root, role: s.role, session_branch: s.session_branch,
+                git: s.git, finish_job: s.finish_job,
+                userStatus: s.userStatus, sortOrder: Int32(i), draftPayload: s.draftPayload)
+        }
+        Task { [api] in try? await api.reorderSessions(orderedIds: orderedIds) }
+    }
+    func createDraft(
+        workdir: String,
+        agent: String,
+        model: String?,
+        text: String,
+        name: String? = nil,
+        reasoningLevel: String? = nil
+    ) async -> String? {
+        let payload = DraftPayloadDto(text: text, attachments: nil)
+        let req = SpawnRequest(
+            workdir: workdir,
+            name: name,
+            agent: agent,
+            model: model,
+            worktree: nil,
+            baseBranch: nil,
+            reasoningLevel: reasoningLevel,
+            userStatus: "draft",
+            draftPayload: payload
+        )
+        return try? await api.spawn(req: req).id
+    }
     func archivedLogs(_ id: String) async -> [LogEntry] { (try? await api.archivedLogs(sessionId: id)) ?? [] }
 
     /// Lazily fetch a session's transcript when we don't already have it. The WS `snapshot`

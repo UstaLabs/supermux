@@ -3,7 +3,7 @@ defineOptions({ name: "ChatView" })
 
 import { computed, ref, provide, onMounted, onBeforeUnmount, nextTick, watch } from "vue"
 import { useRouter } from "vue-router"
-import { ChevronLeft, GitMerge } from "@lucide/vue"
+import { ChevronLeft, GitMerge, MessageSquarePlus } from "@lucide/vue"
 import { AlertTriangleIcon, HourglassIcon, Loader2Icon, SendHorizonalIcon, SquareIcon } from "lucide-vue-next"
 import { useMessages } from "@/stores/messages"
 import { useWS } from "@/api/ws"
@@ -29,6 +29,7 @@ import ModelSwitcher from "@/components/ModelSwitcher.vue"
 import EffortSwitcher from "@/components/EffortSwitcher.vue"
 import SlashCommandMenu from "@/components/SlashCommandMenu.vue"
 import KillConfirmDialog from "@/components/KillConfirmDialog.vue"
+import ContinueConversationDialog from "@/components/ContinueConversationDialog.vue"
 import { useCommandsStore, type SlashCommand } from "@/stores/commands"
 import { usePendingFirstMessage } from "@/stores/pendingFirstMessage"
 import { useComposerSubmit } from "@/composables/useComposerSubmit"
@@ -89,6 +90,8 @@ const commandsStore = useCommandsStore()
 const { requestRename } = useRenameRequest()
 const sessionCommands = computed(() => commandsStore.commandsFor(props.id))
 const killConfirmOpen = ref(false)
+const continueOpen = ref(false)
+
 
 function onControlCommand(cmd: SlashCommand) {
   switch (cmd.action?.kind) {
@@ -477,6 +480,16 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
           {{ workdirLabel }}
         </div>
       </div>
+      <button
+        v-if="!isArchived && activeSession"
+        type="button"
+        class="cmux-icon-button shrink-0"
+        aria-label="Session menu"
+        title="Continue in new conversation"
+        @click="continueOpen = true"
+      >
+        <MessageSquarePlus class="size-4" />
+      </button>
       <SessionLinks v-if="!isArchived && session?.name" :session-name="session?.name ?? ''" />
       <button
         v-if="isArchived"
@@ -832,6 +845,11 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
       :session-name="displayName"
       @update:open="killConfirmOpen = $event"
       @confirm="() => { void api.killSession(props.id); killConfirmOpen = false }"
+    />
+    <ContinueConversationDialog
+      :open="continueOpen"
+      :session="activeSession ?? null"
+      @update:open="continueOpen = $event"
     />
   </div>
 </template>

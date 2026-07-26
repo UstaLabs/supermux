@@ -1,18 +1,34 @@
-import { spawn } from "child_process"
+import { spawn as defaultSpawn, type ChildProcess } from "child_process"
 import type { CursorRunner } from "./adapter"
 import { makeLogger } from "../../../shared/log"
+import { resolveCommand, spawnCommand, type FileExists } from "../../process/launcher"
 
 const log = makeLogger("agents/cursor/runner")
 
-export function makeRealCursorRunner(opts: { home: string; authEnv: Record<string, string> }): CursorRunner {
+export function makeRealCursorRunner(opts: {
+  home: string
+  authEnv: Record<string, string>
+  platform?: NodeJS.Platform
+  fileExists?: FileExists
+  spawn?: (command: string, args: string[], options: Record<string, unknown>) => ChildProcess
+}): CursorRunner {
   return async (args, onLine, onExit, signal) => {
     return new Promise((resolve) => {
       const env: Record<string, string> = {
         ...(process.env as Record<string, string>),
         ...opts.authEnv,
         HOME: opts.home,
+        ...(opts.platform === "win32" || (!opts.platform && process.platform === "win32") ? { USERPROFILE: opts.home } : {}),
       }
-      const child = spawn("cursor-agent", args, { env, stdio: ["ignore", "pipe", "pipe"] })
+      const platform = opts.platform ?? process.platform
+      const shouldResolve = !opts.spawn || opts.platform !== undefined || opts.fileExists !== undefined
+      const command = shouldResolve
+        ? (resolveCommand(["cursor-agent", "agent"], env, platform, { fileExists: opts.fileExists }) ?? "cursor-agent")
+        : "cursor-agent"
+      const child = spawnCommand(command, args, {
+        platform, fileExists: opts.fileExists, spawn: (opts.spawn ?? defaultSpawn) as never,
+        env, stdio: ["ignore", "pipe", "pipe"],
+      })
       // User-initiated stop: SIGTERM the child. Its `exit` event then runs the
       // normal settle path (onExit + resolve) — a clean turn-end, not an error.
       const onAbort = () => { try { child.kill("SIGTERM") } catch { /* already gone */ } }

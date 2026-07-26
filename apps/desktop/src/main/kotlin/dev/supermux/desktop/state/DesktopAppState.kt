@@ -784,6 +784,47 @@ class DesktopAppState(
     // sessions with a read-only transcript (via [archivedLogs] below) + resume.
 
     /** GET /archived-sessions — every killed/archived session. Empty on any failure. */
+    fun reorderSessions(orderedIds: List<String>) {
+        // Optimistic sort_order so the list doesn't snap back when live drag ends
+        // (broker PATCH does not broadcast a session frame).
+        _sessions.update { current ->
+            val order = orderedIds.withIndex().associate { (i, id) -> id to i }
+            current.map { s -> order[s.id]?.let { s.copy(sortOrder = it) } ?: s }
+        }
+        stateScope.launch {
+            runCatching { api.reorderSessions(orderedIds) }
+        }
+    }
+
+    suspend fun createDraftSession(
+        workdir: String,
+        agent: String,
+        model: String?,
+        text: String,
+        name: String? = null,
+        reasoningLevel: String? = null,
+        attachments: List<dev.supermux.net.DraftAttachmentDto> = emptyList(),
+        replaceDraftId: String? = null,
+    ): String? = runCatching {
+        if (!replaceDraftId.isNullOrBlank()) {
+            runCatching { api.kill(replaceDraftId) }
+        }
+        api.spawn(
+            dev.supermux.net.SpawnRequest(
+                workdir = workdir,
+                name = name?.ifBlank { null },
+                agent = agent,
+                model = model?.ifBlank { null },
+                reasoningLevel = reasoningLevel,
+                userStatus = "draft",
+                draftPayload = dev.supermux.net.DraftPayloadDto(
+                    text = text,
+                    attachments = attachments.ifEmpty { null },
+                ),
+            ),
+        )?.id
+    }.getOrNull()
+
     suspend fun archived(): List<ArchivedDto> =
         runApi("archived") { api.archived() } ?: emptyList()
 
@@ -1061,7 +1102,11 @@ class DesktopAppState(
         staged: List<StagedUpload>,
         worktree: Boolean,
         baseBranch: String?,
+        replaceDraftId: String? = null,
     ): String? = runApi("createSessionWithFirstMessage") {
+        if (!replaceDraftId.isNullOrBlank()) {
+            runCatching { api.kill(replaceDraftId) }
+        }
         val validation = api.validatePath(workdir)
         val resolvedPath = validation.path
         if (!validation.ok || resolvedPath.isNullOrBlank()) {

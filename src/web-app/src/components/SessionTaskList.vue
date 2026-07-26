@@ -1,7 +1,9 @@
 <script setup lang="ts">
-// The task list itself: PA rows pinned on top, then the three task-state
-// sections — either flat (states only, a project tag per row) or nested under
-// per-project headers with a soft-tinted body. Toggled by "Group by project".
+// The task list itself: PA rows pinned on top, then either flat task-state
+// sections (In Progress / Drafts / Settled with a project tag per row) or
+// grouped-by-project (project header above an Android-style group card:
+// flush rows + hairline dividers, settled as a recessed in-card footer).
+// Toggled by "Group by project".
 import { computed, ref, reactive, provide, onMounted } from "vue"
 import { useRoute, useRouter } from "vue-router"
 import { ChevronDown, Folder } from "lucide-vue-next"
@@ -9,12 +11,12 @@ import type { PathGroup } from "@/composables/usePathGroups"
 import { usePathGroups } from "@/composables/usePathGroups"
 import { useSortedSessions } from "@/composables/useSortedSessions"
 import { useRenameRequest } from "@/composables/useRenameRequest"
-import { useSessions } from "@/stores/sessions"
+import { useSessions, type Session } from "@/stores/sessions"
 import { useLayout } from "@/stores/layout"
 import { api } from "@/api/client"
 import { toast } from "vue-sonner"
 import TaskSection from "./TaskSection.vue"
-import KillConfirmDialog from "./KillConfirmDialog.vue"
+import ContinueConversationDialog from "./ContinueConversationDialog.vue"
 
 defineProps<{ mobile: boolean }>()
 
@@ -36,8 +38,31 @@ const groupByProject = computed(() => layout.state.groupByProject)
 const homeDir = computed(() => sessions.homeDir)
 
 const renamingRow = ref<string | null>(null)
-const killTarget = ref<{ id: string; name: string } | null>(null)
-const showKillConfirm = ref(false)
+const continueOpen = ref(false)
+const continueSession = ref<Session | null>(null)
+
+function handleContinue(id: string) {
+  // Settled rows may only live in the archived list (mapped as userStatus settled).
+  const s =
+    sessions.list.find((x) => x.id === id) ??
+    sessions.archivedSessions.find((x) => x.id === id)
+  if (!s) {
+    toast.error("Session not found")
+    return
+  }
+  continueSession.value = {
+    id: s.id,
+    name: s.name,
+    workdir: s.workdir,
+    mute: "mute" in s ? !!s.mute : false,
+    connected: "connected" in s ? !!s.connected : false,
+    agent: s.agent,
+    model: s.model,
+    repo_root: s.repo_root,
+    session_branch: "session_branch" in s ? s.session_branch : undefined,
+  }
+  continueOpen.value = true
+}
 
 onMounted(() => {
   const name = consumeRenameRequest()
@@ -57,23 +82,6 @@ function toggleSettled(workdir: string) {
   else settledExpanded.add(workdir)
 }
 const flatSettledExpanded = ref(false)
-
-function requestKill(id: string) {
-  const s = sessions.list.find((x) => x.id === id)
-  killTarget.value = { id, name: s?.name ?? id }
-  showKillConfirm.value = true
-}
-async function confirmKill() {
-  const target = killTarget.value
-  if (!target) return
-  showKillConfirm.value = false
-  try {
-    await api.killSession(target.id)
-  } catch (err: any) {
-    toast.error(err?.message ?? "Failed to kill session")
-  }
-  killTarget.value = null
-}
 
 async function handleMute(id: string) {
   const session = sessions.list.find((s) => s.id === id)
@@ -194,7 +202,6 @@ async function handleReorder(ids: string[]) {
     :expanded="true"
     :reorderable="false"
     @navigate="navigateToSession"
-    @kill="requestKill"
     @mute="handleMute"
     @rename-start="(name) => (renamingRow = name)"
     @rename="handleRename"
@@ -203,6 +210,7 @@ async function handleReorder(ids: string[]) {
     @resume="handleResume"
     @open-draft="handleOpenDraft"
     @delete-draft="handleDeleteDraft"
+    @continue="handleContinue"
   />
 
   <!-- FLAT: three task sections across every project -->
@@ -220,7 +228,6 @@ async function handleReorder(ids: string[]) {
       :reorderable="true"
       @navigate="navigateToSession"
       @reorder="handleReorder"
-      @kill="requestKill"
       @mute="handleMute"
       @rename-start="(name) => (renamingRow = name)"
       @rename="handleRename"
@@ -229,33 +236,37 @@ async function handleReorder(ids: string[]) {
       @resume="handleResume"
       @open-draft="handleOpenDraft"
       @delete-draft="handleDeleteDraft"
+      @continue="handleContinue"
       @toggle-expanded="flatSettledExpanded = !flatSettledExpanded"
     />
   </template>
 
-  <!-- GROUPED: per-project header + soft-tinted body -->
+  <!-- GROUPED: path header above Android-style group card (flush rows + settled footer) -->
   <template v-else>
-    <div v-for="group in groups" :key="group.workdir">
-      <div class="flex items-baseline gap-2 px-3" :class="mobile ? 'pt-2.5 pb-1' : 'pt-3 pb-1'">
+    <div v-for="group in groups" :key="group.workdir" class="px-3 pb-2" :class="mobile ? 'pt-1' : 'pt-1.5'">
+      <div class="flex items-center gap-1.5 min-h-[32px] py-1">
         <button
           type="button"
-          class="flex min-w-0 flex-1 items-baseline gap-2 text-left"
+          class="flex min-w-0 flex-1 items-center gap-1.5 text-left"
           :aria-expanded="!group.collapsed"
           @click="toggle(group.workdir)"
         >
           <ChevronDown
-            class="size-3 shrink-0 self-center text-muted-foreground/70 transition-transform duration-150"
+            class="size-3 shrink-0 text-muted-foreground/70 transition-transform duration-150"
             :class="{ '-rotate-90': group.collapsed }"
           />
-          <span class="truncate font-bold tracking-tight" :class="mobile ? 'text-[14px]' : 'text-[13px]'">{{ group.label }}</span>
+          <span class="min-w-0 flex-1 truncate font-mono text-[11px] font-medium text-muted-foreground">{{ group.label }}</span>
           <span class="shrink-0 font-mono text-[10px] text-muted-foreground/60">{{ activeCount(group) }}</span>
         </button>
       </div>
+      <!--
+        One surface per project (Android PathGroup Surface). Live/draft rows are
+        multi-root fragment children so divide-y paints hairlines between them;
+        settled is a single muted footer block inside the same card.
+      -->
       <div
         v-show="!group.collapsed"
-        class="mb-1 rounded-[10px] pb-1"
-        :class="mobile ? 'mx-1.5' : 'mx-2'"
-        style="background: color-mix(in oklab, var(--primary) 4%, transparent)"
+        class="overflow-hidden rounded-xl border border-border/70 bg-card divide-y divide-border/50"
       >
         <TaskSection
           v-for="section in group.sections"
@@ -267,8 +278,10 @@ async function handleReorder(ids: string[]) {
           :renaming-name="renamingRow"
           :expanded="settledExpanded.has(group.workdir)"
           :reorderable="true"
+          :hide-header="true"
+          :quiet-settled="true"
+          :card="true"
           @navigate="navigateToSession"
-          @kill="requestKill"
           @mute="handleMute"
           @rename-start="(name) => (renamingRow = name)"
           @rename="handleRename"
@@ -277,6 +290,7 @@ async function handleReorder(ids: string[]) {
           @resume="handleResume"
           @open-draft="handleOpenDraft"
           @delete-draft="handleDeleteDraft"
+          @continue="handleContinue"
           @toggle-expanded="toggleSettled(group.workdir)"
           @reorder="handleReorder"
         />
@@ -284,10 +298,11 @@ async function handleReorder(ids: string[]) {
     </div>
   </template>
 
-  <KillConfirmDialog
-    :open="showKillConfirm"
-    :session-name="killTarget?.name ?? ''"
-    @update:open="showKillConfirm = $event"
-    @confirm="confirmKill"
+
+  <ContinueConversationDialog
+    :open="continueOpen"
+    :session="continueSession"
+    @update:open="(v) => { continueOpen = v; if (!v) continueSession = null }"
   />
+
 </template>

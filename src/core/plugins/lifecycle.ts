@@ -1,6 +1,5 @@
 import { existsSync, rmSync, cpSync } from "fs"
 import { basename, isAbsolute, join } from "path"
-import { execFileSync } from "child_process"
 import { PLUGINS_DIR } from "../../shared/paths"
 import { home } from "../../shared/home"
 import { loadPluginsRegistry, savePluginsRegistry } from "./registry"
@@ -9,6 +8,7 @@ import { CursorPluginAdapter } from "./adapters/cursor"
 import { CodexPluginAdapter, codexPluginId, CODEX_MARKETPLACE_NAME } from "./adapters/codex"
 import { codexPrepareGlobal } from "./index"
 import type { CliScope, Plugin, PluginSource, PluginsRegistry } from "./types"
+import { resolveCommand, spawnCommandSync } from "../process/launcher"
 
 // Lifecycle operations behind `mux plugin …`. The pure helpers
 // (parseAddSource/applyEnable/applyRemove/pluginSummaries) carry the logic and
@@ -104,7 +104,13 @@ export function pluginSummaries(reg: PluginsRegistry): PluginSummary[] {
 // ---- Side-effecting orchestrators -----------------------------------------
 
 export type Exec = (cmd: string, args: string[]) => void
-const defaultExec: Exec = (cmd, args) => { execFileSync(cmd, args, { stdio: "inherit" }) }
+const defaultExec: Exec = (cmd, args) => {
+  const env = { ...process.env }
+  const command = resolveCommand([cmd], env, process.platform) ?? cmd
+  const result = spawnCommandSync(command, args, { env, stdio: "inherit" })
+  if (result.error) throw result.error
+  if (result.status !== 0) throw new Error(`${cmd} exited ${result.status}`)
+}
 
 export interface LifecycleDeps {
   file?: string

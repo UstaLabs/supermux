@@ -1,4 +1,5 @@
-import { sendKeysToWindowId, capturePaneById } from "./tmux"
+import { getSessionBackend } from "../runtime"
+import type { SessionBackend } from "../runtime/session-backend"
 import { makeLogger } from "../../shared/log"
 
 const log = makeLogger("post-spawn-keys")
@@ -45,22 +46,24 @@ const BYPASS_WARNING_MARKER = "Bypass Permissions mode"
 // the dev-channels one (default = accept), never the bypass warning (default
 // "No, exit"), which a blind Enter would turn into an exit.
 export async function sendChannelConsentEnter(
-  windowId: string,
+  targetId: string,
   opts?: {
     pollIntervalMs?: number
     maxWaitMs?: number
     retryAfterMs?: number
     keyDelayMs?: number
-    sendKeysFn?: (windowId: string, keys: string[]) => Promise<void>
-    capturePane?: (windowId: string) => Promise<string | null>
+    backend?: SessionBackend
+    sendKeysFn?: (targetId: string, keys: string[]) => Promise<void>
+    capturePane?: (targetId: string) => Promise<string | null>
   },
 ): Promise<void> {
   const interval = opts?.pollIntervalMs ?? POLL_INTERVAL_MS
   const maxWait = opts?.maxWaitMs ?? MAX_WAIT_MS
   const retryAfter = opts?.retryAfterMs ?? RETRY_AFTER_MS
   const keyDelay = opts?.keyDelayMs ?? BYPASS_KEY_DELAY_MS
-  const send = opts?.sendKeysFn ?? sendKeysToWindowId
-  const capture = opts?.capturePane ?? capturePaneById
+  const backend = () => opts?.backend ?? getSessionBackend()
+  const send = opts?.sendKeysFn ?? ((id: string, keys: string[]) => backend().sendKeys(id, keys))
+  const capture = opts?.capturePane ?? ((id: string) => backend().capture(id))
 
   let resumeMenuDismissed = false
   const deadline = Date.now() + maxWait
@@ -69,10 +72,10 @@ export async function sendChannelConsentEnter(
   let lastBypassAt = 0
   while (Date.now() < deadline) {
     try {
-      const text = (await capture(windowId)) ?? ""
+      const text = (await capture(targetId)) ?? ""
       // Claude is live on the channel → past all startup prompts.
       if (text.includes(LISTENING_MARKER)) {
-        log.debug("channel_consent_already_past", { windowId })
+        log.debug("channel_consent_already_past", { targetId })
         return
       }
       // Bypass Permissions warning: default is "No, exit", so a bare Enter would
@@ -85,11 +88,11 @@ export async function sendChannelConsentEnter(
       if (text.includes(BYPASS_WARNING_MARKER)) {
         const now = Date.now()
         if (lastBypassAt === 0 || now - lastBypassAt >= retryAfter) {
-          await send(windowId, ["Down"])
+          await send(targetId, ["Down"])
           await new Promise<void>(r => setTimeout(r, keyDelay))
-          await send(windowId, ["Enter"])
+          await send(targetId, ["Enter"])
           lastBypassAt = now
-          log.info("bypass_warning_accepted", { windowId })
+          log.info("bypass_warning_accepted", { targetId })
         }
         await new Promise<void>(r => setTimeout(r, interval))
         continue
@@ -97,9 +100,9 @@ export async function sendChannelConsentEnter(
       // --resume "summary vs full session" menu (also contains "Enter to
       // confirm"): "2" = resume the full session. Dismiss once.
       if (text.includes(RESUME_MENU_MARKER) && !resumeMenuDismissed) {
-        await send(windowId, ["2", "Enter"])
+        await send(targetId, ["2", "Enter"])
         resumeMenuDismissed = true
-        log.info("resume_menu_full_session_sent", { windowId })
+        log.info("resume_menu_full_session_sent", { targetId })
         await new Promise<void>(r => setTimeout(r, interval))
         continue
       }
@@ -107,24 +110,24 @@ export async function sendChannelConsentEnter(
       if (text.includes(CHANNEL_CONSENT_MARKER) && !text.includes(RESUME_MENU_MARKER)) {
         const now = Date.now()
         if (sent === 0 || now - lastSentAt >= retryAfter) {
-          await send(windowId, ["Enter"])
+          await send(targetId, ["Enter"])
           sent++
           lastSentAt = now
           log.info(sent === 1 ? "channel_consent_enter_sent" : "channel_consent_enter_retried", {
-            windowId,
+            targetId,
             attempt: sent,
           })
         }
       } else if (sent > 0) {
         // The consent prompt we were dismissing is gone → an Enter landed and
         // Claude accepted. (A dropped Enter would have left the marker up.)
-        log.info("channel_consent_accepted", { windowId, attempts: sent })
+        log.info("channel_consent_accepted", { targetId, attempts: sent })
         return
       }
     } catch (err) {
-      log.debug("channel_consent_capture_failed", { windowId, err: String(err) })
+      log.debug("channel_consent_capture_failed", { targetId, err: String(err) })
     }
     await new Promise<void>(r => setTimeout(r, interval))
   }
-  log.warn("channel_consent_timeout", { windowId, maxWaitMs: maxWait, enters: sent, resumeMenuDismissed })
+  log.warn("channel_consent_timeout", { targetId, maxWaitMs: maxWait, enters: sent, resumeMenuDismissed })
 }

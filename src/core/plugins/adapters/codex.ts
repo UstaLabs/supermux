@@ -1,12 +1,12 @@
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { dirname, join, relative, resolve } from "path"
-import { execFileSync, execFile } from "child_process"
-import { promisify } from "util"
-
-const execFileAsync = promisify(execFile)
+import type { ChildProcess } from "child_process"
 import { home } from "../../../shared/home"
 import { makeLogger } from "../../../shared/log"
 import { isActiveForCli, type Plugin, type PluginAdapter, type PluginSession, type SpawnArgs } from "../types"
+import {
+  resolveCommand, spawnCommand, spawnCommandSync, type FileExists, type SpawnLike, type SpawnSyncLike,
+} from "../../process/launcher"
 
 const log = makeLogger("plugins/codex")
 
@@ -94,10 +94,69 @@ export function buildCodexMarketplace(plugins: Plugin[], marketplaceRoot: string
 /** Installs one plugin from the mux marketplace. Injectable for tests. */
 export type CodexPluginInstaller = (pluginName: string) => void
 
+export interface CodexCommandDeps {
+  platform?: NodeJS.Platform
+  env?: Record<string, string | undefined>
+  fileExists?: FileExists
+  spawn?: SpawnLike
+  spawnSync?: SpawnSyncLike
+}
+
+function codexCommand(deps: CodexCommandDeps, extraEnv: Record<string, string> = {}) {
+  const platform = deps.platform ?? process.platform
+  const env = { ...(deps.env ?? process.env), ...extraEnv } as Record<string, string>
+  const command = resolveCommand(["codex"], env, platform, { fileExists: deps.fileExists }) ?? "codex"
+  return { platform, env, command }
+}
+
+/** Public narrow seams make the real default launch behavior execution-testable. */
+export function runCodexPluginCommandSync(args: string[], deps: CodexCommandDeps = {}): void {
+  const launch = codexCommand(deps)
+  const result = spawnCommandSync(launch.command, args, {
+    platform: launch.platform, env: launch.env, fileExists: deps.fileExists,
+    spawnSync: deps.spawnSync, stdio: "ignore",
+  })
+  if (result.error) throw result.error
+  if (result.status === null) {
+    throw new Error(`codex ${args.join(" ")} terminated (signal=${result.signal ?? "unknown"})`)
+  }
+  if (result.status !== 0) throw new Error(`codex ${args.join(" ")} exited ${result.status}`)
+}
+
+export async function runCodexPluginCommand(
+  args: string[], extraEnv: Record<string, string> = {}, deps: CodexCommandDeps = {},
+): Promise<void> {
+  const launch = codexCommand(deps, extraEnv)
+  await new Promise<void>((resolve, reject) => {
+    let child: ChildProcess
+    let settled = false
+    const finish = (error?: Error) => {
+      if (settled) return
+      settled = true
+      if (error) reject(error)
+      else resolve()
+    }
+    try {
+      child = spawnCommand(launch.command, args, {
+        platform: launch.platform, env: launch.env, fileExists: deps.fileExists,
+        spawn: deps.spawn, stdio: "ignore",
+      })
+    } catch (error) {
+      reject(error)
+      return
+    }
+    child.once("error", (error) => finish(error))
+    child.once("exit", (code, signal) => {
+      if (code === 0) finish()
+      else finish(new Error(`codex ${args.join(" ")} exited (code=${code}, signal=${signal})`))
+    })
+  })
+}
+
 function defaultInstaller(pluginName: string): void {
   // Idempotent in practice: re-adding an installed plugin is a no-op or a
   // harmless non-zero exit, which prepareGlobal swallows per-plugin.
-  execFileSync("codex", ["plugin", "add", `${pluginName}@${CODEX_MARKETPLACE_NAME}`], { stdio: "ignore" })
+  runCodexPluginCommandSync(["plugin", "add", `${pluginName}@${CODEX_MARKETPLACE_NAME}`])
 }
 
 /** Installs one plugin into a specific CODEX_HOME (async; non-blocking). Injectable for tests. */
@@ -107,9 +166,7 @@ async function defaultHomeInstaller(pluginName: string, codexHome: string): Prom
   // `-c` enable flags only take effect once a plugin is actually INSTALLED in
   // the target CODEX_HOME; the global install (prepareGlobal) lands in ~/.codex,
   // not the per-session home, so we install here too. Idempotent.
-  await execFileAsync("codex", ["plugin", "add", `${pluginName}@${CODEX_MARKETPLACE_NAME}`], {
-    env: { ...process.env, CODEX_HOME: codexHome },
-  })
+  await runCodexPluginCommand(["plugin", "add", `${pluginName}@${CODEX_MARKETPLACE_NAME}`], { CODEX_HOME: codexHome })
 }
 
 export interface CodexPluginAdapterOpts {

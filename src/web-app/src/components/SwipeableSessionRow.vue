@@ -2,7 +2,7 @@
 import { ref, watch, inject, type Ref } from "vue"
 import { useRouter } from "vue-router"
 import { computed } from "vue"
-import { Trash2, VolumeX, Volume2, Pencil, RotateCcw } from "lucide-vue-next"
+import { Trash2, VolumeX, Volume2, Pencil, RotateCcw, CheckCircle2, MessageSquarePlus } from "lucide-vue-next"
 import { useSwipeReveal } from "@/composables/useSwipeReveal"
 import SessionRow from "./SessionRow.vue"
 
@@ -20,21 +20,23 @@ const props = withDefaults(
     status?: string
     variant?: "in_progress" | "draft" | "settled"
     projectLabel?: string
+    /** In-group card: match card surface, no outer padding. */
+    flush?: boolean
   }>(),
-  { variant: "in_progress" },
+  { variant: "in_progress", flush: false },
 )
 
 const emit = defineEmits<{
-  (e: "kill", id: string): void
   (e: "mute", id: string): void
   (e: "rename", id: string, newName: string): void
   (e: "settle", id: string): void
   (e: "resume", id: string): void
   (e: "openDraft", id: string): void
   (e: "deleteDraft", id: string): void
+  (e: "continue", id: string): void
 }>()
 
-// Drafts have no process, so mute/kill don't apply; settled rows only resume.
+// Drafts have no process, so mute/settle don't apply; settled rows only resume.
 const showMute = computed(() => props.variant === "in_progress")
 
 const router = useRouter()
@@ -49,7 +51,7 @@ const sectionReordering = inject<Ref<boolean>>("sectionReordering", ref(false))
 const sectionShouldSuppressClick = inject<() => boolean>("sectionShouldSuppressClick", () => false)
 
 const { state, close } = useSwipeReveal(containerRef, {
-  leftWidth: 140,
+  leftWidth: 210, // mute + rename + continue (in_progress); unused width ok for draft/settled
   rightWidth: 80,
   // When the parent section is reordering, freeze swipe at idle.
   paused: sectionReordering,
@@ -66,9 +68,9 @@ watch(state, (s) => {
   }
 })
 
-function handleKill() {
+function handleSettle() {
   close()
-  emit("kill", props.id)
+  emit("settle", props.id)
 }
 
 function handleDeleteDraft() {
@@ -89,6 +91,11 @@ function handleOpenDraft() {
 function handleMute() {
   close()
   emit("mute", props.id)
+}
+
+function handleContinue() {
+  close()
+  emit("continue", props.id)
 }
 
 function handleStartRename() {
@@ -156,6 +163,14 @@ function handleNavigate() {
         <Pencil class="size-5" />
         <span class="text-[10px] font-medium">Rename</span>
       </button>
+      <button
+        v-if="props.variant === 'in_progress' || props.variant === 'settled'"
+        class="w-[70px] flex flex-col items-center justify-center gap-1 border-r border-border bg-[color-mix(in_oklab,var(--primary)_16%,var(--cmux-session-list))] text-foreground active:bg-[color-mix(in_oklab,var(--primary)_24%,var(--cmux-session-list))]"
+        @click="handleContinue"
+      >
+        <MessageSquarePlus class="size-5" />
+        <span class="text-[10px] font-medium">Continue</span>
+      </button>
     </div>
 
     <div class="absolute inset-y-0 right-0 flex items-stretch">
@@ -169,15 +184,21 @@ function handleNavigate() {
       </button>
       <button
         v-else-if="props.variant === 'in_progress'"
-        class="w-[80px] flex flex-col items-center justify-center gap-1 bg-[color-mix(in_oklab,var(--destructive)_28%,var(--cmux-session-list))] text-foreground active:bg-[color-mix(in_oklab,var(--destructive)_36%,var(--cmux-session-list))]"
-        @click="handleKill"
+        class="w-[80px] flex flex-col items-center justify-center gap-1 bg-[color-mix(in_oklab,var(--cmux-success,var(--primary))_28%,var(--cmux-session-list))] text-foreground active:bg-[color-mix(in_oklab,var(--cmux-success,var(--primary))_36%,var(--cmux-session-list))]"
+        @click="handleSettle"
       >
-        <Trash2 class="size-5" />
-        <span class="text-[10px] font-medium">Kill</span>
+        <CheckCircle2 class="size-5" />
+        <span class="text-[10px] font-medium">Settle</span>
       </button>
     </div>
 
-    <div data-swipe-content class="relative bg-[var(--cmux-session-list)] px-2 py-1">
+    <div
+      data-swipe-content
+      class="relative"
+      :class="props.flush
+        ? 'bg-card'
+        : 'bg-[var(--cmux-session-list)] px-2 py-1'"
+    >
       <SessionRow
         ref="rowRef"
         flush

@@ -3,9 +3,8 @@ import { mkdirSync, existsSync } from "fs"
 import { isWorktreeReclaimable } from "../worktree/gc"
 import { removeWorktree } from "../worktree/manager"
 import { Registry } from "./registry"
-import { spawnSessionWindow, killWindowById } from "./tmux"
 import { isProcessAlive } from "./pid-file"
-import { buildClaudeSpawnCommand } from "./spawn-command"
+import { buildClaudeSpawnSpec } from "./spawn-command"
 import { preAcceptTrust } from "./trust"
 import { sendChannelConsentEnter } from "./post-spawn-keys"
 import { seedSoulName } from "../memory/init"
@@ -15,6 +14,8 @@ import { AgentKind } from "../../shared/agents"
 import { spawnPA } from "./spawn-helper"
 import type { Session } from "./types"
 import { makeLogger } from "../../shared/log"
+import { getSessionBackend } from "../runtime"
+import type { SessionBackend } from "../runtime/session-backend"
 
 const TMUX_SESSION = process.env.MUX_TMUX_SESSION ?? "mux"
 const log = makeLogger("supervisor")
@@ -46,6 +47,7 @@ export type SupervisorOpts = {
   onClaudeSessionId?: (brokerSessionId: string, claudeSessionId: string) => void
   // Override for tests; defaults to the real tmux helper.
   spawnTmux?: (opts: { session: string; window: string; workdir: string; command: string }) => Promise<{ windowId?: string } | void>
+  sessionBackend?: SessionBackend
   // PA workdir, resolved from the config store by the caller. When omitted
   // (e.g. tests), falls back to the historical default.
   paWorkdir?: string
@@ -70,18 +72,26 @@ export type SupervisorOpts = {
 export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let stopped = false
   let timer: ReturnType<typeof setInterval> | null = null
-  const spawnTmux = opts.spawnTmux ?? spawnSessionWindow
+  const spawnTmux = opts.spawnTmux
+  const sessionBackend = opts.sessionBackend ?? getSessionBackend()
   // Prefer caller-supplied values (from config store); fall back to the built-in
   // default. The env var MUX_PA_WORKDIR is now read by the caller (main.ts via
   // SettingsStore.getAppConfig) and forwarded as opts.paWorkdir.
   const resolvedPaWorkdir = opts.paWorkdir || `${home()}/.mux/workspace`
+
+  async function runtimeTargetId(session: Session): Promise<string | null> {
+    if (session.tmux_window_id) return session.tmux_window_id
+    const targetId = await sessionBackend.resolve(TMUX_SESSION, normalizeName(session.name))
+    if (targetId) opts.registry.sessions.setTmuxWindowId(session.id, targetId)
+    return targetId
+  }
 
   async function respawnPA(pa: Session) {
     // Kill the prior window by id. A legacy PA with no persisted tmux_window_id
     // skips teardown; any orphan window is harmless (we address by id, never name)
     // and is reclaimed on the next reconcile cycle.
     if (pa.agent === AgentKind.Claude && pa.tmux_window_id) {
-      await killWindowById(pa.tmux_window_id).catch(() => {})
+      await sessionBackend.kill(pa.tmux_window_id).catch(() => {})
     }
 
     if (pa.agent === AgentKind.Claude) {
@@ -94,25 +104,21 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       const claudeSessionId = pa.agent_session_id ?? randomUUID()
       await opts.bindSocket(pa.id)
 
-      const tmuxWindow = await spawnTmux({
-        session: TMUX_SESSION,
-        window: tmuxWindowName,
+      const spec = buildClaudeSpawnSpec({
+        name: pa.name,
+        sessionId: pa.id,
+        claudeSessionId,
+        resume: !!pa.agent_session_id,
+        sessionRole: "personal_assistant",
+        model: pa.model,
+        effort: opts.resolveEffort?.(pa),
         workdir: pa.workdir,
-        command: buildClaudeSpawnCommand({
-          name: pa.name,
-          sessionId: pa.id,
-          claudeSessionId,
-          resume: !!pa.agent_session_id,
-          sessionRole: "personal_assistant",
-          model: pa.model,
-          effort: opts.resolveEffort?.(pa),
-          workdir: pa.workdir,
-        }),
       })
-      if (tmuxWindow?.windowId) opts.registry.sessions.setTmuxWindowId(pa.id, tmuxWindow.windowId)
+      const target = await sessionBackend.create({ group: TMUX_SESSION, name: tmuxWindowName, cwd: pa.workdir, ...spec, cols: 80, rows: 24 })
+      opts.registry.sessions.setTmuxWindowId(pa.id, target.id)
       if (!pa.agent_session_id) opts.onClaudeSessionId?.(pa.id, claudeSessionId)
-      opts.registry.sessions.activate(pa.id, process.pid)
-      if (tmuxWindow?.windowId) void sendChannelConsentEnter(tmuxWindow.windowId)
+      opts.registry.sessions.activate(pa.id, target.pid ?? process.pid)
+      void sendChannelConsentEnter(target.id, { backend: sessionBackend })
     } else {
       await spawnPA({
         registry: opts.registry,
@@ -123,6 +129,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         reasoningLevel: pa.reasoningLevel,
         bind: opts.bindSocket,
         spawnTmux,
+        sessionBackend,
         tmuxSession: TMUX_SESSION,
         id: pa.id,
         onClaudeSessionId: opts.onClaudeSessionId,
@@ -169,6 +176,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         reasoningLevel: bootstrapOpts?.reasoningLevel,
         bind: opts.bindSocket,
         spawnTmux,
+        sessionBackend,
         tmuxSession: TMUX_SESSION,
         onClaudeSessionId: opts.onClaudeSessionId,
         resolveEffort: opts.resolveEffort,
@@ -203,7 +211,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     } else {
       // Supervise existing PAs: respawn any whose process is dead.
       for (const pa of pas) {
-        if (isProcessAlive(pa.pid)) continue
+        if (pa.agent === AgentKind.Claude) {
+          const targetId = await runtimeTargetId(pa)
+          if (targetId && await sessionBackend.livePid(targetId) !== null) continue
+        } else if (isProcessAlive(pa.pid)) continue
         try {
           await respawnPA(pa)
         } catch (err) {
@@ -223,7 +234,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       if (isDraftSession(s)) continue
       if (s.status === "suspended") continue
       if (s.agent !== "claude") continue
-      if (!isProcessAlive(s.pid)) {
+      const targetId = await runtimeTargetId(s)
+      const alive = targetId ? await sessionBackend.livePid(targetId) !== null : isProcessAlive(s.pid)
+      if (!alive) {
         if (s.role === "personal_assistant") await ensurePersonalAssistants()
         else {
           log.info("session_suspended", { id: s.id, name: s.name, pid: s.pid, reason: "process_dead" })
@@ -264,9 +277,11 @@ export async function reconcileOnStartup(deps: {
   supervisor: Supervisor
   isAlive?: (pid: number) => boolean
   livePanePid?: (windowId: string) => Promise<number | null>
+  sessionBackend?: SessionBackend
 }): Promise<void> {
   const alive = deps.isAlive ?? isProcessAlive
-  const livePanePid = deps.livePanePid ?? (async () => null)
+  const sessionBackend = deps.sessionBackend ?? getSessionBackend()
+  const liveRuntimePid = deps.livePanePid ?? ((targetId: string) => sessionBackend.livePid(targetId))
   for (const s of deps.registry.list()) {
     if (alive(s.pid)) continue
     if (isDraftSession(s)) continue
@@ -287,13 +302,16 @@ export async function reconcileOnStartup(deps: {
     // the session ACTIVE. Otherwise the live session is false-suspended and the
     // next message would kill-and-respawn it, losing its in-progress state.
     if (s.tmux_window_id) {
-      const panePid = await livePanePid(s.tmux_window_id)
+      const panePid = await liveRuntimePid(s.tmux_window_id)
       if (panePid) {
         deps.registry.sessions.activate(s.id, panePid)
         log.info("session_pane_survived", { id: s.id, name: s.name, pane_pid: panePid, window: s.tmux_window_id })
         continue
       }
     }
+    // Legacy rows can predate persisted runtime target IDs. Their recorded PID
+    // remains the only liveness evidence until a later resolve/heal succeeds.
+    if (!s.tmux_window_id && alive(s.pid)) continue
     // Claude user session with a dead PID and no surviving pane: mark suspended
     // (not dropped). It keeps its history and lazily resumes on the next message.
     log.info("session_suspended", { id: s.id, name: s.name, pid: s.pid, reason: "dead_on_startup" })

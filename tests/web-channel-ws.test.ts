@@ -105,6 +105,78 @@ test("agent terminal: rejects non-claude, accepts claude and attaches with targe
   ws.close()
 })
 
+test("terminal attach rejection reports an error and closes with 1011", async () => {
+  await ch.stop()
+  ch = new WebChannel({
+    port: PORT,
+    devicesFile: DEV_PATH,
+    publicUrl: "http://127.0.0.1:" + PORT,
+    getSessionsSnapshot: () => [],
+    getSessionLog: () => [],
+    setMute: () => {},
+    onSendFromWeb: () => {},
+    getSessionWorkdir: () => "/w",
+    terminalManager: {
+      attach: async () => { throw new Error("attach exploded") },
+      detach: () => {},
+    } as any,
+  })
+  await ch.start()
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${PORT}/ws/term?session=ana&kind=scratch`,
+    { headers: { Cookie: `cmux_token=${token}` } },
+  )
+  const messages: any[] = []
+  const opened = new Promise<void>((resolve, reject) => {
+    ws.onopen = () => resolve()
+    ws.onerror = event => reject(event)
+  })
+  ws.onmessage = event => { messages.push(JSON.parse(String(event.data))) }
+  const closed = new Promise<number>(resolve => {
+    ws.onclose = event => { resolve(event.code) }
+  })
+  await opened
+  expect(await closed).toBe(1011)
+  expect(messages).toEqual([{ type: "reset" }, { type: "error", reason: "attach exploded" }])
+})
+
+test("terminal reset precedes replay and viewer failure reconnects without a target-exit frame", async () => {
+  await ch.stop()
+  ch = new WebChannel({
+    port: PORT,
+    devicesFile: DEV_PATH,
+    publicUrl: "http://127.0.0.1:" + PORT,
+    getSessionsSnapshot: () => [],
+    getSessionLog: () => [],
+    setMute: () => {},
+    onSendFromWeb: () => {},
+    getSessionWorkdir: () => "/w",
+    terminalManager: {
+      attach: async (opts: any) => {
+        await opts.onData(new TextEncoder().encode("snapshot"))
+        setTimeout(() => opts.onFailure("viewer queue overflow"), 0)
+        return { ok: true }
+      },
+      detach: () => {},
+    } as any,
+  })
+  await ch.start()
+  const frames: Array<{ type: string } | string> = []
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${PORT}/ws/term?session=ana&kind=scratch`,
+    { headers: { Cookie: `cmux_token=${token}` } },
+  )
+  ws.binaryType = "arraybuffer"
+  ws.onmessage = event => {
+    if (event.data instanceof ArrayBuffer) frames.push(new TextDecoder().decode(event.data))
+    else frames.push(JSON.parse(String(event.data)))
+  }
+  const closed = new Promise<number>(resolve => { ws.onclose = event => resolve(event.code) })
+  expect(await closed).toBe(1011)
+  expect(frames).toEqual([{ type: "reset" }, "snapshot"])
+  expect(frames).not.toContainEqual(expect.objectContaining({ type: "exit" }))
+})
+
 test("ws send frame triggers onSendFromWeb callback", async () => {
   const received: any[] = []
   await ch.stop()

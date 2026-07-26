@@ -4,12 +4,22 @@ import dev.supermux.desktop.auth.DesktopTokenStore
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
 import java.nio.file.Files
+import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DesktopHostPersistenceTest {
+    private class FakeKeepAliveEnv(override val os: KeepAlive.Os) : KeepAliveEnv {
+        override val home: Path = Path.of(".")
+        override val localAppData: Path = home.resolve("AppData/Local")
+        override val uid: Long? = null
+        override val xdgRuntimeDir: String? = null
+        override fun hasCommand(name: String) = false
+        override fun run(argv: List<String>) = false
+    }
+
     private fun tempPersistence(): DesktopHostPersistence {
         val dir = Files.createTempDirectory("smx-fleet")
         return DesktopHostPersistence(dir.resolve("hosts.json"), dir.resolve("host-tokens.json"))
@@ -17,6 +27,30 @@ class DesktopHostPersistenceTest {
 
     @Test fun startsEmpty() {
         assertTrue(tempPersistence().loadAll().isEmpty())
+    }
+
+    @Test fun windowsUsesTheSameNativeHostOnboardingAsPosix() {
+        assertTrue(DesktopHostBootstrap.isNativeHostPlatform(FakeKeepAliveEnv(KeepAlive.Os.WINDOWS)))
+    }
+
+    @Test fun windowsSidecarEnvironmentPointsBrokerAtMaterializedSessiond() {
+        val binDir = Path.of("C:/Users/test/.mux/state/desktop-assets/bin")
+        val sessiond = binDir.resolve("mux-sessiond.exe")
+        val env = DesktopHostBootstrap.buildSidecarEnvironment(
+            HostBinaries.SidecarBinaries(
+                brokerPath = binDir.resolve("supermux-broker.exe"),
+                binDir = binDir,
+                sessiondPath = sessiond,
+                frpcPath = binDir.resolve("frpc.exe"),
+                tmuxPath = null,
+            ),
+            hostName = "winbox",
+            existingPath = "C:/Windows/System32",
+        )
+
+        assertEquals(sessiond.toString(), env["MUX_SESSIOND_PATH"])
+        assertEquals("winbox", env["MUX_HOST_NAME"])
+        assertTrue(env.getValue("PATH").startsWith(binDir.toString()))
     }
 
     @Test fun roundTripsMetadataAndTokensAcrossInstances() {

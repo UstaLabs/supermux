@@ -1,0 +1,265 @@
+import { randomUUID } from "node:crypto"
+import type { RuntimeViewer, SessionBackend } from "../runtime/session-backend"
+
+export type SessiondTerminalKind = "scratch" | "agent"
+export type FindExecutable = (name: string) => string | null
+
+export type SessiondTermOptions = {
+  backend: SessionBackend
+  kind: SessiondTerminalKind
+  deviceName: string
+  sessionName: string
+  terminalId: string
+  agentTarget?: string
+  workdir: string
+  cols: number
+  rows: number
+  environment?: Readonly<Record<string, string>>
+  findExecutable?: FindExecutable
+  outputByteLimit?: number
+}
+
+const encoder = new TextEncoder()
+
+function hex(value: string): string {
+  return Buffer.from(value, "utf8").toString("hex")
+}
+
+export function sessiondTerminalGroup(sessionName: string): string {
+  return `muxterm-${hex(sessionName)}`
+}
+
+export function sessiondTerminalName(terminalId: string): string {
+  return `term-${hex(terminalId)}`
+}
+
+export function parseSessiondTerminalName(name: string): string | null {
+  if (!name.startsWith("term-")) return null
+  const encoded = name.slice("term-".length)
+  if (encoded.length === 0 || encoded.length % 2 !== 0 || !/^[0-9a-f]+$/.test(encoded)) return null
+  try {
+    const decoded = Buffer.from(encoded, "hex")
+    if (decoded.toString("hex") !== encoded) return null
+    return decoded.toString("utf8")
+  } catch {
+    return null
+  }
+}
+
+function processEnvironment(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const environment: Record<string, string> = {}
+  for (const [key, value] of Object.entries(source)) if (typeof value === "string") environment[key] = value
+  return environment
+}
+
+function defaultFindExecutable(name: string): string | null {
+  try {
+    return Bun.which(name)
+  } catch {
+    return null
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+export function findPowerShell(findExecutable: FindExecutable = defaultFindExecutable): string {
+  for (const name of ["pwsh.exe", "powershell.exe"]) {
+    const found = findExecutable(name)
+    if (found) return found
+  }
+  throw new Error("PowerShell was not found (tried pwsh.exe and powershell.exe)")
+}
+
+export class SessiondTerm {
+  readonly pid?: number
+  readonly stdout: ReadableStream<Uint8Array>
+  readonly exited: Promise<number>
+  readonly viewerFailed: Promise<string>
+  readonly stdin: { write(data: Uint8Array | string): boolean }
+
+  private viewer?: RuntimeViewer
+  private controller?: ReadableStreamDefaultController<Uint8Array>
+  private readonly outputQueue: Uint8Array[] = []
+  private pendingOutputBytes = 0
+  private waitingForPull = false
+  private resolveExited!: (code: number) => void
+  private resolveViewerFailed!: (reason: string) => void
+  private unsubscribeExit?: () => void
+  private unsubscribeFailure?: () => void
+  private closed = false
+
+  constructor(pid?: number, private readonly outputByteLimit = 1024 * 1024) {
+    if (!Number.isInteger(outputByteLimit) || outputByteLimit < 0) {
+      throw new RangeError("outputByteLimit must be a non-negative integer")
+    }
+    this.pid = pid
+    this.exited = new Promise(resolve => { this.resolveExited = resolve })
+    this.viewerFailed = new Promise(resolve => { this.resolveViewerFailed = resolve })
+    this.stdout = new ReadableStream<Uint8Array>({
+      start: controller => { this.controller = controller },
+      pull: controller => {
+        const data = this.outputQueue.shift()
+        if (!data) {
+          this.waitingForPull = true
+          return
+        }
+        this.pendingOutputBytes -= data.byteLength
+        controller.enqueue(data)
+      },
+      cancel: () => { this.detach(143) },
+    }, { highWaterMark: 0 })
+    this.stdin = {
+      write: data => {
+        if (this.closed || !this.viewer) return false
+        const value = typeof data === "string" ? encoder.encode(data) : data
+        try {
+          return this.viewer.write(value)
+        } catch {
+          return false
+        }
+      },
+    }
+  }
+
+  accept(data: Uint8Array): void {
+    if (this.closed) return
+    if (data.byteLength === 0) return
+    if (data.byteLength > this.outputByteLimit) {
+      this.fail(`terminal viewer output queue exceeds ${this.outputByteLimit} bytes`)
+      return
+    }
+    const snapshot = data.slice()
+    if (this.waitingForPull) {
+      this.waitingForPull = false
+      try { this.controller?.enqueue(snapshot) } catch { this.fail("terminal viewer output stream failed") }
+      return
+    }
+    if (this.pendingOutputBytes + data.byteLength > this.outputByteLimit) {
+      this.fail(`terminal viewer output queue exceeds ${this.outputByteLimit} bytes`)
+      return
+    }
+    this.outputQueue.push(snapshot)
+    this.pendingOutputBytes += data.byteLength
+  }
+
+  bind(viewer: RuntimeViewer): void {
+    if (this.closed) {
+      viewer.close()
+      return
+    }
+    this.viewer = viewer
+    if (viewer.onExit) this.unsubscribeExit = viewer.onExit(code => { this.detach(code) })
+    else void viewer.exited?.then(code => { this.detach(code) }, () => { this.fail("viewer exit subscription failed") })
+    this.unsubscribeFailure = viewer.onFailure?.(reason => { this.fail(reason) })
+  }
+
+  resize(cols: number, rows: number): boolean {
+    if (this.closed || !this.viewer) return false
+    try {
+      return this.viewer.resize(cols, rows)
+    } catch {
+      return false
+    }
+  }
+
+  kill(): void {
+    this.detach(143)
+  }
+
+  private detach(code: number): void {
+    if (this.closed) return
+    this.closed = true
+    const viewer = this.viewer
+    this.viewer = undefined
+    this.unsubscribeExit?.()
+    this.unsubscribeExit = undefined
+    this.unsubscribeFailure?.()
+    this.unsubscribeFailure = undefined
+    this.outputQueue.length = 0
+    this.pendingOutputBytes = 0
+    this.waitingForPull = false
+    try { viewer?.close() } catch {}
+    try { this.controller?.close() } catch {}
+    this.resolveExited(code)
+  }
+
+  private fail(reason: string): void {
+    if (this.closed) return
+    this.closed = true
+    const viewer = this.viewer
+    this.viewer = undefined
+    this.unsubscribeExit?.()
+    this.unsubscribeExit = undefined
+    this.unsubscribeFailure?.()
+    this.unsubscribeFailure = undefined
+    this.outputQueue.length = 0
+    this.pendingOutputBytes = 0
+    this.waitingForPull = false
+    try { viewer?.close() } catch {}
+    try { this.controller?.close() } catch {}
+    this.resolveViewerFailed(reason)
+  }
+}
+
+export async function createSessiondTerm(options: SessiondTermOptions): Promise<{
+  proc: SessiondTerm
+  targetId: string
+  created: boolean
+}> {
+  const { backend } = options
+  let targetId: string | undefined
+  let created = false
+  let proc: SessiondTerm | undefined
+
+  try {
+    if (options.kind === "agent") {
+      if (!options.agentTarget) throw new Error("agent target is required")
+      targetId = options.agentTarget
+      if (await backend.livePid(targetId) === null) throw new Error("agent target is not alive")
+    } else {
+      const group = sessiondTerminalGroup(options.sessionName)
+      const name = sessiondTerminalName(options.terminalId)
+      const resolved = await backend.resolve(group, name)
+      if (resolved && await backend.livePid(resolved) !== null) {
+        targetId = resolved
+      } else {
+        if (resolved) await backend.kill(resolved)
+        const shell = findPowerShell(options.findExecutable)
+        const environment = options.environment ? { ...options.environment } : processEnvironment()
+        const target = await backend.create({
+          group,
+          name,
+          cwd: options.workdir,
+          argv: [shell, "-NoLogo"],
+          env: environment,
+          cols: options.cols,
+          rows: options.rows,
+        })
+        targetId = target.id
+        created = true
+      }
+    }
+
+    const activeProc = new SessiondTerm(await backend.livePid(targetId) ?? undefined, options.outputByteLimit)
+    proc = activeProc
+    const viewerId = `terminal-viewer-${randomUUID().replaceAll("-", "")}`
+    const viewer = await backend.attach(targetId, viewerId, data => { activeProc.accept(data) })
+    activeProc.bind(viewer)
+    return { proc: activeProc, targetId, created }
+  } catch (error) {
+    proc?.kill()
+    if (created && targetId) {
+      try {
+        await backend.kill(targetId)
+      } catch (cleanupError) {
+        throw new Error(
+          `${errorMessage(error)}; target cleanup failed: ${errorMessage(cleanupError)}`,
+          { cause: new AggregateError([error, cleanupError]) },
+        )
+      }
+    }
+    throw error
+  }
+}

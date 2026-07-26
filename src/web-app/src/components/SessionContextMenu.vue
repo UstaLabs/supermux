@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue"
-import { Trash2, VolumeX, Volume2, Pencil, MoreVertical, CheckCircle2, RotateCcw, Play } from "lucide-vue-next"
+import { Trash2, VolumeX, Volume2, Pencil, MoreVertical, CheckCircle2, RotateCcw, Play, MessageSquarePlus } from "lucide-vue-next"
 import {
   DropdownMenuRoot,
   DropdownMenuTrigger,
@@ -26,7 +26,6 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{
-  (e: "kill"): void
   (e: "mute"): void
   (e: "rename"): void
   (e: "navigate"): void
@@ -34,6 +33,7 @@ const emit = defineEmits<{
   (e: "resume"): void
   (e: "openDraft"): void
   (e: "deleteDraft"): void
+  (e: "continue"): void
 }>()
 
 const open = ref(false)
@@ -94,7 +94,7 @@ defineExpose({ onContextMenu })
         :side="props.triggerless ? 'right' : 'bottom'"
         :align="props.triggerless ? 'start' : 'end'"
       >
-        <!-- in_progress: mute / rename / mark settled / kill -->
+        <!-- in_progress: mute / rename / settle -->
         <template v-if="props.variant === 'in_progress'">
           <DropdownMenuItem
             class="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none focus:bg-accent"
@@ -113,18 +113,17 @@ defineExpose({ onContextMenu })
           </DropdownMenuItem>
           <DropdownMenuItem
             class="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none focus:bg-accent"
+            @select="emit('continue')"
+          >
+            <MessageSquarePlus class="size-4" />
+            Continue in new conversation
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            class="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none focus:bg-accent"
             @select="emit('settle')"
           >
             <CheckCircle2 class="size-4" />
-            Mark settled
-          </DropdownMenuItem>
-          <DropdownMenuSeparator class="mx-1 my-1 h-px bg-border" />
-          <DropdownMenuItem
-            class="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm text-destructive outline-none focus:bg-destructive/10"
-            @select="emit('kill')"
-          >
-            <Trash2 class="size-4" />
-            Kill
+            Settle
           </DropdownMenuItem>
         </template>
 
@@ -162,6 +161,13 @@ defineExpose({ onContextMenu })
           >
             <RotateCcw class="size-4" />
             Set active again
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            class="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none focus:bg-accent"
+            @select="emit('continue')"
+          >
+            <MessageSquarePlus class="size-4" />
+            Continue in new conversation
           </DropdownMenuItem>
         </template>
       </DropdownMenuContent>

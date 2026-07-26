@@ -1,6 +1,25 @@
 export type JsonRpcId = number
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void }
 
+/** Format a JSON-RPC error object into a user-facing message. Prefer the
+ * server's `message`; fold in `data` when present so rate-limit / auth detail
+ * isn't discarded (supermux surfaces this via the adapter `error` event). */
+export function formatJsonRpcError(error: unknown): string {
+  const e = error as { message?: unknown; data?: unknown; code?: unknown } | null
+  if (!e || typeof e !== "object") return "jsonrpc error"
+  const msg = typeof e.message === "string" && e.message.trim()
+    ? e.message.trim()
+    : "jsonrpc error"
+  if (e.data == null || e.data === "") return msg
+  const data = typeof e.data === "string"
+    ? e.data.trim()
+    : (() => { try { return JSON.stringify(e.data) } catch { return String(e.data) } })()
+  if (!data) return msg
+  // Avoid "foo: foo" when data repeats the message.
+  if (data === msg) return msg
+  return `${msg}: ${data}`
+}
+
 /** Minimal JSON-RPC 2.0 client over a newline-delimited byte pipe. Transport-agnostic:
  * construct with a `write` callback (we do NOT append the trailing newline — the runner does)
  * and push inbound bytes via feed(). */
@@ -48,7 +67,7 @@ export class AcpClient {
       const p = this.pending.get(m.id)
       if (!p) return
       this.pending.delete(m.id)
-      if (m.error) p.reject(new Error(m.error.message ?? "jsonrpc error"))
+      if (m.error) p.reject(new Error(formatJsonRpcError(m.error)))
       else p.resolve(m.result)
       return
     }

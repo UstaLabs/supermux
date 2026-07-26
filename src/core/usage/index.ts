@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
 import { Database } from "bun:sqlite"
+import { openCodeDataDir } from "../agents/opencode/auth"
 
 // ── Types ──
 
@@ -87,7 +88,7 @@ export interface UsageResponse {
 const CLAUDE_CREDS = join(homedir(), ".claude", ".credentials.json")
 const CODEX_AUTH   = join(homedir(), ".codex", "auth.json")
 const CURSOR_DB   = join(homedir(), ".config", "Cursor", "User", "globalStorage", "state.vscdb")
-const OPENCODE_DB = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "opencode", "opencode.db")
+const OPENCODE_DB = join(openCodeDataDir({ home: homedir() }), "opencode.db")
 const GROK_AUTH   = join(homedir(), ".grok", "auth.json")
 
 // Undocumented but what `grok /usage` hits (cli-chat-proxy). Override via env for tests/mirrors.
@@ -332,7 +333,7 @@ export async function fetchCursorUsage(
 // ── opencode ──
 //
 // opencode has no usage API — it records every assistant turn's token counts and
-// cost in its own SQLite store (~/.local/share/opencode/opencode.db, the same data
+// cost in its own SQLite store (the native OpenCode data dir's opencode.db, the same data
 // `opencode stats` reads). Each message row's `data` JSON carries, for assistant
 // messages, `cost` and `tokens: { input, output, cache: { read, write } }`. We open
 // the DB read-only (WAL permits concurrent readers while opencode is running) and

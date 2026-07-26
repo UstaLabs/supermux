@@ -15,6 +15,8 @@ const props = defineProps<{
   variant: "in_progress" | "draft" | "settled"
   projectLabel?: string
   renaming?: boolean
+  /** In-group card: no floating row chrome (Android-style flush rows). */
+  flush?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -28,6 +30,7 @@ const emit = defineEmits<{
   (e: "open-draft"): void
   (e: "delete-draft"): void
   (e: "navigate"): void
+  (e: "continue"): void
 }>()
 </script>
 
@@ -45,6 +48,7 @@ const emit = defineEmits<{
     :model="props.session.model"
     :variant="props.variant"
     :project-label="props.projectLabel"
+    :flush="props.flush"
     @kill="emit('kill')"
     @mute="emit('mute')"
     @rename="(_id, newName) => emit('rename', newName)"
@@ -52,6 +56,7 @@ const emit = defineEmits<{
     @resume="emit('resume')"
     @open-draft="emit('open-draft')"
     @delete-draft="emit('delete-draft')"
+    @continue="emit('continue')"
   />
   <SessionContextMenu
     v-else
@@ -65,6 +70,7 @@ const emit = defineEmits<{
     @resume="emit('resume')"
     @open-draft="emit('open-draft')"
     @delete-draft="emit('delete-draft')"
+    @continue="emit('continue')"
   >
     <template #default="{ onContextmenu }">
       <div @contextmenu="onContextmenu">
@@ -81,6 +87,7 @@ const emit = defineEmits<{
           :variant="props.variant"
           :project-label="props.projectLabel"
           :renaming="props.renaming"
+          :flush="props.flush"
           @navigate="emit('navigate')"
           @rename="(newName) => emit('rename', newName)"
           @rename-cancel="emit('rename-cancel')"
