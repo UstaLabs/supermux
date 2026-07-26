@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue"
-import { Trash2, VolumeX, Volume2, Pencil, MoreVertical, CheckCircle2, RotateCcw, Play } from "lucide-vue-next"
+import { Trash2, VolumeX, Volume2, Pencil, MoreVertical, CheckCircle2, RotateCcw, Play, MessageSquarePlus } from "lucide-vue-next"
 import {
   DropdownMenuRoot,
   DropdownMenuTrigger,
@@ -33,6 +33,7 @@ const emit = defineEmits<{
   (e: "resume"): void
   (e: "openDraft"): void
   (e: "deleteDraft"): void
+  (e: "continue"): void
 }>()
 
 const open = ref(false)
@@ -112,6 +113,13 @@ defineExpose({ onContextMenu })
           </DropdownMenuItem>
           <DropdownMenuItem
             class="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none focus:bg-accent"
+            @select="emit('continue')"
+          >
+            <MessageSquarePlus class="size-4" />
+            Continue in new conversation
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            class="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none focus:bg-accent"
             @select="emit('settle')"
           >
             <CheckCircle2 class="size-4" />
@@ -153,6 +161,13 @@ defineExpose({ onContextMenu })
           >
             <RotateCcw class="size-4" />
             Set active again
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            class="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none focus:bg-accent"
+            @select="emit('continue')"
+          >
+            <MessageSquarePlus class="size-4" />
+            Continue in new conversation
           </DropdownMenuItem>
         </template>
       </DropdownMenuContent>
