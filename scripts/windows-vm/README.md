@@ -88,3 +88,20 @@ agent sessions.
 
 Validated 2026-07-26 on UTM Windows 11 ARM64 with Bun 1.3.14 **x64-baseline**
 under emulation (not native ARM64 Bun; that build still lacks `bun:ffi`).
+
+
+## Authenticated terminal path (device token + scratch term)
+
+`auth-smoke.ps1` (run as interactive user via `run-auth-smoke.bat` / schtasks):
+
+1. Mints a device into `devices.json` (DeviceStore sha256 scheme)
+2. Starts sessiond with Bun **x64-baseline** (`run-sessiond.cmd`) — required on WoA
+3. Starts staged `supermux-broker.exe` with agent CLI stubs on PATH
+4. Seeds a session row into `db.sqlite3` (avoids agent-spawn wait for shim registration)
+5. Opens `/ws/term` with `Authorization: Bearer` and session **UUID**
+
+**Proven on guest (2026-07-26):** boot, device mint, session seed, WebSocket **open**.
+**Still open:** terminal I/O markers through the broker WS (SessionStore ConPTY
+works when exercised directly; broker-mediated stream needs further diagnosis).
+Compiled `mux-sessiond.exe` (non-baseline Bun embed) is unreliable under Windows-on-ARM —
+use baseline Bun for sessiond on ARM guests.
