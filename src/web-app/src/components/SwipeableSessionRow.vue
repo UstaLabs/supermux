@@ -2,7 +2,7 @@
 import { ref, watch, inject, type Ref } from "vue"
 import { useRouter } from "vue-router"
 import { computed } from "vue"
-import { Trash2, VolumeX, Volume2, Pencil, RotateCcw, CheckCircle2 } from "lucide-vue-next"
+import { Trash2, VolumeX, Volume2, Pencil, RotateCcw, CheckCircle2, MessageSquarePlus } from "lucide-vue-next"
 import { useSwipeReveal } from "@/composables/useSwipeReveal"
 import SessionRow from "./SessionRow.vue"
 
@@ -33,6 +33,7 @@ const emit = defineEmits<{
   (e: "resume", id: string): void
   (e: "openDraft", id: string): void
   (e: "deleteDraft", id: string): void
+  (e: "continue", id: string): void
 }>()
 
 // Drafts have no process, so mute/settle don't apply; settled rows only resume.
@@ -50,7 +51,7 @@ const sectionReordering = inject<Ref<boolean>>("sectionReordering", ref(false))
 const sectionShouldSuppressClick = inject<() => boolean>("sectionShouldSuppressClick", () => false)
 
 const { state, close } = useSwipeReveal(containerRef, {
-  leftWidth: 140,
+  leftWidth: 210, // mute + rename + continue (in_progress); unused width ok for draft/settled
   rightWidth: 80,
   // When the parent section is reordering, freeze swipe at idle.
   paused: sectionReordering,
@@ -90,6 +91,11 @@ function handleOpenDraft() {
 function handleMute() {
   close()
   emit("mute", props.id)
+}
+
+function handleContinue() {
+  close()
+  emit("continue", props.id)
 }
 
 function handleStartRename() {
@@ -156,6 +162,14 @@ function handleNavigate() {
       >
         <Pencil class="size-5" />
         <span class="text-[10px] font-medium">Rename</span>
+      </button>
+      <button
+        v-if="props.variant === 'in_progress' || props.variant === 'settled'"
+        class="w-[70px] flex flex-col items-center justify-center gap-1 border-r border-border bg-[color-mix(in_oklab,var(--primary)_16%,var(--cmux-session-list))] text-foreground active:bg-[color-mix(in_oklab,var(--primary)_24%,var(--cmux-session-list))]"
+        @click="handleContinue"
+      >
+        <MessageSquarePlus class="size-5" />
+        <span class="text-[10px] font-medium">Continue</span>
       </button>
     </div>
 

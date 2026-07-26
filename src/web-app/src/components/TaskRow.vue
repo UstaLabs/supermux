@@ -30,6 +30,7 @@ const emit = defineEmits<{
   (e: "open-draft"): void
   (e: "delete-draft"): void
   (e: "navigate"): void
+  (e: "continue"): void
 }>()
 </script>
 
@@ -55,6 +56,7 @@ const emit = defineEmits<{
     @resume="emit('resume')"
     @open-draft="emit('open-draft')"
     @delete-draft="emit('delete-draft')"
+    @continue="emit('continue')"
   />
   <SessionContextMenu
     v-else
@@ -68,6 +70,7 @@ const emit = defineEmits<{
     @resume="emit('resume')"
     @open-draft="emit('open-draft')"
     @delete-draft="emit('delete-draft')"
+    @continue="emit('continue')"
   >
     <template #default="{ onContextmenu }">
       <div @contextmenu="onContextmenu">

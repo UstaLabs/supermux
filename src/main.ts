@@ -1318,6 +1318,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         reasoningLevel: args.reasoningLevel,
         worktree: args.worktree,
         baseBranch: args.baseBranch,
+        inheritFromSessionId: args.inheritFrom,
       })
       const entry = registry.get(r.session_id)
       await refreshTelegramMenu()
@@ -1347,11 +1348,13 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       }
       return {
         id: entry?.id ?? r.session_id,
-        name: r.name,
+        name: entry?.name ?? r.name,
         workdir: entry?.workdir ?? args.workdir,
         agent: entry?.agent ?? "claude",
         model: entry?.model,
         reasoningLevel: entry ? sessionEffort(entry) : undefined,
+        repo_root: entry?.repo_root || undefined,
+        session_branch: entry?.session_branch || undefined,
       }
     },
     createDraft: async (args) => {
@@ -2675,9 +2678,26 @@ async function deliverUserMessage(sessionId: string, text: string): Promise<{ ok
   return { ok: true }
 }
 
-async function spawnSession(args: { workdir: string; requestedName?: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string; internal?: boolean; rpcMcpConfig?: string }) {
+async function spawnSession(args: {
+  workdir: string
+  requestedName?: string
+  agent?: AgentKind
+  model?: string
+  reasoningLevel?: string
+  worktree?: boolean
+  baseBranch?: string
+  /** When set (e.g. "continue in new conversation"), reuse that session's display-name base and worktree metadata instead of deriving a name from the workdir basename (often a uuid under ~/.mux/worktrees). */
+  inheritFromSessionId?: string
+  internal?: boolean
+  rpcMcpConfig?: string
+}) {
   const agent = args.agent ?? AgentKind.Claude
+  const inheritSrc = args.inheritFromSessionId
+    ? registry.sessions.getById(args.inheritFromSessionId)
+    : undefined
   const workdir = normalizeExistingWorkdir(args.workdir)
+  // Prefer an explicit name, then the inherited session's name, then (for new worktrees) the project basename.
+  const requestedName = args.requestedName?.trim() || inheritSrc?.name || undefined
   // Worktree-by-default: when the path is a single git repo and worktree isn't
   // explicitly disabled, spawn the agent in an isolated external worktree.
   let effectiveWorkdir = workdir
@@ -2689,7 +2709,7 @@ async function spawnSession(args: { workdir: string; requestedName?: string; age
         wt = await createWorktree({
           repoRoot: info.repoRoot,
           baseBranch: args.baseBranch || info.currentBranch || "HEAD",
-          sessionName: args.requestedName || deriveName(workdir),
+          sessionName: requestedName || deriveName(workdir),
         })
         effectiveWorkdir = wt.worktreeDir
       } catch (err) {
@@ -2755,7 +2775,7 @@ async function spawnSession(args: { workdir: string; requestedName?: string; age
     },
     // Worktree-backed: derive the session name from the ORIGINAL repo, not the
     // worktree dir (whose basename is a uuid) — otherwise the session is named after the uuid.
-    { workdir: effectiveWorkdir, requestedName: args.requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig },
+    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig },
   )
   // Claude registers async via the shim — record the internal intent so
   // onRegister can stamp the row. Non-claude agents are already registered
@@ -2796,6 +2816,24 @@ async function spawnSession(args: { workdir: string; requestedName?: string; age
     registry.sessions.setWorktree(r.session_id, {
       repo_root: wt.repoRoot, base_branch: wt.baseBranch, session_branch: wt.sessionBranch,
     })
+  } else if (registry.get(r.session_id)) {
+    // Same-workdir continue (worktree: false): copy project/worktree metadata so
+    // the new session groups under the real project and Finish stays available.
+    // Prefer explicit inheritFrom, else any peer already bound to this workdir.
+    const peer =
+      (inheritSrc?.repo_root && inheritSrc.session_branch
+        ? inheritSrc
+        : undefined)
+      ?? [...registry.list(), ...registry.listArchived()].find(
+        (s) => s.id !== r.session_id && s.workdir === effectiveWorkdir && !!s.repo_root && !!s.session_branch,
+      )
+    if (peer?.repo_root && peer.session_branch) {
+      registry.sessions.setWorktree(r.session_id, {
+        repo_root: peer.repo_root,
+        base_branch: peer.base_branch || "HEAD",
+        session_branch: peer.session_branch,
+      })
+    }
   }
   gitStatusService.sync(gitServiceSessions())
   return r

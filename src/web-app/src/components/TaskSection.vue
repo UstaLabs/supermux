@@ -47,6 +47,7 @@ const emit = defineEmits<{
   (e: "resume", id: string): void
   (e: "open-draft", id: string): void
   (e: "delete-draft", id: string): void
+  (e: "continue", id: string): void
   (e: "toggle-expanded"): void
   (e: "reorder", orderedIds: string[]): void
 }>()
@@ -135,6 +136,7 @@ function rowClass(sId: string) {
         @resume="emit('resume', s.id)"
         @open-draft="emit('open-draft', s.id)"
         @delete-draft="emit('delete-draft', s.id)"
+          @continue="emit('continue', s.id)"
       />
     </div>
     <Teleport to="body">
@@ -200,6 +202,7 @@ function rowClass(sId: string) {
           @resume="emit('resume', s.id)"
           @open-draft="emit('open-draft', s.id)"
           @delete-draft="emit('delete-draft', s.id)"
+          @continue="emit('continue', s.id)"
         />
       </div>
     </div>
@@ -265,6 +268,7 @@ function rowClass(sId: string) {
           @resume="emit('resume', s.id)"
           @open-draft="emit('open-draft', s.id)"
           @delete-draft="emit('delete-draft', s.id)"
+          @continue="emit('continue', s.id)"
         />
       </div>
     </template>

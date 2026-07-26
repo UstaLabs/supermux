@@ -11,11 +11,12 @@ import type { PathGroup } from "@/composables/usePathGroups"
 import { usePathGroups } from "@/composables/usePathGroups"
 import { useSortedSessions } from "@/composables/useSortedSessions"
 import { useRenameRequest } from "@/composables/useRenameRequest"
-import { useSessions } from "@/stores/sessions"
+import { useSessions, type Session } from "@/stores/sessions"
 import { useLayout } from "@/stores/layout"
 import { api } from "@/api/client"
 import { toast } from "vue-sonner"
 import TaskSection from "./TaskSection.vue"
+import ContinueConversationDialog from "./ContinueConversationDialog.vue"
 
 defineProps<{ mobile: boolean }>()
 
@@ -37,6 +38,31 @@ const groupByProject = computed(() => layout.state.groupByProject)
 const homeDir = computed(() => sessions.homeDir)
 
 const renamingRow = ref<string | null>(null)
+const continueOpen = ref(false)
+const continueSession = ref<Session | null>(null)
+
+function handleContinue(id: string) {
+  // Settled rows may only live in the archived list (mapped as userStatus settled).
+  const s =
+    sessions.list.find((x) => x.id === id) ??
+    sessions.archivedSessions.find((x) => x.id === id)
+  if (!s) {
+    toast.error("Session not found")
+    return
+  }
+  continueSession.value = {
+    id: s.id,
+    name: s.name,
+    workdir: s.workdir,
+    mute: "mute" in s ? !!s.mute : false,
+    connected: "connected" in s ? !!s.connected : false,
+    agent: s.agent,
+    model: s.model,
+    repo_root: s.repo_root,
+    session_branch: "session_branch" in s ? s.session_branch : undefined,
+  }
+  continueOpen.value = true
+}
 
 onMounted(() => {
   const name = consumeRenameRequest()
@@ -184,6 +210,7 @@ async function handleReorder(ids: string[]) {
     @resume="handleResume"
     @open-draft="handleOpenDraft"
     @delete-draft="handleDeleteDraft"
+    @continue="handleContinue"
   />
 
   <!-- FLAT: three task sections across every project -->
@@ -209,6 +236,7 @@ async function handleReorder(ids: string[]) {
       @resume="handleResume"
       @open-draft="handleOpenDraft"
       @delete-draft="handleDeleteDraft"
+      @continue="handleContinue"
       @toggle-expanded="flatSettledExpanded = !flatSettledExpanded"
     />
   </template>
@@ -262,11 +290,19 @@ async function handleReorder(ids: string[]) {
           @resume="handleResume"
           @open-draft="handleOpenDraft"
           @delete-draft="handleDeleteDraft"
+          @continue="handleContinue"
           @toggle-expanded="toggleSettled(group.workdir)"
           @reorder="handleReorder"
         />
       </div>
     </div>
   </template>
+
+
+  <ContinueConversationDialog
+    :open="continueOpen"
+    :session="continueSession"
+    @update:open="(v) => { continueOpen = v; if (!v) continueSession = null }"
+  />
 
 </template>
