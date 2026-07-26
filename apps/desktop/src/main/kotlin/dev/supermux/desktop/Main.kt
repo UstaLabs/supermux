@@ -304,12 +304,10 @@ fun main() {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 if (!paired) {
                     val scope = rememberCoroutineScope()
-                    // First-run choice (spec §6 / D6 choice A): on a native-host platform (macOS/Linux)
+                    // First-run choice (spec §6 / D6 choice A): on every native-host desktop platform
                     // the default first run is the desktop-as-host wizard — this computer becomes a host,
                     // shows a pairing QR for the phone, and auto-pairs "This computer" into the fleet. A
                     // "Connect to a different broker instead" escape hatch drops to the classic onboarding.
-                    // Windows (client-only) skips straight to onboarding; its "Host from this PC" preview
-                    // card lives in the fleet list (Task 6).
                     var connectInstead by remember { mutableStateOf(false) }
                     val showHostWizard = DesktopHostBootstrap.isNativeHostPlatform() && !connectInstead
 

@@ -44,7 +44,7 @@ export type GrokAuthResult = {
  * NOT fail-closed: a session with no credential still spawns; grok reports the auth
  * error on the first turn, which is the right place to surface it.
  */
-export function resolveGrokAuth(opts: { userGrokDir: string; sessionHome: string }): GrokAuthResult {
+export function resolveGrokAuth(opts: { userGrokDir: string; sessionHome: string; platform?: NodeJS.Platform }): GrokAuthResult {
   const sessionGrokDir = join(opts.sessionHome, ".grok")
   mkdirSync(sessionGrokDir, { recursive: true, mode: 0o700 })
 
@@ -58,18 +58,18 @@ export function resolveGrokAuth(opts: { userGrokDir: string; sessionHome: string
       } catch {
         // Keep the usable private credential if promotion fails. A later resume
         // can retry without losing the only refreshed token.
-        return { mode: "cached_token", env: { HOME: opts.sessionHome } }
+        return sessionEnv(opts.sessionHome, "cached_token", opts.platform)
       }
     }
 
     if (!existsSync(src)) {
-      return { mode: "none", env: { HOME: opts.sessionHome } }
+      return sessionEnv(opts.sessionHome, "none", opts.platform)
     }
 
     if (current?.isSymbolicLink()) {
       try {
         if (readlinkSync(dest) === src) {
-          return { mode: "cached_token", env: { HOME: opts.sessionHome } }
+          return sessionEnv(opts.sessionHome, "cached_token", opts.platform)
         }
       } catch {
         // Replace a broken link below.
@@ -78,7 +78,7 @@ export function resolveGrokAuth(opts: { userGrokDir: string; sessionHome: string
 
     if (current) rmSync(dest, { force: true })
     symlinkSync(src, dest, "file")
-    return { mode: "cached_token", env: { HOME: opts.sessionHome } }
+    return sessionEnv(opts.sessionHome, "cached_token", opts.platform)
   } catch {
     // Some Windows hosts disallow file symlinks. Retain the old copy behavior as
     // a fail-open fallback there; Grok will still surface an auth error normally.
@@ -86,13 +86,24 @@ export function resolveGrokAuth(opts: { userGrokDir: string; sessionHome: string
       if (existsSync(src)) {
         rmSync(dest, { force: true })
         copyFileSync(src, dest)
-        return { mode: "cached_token", env: { HOME: opts.sessionHome } }
+        return sessionEnv(opts.sessionHome, "cached_token", opts.platform)
       }
     } catch {
       // fall through as unauthenticated
     }
   }
-  return { mode: "none", env: { HOME: opts.sessionHome } }
+  return sessionEnv(opts.sessionHome, "none", opts.platform)
+}
+
+function sessionEnv(sessionHome: string, mode: GrokAuthResult["mode"], platform?: NodeJS.Platform): GrokAuthResult {
+  const plat = platform ?? process.platform
+  return {
+    mode,
+    env: {
+      HOME: sessionHome,
+      ...(plat === "win32" ? { USERPROFILE: sessionHome } : {}),
+    },
+  }
 }
 
 function lstatSafe(path: string): Stats | undefined {

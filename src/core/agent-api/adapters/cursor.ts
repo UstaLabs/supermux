@@ -1,6 +1,6 @@
 // Cursor adapter — direct one-shot text completion against Cursor's backend
 // (api2.cursor.sh), reusing the logged-in subscription token from
-// ~/.config/cursor/auth.json (`accessToken`).
+// cursor's native config-dir auth.json (`accessToken`).
 //
 // Cursor speaks Connect-RPC (the buf Connect protocol) with PROTOBUF payloads
 // over HTTPS — there is no JSON/OpenAI shape here. We talk to
@@ -43,6 +43,7 @@ import { homedir } from "os"
 import { join } from "path"
 import { makeLogger } from "../../../shared/log"
 import { defaultRead, readJson } from "../auth"
+import { authCredPath } from "../../agents/detect"
 import { DEFAULT_TIMEOUT_MS, type AgentApi, type CompleteOpts, type FetchFn, type ReadFileFn } from "../types"
 
 const log = makeLogger("agent-api:cursor")
@@ -223,7 +224,10 @@ export interface CursorAdapterOpts {
 export function cursorAdapter(opts: CursorAdapterOpts = {}): AgentApi {
   const fetchFn = opts.fetchFn ?? fetch
   const read = opts.readFileFn ?? defaultRead
-  const authPath = opts.authPath ?? join(homedir(), ".config", "cursor", "auth.json")
+  const authPath = opts.authPath ?? authCredPath("cursor", {
+    home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME,
+    appData: process.env.APPDATA, platform: process.platform,
+  })
 
   const loadToken = (): string | undefined => {
     const tok = readJson(read, authPath)?.accessToken

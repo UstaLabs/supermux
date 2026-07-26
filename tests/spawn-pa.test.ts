@@ -5,6 +5,7 @@ import { join } from "path"
 import { openDb, runMigrations } from "../src/core/storage/db"
 import { Registry } from "../src/core/session-manager/registry"
 import { spawnPA } from "../src/core/session-manager/spawn-helper"
+import type { SessionBackend } from "../src/core/runtime/session-backend"
 
 let tmpDir: string
 
@@ -17,6 +18,13 @@ function makeRegistry(): Registry {
 beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), "spawn-pa-")) })
 afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }) })
 
+function claudeBackend(id: string): SessionBackend {
+  return {
+    create: async (opts: Parameters<SessionBackend["create"]>[0]) => ({ id, name: opts.name, pid: 123, alive: true }),
+    capture: async () => "Listening for channel messages",
+  } as unknown as SessionBackend
+}
+
 test("spawns a Claude PA and registers it as personal_assistant", async () => {
   const registry = makeRegistry()
   const result = await spawnPA({
@@ -25,7 +33,7 @@ test("spawns a Claude PA and registers it as personal_assistant", async () => {
     agent: "claude" as const,
     workdir: join(tmpDir, "pa-workdir"),
     bind: async () => {},
-    spawnTmux: async () => ({ windowId: "w1" }),
+    sessionBackend: claudeBackend("w1"),
     tmuxSession: "mux",
   })
 
@@ -47,7 +55,7 @@ test("second PA gets is_default false", async () => {
     agent: "claude" as const,
     workdir: join(tmpDir, "pa-1"),
     bind: async () => {},
-    spawnTmux: async () => ({ windowId: "w1" }),
+    sessionBackend: claudeBackend("w1"),
     tmuxSession: "mux",
   })
 
@@ -57,7 +65,7 @@ test("second PA gets is_default false", async () => {
     agent: "claude" as const,
     workdir: join(tmpDir, "pa-2"),
     bind: async () => {},
-    spawnTmux: async () => ({ windowId: "w2" }),
+    sessionBackend: claudeBackend("w2"),
     tmuxSession: "mux",
   })
 

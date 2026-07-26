@@ -5,13 +5,15 @@ import { join } from "path"
 import { mkdirSync, existsSync, readFileSync } from "fs"
 import { STATE_DIR } from "../../../shared/paths"
 import { home } from "../../../shared/home"
+import { openCodeDataDir } from "./auth"
 
 const log = makeLogger("agents/opencode/auth-ops")
 
 type RealClient = ReturnType<typeof createOpencodeClient>
 
-// opencode auth is GLOBAL (one ~/.local/share/opencode/auth.json shared by every
-// session). So auth management runs against a single lazily-started "control"
+// opencode auth is GLOBAL (one native data-dir auth.json shared by every
+// session: XDG data on POSIX, LOCALAPPDATA on Windows). So auth management runs
+// against a single lazily-started "control"
 // server rather than any per-session server. First boot is ~20s; it's cached
 // after that and torn down implicitly if the process exits.
 let serverHandle: OpenCodeSpawnHandle | null = null
@@ -44,7 +46,7 @@ export type OpenCodeProviderInfo = { id: string; configured: boolean; methods: O
 /** The user's real auth.json (provider-id → credential), used to mark which
  * providers are already connected. Read directly (cheap, no server needed). */
 function readAuthJson(): Record<string, unknown> {
-  const p = join(home(), ".local", "share", "opencode", "auth.json")
+  const p = join(openCodeDataDir({ home: home() }), "auth.json")
   try {
     return existsSync(p) ? (JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>) : {}
   } catch {

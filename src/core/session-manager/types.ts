@@ -34,6 +34,7 @@ export type SessionRecord = {
   is_default: boolean
   internal: boolean
   tmux_target: string
+  /** Legacy storage name: contains an opaque persistent runtime target ID, not necessarily tmux. */
   tmux_window_id?: string
   agent_session_id?: string
   agent_home?: string
@@ -131,6 +132,6 @@ export function rowToRecord(row: SessionRow): SessionRecord {
   }
 }
 
-export function isTmuxBackedSession(session: Pick<SessionRecord, "agent">): boolean {
+export function isPersistentRuntimeSession(session: Pick<SessionRecord, "agent">): boolean {
   return session.agent === AgentKind.Claude
 }

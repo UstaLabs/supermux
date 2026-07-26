@@ -2,7 +2,8 @@ import { test, expect } from "bun:test"
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { CodexPluginAdapter, buildCodexMarketplace, marketplaceRootFor, codexPluginId, CODEX_MARKETPLACE_NAME } from "./codex"
+import { EventEmitter } from "events"
+import { CodexPluginAdapter, buildCodexMarketplace, marketplaceRootFor, codexPluginId, CODEX_MARKETPLACE_NAME, runCodexPluginCommand, runCodexPluginCommandSync } from "./codex"
 import type { Plugin } from "../types"
 
 function tmpRoot(): string {
@@ -155,4 +156,37 @@ test("prepareGlobal is resilient: an installer that throws does not abort the re
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test("default Codex plugin commands resolve Windows shims and preserve POSIX argv", async () => {
+  const syncCalls: any[] = []
+  runCodexPluginCommandSync(["plugin", "add", "mux@mux"], {
+    platform: "win32", env: { Path: "C:\\Tools", ComSpec: "C:\\Windows\\cmd.exe" },
+    fileExists: (p) => p.toLowerCase() === "c:\\tools\\codex.cmd",
+    spawnSync: ((command: string, args: string[], options: any) => { syncCalls.push({ command, args, options }); return { status: 0 } }) as any,
+  })
+  expect(syncCalls[0].command).toBe("C:\\Windows\\cmd.exe")
+  expect(syncCalls[0].options.windowsVerbatimArguments).toBe(true)
+
+  const asyncCalls: any[] = []
+  await runCodexPluginCommand(["plugin", "add", "mux@mux"], { CODEX_HOME: "C:\\State" }, {
+    platform: "win32", env: { Path: "C:\\PS" },
+    fileExists: (p) => ["c:\\ps\\codex.ps1", "c:\\ps\\pwsh.exe"].includes(p.toLowerCase()),
+    spawn: ((command: string, args: string[], options: any) => {
+      asyncCalls.push({ command, args, options })
+      const child = new EventEmitter() as any
+      queueMicrotask(() => child.emit("exit", 0, null))
+      return child
+    }) as any,
+  })
+  expect(asyncCalls[0].command).toBe("C:\\PS\\pwsh.exe")
+  expect(asyncCalls[0].args).toContain("-File")
+  expect(asyncCalls[0].options.env.CODEX_HOME).toBe("C:\\State")
+})
+
+test("synchronous Codex plugin commands report signal termination clearly", () => {
+  expect(() => runCodexPluginCommandSync(["plugin", "add", "mux@mux"], {
+    platform: "linux", env: { PATH: "/bin" }, fileExists: () => true,
+    spawnSync: (() => ({ status: null, signal: "SIGTERM", error: undefined })) as any,
+  })).toThrow(/signal=SIGTERM/)
 })

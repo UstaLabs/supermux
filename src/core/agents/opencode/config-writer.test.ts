@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { writeOpenCodeConfig, readGlobalProviderConfig } from "./config-writer"
+import { resolveOpenCodeAuth } from "./auth"
 
 const dirs: string[] = []
 afterEach(() => {
@@ -110,4 +111,13 @@ test("omits instructions when no preamble path is given", () => {
   })
   const cfg = JSON.parse(readFileSync(path, "utf8"))
   expect(cfg.instructions).toBeUndefined()
+})
+
+test("uses LOCALAPPDATA for native Windows opencode auth without changing POSIX XDG", () => {
+  expect(resolveOpenCodeAuth({
+    home: "C:\\Users\\u", platform: "win32", localAppData: "D:\\Data", fileExists: () => false,
+  }).authPath).toBe("D:\\Data\\opencode\\auth.json")
+  expect(resolveOpenCodeAuth({
+    home: "/home/u", platform: "linux", xdgDataHome: "/xdg", fileExists: () => false,
+  }).authPath).toBe("/xdg/opencode/auth.json")
 })

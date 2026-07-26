@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test"
 import { applyClaudeLiveSwitch } from "./live-switch"
+import type { SessionBackend } from "../../runtime/session-backend"
 
 const WID = "@42"
 const ESC = "\x1b"
@@ -47,6 +48,8 @@ const PERMISSION_DIALOG = [
  * order — plain text is valid raw output with zero escapes. */
 function seams(captures: (string | null)[], opts?: { safetyWaitMs?: number; confirmTimeoutMs?: number }) {
   const sent: string[][] = []
+  const written: string[] = []
+  const events: Array<{ op: "keys"; keys: string[] } | { op: "write"; bytes: number[] }> = []
   let i = 0
   const capture = async () => {
     const r = captures[i]
@@ -60,10 +63,16 @@ function seams(captures: (string | null)[], opts?: { safetyWaitMs?: number; conf
       menuRetryMs: 0,
       safetyWaitMs: opts?.safetyWaitMs ?? 5_000,
       confirmTimeoutMs: opts?.confirmTimeoutMs ?? 5_000,
-      sendKeysFn: async (_wid: string, keys: string[]) => { sent.push(keys) },
+      sendKeysFn: async (_wid: string, keys: string[]) => { sent.push(keys); events.push({ op: "keys", keys }) },
+      writeFn: async (_wid: string, data: Uint8Array) => {
+        written.push(new TextDecoder().decode(data))
+        events.push({ op: "write", bytes: [...data] })
+      },
       capturePane: capture,
     },
     sent,
+    written,
+    events,
   }
 }
 
@@ -75,7 +84,7 @@ test("no-op target: ok, nothing sent or captured", async () => {
 })
 
 test("model switch happy path: C-u, type, verify composer, Enter, success on marker", async () => {
-  const { seams: s, sent } = seams([
+  const { seams: s, sent, written } = seams([
     IDLE_PANE,                        // safety check (plain)
     IDLE_PANE,                        // post C-u empty-composer check (raw)
     typed("/model claude-opus-4-8"),  // post-type composer verification (raw)
@@ -83,11 +92,43 @@ test("model switch happy path: C-u, type, verify composer, Enter, success on mar
   ])
   const r = await applyClaudeLiveSwitch(WID, { model: "claude-opus-4-8" }, s)
   expect(r).toEqual({ ok: true })
-  expect(sent).toEqual([["C-u"], ["-l", "/model claude-opus-4-8"], ["Enter"]])
+  expect(sent).toEqual([["C-u"], ["Enter"]])
+  expect(written).toEqual(["/model claude-opus-4-8"])
+})
+
+test("uses an injected session backend for semantic keys and raw/plain capture", async () => {
+  const captures = [IDLE_PANE, IDLE_PANE, typed("/model claude-opus-4-8"), MODEL_OK]
+  const rawFlags: boolean[] = []
+  const sent: string[][] = []
+  const events: Array<{ op: "keys"; keys: string[] } | { op: "write"; bytes: number[] }> = []
+  const backend = {
+    capture: async (_targetId: string, raw = false) => {
+      rawFlags.push(raw)
+      return captures.shift() ?? null
+    },
+    sendKeys: async (_targetId: string, keys: string[]) => { sent.push(keys); events.push({ op: "keys", keys }) },
+    write: async (_targetId: string, data: Uint8Array) => { events.push({ op: "write", bytes: [...data] }) },
+  } as SessionBackend
+
+  const result = await applyClaudeLiveSwitch(WID, { model: "claude-opus-4-8" }, {
+    backend,
+    pollIntervalMs: 0,
+    typeDelayMs: 0,
+  })
+
+  expect(result).toEqual({ ok: true })
+  expect(rawFlags).toEqual([false, true, true, false])
+  expect(sent).toEqual([["C-u"], ["Enter"]])
+  expect(events).toEqual([
+    { op: "keys", keys: ["C-u"] },
+    { op: "write", bytes: [...new TextEncoder().encode("/model claude-opus-4-8")] },
+    { op: "keys", keys: ["Enter"] },
+  ])
+  expect(sent.flat()).not.toContain("-l")
 })
 
 test("ghost autosuggestion counts as empty: switch proceeds and succeeds", async () => {
-  const { seams: s, sent } = seams([
+  const { seams: s, sent, written } = seams([
     IDLE_WITH_GHOST_PLAIN,            // safety (plain: ghost looks like a draft — must not block)
     IDLE_WITH_GHOST_RAW,              // post C-u (raw: dim ghost → stripped → empty)
     typed("/effort max"),             // post-type verify (typing dismissed the ghost)
@@ -95,17 +136,19 @@ test("ghost autosuggestion counts as empty: switch proceeds and succeeds", async
   ])
   const r = await applyClaudeLiveSwitch(WID, { effort: "max" }, s)
   expect(r).toEqual({ ok: true })
-  expect(sent).toEqual([["C-u"], ["-l", "/effort max"], ["Enter"]])
+  expect(sent).toEqual([["C-u"], ["Enter"]])
+  expect(written).toEqual(["/effort max"])
 })
 
 test("post-type composer mismatch aborts BEFORE Enter", async () => {
-  const { seams: s, sent } = seams([
+  const { seams: s, sent, written } = seams([
     IDLE_PANE,                              // safety
     IDLE_PANE,                              // post C-u: empty
     typed("leftover junk /model claude-opus-4-8"), // post-type: composer does NOT show exactly the command (held)
   ])
   const r = await applyClaudeLiveSwitch(WID, { model: "claude-opus-4-8" }, s)
   expect(r.ok).toBe(false)
+  expect(written).toEqual(["/model claude-opus-4-8"])
   expect(sent.some((k) => k[0] === "Enter")).toBe(false) // never submitted
   expect(sent[sent.length - 1]).toEqual(["C-u"])         // cleaned up the typed text
 })
@@ -144,7 +187,7 @@ test("stale confirmation in scrollback does NOT count (baseline delta)", async (
 })
 
 test("effort switch with confirm menu: Enter confirms, then success", async () => {
-  const { seams: s, sent } = seams([
+  const { seams: s, sent, written, events } = seams([
     IDLE_PANE,             // safety
     IDLE_PANE,             // post C-u
     typed("/effort low"),  // post-type verify
@@ -153,12 +196,19 @@ test("effort switch with confirm menu: Enter confirms, then success", async () =
   ])
   const r = await applyClaudeLiveSwitch(WID, { effort: "low" }, s)
   expect(r).toEqual({ ok: true })
-  expect(sent).toEqual([["C-u"], ["-l", "/effort low"], ["Enter"], ["Enter"]])
+  expect(sent).toEqual([["C-u"], ["Enter"], ["Enter"]])
+  expect(written).toEqual(["/effort low"])
+  expect(events).toEqual([
+    { op: "keys", keys: ["C-u"] },
+    { op: "write", bytes: [...new TextEncoder().encode("/effort low")] },
+    { op: "keys", keys: ["Enter"] },
+    { op: "keys", keys: ["Enter"] },
+  ])
 })
 
 test("model then effort sequentially, each verified", async () => {
   const BOTH_OK = MODEL_OK + "\n  ⎿  Set effort level to max (saved as your default for new sessions)"
-  const { seams: s, sent } = seams([
+  const { seams: s, sent, written } = seams([
     IDLE_PANE,                                      // model: safety
     IDLE_PANE,                                      // model: post C-u
     typed("/model claude-opus-4-8"),                // model: post-type verify
@@ -171,9 +221,10 @@ test("model then effort sequentially, each verified", async () => {
   const r = await applyClaudeLiveSwitch(WID, { model: "claude-opus-4-8", effort: "max" }, s)
   expect(r).toEqual({ ok: true })
   expect(sent).toEqual([
-    ["C-u"], ["-l", "/model claude-opus-4-8"], ["Enter"],
-    ["C-u"], ["-l", "/effort max"], ["Enter"],
+    ["C-u"], ["Enter"],
+    ["C-u"], ["Enter"],
   ])
+  expect(written).toEqual(["/model claude-opus-4-8", "/effort max"])
 })
 
 test("unsafe pane (permission dialog) fails without typing", async () => {
@@ -238,7 +289,7 @@ test("null capture fails with window-gone error", async () => {
 })
 
 test("first part failing aborts the second (no effort typing after model failure)", async () => {
-  const { seams: s, sent } = seams([
+  const { seams: s, written } = seams([
     IDLE_PANE,                        // model: safety
     IDLE_PANE,                        // model: post C-u
     typed("/model claude-opus-4-8"),  // model: post-type verify
@@ -246,5 +297,5 @@ test("first part failing aborts the second (no effort typing after model failure
   ], { confirmTimeoutMs: 0 })
   const r = await applyClaudeLiveSwitch(WID, { model: "claude-opus-4-8", effort: "low" }, s)
   expect(r.ok).toBe(false)
-  expect(sent.some((k) => k[1] === "/effort low")).toBe(false)
+  expect(written).not.toContain("/effort low")
 })

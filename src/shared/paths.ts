@@ -1,4 +1,5 @@
 import { join } from "path"
+import { localEndpoint } from "../core/local-endpoint"
 import { home } from "./home"
 
 export const MUX_HOME = process.env.MUX_HOME ?? join(home(), ".mux")
@@ -23,5 +24,5 @@ export const PLUGINS_DIR = join(MUX_HOME, "plugins")
 export const PLUGINS_FILE = join(MUX_HOME, "plugins.json")
 
 export function socketPathForSession(sessionId: string): string {
-  return join(SOCKETS_DIR, `${sessionId}.sock`)
+  return localEndpoint(sessionId, { socketsDir: SOCKETS_DIR })
 }

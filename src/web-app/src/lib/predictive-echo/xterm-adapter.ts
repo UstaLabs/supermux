@@ -67,6 +67,10 @@ export class XtermPredictionAdapter {
     }
   }
 
+  reset(): void {
+    this.snapshots.clear()
+  }
+
   /** Read the character currently in a (viewport-relative) cell. getLine() takes an
    *  ABSOLUTE buffer index, so we add baseY to the viewport-relative row. */
   private readCell(row: number, col: number): string {

@@ -1,5 +1,6 @@
 import { spawn as defaultSpawn, ChildProcess } from "child_process"
 import { JsonRpcClient } from "./jsonrpc"
+import { resolveCommand, spawnCommand, type FileExists } from "../../process/launcher"
 
 export type CodexSpawnHandle = {
   pid: number
@@ -27,6 +28,8 @@ export function spawnCodexAppServer(opts: {
   reasoningLevel?: string
   /** supermux plugin-host flags (`-c plugins."<name>@mux".enabled=true` pairs). */
   pluginConfigArgs?: string[]
+  platform?: NodeJS.Platform
+  fileExists?: FileExists
 }): CodexSpawnHandle {
   const spawnFn: SpawnFn = opts.spawn ?? (defaultSpawn as unknown as SpawnFn)
   const env: Record<string, string> = {
@@ -47,7 +50,12 @@ export function spawnCodexAppServer(opts: {
     ...(opts.reasoningLevel ? ["-c", `model_reasoning_effort="${opts.reasoningLevel}"`] : []),
     ...(opts.pluginConfigArgs ?? []),
   ]
-  const child = spawnFn("codex", args, { env, stdio: ["pipe", "pipe", "pipe"] })
+  const platform = opts.platform ?? process.platform
+  const shouldResolve = !opts.spawn || opts.platform !== undefined || opts.fileExists !== undefined
+  const command = shouldResolve ? (resolveCommand(["codex"], env, platform, { fileExists: opts.fileExists }) ?? "codex") : "codex"
+  const child = spawnCommand(command, args, {
+    platform, fileExists: opts.fileExists, spawn: spawnFn as never, env, stdio: ["pipe", "pipe", "pipe"],
+  })
   const client = new JsonRpcClient({ stdin: child.stdin!, stdout: child.stdout! })
 
   // Consume stderr — same pipe-buffer deadlock pattern as the cursor runner.

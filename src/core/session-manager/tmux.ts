@@ -5,12 +5,18 @@ type CmdRunner = (cmd: string, args: string[]) => Promise<TmuxResult>
 
 export const TMUX_COMMAND_TIMEOUT_MS = 10_000
 
-export async function runCommand(cmd: string, args: string[], timeoutMs = TMUX_COMMAND_TIMEOUT_MS): Promise<TmuxResult> {
+export async function runCommand(cmd: string, args: string[], timeoutMs = TMUX_COMMAND_TIMEOUT_MS, input?: Uint8Array): Promise<TmuxResult> {
   // The broker is a Bun binary; use Bun's native subprocess lifecycle instead of its Node
   // child_process compatibility events, which are unreliable for tmux clients in a compiled
   // macOS executable. The first-server path is separately detached below, so every command that
   // reaches this runner is expected to exit and close its own output streams.
-  const proc = Bun.spawn([cmd, ...args], { stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+  const proc = Bun.spawn([cmd, ...args], { stdin: input === undefined ? "ignore" : "pipe", stdout: "pipe", stderr: "pipe" })
+  if (input !== undefined) {
+    const stdin = proc.stdin
+    if (!stdin) throw new Error(`${cmd} stdin pipe was not created`)
+    stdin.write(input)
+    stdin.end()
+  }
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     const code = await Promise.race([

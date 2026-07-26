@@ -1,6 +1,7 @@
-import { spawn } from "child_process"
+import { spawn as defaultSpawn, type ChildProcess } from "child_process"
 import type { AcpClient } from "./acp-client"
 import { makeLogger } from "../../../shared/log"
+import { resolveCommand, spawnCommand, type FileExists } from "../../process/launcher"
 
 const log = makeLogger("agents/grok/runner")
 
@@ -30,7 +31,12 @@ export type GrokRunner = (opts: {
  * `--always-approve` auto-approves tool execution, matching cursor's `--force`: the
  * broker drives grok unattended, so an interactive permission prompt would deadlock
  * the turn. The adapter still answers session/request_permission defensively. */
-export const realGrokRunner: GrokRunner = ({ workdir, env, client, onExit, model, effort }) => {
+export function makeRealGrokRunner(deps: {
+  platform?: NodeJS.Platform
+  fileExists?: FileExists
+  spawn?: (command: string, args: string[], options: Record<string, unknown>) => ChildProcess
+} = {}): GrokRunner {
+  return ({ workdir, env, client, onExit, model, effort }) => {
   const args = [
     "agent",
     ...(model ? ["--model", model] : []),
@@ -38,9 +44,14 @@ export const realGrokRunner: GrokRunner = ({ workdir, env, client, onExit, model
     "--always-approve",
     "stdio",
   ]
-  const child = spawn("grok", args, {
+  const childEnv = { ...process.env, ...env } as Record<string, string>
+  const platform = deps.platform ?? process.platform
+  const shouldResolve = !deps.spawn || deps.platform !== undefined || deps.fileExists !== undefined
+  const command = shouldResolve ? (resolveCommand(["grok"], childEnv, platform, { fileExists: deps.fileExists }) ?? "grok") : "grok"
+  const child = spawnCommand(command, args, {
+    platform, fileExists: deps.fileExists, spawn: (deps.spawn ?? defaultSpawn) as never,
     cwd: workdir,
-    env: { ...process.env, ...env },
+    env: childEnv,
     stdio: ["pipe", "pipe", "pipe"],
   })
   let stderrBuf = ""
@@ -63,7 +74,10 @@ export const realGrokRunner: GrokRunner = ({ workdir, env, client, onExit, model
     onExit(null, String(e))
   })
   client.setWrite((line: string) => {
-    if (child.stdin.writable) child.stdin.write(line + "\n")
+    if (child.stdin!.writable) child.stdin!.write(line + "\n")
   })
   return { kill: () => { try { child.kill("SIGTERM") } catch {} } }
+  }
 }
+
+export const realGrokRunner: GrokRunner = makeRealGrokRunner()

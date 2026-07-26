@@ -498,14 +498,6 @@ fun WorkspaceRoot(
                         hostFilter = hostFilter,
                         onSelectHostFilter = { hostFilter = it },
                         onAddHost = { addHostOpen = true },
-                        // Windows-only "Host from this PC — preview" card (Task 6); native hosts hide it.
-                        showWindowsPreview = dev.supermux.desktop.host.shouldShowWindowsPreview(),
-                        onJoinWindowsPreview = {
-                            dev.supermux.desktop.host.recordWindowsPreviewSignup(
-                                dev.supermux.desktop.auth.DesktopTokenStore.defaultPath().parent.resolve("windows-host-preview.log"),
-                            )
-                        },
-                        onOpenWslGuide = { dev.supermux.desktop.ui.openInBrowser(dev.supermux.desktop.host.WSL_HOST_DOCS_URL) },
                         modifier = Modifier.width(layout.sidebarWidth).fillMaxHeight(),
                     )
                     SidebarDivider(

@@ -11,6 +11,7 @@ export interface UseTerminal {
   sendInput: (data: Uint8Array) => void
   resize: (cols: number, rows: number) => void
   onData: (cb: (data: Uint8Array) => void) => void
+  onReset: (cb: () => void) => void
   onExit: (cb: (code: number) => void) => void
 }
 
@@ -25,6 +26,7 @@ export function useTerminal(sessionName: MaybeRefOrGetter<string>, terminalId: M
   let stopped = false
 
   let dataCallback: ((data: Uint8Array) => void) | null = null
+  let resetCallback: (() => void) | null = null
   let exitCallback: ((code: number) => void) | null = null
   // Remember the latest requested size so we can (re)send it the moment the
   // socket opens. fit() frequently runs before connect() opens the socket (and
@@ -63,9 +65,8 @@ export function useTerminal(sessionName: MaybeRefOrGetter<string>, terminalId: M
       try { frame = JSON.parse(String(e.data)) } catch { return }
       if (frame.type === "exit") {
         exitCallback?.(frame.code ?? 0)
-      } else if (frame.type === "error") {
-        exitCallback?.(-1)
-      }
+      } else if (frame.type === "reset") resetCallback?.()
+      else if (frame.type === "error") exitCallback?.(-1)
     }
 
     ws.onclose = () => {
@@ -116,5 +117,9 @@ export function useTerminal(sessionName: MaybeRefOrGetter<string>, terminalId: M
     exitCallback = cb
   }
 
-  return { status, connect, disconnect, sendInput, resize, onData, onExit }
+  function onReset(cb: () => void) {
+    resetCallback = cb
+  }
+
+  return { status, connect, disconnect, sendInput, resize, onData, onReset, onExit }
 }

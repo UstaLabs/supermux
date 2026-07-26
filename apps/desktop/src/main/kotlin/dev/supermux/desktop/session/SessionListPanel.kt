@@ -416,10 +416,6 @@ fun SessionListPanel(
     hostFilter: String? = null,
     onSelectHostFilter: (String?) -> Unit = {},
     onAddHost: () -> Unit = {},
-    // ── Windows preview card (spec §6 / Task 6); Windows-only, hidden on native-host platforms ──
-    showWindowsPreview: Boolean = false,
-    onJoinWindowsPreview: () -> Boolean = { false },
-    onOpenWslGuide: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -499,15 +495,6 @@ fun SessionListPanel(
                 .fillMaxSize(),
         ) {
             item(key = "new_session_row") { NewSessionListRow(onClick = onNewSession) }
-            // Windows-only "Host from this PC — preview" card (Task 6). macOS/Linux pass false.
-            if (showWindowsPreview) {
-                item(key = "windows_host_preview") {
-                    dev.supermux.desktop.host.WindowsHostPreviewCard(
-                        onJoinPreview = onJoinWindowsPreview,
-                        onOpenWslGuide = onOpenWslGuide,
-                    )
-                }
-            }
             if (multiHost) {
                 item(key = "host_chips") {
                     HostFilterChips(

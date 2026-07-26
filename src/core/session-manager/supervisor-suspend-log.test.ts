@@ -5,6 +5,7 @@ import { fileURLToPath } from "url"
 import { openDb, runMigrations } from "../storage/db"
 import { Registry } from "./registry"
 import { createSupervisor, reconcileOnStartup } from "./supervisor"
+import type { SessionBackend } from "../runtime/session-backend"
 
 // Observability: when the broker detects a worker session whose process has
 // died, it flips it to `suspended`. That transition used to be SILENT (no log),
@@ -39,7 +40,11 @@ describe("session-death observability (suspend logging)", () => {
     const registry = freshRegistry()
     const pid = await deadPid()
     const s = registry.register({ name: "ztest-dead-timer", workdir: "/tmp", tmux_target: "mux:ztest1", pid })
-    const sup = createSupervisor({ registry, bindSocket: async () => {} })
+    const sup = createSupervisor({
+      registry,
+      bindSocket: async () => {},
+      sessionBackend: { resolve: async () => null } as unknown as SessionBackend,
+    })
 
     const prev = process.env.MUX_LOG_LEVEL
     process.env.MUX_LOG_LEVEL = "info"
