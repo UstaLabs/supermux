@@ -3243,7 +3243,12 @@ ch.on("inbound", async (msg: InboundMessage) => {
       log.debug("send_inbound.after", { session: session.name, ok: true })
     }
   } catch (err: any) {
-    log.error("send_inbound.error", { session: session.name, err: err?.message ?? String(err) })
+    const msgText = err?.message ?? String(err)
+    log.error("send_inbound.error", { session: session.name, err: msgText })
+    // Safety net: adapters should emit `error` themselves, but if send() throws
+    // without that (or the event is missed), still surface the real reason so the
+    // user isn't left on a silent stuck/idle session (seen with grok handoff).
+    void notifyAgentError(session.id, session.name, "error", msgText)
   }
 })
 }
@@ -3400,7 +3405,11 @@ if (webChannel) {
           const r = await deliverInbound(sessionId, text, meta)
           if (!r.ok) log.warn("web_inbound_adapter_missing", { sid, agent: sessionEntry?.agent ?? "claude" })
         } catch (err: any) {
-          log.error("web_inbound_adapter_failed", { sid, err: err?.message ?? String(err) })
+          const msgText = err?.message ?? String(err)
+          log.error("web_inbound_adapter_failed", { sid, err: msgText })
+          // Safety net for agents that throw from send() without emitting `error`
+          // (or when that event is missed) — show the real message to the user.
+          void notifyAgentError(sessionId, sessionEntry?.name ?? sid, "error", msgText)
         }
       },
     })

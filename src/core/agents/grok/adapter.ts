@@ -7,6 +7,10 @@ import { makeLogger } from "../../../shared/log"
 
 const log = makeLogger("agents/grok/adapter")
 
+/** No-activity stall watchdog (ms). First `session/update` disarms it so long
+ * turns that stream thoughts/tools run to completion. Mirrors opencode. */
+const DEFAULT_STALL_MS = 90_000
+
 export type GrokAdapterOpts = {
   sessionName: string
   workdir: string
@@ -18,6 +22,26 @@ export type GrokAdapterOpts = {
   effort?: string
   resolveAttachment?: (file_id: string) => Promise<string>
   env?: Record<string, string>
+  /** Override the no-activity stall watchdog (ms). Default 90s; tests use a small value. */
+  stallTimeoutMs?: number
+}
+
+function asError(err: unknown): Error {
+  return err instanceof Error ? err : new Error(String(err))
+}
+
+/** Build a user-facing exit message from the process code + recent stderr. */
+export function formatGrokExitError(code: number | null, stderr?: string): Error {
+  const tail = stderr?.trim()
+  if (tail) {
+    // Prefer the last non-empty line of stderr — usually the actual diagnostic.
+    const lines = tail.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+    const last = lines[lines.length - 1] ?? tail
+    const codeBit = code != null ? ` (exit ${code})` : ""
+    return new Error(`grok agent exited${codeBit}: ${last}`)
+  }
+  if (code != null && code !== 0) return new Error(`grok agent exited with code ${code}`)
+  return new Error("grok agent exited")
 }
 
 export class GrokAdapter extends EventEmitter implements AgentAdapter {
@@ -34,12 +58,16 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
   private _effort?: string
   private env: Record<string, string>
   private resolveAttachment?: (file_id: string) => Promise<string>
+  private stallTimeoutMs: number
   availableModels: { modelId: string }[] = []
 
   private queue: { text: string; chat_id?: string; attachmentFileId?: string; resolve: () => void; reject: (e: Error) => void }[] = []
   private draining = false
   private activeChatId?: string
   private turnActive = false
+  /** Disarm callback for the in-flight stall watchdog; set while a turn waits
+   * for first activity. */
+  private onTurnActivity?: () => void
 
   constructor(opts: GrokAdapterOpts) {
     super()
@@ -52,6 +80,7 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
     this._effort = opts.effort
     this.env = opts.env ?? {}
     this.resolveAttachment = opts.resolveAttachment
+    this.stallTimeoutMs = opts.stallTimeoutMs ?? DEFAULT_STALL_MS
     this.client = new AcpClient(() => {})
     this.client.onNotification = (method, params) => this.onNotification(method, params)
     this.client.onServerRequest = (method, params) => this.onServerRequest(method, params)
@@ -91,7 +120,7 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
     this.child = this.runner({
       workdir: this.workdir, env: this.env, client: this.client,
       model: this._model, effort: this._effort,
-      onExit: (code) => this.onExit(code),
+      onExit: (code, stderr) => this.onExit(code, stderr),
     })
     const init: any = await this.client.request("initialize", {
       protocolVersion: 1,
@@ -136,6 +165,8 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
           await this.runOne(text)
           next.resolve()
         } catch (err: any) {
+          // runOne emits `error` for turn failures and does not rethrow them.
+          // Remaining throws (e.g. session not initialized) still reject send().
           next.reject(err instanceof Error ? err : new Error(String(err)))
         } finally { this.activeChatId = undefined }
       }
@@ -154,14 +185,49 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
     if (!this.sessionId) throw new Error("grok session not initialized")
     this.turnActive = true
     this.emit("turn-start", { kind: "turn-start" })
+
+    // Stall watchdog: bound the wait for grok to START producing activity. A
+    // live turn streams session/update frames; a lost/hung prompt produces
+    // nothing and never settles — e.g. the handoff session stuck on "Continue".
+    // First activity disarms it, so long turns run to completion.
+    let stallTimer: ReturnType<typeof setTimeout> | undefined
+    const disarm = () => { if (stallTimer) { clearTimeout(stallTimer); stallTimer = undefined } }
+    this.onTurnActivity = disarm
+    const watchdog = new Promise<never>((_, reject) => {
+      stallTimer = setTimeout(
+        () => reject(new Error(
+          `grok produced no response within ${Math.round(this.stallTimeoutMs / 1000)}s — the request appears stalled; please try again`,
+        )),
+        this.stallTimeoutMs,
+      )
+    })
+
     try {
       // No `model` here: grok ignores it on session/prompt. The model is set by
       // the --model spawn flag and changed live via session/set_model.
-      await this.client.request("session/prompt", {
-        sessionId: this.sessionId,
-        prompt: [{ type: "text", text }],
-      })
+      await Promise.race([
+        this.client.request("session/prompt", {
+          sessionId: this.sessionId,
+          prompt: [{ type: "text", text }],
+        }),
+        watchdog,
+      ])
+    } catch (err) {
+      const error = asError(err)
+      // Faithful surface: wireAdapterEvents → notifyAgentError (toast + push).
+      // Without this, JSON-RPC / exit / stall failures only hit broker logs and
+      // the user sees an idle (or forever-working) session with no explanation.
+      // Do not rethrow: matching opencode, the error event is the user-facing
+      // path and send() resolves so the broker safety net doesn't double-toast.
+      this.emit("error", { kind: "error", error })
+      // On stall, cancel the in-flight turn so the child doesn't keep working
+      // after we've already told the user it failed.
+      if (/stalled/i.test(error.message)) {
+        void this.interrupt().catch(() => {})
+      }
     } finally {
+      disarm()
+      this.onTurnActivity = undefined
       this.turnActive = false
       this.flushAssistant()
       this.emit("turn-complete", { kind: "turn-complete" })
@@ -179,6 +245,9 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
 
   private onNotification(method: string, params: unknown): void {
     if (method !== "session/update") return
+    // Any session/update counts as turn activity for the stall watchdog
+    // (thoughts, tool calls, message chunks).
+    this.onTurnActivity?.()
     for (const ev of parseGrokUpdate(params)) {
       if (ev.kind === "assistant-message") {
         this.pendingAssistantText += ev.text
@@ -209,13 +278,12 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
     return {}
   }
 
-  private onExit(_code: number | null): void {
-    this.client.fail(new Error("grok agent exited"))
-    if (this.turnActive) {
-      this.turnActive = false
-      this.flushAssistant()
-      this.emit("turn-complete", { kind: "turn-complete" })
-    }
+  private onExit(code: number | null, stderr?: string): void {
+    // Reject any in-flight JSON-RPC (session/prompt, initialize, …) with a
+    // faithful message; runOne's catch emits the user-facing `error` event and
+    // its finally emits turn-complete. Do NOT emit turn-complete here — that
+    // double-fired Stop on the agent-state store.
+    this.client.fail(formatGrokExitError(code, stderr))
     this.child = undefined
   }
 

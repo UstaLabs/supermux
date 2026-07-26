@@ -49,3 +49,21 @@ test("a rejected response rejects the request promise", async () => {
   client.feed(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32602, message: "Invalid params" } }) + "\n")
   await expect(p).rejects.toThrow("Invalid params")
 })
+
+test("formatJsonRpcError folds data into the message", async () => {
+  const { formatJsonRpcError } = await import("./acp-client")
+  expect(formatJsonRpcError({ message: "rate limited", data: "retry in 30s" })).toBe("rate limited: retry in 30s")
+  expect(formatJsonRpcError({ message: "boom", data: { code: "AUTH" } })).toBe('boom: {"code":"AUTH"}')
+  expect(formatJsonRpcError({ message: "same", data: "same" })).toBe("same")
+  expect(formatJsonRpcError({})).toBe("jsonrpc error")
+})
+
+test("a rejected response with data rejects with the full diagnostic", async () => {
+  const { client } = makeClient()
+  const p = client.request("bad", {})
+  client.feed(JSON.stringify({
+    jsonrpc: "2.0", id: 1,
+    error: { code: -32000, message: "Unauthorized", data: "token expired" },
+  }) + "\n")
+  await expect(p).rejects.toThrow("Unauthorized: token expired")
+})

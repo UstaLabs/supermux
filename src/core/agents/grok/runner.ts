@@ -4,11 +4,16 @@ import { makeLogger } from "../../../shared/log"
 
 const log = makeLogger("agents/grok/runner")
 
+/** Cap retained stderr so a chatty child can't balloon memory; last N chars keep
+ * the most recent (usually most relevant) diagnostic lines. */
+const STDERR_CAP = 4_000
+
 export type GrokRunner = (opts: {
   workdir: string
   env: Record<string, string>
   client: AcpClient
-  onExit: (code: number | null) => void
+  /** code + recent stderr so the adapter can surface a faithful error to the user. */
+  onExit: (code: number | null, stderr?: string) => void
   /** Passed as `--model`; ACP session/set_model can change it later without a respawn. */
   model?: string
   /** Passed as `--reasoning-effort`. There is no ACP method to change this on a live
@@ -38,12 +43,25 @@ export const realGrokRunner: GrokRunner = ({ workdir, env, client, onExit, model
     env: { ...process.env, ...env },
     stdio: ["pipe", "pipe", "pipe"],
   })
+  let stderrBuf = ""
   child.stdout.setEncoding("utf8")
   child.stdout.on("data", (chunk: string) => client.feed(chunk))
   child.stderr.setEncoding("utf8")
-  child.stderr.on("data", (d: string) => log.debug("grok_stderr", { d: d.slice(0, 500) }))
-  child.on("exit", (code) => { log.info("grok_exit", { code }); onExit(code) })
-  child.on("error", (e) => { log.warn("grok_spawn_error", { err: String(e) }); onExit(null) })
+  child.stderr.on("data", (d: string) => {
+    stderrBuf += d
+    if (stderrBuf.length > STDERR_CAP) stderrBuf = stderrBuf.slice(-STDERR_CAP)
+    // Keep a short debug line; the full buffered tail rides out via onExit for the UI.
+    log.debug("grok_stderr", { d: d.slice(0, 500) })
+  })
+  child.on("exit", (code) => {
+    const stderr = stderrBuf.trim() || undefined
+    log.info("grok_exit", { code, stderr: stderr?.slice(0, 500) })
+    onExit(code, stderr)
+  })
+  child.on("error", (e) => {
+    log.warn("grok_spawn_error", { err: String(e) })
+    onExit(null, String(e))
+  })
   client.setWrite((line: string) => {
     if (child.stdin.writable) child.stdin.write(line + "\n")
   })

@@ -11,9 +11,9 @@ const tick = () => new Promise((r) => setTimeout(r, 0))
 
 function fakeRunner() {
   let client!: AcpClient
-  let exit!: (c: number | null) => void
+  let exit!: (c: number | null, stderr?: string) => void
   const runner = (opts: any) => { client = opts.client; exit = opts.onExit; return { kill: () => exit(0) } }
-  return { runner, feed: (o: any) => client.feed(JSON.stringify(o) + "\n"), get client() { return client }, exit: () => exit(0) }
+  return { runner, feed: (o: any) => client.feed(JSON.stringify(o) + "\n"), get client() { return client }, exit: (code: number | null = 0, stderr?: string) => exit(code, stderr) }
 }
 
 test("start() handshakes and send() streams reply + tool events then completes", async () => {
@@ -189,4 +189,78 @@ test("interrupt() sends session/cancel notification", async () => {
   fr.client.setWrite((l) => writes.push(l))
   await adapter.interrupt()
   expect(writes.some((w) => JSON.parse(w).method === "session/cancel")).toBe(true)
+})
+
+test("session/prompt JSON-RPC error emits error event with faithful message and completes turn", async () => {
+  const fr = fakeRunner()
+  const events: any[] = []
+  const adapter = new GrokAdapter({ sessionName: "s1", workdir: "/w", runner: fr.runner, persistSessionId: async () => {} })
+  for (const k of ["error", "turn-start", "turn-complete"]) adapter.on(k, (e) => events.push(e))
+
+  const started = adapter.start()
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 1, result: { protocolVersion: 1 } })
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 2, result: { sessionId: "sess-1" } })
+  await started
+
+  const sent = adapter.send("hi")
+  await tick()
+  fr.feed({ jsonrpc: "2.0", id: 3, error: { code: -32000, message: "rate limited", data: "retry later" } })
+  await sent
+
+  const err = events.find((e) => e.kind === "error")
+  expect(err?.error?.message).toBe("rate limited: retry later")
+  expect(events.some((e) => e.kind === "turn-start")).toBe(true)
+  expect(events.some((e) => e.kind === "turn-complete")).toBe(true)
+})
+
+test("agent exit mid-turn surfaces stderr in the error event", async () => {
+  const fr = fakeRunner()
+  const events: any[] = []
+  const adapter = new GrokAdapter({ sessionName: "s1", workdir: "/w", runner: fr.runner, persistSessionId: async () => {} })
+  for (const k of ["error", "turn-complete"]) adapter.on(k, (e) => events.push(e))
+
+  const started = adapter.start()
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 1, result: { protocolVersion: 1 } })
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 2, result: { sessionId: "sess-1" } })
+  await started
+
+  const sent = adapter.send("hi")
+  await tick()
+  // Simulate runner calling onExit with code + stderr (process crash mid-turn).
+  fr.exit(1, "fatal: auth token expired\n")
+  await sent
+
+  const err = events.find((e) => e.kind === "error")
+  expect(err?.error?.message).toMatch(/auth token expired/)
+  expect(events.some((e) => e.kind === "turn-complete")).toBe(true)
+})
+
+test("stall watchdog emits error when no session/update arrives", async () => {
+  const fr = fakeRunner()
+  const events: any[] = []
+  const adapter = new GrokAdapter({
+    sessionName: "s1", workdir: "/w", runner: fr.runner, persistSessionId: async () => {},
+    stallTimeoutMs: 30,
+  })
+  for (const k of ["error", "turn-complete"]) adapter.on(k, (e) => events.push(e))
+
+  const started = adapter.start()
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 1, result: { protocolVersion: 1 } })
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 2, result: { sessionId: "sess-1" } })
+  await started
+
+  const sent = adapter.send("hi")
+  // No session/update and no prompt result — watchdog should fire.
+  await sent
+
+  const err = events.find((e) => e.kind === "error")
+  expect(err?.error?.message).toMatch(/stalled/i)
+  expect(events.some((e) => e.kind === "turn-complete")).toBe(true)
+})
+
+test("formatGrokExitError prefers last stderr line", async () => {
+  const { formatGrokExitError } = await import("./adapter")
+  expect(formatGrokExitError(1, "warn: x\nfatal: boom\n").message).toBe("grok agent exited (exit 1): fatal: boom")
+  expect(formatGrokExitError(2).message).toBe("grok agent exited with code 2")
+  expect(formatGrokExitError(0).message).toBe("grok agent exited")
 })
