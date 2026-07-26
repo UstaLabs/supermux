@@ -4,7 +4,7 @@
 
 **Goal:** Make Android session rows reorder reliably in flat and grouped views and replace immediate swipe execution with reveal-then-tap action trays.
 
-**Architecture:** Introduce a pure interaction model for reorder scopes, working orders, and swipe action mapping. Render every reorderable session as a top-level lazy-list item, update a screen-local working order synchronously during drag, and persist only on drag stop. Replace `SwipeToDismissBox` with a direction-locking horizontal reveal whose anchors have no side effects.
+**Architecture:** Introduce a pure interaction model for view-aware reorder scopes, working orders, and swipe action mapping. Render every reorderable session as a top-level lazy-list item, update a screen-local working order synchronously during drag, and persist only on drag stop. Flat mode scopes by status; grouped mode scopes by project plus status. Replace `SwipeToDismissBox` with a direction-locking horizontal reveal whose anchors have no side effects.
 
 **Tech Stack:** Kotlin 2.3.21, Jetpack Compose, Material 3, Calvin Reorderable 3.1.0, Kotlin Test, Android Compose UI Test, Gradle, ADB
 

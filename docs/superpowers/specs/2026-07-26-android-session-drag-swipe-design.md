@@ -18,7 +18,8 @@ Make Android session reordering reliable in both flat and grouped views, and rep
 - A long press anywhere on an eligible row starts the drag.
 - Pickup emits haptic feedback and raises the row with elevation.
 - Neighboring rows animate out of the way as the dragged row crosses them.
-- Reordering is limited to the row's current project and task-status section.
+- Flat mode reorders within the current task-status section across projects.
+- Grouped mode additionally limits reordering to the current project.
 - Personal assistants, offline cached sessions, and settled sessions are not reorderable.
 - The displayed order changes locally and synchronously during the gesture.
 - Releasing the row persists the final ordered IDs once.
@@ -53,7 +54,7 @@ Settle and discard continue through the existing confirmation dialog. Mute, unmu
 
 Grouped cards will keep their current visual appearance by deriving each row's top, middle, bottom, or single position and applying the appropriate container shape and dividers. They will no longer hide several reorderable rows inside one lazy-list item.
 
-Each reorderable row key will encode its project, section, and session ID. A pure helper will validate that a proposed move stays within the same reorder scope and return the next ordered IDs.
+Each reorderable row key identifies its session. A pure helper derives the active view's reorder scope—status section in flat mode, project plus status in grouped mode—validates a proposed move, and returns the next ordered IDs.
 
 ### Drag state
 
@@ -95,7 +96,7 @@ Tests will be added before production changes:
 
 - Flat and grouped session rows visibly reorder under the finger.
 - The final order remains after the list refreshes.
-- Reordering cannot cross project or task-status boundaries.
+- Reordering cannot cross task-status boundaries, or project boundaries in grouped mode.
 - Long-press drag and horizontal swipe do not trigger each other.
 - Swiping never invokes mute, settle, edit, discard, or activate by itself.
 - Revealed actions remain open until tapped or dismissed.

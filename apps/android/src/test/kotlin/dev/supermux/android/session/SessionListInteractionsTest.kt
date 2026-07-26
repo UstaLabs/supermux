@@ -45,6 +45,22 @@ class SessionListInteractionsTest {
     }
 
     @Test
+    fun moveWithinScope_flatModeAllowsDifferentProjectsWithinOneSection() {
+        val rows = listOf(row("a", "/one"), row("b", "/two"), row("c", "/one"))
+
+        assertEquals(
+            listOf("b", "c", "a"),
+            moveWithinScope(
+                rows = rows,
+                workingOrders = emptyMap(),
+                fromId = "a",
+                toId = "c",
+                projectScoped = false,
+            )?.orderedIds,
+        )
+    }
+
+    @Test
     fun applyWorkingOrders_reordersOnlyMatchingScopeSlots() {
         val rows = listOf(
             row("a", "/one"),
@@ -100,5 +116,16 @@ class SessionListInteractionsTest {
 
         assertNull(state.finish(commit = false))
         assertNull(state.finish(commit = true))
+    }
+
+    @Test
+    fun dragWorkingState_beginIfIdlePreservesOriginalOrderAcrossRecomposition() {
+        val scope = SessionReorderScope("/p", SectionKey.IN_PROGRESS)
+        val state = SessionDragWorkingState()
+        state.beginIfIdle(scope, listOf("a", "b"))
+        state.move(listOf("b", "a"))
+        state.beginIfIdle(scope, listOf("b", "a"))
+
+        assertEquals(SessionReorderMove(scope, listOf("b", "a")), state.finish(commit = true))
     }
 }

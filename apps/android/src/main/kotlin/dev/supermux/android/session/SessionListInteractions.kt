@@ -29,8 +29,13 @@ data class SessionSwipeActions(
     val end: SessionSwipeAction?,
 )
 
-fun reorderScope(session: SessionInfo) = SessionReorderScope(
-    project = session.repo_root ?: session.workdir,
+private const val ALL_PROJECTS_SCOPE = "__all_projects__"
+
+fun reorderScope(
+    session: SessionInfo,
+    projectScoped: Boolean = true,
+) = SessionReorderScope(
+    project = if (projectScoped) session.repo_root ?: session.workdir else ALL_PROJECTS_SCOPE,
     section = session.sectionKey(),
 )
 
@@ -39,14 +44,15 @@ fun moveWithinScope(
     workingOrders: Map<SessionReorderScope, List<String>>,
     fromId: String,
     toId: String,
+    projectScoped: Boolean = true,
 ): SessionReorderMove? {
     val from = rows.firstOrNull { it.id == fromId } ?: return null
     val to = rows.firstOrNull { it.id == toId } ?: return null
-    val scope = reorderScope(from)
-    if (reorderScope(to) != scope) return null
+    val scope = reorderScope(from, projectScoped)
+    if (reorderScope(to, projectScoped) != scope) return null
 
     val ids = workingOrders[scope]
-        ?: rows.filter { reorderScope(it) == scope }.map { it.id }
+        ?: rows.filter { reorderScope(it, projectScoped) == scope }.map { it.id }
     val fromIndex = ids.indexOf(fromId)
     val toIndex = ids.indexOf(toId)
     if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex) return null
@@ -57,15 +63,17 @@ fun moveWithinScope(
 fun applyWorkingOrders(
     rows: List<SessionInfo>,
     workingOrders: Map<SessionReorderScope, List<String>>,
+    projectScoped: Boolean = true,
 ): List<SessionInfo> {
     val byId = rows.associateBy { it.id }
-    val queues = rows.groupBy(::reorderScope).mapValues { (scope, scopedRows) ->
+    val scopeOf: (SessionInfo) -> SessionReorderScope = { reorderScope(it, projectScoped) }
+    val queues = rows.groupBy(scopeOf).mapValues { (scope, scopedRows) ->
         val working = workingOrders[scope].orEmpty()
         val ordered = working.mapNotNull(byId::get) +
             scopedRows.filterNot { it.id in working }
         ordered.iterator()
     }
-    return rows.map { row -> queues.getValue(reorderScope(row)).next() }
+    return rows.map { row -> queues.getValue(scopeOf(row)).next() }
 }
 
 fun sessionSwipeActions(session: SessionInfo): SessionSwipeActions = when (session.sectionKey()) {
@@ -92,6 +100,10 @@ class SessionDragWorkingState {
         this.scope = scope
         original = orderedIds
         current = orderedIds
+    }
+
+    fun beginIfIdle(scope: SessionReorderScope, orderedIds: List<String>) {
+        if (this.scope == null) begin(scope, orderedIds)
     }
 
     fun move(orderedIds: List<String>) {

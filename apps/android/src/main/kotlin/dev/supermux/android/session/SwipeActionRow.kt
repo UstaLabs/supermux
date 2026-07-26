@@ -5,10 +5,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -24,6 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -37,6 +41,8 @@ fun SwipeActionRow(
     onOpenRowChange: (String?) -> Unit,
     startLabel: String?,
     endLabel: String?,
+    startIcon: Int? = null,
+    endIcon: Int? = null,
     onStartAction: () -> Unit,
     onEndAction: () -> Unit,
     modifier: Modifier = Modifier,
@@ -85,7 +91,19 @@ fun SwipeActionRow(
                             .fillMaxHeight()
                             .background(startColor),
                     ) {
-                        Text(startLabel, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            if (startIcon != null) {
+                                Icon(
+                                    painter = painterResource(startIcon),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                            Text(startLabel, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                        }
                     }
                 } else {
                     Box(Modifier.width(ActionWidth))
@@ -98,7 +116,19 @@ fun SwipeActionRow(
                             .fillMaxHeight()
                             .background(endColor),
                     ) {
-                        Text(endLabel, color = MaterialTheme.colorScheme.onErrorContainer)
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            if (endIcon != null) {
+                                Icon(
+                                    painter = painterResource(endIcon),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                            Text(endLabel, color = MaterialTheme.colorScheme.onErrorContainer)
+                        }
                     }
                 }
             }
