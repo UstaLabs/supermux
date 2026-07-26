@@ -3,7 +3,7 @@ import { computed, nextTick, ref, watch } from "vue"
 import { useRouter } from "vue-router"
 import { DialogRoot, DialogPortal, DialogOverlay, DialogContent } from "reka-ui"
 import { Button } from "@/components/ui/button"
-import AgentLogo from "@/components/AgentLogo.vue"
+import LauncherAgentPicker from "@/components/LauncherAgentPicker.vue"
 import LauncherModelPicker from "@/components/LauncherModelPicker.vue"
 import LauncherEffortPicker from "@/components/LauncherEffortPicker.vue"
 import { api } from "@/api/client"
@@ -11,7 +11,6 @@ import { useSessions, type Session } from "@/stores/sessions"
 import { usePendingFirstMessage } from "@/stores/pendingFirstMessage"
 import {
   buildHandoffPrefill,
-  CONTINUE_AGENTS,
   defaultContinueAgent,
   type ContinueAgent,
 } from "@/lib/handoff-prefill"
@@ -139,39 +138,14 @@ async function start() {
         </p>
 
         <div class="mt-4 space-y-3">
-          <div>
-            <p class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mb-1.5">
-              Agent
-            </p>
-            <div class="flex flex-wrap gap-1.5">
-              <button
-                v-for="a in CONTINUE_AGENTS"
-                :key="a"
-                type="button"
-                class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium border transition"
-                :class="agent === a
-                  ? 'border-primary bg-primary/10 text-foreground'
-                  : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground'"
-                @click="agent = a"
-              >
-                <AgentLogo :agent="a" class="size-3.5 shrink-0 opacity-80" />
-                <span class="capitalize">{{ a }}</span>
-              </button>
-            </div>
-          </div>
-
-          <div>
-            <p class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mb-1.5">
-              Model &amp; thinking
-            </p>
-            <div class="flex flex-wrap items-center gap-1 rounded-lg border border-border bg-background px-1.5 py-1">
-              <LauncherModelPicker v-model:model="model" :agent="agent" />
-              <LauncherEffortPicker
-                v-model:level="reasoningLevel"
-                :agent="agent"
-                :model="model"
-              />
-            </div>
+          <div class="flex flex-wrap items-center gap-0.5 rounded-lg border border-border bg-background px-1.5 py-1">
+            <LauncherAgentPicker v-model:agent="agent" />
+            <LauncherModelPicker v-model:model="model" :agent="agent" />
+            <LauncherEffortPicker
+              v-model:level="reasoningLevel"
+              :agent="agent"
+              :model="model"
+            />
           </div>
 
           <div>
