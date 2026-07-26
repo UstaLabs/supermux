@@ -565,6 +565,9 @@ fun SessionListScreen(
         val finished = dragWorkingState.finish(commit = true)
         finished?.let { move ->
             onReorder(move.orderedIds)
+            // The ViewModel applies sortOrder optimistically before returning. Drop the gesture
+            // overlay so later server snapshots (including a failed persistence rollback) win.
+            workingOrders.remove(move.scope)
         }
     }
 
