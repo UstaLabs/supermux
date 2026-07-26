@@ -132,7 +132,7 @@ async function start() {
       >
         <h3 class="font-semibold text-base">Continue in new conversation</h3>
         <p class="text-sm text-muted-foreground mt-1.5">
-          Same worktree as
+          Same working directory as
           <span class="font-medium text-foreground">{{ props.session?.name ?? "this session" }}</span>.
           The new agent is told to read this session first. Edit freely before start.
         </p>
