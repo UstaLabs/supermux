@@ -39,7 +39,6 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   (e: "navigate", id: string): void
-  (e: "kill", id: string): void
   (e: "mute", id: string): void
   (e: "rename-start", name: string): void
   (e: "rename", id: string, newName: string): void
@@ -128,7 +127,6 @@ function rowClass(sId: string) {
         :renaming="props.renamingName === s.name"
         flush
         @navigate="emit('navigate', s.id)"
-        @kill="emit('kill', s.id)"
         @mute="emit('mute', s.id)"
         @rename-start="emit('rename-start', s.name)"
         @rename="(newName) => emit('rename', s.id, newName)"
@@ -194,7 +192,6 @@ function rowClass(sId: string) {
           :renaming="props.renamingName === s.name"
           flush
           @navigate="emit('navigate', s.id)"
-          @kill="emit('kill', s.id)"
           @mute="emit('mute', s.id)"
           @rename-start="emit('rename-start', s.name)"
           @rename="(newName) => emit('rename', s.id, newName)"
@@ -260,7 +257,6 @@ function rowClass(sId: string) {
           :project-label="tagFor(s)"
           :renaming="props.renamingName === s.name"
           @navigate="emit('navigate', s.id)"
-          @kill="emit('kill', s.id)"
           @mute="emit('mute', s.id)"
           @rename-start="emit('rename-start', s.name)"
           @rename="(newName) => emit('rename', s.id, newName)"

@@ -348,7 +348,7 @@ fun SessionRow(
             onClick = { menuExpanded = false; onToggleMute() },
         )
         DropdownMenuItem(
-            text = { Text("Kill", color = MaterialTheme.colorScheme.error) },
+            text = { Text("Settle", color = MaterialTheme.colorScheme.error) },
             onClick = { menuExpanded = false; onKill() },
         )
     }
@@ -702,11 +702,11 @@ fun SessionListScreen(
     killTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { killTarget = null },
-            title = { Text("Kill session?") },
+            title = { Text("Settle session?") },
             text = { Text("This ends \"${target.name}\" and its agent. This can't be undone.") },
             confirmButton = {
                 TextButton(onClick = { onKill(target.id); killTarget = null }) {
-                    Text("Kill", color = MaterialTheme.colorScheme.error)
+                    Text("Settle", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = { TextButton(onClick = { killTarget = null }) { Text("Cancel") } },

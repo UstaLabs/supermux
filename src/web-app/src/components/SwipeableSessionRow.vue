@@ -2,7 +2,7 @@
 import { ref, watch, inject, type Ref } from "vue"
 import { useRouter } from "vue-router"
 import { computed } from "vue"
-import { Trash2, VolumeX, Volume2, Pencil, RotateCcw } from "lucide-vue-next"
+import { Trash2, VolumeX, Volume2, Pencil, RotateCcw, CheckCircle2 } from "lucide-vue-next"
 import { useSwipeReveal } from "@/composables/useSwipeReveal"
 import SessionRow from "./SessionRow.vue"
 
@@ -27,7 +27,6 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{
-  (e: "kill", id: string): void
   (e: "mute", id: string): void
   (e: "rename", id: string, newName: string): void
   (e: "settle", id: string): void
@@ -36,7 +35,7 @@ const emit = defineEmits<{
   (e: "deleteDraft", id: string): void
 }>()
 
-// Drafts have no process, so mute/kill don't apply; settled rows only resume.
+// Drafts have no process, so mute/settle don't apply; settled rows only resume.
 const showMute = computed(() => props.variant === "in_progress")
 
 const router = useRouter()
@@ -68,9 +67,9 @@ watch(state, (s) => {
   }
 })
 
-function handleKill() {
+function handleSettle() {
   close()
-  emit("kill", props.id)
+  emit("settle", props.id)
 }
 
 function handleDeleteDraft() {
@@ -171,11 +170,11 @@ function handleNavigate() {
       </button>
       <button
         v-else-if="props.variant === 'in_progress'"
-        class="w-[80px] flex flex-col items-center justify-center gap-1 bg-[color-mix(in_oklab,var(--destructive)_28%,var(--cmux-session-list))] text-foreground active:bg-[color-mix(in_oklab,var(--destructive)_36%,var(--cmux-session-list))]"
-        @click="handleKill"
+        class="w-[80px] flex flex-col items-center justify-center gap-1 bg-[color-mix(in_oklab,var(--cmux-success,var(--primary))_28%,var(--cmux-session-list))] text-foreground active:bg-[color-mix(in_oklab,var(--cmux-success,var(--primary))_36%,var(--cmux-session-list))]"
+        @click="handleSettle"
       >
-        <Trash2 class="size-5" />
-        <span class="text-[10px] font-medium">Kill</span>
+        <CheckCircle2 class="size-5" />
+        <span class="text-[10px] font-medium">Settle</span>
       </button>
     </div>
 

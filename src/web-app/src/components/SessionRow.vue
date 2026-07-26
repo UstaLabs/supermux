@@ -22,7 +22,6 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: "kill"): void
   (e: "mute"): void
   (e: "rename", newName: string): void
   (e: "rename-cancel"): void

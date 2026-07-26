@@ -16,7 +16,6 @@ import { useLayout } from "@/stores/layout"
 import { api } from "@/api/client"
 import { toast } from "vue-sonner"
 import TaskSection from "./TaskSection.vue"
-import KillConfirmDialog from "./KillConfirmDialog.vue"
 
 defineProps<{ mobile: boolean }>()
 
@@ -38,8 +37,6 @@ const groupByProject = computed(() => layout.state.groupByProject)
 const homeDir = computed(() => sessions.homeDir)
 
 const renamingRow = ref<string | null>(null)
-const killTarget = ref<{ id: string; name: string } | null>(null)
-const showKillConfirm = ref(false)
 
 onMounted(() => {
   const name = consumeRenameRequest()
@@ -59,23 +56,6 @@ function toggleSettled(workdir: string) {
   else settledExpanded.add(workdir)
 }
 const flatSettledExpanded = ref(false)
-
-function requestKill(id: string) {
-  const s = sessions.list.find((x) => x.id === id)
-  killTarget.value = { id, name: s?.name ?? id }
-  showKillConfirm.value = true
-}
-async function confirmKill() {
-  const target = killTarget.value
-  if (!target) return
-  showKillConfirm.value = false
-  try {
-    await api.killSession(target.id)
-  } catch (err: any) {
-    toast.error(err?.message ?? "Failed to kill session")
-  }
-  killTarget.value = null
-}
 
 async function handleMute(id: string) {
   const session = sessions.list.find((s) => s.id === id)
@@ -196,7 +176,6 @@ async function handleReorder(ids: string[]) {
     :expanded="true"
     :reorderable="false"
     @navigate="navigateToSession"
-    @kill="requestKill"
     @mute="handleMute"
     @rename-start="(name) => (renamingRow = name)"
     @rename="handleRename"
@@ -222,7 +201,6 @@ async function handleReorder(ids: string[]) {
       :reorderable="true"
       @navigate="navigateToSession"
       @reorder="handleReorder"
-      @kill="requestKill"
       @mute="handleMute"
       @rename-start="(name) => (renamingRow = name)"
       @rename="handleRename"
@@ -276,7 +254,6 @@ async function handleReorder(ids: string[]) {
           :quiet-settled="true"
           :card="true"
           @navigate="navigateToSession"
-          @kill="requestKill"
           @mute="handleMute"
           @rename-start="(name) => (renamingRow = name)"
           @rename="handleRename"
@@ -292,10 +269,4 @@ async function handleReorder(ids: string[]) {
     </div>
   </template>
 
-  <KillConfirmDialog
-    :open="showKillConfirm"
-    :session-name="killTarget?.name ?? ''"
-    @update:open="showKillConfirm = $event"
-    @confirm="confirmKill"
-  />
 </template>

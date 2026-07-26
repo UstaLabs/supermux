@@ -205,7 +205,7 @@ fun PathGroupHeader(label: String, count: Int, collapsed: Boolean = false) {
 /**
  * One session row: status rail, name/time header, status badge, and message/workdir preview —
  * lean by design, no per-row avatar (Android parity; see [SessionAvatar]). Right-click opens the
- * row's action menu (Rename/Mute/Kill); Android's long-press + DropdownMenu becomes a native
+ * row's action menu (Rename/Mute/Settle); Android's long-press + DropdownMenu becomes a native
  * `ContextMenuArea` on desktop (see file header).
  */
 @Composable
@@ -249,7 +249,7 @@ fun SessionRow(
             listOf(
                 ContextMenuItem("Rename") { onRename() },
                 ContextMenuItem(if (s.mute == true) "Unmute" else "Mute") { onToggleMute() },
-                ContextMenuItem("Kill") { onKill() },
+                ContextMenuItem("Settle") { onKill() },
             )
         },
     ) {
@@ -458,11 +458,11 @@ fun SessionListPanel(
     killTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { killTarget = null },
-            title = { Text("Kill session?") },
+            title = { Text("Settle session?") },
             text = { Text("This ends \"${target.name}\" and its agent. This can't be undone.") },
             confirmButton = {
                 TextButton(onClick = { onKill(target.id); killTarget = null }) {
-                    Text("Kill", color = MaterialTheme.colorScheme.error)
+                    Text("Settle", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = { TextButton(onClick = { killTarget = null }) { Text("Cancel") } },

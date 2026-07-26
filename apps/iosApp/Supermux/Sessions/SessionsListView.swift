@@ -45,7 +45,7 @@ private enum SidebarRowPosition {
 /// Sidebar / root list — the merged multi-host fleet (spec §5): grouped (PA + project) sessions
 /// across every paired host, a per-row host badge + an `All · <host…> · +` filter chip row (both
 /// shown only when ≥2 hosts are paired), and offline hosts rendered as greyed "last seen" groups.
-/// Per-row reads (preview/agent state) and actions (kill/rename/mute) route to the session's OWNING
+/// Per-row reads (preview/agent state) and actions (settle/rename/mute) route to the session's OWNING
 /// `BrokerSession` via `Fleet`. Single-host is the unchanged path: no chips, no badges.
 struct SessionsListView: View {
     let fleet: Fleet
@@ -178,11 +178,11 @@ struct SessionsListView: View {
                 renameTarget = nil
             }
         }
-        .confirmationDialog("Kill \u{201C}\(killTarget?.name ?? "")\u{201D}?",
+        .confirmationDialog("Settle \u{201C}\(killTarget?.name ?? "")\u{201D}?",
                             isPresented: Binding(get: { killTarget != nil },
                                                  set: { if !$0 { killTarget = nil } }),
                             titleVisibility: .visible) {
-            Button("Kill session", role: .destructive) {
+            Button("Settle session", role: .destructive) {
                 if let t = killTarget { fleet.broker(for: t.id)?.kill(t.id) }
                 killTarget = nil
             }
@@ -274,7 +274,7 @@ struct SessionsListView: View {
                     Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
                 }
                 Button { renameText = s.name; renameTarget = s } label: { Label("Rename", systemImage: "pencil") }
-                Button(role: .destructive) { killTarget = s } label: { Label("Kill", systemImage: "xmark.circle") }
+                Button(role: .destructive) { killTarget = s } label: { Label("Settle", systemImage: "checkmark.circle") }
             }
     }
 
@@ -318,7 +318,7 @@ struct SessionsListView: View {
         let b = fleet.broker(for: s.id)
         let muted = s.mute?.boolValue ?? false
         Button(role: .destructive) { killTarget = s } label: {
-            Label("Kill", systemImage: "xmark.circle")
+            Label("Settle", systemImage: "checkmark.circle")
         }
         Button { renameText = s.name; renameTarget = s } label: {
             Label("Rename", systemImage: "pencil")
