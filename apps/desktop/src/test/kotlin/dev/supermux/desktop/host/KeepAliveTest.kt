@@ -74,6 +74,14 @@ class KeepAliveTest {
         assertTrue(xml.contains("<RunLevel>LeastPrivilege</RunLevel>"), "does not request elevation")
         assertTrue(xml.contains("<RestartOnFailure>"), "restarts a crashed host")
         assertTrue(
+            xml.contains("<Interval>PT1M</Interval>"),
+            "Task Scheduler requires a restart interval of at least one minute",
+        )
+        assertTrue(
+            xml.contains("<Count>255</Count>"),
+            "Task Scheduler restart count is an unsigned byte",
+        )
+        assertTrue(
             xml.contains("<Command>powershell.exe</Command>"),
             "uses a fixed non-interactive PowerShell launcher for the env assignment",
         )
@@ -154,14 +162,13 @@ class KeepAliveTest {
         assertTrue(Files.readString(taskXml, Charsets.UTF_16).contains("<LogonTrigger>"))
         assertTrue(
             env.ran.any {
-                it == listOf(
-                    "schtasks.exe", "/Create",
-                    "/TN", KeepAlive.WINDOWS_TASK_NAME,
-                    "/XML", taskXml.toString(),
-                    "/F",
-                )
+                it.firstOrNull() == "powershell.exe" &&
+                    it.last().contains("Start-Process") &&
+                    it.last().contains("-Verb RunAs") &&
+                    it.last().contains("/Create") &&
+                    it.last().contains(taskXml.toString())
             },
-            "creates the idempotent current-user task from the generated XML",
+            "requests the one-time elevation Windows requires to create the task",
         )
     }
 
@@ -177,13 +184,12 @@ class KeepAliveTest {
         assertFalse(Files.exists(taskXml))
         assertTrue(
             env.ran.any {
-                it == listOf(
-                    "schtasks.exe", "/Delete",
-                    "/TN", KeepAlive.WINDOWS_TASK_NAME,
-                    "/F",
-                )
+                it.firstOrNull() == "powershell.exe" &&
+                    it.last().contains("Start-Process") &&
+                    it.last().contains("-Verb RunAs") &&
+                    it.last().contains("/Delete")
             },
-            "deletes only the per-user Supermux task",
+            "requests elevation to delete only the per-user Supermux task",
         )
     }
 

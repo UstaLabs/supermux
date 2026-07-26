@@ -204,8 +204,8 @@ Terminal=false
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <StartWhenAvailable>true</StartWhenAvailable>
     <RestartOnFailure>
-      <Interval>PT5S</Interval>
-      <Count>999</Count>
+      <Interval>PT1M</Interval>
+      <Count>255</Count>
     </RestartOnFailure>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <Enabled>true</Enabled>
@@ -313,9 +313,10 @@ Terminal=false
         return runCatching {
             Files.createDirectories(taskXml.parent)
             Files.writeString(taskXml, windowsTaskXml(spec), Charsets.UTF_16)
-            val enabled = env.run(
+            val enabled = runElevatedSchtasks(
+                env,
                 listOf(
-                    "schtasks.exe", "/Create",
+                    "/Create",
                     "/TN", WINDOWS_TASK_NAME,
                     "/XML", taskXml.toString(),
                     "/F",
@@ -328,10 +329,33 @@ Terminal=false
     private fun removeWindowsTask(env: KeepAliveEnv): Result {
         val taskXml = env.localAppData.resolve(WINDOWS_TASK_XML)
         return runCatching {
-            env.run(listOf("schtasks.exe", "/Delete", "/TN", WINDOWS_TASK_NAME, "/F"))
+            runElevatedSchtasks(env, listOf("/Delete", "/TN", WINDOWS_TASK_NAME, "/F"))
             val existed = Files.deleteIfExists(taskXml)
             Result.Removed(if (existed) taskXml else null)
         }.getOrElse { Result.Failed("Windows Scheduled Task remove failed: ${it.message}") }
+    }
+
+    /**
+     * Windows 11 denies even current-user Task Scheduler registration to a non-elevated process.
+     * Elevate only schtasks (the registered task itself remains InteractiveToken/LeastPrivilege).
+     */
+    private fun runElevatedSchtasks(env: KeepAliveEnv, args: List<String>): Boolean {
+        val argumentLine = args.joinToString(" ") { windowsArgument(it) }
+        val script =
+            "\$process = Start-Process -FilePath 'schtasks.exe' -Verb RunAs -Wait -PassThru " +
+                "-ArgumentList ${powershellLiteral(argumentLine)}; exit \$process.ExitCode"
+        return env.run(
+            listOf(
+                "powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ),
+        )
     }
 }
 

@@ -204,7 +204,6 @@ function productionProcessFactory(
   const spawned = Bun.spawn(options.argv, {
     cwd: options.cwd,
     env: options.env,
-    detached: true,
     windowsHide: true,
     terminal: {
       cols: options.cols,

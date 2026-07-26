@@ -1,21 +1,29 @@
 import { describe, expect, test } from "bun:test"
-import { buildNestedChildCommand, withTimeout } from "./conpty-smoke"
+import {
+  buildInputMarkerCommand,
+  buildNestedChildCommand,
+  buildOutputMarkerCommand,
+  buildSmokeShellArgv,
+  withTimeout,
+} from "./conpty-smoke"
 
 describe("ConPTY smoke command", () => {
-  test("keeps Start-Process parameters in one statement and delimits only the output statement", () => {
-    const command = buildNestedChildCommand()
-
-    expect(command).toContain(
-      "$child = Start-Process -FilePath powershell.exe -ArgumentList @('-NoLogo','-NoProfile','-Command','Start-Sleep -Seconds 600') -PassThru",
-    )
-    expect(command).toContain("; Write-Output ('SUPERMUX_CHILD_PID=' + $child.Id)\r")
-    expect(command).not.toContain("; -ArgumentList")
-    expect(command).not.toContain("; -PassThru")
-    expect(command.match(/;/gu)).toHaveLength(1)
+  test("uses cmd.exe as the authoritative Windows ConPTY shell", () => {
+    expect(buildSmokeShellArgv()).toEqual(["cmd.exe", "/d", "/k"])
   })
 
-  test("can import command construction without executing the Windows-only smoke", () => {
-    expect(typeof buildNestedChildCommand).toBe("function")
+  test("composes markers at execution time so ConPTY input echo cannot satisfy the matchers", () => {
+    expect(buildOutputMarkerCommand()).toContain("for %i in (OUTPUT_OK)")
+    expect(buildOutputMarkerCommand()).toContain("@echo SUPERMUX_CONPTY_%i")
+    expect(buildOutputMarkerCommand()).not.toContain("SUPERMUX_CONPTY_OUTPUT_OK")
+    expect(buildInputMarkerCommand()).toContain("for %i in (OK)")
+    expect(buildInputMarkerCommand()).not.toContain("SUPERMUX_CONPTY_OK")
+  })
+
+  test("starts a nested long-lived child that shares the console Job Object", () => {
+    const command = buildNestedChildCommand()
+    expect(command).toContain("start /B cmd")
+    expect(command).toContain("ping -n 600")
   })
 
   test("bounds a stalled cleanup promise", async () => {
