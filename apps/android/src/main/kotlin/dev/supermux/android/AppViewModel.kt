@@ -1136,7 +1136,8 @@ class AppViewModel(
             rebuildSessions()
         }
         viewModelScope.launch {
-            runCatching { activeApi()?.reorderSessions(orderedIds) }
+            val api = orderedIds.firstOrNull()?.let(::apiFor) ?: activeApi()
+            runCatching { api?.reorderSessions(orderedIds) }
         }
     }
 

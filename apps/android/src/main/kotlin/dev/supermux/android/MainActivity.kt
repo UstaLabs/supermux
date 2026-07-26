@@ -97,6 +97,7 @@ import dev.supermux.android.push.PushPermission
 import dev.supermux.android.push.SupermuxMessagingService
 import dev.supermux.auth.SecureTokenStore
 import dev.supermux.auth.SecureTokenStoreContext
+import dev.supermux.net.ArchivedDto
 import dev.supermux.net.PairUrl
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
@@ -427,8 +428,10 @@ class MainActivity : ComponentActivity() {
                                 commands = commands,
                                 commandsResolved = commandsResolved,
                                 lastBySession = lastBySession,
+                                archived = archivedSessions,
                                 vm = vm,
                                 onNavigate = navTo,
+                                onOpenDraft = { id -> navController.navigate(NewSession(draftId = id)) },
                                 onOpenDisplays = { navController.navigate(Displays) },
                                 hosts = hostViews,
                                 sessionHost = sessionHost,
@@ -722,8 +725,10 @@ private fun PhoneNavHost(
     commands: Map<String, List<SlashCommand>>,
     commandsResolved: Map<String, Boolean>,
     lastBySession: Map<String, LogEntry?>,
+    archived: List<ArchivedDto> = emptyList(),
     vm: AppViewModel,
     onNavigate: (String) -> Unit,
+    onOpenDraft: (String) -> Unit = {},
     onOpenDisplays: () -> Unit,
     hosts: List<dev.supermux.android.host.HostView> = emptyList(),
     sessionHost: Map<String, String> = emptyMap(),
@@ -745,8 +750,10 @@ private fun PhoneNavHost(
         commands = commands,
         commandsResolved = commandsResolved,
         lastBySession = lastBySession,
+        archived = archived,
         vm = vm,
         onNavigate = onNavigate,
+        onOpenDraft = onOpenDraft,
         onOpenDisplays = onOpenDisplays,
         hosts = hosts,
         sessionHost = sessionHost,

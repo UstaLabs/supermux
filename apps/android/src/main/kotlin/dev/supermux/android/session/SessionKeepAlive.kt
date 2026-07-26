@@ -37,6 +37,7 @@ import dev.supermux.android.chat.ChatScreen
 import dev.supermux.android.ui.keepAlivePanel
 import dev.supermux.android.workspace.SessionWorkspaceDetail
 import dev.supermux.android.workspace.WorkspaceLayout
+import dev.supermux.net.ArchivedDto
 import dev.supermux.net.GitOpResult
 import dev.supermux.net.ProxyDto
 import dev.supermux.proto.ActivityEvent
@@ -95,8 +96,10 @@ fun SessionKeepAlivePhoneHost(
     commands: Map<String, List<SlashCommand>>,
     commandsResolved: Map<String, Boolean>,
     lastBySession: Map<String, LogEntry?>,
+    archived: List<ArchivedDto> = emptyList(),
     vm: AppViewModel,
     onNavigate: (String) -> Unit,
+    onOpenDraft: (String) -> Unit = {},
     onOpenDisplays: () -> Unit,
     // Multi-host (spec §5): threaded straight to the phone SessionListScreen (chips + badges).
     hosts: List<dev.supermux.android.host.HostView> = emptyList(),
@@ -182,6 +185,10 @@ fun SessionKeepAlivePhoneHost(
                             }
                         },
                         onMute = { id, m -> vm.setMute(id, m) },
+                        archived = archived,
+                        onResume = { id -> vm.resume(id) },
+                        onOpenDraft = onOpenDraft,
+                        onReorder = { ids -> vm.reorderSessions(ids) },
                         hosts = hosts,
                         sessionHost = sessionHost,
                         hostFilter = hostFilter,

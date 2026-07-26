@@ -1,7 +1,6 @@
 package dev.supermux.android.session
 
 import android.content.Context
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
@@ -12,13 +11,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import dev.supermux.session.moveId
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -27,23 +23,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import sh.calvin.reorderable.ReorderableItem
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.Surface
-import androidx.compose.material3.rememberSwipeToDismissBoxState
-import androidx.compose.material3.SwipeToDismissBoxValue
-import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.zIndex
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.layout.positionInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
@@ -75,10 +62,8 @@ import dev.supermux.session.sectionKey
 import dev.supermux.session.projectLabel
 import dev.supermux.session.combinedTaskSessions
 import dev.supermux.session.buildTaskSections
-import dev.supermux.session.TaskSection
 import dev.supermux.session.SectionKey
 import dev.supermux.net.ArchivedDto
-import kotlinx.coroutines.launch
 
 /** Produces a human-readable relative time string from an ISO-8601 timestamp string. */
 fun relTime(ts: String?): String {
@@ -124,6 +109,13 @@ private fun saveCollapsedPaths(ctx: Context, paths: Set<String>) {
         .putStringSet(COLLAPSE_KEY, paths)
         .apply()
 }
+
+private fun groupedRowShape(first: Boolean, last: Boolean): Shape = RoundedCornerShape(
+    topStart = if (first) Radii.lg else 0.dp,
+    topEnd = if (first) Radii.lg else 0.dp,
+    bottomStart = if (last) Radii.lg else 0.dp,
+    bottomEnd = if (last) Radii.lg else 0.dp,
+)
 
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
@@ -237,7 +229,7 @@ fun PathGroupHeader(
     }
 }
 
-@OptIn(ExperimentalSharedTransitionApi::class, ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalSharedTransitionApi::class, ExperimentalFoundationApi::class)
 @Composable
 fun SessionRow(
     s: SessionInfo,
@@ -247,13 +239,11 @@ fun SessionRow(
     bgOpen: Int = 0,
     hostBadge: dev.supermux.android.host.HostView? = null,
     projectTag: String? = null,
-    /**
-     * Applied as an outer Box around SwipeToDismissBox (must NOT be the swipe box's own
-     * modifier — that chains under anchoredDraggable and never receives the long-press).
-     * Pass [longPressDraggableHandle] + shared [interactionSource] from ReorderableItem.
-     */
+    /** Applied outside the horizontal reveal handler so long-press can own the drag. */
     dragModifier: Modifier = Modifier,
     interactionSource: MutableInteractionSource? = null,
+    openSwipeRowId: String? = null,
+    onOpenSwipeRowChange: (String?) -> Unit = {},
     onClick: () -> Unit,
     onRename: () -> Unit = {},
     onKill: () -> Unit = {},
@@ -261,6 +251,8 @@ fun SessionRow(
     onResume: () -> Unit = {},
     /** Elevation while the row is being dragged by the reorder library. */
     isDragging: Boolean = false,
+    rowShape: Shape = RoundedCornerShape(Radii.md),
+    outerPadding: PaddingValues = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
 ) {
@@ -268,244 +260,192 @@ fun SessionRow(
     val cs = MaterialTheme.colorScheme
     val haptic = rememberHaptics()
     val hasUnread = !active && preview?.direction == "inbound"
-    val section = s.sectionKey()
     val rowInteraction = interactionSource ?: remember { MutableInteractionSource() }
+    val actions = sessionSwipeActions(s)
 
     val elevation by androidx.compose.animation.core.animateDpAsState(
         if (isDragging) 6.dp else 0.dp,
         label = "session-drag-elevation",
     )
 
-    // Material3 SwipeToDismissBox: one primary action per edge (Android pattern).
-    // End→Start (swipe left): Settle / Delete
-    // Start→End (swipe right): Mute (in progress) / Resume (settled) — snaps back after action
-    // Threshold is intentionally high: 0.35 fired kill/mute on light flicks.
-    val dismissState = rememberSwipeToDismissBoxState(
-        confirmValueChange = { value ->
-            when (value) {
-                SwipeToDismissBoxValue.EndToStart -> {
-                    when (section) {
-                        SectionKey.IN_PROGRESS, SectionKey.DRAFT -> {
-                            haptic(HapticKind.Confirm)
-                            onKill()
-                        }
-                        SectionKey.SETTLED -> Unit
-                    }
-                    false // keep row; kill uses confirm dialog / list update
-                }
-                SwipeToDismissBoxValue.StartToEnd -> {
-                    when (section) {
-                        SectionKey.IN_PROGRESS -> {
-                            haptic(HapticKind.Tick)
-                            onToggleMute()
-                        }
-                        SectionKey.DRAFT -> {
-                            haptic(HapticKind.Tick)
-                            onClick() // open draft
-                        }
-                        SectionKey.SETTLED -> {
-                            haptic(HapticKind.Tick)
-                            onResume()
-                        }
-                    }
-                    false // snap back after secondary action
-                }
-                SwipeToDismissBoxValue.Settled -> false
+    fun label(action: SessionSwipeAction?): String? = when (action) {
+        SessionSwipeAction.Mute -> "Mute"
+        SessionSwipeAction.Unmute -> "Unmute"
+        SessionSwipeAction.Settle -> "Settle"
+        SessionSwipeAction.Edit -> "Edit"
+        SessionSwipeAction.Discard -> "Discard"
+        SessionSwipeAction.Activate -> "Activate"
+        null -> null
+    }
+
+    fun icon(action: SessionSwipeAction?): Int? = when (action) {
+        SessionSwipeAction.Mute -> R.drawable.ic_volume_x
+        SessionSwipeAction.Unmute -> R.drawable.ic_volume_2
+        SessionSwipeAction.Settle -> R.drawable.ic_check
+        SessionSwipeAction.Edit -> R.drawable.ic_pencil
+        SessionSwipeAction.Discard -> R.drawable.ic_trash
+        SessionSwipeAction.Activate -> R.drawable.ic_play
+        null -> null
+    }
+
+    fun runAction(action: SessionSwipeAction?) {
+        when (action) {
+            SessionSwipeAction.Mute, SessionSwipeAction.Unmute -> {
+                haptic(HapticKind.Tick)
+                onToggleMute()
             }
-        },
-        // ~55% of row width before commit (default Material is 56.dp; fraction felt too eager at 0.35).
-        positionalThreshold = { total -> total * 0.55f },
-    )
+            SessionSwipeAction.Settle, SessionSwipeAction.Discard -> {
+                haptic(HapticKind.Confirm)
+                onKill()
+            }
+            SessionSwipeAction.Edit -> {
+                haptic(HapticKind.Tick)
+                onClick()
+            }
+            SessionSwipeAction.Activate -> {
+                haptic(HapticKind.Tick)
+                onResume()
+            }
+            null -> Unit
+        }
+    }
 
-    val enableStartToEnd = true
-    val enableEndToStart = section != SectionKey.SETTLED
-    // While reordering, disable horizontal swipe so Calvin long-press owns the pointer.
-    val swipeGestures = !isDragging && (enableStartToEnd || enableEndToStart)
-
-    // longPress must wrap SwipeToDismissBox, not sit under its anchoredDraggable.
-    // Otherwise horizontal swipe steals the pointer and drag never starts.
     Box(
         modifier = dragModifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp),
+            .padding(outerPadding),
     ) {
-    SwipeToDismissBox(
-        state = dismissState,
-        modifier = Modifier.fillMaxWidth(),
-        enableDismissFromStartToEnd = enableStartToEnd,
-        enableDismissFromEndToStart = enableEndToStart,
-        gesturesEnabled = swipeGestures,
-        backgroundContent = {
-            val dir = dismissState.dismissDirection
-            val color = when (dir) {
-                SwipeToDismissBoxValue.StartToEnd -> when (section) {
-                    SectionKey.IN_PROGRESS -> Color(c.warning).copy(alpha = 0.35f)
-                    else -> cs.primary.copy(alpha = 0.28f)
-                }
-                SwipeToDismissBoxValue.EndToStart -> when (section) {
-                    SectionKey.DRAFT -> cs.error.copy(alpha = 0.35f)
-                    else -> cs.primary.copy(alpha = 0.35f)
-                }
-                else -> Color.Transparent
-            }
-            val icon = when (dir) {
-                SwipeToDismissBoxValue.StartToEnd -> when (section) {
-                    SectionKey.IN_PROGRESS ->
-                        if (s.mute == true) R.drawable.ic_volume_2 else R.drawable.ic_volume_x
-                    SectionKey.DRAFT -> R.drawable.ic_pencil
-                    SectionKey.SETTLED -> R.drawable.ic_play
-                }
-                SwipeToDismissBoxValue.EndToStart -> when (section) {
-                    SectionKey.DRAFT -> R.drawable.ic_trash
-                    else -> R.drawable.ic_check
-                }
-                else -> null
-            }
-            val label = when (dir) {
-                SwipeToDismissBoxValue.StartToEnd -> when (section) {
-                    SectionKey.IN_PROGRESS -> if (s.mute == true) "Unmute" else "Mute"
-                    SectionKey.DRAFT -> "Edit"
-                    SectionKey.SETTLED -> "Activate"
-                }
-                SwipeToDismissBoxValue.EndToStart -> when (section) {
-                    SectionKey.DRAFT -> "Delete"
-                    else -> "Settle"
-                }
-                else -> ""
-            }
-            val align = when (dir) {
-                SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
-                SwipeToDismissBoxValue.EndToStart -> Alignment.CenterEnd
-                else -> Alignment.Center
-            }
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(color)
-                    .padding(horizontal = 20.dp),
-                contentAlignment = align,
-            ) {
-                if (icon != null) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            painter = painterResource(icon),
-                            contentDescription = label,
-                            tint = cs.onSurface,
-                            modifier = Modifier.size(22.dp),
-                        )
-                        Text(label, color = cs.onSurface, fontSize = 11.sp)
-                    }
-                }
-            }
-        },
-    ) {
-        Surface(
-            tonalElevation = elevation,
-            shadowElevation = elevation,
-            shape = RoundedCornerShape(Radii.md),
-            color = if (active) cs.surfaceContainer else cs.surfaceContainerHigh,
-            onClick = { haptic(HapticKind.Tick); onClick() },
-            interactionSource = rowInteraction,
-            modifier = Modifier.fillMaxWidth(),
+        SwipeActionRow(
+            rowId = s.id,
+            openRowId = openSwipeRowId,
+            onOpenRowChange = onOpenSwipeRowChange,
+            startLabel = label(actions.start),
+            endLabel = label(actions.end),
+            startIcon = icon(actions.start),
+            endIcon = icon(actions.end),
+            onStartAction = { runAction(actions.start) },
+            onEndAction = { runAction(actions.end) },
+            enabled = !isDragging,
+            startColor = when (actions.start) {
+                SessionSwipeAction.Mute, SessionSwipeAction.Unmute ->
+                    Color(c.warning).copy(alpha = 0.35f)
+                else -> cs.primaryContainer
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(rowShape),
         ) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .testTag("session_row_${s.id}")
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.Top,
+            Surface(
+                tonalElevation = elevation,
+                shadowElevation = elevation,
+                shape = rowShape,
+                color = if (active) cs.surfaceContainer else cs.surfaceContainerHigh,
+                onClick = {
+                    onOpenSwipeRowChange(null)
+                    haptic(HapticKind.Tick)
+                    onClick()
+                },
+                interactionSource = rowInteraction,
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                if (s.effectiveUserStatus() == "draft") {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_pencil),
-                        contentDescription = "draft",
-                        tint = cs.primary.copy(alpha = 0.75f),
-                        modifier = Modifier.size(14.dp).align(Alignment.CenterVertically),
-                    )
-                } else {
-                    SessionStatusRail(
-                        git = null,
-                        working = working,
-                        bgOpen = bgOpen,
-                        modifier = Modifier.align(Alignment.CenterVertically),
-                    )
-                }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            s.name,
-                            color = cs.onSurface,
-                            fontSize = 15.sp,
-                            fontWeight = if (active || hasUnread) FontWeight.Bold else FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .testTag("session_row_${s.id}")
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    if (s.effectiveUserStatus() == "draft") {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_pencil),
+                            contentDescription = "draft",
+                            tint = cs.primary.copy(alpha = 0.75f),
+                            modifier = Modifier.size(14.dp).align(Alignment.CenterVertically),
                         )
-                        if (projectTag != null) {
-                            Spacer(Modifier.width(Space.sm))
+                    } else {
+                        SessionStatusRail(
+                            git = null,
+                            working = working,
+                            bgOpen = bgOpen,
+                            modifier = Modifier.align(Alignment.CenterVertically),
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                projectTag,
-                                color = cs.onSurfaceVariant.copy(alpha = 0.75f),
-                                fontFamily = MonoFontFamily,
-                                fontSize = 10.sp,
+                                s.name,
+                                color = cs.onSurface,
+                                fontSize = 15.sp,
+                                fontWeight = if (active || hasUnread) FontWeight.Bold else FontWeight.Medium,
                                 maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
                             )
+                            if (projectTag != null) {
+                                Spacer(Modifier.width(Space.sm))
+                                Text(
+                                    projectTag,
+                                    color = cs.onSurfaceVariant.copy(alpha = 0.75f),
+                                    fontFamily = MonoFontFamily,
+                                    fontSize = 10.sp,
+                                    maxLines = 1,
+                                )
+                            }
+                            if (hostBadge != null) {
+                                Spacer(Modifier.width(Space.sm))
+                                dev.supermux.android.host.HostBadge(hostBadge)
+                            }
+                            val timeStr = relTime(preview?.ts)
+                            if (timeStr.isNotEmpty()) {
+                                Spacer(Modifier.width(Space.sm))
+                                Text(
+                                    timeStr,
+                                    color = cs.onSurfaceVariant,
+                                    fontFamily = MonoFontFamily,
+                                    fontSize = 11.sp,
+                                )
+                            }
                         }
-                        if (hostBadge != null) {
-                            Spacer(Modifier.width(Space.sm))
-                            dev.supermux.android.host.HostBadge(hostBadge)
+                        val userSt = s.effectiveUserStatus()
+                        val status = s.status
+                        when {
+                            userSt == "draft" -> {
+                                Spacer(Modifier.height(2.dp))
+                                Text("draft", color = cs.primary, fontFamily = MonoFontFamily, fontSize = 10.sp)
+                            }
+                            status != null && status != "active" && status != "archived" -> {
+                                val badgeColor = if (status == "suspended") Color(c.warning)
+                                else cs.onSurfaceVariant.copy(alpha = 0.6f)
+                                Spacer(Modifier.height(2.dp))
+                                Text(status, color = badgeColor, fontFamily = MonoFontFamily, fontSize = 10.sp)
+                            }
+                            else -> Spacer(Modifier.height(Space.xs))
                         }
-                        val timeStr = relTime(preview?.ts)
-                        if (timeStr.isNotEmpty()) {
-                            Spacer(Modifier.width(Space.sm))
+                        val previewText = preview?.text?.replace("\n", " ")?.take(80)
+                        if (previewText != null) {
                             Text(
-                                timeStr,
+                                previewText,
+                                color = cs.onSurfaceVariant,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        } else {
+                            Text(
+                                formatWorkdir(s.workdir, inferHomeDir(s.workdir)),
                                 color = cs.onSurfaceVariant,
                                 fontFamily = MonoFontFamily,
                                 fontSize = 11.sp,
+                                fontStyle = FontStyle.Italic,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
-                    }
-                    val userSt = s.effectiveUserStatus()
-                    val status = s.status
-                    when {
-                        userSt == "draft" -> {
-                            Spacer(Modifier.height(2.dp))
-                            Text("draft", color = cs.primary, fontFamily = MonoFontFamily, fontSize = 10.sp)
-                        }
-                        status != null && status != "active" && status != "archived" -> {
-                            val badgeColor = if (status == "suspended") Color(c.warning)
-                            else cs.onSurfaceVariant.copy(alpha = 0.6f)
-                            Spacer(Modifier.height(2.dp))
-                            Text(status, color = badgeColor, fontFamily = MonoFontFamily, fontSize = 10.sp)
-                        }
-                        else -> Spacer(Modifier.height(Space.xs))
-                    }
-                    val previewText = preview?.text?.replace("\n", " ")?.take(80)
-                    if (previewText != null) {
-                        Text(
-                            previewText,
-                            color = cs.onSurfaceVariant,
-                            fontSize = 11.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    } else {
-                        Text(
-                            formatWorkdir(s.workdir, inferHomeDir(s.workdir)),
-                            color = cs.onSurfaceVariant,
-                            fontFamily = MonoFontFamily,
-                            fontSize = 11.sp,
-                            fontStyle = FontStyle.Italic,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
                     }
                 }
             }
         }
-    }
     } // Box(dragModifier)
 }
 
@@ -558,8 +498,19 @@ fun SessionListScreen(
     val groups = remember(onlineSessions, effectiveHome, lastBySession, archived) {
         groupSessions(onlineSessions, effectiveHome, lastTs, archived = archived)
     }
-    val flatSections = remember(onlineSessions, lastBySession, archived) {
+    val baseFlatSections = remember(onlineSessions, lastBySession, archived) {
         buildTaskSections(combinedTaskSessions(onlineSessions, archived), lastTs)
+    }
+    val reorderRows = remember(baseFlatSections) { baseFlatSections.flatMap { it.sessions } }
+    val workingOrders = remember { mutableStateMapOf<SessionReorderScope, List<String>>() }
+    val flatSections = baseFlatSections.map { section ->
+        section.copy(
+            sessions = applyWorkingOrders(
+                rows = section.sessions,
+                workingOrders = workingOrders,
+                projectScoped = false,
+            ),
+        )
     }
     // Offline hosts (greyed groups with last-seen), honoring the filter.
     val offlineGroups = if (multiHost) {
@@ -571,6 +522,9 @@ fun SessionListScreen(
     var renameTarget by remember { mutableStateOf<SessionInfo?>(null) }
     var renameText by remember { mutableStateOf("") }
     var killTarget by remember { mutableStateOf<SessionInfo?>(null) }
+    var openSwipeRowId by remember { mutableStateOf<String?>(null) }
+    val dragWorkingState = remember { SessionDragWorkingState() }
+    val haptic = rememberHaptics()
 
     // Which project groups are collapsed (keyed by group workdir), restored from and
     // written back to SharedPreferences so the choice survives app restarts.
@@ -587,26 +541,66 @@ fun SessionListScreen(
     var flatSettledExpanded by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
+            if (scrolling) openSwipeRowId = null
+        }
+    }
+    LaunchedEffect(groupByProject) {
+        openSwipeRowId = null
+    }
+
+    fun beginDrag(session: SessionInfo) {
+        val scope = reorderScope(session, projectScoped = groupByProject)
+        val orderedIds = workingOrders[scope]
+            ?: reorderRows
+                .filter { reorderScope(it, projectScoped = groupByProject) == scope }
+                .map { it.id }
+        dragWorkingState.begin(scope, orderedIds)
+        openSwipeRowId = null
+        haptic(HapticKind.Tick)
+    }
+
+    fun finishDrag() {
+        val finished = dragWorkingState.finish(commit = true)
+        finished?.let { move ->
+            onReorder(move.orderedIds)
+            // The ViewModel applies sortOrder optimistically before returning. Drop the gesture
+            // overlay so later server snapshots (including a failed persistence rollback) win.
+            workingOrders.remove(move.scope)
+        }
+    }
+
     // Native Compose reorder (sh.calvin.reorderable) — elevates the item, auto-scrolls,
     // animates neighbors. Used by production apps (Pocket Casts, ProtonVPN, etc.).
     val reorderableState = rememberReorderableLazyListState(listState) { from, to ->
         val fromKey = from.key as? String ?: return@rememberReorderableLazyListState
         val toKey = to.key as? String ?: return@rememberReorderableLazyListState
-        // Only reorder within the same flat section: keys are "flat:<sessionId>".
-        // Do not use from.index/to.index — headers/settled/offline items shift absolute indices.
-        if (!fromKey.startsWith("flat:") || !toKey.startsWith("flat:")) return@rememberReorderableLazyListState
-        val fromId = fromKey.removePrefix("flat:")
-        val toId = toKey.removePrefix("flat:")
-        val section = flatSections.find { sec ->
-            sec.key != SectionKey.SETTLED && sec.sessions.any { it.id == fromId }
-        } ?: return@rememberReorderableLazyListState
-        if (section.sessions.none { it.id == toId }) return@rememberReorderableLazyListState
-        val ids = section.sessions.map { it.id }
-        val fi = ids.indexOf(fromId)
-        val ti = ids.indexOf(toId)
-        if (fi < 0 || ti < 0 || fi == ti) return@rememberReorderableLazyListState
-        // Must finish list mutation before returning (library contract).
-        onReorder(moveId(ids, fi, ti))
+        if (!fromKey.startsWith("task:") || !toKey.startsWith("task:")) {
+            return@rememberReorderableLazyListState
+        }
+        val move = moveWithinScope(
+            rows = reorderRows,
+            workingOrders = workingOrders,
+            fromId = fromKey.removePrefix("task:"),
+            toId = toKey.removePrefix("task:"),
+            projectScoped = groupByProject,
+        ) ?: return@rememberReorderableLazyListState
+        val originalIds = workingOrders[move.scope]
+            ?: reorderRows
+                .filter { reorderScope(it, projectScoped = groupByProject) == move.scope }
+                .map { it.id }
+        dragWorkingState.beginIfIdle(move.scope, originalIds)
+        // Calvin requires this mutation before onMove returns so neighbors can animate.
+        workingOrders[move.scope] = move.orderedIds
+        dragWorkingState.move(move.orderedIds)
+    }
+    LaunchedEffect(reorderableState) {
+        var wasDragging = reorderableState.isAnyItemDragging
+        snapshotFlow { reorderableState.isAnyItemDragging }.collect { dragging ->
+            if (wasDragging && !dragging) finishDrag()
+            wasDragging = dragging
+        }
     }
 
     fun openSession(s: SessionInfo) {
@@ -878,6 +872,8 @@ fun SessionListScreen(
                             working = agentState[s.id]?.working == true,
                             bgOpen = agentState[s.id]?.bgOpen ?: 0,
                             hostBadge = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
+                            openSwipeRowId = openSwipeRowId,
+                            onOpenSwipeRowChange = { openSwipeRowId = it },
                             onClick = { openSession(s) },
                             onRename = { renameTarget = s; renameText = s.name },
                             onKill = { killTarget = s },
@@ -907,6 +903,8 @@ fun SessionListScreen(
                                     bgOpen = agentState[s.id]?.bgOpen ?: 0,
                                     hostBadge = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
                                     projectTag = projectLabel(s, effectiveHome),
+                                    openSwipeRowId = openSwipeRowId,
+                                    onOpenSwipeRowChange = { openSwipeRowId = it },
                                     onClick = { openSession(s) },
                                     onRename = { renameTarget = s; renameText = s.name },
                                     onKill = { killTarget = s },
@@ -928,8 +926,8 @@ fun SessionListScreen(
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                             )
                         }
-                        items(section.sessions, key = { "flat:${it.id}" }) { s ->
-                            ReorderableItem(reorderableState, key = "flat:${s.id}") { isDragging ->
+                        items(section.sessions, key = { "task:${it.id}" }) { s ->
+                            ReorderableItem(reorderableState, key = "task:${s.id}") { isDragging ->
                                 // Whole-row long-press on the swipe shell (parent of Surface click).
                                 // Shared interactionSource keeps click + long-press from fighting
                                 // (Calvin demo pattern). Swipe is disabled while isDragging.
@@ -944,8 +942,12 @@ fun SessionListScreen(
                                     projectTag = projectLabel(s, effectiveHome),
                                     isDragging = isDragging,
                                     interactionSource = rowInteraction,
+                                    openSwipeRowId = openSwipeRowId,
+                                    onOpenSwipeRowChange = { openSwipeRowId = it },
                                     dragModifier = Modifier.longPressDraggableHandle(
                                         interactionSource = rowInteraction,
+                                        onDragStarted = { beginDrag(s) },
+                                        onDragStopped = { finishDrag() },
                                     ),
                                     onClick = { openSession(s) },
                                     onRename = { renameTarget = s; renameText = s.name },
@@ -960,119 +962,164 @@ fun SessionListScreen(
                     }
                 }
             } else {
-            // Grouped: path header above Android-style card; rows flush; settled as quiet footer.
-            groups.forEach { g ->
-                item(key = "group:${g.workdir}") {
+                // Grouped rows stay visually joined, but each row is a top-level lazy item so
+                // the reorder engine can move it and auto-scroll exactly as it does in flat mode.
+                groups.forEach { g ->
                     val isCollapsed = collapsedPaths.contains(g.workdir)
-                    val activeCount = g.sections.filter { it.key != SectionKey.SETTLED }
-                        .sumOf { it.sessions.size }
-                        .let { n -> if (g.workdir == dev.supermux.session.PA_GROUP_KEY) g.sessions.size else n }
-                    val openSections = if (g.sections.isEmpty()) {
-                        // PA group: single flat list of sessions
-                        listOf(TaskSection(SectionKey.IN_PROGRESS, "In Progress", g.sessions))
+                    val isPaGroup = g.workdir == dev.supermux.session.PA_GROUP_KEY
+                    val activeCount = if (isPaGroup) {
+                        g.sessions.size
                     } else {
-                        g.sections.filter { it.key != SectionKey.SETTLED }
+                        g.sections.filter { it.key != SectionKey.SETTLED }.sumOf { it.sessions.size }
+                    }
+                    val openRows = if (isPaGroup) {
+                        g.sessions
+                    } else {
+                        g.sections
+                            .filter { it.key != SectionKey.SETTLED }
+                            .flatMap { applyWorkingOrders(it.sessions, workingOrders) }
                     }
                     val settled = g.sections.firstOrNull { it.key == SectionKey.SETTLED }
+                    val settledRows = settled?.sessions.orEmpty()
                     val settledOpen = settledExpanded.contains(g.workdir)
-                    Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
-                        PathGroupHeader(
-                            label = g.label,
-                            count = activeCount,
-                            collapsed = isCollapsed,
-                            onToggle = {
-                                collapsedPaths = if (isCollapsed) {
-                                    collapsedPaths - g.workdir
-                                } else {
-                                    collapsedPaths + g.workdir
+
+                    item(key = "group:header:${g.workdir}") {
+                        Box(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+                            PathGroupHeader(
+                                label = g.label,
+                                count = activeCount,
+                                collapsed = isCollapsed,
+                                onToggle = {
+                                    openSwipeRowId = null
+                                    collapsedPaths = if (isCollapsed) {
+                                        collapsedPaths - g.workdir
+                                    } else {
+                                        collapsedPaths + g.workdir
+                                    }
+                                    saveCollapsedPaths(ctx, collapsedPaths)
+                                },
+                            )
+                        }
+                    }
+
+                    if (!isCollapsed) {
+                        if (isPaGroup) {
+                            itemsIndexed(openRows, key = { _, s -> "group:pa:${s.id}" }) { index, s ->
+                                SessionRow(
+                                    s = s,
+                                    active = s.id == activeId,
+                                    preview = lastBySession[s.id],
+                                    working = agentState[s.id]?.working == true,
+                                    bgOpen = agentState[s.id]?.bgOpen ?: 0,
+                                    hostBadge = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
+                                    openSwipeRowId = openSwipeRowId,
+                                    onOpenSwipeRowChange = { openSwipeRowId = it },
+                                    rowShape = groupedRowShape(
+                                        first = index == 0,
+                                        last = index == openRows.lastIndex,
+                                    ),
+                                    outerPadding = PaddingValues(horizontal = 12.dp),
+                                    onClick = { openSession(s) },
+                                    onRename = { renameTarget = s; renameText = s.name },
+                                    onKill = { killTarget = s },
+                                    onToggleMute = { onMute(s.id, !(s.mute ?: false)) },
+                                    sharedScope = sharedScope,
+                                    animScope = animScope,
+                                )
+                            }
+                        } else {
+                            itemsIndexed(openRows, key = { _, s -> "task:${s.id}" }) { index, s ->
+                                ReorderableItem(reorderableState, key = "task:${s.id}") { isDragging ->
+                                    val rowInteraction = remember { MutableInteractionSource() }
+                                    SessionRow(
+                                        s = s,
+                                        active = s.id == activeId,
+                                        preview = lastBySession[s.id],
+                                        working = agentState[s.id]?.working == true,
+                                        bgOpen = agentState[s.id]?.bgOpen ?: 0,
+                                        hostBadge = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
+                                        openSwipeRowId = openSwipeRowId,
+                                        onOpenSwipeRowChange = { openSwipeRowId = it },
+                                        isDragging = isDragging,
+                                        interactionSource = rowInteraction,
+                                        dragModifier = Modifier.longPressDraggableHandle(
+                                            interactionSource = rowInteraction,
+                                            onDragStarted = { beginDrag(s) },
+                                            onDragStopped = { finishDrag() },
+                                        ),
+                                        rowShape = groupedRowShape(
+                                            first = index == 0,
+                                            last = index == openRows.lastIndex && settledRows.isEmpty(),
+                                        ),
+                                        outerPadding = PaddingValues(horizontal = 12.dp),
+                                        onClick = { openSession(s) },
+                                        onRename = { renameTarget = s; renameText = s.name },
+                                        onKill = { killTarget = s },
+                                        onToggleMute = { onMute(s.id, !(s.mute ?: false)) },
+                                        onResume = { onResume(s.id) },
+                                        sharedScope = sharedScope,
+                                        animScope = animScope,
+                                    )
                                 }
-                                saveCollapsedPaths(ctx, collapsedPaths)
-                            },
-                        )
-                        AnimatedVisibility(visible = !isCollapsed) {
-                            Surface(
-                                shape = RoundedCornerShape(Radii.lg),
-                                color = cs.surfaceContainerLow,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("group_card_${g.workdir}"),
-                            ) {
-                                Column {
-                                    var rowIndex = 0
-                                    openSections.forEach { section ->
-                                        section.sessions.forEach { s ->
-                                            if (rowIndex > 0) {
-                                                HorizontalDivider(
-                                                    modifier = Modifier.padding(start = 20.dp),
-                                                    thickness = 0.5.dp,
-                                                    color = cs.outlineVariant.copy(alpha = 0.5f),
-                                                )
+                            }
+                        }
+
+                        if (settledRows.isNotEmpty()) {
+                            item(key = "group:settled-toggle:${g.workdir}") {
+                                Surface(
+                                    shape = groupedRowShape(
+                                        first = openRows.isEmpty(),
+                                        last = !settledOpen,
+                                    ),
+                                    color = cs.surfaceContainerLow,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp),
+                                ) {
+                                    QuietSettledToggle(
+                                        count = settledRows.size,
+                                        expanded = settledOpen,
+                                        onToggle = {
+                                            openSwipeRowId = null
+                                            settledExpanded = if (settledOpen) {
+                                                settledExpanded - g.workdir
+                                            } else {
+                                                settledExpanded + g.workdir
                                             }
-                                            rowIndex++
-                                            SessionRow(
-                                                s = s,
-                                                active = s.id == activeId,
-                                                preview = lastBySession[s.id],
-                                                working = agentState[s.id]?.working == true,
-                                                bgOpen = agentState[s.id]?.bgOpen ?: 0,
-                                                hostBadge = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
-                                                onClick = { openSession(s) },
-                                                onRename = { renameTarget = s; renameText = s.name },
-                                                onKill = { killTarget = s },
-                                                onToggleMute = { onMute(s.id, !(s.mute ?: false)) },
-                                                onResume = { onResume(s.id) },
-                                                sharedScope = sharedScope,
-                                                animScope = animScope,
-                                            )
-                                        }
-                                    }
-                                    if (settled != null && settled.sessions.isNotEmpty()) {
-                                        if (rowIndex > 0) {
-                                            HorizontalDivider(
-                                                thickness = 0.5.dp,
-                                                color = cs.outlineVariant.copy(alpha = 0.5f),
-                                            )
-                                        }
-                                        QuietSettledToggle(
-                                            count = settled.sessions.size,
-                                            expanded = settledOpen,
-                                            onToggle = {
-                                                settledExpanded = if (settledOpen) {
-                                                    settledExpanded - g.workdir
-                                                } else {
-                                                    settledExpanded + g.workdir
-                                                }
-                                            },
-                                            inCard = true,
-                                        )
-                                        if (settledOpen) {
-                                            settled.sessions.forEach { s ->
-                                                HorizontalDivider(
-                                                    modifier = Modifier.padding(start = 20.dp),
-                                                    thickness = 0.5.dp,
-                                                    color = cs.outlineVariant.copy(alpha = 0.5f),
-                                                )
-                                                SessionRow(
-                                                    s,
-                                                    active = s.id == activeId,
-                                                    preview = lastBySession[s.id],
-                                                    working = false,
-                                                    hostBadge = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
-                                                    onClick = { openSession(s) },
-                                                    onResume = { onResume(s.id) },
-                                                    onKill = { killTarget = s },
-                                                    sharedScope = sharedScope,
-                                                    animScope = animScope,
-                                                )
-                                            }
-                                        }
-                                    }
+                                        },
+                                        inCard = true,
+                                    )
+                                }
+                            }
+                            if (settledOpen) {
+                                itemsIndexed(
+                                    settledRows,
+                                    key = { _, s -> "group:settled:${s.id}" },
+                                ) { index, s ->
+                                    SessionRow(
+                                        s = s,
+                                        active = s.id == activeId,
+                                        preview = lastBySession[s.id],
+                                        working = false,
+                                        hostBadge = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
+                                        openSwipeRowId = openSwipeRowId,
+                                        onOpenSwipeRowChange = { openSwipeRowId = it },
+                                        rowShape = groupedRowShape(
+                                            first = false,
+                                            last = index == settledRows.lastIndex,
+                                        ),
+                                        outerPadding = PaddingValues(horizontal = 12.dp),
+                                        onClick = { openSession(s) },
+                                        onResume = { onResume(s.id) },
+                                        onKill = { killTarget = s },
+                                        sharedScope = sharedScope,
+                                        animScope = animScope,
+                                    )
                                 }
                             }
                         }
                     }
                 }
-            }
             }
 
             // Offline hosts (spec §5): a greyed group per unreachable host with its last-seen and
@@ -1086,6 +1133,8 @@ fun SessionListScreen(
                             active = false,
                             preview = lastBySession[s.id],
                             hostBadge = hostByRecord[host.recordId],
+                            openSwipeRowId = openSwipeRowId,
+                            onOpenSwipeRowChange = { openSwipeRowId = it },
                             onClick = { onOpen(s.id) },
                             onRename = { renameTarget = s; renameText = s.name },
                             onKill = { killTarget = s },
@@ -1113,13 +1162,22 @@ fun SessionListScreen(
         )
     }
     killTarget?.let { target ->
+        val discard = target.sectionKey() == SectionKey.DRAFT
         AlertDialog(
             onDismissRequest = { killTarget = null },
-            title = { Text("Settle session?") },
-            text = { Text("This ends \"${target.name}\" and its agent. This can't be undone.") },
+            title = { Text(if (discard) "Discard draft?" else "Settle session?") },
+            text = {
+                Text(
+                    if (discard) {
+                        "This permanently discards \"${target.name}\". This can't be undone."
+                    } else {
+                        "This ends \"${target.name}\" and its agent. This can't be undone."
+                    },
+                )
+            },
             confirmButton = {
                 TextButton(onClick = { onKill(target.id); killTarget = null }) {
-                    Text("Settle", color = MaterialTheme.colorScheme.error)
+                    Text(if (discard) "Discard" else "Settle", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = { TextButton(onClick = { killTarget = null }) { Text("Cancel") } },

@@ -25,6 +25,7 @@ android {
         minSdk = libs.versions.androidMinSdk.get().toInt()
         targetSdk = libs.versions.androidCompileSdk.get().toInt()
         versionCode = 32; versionName = "0.9.8"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true }
     signingConfigs {
@@ -95,7 +96,10 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.coil.network.ktor3)
     debugImplementation(libs.compose.ui.tooling)
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     implementation(libs.compose.ui.tooling.preview)
     testImplementation(kotlin("test"))
     testImplementation(libs.coroutines.test)
+    androidTestImplementation(platform(libs.compose.bom))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 }
