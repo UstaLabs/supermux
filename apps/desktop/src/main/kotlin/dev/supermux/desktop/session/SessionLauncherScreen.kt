@@ -67,6 +67,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -240,7 +241,18 @@ fun SessionLauncherScreen(
         staged: List<StagedUpload>,
         worktree: Boolean,
         baseBranch: String?,
+        replaceDraftId: String?,
     ) -> Unit,
+    onSaveDraft: suspend (
+        workdir: String,
+        agent: String,
+        model: String?,
+        reasoningLevel: String?,
+        text: String,
+        replaceDraftId: String?,
+    ) -> String? = { _, _, _, _, _, _ -> null },
+    initialDraftId: String? = null,
+    initialDraft: SessionInfo? = null,
     transcribeAudio: suspend (bytes: ByteArray, filename: String) -> String? = { _, _ -> null },
     micRecorderFactory: () -> MicCapture = { MicRecorder() },
     // ── Multi-host host picker (spec §5); defaults to single-host (no picker) ──
@@ -266,6 +278,21 @@ fun SessionLauncherScreen(
     // a restore-settle from a genuine change. draftCleared guards the dispose-flush after a submit.
     var launcherRestoring by remember { mutableStateOf(true) }
     var draftCleared by remember { mutableStateOf(false) }
+    var activeDraftId by remember { mutableStateOf(initialDraftId) }
+    // Prefill runs once when opening from the task list draft.
+    LaunchedEffect(initialDraftId) {
+        val s = initialDraft
+        if (s != null) {
+            activeDraftId = s.id
+            workdir = s.workdir
+            workdirTouched = true
+            if (s.agent.isNotBlank()) agent = s.agent
+            if (!s.model.isNullOrBlank()) model = s.model
+            val t = s.draftPayload?.text.orEmpty()
+            message = TextFieldValue(t, TextRange(t.length))
+        }
+    }
+
     var lastSeenAgent by remember { mutableStateOf<String?>(null) }
     var lastSeenWorkdir by remember { mutableStateOf<String?>(null) }
     var lastSeenHost by remember { mutableStateOf<String?>(null) }
@@ -428,6 +455,29 @@ fun SessionLauncherScreen(
         label = "send_scale",
     )
     val canSend = workdir.isNotBlank() && (message.text.isNotBlank() || staged.isNotEmpty())
+    val canSaveDraft = workdir.isNotBlank() && message.text.isNotBlank()
+    fun doSaveDraft() {
+        if (!canSaveDraft || submitting) return
+        scope.launch {
+            submitting = true
+            error = null
+            try {
+                val id = onSaveDraft(workdir.trim(), agent, model, reasoningLevel, message.text.trim(), activeDraftId)
+                if (id != null) {
+                    onClearDraft()
+                    draftCleared = true
+                    onBack()
+                } else {
+                    error = "Couldn't save draft"
+                }
+            } catch (e: Exception) {
+                error = e.message ?: "Couldn't save draft"
+            } finally {
+                submitting = false
+            }
+        }
+    }
+
 
     // Mic dictation (M5-1): the pre-spawn launcher has no live session yet, so [transcribeAudio]
     // always routes through the id-less `/transcribe` path (bound by the caller —
@@ -458,7 +508,7 @@ fun SessionLauncherScreen(
         }
         scope.launch {
             try {
-                onSubmit(workdir.trim(), agent, model, reasoningLevel, message.text.trim(), toUpload, wantsWorktree, base)
+                onSubmit(workdir.trim(), agent, model, reasoningLevel, message.text.trim(), toUpload, wantsWorktree, base, activeDraftId)
                 onClearDraft()
                 draftCleared = true
             } catch (e: Exception) {
@@ -741,6 +791,11 @@ fun SessionLauncherScreen(
 
                 Spacer(Modifier.weight(1f))
 
+                TextButton(
+                    onClick = { doSaveDraft() },
+                    enabled = canSaveDraft && !submitting,
+                    modifier = Modifier.testTag("launcher_save_draft"),
+                ) { Text("Save draft", fontSize = 12.sp) }
                 IconButton(
                     onClick = { doSubmit() },
                     enabled = canSend && !submitting,

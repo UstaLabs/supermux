@@ -13,6 +13,7 @@ struct RootView: View {
     @State private var fleet: Fleet
     @State private var selected: String?
     @State private var route: NavRoute?
+    @State private var launcherDraftId: String? = nil
     @State private var showAddHost = false
     @State private var debugArchived: ArchivedItem?    // SM_OPEN_ARCHIVED headless repro
     @State private var layout = WorkspaceLayoutModel()
@@ -170,9 +171,11 @@ struct RootView: View {
     private var compactShell: some View {
         NavigationSplitView {
             SessionsListView(fleet: fleet, selected: $selected,
-                             onNewSession: { route = .newSession },
+                             onNewSession: { launcherDraftId = nil; route = .newSession },
                              onArchived: { route = .archived },
-                             onAddHost: { showAddHost = true })
+                             onAddHost: { showAddHost = true },
+                             onOpenDraft: { id in launcherDraftId = id; route = .newSession },
+                             onReorder: { ids in fleet.activeBroker?.reorderSessions(ids) })
                 .navigationDestination(item: $route) { page($0) }
                 .toolbar {
                     ToolbarItem(placement: .smTopTrailing) {
@@ -207,6 +210,7 @@ struct RootView: View {
         NavigationStack {
             IPadWorkspace(fleet: fleet, selected: $selected, route: $route, layout: layout,
                           onAddHost: { showAddHost = true },
+                          launcherDraftId: $launcherDraftId,
                           newSessionContent: {
                               #if os(macOS)
                               MacNewSessionOverlay(onClose: { route = nil }) {
@@ -251,7 +255,9 @@ struct RootView: View {
     @ViewBuilder private func page(_ r: NavRoute) -> some View {
         switch r {
         case .newSession: ActiveHostPage(fleet: fleet) { broker in
-            NewSessionView(broker: broker, fleet: fleet, onSpawned: { id in route = nil; selected = id })
+            NewSessionView(broker: broker, fleet: fleet,
+                           draft: launcherDraftId.flatMap { id in fleet.sessions.first { $0.id == id } },
+                           onSpawned: { id in launcherDraftId = nil; route = nil; if !id.isEmpty { selected = id } })
         }
         case .personalAssistants: HostScopedPage(fleet: fleet) { broker in
             PersonalAssistantsView(broker: broker, onOpen: { id in route = nil; selected = id })

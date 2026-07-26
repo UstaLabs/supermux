@@ -147,7 +147,30 @@ data class SpawnRequest(
     val baseBranch: String? = null,
     /** Reasoning ("thinking") effort to start the session at (agent-specific; ignored when unsupported). */
     val reasoningLevel: String? = null,
+    /** draft | in_progress — draft creates without spawning an agent process. */
+    val userStatus: String? = null,
+    /** Composer body when [userStatus] is draft (broker camelCase on POST body). */
+    val draftPayload: DraftPayloadDto? = null,
 )
+
+/** Draft composer payload on POST /sessions (mirrors web draftPayload). */
+@Serializable
+data class DraftPayloadDto(
+    val text: String? = null,
+    val attachments: List<DraftAttachmentDto>? = null,
+)
+
+@Serializable
+data class DraftAttachmentDto(
+    val file_id: String,
+    val name: String? = null,
+    val mime: String? = null,
+    val size: Long? = null,
+    val kind: String? = null,
+)
+
+@Serializable
+data class ReorderSessionsBody(val orderedIds: List<String>)
 
 @Serializable
 data class SpawnResponse(
@@ -1157,6 +1180,15 @@ class BrokerApi(
     suspend fun kill(id: String) {
         http.delete("$httpBase/sessions/$id") {
             header("Authorization", bearerHeader())
+        }
+    }
+
+    /** PATCH /sessions/reorder — renumber sort_order for a whole section (ordered ids). */
+    suspend fun reorderSessions(orderedIds: List<String>) {
+        http.patch("$httpBase/sessions/reorder") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(ReorderSessionsBody(orderedIds)))
         }
     }
 

@@ -176,6 +176,11 @@ class AppViewModel(
 
     private val _sessions = MutableStateFlow<List<SessionInfo>>(emptyList())
     val sessions: StateFlow<List<SessionInfo>> = _sessions
+
+    /** Archived sessions for the active host — folded into Settled on the task list. */
+    private val _archivedSessions = MutableStateFlow<List<ArchivedDto>>(emptyList())
+    val archivedSessions: StateFlow<List<ArchivedDto>> = _archivedSessions
+
     /** sessionId → owning host recordId (drives per-row badges + per-session routing). */
     private val _sessionHost = MutableStateFlow<Map<String, String>>(emptyMap())
     val sessionHost: StateFlow<Map<String, String>> = _sessionHost
@@ -287,6 +292,7 @@ class AppViewModel(
             is ServerFrame.Snapshot -> {
                 sessionsByHost[recordId] = f.sessions
                 onlineHosts[recordId] = true
+                if (recordId == _activeHost.value) refreshArchived()
                 val now = System.currentTimeMillis()
                 store.updateSeen(recordId, now)
                 // Spec §5: replace this host's persisted snapshot wholesale so it survives a restart
@@ -335,6 +341,9 @@ class AppViewModel(
                             session_branch = incoming.session_branch ?: s.session_branch,
                             git = incoming.git ?: s.git,
                             finish_job = incoming.finish_job ?: s.finish_job,
+                            userStatus = incoming.userStatus ?: s.userStatus,
+                            sortOrder = if (incoming.userStatus != null || incoming.sortOrder != 0) incoming.sortOrder else s.sortOrder,
+                            draftPayload = incoming.draftPayload ?: s.draftPayload,
                         )
                     }
                 }
@@ -345,6 +354,7 @@ class AppViewModel(
                 sessionsByHost[recordId] = sessionsByHost[recordId].orEmpty().filterNot { it.id == f.id }
                 rebuildSessions()
                 if (bgByKey.remove(keyFor(recordId, f.id)) != null) dirty = true
+                if (recordId == _activeHost.value) refreshArchived()
             }
             is ServerFrame.SessionRenamed ->
                 patchSessionIn(recordId, f.id) { it.copy(name = f.newName) }
@@ -1022,8 +1032,13 @@ class AppViewModel(
         worktree: Boolean = false,
         baseBranch: String? = null,
         reasoningLevel: String? = null,
+        /** When reopening a draft, hard-delete it first (web onPromptSubmit parity). */
+        replaceDraftId: String? = null,
     ): String {
         val api = activeApi() ?: throw IllegalStateException("No host connected")
+        if (!replaceDraftId.isNullOrBlank()) {
+            runCatching { api.kill(replaceDraftId) }
+        }
         val validation = runCatching { api.validatePath(workdir) }.getOrNull()
             ?: throw IllegalArgumentException("Could not validate path")
         val resolvedPath = validation.path
@@ -1086,7 +1101,56 @@ class AppViewModel(
     suspend fun addDevice(name: String): AddDeviceResponse? = runCatching { activeApi()?.addDevice(name) }.getOrNull()
     fun revoke(n: String) { viewModelScope.launch { runCatching { activeApi()?.revokeDevice(n) } } }
     suspend fun archived(): List<ArchivedDto> = runCatching { activeApi()?.archived() }.getOrNull() ?: emptyList()
-    fun resume(id: String) { viewModelScope.launch { runCatching { activeApi()?.resume(id) } } }
+
+    fun refreshArchived() {
+        viewModelScope.launch {
+            _archivedSessions.value = archived()
+        }
+    }
+
+    fun reorderSessions(orderedIds: List<String>) {
+        orderedIds.forEachIndexed { i, id ->
+            patchSession(id) { it.copy(sortOrder = i) }
+        }
+        viewModelScope.launch {
+            runCatching { activeApi()?.reorderSessions(orderedIds) }
+        }
+    }
+
+    /** Create a draft session (no agent process) with launcher composer payload. */
+    suspend fun createDraftSession(
+        workdir: String,
+        agent: String,
+        model: String?,
+        text: String,
+        name: String? = null,
+        reasoningLevel: String? = null,
+        attachments: List<dev.supermux.net.DraftAttachmentDto> = emptyList(),
+        replaceDraftId: String? = null,
+    ): String? {
+        return runCatching {
+            val api = activeApi() ?: return@runCatching null
+            if (!replaceDraftId.isNullOrBlank()) {
+                runCatching { api.kill(replaceDraftId) }
+            }
+            api.spawn(
+                SpawnRequest(
+                    workdir = workdir,
+                    name = name?.ifBlank { null },
+                    agent = agent,
+                    model = model?.ifBlank { null },
+                    reasoningLevel = reasoningLevel,
+                    userStatus = "draft",
+                    draftPayload = dev.supermux.net.DraftPayloadDto(
+                        text = text,
+                        attachments = attachments.ifEmpty { null },
+                    ),
+                ),
+            ).id
+        }.getOrNull()
+    }
+
+    fun resume(id: String) { viewModelScope.launch { runCatching { activeApi()?.resume(id) }; refreshArchived() } }
 
     // ── Assistant ──────────────────────────────────────────────────────────────
 

@@ -1,5 +1,6 @@
 package dev.supermux.session
 
+import dev.supermux.net.ArchivedDto
 import dev.supermux.proto.SessionInfo
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -96,5 +97,46 @@ class SessionGroupingTest {
 
     @Test fun formatWorkdir_empty_home_infers_from_workdir() {
         assertEquals("…/projects/x", formatWorkdir("/home/user/projects/x", ""))
+    }
+
+
+    @Test fun task_sections_split_by_user_status_and_sort_order() {
+        val list = listOf(
+            SessionInfo(id = "a", name = "a", workdir = "/p", agent = "claude", userStatus = "in_progress", sortOrder = 2),
+            SessionInfo(id = "b", name = "b", workdir = "/p", agent = "claude", userStatus = "in_progress", sortOrder = 0),
+            SessionInfo(id = "d", name = "d", workdir = "/p", agent = "claude", userStatus = "draft", sortOrder = 0),
+            SessionInfo(id = "s", name = "s", workdir = "/p", agent = "claude", userStatus = "settled", sortOrder = 9),
+        )
+        val sections = buildTaskSections(list) { "" }
+        assertEquals(listOf(SectionKey.IN_PROGRESS, SectionKey.DRAFT, SectionKey.SETTLED), sections.map { it.key })
+        assertEquals(listOf("b", "a"), sections[0].sessions.map { it.name })
+        assertEquals(listOf("d"), sections[1].sessions.map { it.name })
+        assertEquals(listOf("s"), sections[2].sessions.map { it.name })
+    }
+
+    @Test fun groupSessions_merges_archived_into_settled() {
+        val live = listOf(
+            SessionInfo(id = "live", name = "live", workdir = "/home/user/proj", agent = "claude", userStatus = "in_progress"),
+        )
+        val archived = listOf(
+            ArchivedDto(id = "old", name = "old", workdir = "/home/user/proj", agent = "claude"),
+        )
+        val groups = groupSessions(live, home = "/home/user", archived = archived)
+        assertEquals(1, groups.size)
+        val settled = groups[0].sections.first { it.key == SectionKey.SETTLED }
+        assertEquals(listOf("old"), settled.sessions.map { it.name })
+        val progress = groups[0].sections.first { it.key == SectionKey.IN_PROGRESS }
+        assertEquals(listOf("live"), progress.sessions.map { it.name })
+    }
+
+    @Test fun archived_status_counts_as_settled() {
+        val s = SessionInfo(id = "x", name = "x", workdir = "/p", agent = "claude", status = "archived")
+        assertEquals(SectionKey.SETTLED, s.sectionKey())
+    }
+
+    @Test fun moveId_reorders() {
+        assertEquals(listOf("b", "a", "c"), moveId(listOf("a", "b", "c"), 0, 1))
+        assertEquals(listOf("a", "c", "b"), moveId(listOf("a", "b", "c"), 1, 2))
+        assertEquals(listOf("a", "b", "c"), moveId(listOf("a", "b", "c"), 1, 1))
     }
 }

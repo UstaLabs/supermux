@@ -18,6 +18,7 @@ struct IPadWorkspace<NewSessionContent: View>: View {
     @Binding var route: RootView.NavRoute?
     @Bindable var layout: WorkspaceLayoutModel
     var onAddHost: () -> Void = {}
+    @Binding var launcherDraftId: String?
     @ViewBuilder var newSessionContent: () -> NewSessionContent
 
     // Session-action state shared with ChatPane (slash /rename, /kill).
@@ -165,7 +166,7 @@ struct IPadWorkspace<NewSessionContent: View>: View {
     private var sidebarRail: some View {
         SessionsRailView(fleet: fleet, selected: $selected,
                          onExpand: { layout.sidebarCollapsed = false },
-                         onNewSession: { route = .newSession },
+                         onNewSession: { launcherDraftId = nil; route = .newSession },
                          onSessionSelected: { id in
                              selected = id
                              if route == .newSession { route = nil }
@@ -185,13 +186,15 @@ struct IPadWorkspace<NewSessionContent: View>: View {
             .background(.bar)
             .overlay(alignment: .bottom) { Divider() }
             SessionsListView(fleet: fleet, selected: $selected,
-                             onNewSession: { route = .newSession },
+                             onNewSession: { launcherDraftId = nil; route = .newSession },
                              onArchived: { route = .archived },
                              onAddHost: onAddHost,
                              onSessionSelected: { id in
                                  selected = id
                                  if route == .newSession { route = nil }
-                             })
+                             },
+                             onOpenDraft: { id in launcherDraftId = id; route = .newSession },
+                             onReorder: { ids in fleet.activeBroker?.reorderSessions(ids) })
         }
     }
 

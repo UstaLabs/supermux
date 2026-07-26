@@ -83,10 +83,14 @@ struct NewSessionView: View {
     /// The active host as the picker renders it (dot + name), or nil in single-host mode.
     private var activeHost: HostView? { fleet.hostViews.first { $0.recordId == fleet.activeRecordId } }
 
-    init(broker: BrokerSession, fleet: Fleet, onSpawned: @escaping (String) -> Void) {
+    /// When non-nil, launcher reopens this draft (web /new?draft= parity).
+    private let reopenDraft: SessionInfo?
+
+    init(broker: BrokerSession, fleet: Fleet, draft: SessionInfo? = nil, onSpawned: @escaping (String) -> Void) {
         self.broker = broker
         self.fleet = fleet
         self.onSpawned = onSpawned
+        self.reopenDraft = draft
         // Seed every persisted field synchronously, at construction — before the very first
         // render — so there is never a moment where `agent`/`workdir`/etc hold a plain default
         // that a guarded `.task(id:)` effect downstream could see and act on. See the note above
@@ -97,19 +101,21 @@ struct NewSessionView: View {
         // Validate against the known agent list — web's loadPrefs() does the same
         // (SessionLauncherView.vue:126) — so a future agent type added after this prefs blob was
         // written can't leave `agent` holding a value the Menu below has no matching row for.
-        let resolvedAgent = Self.agents.contains(restoredAgent) ? restoredAgent : "claude"
+        var resolvedAgent = Self.agents.contains(restoredAgent) ? restoredAgent : "claude"
+        if let da = draft?.agent, Self.agents.contains(da) { resolvedAgent = da }
         _launcherState = State(initialValue: store)
         _agent = State(initialValue: resolvedAgent)
-        _model = State(initialValue: store.prefs.models[resolvedAgent])
-        _reasoningLevel = State(initialValue: store.prefs.reasoningLevels[resolvedAgent])
-        _workdir = State(initialValue: store.draft.workdir ?? "")
+        _model = State(initialValue: draft?.model ?? store.prefs.models[resolvedAgent])
+        _reasoningLevel = State(initialValue: draft?.reasoningLevel ?? store.prefs.reasoningLevels[resolvedAgent])
+        _workdir = State(initialValue: draft?.workdir ?? store.draft.workdir ?? "")
         _useWorktree = State(initialValue: store.draft.useWorktree)
         _baseBranch = State(initialValue: store.draft.baseBranch)
         // The real glossary/transcribe closures need `broker`, wired in `.task` once the view
         // has appeared; this placeholder context only needs to seed the restored draft text.
+        // Server draft_payload wins when reopening a task-list draft.
         _composer = State(initialValue: ComposerModel(
             context: ComposerContext(glossary: { [] }, cleanupTranscript: nil, audioFallbackTranscribe: nil),
-            initialDraft: store.draft.text
+            initialDraft: draft?.draftPayload?.text ?? store.draft.text
         ))
     }
 
@@ -127,6 +133,12 @@ struct NewSessionView: View {
             #endif
         }
         .navigationTitle("New session").smInlineNavigationTitle()
+        .toolbar {
+            ToolbarItem(placement: .smTopTrailing) {
+                Button("Save draft") { saveAsDraft() }
+                    .disabled(workdir.isEmpty || composer.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || spawning)
+            }
+        }
         .tint(Theme.teal)
         // Keyed on the active host (baseURL) so a host switch re-wires the composer context and
         // reloads that host's projects + installed agents (spec §5). Single-host: runs once on appear.
@@ -555,6 +567,35 @@ struct NewSessionView: View {
 
     private var canSpawn: Bool { !workdir.isEmpty }
 
+    private func saveAsDraft() {
+        let text = composer.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !workdir.isEmpty, !text.isEmpty else { return }
+        spawning = true
+        Task {
+            if let old = reopenDraft?.id {
+                // Replace on re-save (web saveAsDraft parity) — no update endpoint.
+                broker.kill(old)
+            }
+            let id = await broker.createDraft(
+                workdir: workdir,
+                agent: agent,
+                model: model,
+                text: text,
+                name: nil,
+                reasoningLevel: reasoningLevel
+            )
+            await MainActor.run {
+                spawning = false
+                if id != nil {
+                    launcherState.clearDraft()
+                    onSpawned(id ?? "")
+                } else {
+                    spawnFailed = true
+                }
+            }
+        }
+    }
+
     private func spawn() {
         spawning = true
         let (raw, toUpload) = composer.consume()
@@ -563,6 +604,10 @@ struct NewSessionView: View {
         let wantsWorktree = eligible ? useWorktree : false
         let base = (eligible && useWorktree && !baseBranch.isEmpty) ? baseBranch : nil
         Task {
+            // Starting a reopened draft: discard it first so the name is free (web parity).
+            if let old = reopenDraft?.id {
+                broker.kill(old)
+            }
             let id = await broker.spawn(workdir: workdir, agent: agent, name: nil, model: model,
                                         worktree: wantsWorktree, baseBranch: base, reasoningLevel: reasoningLevel)
             if let id, !id.isEmpty {

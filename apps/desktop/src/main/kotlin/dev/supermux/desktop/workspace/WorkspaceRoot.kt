@@ -91,6 +91,8 @@ class WorkspaceUiState {
      * composition — can open it too, the same reason [selectedId] lives here.
      */
     var launcherOpen by mutableStateOf(false)
+    /** When set, the launcher reopens this draft session (web /new?draft=). */
+    var launcherDraftId by mutableStateOf<String?>(null)
 
     /**
      * Whether the Archived-sessions overlay (M4e Task 2) is showing. Flipped on by the File ▸
@@ -138,7 +140,8 @@ class WorkspaceUiState {
      * draws opaquely over the others, and a stale one surfacing when another closes would be a
      * confusing back-stack. Every future overlay adds a matching openX().
      */
-    fun openLauncher() {
+    fun openLauncher(draftId: String? = null) {
+        launcherDraftId = draftId
         launcherOpen = true
         archivedOpen = false
         usageOpen = false
@@ -301,6 +304,11 @@ fun WorkspaceRoot(
     // Prefer the merged fleet flows when multi-host; else the single [app]'s. `fleet` is stable
     // across recompositions (remembered in Main), so the `?:` picks the same flow each time.
     val sessions by (fleet?.sessions ?: app.sessions).collectAsState()
+    var archivedForList by remember { mutableStateOf<List<dev.supermux.net.ArchivedDto>>(emptyList()) }
+    LaunchedEffect(sessions, ui.selectedId) {
+        // Refresh settled fold when the live list changes (settle/resume/snapshot).
+        archivedForList = runCatching { app.archived() }.getOrDefault(emptyList())
+    }
     val messages by (fleet?.messages ?: app.messages).collectAsState()
     val agentState by (fleet?.agentState ?: app.agentState).collectAsState()
     val lastBySession = remember(messages) { messages.mapValues { it.value.lastOrNull() } }
@@ -480,6 +488,10 @@ fun WorkspaceRoot(
                         onKill = { id -> appFor(id).kill(id) { if (ui.selectedId == id) ui.selectedId = null } },
                         onMute = { id, muted -> appFor(id).setMute(id, muted) },
                         onNewSession = onNewSession,
+                        archived = archivedForList,
+                        onResume = { id -> overlayScope.launch { appFor(id).resume(id); archivedForList = runCatching { app.archived() }.getOrDefault(emptyList()) } },
+                        onOpenDraft = { id -> ui.openLauncher(draftId = id) },
+                        onReorder = { ids -> app.reorderSessions(ids) },
                         // Fleet badges/chips (multi-host only; empty in single-host mode).
                         hosts = hostViews,
                         sessionHost = sessionHost,
@@ -572,7 +584,7 @@ fun WorkspaceRoot(
                         .testTag("launcher_overlay")
                         .onPreviewKeyEvent { e ->
                             if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                                ui.launcherOpen = false
+                                ui.launcherOpen = false; ui.launcherDraftId = null
                                 true
                             } else {
                                 false
@@ -582,7 +594,7 @@ fun WorkspaceRoot(
                     SessionLauncherScreen(
                         sessions = activeHostSessions,
                         home = home,
-                        onBack = { ui.launcherOpen = false },
+                        onBack = { ui.launcherOpen = false; ui.launcherDraftId = null },
                         // Host-global lookups + spawn target the ACTIVE host (`hostApp`); the host
                         // picker below switches it. Single-host → [app].
                         loadProjects = { hostApp.listProjects() },
@@ -601,9 +613,10 @@ fun WorkspaceRoot(
                         // own doSubmit try/catch turns any thrown message into the inline
                         // launcher_error text (its onSubmit contract is Unit-returning, so a failure
                         // has no other channel back to the screen).
-                        onSubmit = { workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch ->
+                        onSubmit = { workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch, replaceDraftId ->
                             val id = hostApp.createSessionWithFirstMessage(
                                 workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
+                                replaceDraftId = replaceDraftId,
                             )
                             if (id == null) {
                                 throw IllegalStateException(
@@ -612,8 +625,17 @@ fun WorkspaceRoot(
                             }
                             ui.selectedId = id
                             hostApp.sendMessage(id, text, hostApp.consumeFirstUploads(id))
-                            ui.launcherOpen = false
+                            ui.launcherOpen = false; ui.launcherDraftId = null
                         },
+                        onSaveDraft = { workdir, agent, model, reasoningLevel, text, replaceDraftId ->
+                            hostApp.createDraftSession(
+                                workdir, agent, model, text,
+                                reasoningLevel = reasoningLevel,
+                                replaceDraftId = replaceDraftId,
+                            )
+                        },
+                        initialDraftId = ui.launcherDraftId,
+                        initialDraft = ui.launcherDraftId?.let { id -> sessions.find { it.id == id } },
                         // Multi-host: pick which broker to spawn on (hidden with one host).
                         hosts = hostViews,
                         selectedHost = activeHostId,
