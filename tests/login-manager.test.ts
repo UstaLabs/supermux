@@ -120,16 +120,20 @@ test("reauth: already-authed agent exits non-zero → failed", () => {
 test("Cursor login polling uses the supplied Windows APPDATA root", () => {
   let poll: () => void = () => {}
   const checked: string[] = []
+  let present = false
   const mgr = new LoginManager({
     paths: {
       home: "C:\\Users\\u", appData: "D:\\Roaming", localAppData: "D:\\Local", platform: "win32",
     },
-    fileExists: (path) => { checked.push(path); return true },
+    // First-time login: credential absent at start so poll can succeed when it appears.
+    // (already-authed reauth mode ignores poll success — see reauth tests above.)
+    fileExists: (path) => { checked.push(path); return present },
     spawnLogin: () => ({ onStdout: () => {}, onExit: () => {}, kill: () => {}, write: () => {} }),
     onChange: () => {}, setInterval: (fn) => { poll = fn; return 1 }, clearInterval: () => {},
   })
   mgr.start("cursor")
+  present = true
   poll()
-  expect(checked).toEqual(["D:\\Roaming\\cursor\\auth.json"])
+  expect(checked).toContain("D:\\Roaming\\cursor\\auth.json")
   expect(mgr.get("cursor")?.phase).toBe("success")
 })

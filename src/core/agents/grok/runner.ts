@@ -55,10 +55,10 @@ export function makeRealGrokRunner(deps: {
     stdio: ["pipe", "pipe", "pipe"],
   })
   let stderrBuf = ""
-  child.stdout.setEncoding("utf8")
-  child.stdout.on("data", (chunk: string) => client.feed(chunk))
-  child.stderr.setEncoding("utf8")
-  child.stderr.on("data", (d: string) => {
+  child.stdout!.setEncoding("utf8")
+  child.stdout!.on("data", (chunk: string) => client.feed(chunk))
+  child.stderr!.setEncoding("utf8")
+  child.stderr!.on("data", (d: string) => {
     stderrBuf += d
     if (stderrBuf.length > STDERR_CAP) stderrBuf = stderrBuf.slice(-STDERR_CAP)
     // Keep a short debug line; the full buffered tail rides out via onExit for the UI.
