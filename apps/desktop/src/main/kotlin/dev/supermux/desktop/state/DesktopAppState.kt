@@ -785,6 +785,12 @@ class DesktopAppState(
 
     /** GET /archived-sessions — every killed/archived session. Empty on any failure. */
     fun reorderSessions(orderedIds: List<String>) {
+        // Optimistic sort_order so the list doesn't snap back when live drag ends
+        // (broker PATCH does not broadcast a session frame).
+        _sessions.update { current ->
+            val order = orderedIds.withIndex().associate { (i, id) -> id to i }
+            current.map { s -> order[s.id]?.let { s.copy(sortOrder = it) } ?: s }
+        }
         stateScope.launch {
             runCatching { api.reorderSessions(orderedIds) }
         }

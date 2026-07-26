@@ -71,6 +71,9 @@ struct SessionsListView: View {
     @State private var groupByProject = UserDefaults.standard.object(forKey: "cmux:group-by-project") as? Bool ?? false
     @State private var settledExpanded: Set<String> = []
     @State private var flatSettledExpanded = false
+    #if os(iOS)
+    @State private var listEditMode: EditMode = .inactive
+    #endif
 
     var body: some View {
         let owner = fleet.sessionHost
@@ -117,6 +120,8 @@ struct SessionsListView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("new-session")
+                .moveDisabled(true)
+                .deleteDisabled(true)
                 #if os(macOS)
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
@@ -137,6 +142,23 @@ struct SessionsListView: View {
                 .toggleStyle(.switch)
                 .accessibilityLabel("Group by project")
                 .accessibilityIdentifier("group-by-project")
+                .moveDisabled(true)
+                .deleteDisabled(true)
+                #if os(iOS)
+                Button {
+                    withAnimation {
+                        listEditMode = listEditMode == .active ? .inactive : .active
+                    }
+                } label: {
+                    Label(
+                        listEditMode == .active ? "Done reordering" : "Reorder sessions",
+                        systemImage: listEditMode == .active ? "checkmark" : "arrow.up.arrow.down"
+                    )
+                }
+                .accessibilityIdentifier("reorder-sessions")
+                .moveDisabled(true)
+                .deleteDisabled(true)
+                #endif
             }
 
             if groupByProject {
@@ -159,6 +181,9 @@ struct SessionsListView: View {
         .contentMargins(.horizontal, 12, for: .scrollContent)
         #else
         .smInsetGroupedListStyle()
+        // iOS List only allows onMove (system drag ghost) in edit mode. Toggle via
+        // the "Reorder" control in the group-by section so selection stays normal.
+        .environment(\.editMode, $listEditMode)
         #endif
         #if os(macOS)
         // The reveal must not participate in scroll layout on AppKit. The overlay also keeps a
@@ -274,6 +299,8 @@ struct SessionsListView: View {
                             selectableRow(session, host: rowHost, position: position,
                                           projectTag: projectLabel(session: session, home: inferHomeDir(workdir: session.workdir)))
                         }
+                        .moveDisabled(true)
+                        .deleteDisabled(true)
                     }
                 }
             } else {
@@ -285,11 +312,11 @@ struct SessionsListView: View {
                         selectableRow(session, host: rowHost, position: position,
                                       projectTag: projectLabel(session: session, home: inferHomeDir(workdir: session.workdir)))
                     }
+                    .deleteDisabled(true)
                     .onMove { indices, newOffset in
                         var ids = section.sessions.map(\.id)
                         ids.move(fromOffsets: indices, toOffset: newOffset)
                         onReorder(ids)
-                        fleet.activeBroker?.reorderSessions(ids)
                     }
                 } header: {
                     Text(section.label.uppercased())
@@ -331,13 +358,14 @@ struct SessionsListView: View {
                     let position = SidebarRowPosition.at(index, count: openSessions.count)
                     selectableRow(session, host: rowHost, position: position)
                 }
+                .deleteDisabled(true)
                 .onMove { indices, newOffset in
                     guard group.workdir != PA_GROUP_KEY else { return }
                     var ids = openSessions.map(\.id)
                     ids.move(fromOffsets: indices, toOffset: newOffset)
                     onReorder(ids)
-                    if let b = fleet.activeBroker { b.reorderSessions(ids) }
                 }
+                .moveDisabled(group.workdir == PA_GROUP_KEY)
                 if !settled.isEmpty {
                     Button {
                         if settledExpanded.contains(group.workdir) { settledExpanded.remove(group.workdir) }

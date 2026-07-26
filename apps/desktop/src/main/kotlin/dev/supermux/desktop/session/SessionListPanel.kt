@@ -28,6 +28,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.material3.Surface
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -52,6 +58,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
@@ -444,6 +452,7 @@ fun SessionListPanel(
     val dragReorder = remember(listState) {
         SessionDragReorderState(scope, listState) { ids -> onReorder(ids) }
     }
+    var listRootOffset by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
     fun sectionOrder(section: TaskSection): List<SessionInfo> {
         val live = dragReorder.liveOrder
         if (live == null || dragReorder.draggingId !in section.sessions.map { it.id }) return section.sessions
@@ -451,7 +460,13 @@ fun SessionListPanel(
         return live.mapNotNull { byId[it] }
     }
     fun dragMod(section: TaskSection, can: Boolean): (String) -> Modifier = { id ->
-        dragReorder.rowModifier(id, { dragReorder.liveOrder ?: section.sessions.map { it.id } }, enabled = can)
+        val label = section.sessions.firstOrNull { it.id == id }?.name ?: id
+        dragReorder.rowModifier(
+            id,
+            { dragReorder.liveOrder ?: section.sessions.map { it.id } },
+            enabled = can,
+            label = label,
+        )
     }
 
 
@@ -470,7 +485,11 @@ fun SessionListPanel(
         onReorder(ids)
     }
 
-    Box(modifier.background(cs.surfaceContainerHigh)) {
+    Box(
+        modifier
+            .background(cs.surfaceContainerHigh)
+            .onGloballyPositioned { listRootOffset = it.positionInRoot() },
+    ) {
         // The "Start a new session" row is always the first item so session creation is reachable
         // from both the populated list and the zero-session empty state (Android parity).
         LazyColumn(
@@ -654,6 +673,53 @@ fun SessionListPanel(
                 }
             }
             item(key = "bottom_spacer") { Spacer(Modifier.height(Space.lg)) }
+        }
+
+        // Floating drag ghost (web TaskSection Teleport parity). Ghost stores root coords;
+        // subtract this Box's root origin so offset is local.
+        dragReorder.ghost?.let { g ->
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            Surface(
+                modifier = Modifier
+                    .zIndex(10f)
+                    .offset {
+                        IntOffset(
+                            (g.x - listRootOffset.x).toInt(),
+                            (g.y - listRootOffset.y).toInt(),
+                        )
+                    }
+                    .width(with(density) { g.width.toDp() })
+                    .heightIn(min = with(density) { g.height.toDp() }),
+                shape = RoundedCornerShape(6.dp),
+                tonalElevation = 6.dp,
+                shadowElevation = 8.dp,
+                border = BorderStroke(1.dp, cs.primary.copy(alpha = 0.35f)),
+                color = cs.surface,
+            ) {
+                Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier
+                                .size(6.dp)
+                                .background(cs.primary, CircleShape),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            g.label,
+                            color = cs.onSurface,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                        )
+                    }
+                    Text(
+                        "Release to drop",
+                        color = cs.onSurfaceVariant.copy(alpha = 0.7f),
+                        fontSize = 10.sp,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+            }
         }
     }
 

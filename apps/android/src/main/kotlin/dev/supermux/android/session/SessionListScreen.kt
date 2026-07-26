@@ -10,6 +10,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -24,9 +25,22 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import sh.calvin.reorderable.rememberReorderableLazyListState
+import sh.calvin.reorderable.ReorderableItem
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Surface
+import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
@@ -223,7 +237,7 @@ fun PathGroupHeader(
     }
 }
 
-@OptIn(ExperimentalSharedTransitionApi::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalSharedTransitionApi::class, ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun SessionRow(
     s: SessionInfo,
@@ -231,197 +245,268 @@ fun SessionRow(
     preview: LogEntry? = null,
     working: Boolean = false,
     bgOpen: Int = 0,
-    // Non-null only in multi-host mode → renders the compact per-row host badge (dot + short name).
     hostBadge: dev.supermux.android.host.HostView? = null,
-    /** Flat-mode project leaf tag (null when grouped-by-project). */
     projectTag: String? = null,
-    modifier: Modifier = Modifier,
+    /**
+     * Applied as an outer Box around SwipeToDismissBox (must NOT be the swipe box's own
+     * modifier — that chains under anchoredDraggable and never receives the long-press).
+     * Pass [longPressDraggableHandle] + shared [interactionSource] from ReorderableItem.
+     */
+    dragModifier: Modifier = Modifier,
+    interactionSource: MutableInteractionSource? = null,
     onClick: () -> Unit,
     onRename: () -> Unit = {},
     onKill: () -> Unit = {},
     onToggleMute: () -> Unit = {},
     onResume: () -> Unit = {},
-    onMoveUp: (() -> Unit)? = null,
-    onMoveDown: (() -> Unit)? = null,
+    /** Elevation while the row is being dragged by the reorder library. */
+    isDragging: Boolean = false,
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
 ) {
     val c = LocalPanes.current
     val cs = MaterialTheme.colorScheme
     val haptic = rememberHaptics()
-    var menuExpanded by remember { mutableStateOf(false) }
-
-    // Unread indicator: inbound message that is the latest entry
     val hasUnread = !active && preview?.direction == "inbound"
+    val section = s.sectionKey()
+    val rowInteraction = interactionSource ?: remember { MutableInteractionSource() }
 
-    val rowModifier = if (active) {
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .softElevation(radius = Radii.md)
-            .clip(RoundedCornerShape(6.dp))
-            .background(cs.surfaceContainer)
-            .combinedClickable(
-                onClick = { haptic(HapticKind.Tick); onClick() },
-                onLongClick = { haptic(HapticKind.Confirm); menuExpanded = true },
-            )
-    } else {
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(Color.Transparent)
-            .combinedClickable(
-                onClick = { haptic(HapticKind.Tick); onClick() },
-                onLongClick = { haptic(HapticKind.Confirm); menuExpanded = true },
-            )
-    }
+    val elevation by androidx.compose.animation.core.animateDpAsState(
+        if (isDragging) 6.dp else 0.dp,
+        label = "session-drag-elevation",
+    )
 
-    Box(modifier) {
-    Row(
-        rowModifier
-            .testTag("session_row_${s.id}")
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.Top,
+    // Material3 SwipeToDismissBox: one primary action per edge (Android pattern).
+    // End→Start (swipe left): Settle / Delete
+    // Start→End (swipe right): Mute (in progress) / Resume (settled) — snaps back after action
+    // Threshold is intentionally high: 0.35 fired kill/mute on light flicks.
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            when (value) {
+                SwipeToDismissBoxValue.EndToStart -> {
+                    when (section) {
+                        SectionKey.IN_PROGRESS, SectionKey.DRAFT -> {
+                            haptic(HapticKind.Confirm)
+                            onKill()
+                        }
+                        SectionKey.SETTLED -> Unit
+                    }
+                    false // keep row; kill uses confirm dialog / list update
+                }
+                SwipeToDismissBoxValue.StartToEnd -> {
+                    when (section) {
+                        SectionKey.IN_PROGRESS -> {
+                            haptic(HapticKind.Tick)
+                            onToggleMute()
+                        }
+                        SectionKey.DRAFT -> {
+                            haptic(HapticKind.Tick)
+                            onClick() // open draft
+                        }
+                        SectionKey.SETTLED -> {
+                            haptic(HapticKind.Tick)
+                            onResume()
+                        }
+                    }
+                    false // snap back after secondary action
+                }
+                SwipeToDismissBoxValue.Settled -> false
+            }
+        },
+        // ~55% of row width before commit (default Material is 56.dp; fraction felt too eager at 0.35).
+        positionalThreshold = { total -> total * 0.55f },
+    )
+
+    val enableStartToEnd = true
+    val enableEndToStart = section != SectionKey.SETTLED
+    // While reordering, disable horizontal swipe so Calvin long-press owns the pointer.
+    val swipeGestures = !isDragging && (enableStartToEnd || enableEndToStart)
+
+    // longPress must wrap SwipeToDismissBox, not sit under its anchoredDraggable.
+    // Otherwise horizontal swipe steals the pointer and drag never starts.
+    Box(
+        modifier = dragModifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp),
     ) {
-        if (s.effectiveUserStatus() == "draft") {
-            Icon(
-                painter = painterResource(R.drawable.ic_pencil),
-                contentDescription = "draft",
-                tint = cs.primary.copy(alpha = 0.75f),
-                modifier = Modifier.size(14.dp).align(Alignment.CenterVertically),
-            )
-        } else {
-            SessionStatusRail(git = null, working = working, bgOpen = bgOpen, modifier = Modifier.align(Alignment.CenterVertically))
-        }
-        Spacer(Modifier.width(12.dp))
-
-        Column(Modifier.weight(1f)) {
-            // Name row: session name + relative time aligned to end
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    s.name,
-                    color = cs.onSurface,
-                    fontSize = 15.sp,
-                    // Bold the ACTIVE session (selection) as well as unread ones. Previously only
-                    // unread (last-message-inbound) rows were bold, and selecting a row cleared its
-                    // unread → it *lost* bold on click and regained it when you selected away, which
-                    // read as "clicking doesn't bold it, but clicking another one does".
-                    fontWeight = if (active || hasUnread) FontWeight.Bold else FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                if (projectTag != null) {
-                    Spacer(Modifier.width(Space.sm))
-                    Text(
-                        projectTag,
-                        color = cs.onSurfaceVariant.copy(alpha = 0.75f),
-                        fontFamily = MonoFontFamily,
-                        fontSize = 10.sp,
-                        maxLines = 1,
-                    )
+    SwipeToDismissBox(
+        state = dismissState,
+        modifier = Modifier.fillMaxWidth(),
+        enableDismissFromStartToEnd = enableStartToEnd,
+        enableDismissFromEndToStart = enableEndToStart,
+        gesturesEnabled = swipeGestures,
+        backgroundContent = {
+            val dir = dismissState.dismissDirection
+            val color = when (dir) {
+                SwipeToDismissBoxValue.StartToEnd -> when (section) {
+                    SectionKey.IN_PROGRESS -> Color(c.warning).copy(alpha = 0.35f)
+                    else -> cs.primary.copy(alpha = 0.28f)
                 }
-                if (hostBadge != null) {
-                    Spacer(Modifier.width(Space.sm))
-                    dev.supermux.android.host.HostBadge(hostBadge)
+                SwipeToDismissBoxValue.EndToStart -> when (section) {
+                    SectionKey.DRAFT -> cs.error.copy(alpha = 0.35f)
+                    else -> cs.primary.copy(alpha = 0.35f)
                 }
-                val timeStr = relTime(preview?.ts)
-                if (timeStr.isNotEmpty()) {
-                    Spacer(Modifier.width(Space.sm))
-                    Text(
-                        timeStr,
-                        color = cs.onSurfaceVariant,
-                        fontFamily = MonoFontFamily,
-                        fontSize = 11.sp,
-                    )
+                else -> Color.Transparent
+            }
+            val icon = when (dir) {
+                SwipeToDismissBoxValue.StartToEnd -> when (section) {
+                    SectionKey.IN_PROGRESS ->
+                        if (s.mute == true) R.drawable.ic_volume_2 else R.drawable.ic_volume_x
+                    SectionKey.DRAFT -> R.drawable.ic_pencil
+                    SectionKey.SETTLED -> R.drawable.ic_play
+                }
+                SwipeToDismissBoxValue.EndToStart -> when (section) {
+                    SectionKey.DRAFT -> R.drawable.ic_trash
+                    else -> R.drawable.ic_check
+                }
+                else -> null
+            }
+            val label = when (dir) {
+                SwipeToDismissBoxValue.StartToEnd -> when (section) {
+                    SectionKey.IN_PROGRESS -> if (s.mute == true) "Unmute" else "Mute"
+                    SectionKey.DRAFT -> "Edit"
+                    SectionKey.SETTLED -> "Activate"
+                }
+                SwipeToDismissBoxValue.EndToStart -> when (section) {
+                    SectionKey.DRAFT -> "Delete"
+                    else -> "Settle"
+                }
+                else -> ""
+            }
+            val align = when (dir) {
+                SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
+                SwipeToDismissBoxValue.EndToStart -> Alignment.CenterEnd
+                else -> Alignment.Center
+            }
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(color)
+                    .padding(horizontal = 20.dp),
+                contentAlignment = align,
+            ) {
+                if (icon != null) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            painter = painterResource(icon),
+                            contentDescription = label,
+                            tint = cs.onSurface,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Text(label, color = cs.onSurface, fontSize = 11.sp)
+                    }
                 }
             }
-
-            // Task status chip for drafts; lifecycle suspended still shown.
-            val userSt = s.effectiveUserStatus()
-            val status = s.status
-            when {
-                userSt == "draft" -> {
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        "draft",
-                        color = cs.primary,
-                        fontFamily = MonoFontFamily,
-                        fontSize = 10.sp,
+        },
+    ) {
+        Surface(
+            tonalElevation = elevation,
+            shadowElevation = elevation,
+            shape = RoundedCornerShape(Radii.md),
+            color = if (active) cs.surfaceContainer else cs.surfaceContainerHigh,
+            onClick = { haptic(HapticKind.Tick); onClick() },
+            interactionSource = rowInteraction,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .testTag("session_row_${s.id}")
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                if (s.effectiveUserStatus() == "draft") {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_pencil),
+                        contentDescription = "draft",
+                        tint = cs.primary.copy(alpha = 0.75f),
+                        modifier = Modifier.size(14.dp).align(Alignment.CenterVertically),
+                    )
+                } else {
+                    SessionStatusRail(
+                        git = null,
+                        working = working,
+                        bgOpen = bgOpen,
+                        modifier = Modifier.align(Alignment.CenterVertically),
                     )
                 }
-                status != null && status != "active" && status != "archived" -> {
-                    val badgeColor = if (status == "suspended") Color(c.warning)
-                                     else cs.onSurfaceVariant.copy(alpha = 0.6f)
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        status,
-                        color = badgeColor,
-                        fontFamily = MonoFontFamily,
-                        fontSize = 10.sp,
-                    )
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            s.name,
+                            color = cs.onSurface,
+                            fontSize = 15.sp,
+                            fontWeight = if (active || hasUnread) FontWeight.Bold else FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (projectTag != null) {
+                            Spacer(Modifier.width(Space.sm))
+                            Text(
+                                projectTag,
+                                color = cs.onSurfaceVariant.copy(alpha = 0.75f),
+                                fontFamily = MonoFontFamily,
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                            )
+                        }
+                        if (hostBadge != null) {
+                            Spacer(Modifier.width(Space.sm))
+                            dev.supermux.android.host.HostBadge(hostBadge)
+                        }
+                        val timeStr = relTime(preview?.ts)
+                        if (timeStr.isNotEmpty()) {
+                            Spacer(Modifier.width(Space.sm))
+                            Text(
+                                timeStr,
+                                color = cs.onSurfaceVariant,
+                                fontFamily = MonoFontFamily,
+                                fontSize = 11.sp,
+                            )
+                        }
+                    }
+                    val userSt = s.effectiveUserStatus()
+                    val status = s.status
+                    when {
+                        userSt == "draft" -> {
+                            Spacer(Modifier.height(2.dp))
+                            Text("draft", color = cs.primary, fontFamily = MonoFontFamily, fontSize = 10.sp)
+                        }
+                        status != null && status != "active" && status != "archived" -> {
+                            val badgeColor = if (status == "suspended") Color(c.warning)
+                            else cs.onSurfaceVariant.copy(alpha = 0.6f)
+                            Spacer(Modifier.height(2.dp))
+                            Text(status, color = badgeColor, fontFamily = MonoFontFamily, fontSize = 10.sp)
+                        }
+                        else -> Spacer(Modifier.height(Space.xs))
+                    }
+                    val previewText = preview?.text?.replace("\n", " ")?.take(80)
+                    if (previewText != null) {
+                        Text(
+                            previewText,
+                            color = cs.onSurfaceVariant,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    } else {
+                        Text(
+                            formatWorkdir(s.workdir, inferHomeDir(s.workdir)),
+                            color = cs.onSurfaceVariant,
+                            fontFamily = MonoFontFamily,
+                            fontSize = 11.sp,
+                            fontStyle = FontStyle.Italic,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
-                else -> Spacer(Modifier.height(Space.xs))
-            }
-
-            // Preview: last message or workdir fallback
-            val previewText = preview?.text?.replace("\n", " ")?.take(80)
-            if (previewText != null) {
-                Text(
-                    previewText,
-                    color = cs.onSurfaceVariant,
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            } else {
-                Text(
-                    // Match iOS: abbreviate the workdir via the shared KMP util (~/… under home,
-                    // …/parent/leaf when deep) instead of showing the raw absolute path.
-                    formatWorkdir(s.workdir, inferHomeDir(s.workdir)),
-                    color = cs.onSurfaceVariant,
-                    fontFamily = MonoFontFamily,
-                    fontSize = 11.sp,
-                    fontStyle = FontStyle.Italic,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
             }
         }
     }
-    DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-        when (s.sectionKey()) {
-            SectionKey.SETTLED -> {
-                DropdownMenuItem(text = { Text("Resume") }, onClick = { menuExpanded = false; onResume() })
-            }
-            SectionKey.DRAFT -> {
-                DropdownMenuItem(text = { Text("Open draft") }, onClick = { menuExpanded = false; onClick() })
-                DropdownMenuItem(
-                    text = { Text("Discard", color = MaterialTheme.colorScheme.error) },
-                    onClick = { menuExpanded = false; onKill() },
-                )
-            }
-            SectionKey.IN_PROGRESS -> {
-                DropdownMenuItem(text = { Text("Rename") }, onClick = { menuExpanded = false; onRename() })
-                DropdownMenuItem(
-                    text = { Text(if (s.mute == true) "Unmute" else "Mute") },
-                    onClick = { menuExpanded = false; onToggleMute() },
-                )
-                if (onMoveUp != null) {
-                    DropdownMenuItem(text = { Text("Move up") }, onClick = { menuExpanded = false; onMoveUp() })
-                }
-                if (onMoveDown != null) {
-                    DropdownMenuItem(text = { Text("Move down") }, onClick = { menuExpanded = false; onMoveDown() })
-                }
-                DropdownMenuItem(
-                    text = { Text("Settle", color = MaterialTheme.colorScheme.error) },
-                    onClick = { menuExpanded = false; onKill() },
-                )
-            }
-        }
-    }
-    }
+    } // Box(dragModifier)
 }
 
 @OptIn(ExperimentalSharedTransitionApi::class, ExperimentalMaterial3Api::class)
@@ -502,43 +587,34 @@ fun SessionListScreen(
     var flatSettledExpanded by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
-    val dragReorder = remember(listState) {
-        SessionDragReorderState(scope, listState) { ids -> onReorder(ids) }
+    // Native Compose reorder (sh.calvin.reorderable) — elevates the item, auto-scrolls,
+    // animates neighbors. Used by production apps (Pocket Casts, ProtonVPN, etc.).
+    val reorderableState = rememberReorderableLazyListState(listState) { from, to ->
+        val fromKey = from.key as? String ?: return@rememberReorderableLazyListState
+        val toKey = to.key as? String ?: return@rememberReorderableLazyListState
+        // Only reorder within the same flat section: keys are "flat:<sessionId>".
+        // Do not use from.index/to.index — headers/settled/offline items shift absolute indices.
+        if (!fromKey.startsWith("flat:") || !toKey.startsWith("flat:")) return@rememberReorderableLazyListState
+        val fromId = fromKey.removePrefix("flat:")
+        val toId = toKey.removePrefix("flat:")
+        val section = flatSections.find { sec ->
+            sec.key != SectionKey.SETTLED && sec.sessions.any { it.id == fromId }
+        } ?: return@rememberReorderableLazyListState
+        if (section.sessions.none { it.id == toId }) return@rememberReorderableLazyListState
+        val ids = section.sessions.map { it.id }
+        val fi = ids.indexOf(fromId)
+        val ti = ids.indexOf(toId)
+        if (fi < 0 || ti < 0 || fi == ti) return@rememberReorderableLazyListState
+        // Must finish list mutation before returning (library contract).
+        onReorder(moveId(ids, fi, ti))
     }
 
     fun openSession(s: SessionInfo) {
         when (s.sectionKey()) {
             SectionKey.DRAFT -> onOpenDraft(s.id)
-            SectionKey.SETTLED -> onOpen(s.id) // archived read-only via existing nav if needed
+            SectionKey.SETTLED -> onOpen(s.id)
             SectionKey.IN_PROGRESS -> onOpen(s.id)
         }
-    }
-
-    fun reorderWithin(sectionSessions: List<SessionInfo>, id: String, delta: Int) {
-        val ids = sectionSessions.map { it.id }.toMutableList()
-        val i = ids.indexOf(id)
-        val j = i + delta
-        if (i < 0 || j !in ids.indices) return
-        java.util.Collections.swap(ids, i, j)
-        onReorder(ids)
-    }
-
-    fun sectionOrder(section: TaskSection): List<SessionInfo> {
-        val live = dragReorder.liveOrder
-        if (live == null || dragReorder.draggingId !in section.sessions.map { it.id }) {
-            return section.sessions
-        }
-        val byId = section.sessions.associateBy { it.id }
-        return live.mapNotNull { byId[it] }
-    }
-
-    fun dragMod(section: TaskSection, can: Boolean): (String) -> Modifier = { id ->
-        dragReorder.rowModifier(
-            id,
-            { (dragReorder.liveOrder ?: section.sessions.map { it.id }) },
-            enabled = can,
-        )
     }
 
     Scaffold(
@@ -699,12 +775,16 @@ fun SessionListScreen(
         floatingActionButtonPosition = FabPosition.End,
         containerColor = cs.surfaceContainerHigh,
     ) { innerPadding ->
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .testTag("sessions_list")
+        Box(
+            Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+        ) {
+        LazyColumn(
+            state = listState,
+                        modifier = Modifier
+                .testTag("sessions_list")
+                .fillMaxSize()
                 .background(cs.surfaceContainerHigh),
         ) {
             if (multiHost) {
@@ -792,7 +872,7 @@ fun SessionListScreen(
                     }
                     items(pas, key = { "flat:pa:${it.id}" }) { s ->
                         SessionRow(
-                            s,
+                            s = s,
                             active = s.id == activeId,
                             preview = lastBySession[s.id],
                             working = agentState[s.id]?.working == true,
@@ -820,7 +900,7 @@ fun SessionListScreen(
                         if (flatSettledExpanded) {
                             items(section.sessions, key = { "flat:${it.id}" }) { s ->
                                 SessionRow(
-                                    s,
+                                    s = s,
                                     active = s.id == activeId,
                                     preview = lastBySession[s.id],
                                     working = agentState[s.id]?.working == true,
@@ -832,8 +912,6 @@ fun SessionListScreen(
                                     onKill = { killTarget = s },
                                     onToggleMute = { onMute(s.id, !(s.mute ?: false)) },
                                     onResume = { onResume(s.id) },
-                                    onMoveUp = null,
-                                    onMoveDown = null,
                                     sharedScope = sharedScope,
                                     animScope = animScope,
                                 )
@@ -850,27 +928,34 @@ fun SessionListScreen(
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                             )
                         }
-                        items(sectionOrder(section), key = { "flat:${it.id}" }) { s ->
-                            val canReorder = section.key != SectionKey.SETTLED
-                            SessionRow(
-                                s,
-                                active = s.id == activeId,
-                                preview = lastBySession[s.id],
-                                working = agentState[s.id]?.working == true,
-                                bgOpen = agentState[s.id]?.bgOpen ?: 0,
-                                hostBadge = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
-                                projectTag = projectLabel(s, effectiveHome),
-                                modifier = dragMod(section, canReorder)(s.id),
-                                onClick = { openSession(s) },
-                                onRename = { renameTarget = s; renameText = s.name },
-                                onKill = { killTarget = s },
-                                onToggleMute = { onMute(s.id, !(s.mute ?: false)) },
-                                onResume = { onResume(s.id) },
-                                onMoveUp = if (canReorder) ({ reorderWithin(sectionOrder(section), s.id, -1) }) else null,
-                                onMoveDown = if (canReorder) ({ reorderWithin(sectionOrder(section), s.id, +1) }) else null,
-                                sharedScope = sharedScope,
-                                animScope = animScope,
-                            )
+                        items(section.sessions, key = { "flat:${it.id}" }) { s ->
+                            ReorderableItem(reorderableState, key = "flat:${s.id}") { isDragging ->
+                                // Whole-row long-press on the swipe shell (parent of Surface click).
+                                // Shared interactionSource keeps click + long-press from fighting
+                                // (Calvin demo pattern). Swipe is disabled while isDragging.
+                                val rowInteraction = remember { MutableInteractionSource() }
+                                SessionRow(
+                                    s = s,
+                                    active = s.id == activeId,
+                                    preview = lastBySession[s.id],
+                                    working = agentState[s.id]?.working == true,
+                                    bgOpen = agentState[s.id]?.bgOpen ?: 0,
+                                    hostBadge = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
+                                    projectTag = projectLabel(s, effectiveHome),
+                                    isDragging = isDragging,
+                                    interactionSource = rowInteraction,
+                                    dragModifier = Modifier.longPressDraggableHandle(
+                                        interactionSource = rowInteraction,
+                                    ),
+                                    onClick = { openSession(s) },
+                                    onRename = { renameTarget = s; renameText = s.name },
+                                    onKill = { killTarget = s },
+                                    onToggleMute = { onMute(s.id, !(s.mute ?: false)) },
+                                    onResume = { onResume(s.id) },
+                                    sharedScope = sharedScope,
+                                    animScope = animScope,
+                                )
+                            }
                         }
                     }
                 }
@@ -915,7 +1000,7 @@ fun SessionListScreen(
                                 Column {
                                     var rowIndex = 0
                                     openSections.forEach { section ->
-                                        sectionOrder(section).forEach { s ->
+                                        section.sessions.forEach { s ->
                                             if (rowIndex > 0) {
                                                 HorizontalDivider(
                                                     modifier = Modifier.padding(start = 20.dp),
@@ -924,23 +1009,18 @@ fun SessionListScreen(
                                                 )
                                             }
                                             rowIndex++
-                                            val canReorder = section.key != SectionKey.SETTLED &&
-                                                g.workdir != dev.supermux.session.PA_GROUP_KEY
                                             SessionRow(
-                                                s,
+                                                s = s,
                                                 active = s.id == activeId,
                                                 preview = lastBySession[s.id],
                                                 working = agentState[s.id]?.working == true,
                                                 bgOpen = agentState[s.id]?.bgOpen ?: 0,
                                                 hostBadge = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
-                                                modifier = dragMod(section, canReorder)(s.id),
                                                 onClick = { openSession(s) },
                                                 onRename = { renameTarget = s; renameText = s.name },
                                                 onKill = { killTarget = s },
                                                 onToggleMute = { onMute(s.id, !(s.mute ?: false)) },
                                                 onResume = { onResume(s.id) },
-                                                onMoveUp = if (canReorder) ({ reorderWithin(sectionOrder(section), s.id, -1) }) else null,
-                                                onMoveDown = if (canReorder) ({ reorderWithin(sectionOrder(section), s.id, +1) }) else null,
                                                 sharedScope = sharedScope,
                                                 animScope = animScope,
                                             )
@@ -1016,10 +1096,11 @@ fun SessionListScreen(
             }
             // Bottom padding so the FAB doesn't cover the last item
             item(key = "bottom_spacer") { Spacer(Modifier.height(88.dp)) }
-        }
-    }
+        } // LazyColumn
+        } // Box(innerPadding)
+    } // Scaffold content
 
-    // Long-press row actions (parity with iOS's session-list swipe/context actions).
+    // Row action dialogs
     renameTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { renameTarget = null },

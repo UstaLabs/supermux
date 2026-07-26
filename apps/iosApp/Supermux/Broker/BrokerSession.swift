@@ -571,6 +571,18 @@ final class BrokerSession {
     func archived() async -> [ArchivedDto] { (try? await api.archived()) ?? [] }
     func resume(_ id: String) { Task { [api] in try? await api.resume(id: id) } }
     func reorderSessions(_ orderedIds: [String]) {
+        // Optimistic sort_order so List.onMove doesn't snap back (PATCH has no WS broadcast).
+        let order = Dictionary(uniqueKeysWithValues: orderedIds.enumerated().map { ($1, $0) })
+        sessions = sessions.map { s in
+            guard let i = order[s.id] else { return s }
+            return s.doCopy(
+                id: s.id, name: s.name, workdir: s.workdir, agent: s.agent,
+                status: s.status, mute: s.mute, connected: s.connected,
+                model: s.model, reasoningLevel: s.reasoningLevel,
+                repo_root: s.repo_root, role: s.role, session_branch: s.session_branch,
+                git: s.git, finish_job: s.finish_job,
+                userStatus: s.userStatus, sortOrder: Int32(i), draftPayload: s.draftPayload)
+        }
         Task { [api] in try? await api.reorderSessions(orderedIds: orderedIds) }
     }
     func createDraft(

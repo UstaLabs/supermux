@@ -1109,8 +1109,31 @@ class AppViewModel(
     }
 
     fun reorderSessions(orderedIds: List<String>) {
-        orderedIds.forEachIndexed { i, id ->
-            patchSession(id) { it.copy(sortOrder = i) }
+        // Batch sortOrder updates in one rebuild so drag recompose sees a single consistent order
+        // (library requires list mutation to finish before onMove returns).
+        val order = orderedIds.withIndex().associate { (i, id) -> id to i }
+        if (order.isEmpty()) return
+        // Prefer active/owner host buckets; fall back to any host that holds the id.
+        val byHost = sessionsByHost.toMutableMap()
+        var changed = false
+        for ((recordId, bucket) in byHost) {
+            var hostChanged = false
+            val next = bucket.map { s ->
+                val so = order[s.id] ?: return@map s
+                if (s.sortOrder == so) s else {
+                    hostChanged = true
+                    s.copy(sortOrder = so)
+                }
+            }
+            if (hostChanged) {
+                byHost[recordId] = next
+                changed = true
+            }
+        }
+        if (changed) {
+            sessionsByHost.clear()
+            sessionsByHost.putAll(byHost)
+            rebuildSessions()
         }
         viewModelScope.launch {
             runCatching { activeApi()?.reorderSessions(orderedIds) }

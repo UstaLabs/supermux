@@ -1,15 +1,17 @@
 package dev.supermux.desktop.session
 
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.zIndex
 import dev.supermux.session.moveId
 import kotlinx.coroutines.CoroutineScope
@@ -19,9 +21,11 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * Whole-row long-press reorder (web useSectionReorder parity):
- * long-press ~ arms drag, live list reorders under the finger, edge auto-scroll,
- * commits ordered ids on release.
+ * Whole-row drag reorder with floating ghost (web useSectionReorder parity).
+ *
+ * Desktop: press + small move grabs immediately (mouse-friendly; no long-press).
+ * Floating ghost follows the pointer; the list slot dims as a placeholder; live
+ * insert under the finger; edge auto-scroll; commits ordered ids on release.
  */
 class SessionDragReorderState(
     private val scope: CoroutineScope,
@@ -36,9 +40,24 @@ class SessionDragReorderState(
     var liveOrder by mutableStateOf<List<String>?>(null)
         private set
 
+    /** Floating ghost card (viewport / root coords). Null when idle. */
+    var ghost by mutableStateOf<ReorderGhost?>(null)
+        private set
+
     private var startOrder: List<String> = emptyList()
     private var fromIndex: Int = -1
     private var scrollJob: Job? = null
+    private var rowRootX = 0f
+    private var rowRootY = 0f
+    private var rowSize = IntSize.Zero
+
+    data class ReorderGhost(
+        val label: String,
+        val x: Float,
+        val y: Float,
+        val width: Float,
+        val height: Float,
+    )
 
     fun displayOrder(fallback: List<String>): List<String> = liveOrder ?: fallback
 
@@ -46,65 +65,70 @@ class SessionDragReorderState(
         id: String,
         sectionIds: () -> List<String>,
         enabled: Boolean,
+        label: String = id,
     ): Modifier {
         if (!enabled) return Modifier
         return Modifier
             .zIndex(if (draggingId == id) 1f else 0f)
+            .onGloballyPositioned { coords ->
+                if (draggingId == null || draggingId == id) {
+                    rowRootX = coords.positionInRoot().x
+                    rowRootY = coords.positionInRoot().y
+                    rowSize = coords.size
+                }
+            }
             .graphicsLayer {
                 if (draggingId == id) {
-                    translationY = dragOffsetY
-                    shadowElevation = 8f
-                    alpha = 0.95f
+                    // Placeholder slot: dimmed original stays in the list.
+                    alpha = 0.3f
+                    scaleX = 0.98f
+                    scaleY = 0.98f
                 }
             }
             .pointerInput(id, enabled) {
-                detectDragGesturesAfterLongPress(
-                    onDragStart = {
+                detectDragGestures(
+                    onDragStart = { offset ->
                         val order = sectionIds()
                         val idx = order.indexOf(id)
-                        if (idx < 0) return@detectDragGesturesAfterLongPress
+                        if (idx < 0) return@detectDragGestures
                         startOrder = order
                         fromIndex = idx
                         liveOrder = order
                         draggingId = id
                         dragOffsetY = 0f
+                        ghost = ReorderGhost(
+                            label = label,
+                            x = rowRootX,
+                            y = rowRootY,
+                            width = rowSize.width.toFloat().coerceAtLeast(200f),
+                            height = rowSize.height.toFloat().coerceAtLeast(48f),
+                        )
                         startEdgeScroll()
                     },
                     onDrag = { change, dragAmount ->
                         change.consume()
-                        if (draggingId != id) return@detectDragGesturesAfterLongPress
+                        if (draggingId != id) return@detectDragGestures
                         dragOffsetY += dragAmount.y
-                        val order = liveOrder ?: return@detectDragGesturesAfterLongPress
+                        val g = ghost
+                        if (g != null) {
+                            ghost = g.copy(
+                                x = g.x + dragAmount.x,
+                                y = g.y + dragAmount.y,
+                            )
+                        }
+                        val order = liveOrder ?: return@detectDragGestures
                         val layoutInfo = listState.layoutInfo
-                        val draggedKey = id
-                        // Approximate target: find visible item whose center is nearest to
-                        // the dragged row's visual center.
                         val draggedItem = layoutInfo.visibleItemsInfo.find {
-                            (it.key as? String)?.endsWith(draggedKey) == true || it.key == draggedKey
+                            (it.key as? String)?.endsWith(id) == true || it.key == id
                         }
-                        val fingerY = (draggedItem?.offset?.toFloat() ?: 0f) + dragOffsetY +
-                            (draggedItem?.size?.toFloat() ?: 0f) / 2f
-                        var target = fromIndex
-                        for (info in layoutInfo.visibleItemsInfo) {
-                            val key = info.key as? String ?: continue
-                            val sid = order.find { key == it || key.endsWith(it) } ?: continue
-                            val center = info.offset + info.size / 2f
-                            val si = order.indexOf(sid)
-                            if (si >= 0 && fingerY < center && si < target) target = si
-                            if (si >= 0 && fingerY > center && si > target) target = si
-                        }
-                        // Simpler: step by half-row height relative to offset
-                        val rowH = draggedItem?.size?.toFloat() ?: 72f
+                        val rowH = draggedItem?.size?.toFloat() ?: g?.height ?: 72f
                         val steps = (dragOffsetY / rowH).toInt()
-                        target = (fromIndex + steps).coerceIn(0, order.lastIndex)
-                        if (target != order.indexOf(id)) {
-                            val curIdx = order.indexOf(id)
-                            if (curIdx >= 0 && target != curIdx) {
-                                liveOrder = moveId(order, curIdx, target)
-                                // Keep visual under finger: reset offset relative to new slot
-                                dragOffsetY -= (target - curIdx) * rowH
-                                fromIndex = target
-                            }
+                        val target = (fromIndex + steps).coerceIn(0, order.lastIndex)
+                        val curIdx = order.indexOf(id)
+                        if (curIdx >= 0 && target != curIdx) {
+                            liveOrder = moveId(order, curIdx, target)
+                            dragOffsetY -= (target - curIdx) * rowH
+                            fromIndex = target
                         }
                     },
                     onDragEnd = { finish(commit = true) },
@@ -146,11 +170,14 @@ class SessionDragReorderState(
         scrollJob = null
         val finalOrder = liveOrder
         val changed = finalOrder != null && finalOrder != startOrder
+        // Commit before clearing liveOrder so the first recomposition already sees
+        // the optimistic sortOrder (avoids a one-frame snap-back).
+        if (commit && changed && finalOrder != null) onCommit(finalOrder)
         draggingId = null
         dragOffsetY = 0f
         liveOrder = null
+        ghost = null
         fromIndex = -1
-        if (commit && changed && finalOrder != null) onCommit(finalOrder)
         startOrder = emptyList()
     }
 }
