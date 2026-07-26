@@ -19,7 +19,7 @@ export interface Session {
   finish_job?: import("./finishJob").FinishJob
   userStatus?: "draft" | "in_progress" | "settled"
   sortOrder?: number
-  draftPayload?: { text?: string; attachments?: Array<{ file_id: string; name?: string; mime?: string }> }
+  draftPayload?: { text?: string; attachments?: Array<{ file_id: string; name?: string; mime?: string; size?: number }> }
 }
 
 export interface ArchivedSession {

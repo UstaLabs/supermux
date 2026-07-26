@@ -1,4 +1,4 @@
-import type { AttachmentFile, PromptInputContext, PromptInputMessage } from './types'
+import type { AttachmentFile, PromptInputContext, PromptInputMessage, SeededAttachment } from './types'
 import { nanoid } from 'nanoid'
 import { inject, onBeforeUnmount, provide, ref } from 'vue'
 import { PROMPT_INPUT_KEY } from './types'
@@ -102,6 +102,27 @@ export function usePromptInputProvider(props: {
     }))
 
     files.value = [...files.value, ...newAttachments]
+  }
+
+  // Rehydrate already-uploaded attachments (e.g. reopening a draft). No local
+  // File blob — the uploads store is marked "uploaded" by the caller so send
+  // reuses the durable server file_id instead of re-uploading.
+  const seedUploadedFiles = (items: SeededAttachment[]) => {
+    if (!items.length) return
+    const capacity = props.maxFiles ? Math.max(0, props.maxFiles - files.value.length) : undefined
+    const capped = typeof capacity === 'number' ? items.slice(0, capacity) : items
+    if (typeof capacity === 'number' && items.length > capacity) {
+      props.onError?.({ code: 'max_files', message: 'Too many files. Some were not added.' })
+    }
+    const seeded: AttachmentFile[] = capped.map(item => ({
+      id: item.id,
+      type: 'file',
+      url: item.url ?? `/files/${encodeURIComponent(item.file_id)}`,
+      mediaType: item.mime ?? '',
+      filename: item.name ?? 'file',
+      // No `file` blob — submit path uses the uploads store's uploaded result.
+    }))
+    files.value = [...files.value, ...seeded]
   }
 
   const removeFile = (id: string) => {
@@ -218,6 +239,7 @@ export function usePromptInputProvider(props: {
     focused,
     setTextInput,
     addFiles,
+    seedUploadedFiles,
     removeFile,
     clearFiles,
     clearInput,

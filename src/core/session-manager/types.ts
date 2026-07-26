@@ -12,6 +12,7 @@ export type DraftAttachment = {
   file_id: string
   name?: string
   mime?: string
+  size?: number
 }
 
 export type DraftPayload = {

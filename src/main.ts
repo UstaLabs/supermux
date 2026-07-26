@@ -1362,6 +1362,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       // with a live session or an in-flight spawn.
       const base = args.name ?? deriveName(args.workdir)
       const name = ensureUnique(base, registry.takenNames())
+      const draftPayload = args.draftPayload as import("./core/session-manager/types").DraftPayload | undefined
       const s = registry.sessions.register({
         name,
         agent: (args.agent ?? "claude"),
@@ -1370,8 +1371,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         model: args.model,
         reasoningLevel: args.reasoningLevel,
         user_status: "draft",
-        draft_payload: args.draftPayload as import("./core/session-manager/types").DraftPayload | undefined,
+        draft_payload: draftPayload,
       })
+      // Hold attachment refs while the draft exists (released on kill/start).
+      bumpDraftAttachmentRefs(draftPayload)
       await refreshTelegramMenu()
       webChannel?.broadcastToAll({
         type: "session_added",
@@ -1756,6 +1759,31 @@ async function refreshTelegramMenu() {
   }
 }
 
+
+/** Keep FileStore ref_counts in sync with draft_payload.attachments so hourly GC
+ *  doesn't reap files that are still staged on a draft. Mirrors MessageStore's
+ *  bump/release on message append/remove. */
+function bumpDraftAttachmentRefs(payload: { attachments?: Array<{ file_id?: string }> } | null | undefined) {
+  const atts = payload?.attachments
+  if (!atts?.length) return
+  for (const a of atts) {
+    if (!a?.file_id) continue
+    fileStore.bumpRef(a.file_id).catch((err) =>
+      log.error("draft_bumpref_failed", { file_id: a.file_id, err: err?.message ?? String(err) }),
+    )
+  }
+}
+function releaseDraftAttachmentRefs(payload: { attachments?: Array<{ file_id?: string }> } | null | undefined) {
+  const atts = payload?.attachments
+  if (!atts?.length) return
+  for (const a of atts) {
+    if (!a?.file_id) continue
+    fileStore.release(a.file_id).catch((err) =>
+      log.error("draft_release_failed", { file_id: a.file_id, err: err?.message ?? String(err) }),
+    )
+  }
+}
+
 async function killSession(id: string) {
   const s = registry.get(id)
   if (!s) return
@@ -1764,6 +1792,7 @@ async function killSession(id: string) {
   // proxies. Deleting it must DISCARD (hard-delete) the row — never archive it
   // to user_status='settled', which would leave a phantom settled session.
   if (isDraftSession(s)) {
+    releaseDraftAttachmentRefs(s.draft_payload)
     registry.sessions.deleteById(s.id)
     webChannel?.broadcastToAll({ type: "session_removed", id: s.id })
     return
@@ -3275,6 +3304,7 @@ if (webChannel) {
         sort_order: targetSession.sort_order,
         draft_payload: targetSession.draft_payload,
       }
+      releaseDraftAttachmentRefs(draftSnapshot.draft_payload)
       registry.sessions.deleteById(targetSession.id)   // frees the name, no ghost
       webChannel?.broadcastToAll({ type: "session_removed", id: draftSnapshot.id })
       let started: ReturnType<typeof registry.resolveName>
@@ -3293,6 +3323,7 @@ if (webChannel) {
       if (!started) {
         // Restore the draft (same id, still a draft) and re-add it client-side.
         registry.sessions.register(draftSnapshot)
+        bumpDraftAttachmentRefs(draftSnapshot.draft_payload)
         webChannel?.broadcastToAll({
           type: "session_added",
           session: {
