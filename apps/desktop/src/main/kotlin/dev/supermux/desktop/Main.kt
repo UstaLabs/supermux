@@ -280,6 +280,9 @@ fun main() {
                         Item("Personal Assistants…") {
                             ui.openPersonalAssistants()
                         }
+                        Item("Check for Updates…") {
+                            ui.openAppUpdate()
+                        }
                         Separator()
                         Item("Unpair…") { showUnpairConfirm = true }
                     }

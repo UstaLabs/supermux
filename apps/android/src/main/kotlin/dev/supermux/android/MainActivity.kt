@@ -85,6 +85,7 @@ import dev.supermux.android.settings.ArchivedScreen
 import dev.supermux.android.settings.DevicesScreen
 import dev.supermux.android.settings.ProxyScreen
 import dev.supermux.android.settings.SettingsScreen
+import dev.supermux.android.update.AppUpdateBanner
 import dev.supermux.android.settings.UsageScreen
 import dev.supermux.android.theme.AppearanceMode
 import dev.supermux.android.theme.SupermuxTheme
@@ -268,10 +269,17 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                Column(Modifier.fillMaxSize()) {
+                // App self-update strip (versions.json). One-tap install for sideloaded APKs.
+                AppUpdateBanner(
+                    onOpenPage = { navController.navigate(Settings) },
+                )
                 NavHost(
                     navController = navController,
                     startDestination = Home,
-                    modifier = Modifier.semantics { testTagsAsResourceId = true },
+                    modifier = Modifier
+                        .weight(1f)
+                        .semantics { testTagsAsResourceId = true },
                 ) {
                     // ── Home: list ↔ chat (keep-alive). Bodies are the old `else`-branch, verbatim,
                     //    with `route = …` swapped for nav. The keep-alive / shared-element / predictive-back
@@ -663,6 +671,7 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
+                } // Column (banner + NavHost)
             }
         }
     }

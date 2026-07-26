@@ -36,6 +36,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
+import dev.supermux.android.update.AppUpdatePage
 import dev.supermux.android.chat.TimelineItemRow
 import dev.supermux.android.chat.mergeTimeline
 import dev.supermux.android.theme.AppearanceMode
@@ -206,6 +207,9 @@ fun SettingsScreen(
             updateStatus = updateStatus,
             runUpdate = runUpdate,
             restartBroker = restartBroker,
+        )
+        "app-update" -> AppUpdatePage(
+            onBack = { opened = null },
         )
         else -> SettingsIndexPage(
             onBack = onBack,
@@ -435,6 +439,7 @@ private fun SettingsIndexPage(
             SettingsNavRow(R.drawable.ic_network, "Git hosting", "GitHub & GitLab connections") { onOpen("git") }
             HorizontalDivider(color = cs.outlineVariant)
             SettingsNavRow(R.drawable.ic_monitor, "System", "Broker restart and status") { onOpen("system") }
+            SettingsNavRow(R.drawable.ic_download, "Check for updates", "App version and one-tap install") { onOpen("app-update") }
         }
     }
 }

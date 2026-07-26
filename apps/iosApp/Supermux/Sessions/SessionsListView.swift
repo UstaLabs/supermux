@@ -74,6 +74,9 @@ struct SessionsListView: View {
         let multiHost = fleet.multiHost
 
         return VStack(spacing: 0) {
+            #if os(macOS)
+            AppUpdateBanner()
+            #endif
             if multiHost {
                 HostFilterChips(
                     hosts: hostViews,

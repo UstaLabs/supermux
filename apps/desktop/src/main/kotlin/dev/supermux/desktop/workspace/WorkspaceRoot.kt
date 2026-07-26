@@ -65,6 +65,8 @@ import dev.supermux.desktop.session.SessionLauncherScreen
 import dev.supermux.desktop.session.SessionListPanel
 import dev.supermux.desktop.settings.LspSettingsScreen
 import dev.supermux.desktop.settings.PersonalAssistantsScreen
+import dev.supermux.desktop.update.AppUpdateBanner
+import dev.supermux.desktop.update.AppUpdateScreen
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.usage.UsageScreen
 import dev.supermux.net.ArchivedDto
@@ -120,6 +122,7 @@ class WorkspaceUiState {
      */
     var lspSettingsOpen by mutableStateOf(false)
     var personalAssistantsOpen by mutableStateOf(false)
+    var appUpdateOpen by mutableStateOf(false)
 
     /**
      * Any full-pane modal overlay ([launcherOpen], [archivedOpen], [usageOpen],
@@ -129,7 +132,7 @@ class WorkspaceUiState {
      * [workspaceShortcuts] and silently mutate the layout behind it. One gate for every overlay,
      * so new overlays don't each have to remember to extend the guard.
      */
-    val overlayOpen: Boolean get() = launcherOpen || archivedOpen || usageOpen || lspSettingsOpen || personalAssistantsOpen
+    val overlayOpen: Boolean get() = launcherOpen || archivedOpen || usageOpen || lspSettingsOpen || personalAssistantsOpen || appUpdateOpen
 
     /**
      * Open the New-Session launcher, enforcing the "at most one overlay" invariant (closes the
@@ -144,6 +147,7 @@ class WorkspaceUiState {
         usageOpen = false
         lspSettingsOpen = false
         personalAssistantsOpen = false
+        appUpdateOpen = false
     }
 
     /** Open the Archived-sessions overlay; the "at most one overlay" mirror of [openLauncher]. */
@@ -153,6 +157,7 @@ class WorkspaceUiState {
         usageOpen = false
         lspSettingsOpen = false
         personalAssistantsOpen = false
+        appUpdateOpen = false
     }
 
     /** Open the Usage overlay; the "at most one overlay" mirror of [openLauncher]/[openArchived]. */
@@ -162,6 +167,7 @@ class WorkspaceUiState {
         archivedOpen = false
         lspSettingsOpen = false
         personalAssistantsOpen = false
+        appUpdateOpen = false
     }
 
     /** Open the LSP settings overlay; the "at most one overlay" mirror of [openLauncher]/
@@ -172,6 +178,7 @@ class WorkspaceUiState {
         archivedOpen = false
         usageOpen = false
         personalAssistantsOpen = false
+        appUpdateOpen = false
     }
 
     fun openPersonalAssistants() {
@@ -180,6 +187,16 @@ class WorkspaceUiState {
         archivedOpen = false
         usageOpen = false
         lspSettingsOpen = false
+        appUpdateOpen = false
+    }
+
+    fun openAppUpdate() {
+        launcherOpen = false
+        archivedOpen = false
+        usageOpen = false
+        lspSettingsOpen = false
+        personalAssistantsOpen = false
+        appUpdateOpen = true
     }
 
     /**
@@ -456,6 +473,9 @@ fun WorkspaceRoot(
                 // too costs nothing. `ui.overlayOpen` is the single gate for every overlay.
                 .then(if (ui.overlayOpen || addHostOpen) Modifier else Modifier.workspaceShortcuts(layout, ui.selectedId, onNewSession)),
         ) {
+            Column(Modifier.fillMaxSize()) {
+            AppUpdateBanner(onOpenPage = { ui.openAppUpdate() })
+            Box(Modifier.weight(1f).fillMaxWidth()) {
             Row(Modifier.fillMaxSize()) {
                 // ── Sidebar: collapsed rail, or the full list + a drag-resize gutter ──
                 if (layout.sidebarCollapsed) {
@@ -813,6 +833,26 @@ fun WorkspaceRoot(
                 }
             }
 
+            if (ui.appUpdateOpen) {
+                val updFocus = remember { FocusRequester() }
+                LaunchedEffect(Unit) { runCatching { updFocus.requestFocus() } }
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .testTag("app_update_overlay")
+                        .focusRequester(updFocus)
+                        .focusable()
+                        .onPreviewKeyEvent { e ->
+                            if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                                ui.appUpdateOpen = false
+                                true
+                            } else false
+                        },
+                ) {
+                    AppUpdateScreen(onBack = { ui.appUpdateOpen = false })
+                }
+            }
+
             // ── Add host: a FULL-PANE overlay above the workspace (multi-host, spec §3.4/§5) ──
             // Opened by the fleet chip row's `+`. Wired to the fleet's claim seams; a successful
             // add closes the overlay and jumps the filter to the new host so its (soon-arriving)
@@ -844,6 +884,8 @@ fun WorkspaceRoot(
                     )
                 }
             }
+            } // weight Box (banner column content)
+            } // Column (banner + content)
         }
     }
 }

@@ -89,6 +89,16 @@ struct SettingsView: View {
                         subtitle: "Broker restart and status"
                     )
                 }
+
+                NavigationLink {
+                    AppUpdateView()
+                } label: {
+                    SettingsRow(
+                        symbol: "arrow.down.circle",
+                        title: "Check for updates",
+                        subtitle: "App version and install"
+                    )
+                }
             }
 
             Section("Appearance") {

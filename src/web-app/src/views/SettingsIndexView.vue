@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useRouter } from "vue-router"
-import { ArrowLeft, ChevronRight, Sparkle, FileCode, Keyboard, Bot, UserRoundCog, Server, GitBranch, Mic } from "lucide-vue-next"
+import { ArrowLeft, ChevronRight, Sparkle, FileCode, Keyboard, Bot, UserRoundCog, Server, GitBranch, Mic, Download } from "lucide-vue-next"
 
 const router = useRouter()
 
@@ -19,6 +19,7 @@ const items = [
   { label: "Keyboard", desc: "Workspace shortcuts and custom bindings", icon: Keyboard, path: "/settings/keyboard" },
   { label: "Git hosting", desc: "GitHub & GitLab connections and repos", icon: GitBranch, path: "/settings/git-hosting" },
   { label: "System", desc: "Broker restart and status", icon: Server, path: "/settings/system" },
+  { label: "Check for updates", desc: "Release version and one-click install", icon: Download, path: "/settings/updates" },
 ]
 </script>
 

@@ -673,8 +673,19 @@ jobs:
           SHA_LINUX_ARM64=$(cut -d' ' -f1 dist/supermux-linux-arm64.sha256)
           SHA_DARWIN_ARM64=$(cut -d' ' -f1 dist/supermux-darwin-arm64.sha256)
           SHA_ANDROID=$(cut -d' ' -f1 dist/supermux-android.apk.sha256)
+          SHA_DESKTOP_LINUX=$(cut -d' ' -f1 dist/supermux-linux.deb.sha256 2>/dev/null || true)
+          SHA_DESKTOP_WINDOWS=$(cut -d' ' -f1 dist/supermux-windows.msi.sha256 2>/dev/null || true)
+          SHA_DESKTOP_MACOS=$(cut -d' ' -f1 dist/supermux-macos.dmg.sha256 2>/dev/null || true)
+          # Client marketing versions live in source (independent of the v* tag).
+          CLIENT_ANDROID_VERSION=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' apps/android/build.gradle.kts | head -1)
+          CLIENT_ANDROID_CODE=$(sed -n 's/.*versionCode = \([0-9]*\).*/\1/p' apps/android/build.gradle.kts | head -1)
+          CLIENT_DESKTOP_VERSION=$(sed -n 's/.*packageVersion = "\([^"]*\)".*/\1/p' apps/desktop/build.gradle.kts | head -1)
+          CLIENT_IOS_VERSION=$(sed -n 's/.*MARKETING_VERSION: "\([^"]*\)".*/\1/p' apps/iosApp/project.yml | head -1)
+          CLIENT_IOS_BUILD=$(sed -n 's/.*CURRENT_PROJECT_VERSION: "\([^"]*\)".*/\1/p' apps/iosApp/project.yml | head -1)
+          export CLIENT_ANDROID_VERSION CLIENT_ANDROID_CODE CLIENT_DESKTOP_VERSION CLIENT_IOS_VERSION CLIENT_IOS_BUILD
           git clone "https://x-access-token:${TOKEN}@github.com/AhmetHuseyinDOK/supermux-website.git" site
-          bun scripts/generate-versions-json.ts "$V" "$SHA_LINUX_X64" "$SHA_LINUX_ARM64" "$SHA_DARWIN_ARM64" "$SHA_ANDROID" > site/versions.json
+          bun scripts/generate-versions-json.ts "$V" "$SHA_LINUX_X64" "$SHA_LINUX_ARM64" "$SHA_DARWIN_ARM64" \
+            "$SHA_ANDROID" "$SHA_DESKTOP_LINUX" "$SHA_DESKTOP_WINDOWS" "$SHA_DESKTOP_MACOS" > site/versions.json
           sed "s|__SUPERMUX_TAG__|v${V}|" .github/release-assets/docker-compose.release.yml > site/docker-compose.yml
           cd site
           git config user.name "supermux-release"
