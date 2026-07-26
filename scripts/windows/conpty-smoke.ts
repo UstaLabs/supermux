@@ -4,26 +4,31 @@ const encoder = new TextEncoder()
 const KILL_TIMEOUT_MS = 12_000
 
 /**
- * Bun 1.3.14's Windows ConPTY path drops argv for powershell.exe and is unreliable
- * for interactive PowerShell input under Windows-on-ARM. cmd.exe is the authoritative
- * host-runtime gate: output, Uint8Array input, resize, and Job Object kill all pass.
+ * Authoritative native-Windows ConPTY gate.
+ *
+ * Bun 1.3.14 requires NOT setting `detached: true` with `terminal:` (session-store).
+ * On Windows 11 ARM64 with Bun x64-baseline, PowerShell argv + input + resize +
+ * Job Object kill all pass under SessionStore after that fix.
  */
 export function buildSmokeShellArgv(): string[] {
-  return ["cmd.exe", "/d", "/k"]
+  return ["powershell.exe", "-NoLogo", "-NoProfile"]
 }
 
 export function buildOutputMarkerCommand(): string {
-  // Compose the marker at execution time so ConPTY input echo cannot satisfy the matcher.
-  return "for %i in (OUTPUT_OK) do @echo SUPERMUX_CONPTY_%i\r\n"
+  // Compose at runtime so ConPTY input echo cannot satisfy the matcher alone.
+  return "Write-Output ('SUPERMUX_CONPTY_' + 'OUTPUT_OK')\r"
 }
 
 export function buildNestedChildCommand(): string {
-  // start /B children stay in the root console Job Object (no breakaway).
-  return "start /B cmd /d /c \"ping -n 600 127.0.0.1 >nul\"\r\n"
+  return [
+    "$child = Start-Process -FilePath powershell.exe",
+    "-ArgumentList @('-NoLogo','-NoProfile','-Command','Start-Sleep -Seconds 600')",
+    "-PassThru",
+  ].join(" ") + "; Write-Output ('SUPERMUX_CHILD_PID=' + $child.Id)\r"
 }
 
 export function buildInputMarkerCommand(): string {
-  return "for %i in (OK) do @echo SUPERMUX_CONPTY_%i\r\n"
+  return "Write-Output ('SUPERMUX_CONPTY_' + 'OK')\r"
 }
 
 export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -98,20 +103,22 @@ async function main(): Promise<void> {
   })
 
   try {
-    await waitForCapture(store, target.id, />/u, 30_000)
+    await waitForCapture(store, target.id, /powershell/iu, 30_000)
 
     await store.write(target.id, encoder.encode(buildOutputMarkerCommand()))
     await waitForCapture(store, target.id, /SUPERMUX_CONPTY_OUTPUT_OK/u, 15_000)
 
     await store.write(target.id, encoder.encode(buildNestedChildCommand()))
-    await Bun.sleep(500)
-    if (!processExists(target.pid!)) {
-      throw new Error("root exited before Job Object termination could be exercised")
+    const childMatch = await waitForCapture(store, target.id, /SUPERMUX_CHILD_PID=(\d+)/u, 15_000)
+    const childPid = Number(childMatch[1])
+    if (!Number.isSafeInteger(childPid) || childPid <= 0) throw new Error("invalid nested child PID")
+    if (!processExists(target.pid!) || !processExists(childPid)) {
+      throw new Error("root or nested child exited before Job Object termination could be exercised")
     }
 
     await store.resize(target.id, 120, 40)
     await withTimeout(store.kill(target.id), KILL_TIMEOUT_MS, "Job Object cleanup")
-    await waitForTreeExit([target.pid!], 10_000)
+    await waitForTreeExit([target.pid!, childPid], 10_000)
     console.log("SUPERMUX_CONPTY_LIFECYCLE_OK")
 
     const inputTarget = await store.create({
@@ -124,7 +131,7 @@ async function main(): Promise<void> {
       rows: 24,
     })
     try {
-      await waitForCapture(store, inputTarget.id, />/u, 30_000)
+      await waitForCapture(store, inputTarget.id, /powershell/iu, 30_000)
       await store.write(inputTarget.id, encoder.encode(buildInputMarkerCommand()))
       await waitForCapture(store, inputTarget.id, /SUPERMUX_CONPTY_OK/u, 10_000)
       await store.resize(inputTarget.id, 100, 30)

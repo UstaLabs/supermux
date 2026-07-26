@@ -62,3 +62,29 @@ terminal.
   terminal.
 - Never add agent credentials only for this test. Record missing authentication
   as an external gate.
+
+
+## Host runtime E2E (broker + sessiond + ConPTY)
+
+On an interactive Windows desktop user (not session-0/SYSTEM), with Bun on PATH
+or `scripts/windows-vm/run-sessiond.cmd` pointing at Bun + a checkout of this
+branch (so `session-store.ts` has **no** `detached: true`):
+
+```bat
+set BROKER=C:\path\to\supermux-broker.exe
+rem optional: point run-sessiond.cmd at your bun + source
+scripts\windows-vm\e2e-host.bat
+```
+
+Success markers written to `%TEMP%\e2e-full.txt` (or `C:\Windows\Temp\e2e-full.txt`):
+
+- `SUPERMUX_WINDOWS_BOOT_OK` — `/host` ready and `\\.\pipe\supermux-sessiond-*` present
+- `SUPERMUX_TERM_E2E_OK` — PowerShell ConPTY create/write/resize/kill via SessionStore
+- `SUPERMUX_WINDOWS_E2E_OK` — both gates
+
+The broker preflight requires at least one agent CLI on PATH; the bat creates a
+`claude.cmd` stub that sleeps. Real agent CLIs are required for authenticated
+agent sessions.
+
+Validated 2026-07-26 on UTM Windows 11 ARM64 with Bun 1.3.14 **x64-baseline**
+under emulation (not native ARM64 Bun; that build still lacks `bun:ffi`).
