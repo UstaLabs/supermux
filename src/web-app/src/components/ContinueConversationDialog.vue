@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue"
+import { computed, nextTick, ref, watch } from "vue"
 import { useRouter } from "vue-router"
 import { DialogRoot, DialogPortal, DialogOverlay, DialogContent } from "reka-ui"
 import { Button } from "@/components/ui/button"
 import AgentLogo from "@/components/AgentLogo.vue"
+import LauncherModelPicker from "@/components/LauncherModelPicker.vue"
+import LauncherEffortPicker from "@/components/LauncherEffortPicker.vue"
 import { api } from "@/api/client"
 import { useSessions, type Session } from "@/stores/sessions"
 import { usePendingFirstMessage } from "@/stores/pendingFirstMessage"
@@ -29,20 +31,42 @@ const sessions = useSessions()
 const pending = usePendingFirstMessage()
 
 const agent = ref<ContinueAgent>("claude")
+const model = ref("")
+const reasoningLevel = ref("")
 const message = ref("")
 const submitting = ref(false)
+// Skip the agent-change reset while we apply open-dialog defaults from the source session.
+const seeding = ref(false)
 
 watch(
   () => [props.open, props.session?.id] as const,
-  ([open]) => {
+  async ([open]) => {
     if (!open || !props.session) return
-    agent.value = defaultContinueAgent(props.session.agent)
+    seeding.value = true
+    const nextAgent = defaultContinueAgent(props.session.agent)
+    agent.value = nextAgent
+    // Prefill model/effort from the source only when staying on the same agent;
+    // switching agent later clears these so we never send a cross-agent id.
+    const sameAgent = props.session.agent === nextAgent
+    model.value = sameAgent && props.session.model ? props.session.model : ""
+    reasoningLevel.value =
+      sameAgent && props.session.reasoningLevel ? props.session.reasoningLevel : ""
     message.value = buildHandoffPrefill({
       name: props.session.name,
       id: props.session.id,
     })
+    await nextTick()
+    seeding.value = false
   },
 )
+
+// User changed agent in the dialog: drop model so Default applies, and clear
+// effort so LauncherEffortPicker can resolve the new agent/model default.
+watch(agent, () => {
+  if (seeding.value) return
+  model.value = ""
+  reasoningLevel.value = ""
+})
 
 const canStart = computed(() => {
   if (submitting.value) return false
@@ -69,6 +93,8 @@ async function start() {
     const result = await api.createSession({
       workdir: source.workdir,
       agent: agent.value,
+      model: model.value || undefined,
+      reasoningLevel: reasoningLevel.value || undefined,
       worktree: false,
       name: source.name,
       inheritFrom: source.id,
@@ -131,6 +157,20 @@ async function start() {
                 <AgentLogo :agent="a" class="size-3.5 shrink-0 opacity-80" />
                 <span class="capitalize">{{ a }}</span>
               </button>
+            </div>
+          </div>
+
+          <div>
+            <p class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mb-1.5">
+              Model &amp; thinking
+            </p>
+            <div class="flex flex-wrap items-center gap-1 rounded-lg border border-border bg-background px-1.5 py-1">
+              <LauncherModelPicker v-model:model="model" :agent="agent" />
+              <LauncherEffortPicker
+                v-model:level="reasoningLevel"
+                :agent="agent"
+                :model="model"
+              />
             </div>
           </div>
 
