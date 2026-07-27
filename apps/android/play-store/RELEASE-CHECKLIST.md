@@ -94,5 +94,9 @@ to the website), or any static host. Paste that URL into App content → Privacy
 ---
 
 ### Future updates (reference)
-Every new upload needs a higher `versionCode`. Current: `versionCode = 2`, `versionName "0.5.2"`.
-Bump both, rebuild the AAB, upload to a track, promote. The upload key never changes.
+Every new upload needs a higher `versionCode`. GitHub Release APKs get this **automatically**
+from CI (`ANDROID_VERSION_CODE_FLOOR + GITHUB_RUN_NUMBER` + tag as `versionName` — see
+`.github/workflows/release.yml` `build-android`). For a manual Play Console AAB outside that
+flow, pass `-PsupermuxVersionCode=… -PsupermuxVersionName=…` (or temporarily raise the
+defaults in `apps/android/build.gradle.kts`), rebuild, upload to a track, promote. The
+upload key never changes.

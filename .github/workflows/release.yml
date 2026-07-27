@@ -135,9 +135,19 @@ jobs:
     # config come from repo secrets; when a secret is absent the build gracefully
     # falls back to the debug key / committed placeholder google-services.json, so
     # it still assembles (but push won't work and installs can't upgrade across
-    # releases). The app carries its OWN versionName (independent of the v* tag),
-    # so the asset has a stable name: supermux-android.apk.
+    # releases). Asset name is stable: supermux-android.apk.
+    #
+    # Versioning is AUTOMATED on CI (no manual versionCode bump):
+    #   versionName = v* tag (e.g. 0.11.26) so the in-app banner matches the release
+    #   versionCode = ANDROID_VERSION_CODE_FLOOR + GITHUB_RUN_NUMBER (strictly
+    #     increasing; floor keeps CI above any historical local default, currently 32)
+    # Those values are written to dist/android-client.env and consumed by
+    # publish-website so versions.json matches the APK that was actually built.
     runs-on: ubuntu-latest
+    env:
+      # Keep above any versionCode ever shipped from apps/android/build.gradle.kts
+      # defaults (currently 32). Raise only if a manual/local build ever exceeds it.
+      ANDROID_VERSION_CODE_FLOOR: "1000"
     defaults:
       run:
         working-directory: apps
@@ -150,6 +160,19 @@ jobs:
       - uses: android-actions/setup-android@v3
       - name: Install SDK packages
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Resolve Android client version
+        id: ver
+        working-directory: .
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            NAME="${GITHUB_REF_NAME#v}"
+          else
+            NAME="0.0.0-dryrun.${GITHUB_RUN_NUMBER}"
+          fi
+          CODE=$(( ANDROID_VERSION_CODE_FLOOR + GITHUB_RUN_NUMBER ))
+          echo "versionName=$NAME" >> "$GITHUB_OUTPUT"
+          echo "versionCode=$CODE" >> "$GITHUB_OUTPUT"
+          echo "Android client versionName=$NAME versionCode=$CODE"
       - name: Firebase config
         env:
           GS: ${{ secrets.ANDROID_GOOGLE_SERVICES_JSON }}
@@ -181,13 +204,22 @@ jobs:
             echo "::warning::ANDROID_KEYSTORE_BASE64 not set — release APK will be debug-signed and NOT upgradable across releases"
           fi
       - name: Assemble release APK
-        run: ./gradlew :android:assembleRelease --console=plain --no-daemon
-      - name: Stage APK + checksum
+        run: >
+          ./gradlew :android:assembleRelease --console=plain --no-daemon
+          -PsupermuxVersionCode=${{ steps.ver.outputs.versionCode }}
+          -PsupermuxVersionName=${{ steps.ver.outputs.versionName }}
+      - name: Stage APK + checksum + client version
         run: |
           mkdir -p ../dist
           cp android/build/outputs/apk/release/android-release.apk ../dist/supermux-android.apk
+          {
+            echo "CLIENT_ANDROID_VERSION=${{ steps.ver.outputs.versionName }}"
+            echo "CLIENT_ANDROID_CODE=${{ steps.ver.outputs.versionCode }}"
+          } > ../dist/android-client.env
           cd ../dist
           sha256sum supermux-android.apk > supermux-android.apk.sha256
+          echo "Wrote android-client.env:"
+          cat android-client.env
       - uses: actions/upload-artifact@v4
         with:
           name: supermux-android
@@ -724,13 +756,22 @@ jobs:
           SHA_DESKTOP_LINUX=$(cut -d' ' -f1 dist/supermux-linux.deb.sha256 2>/dev/null || true)
           SHA_DESKTOP_WINDOWS=$(cut -d' ' -f1 dist/supermux-windows.msi.sha256 2>/dev/null || true)
           SHA_DESKTOP_MACOS=$(cut -d' ' -f1 dist/supermux-macos.dmg.sha256 2>/dev/null || true)
-          # Client marketing versions live in source (independent of the v* tag).
-          CLIENT_ANDROID_VERSION=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' apps/android/build.gradle.kts | head -1)
-          CLIENT_ANDROID_CODE=$(sed -n 's/.*versionCode = \([0-9]*\).*/\1/p' apps/android/build.gradle.kts | head -1)
+          # Android: prefer the version CI baked into the APK (android-client.env from
+          # build-android). Fall back to gradle defaults only if the env file is missing.
+          if [ -f dist/android-client.env ]; then
+            # shellcheck disable=SC1091
+            . dist/android-client.env
+          else
+            echo "::warning::dist/android-client.env missing — falling back to apps/android/build.gradle.kts"
+            CLIENT_ANDROID_VERSION=$(sed -n 's/.*defaultVersionName = "\([^"]*\)".*/\1/p' apps/android/build.gradle.kts | head -1)
+            CLIENT_ANDROID_CODE=$(sed -n 's/.*defaultVersionCode = \([0-9]*\).*/\1/p' apps/android/build.gradle.kts | head -1)
+          fi
+          # Desktop / iOS marketing versions still live in source (independent of the v* tag).
           CLIENT_DESKTOP_VERSION=$(sed -n 's/.*packageVersion = "\([^"]*\)".*/\1/p' apps/desktop/build.gradle.kts | head -1)
           CLIENT_IOS_VERSION=$(sed -n 's/.*MARKETING_VERSION: "\([^"]*\)".*/\1/p' apps/iosApp/project.yml | head -1)
           CLIENT_IOS_BUILD=$(sed -n 's/.*CURRENT_PROJECT_VERSION: "\([^"]*\)".*/\1/p' apps/iosApp/project.yml | head -1)
           export CLIENT_ANDROID_VERSION CLIENT_ANDROID_CODE CLIENT_DESKTOP_VERSION CLIENT_IOS_VERSION CLIENT_IOS_BUILD
+          echo "clients.android version=${CLIENT_ANDROID_VERSION} versionCode=${CLIENT_ANDROID_CODE}"
           git clone "https://x-access-token:${TOKEN}@github.com/AhmetHuseyinDOK/supermux-website.git" site
           bun scripts/generate-versions-json.ts "$V" "$SHA_LINUX_X64" "$SHA_LINUX_ARM64" "$SHA_DARWIN_ARM64" \
             "$SHA_ANDROID" "$SHA_DESKTOP_LINUX" "$SHA_DESKTOP_WINDOWS" "$SHA_DESKTOP_MACOS" > site/versions.json
