@@ -3,8 +3,9 @@
 //   bun scripts/generate-versions-json.ts <version> <linux-x64-sha> <linux-arm64-sha> <darwin-arm64-sha> \
 //     [android-apk-sha] [desktop-linux-sha] [desktop-windows-sha] [desktop-macos-sha]
 //
-// Optional env for client marketing versions (independent of the release tag):
+// Optional env for client marketing versions:
 //   CLIENT_ANDROID_VERSION / CLIENT_ANDROID_CODE
+//     (CI release sets these from the APK build: tag versionName + monotonic versionCode)
 //   CLIENT_DESKTOP_VERSION
 //   CLIENT_IOS_VERSION / CLIENT_IOS_BUILD
 //
