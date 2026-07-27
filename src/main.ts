@@ -41,7 +41,7 @@ import { buildClaudeSpawnSpec } from "./core/session-manager/spawn-command"
 import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
-import { transcribeAudio } from "./core/transcription/whisper"
+import { runStt, VOICE_STT_ENGINE } from "./core/transcription/stt"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
 import { cursorSpawnArgs, codexSpawnArgs, claudeSpawnArgs, codexPrepareGlobal, codexPrepareSessionHome, opencodeConfigEntries, ensureOpenCodePluginScopes } from "./core/plugins"
@@ -1703,9 +1703,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     listClonedRepos: () => forgeService.listCloned(),
     removeClonedRepo: (p) => forgeService.removeCloned(p),
     pullClonedRepo: (p) => forgeService.pullCloned(p),
-    // Voice: whisper STT (when audio) → agent cleanup pass → composer-ready text.
-    // Closes over the `agentRpc` `let` binding; runs at request time, by which
-    // point agentRpc is assigned (same pattern as the login closures below).
+    // Voice: pluggable STT engine (when audio) → optional agent cleanup → composer-ready text.
+    // STT engines live under src/core/transcription/ (see stt.ts). Closes over `agentRpc`
+    // at request time (same pattern as the login closures below).
     transcribe: async (sessionId, input) => {
       // The session id is OPTIONAL (id-less /transcribe is used by the pre-spawn launcher). When
       // present it enriches the cleanup with prior messages + the session's agent skills; when
@@ -1713,20 +1713,33 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const s = sessionId ? registry.get(sessionId) : undefined
       const cfg = settings.getAppConfig(appConfigEnv)
       let draft = input.draft ?? ""
-      let whisperMs = 0
+      let sttMs = 0
+      let sttEngine = "client"
+      let prefersCleanup = true
       if (input.audioPath) {
         const t0 = Date.now()
-        const r = await transcribeAudio(input.audioPath, { model: cfg.whisperModel, lang: cfg.whisperLang })
-        whisperMs = Date.now() - t0
+        const r = await runStt(input.audioPath, {
+          engine: cfg.voiceSttEngine ?? VOICE_STT_ENGINE,
+          // whisper-specific knobs stay on app-config until engines grow their own model fields
+          model: cfg.whisperModel,
+          lang: cfg.whisperLang,
+        })
+        sttMs = Date.now() - t0
         draft = r.text
+        sttEngine = r.fellBack ? `${r.engine}(fallback)` : r.engine
+        prefersCleanup = r.prefersCleanup
       }
-      const source = input.audioPath ? "whisper" : "client"
-      if (!draft.trim()) { log.info("voice_transcribe_empty", { sessionId: sessionId ?? null, source, whisperMs }); return { text: "" } }
+      if (!draft.trim()) { log.info("voice_transcribe_empty", { sessionId: sessionId ?? null, sttEngine, sttMs }); return { text: "" } }
       const skills = s ? commandRegistry.get(s.name).filter((c) => c.family === "agent").map((c) => c.name) : []
       const messages = sessionId ? messageLog.get(s?.id ?? sessionId, 10) : []
       const payload = buildVoicePayload(draft, messages, skills)
-      // Full visibility into exactly what the cleanup is fed + the whisper/cleanup timing split.
-      log.info("voice_transcribe_in", { sessionId: sessionId ?? null, source, draft, whisperMs, ctxMsgs: messages.length, skills, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
+      // Client-side STT drafts (no audioPath) always go through cleanup; engine-produced
+      // drafts honor prefersCleanup (whisper: true; future high-quality STT: false).
+      if (!prefersCleanup) {
+        log.info("voice_transcribe_out", { sessionId: sessionId ?? null, draft, text: draft, sttMs, cleanupMs: 0, sttEngine, cleanupEngine: "skipped" })
+        return { text: draft }
+      }
+      log.info("voice_transcribe_in", { sessionId: sessionId ?? null, sttEngine, draft, sttMs, ctxMsgs: messages.length, skills, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
       try {
         const t1 = Date.now()
         const out = await cleanupDraft(
@@ -1735,10 +1748,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         )
         const cleanupMs = Date.now() - t1
         const text = out.text || draft
-        log.info("voice_transcribe_out", { sessionId: sessionId ?? null, draft, text, whisperMs, cleanupMs, engine: out.engine, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
+        log.info("voice_transcribe_out", { sessionId: sessionId ?? null, draft, text, sttMs, cleanupMs, sttEngine, cleanupEngine: out.engine, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
         return { text }
       } catch (e) {
-        log.warn("voice_cleanup_failed", { sessionId: sessionId ?? null, draft, whisperMs, err: String(e) })
+        log.warn("voice_cleanup_failed", { sessionId: sessionId ?? null, draft, sttMs, sttEngine, err: String(e) })
         return { text: draft, degraded: true }
       }
     },

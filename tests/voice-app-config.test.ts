@@ -97,3 +97,21 @@ test("voiceCleanupGlossary: invalid (non-array/non-string) input is dropped → 
   const resolved = resolveAppConfig(patch, {} as any)
   expect(resolved.voiceCleanupGlossary).toEqual(DEFAULT_VOICE_CLEANUP_GLOSSARY)
 })
+
+test("voiceSttEngine: valid engine survives sanitize + resolve", () => {
+  const patch = sanitizeAppConfigPatch({ voiceSttEngine: "whisper" })
+  expect(patch.voiceSttEngine).toBe("whisper")
+  const resolved = resolveAppConfig(patch, {} as any)
+  expect(resolved.voiceSttEngine).toBe("whisper")
+})
+
+test("voiceSttEngine: unknown string is rejected by the allowlist", () => {
+  const patch = sanitizeAppConfigPatch({ voiceSttEngine: "not-a-real-engine" })
+  expect(patch.voiceSttEngine).toBeUndefined()
+})
+
+test("voiceSttEngine: non-string input is dropped", () => {
+  const patch = sanitizeAppConfigPatch({ voiceSttEngine: 42 })
+  expect(patch.voiceSttEngine).toBeUndefined()
+})
+
