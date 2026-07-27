@@ -235,9 +235,16 @@ final class ComposerModel {
     }
 
     // MARK: - Mic / dictation
-    // Mic → on-device STT first (real-time → cleanup → draft text), falling back to audio
-    // recording. The fallback's terminal action is context-driven: chat transcribes the clip
-    // (whisper) into text; the launcher (no session) stages it as a voice attachment.
+    // Prefer broker STT (codex-realtime / whisper via multipart /transcribe) — same path as web +
+    // desktop. On-device Speech recognition is kept behind [enableOnDeviceSTT] for offline /
+    // no-engine environments; when off, mic always records audio and POSTs it.
+    // The recording path's terminal action is context-driven: chat transcribes the clip into
+    // text; the launcher (no session) stages it as a voice attachment when no transcribe hook
+    // is wired.
+    /// When true, try Apple on-device speech first and only fall back to audio upload.
+    /// Off by default so clients hit the broker's pluggable STT engine (voiceSttEngine).
+    static let enableOnDeviceSTT = false
+
     func toggleMic() async {
         if recorder.isRecording {
             guard let (data, name) = recorder.stop() else { status = "Didn't catch that"; return }
@@ -261,6 +268,12 @@ final class ComposerModel {
         guard !micStarting else { return }
         micStarting = true
         defer { micStarting = false }
+
+        if !Self.enableOnDeviceSTT {
+            if case .denied = await recorder.start() { micDenied = true }
+            return
+        }
+
         switch await dictation.start(contextualStrings: glossary) {
         case .started: break
         case .denied: micDenied = true

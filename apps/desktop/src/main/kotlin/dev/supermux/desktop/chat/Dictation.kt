@@ -1,8 +1,8 @@
-// Desktop mic dictation (M5-1) — record -> POST to the broker's whisper /transcribe -> append the
-// cleaned text to the composer draft. Ports ONLY the record->POST->cleaned-text path every
-// supermux client falls back to; Android's on-device live-partial STT
+// Desktop mic dictation (M5-1) — record -> POST to the broker's /transcribe STT engine -> append the
+// cleaned text to the composer draft. Same record->POST->cleaned-text path as web + (now default)
+// Android/iOS; Android's optional on-device live-partial STT
 // (apps/android/.../chat/Dictation.kt's DevConfig.ENABLE_ONDEVICE_STT branch) is deliberately NOT
-// ported — it's gated off by default even there, and desktop has no on-device ASR story.
+// ported — desktop has no on-device ASR story, and on-device STT is off by default on mobile too.
 //
 // Three layers in this file (Tasks 2+3):
 //   - WavEncoder (pure): raw PCM bytes -> a canonical 44-byte-header WAV. No I/O — fully unit

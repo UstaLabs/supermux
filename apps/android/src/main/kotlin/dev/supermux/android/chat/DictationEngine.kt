@@ -16,9 +16,10 @@ enum class DictationStart { STARTED, DENIED, UNAVAILABLE }
 
 /**
  * Thin wrapper over [android.speech.SpeechRecognizer]'s on-device recognizer, exposing a small
- * state surface for Compose. This is the *nice-to-have* live-transcript path, gated behind
- * [dev.supermux.android.DevConfig.ENABLE_ONDEVICE_STT]. It only ever yields a fallback raw draft —
- * the real transcription is always the whisper audio POST (see ChatScreen).
+ * state surface for Compose. This is the *optional* live-transcript path, gated behind
+ * [dev.supermux.android.DevConfig.ENABLE_ONDEVICE_STT] (off by default). When on, it only ever
+ * yields a fallback raw draft — production dictation uses the broker STT audio POST instead
+ * (see [DictationController]).
  *
  * ## Keeping the mic open across pauses (the load-bearing behavior)
  * [SpeechRecognizer] is single-utterance: it treats the first stretch of silence as *end of
