@@ -137,7 +137,7 @@ struct ChatView: View {
                     }
                     .tint(Theme.teal)
                 }
-                if (git?.isRepo ?? false) || !sessionLinks.isEmpty { navMenu }
+                navMenu
             }
         }
         .toolbarTitleDisplayMode(.inline)
@@ -268,11 +268,31 @@ struct ChatView: View {
         return formatWorkdir(workdir: session.workdir, home: inferHomeDir(workdir: session.workdir))
     }
 
-    /// Overflow menu (•••): git actions (when a repo) + session links. Folded out of the
-    /// title row so the bar stays one tidy line regardless of session-name length.
+    /// Overflow menu (•••): Detail density + git actions + session links.
+    /// Always shown (not only when git/links exist) so Detail is always reachable.
     @ViewBuilder private var navMenu: some View {
         Menu {
+            Menu {
+                ForEach(ChatDetailLevel.allCases, id: \.self) { level in
+                    Button {
+                        guard level.isImplemented else { return }
+                        UserDefaults.standard.set(level.rawValue, forKey: "chatDetailLevel")
+                    } label: {
+                        HStack {
+                            Text(level.label + (level == .high ? " · Soon" : ""))
+                            if ChatDetailLevel.parse(UserDefaults.standard.string(forKey: "chatDetailLevel")) == level {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                    .disabled(!level.isImplemented)
+                }
+            } label: {
+                let cur = ChatDetailLevel.parse(UserDefaults.standard.string(forKey: "chatDetailLevel"))
+                Label("Detail · \(cur.label)", systemImage: "text.alignleft")
+            }
             if let g = git, g.isRepo {
+                Divider()
                 Button { gitAction { await broker.gitFetch(session.id) } } label: { Label("Fetch", systemImage: "arrow.down") }
                 Button { gitAction { await broker.gitPush(session.id) } } label: { Label("Push", systemImage: "arrow.up") }
                 Button { gitAction { await broker.gitPull(session.id) } } label: { Label("Pull", systemImage: "arrow.down.to.line") }
@@ -281,7 +301,7 @@ struct ChatView: View {
                 }
             }
             if !sessionLinks.isEmpty {
-                if git?.isRepo ?? false { Divider() }
+                Divider()
                 ForEach(sessionLinks, id: \.domain) { p in
                     if let u = linkURL(p) { Link(destination: u) { Label(proxyDisplayUrl(proxy: p), systemImage: "link") } }
                 }

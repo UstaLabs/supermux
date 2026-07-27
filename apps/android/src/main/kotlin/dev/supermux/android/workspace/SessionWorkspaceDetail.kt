@@ -2,6 +2,7 @@ package dev.supermux.android.workspace
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.supermux.android.R
+import dev.supermux.android.chat.ChatDetailPrefs
 import dev.supermux.android.chat.ChatPanel
 import dev.supermux.util.proxyDisplayUrl
 import dev.supermux.util.proxyUrl
@@ -48,6 +51,7 @@ import dev.supermux.android.chat.FinishButton
 import dev.supermux.net.ChunkSource
 import dev.supermux.android.chat.FinishSheet
 import dev.supermux.android.chat.SessionPanel
+import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.android.display.DisplayPanel
 import dev.supermux.android.editor.EditorPanel
 import dev.supermux.android.editor.PendingEditorOpen
@@ -504,10 +508,14 @@ fun SessionWorkspaceDetail(
                 sessionId = session.id,
             )
 
-            // Overflow (⋮): management screens (Settings/Usage/…). These otherwise live only on the
-            // sidebar; surfacing them here matches the iOS workspace header. Each item routes via the
-            // same string dests MainActivity's navTo(when(dest)) handles.
+            // Overflow (⋮): Detail + management screens (Settings/Usage/…). These otherwise live
+            // only on the sidebar; surfacing them here matches the iOS workspace header. Each item
+            // routes via the same string dests MainActivity's navTo(when(dest)) handles.
             Box {
+                val overflowContext = LocalContext.current
+                ChatDetailPrefs.ensureLoaded(overflowContext)
+                val chatDetailLevel by ChatDetailPrefs.level.collectAsState()
+                var detailSubmenu by remember { mutableStateOf(false) }
                 IconButton(
                     onClick = { showOverflow = true },
                     modifier = Modifier.testTag("workspace_overflow"),
@@ -521,8 +529,25 @@ fun SessionWorkspaceDetail(
                 }
                 DropdownMenu(
                     expanded = showOverflow,
-                    onDismissRequest = { showOverflow = false },
+                    onDismissRequest = { showOverflow = false; detailSubmenu = false },
                 ) {
+                    DropdownMenuItem(
+                        text = {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text("Detail")
+                                Text(
+                                    chatDetailLevel.label,
+                                    color = cs.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        },
+                        modifier = Modifier.testTag("workspace_overflow_detail"),
+                        onClick = { detailSubmenu = true },
+                    )
                     // Git ops — parity with iOS's overflow "Git" section; shown when the session
                     // is a repo. Publish replaces Push when the branch has no upstream yet.
                     if (session.git != null) {
@@ -622,6 +647,31 @@ fun SessionWorkspaceDetail(
                         },
                         onClick = { showOverflow = false; onNavigate("archived") },
                     )
+                }
+                DropdownMenu(
+                    expanded = detailSubmenu,
+                    onDismissRequest = { detailSubmenu = false },
+                ) {
+                    listOf(
+                        ChatDetailLevel.LOW to "Messages only · tools on status line",
+                        ChatDetailLevel.MEDIUM to "Tool chips between messages",
+                        ChatDetailLevel.HIGH to "Coming soon",
+                    ).forEach { (level, desc) ->
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(level.label + if (level == ChatDetailLevel.HIGH) " · Soon" else "")
+                                    Text(desc, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                                }
+                            },
+                            enabled = level != ChatDetailLevel.HIGH,
+                            onClick = {
+                                ChatDetailPrefs.set(overflowContext, level)
+                                detailSubmenu = false
+                                showOverflow = false
+                            },
+                        )
+                    }
                 }
             }
         }

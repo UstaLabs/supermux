@@ -71,6 +71,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -116,7 +117,12 @@ import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
+import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.ui.FilePathRef
+import dev.supermux.ui.countToolsSince
+import dev.supermux.ui.effectiveChatDetail
+import dev.supermux.ui.formatLowWorkingStatus
+import dev.supermux.ui.turnBoundaryMs
 import dev.supermux.util.formatDuration
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -398,7 +404,13 @@ fun ChatPanel(
         // ----------------------------------------------------------------
         // 2. Timeline
         // ----------------------------------------------------------------
-        val timelineItems = remember(messages, activity) { mergeTimeline(messages, activity) }
+        // Chat detail (low/medium): hide tool cards in low; activity still arrives via [activity].
+        ChatDetailPrefs.ensureLoaded(context)
+        val chatDetail by ChatDetailPrefs.level.collectAsState()
+        val hideTools = effectiveChatDetail(chatDetail) == ChatDetailLevel.LOW
+        val timelineItems = remember(messages, activity, hideTools) {
+            mergeTimeline(messages, activity, hideTools = hideTools)
+        }
         val listState = rememberLazyListState()
         var prevTimelineSize by remember { mutableIntStateOf(0) }
 
@@ -514,7 +526,33 @@ fun ChatPanel(
                 // Live working indicator pinned to the bottom (iOS renders it below the last block).
                 if (working && agent != null) {
                     item(key = "__working__") {
-                        WorkingIndicator(agent, onStop = onInterrupt)
+                        WorkingIndicator(
+                            agent = agent,
+                            onStop = onInterrupt,
+                            detailLow = hideTools,
+                            toolCount = if (hideTools) {
+                                val since = turnBoundaryMs(
+                                    messages = messages.map { it.direction to it.ts },
+                                    isUserDirection = { it == "inbound" },
+                                    tsToEpochMs = { ts ->
+                                        ts.toLongOrNull()?.let { n ->
+                                            if (n < 1_000_000_000_000L) n * 1000L else n
+                                        } ?: runCatching {
+                                            java.time.Instant.parse(ts).toEpochMilli()
+                                        }.getOrDefault(0L)
+                                    },
+                                    workingSinceMs = agent.workingSince,
+                                )
+                                val toolTs = activity.filter { it.kind == "tool" }.map { e ->
+                                    e.ts.toLongOrNull()?.let { n ->
+                                        if (n < 1_000_000_000_000L) n * 1000L else n
+                                    } ?: runCatching {
+                                        java.time.Instant.parse(e.ts).toEpochMilli()
+                                    }.getOrDefault(0L)
+                                }
+                                countToolsSince(toolTs, since)
+                            } else 0,
+                        )
                     }
                 } else if (sending) {
                     item(key = "__sending__") {
@@ -1062,7 +1100,12 @@ fun ChatPanel(
  * interrupts the running agent. Ticks every 1s, recomputing elapsed from `agent.since` (epoch-ms).
  */
 @Composable
-private fun WorkingIndicator(agent: AgentStatus, onStop: () -> Unit) {
+private fun WorkingIndicator(
+    agent: AgentStatus,
+    onStop: () -> Unit,
+    detailLow: Boolean = false,
+    toolCount: Int = 0,
+) {
     val cs = MaterialTheme.colorScheme
     val haptic = rememberHaptics()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -1073,9 +1116,22 @@ private fun WorkingIndicator(agent: AgentStatus, onStop: () -> Unit) {
         }
     }
     val elapsed = agent.workingSince?.let { ((now - it).coerceAtLeast(0)) / 1000 }
-    // Name the blocker while a tool runs ("working · Bash") — the tool is already in the frame.
-    val label = (if (agent.detail == "running") "working" else "thinking") +
-        (agent.tool?.takeIf { agent.detail == "running" }?.let { " · $it" } ?: "")
+    val durationLabel = elapsed?.let { formatDuration(it) } ?: ""
+    // Medium: platform baseline (working/thinking + tool). Low: shared enrichment with tool count.
+    val label = if (detailLow) {
+        val base = if (agent.detail == "running") "working" else "thinking"
+        formatLowWorkingStatus(
+            baseLabel = base,
+            detail = agent.detail,
+            tool = agent.tool,
+            toolCount = toolCount,
+            durationLabel = durationLabel,
+        )
+    } else {
+        val base = (if (agent.detail == "running") "working" else "thinking") +
+            (agent.tool?.takeIf { agent.detail == "running" }?.let { " · $it" } ?: "")
+        base + (if (durationLabel.isNotEmpty()) " · $durationLabel" else "")
+    }
     // Terminal-prompt status line: a gutter-aligned live pulse continues the spine's thread,
     // then a mono status + elapsed, then a compact stop. Reads as the prompt of a live session.
     Row(
@@ -1086,7 +1142,7 @@ private fun WorkingIndicator(agent: AgentStatus, onStop: () -> Unit) {
             BreathingDot(cs.primary, Modifier.align(Alignment.CenterEnd).padding(end = 6.dp), size = 7.dp)
         }
         Text(
-            text = label + (elapsed?.let { " · " + formatDuration(it) } ?: ""),
+            text = label,
             fontFamily = MonoFontFamily,
             fontSize = 12.sp,
             color = cs.primary,
