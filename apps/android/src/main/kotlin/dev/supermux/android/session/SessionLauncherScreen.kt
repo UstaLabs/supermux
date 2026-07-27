@@ -294,18 +294,22 @@ fun SessionLauncherScreen(
     
     // Prefill from a reopened task-list draft (web /new?draft= parity). Wins over local
     // LauncherDraft because the server draft_payload is authoritative.
-    LaunchedEffect(initialDraftId, initialDraft?.id) {
-        val s = initialDraft
-        if (s != null) {
-            activeDraftId = s.id
-            workdir = s.workdir
-            workdirTouched = true
-            if (s.agent.isNotBlank()) agent = s.agent
-            if (!s.model.isNullOrBlank()) model = s.model
-            if (!s.reasoningLevel.isNullOrBlank()) reasoningLevel = s.reasoningLevel
-            val t = s.draftPayload?.text.orEmpty()
-            message = TextFieldValue(t, TextRange(t.length))
-        }
+    //
+    // MUST wait until launcherRestoring is false: the Unit restore effect above suspends on
+    // DataStore reads, so this effect can complete first and then get clobbered when restore
+    // assigns local LauncherDraft (often empty after a successful Save draft). Keying on
+    // launcherRestoring re-runs this after restore settles so the server payload always wins.
+    LaunchedEffect(initialDraftId, initialDraft?.id, launcherRestoring) {
+        if (launcherRestoring) return@LaunchedEffect
+        val s = initialDraft ?: return@LaunchedEffect
+        activeDraftId = s.id
+        workdir = s.workdir
+        workdirTouched = true
+        if (s.agent.isNotBlank()) agent = s.agent
+        if (!s.model.isNullOrBlank()) model = s.model
+        if (!s.reasoningLevel.isNullOrBlank()) reasoningLevel = s.reasoningLevel
+        val t = s.draftPayload?.text.orEmpty()
+        message = TextFieldValue(t, TextRange(t.length))
     }
 
 // Persist the in-progress draft, debounced (~400ms) — mirrors ChatScreen.kt's per-session

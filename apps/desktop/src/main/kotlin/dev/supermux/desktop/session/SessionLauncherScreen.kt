@@ -279,18 +279,19 @@ fun SessionLauncherScreen(
     var launcherRestoring by remember { mutableStateOf(true) }
     var draftCleared by remember { mutableStateOf(false) }
     var activeDraftId by remember { mutableStateOf(initialDraftId) }
-    // Prefill runs once when opening from the task list draft.
-    LaunchedEffect(initialDraftId) {
-        val s = initialDraft
-        if (s != null) {
-            activeDraftId = s.id
-            workdir = s.workdir
-            workdirTouched = true
-            if (s.agent.isNotBlank()) agent = s.agent
-            if (!s.model.isNullOrBlank()) model = s.model
-            val t = s.draftPayload?.text.orEmpty()
-            message = TextFieldValue(t, TextRange(t.length))
-        }
+    // Prefill from a reopened task-list draft. Wins over local LauncherDraft.
+    // Wait until launcherRestoring is false so the Unit restore's DataStore load cannot
+    // clobber server draft_payload (same race as Android SessionLauncherScreen).
+    LaunchedEffect(initialDraftId, initialDraft?.id, launcherRestoring) {
+        if (launcherRestoring) return@LaunchedEffect
+        val s = initialDraft ?: return@LaunchedEffect
+        activeDraftId = s.id
+        workdir = s.workdir
+        workdirTouched = true
+        if (s.agent.isNotBlank()) agent = s.agent
+        if (!s.model.isNullOrBlank()) model = s.model
+        val t = s.draftPayload?.text.orEmpty()
+        message = TextFieldValue(t, TextRange(t.length))
     }
 
     var lastSeenAgent by remember { mutableStateOf<String?>(null) }
