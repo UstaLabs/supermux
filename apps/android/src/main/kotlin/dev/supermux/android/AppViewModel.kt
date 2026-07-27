@@ -141,6 +141,14 @@ class AppViewModel(
 
     private val http = HttpClient(CIO) { install(WebSockets) }
 
+    // CIO's default per-request timeout is 15s — too short for mic-dictation POST. Broker STT
+    // (whisper / codex-realtime / claude-voice) routinely runs longer: claude-voice streams PCM at
+    // ~realtime, so a 20s clip takes ~20s+ of wall clock. Desktop already isolates this on a
+    // 120s-timeout client (DesktopAppState.httpDictate); without the same split Android times out
+    // mid-request, runCatching → null → "Transcription failed", while the broker still finishes
+    // successfully. Keep the default client snappy for fs/git/settings; only dictate uses this one.
+    private val httpDictate = HttpClient(CIO) { engine { requestTimeout = 120_000 } }
+
     // The multi-host store + connection registry. Migration (idempotent) guarantees a PairedHost[0]
     // for existing single-host users before we read the list. Every frame is tagged with its host's
     // recordId and folded by [reduce]; connect/disconnect drive [onConnState].
@@ -931,13 +939,19 @@ class AppViewModel(
 
     // ── Voice dictation ──────────────────────────────────────────────────────────
 
-    /** Whisper path: multipart audio → cleaned text. sessionId null (launcher) → active host. */
+    /** BrokerApi on [httpDictate] so STT can exceed CIO's 15s default (see field comment). */
+    private fun dictateApi(sessionId: String?): BrokerApi? {
+        val c = sessionId?.let { connFor(it) } ?: activeConn()
+        return c?.let { BrokerApi(it.baseUrl, it.token, httpDictate) }
+    }
+
+    /** Multipart audio → cleaned text. sessionId null (launcher) → active host. */
     suspend fun transcribeAudio(sessionId: String?, bytes: ByteArray, filename: String): String? =
-        runCatching { (sessionId?.let { apiFor(it) } ?: activeApi())?.transcribeAudio(sessionId, bytes, filename)?.text }.getOrNull()
+        runCatching { dictateApi(sessionId)?.transcribeAudio(sessionId, bytes, filename)?.text }.getOrNull()
 
     /** On-device-STT path: JSON draft → cleaned text. sessionId null (launcher) → active host. */
     suspend fun transcribeDraft(sessionId: String?, draft: String): String? =
-        runCatching { (sessionId?.let { apiFor(it) } ?: activeApi())?.transcribeDraft(sessionId, draft)?.text }.getOrNull()
+        runCatching { dictateApi(sessionId)?.transcribeDraft(sessionId, draft)?.text }.getOrNull()
 
     fun sendWith(sessionId: String, text: String, attachments: List<String>) {
         appendOptimistic(sessionId, text.trim())
@@ -1366,5 +1380,6 @@ class AppViewModel(
     override fun onCleared() {
         hostConns.closeAll()
         http.close()
+        httpDictate.close()
     }
 }

@@ -36,7 +36,8 @@ struct DirectTransport: BrokerTransport {
     func request(method: String, path: String, body: Data?, contentType: String?) async throws -> (Data, Int) {
         guard let url = URL(string: baseURL + path) else { throw URLError(.badURL) }
         var req = URLRequest(url: url)
-        req.timeoutInterval = 15
+        // 15s for snappy list/send; /transcribe cleanup may need longer under load.
+        req.timeoutInterval = path.contains("transcribe") ? 120 : 15
         req.httpMethod = method
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if let contentType { req.setValue(contentType, forHTTPHeaderField: "Content-Type") }
