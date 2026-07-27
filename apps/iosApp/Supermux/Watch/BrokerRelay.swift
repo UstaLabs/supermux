@@ -23,7 +23,8 @@ enum BrokerRelay {
             return RelayEnvelope.encodeFailure("unpaired")
         }
         var urlReq = URLRequest(url: url)
-        urlReq.timeoutInterval = 20
+        // Keep 20s for most REST; /transcribe needs the same 120s budget as iOS phone.
+        urlReq.timeoutInterval = req.path.contains("transcribe") ? 120 : 20
         urlReq.httpMethod = req.method
         urlReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if let ct = req.contentType { urlReq.setValue(ct, forHTTPHeaderField: "Content-Type") }

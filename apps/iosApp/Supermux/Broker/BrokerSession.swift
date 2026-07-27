@@ -811,6 +811,8 @@ final class BrokerSession {
             throw URLError(.badURL)
         }
         var req = URLRequest(url: url)
+        // Parity with Android/desktop (120s): cleanup can exceed URLSession default 60s.
+        req.timeoutInterval = 120
         req.httpMethod = "POST"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -839,6 +841,8 @@ final class BrokerSession {
         body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
 
         var req = URLRequest(url: url)
+        // Multipart STT is the long path (whisper / claude-voice ~realtime).
+        req.timeoutInterval = 120
         req.httpMethod = "POST"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
