@@ -607,6 +607,7 @@ class MainActivity : ComponentActivity() {
                             // Voice
                             voiceLoadModels = { family -> vm.launcherModels(family) },
                             voiceLoadConfig = { vm.config() },
+                            voiceSaveVoiceStt = { engine -> vm.saveVoiceStt(engine) },
                             voiceSaveVoiceCleanup = { engine, model -> vm.saveVoiceCleanup(engine, model) },
                             glossaryLoad = { vm.fetchGlossary() },
                             glossarySave = { vm.updateGlossary(it) },

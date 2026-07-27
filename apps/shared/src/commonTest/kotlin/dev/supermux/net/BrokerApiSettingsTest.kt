@@ -262,6 +262,27 @@ class BrokerApiSettingsTest {
         assertEquals("deepseek-v4-flash-free", c.voiceCleanupModel)
     }
 
+    @Test fun app_config_decodes_voice_stt_engine() {
+        val c = json.decodeFromString<AppConfigDto>(
+            """{"voiceSttEngine":"claude-voice"}""")
+        assertEquals("claude-voice", c.voiceSttEngine)
+    }
+
+    @Test fun app_config_voice_stt_null_when_absent() {
+        val c = json.decodeFromString<AppConfigDto>("""{"paName":"x"}""")
+        assertNull(c.voiceSttEngine)
+    }
+
+    @Test fun save_config_sends_voice_stt_engine() = runTest {
+        val reqs = mutableListOf<HttpRequestData>()
+        val api = captured(sink = reqs)
+        api.saveConfig(voiceSttEngine = "claude-voice")
+        assertEquals(
+            """{"voiceSttEngine":"claude-voice"}""",
+            reqs.single().bodyText(),
+        )
+    }
+
     @Test fun app_config_voice_engine_null_when_absent() {
         val c = json.decodeFromString<AppConfigDto>("""{"paName":"x"}""")
         assertNull(c.voiceCleanupEngine)

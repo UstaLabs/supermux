@@ -119,6 +119,7 @@ fun SettingsScreen(
     // Voice (Voice track)
     voiceLoadModels: suspend (family: String) -> List<dev.supermux.net.ModelInfo>,
     voiceLoadConfig: suspend () -> dev.supermux.net.AppConfigDto?,
+    voiceSaveVoiceStt: (engine: String?) -> Unit,
     voiceSaveVoiceCleanup: (engine: String?, model: String?) -> Unit,
     glossaryLoad: suspend () -> List<String>,
     glossarySave: suspend (List<String>) -> List<String>?,
@@ -177,6 +178,7 @@ fun SettingsScreen(
             onBack = { opened = null },
             loadModels = voiceLoadModels,
             loadConfig = voiceLoadConfig,
+            saveVoiceStt = voiceSaveVoiceStt,
             saveVoiceCleanup = voiceSaveVoiceCleanup,
             onOpenGlossary = { opened = "glossary" },
         )
@@ -432,7 +434,7 @@ private fun SettingsIndexPage(
             HorizontalDivider(color = cs.outlineVariant)
             SettingsNavRow(R.drawable.ic_sparkle, "Curator", "Nightly knowledge curation schedule") { onOpen("curator") }
             HorizontalDivider(color = cs.outlineVariant)
-            SettingsNavRow(R.drawable.ic_mic, "Voice", "Dictation cleanup model & glossary") { onOpen("voice") }
+            SettingsNavRow(R.drawable.ic_mic, "Voice", "Speech engine, cleanup model & glossary") { onOpen("voice") }
             HorizontalDivider(color = cs.outlineVariant)
             SettingsNavRow(R.drawable.ic_file, "Editor", "Font, wrap, and language servers") { onOpen("editor") }
             HorizontalDivider(color = cs.outlineVariant)

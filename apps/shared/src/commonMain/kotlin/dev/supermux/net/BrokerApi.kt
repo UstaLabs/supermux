@@ -73,6 +73,9 @@ data class AppConfigDto(
     val codexConfigured: Boolean = false,
     val cursorConfigured: Boolean = false,
     val onboarded: Boolean = false,
+    /** Broker STT engine for mic audio (codex-realtime | claude-voice | whisper).
+     *  null = broker default (codex-realtime). */
+    val voiceSttEngine: String? = null,
     /** Direct-API engine for voice cleanup (codex | opencode-zen | opencode-go |
      *  cursor | claude). null = broker default (codex). */
     val voiceCleanupEngine: String? = null,
@@ -910,6 +913,7 @@ private data class OpenCodeOAuthFinishBody(val providerId: String, val method: I
 private data class ConfigPatchBody(
     val onboarded: Boolean? = null,
     val paName: String? = null,
+    val voiceSttEngine: String? = null,
     val voiceCleanupModel: String? = null,
     val voiceCleanupEngine: String? = null,
     val claudeOauthToken: String? = null,
@@ -1217,6 +1221,7 @@ class BrokerApi(
     suspend fun saveConfig(
         onboarded: Boolean? = null,
         paName: String? = null,
+        voiceSttEngine: String? = null,
         voiceCleanupModel: String? = null,
         voiceCleanupEngine: String? = null,
         claudeOauthToken: String? = null,
@@ -1228,6 +1233,7 @@ class BrokerApi(
         ConfigPatchBody(
             onboarded = onboarded,
             paName = paName,
+            voiceSttEngine = voiceSttEngine,
             voiceCleanupModel = voiceCleanupModel,
             voiceCleanupEngine = voiceCleanupEngine,
             claudeOauthToken = claudeOauthToken,

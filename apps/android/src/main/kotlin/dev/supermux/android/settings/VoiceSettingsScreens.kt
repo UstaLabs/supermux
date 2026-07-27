@@ -54,15 +54,25 @@ import dev.supermux.android.R
 import dev.supermux.android.chat.PickerSheet
 import kotlinx.coroutines.launch
 
-// ─── Voice settings (cleanup engine + model + glossary link) ───────────────────
+// ─── Voice settings (STT engine + cleanup engine + model + glossary link) ───────
 //
-// Reflects the direct-API cleanup adapter layer: pick the ENGINE (Codex default,
-// OpenCode Zen/Go, Cursor), then a MODEL for that engine ("Default" = the engine's
-// own). The gated Claude adapter is intentionally not offered here. Both rows reuse
-// the shared M3 PickerSheet and persist immediately on pick (one-tap). Switching
-// engine drops the now-irrelevant model and reloads the new engine's model list.
+// Speech engine: broker multipart /transcribe backend (codex-realtime / claude-voice /
+// whisper). Cleanup engine: direct-API adapter that polishes drafts (Codex default,
+// OpenCode Zen/Go, Cursor). The gated Claude cleanup adapter is intentionally not
+// offered here. Rows reuse the shared M3 PickerSheet and persist immediately on pick.
+// Switching cleanup engine drops the now-irrelevant model and reloads the model list.
 
 private data class VoiceEngine(val id: String, val label: String, val family: String)
+
+// STT engines — mirror STT_ENGINES in src/core/transcription/stt-types.ts.
+private data class SttEngine(val id: String, val label: String)
+private val STT_ENGINES = listOf(
+    SttEngine("codex-realtime", "Codex Realtime (ChatGPT)"),
+    SttEngine("claude-voice", "Claude Code voice"),
+    SttEngine("whisper", "Whisper (local)"),
+)
+private const val DEFAULT_STT_ENGINE = "codex-realtime"
+private fun sttEngineLabel(id: String): String = STT_ENGINES.firstOrNull { it.id == id }?.label ?: id
 
 // Curated mirror of ENGINES in src/core/agent-api/index.ts. `family` is the
 // AgentKind whose models GET /models?agent= returns for that engine.
@@ -82,20 +92,24 @@ fun VoiceSettingsPage(
     onBack: () -> Unit,
     loadModels: suspend (family: String) -> List<dev.supermux.net.ModelInfo>,
     loadConfig: suspend () -> dev.supermux.net.AppConfigDto?,
+    saveVoiceStt: (engine: String?) -> Unit,
     saveVoiceCleanup: (engine: String?, model: String?) -> Unit,
     onOpenGlossary: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     var models by remember { mutableStateOf<List<dev.supermux.net.ModelInfo>>(emptyList()) }
+    var sttEngine by remember { mutableStateOf(DEFAULT_STT_ENGINE) }
     var engine by remember { mutableStateOf(DEFAULT_VOICE_ENGINE) }
     var selectedModel by remember { mutableStateOf("") }   // "" = the engine's default
     var loading by remember { mutableStateOf(true) }
+    var showSttPicker by remember { mutableStateOf(false) }
     var showEnginePicker by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         val cfg = loadConfig()
+        sttEngine = cfg?.voiceSttEngine?.ifBlank { null } ?: DEFAULT_STT_ENGINE
         engine = cfg?.voiceCleanupEngine?.ifBlank { null } ?: DEFAULT_VOICE_ENGINE
         selectedModel = cfg?.voiceCleanupModel ?: ""
         models = loadModels(voiceEngineFamily(engine))
@@ -124,7 +138,24 @@ fun VoiceSettingsPage(
             }
         } else {
             Column(Modifier.fillMaxSize().padding(padding)) {
-                // Row 1: Cleanup engine → tappable value chip → picker.
+                // Row 1: Speech (STT) engine → tappable chip → picker.
+                VoiceSettingRow(
+                    label = "Speech engine",
+                    desc = "Cloud STT for uploaded mic audio. Claude Code voice needs a Claude.ai login.",
+                ) {
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(cs.surfaceContainer)
+                            .clickable { showSttPicker = true }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        Text(sttEngineLabel(sttEngine).take(28), color = cs.onSurface, fontSize = 13.sp, maxLines = 1)
+                    }
+                }
+                HorizontalDivider(color = cs.outlineVariant)
+
+                // Row 2: Cleanup engine → tappable value chip → picker.
                 VoiceSettingRow(
                     label = "Cleanup engine",
                     desc = "Direct-API agent that cleans up voice-dictation transcripts.",
@@ -141,7 +172,7 @@ fun VoiceSettingsPage(
                 }
                 HorizontalDivider(color = cs.outlineVariant)
 
-                // Row 2: Cleanup model (for the selected engine) → tappable chip → picker.
+                // Row 3: Cleanup model (for the selected engine) → tappable chip → picker.
                 val modelLabel =
                     if (selectedModel.isEmpty()) "Default"
                     else models.firstOrNull { it.id == selectedModel }?.displayName ?: selectedModel
@@ -161,7 +192,7 @@ fun VoiceSettingsPage(
                 }
                 HorizontalDivider(color = cs.outlineVariant)
 
-                // Row 3: Dictation glossary → glossary editor.
+                // Row 4: Dictation glossary → glossary editor.
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -189,6 +220,18 @@ fun VoiceSettingsPage(
         }
     }
 
+    if (showSttPicker) {
+        PickerSheet(
+            title = "Speech engine",
+            options = STT_ENGINES.map { it.id to it.label },
+            current = sttEngine,
+            onPick = { picked ->
+                sttEngine = picked
+                saveVoiceStt(picked)
+            },
+            onDismiss = { showSttPicker = false },
+        )
+    }
     if (showEnginePicker) {
         PickerSheet(
             title = "Cleanup engine",

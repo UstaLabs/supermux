@@ -1084,6 +1084,10 @@ class AppViewModel(
         if (workdir.isBlank()) emptyList()
         else runCatching { activeApi()?.previewCommands(agent, workdir)?.commands }.getOrNull() ?: emptyList()
 
+    fun saveVoiceStt(engine: String?) {
+        viewModelScope.launch { runCatching { activeApi()?.saveConfig(voiceSttEngine = engine) } }
+    }
+
     fun saveVoiceCleanup(engine: String?, model: String?) {
         viewModelScope.launch { runCatching { activeApi()?.saveConfig(voiceCleanupEngine = engine, voiceCleanupModel = model) } }
     }
