@@ -6,6 +6,7 @@ import { openDb, runMigrations } from "../src/core/storage/db"
 import { Registry } from "../src/core/session-manager/registry"
 import { createSupervisor } from "../src/core/session-manager/supervisor"
 import { AgentKind } from "../src/shared/agents"
+import type { SessionBackend } from "../src/core/runtime/session-backend"
 
 let tmpDir: string, db: ReturnType<typeof openDb>
 beforeEach(() => {
@@ -100,7 +101,10 @@ test("bootstrapPA forwards model and reasoningLevel to registry", async () => {
   const supervisor = createSupervisor({
     registry,
     bindSocket: async () => {},
-    spawnTmux: async () => ({ windowId: "w1" }),
+    sessionBackend: {
+      create: async (opts: Parameters<SessionBackend["create"]>[0]) => ({ id: "w1", name: opts.name, pid: 123, alive: true }),
+      capture: async () => "Listening for channel messages",
+    } as unknown as SessionBackend,
   })
 
   let captured: any
@@ -120,6 +124,31 @@ test("bootstrapPA forwards model and reasoningLevel to registry", async () => {
   expect(captured.reasoningLevel).toBe("high")
 })
 
+test("bootstrapPA creates Claude through the session backend", async () => {
+  const registry = new Registry(db)
+  let createOpts: Parameters<SessionBackend["create"]>[0] | undefined
+  const sessionBackend = {
+    create: async (opts: Parameters<SessionBackend["create"]>[0]) => {
+      createOpts = opts
+      return { id: "opaque-target", name: opts.name, pid: 31337, alive: true }
+    },
+    capture: async () => "Listening for channel messages",
+  } as unknown as SessionBackend
+  const supervisor = createSupervisor({
+    registry,
+    bindSocket: async () => {},
+    spawnTmux: async () => { throw new Error("must not spawn via tmux") },
+    sessionBackend,
+  })
+
+  await supervisor.bootstrapPA("native-pa", { agent: AgentKind.Claude })
+  supervisor.stop()
+
+  expect(createOpts?.argv[0]).toBe("claude")
+  expect(createOpts?.env.MUX_DISPLAY_NAME).toBe("native-pa")
+  expect(registry.resolveName("native-pa")?.tmux_window_id).toBe("opaque-target")
+})
+
 test("reconcile invokes the internal-worker reaper each tick", async () => {
   let reapCalls = 0
   const registry = new Registry(db)
@@ -131,4 +160,34 @@ test("reconcile invokes the internal-worker reaper each tick", async () => {
   })
   await sup.reconcile()
   expect(reapCalls).toBe(1)
+})
+
+test("reconcile never suspends a draft (pid 0 reads as dead but the guard skips it)", async () => {
+  const registry = new Registry(db)
+  // A draft: cached claude row with no process. pid 0 → isProcessAlive returns
+  // false, so WITHOUT the isDraftSession guard the live reconcile loop (which
+  // suspends dead claude sessions) would suspend it. This pins that guard.
+  // Mirror main.ts createDraft: the draft row is written via the store's
+  // register (registry.register drops user_status), so a draft is claude + pid 0.
+  const draft = registry.sessions.register({
+    name: "draft-1",
+    agent: AgentKind.Claude,
+    workdir: "/tmp",
+    pid: 0,
+    user_status: "draft",
+  })
+  const sup = createSupervisor({
+    registry,
+    bindSocket: async () => {},
+    spawnTmux: async () => {},
+  })
+  try {
+    await sup.reconcile()
+  } finally {
+    sup.stop()
+  }
+  const after = registry.get(draft.id)
+  expect(after).toBeDefined()
+  expect(after?.status).toBe("active")
+  expect(after?.user_status).toBe("draft")
 })

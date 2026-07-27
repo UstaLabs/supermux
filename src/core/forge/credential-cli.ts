@@ -1,5 +1,6 @@
 // src/core/forge/credential-cli.ts
 // Standalone git credential helper. git invokes:  mux-credential '<connId>' <get|store|erase>
+// On compiled installs the launcher is: supermux credential '<connId>' <op>
 import { openDb } from "../storage/db"
 import { ForgeStore } from "./store"
 import { resolveCredentialFill } from "./credential-helper"
@@ -15,13 +16,18 @@ export function credentialFill(store: ForgeStore, connectionId: string): string 
   })
 }
 
-if (import.meta.main) {
-  const connectionId = process.argv[2]
-  const op = process.argv[3]
+/** CLI entry used by both `bun credential-cli.ts` and `supermux credential`. */
+export function runCredentialHelper(argv: string[] = process.argv): void {
+  const connectionId = argv[2]
+  const op = argv[3]
   if (op === "get" && connectionId) {
     try {
       const store = new ForgeStore(openDb(join(STATE_DIR, "db.sqlite3")))
       process.stdout.write(credentialFill(store, connectionId))
     } catch { /* emit nothing → git proceeds credential-less */ }
   }
+}
+
+if (import.meta.main) {
+  runCredentialHelper()
 }

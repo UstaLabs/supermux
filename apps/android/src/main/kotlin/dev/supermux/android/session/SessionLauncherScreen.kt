@@ -129,8 +129,13 @@ fun SessionLauncherScreen(
     onLauncherDraftChange: (LauncherDraft) -> Unit = {},
     // Spawn a session and send the first message. `staged` files upload right after spawn (there is
     // no session id to upload against until then) — see AppViewModel.createSessionWithFirstMessage.
-    onSubmit: suspend (workdir: String, agent: String, model: String?, reasoningLevel: String?, message: String, worktree: Boolean, baseBranch: String?, staged: List<StagedUpload>) -> String,
+    onSubmit: suspend (workdir: String, agent: String, model: String?, reasoningLevel: String?, message: String, worktree: Boolean, baseBranch: String?, staged: List<StagedUpload>, replaceDraftId: String?) -> String,
+    /** Save as draft (no agent process). Returns draft session id. */
+    onSaveDraft: suspend (workdir: String, agent: String, model: String?, reasoningLevel: String?, message: String, replaceDraftId: String?) -> String? = { _, _, _, _, _, _ -> null },
     onOpenSession: (String) -> Unit,
+    /** Reopened draft session id (web /new?draft=). Prefills composer from draft_payload. */
+    initialDraftId: String? = null,
+    initialDraft: SessionInfo? = null,
     // ── Multi-host (spec §5). Default-empty/no-op so single-host callers are unchanged. ──
     // The host picker pill selects which host to spawn on; picking one retargets every loader below
     // (models/projects/agents/commands) to that host via the caller's onSelectHost → active host.
@@ -166,6 +171,7 @@ fun SessionLauncherScreen(
     // still-populated (now-stale) local state, so it needs this flag to know the draft was
     // already intentionally cleared and must not be resurrected.
     var draftCleared by remember { mutableStateOf(false) }
+    var activeDraftId by remember { mutableStateOf(initialDraftId) }
     var lastSeenAgent by remember { mutableStateOf<String?>(null) }
     var lastSeenWorkdir by remember { mutableStateOf<String?>(null) }
     var lastSeenHostId by remember { mutableStateOf<String?>(null) }
@@ -285,7 +291,28 @@ fun SessionLauncherScreen(
         launcherRestoring = false
     }
 
-    // Persist the in-progress draft, debounced (~400ms) — mirrors ChatScreen.kt's per-session
+    
+    // Prefill from a reopened task-list draft (web /new?draft= parity). Wins over local
+    // LauncherDraft because the server draft_payload is authoritative.
+    //
+    // MUST wait until launcherRestoring is false: the Unit restore effect above suspends on
+    // DataStore reads, so this effect can complete first and then get clobbered when restore
+    // assigns local LauncherDraft (often empty after a successful Save draft). Keying on
+    // launcherRestoring re-runs this after restore settles so the server payload always wins.
+    LaunchedEffect(initialDraftId, initialDraft?.id, launcherRestoring) {
+        if (launcherRestoring) return@LaunchedEffect
+        val s = initialDraft ?: return@LaunchedEffect
+        activeDraftId = s.id
+        workdir = s.workdir
+        workdirTouched = true
+        if (s.agent.isNotBlank()) agent = s.agent
+        if (!s.model.isNullOrBlank()) model = s.model
+        if (!s.reasoningLevel.isNullOrBlank()) reasoningLevel = s.reasoningLevel
+        val t = s.draftPayload?.text.orEmpty()
+        message = TextFieldValue(t, TextRange(t.length))
+    }
+
+// Persist the in-progress draft, debounced (~400ms) — mirrors ChatScreen.kt's per-session
     // draft save. launcherRestoring gates it so the restore's own assignments (above) don't
     // immediately re-save right back over themselves before they've even settled.
     LaunchedEffect(workdir, workdirTouched, useWorktree, baseBranch, message.text, launcherRestoring) {
@@ -431,6 +458,24 @@ fun SessionLauncherScreen(
     )
     val canSend = workdir.isNotBlank() && (message.text.isNotBlank() || staged.isNotEmpty())
 
+    val canSaveDraft = workdir.isNotBlank() && message.text.isNotBlank()
+    fun doSaveDraft() {
+        if (!canSaveDraft || submitting) return
+        scope.launch {
+            submitting = true
+            try {
+                val id = onSaveDraft(workdir.trim(), agent, model, reasoningLevel, message.text.trim(), activeDraftId)
+                if (id != null) {
+                    onLauncherDraftChange(LauncherDraft())
+                    draftCleared = true
+                    onBack()
+                }
+            } finally {
+                submitting = false
+            }
+        }
+    }
+
     // Spawn → (upload staged files) → send first message → open the session. The circular send
     // button spins through the whole flow, then onOpenSession pops this screen (iOS spawn() parity).
     fun doSubmit() {
@@ -449,7 +494,7 @@ fun SessionLauncherScreen(
         }
         scope.launch {
             try {
-                val sessionId = onSubmit(workdir.trim(), agent, model, reasoningLevel, message.text.trim(), wantsWorktree, base, toUpload)
+                val sessionId = onSubmit(workdir.trim(), agent, model, reasoningLevel, message.text.trim(), wantsWorktree, base, toUpload, activeDraftId)
                 onLauncherDraftChange(LauncherDraft())
                 draftCleared = true
                 onOpenSession(sessionId)
@@ -812,6 +857,14 @@ fun SessionLauncherScreen(
                         )
 
                         Spacer(Modifier.weight(1f))
+
+                        TextButton(
+                            onClick = { doSaveDraft() },
+                            enabled = canSaveDraft && !submitting,
+                            modifier = Modifier.testTag("launcher_save_draft"),
+                        ) {
+                            Text("Save draft", fontSize = 12.sp)
+                        }
 
                         // Circular send — spawns + sends. Spins while submitting; dims when empty.
                         IconButton(

@@ -22,6 +22,17 @@ describe("resolveCursorAuth", () => {
     expect(r.env.CURSOR_API_KEY).toBe("key_xx")
   })
 
+  test("isolates APPDATA and USERPROFILE for Windows API-key sessions", async () => {
+    const session = "C:\\Mux\\cursor-session"
+    const r = await resolveCursorAuth({
+      apiKey: "key_xx", userCursorDir: "C:\\Users\\u\\.cursor", sessionHome: session,
+      platform: "win32", env: { USERPROFILE: "C:\\Users\\u", APPDATA: "C:\\Users\\u\\AppData\\Roaming" },
+    })
+    expect(r.env).toEqual({
+      CURSOR_API_KEY: "key_xx", APPDATA: "C:\\Mux\\cursor-session\\AppData\\Roaming", USERPROFILE: session,
+    })
+  })
+
   test("copies auth files into session HOME/.cursor + .config/cursor/", async () => {
     const userCursor = join(userHome, ".cursor")
     mkdirSync(userCursor, { recursive: true })

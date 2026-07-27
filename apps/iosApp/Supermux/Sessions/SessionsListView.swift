@@ -45,7 +45,7 @@ private enum SidebarRowPosition {
 /// Sidebar / root list — the merged multi-host fleet (spec §5): grouped (PA + project) sessions
 /// across every paired host, a per-row host badge + an `All · <host…> · +` filter chip row (both
 /// shown only when ≥2 hosts are paired), and offline hosts rendered as greyed "last seen" groups.
-/// Per-row reads (preview/agent state) and actions (kill/rename/mute) route to the session's OWNING
+/// Per-row reads (preview/agent state) and actions (settle/rename/mute) route to the session's OWNING
 /// `BrokerSession` via `Fleet`. Single-host is the unchanged path: no chips, no badges.
 struct SessionsListView: View {
     let fleet: Fleet
@@ -54,6 +54,8 @@ struct SessionsListView: View {
     var onArchived: () -> Void
     var onAddHost: () -> Void = {}
     var onSessionSelected: (String) -> Void = { _ in }
+    var onOpenDraft: (String) -> Void = { _ in }
+    var onReorder: ([String]) -> Void = { _ in }
 
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
@@ -66,6 +68,12 @@ struct SessionsListView: View {
     @State private var renameTarget: SessionInfo?
     @State private var renameText = ""
     @State private var killTarget: SessionInfo?
+    @State private var groupByProject = UserDefaults.standard.object(forKey: "cmux:group-by-project") as? Bool ?? false
+    @State private var settledExpanded: Set<String> = []
+    @State private var flatSettledExpanded = false
+    #if os(iOS)
+    @State private var listEditMode: EditMode = .inactive
+    #endif
 
     var body: some View {
         let owner = fleet.sessionHost
@@ -74,6 +82,9 @@ struct SessionsListView: View {
         let multiHost = fleet.multiHost
 
         return VStack(spacing: 0) {
+            #if os(macOS)
+            AppUpdateBanner()
+            #endif
             if multiHost {
                 HostFilterChips(
                     hosts: hostViews,
@@ -112,6 +123,8 @@ struct SessionsListView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("new-session")
+                .moveDisabled(true)
+                .deleteDisabled(true)
                 #if os(macOS)
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
@@ -119,8 +132,44 @@ struct SessionsListView: View {
                 #endif
             }
 
-            ForEach(fleet.onlineGroups(), id: \.workdir) { group in
-                onlineSection(group, owner: owner, hostByRecord: hostByRecord, multiHost: multiHost)
+            Section {
+                Toggle(isOn: Binding(
+                    get: { groupByProject },
+                    set: {
+                        groupByProject = $0
+                        UserDefaults.standard.set($0, forKey: "cmux:group-by-project")
+                    }
+                )) {
+                    Label("Group by project", systemImage: "folder")
+                }
+                .toggleStyle(.switch)
+                .accessibilityLabel("Group by project")
+                .accessibilityIdentifier("group-by-project")
+                .moveDisabled(true)
+                .deleteDisabled(true)
+                #if os(iOS)
+                Button {
+                    withAnimation {
+                        listEditMode = listEditMode == .active ? .inactive : .active
+                    }
+                } label: {
+                    Label(
+                        listEditMode == .active ? "Done reordering" : "Reorder sessions",
+                        systemImage: listEditMode == .active ? "checkmark" : "arrow.up.arrow.down"
+                    )
+                }
+                .accessibilityIdentifier("reorder-sessions")
+                .moveDisabled(true)
+                .deleteDisabled(true)
+                #endif
+            }
+
+            if groupByProject {
+                ForEach(fleet.onlineGroups(), id: \.workdir) { group in
+                    onlineSection(group, owner: owner, hostByRecord: hostByRecord, multiHost: multiHost)
+                }
+            } else {
+                flatSectionsView(owner: owner, hostByRecord: hostByRecord, multiHost: multiHost)
             }
 
             // Offline hosts: greyed group per host with a "last seen" header (multi-host only).
@@ -135,6 +184,9 @@ struct SessionsListView: View {
         .contentMargins(.horizontal, 12, for: .scrollContent)
         #else
         .smInsetGroupedListStyle()
+        // iOS List only allows onMove (system drag ghost) in edit mode. Toggle via
+        // the "Reorder" control in the group-by section so selection stays normal.
+        .environment(\.editMode, $listEditMode)
         #endif
         #if os(macOS)
         // The reveal must not participate in scroll layout on AppKit. The overlay also keeps a
@@ -162,6 +214,15 @@ struct SessionsListView: View {
                 archiveReveal.track(top: top)
             }
         }
+        .onAppear { fleet.refreshArchived() }
+        .onChange(of: selected) { _, id in
+            guard let id,
+                  let s = fleet.sessions.first(where: { $0.id == id }),
+                  (s.userStatus ?? "") == "draft"
+            else { return }
+            selected = nil
+            onOpenDraft(id)
+        }
         .navigationTitle("supermux")
         .smInlineNavigationTitle()
         .overlay {
@@ -178,11 +239,11 @@ struct SessionsListView: View {
                 renameTarget = nil
             }
         }
-        .confirmationDialog("Kill \u{201C}\(killTarget?.name ?? "")\u{201D}?",
+        .confirmationDialog("Settle \u{201C}\(killTarget?.name ?? "")\u{201D}?",
                             isPresented: Binding(get: { killTarget != nil },
                                                  set: { if !$0 { killTarget = nil } }),
                             titleVisibility: .visible) {
-            Button("Kill session", role: .destructive) {
+            Button("Settle session", role: .destructive) {
                 if let t = killTarget { fleet.broker(for: t.id)?.kill(t.id) }
                 killTarget = nil
             }
@@ -190,23 +251,146 @@ struct SessionsListView: View {
         }
     }
 
-    @ViewBuilder private func onlineSection(
+    /// Flat task list (web !groupByProject): In Progress / Drafts / Settled across all projects.
+    @ViewBuilder private func flatSectionsView(
+        owner: [String: String],
+        hostByRecord: [String: HostView],
+        multiHost: Bool
+    ) -> some View {
+        let online = flatOnlineSessions(owner: owner, multiHost: multiHost)
+        let lastTs: (SessionInfo) -> String = { s in
+            fleet.broker(for: s.id)?.messages[s.id]?.last?.ts ?? ""
+        }
+        let sections = buildTaskSections(
+            list: combinedTaskSessions(live: online, archived: fleet.archivedForList),
+            lastTs: lastTs
+        )
+        // PA pin (web SessionTaskList paSection) — not in task sections.
+        let pas = online.filter { $0.role == "personal_assistant" }
+            .sorted { lastTs($0) > lastTs($1) }
+        if !pas.isEmpty {
+            Section {
+                ForEach(Array(pas.enumerated()), id: \.element.id) { index, session in
+                    let recordId = owner[session.id] ?? ""
+                    let rowHost: HostView? = multiHost ? hostByRecord[recordId] : nil
+                    let position = SidebarRowPosition.at(index, count: pas.count)
+                    selectableRow(session, host: rowHost, position: position)
+                }
+            } header: {
+                Text("Personal Assistants")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        ForEach(sections, id: \.key) { section in
+            if section.key == .settled {
+                Section {
+                    Button {
+                        flatSettledExpanded.toggle()
+                    } label: {
+                        Text(flatSettledExpanded
+                             ? "Hide \(section.sessions.count) settled"
+                             : "Show \(section.sessions.count) settled")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if flatSettledExpanded {
+                        ForEach(Array(section.sessions.enumerated()), id: \.element.id) { index, session in
+                            let recordId = owner[session.id] ?? ""
+                            let rowHost: HostView? = multiHost ? hostByRecord[recordId] : nil
+                            let position = SidebarRowPosition.at(index, count: section.sessions.count)
+                            selectableRow(session, host: rowHost, position: position,
+                                          projectTag: projectLabel(session: session, home: inferHomeDir(workdir: session.workdir)))
+                        }
+                        .moveDisabled(true)
+                        .deleteDisabled(true)
+                    }
+                }
+            } else {
+                Section {
+                    ForEach(Array(section.sessions.enumerated()), id: \.element.id) { index, session in
+                        let recordId = owner[session.id] ?? ""
+                        let rowHost: HostView? = multiHost ? hostByRecord[recordId] : nil
+                        let position = SidebarRowPosition.at(index, count: section.sessions.count)
+                        selectableRow(session, host: rowHost, position: position,
+                                      projectTag: projectLabel(session: session, home: inferHomeDir(workdir: session.workdir)))
+                    }
+                    .deleteDisabled(true)
+                    .onMove { indices, newOffset in
+                        var ids = section.sessions.map(\.id)
+                        ids.move(fromOffsets: indices, toOffset: newOffset)
+                        onReorder(ids)
+                    }
+                } header: {
+                    Text(section.label.uppercased())
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func flatOnlineSessions(owner: [String: String], multiHost: Bool) -> [SessionInfo] {
+        let offline = Set(fleet.hostViews.filter { !$0.online }.map { $0.recordId })
+        let shown = fleet.filteredSessions
+        if multiHost {
+            return shown.filter { !offline.contains(owner[$0.id] ?? "") }
+        }
+        return shown
+    }
+
+        @ViewBuilder private func onlineSection(
         _ group: SessionGroup,
         owner: [String: String],
         hostByRecord: [String: HostView],
         multiHost: Bool
     ) -> some View {
+        let openSessions: [SessionInfo] = {
+            if group.workdir == PA_GROUP_KEY { return group.sessions }
+            let secs = group.sections
+            if secs.isEmpty { return group.sessions }
+            return secs.filter { $0.key != .settled }.flatMap { $0.sessions }
+        }()
+        let settled = group.sections.first(where: { $0.key == .settled })?.sessions ?? []
+        let activeCount = group.workdir == PA_GROUP_KEY ? group.sessions.count : openSessions.count
         Section {
             if !collapsed.contains(group.workdir) {
-                ForEach(Array(group.sessions.enumerated()), id: \.element.id) { index, session in
+                ForEach(Array(openSessions.enumerated()), id: \.element.id) { index, session in
                     let recordId = owner[session.id] ?? ""
                     let rowHost: HostView? = multiHost ? hostByRecord[recordId] : nil
-                    let position = SidebarRowPosition.at(index, count: group.sessions.count)
+                    let position = SidebarRowPosition.at(index, count: openSessions.count)
                     selectableRow(session, host: rowHost, position: position)
+                }
+                .deleteDisabled(true)
+                .onMove { indices, newOffset in
+                    guard group.workdir != PA_GROUP_KEY else { return }
+                    var ids = openSessions.map(\.id)
+                    ids.move(fromOffsets: indices, toOffset: newOffset)
+                    onReorder(ids)
+                }
+                .moveDisabled(group.workdir == PA_GROUP_KEY)
+                if !settled.isEmpty {
+                    Button {
+                        if settledExpanded.contains(group.workdir) { settledExpanded.remove(group.workdir) }
+                        else { settledExpanded.insert(group.workdir) }
+                    } label: {
+                        Text(settledExpanded.contains(group.workdir)
+                             ? "Hide \(settled.count) settled"
+                             : "Show \(settled.count) settled")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if settledExpanded.contains(group.workdir) {
+                        ForEach(settled, id: \.id) { session in
+                            let recordId = owner[session.id] ?? ""
+                            let rowHost: HostView? = multiHost ? hostByRecord[recordId] : nil
+                            selectableRow(session, host: rowHost, position: .middle)
+                        }
+                    }
                 }
             }
         } header: {
-            header(group)
+            header(group, count: activeCount)
         }
     }
 
@@ -227,14 +411,14 @@ struct SessionsListView: View {
         }
     }
 
-    private func header(_ group: SessionGroup) -> some View {
+    private func header(_ group: SessionGroup, count: Int? = nil) -> some View {
         Button { toggle(group.workdir) } label: {
             HStack(spacing: 6) {
                 Image(systemName: collapsed.contains(group.workdir) ? "chevron.right" : "chevron.down")
                     .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
                 Text(group.label).textCase(nil)
                 Spacer()
-                Text("\(group.sessions.count)").foregroundStyle(.tertiary)
+                Text("\(count ?? group.sessions.count)").foregroundStyle(.tertiary)
             }
             .contentShape(Rectangle())
         }
@@ -255,26 +439,42 @@ struct SessionsListView: View {
         .opacity(0.85)
     }
 
-    @ViewBuilder private func row(_ s: SessionInfo, host: HostView?, position: SidebarRowPosition) -> some View {
+    @ViewBuilder private func row(_ s: SessionInfo, host: HostView?, position: SidebarRowPosition, projectTag: String? = nil) -> some View {
         let b = fleet.broker(for: s.id)
         let muted = s.mute?.boolValue ?? false
         SessionRow(session: s, preview: b?.messages[s.id]?.last?.text,
                    phase: b?.agentPhase[s.id],
                    working: b?.agentWorking[s.id] == true,
-                   bgOpen: b?.agentBgOpen[s.id] ?? 0, muted: muted, host: host)
+                   bgOpen: b?.agentBgOpen[s.id] ?? 0, muted: muted, host: host,
+                   projectTag: projectTag)
             .smMacSidebarCard(position: position, selected: selected == s.id)
             .contextMenu {
                 #if os(macOS)
-                Button { openWindow(id: "session", value: s.id) } label: {
-                    Label("Open in New Window", systemImage: "macwindow.badge.plus")
+                if (s.userStatus ?? "in_progress") != "draft" {
+                    Button { openWindow(id: "session", value: s.id) } label: {
+                        Label("Open in New Window", systemImage: "macwindow.badge.plus")
+                    }
+                    Divider()
                 }
-                Divider()
                 #endif
-                Button { b?.toggleMute(s) } label: {
-                    Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
+                if (s.status ?? "") == "archived" || (s.userStatus ?? "") == "settled" {
+                    Button { b?.resume(s.id); fleet.refreshArchived() } label: {
+                        Label("Resume", systemImage: "arrow.uturn.backward")
+                    }
+                } else if (s.userStatus ?? "") == "draft" {
+                    Button { onOpenDraft(s.id) } label: {
+                        Label("Open draft", systemImage: "pencil")
+                    }
+                    Button(role: .destructive) { killTarget = s } label: {
+                        Label("Discard", systemImage: "trash")
+                    }
+                } else {
+                    Button { b?.toggleMute(s) } label: {
+                        Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
+                    }
+                    Button { renameText = s.name; renameTarget = s } label: { Label("Rename", systemImage: "pencil") }
+                    Button(role: .destructive) { killTarget = s } label: { Label("Settle", systemImage: "checkmark.circle") }
                 }
-                Button { renameText = s.name; renameTarget = s } label: { Label("Rename", systemImage: "pencil") }
-                Button(role: .destructive) { killTarget = s } label: { Label("Kill", systemImage: "xmark.circle") }
             }
     }
 
@@ -284,14 +484,19 @@ struct SessionsListView: View {
     @ViewBuilder private func selectableRow(
         _ s: SessionInfo,
         host: HostView?,
-        position: SidebarRowPosition
+        position: SidebarRowPosition,
+        projectTag: String? = nil
     ) -> some View {
         #if os(macOS)
         Button {
-            selected = s.id
-            onSessionSelected(s.id)
+            if (s.userStatus ?? "") == "draft" {
+                onOpenDraft(s.id)
+            } else {
+                selected = s.id
+                onSessionSelected(s.id)
+            }
         } label: {
-            row(s, host: host, position: position)
+            row(s, host: host, position: position, projectTag: projectTag)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -303,7 +508,7 @@ struct SessionsListView: View {
             swipeButtons(for: s)
         }
         #else
-        row(s, host: host, position: position)
+        row(s, host: host, position: position, projectTag: projectTag)
             .tag(s.id)
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 swipeButtons(for: s)
@@ -318,7 +523,7 @@ struct SessionsListView: View {
         let b = fleet.broker(for: s.id)
         let muted = s.mute?.boolValue ?? false
         Button(role: .destructive) { killTarget = s } label: {
-            Label("Kill", systemImage: "xmark.circle")
+            Label("Settle", systemImage: "checkmark.circle")
         }
         Button { renameText = s.name; renameTarget = s } label: {
             Label("Rename", systemImage: "pencil")
@@ -408,18 +613,36 @@ struct SessionRow: View {
     var muted: Bool = false
     /// The owning host, when ≥2 hosts are paired — renders the per-row badge (nil = single-host).
     var host: HostView? = nil
+    /// Flat-mode project leaf tag (web projectLabel).
+    var projectTag: String? = nil
+
+    private var isDraft: Bool { (session.userStatus ?? "") == "draft" }
 
     var body: some View {
         HStack(spacing: 8) {
-            SessionStatusRail(git: session.git, working: working, bgOpen: bgOpen)
+            // Web parity: agent working-state only in the list (no per-row git).
+            if isDraft {
+                Image(systemName: "pencil")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.teal.opacity(0.85))
+                    .frame(width: 14)
+            } else {
+                SessionStatusRail(git: nil, working: working, bgOpen: bgOpen)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(session.name).font(titleFont.weight(.semibold)).lineLimit(1)
                     if muted { Image(systemName: "bell.slash.fill").font(.caption2).foregroundStyle(.tertiary) }
+                    if let projectTag {
+                        Text(projectTag)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
                     Spacer(minLength: 0)
                     if let host { HostBadge(host: host) }
                 }
-                Text(preview ?? session.agent)
+                Text(preview ?? (isDraft ? "draft" : session.agent))
                     .font(previewFont).foregroundStyle(.secondary).lineLimit(1)
             }
         }

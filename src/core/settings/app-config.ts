@@ -4,6 +4,7 @@
 // never throws, so a corrupt/old row degrades to safe defaults.
 
 import { ENGINES } from "../agent-api/index"
+import { STT_ENGINES } from "../transcription/stt-types"
 
 export type ExposureMode = "local" | "public"
 
@@ -36,6 +37,7 @@ export interface AppConfig {
   // Set by `supermux connect`; absent when no tunnel is configured. Store-only.
   tunnel?: TunnelRecord
   // Voice pipeline settings. Store-only; absent when not configured.
+  voiceSttEngine?: string // STT backend (codex-realtime | claude-voice | whisper); default codex-realtime — see src/core/transcription/stt.ts
   voiceCleanupEngine?: string // engine used by voice cleanup (codex | opencode-zen | opencode-go | claude | cursor | cursor-cli); default codex
   voiceCleanupModel?: string // model used by the voice-cleanup agent
   voiceCleanupGlossary?: string[] // project/technical terms the cleanup must keep verbatim; default-seeded
@@ -156,6 +158,7 @@ export function resolveAppConfig(stored: Partial<AppConfig>, env: AppConfigEnv):
     whatsappWebhookSecret: firstNonEmpty(stored.whatsappWebhookSecret, env.MUX_WHATSAPP_WEBHOOK_SECRET),
     onboarded: stored.onboarded === undefined ? defaultAppConfig.onboarded : Boolean(stored.onboarded),
     tunnel: parseTunnelRecord(stored.tunnel), // store-only, no env source
+    ...(stored.voiceSttEngine !== undefined ? { voiceSttEngine: stored.voiceSttEngine } : {}),
     ...(stored.voiceCleanupEngine !== undefined ? { voiceCleanupEngine: stored.voiceCleanupEngine } : {}),
     ...(stored.voiceCleanupModel !== undefined ? { voiceCleanupModel: stored.voiceCleanupModel } : {}),
     // Glossary is default-seeded: a stored array (incl. empty) wins; otherwise the built-in seed.
@@ -191,6 +194,7 @@ export function sanitizeAppConfigPatch(input: unknown): Partial<AppConfig> {
     const t = parseTunnelRecord(o.tunnel)
     if (t) out.tunnel = t
   }
+  if (typeof o.voiceSttEngine === "string" && (STT_ENGINES as string[]).includes(o.voiceSttEngine)) out.voiceSttEngine = o.voiceSttEngine
   if (typeof o.voiceCleanupEngine === "string" && (ENGINES as string[]).includes(o.voiceCleanupEngine)) out.voiceCleanupEngine = o.voiceCleanupEngine
   // "" is a reset sentinel: it maps to undefined so the sparse merge in
   // SettingsStore.setAppConfig CLEARS a previously-stored model (reverting to the
@@ -233,6 +237,7 @@ export function parseAppConfig(input: unknown, base: AppConfig = defaultAppConfi
     whatsappWebhookSecret: str(o.whatsappWebhookSecret, base.whatsappWebhookSecret),
     onboarded: o.onboarded === undefined ? base.onboarded : Boolean(o.onboarded),
     tunnel: parseTunnelRecord(o.tunnel) ?? base.tunnel,
+    ...(o.voiceSttEngine !== undefined ? { voiceSttEngine: str(o.voiceSttEngine, base.voiceSttEngine ?? "") || undefined } : base.voiceSttEngine !== undefined ? { voiceSttEngine: base.voiceSttEngine } : {}),
     ...(o.voiceCleanupEngine !== undefined ? { voiceCleanupEngine: str(o.voiceCleanupEngine, base.voiceCleanupEngine ?? "") || undefined } : base.voiceCleanupEngine !== undefined ? { voiceCleanupEngine: base.voiceCleanupEngine } : {}),
     ...(o.voiceCleanupModel !== undefined ? { voiceCleanupModel: str(o.voiceCleanupModel, base.voiceCleanupModel ?? "") || undefined } : base.voiceCleanupModel !== undefined ? { voiceCleanupModel: base.voiceCleanupModel } : {}),
     voiceCleanupGlossary: parseGlossary(o.voiceCleanupGlossary) ?? base.voiceCleanupGlossary ?? DEFAULT_VOICE_CLEANUP_GLOSSARY,

@@ -119,6 +119,7 @@ async function request(method: string, path: string, body?: unknown): Promise<an
 }
 
 export interface AppConfig {
+  voiceSttEngine?: string
   voiceCleanupEngine?: string
   voiceCleanupModel?: string
   whisperLang?: string
@@ -164,14 +165,25 @@ export const api = {
     role?: "personal_assistant" | "worker"
     isDefault?: boolean
   }>>,
-  createSession: (args: { name?: string; workdir: string; agent?: string; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string }) =>
-    request("POST", "/sessions", args),
+  createSession: (args: { name?: string; workdir: string; agent?: string; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; userStatus?: "draft" | "in_progress"; draftPayload?: { text?: string; attachments?: unknown[] } }) =>
+    request("POST", "/sessions", args) as Promise<{
+      id: string
+      name: string
+      workdir: string
+      agent: string
+      model?: string
+      reasoningLevel?: string
+      repo_root?: string
+      session_branch?: string
+    }>,
   getSessionMessages: (id: string) =>
     request("GET", `/sessions/${encodeURIComponent(id)}/messages`),
   killSession: (id: string) =>
     request("DELETE", `/sessions/${encodeURIComponent(id)}`),
   renameSession: (id: string, newName: string) =>
     request("POST", `/sessions/${encodeURIComponent(id)}/rename`, { name: newName }),
+  reorderSessions: (orderedIds: string[]) =>
+    request("PATCH", "/sessions/reorder", { orderedIds }) as Promise<{ ok: boolean }>,
   toggleMute: (id: string, muted: boolean) =>
     request("POST", `/sessions/${encodeURIComponent(id)}/mute`, { muted }),
   interrupt: (id: string) =>

@@ -56,7 +56,7 @@ struct SettingsView: View {
                     SettingsRow(
                         symbol: "mic",
                         title: "Voice",
-                        subtitle: "Dictation cleanup model"
+                        subtitle: "Speech engine, cleanup model & glossary"
                     )
                 }
 
@@ -87,6 +87,16 @@ struct SettingsView: View {
                         symbol: "gearshape.2",
                         title: "System",
                         subtitle: "Broker restart and status"
+                    )
+                }
+
+                NavigationLink {
+                    AppUpdateView()
+                } label: {
+                    SettingsRow(
+                        symbol: "arrow.down.circle",
+                        title: "Check for updates",
+                        subtitle: "App version and install"
                     )
                 }
             }

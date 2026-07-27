@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue"
+import { computed } from "vue"
 import { useRoute, useRouter } from "vue-router"
 import { PanelLeft, Plus } from "lucide-vue-next"
 import { useSessions } from "@/stores/sessions"
@@ -14,7 +14,6 @@ import MuxLogo from "@/components/MuxLogo.vue"
 import SidebarActionsMenu from "@/components/SidebarActionsMenu.vue"
 import SessionAvatar from "@/components/SessionAvatar.vue"
 import SessionContextMenu from "@/components/SessionContextMenu.vue"
-import KillConfirmDialog from "@/components/KillConfirmDialog.vue"
 
 const sessions = useSessions()
 const unread = useUnread()
@@ -27,9 +26,6 @@ const { requestRename } = useRenameRequest()
 
 const activeId = computed(() => (typeof route.params.id === "string" ? route.params.id : ""))
 const launcherActive = computed(() => route.path === "/new")
-
-const killTarget = ref<{ id: string; name: string } | null>(null)
-const showKillConfirm = ref(false)
 
 function navigate(id: string) {
   router.push(`/s/${id}`)
@@ -54,22 +50,25 @@ function handleRename(name: string) {
   layout.expandSidebar()
 }
 
-function requestKill(id: string) {
+async function handleSettle(id: string) {
   const s = sessions.list.find((x) => x.id === id)
-  killTarget.value = { id, name: s?.name ?? id }
-  showKillConfirm.value = true
-}
-
-async function confirmKill() {
-  const target = killTarget.value
-  if (!target) return
-  showKillConfirm.value = false
-  try {
-    await api.killSession(target.id)
-  } catch (err: any) {
-    toast.error(err?.message ?? "Failed to kill session")
+  if (s) {
+    sessions.addArchived({
+      id: s.id,
+      name: s.name,
+      workdir: s.workdir,
+      agent: s.agent ?? "claude",
+      model: s.model,
+      repo_root: s.repo_root,
+      killed_at: new Date().toISOString(),
+    })
   }
-  killTarget.value = null
+  try {
+    await api.killSession(id)
+  } catch (err: any) {
+    sessions.removeArchived(id)
+    toast.error(err?.message ?? "Failed to settle")
+  }
 }
 </script>
 
@@ -102,7 +101,7 @@ async function confirmKill() {
         :name="s.name"
         :mute="s.mute"
         @navigate="navigate(s.id)"
-        @kill="requestKill(s.id)"
+        @settle="handleSettle(s.id)"
         @mute="handleMute(s.id)"
         @rename="handleRename(s.name)"
       >
@@ -125,10 +124,4 @@ async function confirmKill() {
     <SidebarActionsMenu />
   </div>
 
-  <KillConfirmDialog
-    :open="showKillConfirm"
-    :session-name="killTarget?.name ?? ''"
-    @update:open="showKillConfirm = $event"
-    @confirm="confirmKill"
-  />
 </template>

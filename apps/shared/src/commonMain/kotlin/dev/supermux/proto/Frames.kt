@@ -27,6 +27,18 @@ data class SessionInfo(
     val git: GitLiteStatusDto? = null,
     /** Last/in-flight finish job for this session (mirrors the broker session record). */
     val finish_job: FinishJobDto? = null,
+    /**
+     * User-facing task state (independent of lifecycle [status]):
+     * draft | in_progress | settled. Broker JSON uses snake_case.
+     */
+    @SerialName("user_status")
+    val userStatus: String? = null,
+    /** Manual order within a (project, userStatus) section; lower first. */
+    @SerialName("sort_order")
+    val sortOrder: Int = 0,
+    /** Launcher draft body when [userStatus] is draft. */
+    @SerialName("draft_payload")
+    val draftPayload: DraftPayload? = null,
 )
 
 /** A finish job's outcome/state machine, broadcast on the `finish_job` WS frame and
@@ -75,6 +87,13 @@ data class Attachment(
     val mime: String? = null,
     val size: Long? = null,
     val name: String? = null,
+)
+
+/** Composer text + attachments saved on a draft session. */
+@Serializable
+data class DraftPayload(
+    val text: String? = null,
+    val attachments: List<Attachment>? = null,
 )
 
 @Serializable

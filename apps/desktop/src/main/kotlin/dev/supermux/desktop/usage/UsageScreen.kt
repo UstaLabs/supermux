@@ -77,6 +77,7 @@ import dev.supermux.net.ClaudeUsage
 import dev.supermux.net.CodexResetResult
 import dev.supermux.net.CodexUsage
 import dev.supermux.net.CursorUsage
+import dev.supermux.net.GrokUsage
 import dev.supermux.net.UsageResponse
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -375,6 +376,32 @@ fun CursorUsageCard(cursor: CursorUsage?, error: String?) {
     }
 }
 
+@Composable
+fun GrokUsageCard(grok: GrokUsage?, error: String?) {
+    val cs = MaterialTheme.colorScheme
+    UsageCard(
+        title = "Grok",
+        subtitle = grok?.plan?.ifBlank { null } ?: "unknown",
+        enabled = grok != null,
+        modifier = Modifier.testTag("usage_card_grok"),
+    ) {
+        if (grok == null) {
+            Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
+        } else {
+            UsageWindowRow("Monthly credits", grok.percentUsed, formatResetIso(grok.billingPeriodEnd))
+            if (grok.monthlyLimit > 0) {
+                UsageFooterRow("Credits", "${grok.used.toLong()} / ${grok.monthlyLimit.toLong()}")
+            }
+            if (grok.onDemandCap > 0) {
+                UsageFooterRow("On-demand", "${grok.onDemandUsed.toLong()} / ${grok.onDemandCap.toLong()}")
+            }
+            if (grok.prepaidBalance > 0) {
+                UsageFooterRow("Prepaid balance", "${grok.prepaidBalance.toLong()}")
+            }
+        }
+    }
+}
+
 // ─── UsageScreen ────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -440,6 +467,7 @@ fun UsageScreen(
                         ClaudeUsageCard(usage?.claude, usage?.errors?.get("claude"))
                         CodexUsageCard(usage?.codex, usage?.errors?.get("codex"), onRedeem = onRedeem)
                         CursorUsageCard(usage?.cursor, usage?.errors?.get("cursor"))
+                        GrokUsageCard(usage?.grok, usage?.errors?.get("grok"))
                     }
                 }
             }

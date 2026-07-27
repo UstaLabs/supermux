@@ -22,6 +22,18 @@ test("tmux present produces no tmux warning", () => {
   expect(r.warnings.some((w) => w.toLowerCase().includes("tmux"))).toBe(false)
 })
 
+test("Windows uses sessiond and never warns about tmux", () => {
+  const r = checkPreflight(has(["codex"]), "win32")
+  expect(r.fatal).toEqual([])
+  expect(r.warnings.some((w) => w.toLowerCase().includes("tmux"))).toBe(false)
+})
+
+test("all structured agents and Cursor's agent alias satisfy availability", () => {
+  for (const binary of ["agent", "opencode", "grok"]) {
+    expect(checkPreflight(has([binary]), "win32").fatal).toEqual([])
+  }
+})
+
 const origPath = process.env.PATH
 afterEach(() => {
   process.env.PATH = origPath

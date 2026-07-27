@@ -11,12 +11,28 @@ const AssetSchema = z.object({
   sha256: z.string(),
 })
 
+const ClientVersionSchema = z.object({
+  version: z.string(),
+  versionCode: z.number().optional(),
+  build: z.number().optional(),
+})
+
+const ClientsSchema = z.object({
+  android: ClientVersionSchema.optional(),
+  desktop: ClientVersionSchema.optional(),
+  ios: ClientVersionSchema.optional(),
+}).optional()
+
 const ChannelSchema = z.object({
   version: z.string(),
   publishedAt: z.string(),
   notesUrl: z.string(),
-  // record over arbitrary string keys (linux-x64 / linux-arm64 today, more later)
+  // record over arbitrary string keys (linux-x64 / linux-arm64 today, more later;
+  // also android / desktop-linux / desktop-windows / desktop-macos for client installers)
   assets: z.record(z.string(), AssetSchema),
+  // Per-client marketing versions (independent of the broker/release tag). Optional for
+  // backward-compat with older versions.json that only listed broker assets.
+  clients: ClientsSchema,
 })
 
 export const VersionsJsonSchema = z.object({

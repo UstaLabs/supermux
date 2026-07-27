@@ -1,6 +1,23 @@
 import SwiftUI
 import Shared
 
+/// One selectable speech-to-text engine (broker multipart /transcribe).
+private struct SttEngine: Identifiable {
+    let id: String
+    let label: String
+}
+
+/// Mirror of STT_ENGINES in src/core/transcription/stt-types.ts.
+private let sttEngines: [SttEngine] = [
+    .init(id: "codex-realtime", label: "Codex Realtime (ChatGPT)"),
+    .init(id: "claude-voice", label: "Claude Code voice"),
+    .init(id: "whisper", label: "Whisper (local)"),
+]
+private let defaultSttEngine = "codex-realtime"
+private func sttEngineLabel(_ id: String) -> String {
+    sttEngines.first { $0.id == id }?.label ?? id
+}
+
 /// One selectable voice-cleanup engine (direct-API adapter layer). `family` is the
 /// AgentKind whose models `listModels` returns for that engine.
 private struct VoiceEngine: Identifiable {
@@ -25,16 +42,18 @@ private func voiceEngineLabel(_ engine: String) -> String {
     voiceEngines.first { $0.id == engine }?.label ?? engine
 }
 
-/// Settings screen for voice-dictation cleanup.
+/// Settings screen for voice-dictation STT + cleanup.
 ///
-/// Mirrors `VoiceSettingsView.vue` on the web PWA: pick the cleanup ENGINE
-/// (Codex default / OpenCode / Cursor), then a MODEL for that engine ("Default" =
-/// the engine's own). Switching engine resets the now-irrelevant model.
-/// Broker calls used: `config()`, `listModels(family)`, `saveConfig(voiceCleanupEngine:voiceCleanupModel:)`.
+/// Mirrors `VoiceSettingsView.vue` on the web PWA: pick the speech ENGINE
+/// (Codex Realtime / Claude Code voice / Whisper), then the cleanup ENGINE
+/// and MODEL. Switching cleanup engine resets the now-irrelevant model.
+/// Broker calls: `config()`, `listModels(family)`,
+/// `saveConfig(voiceSttEngine:voiceCleanupEngine:voiceCleanupModel:)`.
 struct VoiceSettingsView: View {
     let broker: BrokerSession
 
     @State private var models: [ModelInfo] = []
+    @State private var sttEngine = defaultSttEngine
     @State private var engine = defaultVoiceEngine
     @State private var selected = ""   // "" = the engine's default
     @State private var loading = true
@@ -76,6 +95,16 @@ struct VoiceSettingsView: View {
 
     private var form: some View {
         Form {
+            Section {
+                Picker("Speech engine", selection: $sttEngine) {
+                    ForEach(sttEngines) { e in
+                        Text(e.label).tag(e.id)
+                    }
+                }
+            } footer: {
+                Text("Cloud STT for uploaded mic audio. Claude Code voice needs a Claude.ai login on the host.")
+            }
+
             Section {
                 Picker("Cleanup engine", selection: engineBinding) {
                     ForEach(voiceEngines) { e in
@@ -136,6 +165,8 @@ struct VoiceSettingsView: View {
         loading = true
         defer { loading = false }
         let cfg = await broker.config()
+        let cfgStt = cfg?.voiceSttEngine ?? ""
+        sttEngine = cfgStt.isEmpty ? defaultSttEngine : cfgStt
         let cfgEngine = cfg?.voiceCleanupEngine ?? ""
         engine = cfgEngine.isEmpty ? defaultVoiceEngine : cfgEngine
         selected = cfg?.voiceCleanupModel ?? ""
@@ -149,7 +180,11 @@ struct VoiceSettingsView: View {
         error = nil
         defer { saving = false }
         // selected == "" sends "", the broker's "reset to the engine's default" sentinel.
-        await broker.saveConfig(voiceCleanupModel: selected, voiceCleanupEngine: engine)
+        await broker.saveConfig(
+            voiceSttEngine: sttEngine,
+            voiceCleanupModel: selected,
+            voiceCleanupEngine: engine
+        )
         saved = true
         try? await Task.sleep(for: .seconds(2))
         saved = false

@@ -73,6 +73,9 @@ data class AppConfigDto(
     val codexConfigured: Boolean = false,
     val cursorConfigured: Boolean = false,
     val onboarded: Boolean = false,
+    /** Broker STT engine for mic audio (codex-realtime | claude-voice | whisper).
+     *  null = broker default (codex-realtime). */
+    val voiceSttEngine: String? = null,
     /** Direct-API engine for voice cleanup (codex | opencode-zen | opencode-go |
      *  cursor | claude). null = broker default (codex). */
     val voiceCleanupEngine: String? = null,
@@ -147,7 +150,30 @@ data class SpawnRequest(
     val baseBranch: String? = null,
     /** Reasoning ("thinking") effort to start the session at (agent-specific; ignored when unsupported). */
     val reasoningLevel: String? = null,
+    /** draft | in_progress — draft creates without spawning an agent process. */
+    val userStatus: String? = null,
+    /** Composer body when [userStatus] is draft (broker camelCase on POST body). */
+    val draftPayload: DraftPayloadDto? = null,
 )
+
+/** Draft composer payload on POST /sessions (mirrors web draftPayload). */
+@Serializable
+data class DraftPayloadDto(
+    val text: String? = null,
+    val attachments: List<DraftAttachmentDto>? = null,
+)
+
+@Serializable
+data class DraftAttachmentDto(
+    val file_id: String,
+    val name: String? = null,
+    val mime: String? = null,
+    val size: Long? = null,
+    val kind: String? = null,
+)
+
+@Serializable
+data class ReorderSessionsBody(val orderedIds: List<String>)
 
 @Serializable
 data class SpawnResponse(
@@ -293,12 +319,27 @@ data class OpenCodeUsage(
     val cacheWriteTokens: Long = 0,
 )
 
+/** SuperGrok subscription credit pool from cli-chat-proxy `/billing`. */
+@Serializable
+data class GrokUsage(
+    val plan: String = "",
+    val percentUsed: Double = 0.0,
+    val used: Double = 0.0,
+    val monthlyLimit: Double = 0.0,
+    val onDemandCap: Double = 0.0,
+    val onDemandUsed: Double = 0.0,
+    val prepaidBalance: Double = 0.0,
+    val billingPeriodStart: String? = null,
+    val billingPeriodEnd: String? = null,
+)
+
 @Serializable
 data class UsageResponse(
     val claude: ClaudeUsage? = null,
     val codex: CodexUsage? = null,
     val cursor: CursorUsage? = null,
     val opencode: OpenCodeUsage? = null,
+    val grok: GrokUsage? = null,
     val errors: Map<String, String> = emptyMap(),
 )
 
@@ -872,6 +913,7 @@ private data class OpenCodeOAuthFinishBody(val providerId: String, val method: I
 private data class ConfigPatchBody(
     val onboarded: Boolean? = null,
     val paName: String? = null,
+    val voiceSttEngine: String? = null,
     val voiceCleanupModel: String? = null,
     val voiceCleanupEngine: String? = null,
     val claudeOauthToken: String? = null,
@@ -1145,6 +1187,15 @@ class BrokerApi(
         }
     }
 
+    /** PATCH /sessions/reorder — renumber sort_order for a whole section (ordered ids). */
+    suspend fun reorderSessions(orderedIds: List<String>) {
+        http.patch("$httpBase/sessions/reorder") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(ReorderSessionsBody(orderedIds)))
+        }
+    }
+
     /** POST /sessions */
     suspend fun spawn(req: SpawnRequest): SpawnResponse = withTimeout(spawnTimeoutMillis) {
         decode(http.post("$httpBase/sessions") {
@@ -1170,6 +1221,7 @@ class BrokerApi(
     suspend fun saveConfig(
         onboarded: Boolean? = null,
         paName: String? = null,
+        voiceSttEngine: String? = null,
         voiceCleanupModel: String? = null,
         voiceCleanupEngine: String? = null,
         claudeOauthToken: String? = null,
@@ -1181,6 +1233,7 @@ class BrokerApi(
         ConfigPatchBody(
             onboarded = onboarded,
             paName = paName,
+            voiceSttEngine = voiceSttEngine,
             voiceCleanupModel = voiceCleanupModel,
             voiceCleanupEngine = voiceCleanupEngine,
             claudeOauthToken = claudeOauthToken,
@@ -1360,7 +1413,7 @@ class BrokerApi(
             header("Authorization", bearerHeader())
         }.bodyAsText()
 
-    /** GET /usage → typed per-provider usage (Claude / Codex / Cursor / opencode) */
+    /** GET /usage → typed per-provider usage (Claude / Codex / Cursor / opencode / grok) */
     suspend fun usage(): UsageResponse = getJson("$httpBase/usage")
 
     /** POST /usage/codex/reset → redeem one banked Codex rate-limit reset. */

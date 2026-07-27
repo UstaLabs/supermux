@@ -65,6 +65,8 @@ import dev.supermux.desktop.session.SessionLauncherScreen
 import dev.supermux.desktop.session.SessionListPanel
 import dev.supermux.desktop.settings.LspSettingsScreen
 import dev.supermux.desktop.settings.PersonalAssistantsScreen
+import dev.supermux.desktop.update.AppUpdateBanner
+import dev.supermux.desktop.update.AppUpdateScreen
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.usage.UsageScreen
 import dev.supermux.net.ArchivedDto
@@ -91,6 +93,8 @@ class WorkspaceUiState {
      * composition — can open it too, the same reason [selectedId] lives here.
      */
     var launcherOpen by mutableStateOf(false)
+    /** When set, the launcher reopens this draft session (web /new?draft=). */
+    var launcherDraftId by mutableStateOf<String?>(null)
 
     /**
      * Whether the Archived-sessions overlay (M4e Task 2) is showing. Flipped on by the File ▸
@@ -120,6 +124,7 @@ class WorkspaceUiState {
      */
     var lspSettingsOpen by mutableStateOf(false)
     var personalAssistantsOpen by mutableStateOf(false)
+    var appUpdateOpen by mutableStateOf(false)
 
     /**
      * Any full-pane modal overlay ([launcherOpen], [archivedOpen], [usageOpen],
@@ -129,7 +134,7 @@ class WorkspaceUiState {
      * [workspaceShortcuts] and silently mutate the layout behind it. One gate for every overlay,
      * so new overlays don't each have to remember to extend the guard.
      */
-    val overlayOpen: Boolean get() = launcherOpen || archivedOpen || usageOpen || lspSettingsOpen || personalAssistantsOpen
+    val overlayOpen: Boolean get() = launcherOpen || archivedOpen || usageOpen || lspSettingsOpen || personalAssistantsOpen || appUpdateOpen
 
     /**
      * Open the New-Session launcher, enforcing the "at most one overlay" invariant (closes the
@@ -138,12 +143,14 @@ class WorkspaceUiState {
      * draws opaquely over the others, and a stale one surfacing when another closes would be a
      * confusing back-stack. Every future overlay adds a matching openX().
      */
-    fun openLauncher() {
+    fun openLauncher(draftId: String? = null) {
+        launcherDraftId = draftId
         launcherOpen = true
         archivedOpen = false
         usageOpen = false
         lspSettingsOpen = false
         personalAssistantsOpen = false
+        appUpdateOpen = false
     }
 
     /** Open the Archived-sessions overlay; the "at most one overlay" mirror of [openLauncher]. */
@@ -153,6 +160,7 @@ class WorkspaceUiState {
         usageOpen = false
         lspSettingsOpen = false
         personalAssistantsOpen = false
+        appUpdateOpen = false
     }
 
     /** Open the Usage overlay; the "at most one overlay" mirror of [openLauncher]/[openArchived]. */
@@ -162,6 +170,7 @@ class WorkspaceUiState {
         archivedOpen = false
         lspSettingsOpen = false
         personalAssistantsOpen = false
+        appUpdateOpen = false
     }
 
     /** Open the LSP settings overlay; the "at most one overlay" mirror of [openLauncher]/
@@ -172,6 +181,7 @@ class WorkspaceUiState {
         archivedOpen = false
         usageOpen = false
         personalAssistantsOpen = false
+        appUpdateOpen = false
     }
 
     fun openPersonalAssistants() {
@@ -180,6 +190,16 @@ class WorkspaceUiState {
         archivedOpen = false
         usageOpen = false
         lspSettingsOpen = false
+        appUpdateOpen = false
+    }
+
+    fun openAppUpdate() {
+        launcherOpen = false
+        archivedOpen = false
+        usageOpen = false
+        lspSettingsOpen = false
+        personalAssistantsOpen = false
+        appUpdateOpen = true
     }
 
     /**
@@ -301,6 +321,11 @@ fun WorkspaceRoot(
     // Prefer the merged fleet flows when multi-host; else the single [app]'s. `fleet` is stable
     // across recompositions (remembered in Main), so the `?:` picks the same flow each time.
     val sessions by (fleet?.sessions ?: app.sessions).collectAsState()
+    var archivedForList by remember { mutableStateOf<List<dev.supermux.net.ArchivedDto>>(emptyList()) }
+    LaunchedEffect(sessions, ui.selectedId) {
+        // Refresh settled fold when the live list changes (settle/resume/snapshot).
+        archivedForList = runCatching { app.archived() }.getOrDefault(emptyList())
+    }
     val messages by (fleet?.messages ?: app.messages).collectAsState()
     val agentState by (fleet?.agentState ?: app.agentState).collectAsState()
     val lastBySession = remember(messages) { messages.mapValues { it.value.lastOrNull() } }
@@ -456,6 +481,9 @@ fun WorkspaceRoot(
                 // too costs nothing. `ui.overlayOpen` is the single gate for every overlay.
                 .then(if (ui.overlayOpen || addHostOpen) Modifier else Modifier.workspaceShortcuts(layout, ui.selectedId, onNewSession)),
         ) {
+            Column(Modifier.fillMaxSize()) {
+            AppUpdateBanner(onOpenPage = { ui.openAppUpdate() })
+            Box(Modifier.weight(1f).fillMaxWidth()) {
             Row(Modifier.fillMaxSize()) {
                 // ── Sidebar: collapsed rail, or the full list + a drag-resize gutter ──
                 if (layout.sidebarCollapsed) {
@@ -480,20 +508,16 @@ fun WorkspaceRoot(
                         onKill = { id -> appFor(id).kill(id) { if (ui.selectedId == id) ui.selectedId = null } },
                         onMute = { id, muted -> appFor(id).setMute(id, muted) },
                         onNewSession = onNewSession,
+                        archived = archivedForList,
+                        onResume = { id -> overlayScope.launch { appFor(id).resume(id); archivedForList = runCatching { app.archived() }.getOrDefault(emptyList()) } },
+                        onOpenDraft = { id -> ui.openLauncher(draftId = id) },
+                        onReorder = { ids -> app.reorderSessions(ids) },
                         // Fleet badges/chips (multi-host only; empty in single-host mode).
                         hosts = hostViews,
                         sessionHost = sessionHost,
                         hostFilter = hostFilter,
                         onSelectHostFilter = { hostFilter = it },
                         onAddHost = { addHostOpen = true },
-                        // Windows-only "Host from this PC — preview" card (Task 6); native hosts hide it.
-                        showWindowsPreview = dev.supermux.desktop.host.shouldShowWindowsPreview(),
-                        onJoinWindowsPreview = {
-                            dev.supermux.desktop.host.recordWindowsPreviewSignup(
-                                dev.supermux.desktop.auth.DesktopTokenStore.defaultPath().parent.resolve("windows-host-preview.log"),
-                            )
-                        },
-                        onOpenWslGuide = { dev.supermux.desktop.ui.openInBrowser(dev.supermux.desktop.host.WSL_HOST_DOCS_URL) },
                         modifier = Modifier.width(layout.sidebarWidth).fillMaxHeight(),
                     )
                     SidebarDivider(
@@ -572,7 +596,7 @@ fun WorkspaceRoot(
                         .testTag("launcher_overlay")
                         .onPreviewKeyEvent { e ->
                             if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                                ui.launcherOpen = false
+                                ui.launcherOpen = false; ui.launcherDraftId = null
                                 true
                             } else {
                                 false
@@ -582,7 +606,7 @@ fun WorkspaceRoot(
                     SessionLauncherScreen(
                         sessions = activeHostSessions,
                         home = home,
-                        onBack = { ui.launcherOpen = false },
+                        onBack = { ui.launcherOpen = false; ui.launcherDraftId = null },
                         // Host-global lookups + spawn target the ACTIVE host (`hostApp`); the host
                         // picker below switches it. Single-host → [app].
                         loadProjects = { hostApp.listProjects() },
@@ -601,9 +625,10 @@ fun WorkspaceRoot(
                         // own doSubmit try/catch turns any thrown message into the inline
                         // launcher_error text (its onSubmit contract is Unit-returning, so a failure
                         // has no other channel back to the screen).
-                        onSubmit = { workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch ->
+                        onSubmit = { workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch, replaceDraftId ->
                             val id = hostApp.createSessionWithFirstMessage(
                                 workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
+                                replaceDraftId = replaceDraftId,
                             )
                             if (id == null) {
                                 throw IllegalStateException(
@@ -612,8 +637,17 @@ fun WorkspaceRoot(
                             }
                             ui.selectedId = id
                             hostApp.sendMessage(id, text, hostApp.consumeFirstUploads(id))
-                            ui.launcherOpen = false
+                            ui.launcherOpen = false; ui.launcherDraftId = null
                         },
+                        onSaveDraft = { workdir, agent, model, reasoningLevel, text, replaceDraftId ->
+                            hostApp.createDraftSession(
+                                workdir, agent, model, text,
+                                reasoningLevel = reasoningLevel,
+                                replaceDraftId = replaceDraftId,
+                            )
+                        },
+                        initialDraftId = ui.launcherDraftId,
+                        initialDraft = ui.launcherDraftId?.let { id -> sessions.find { it.id == id } },
                         // Multi-host: pick which broker to spawn on (hidden with one host).
                         hosts = hostViews,
                         selectedHost = activeHostId,
@@ -813,6 +847,26 @@ fun WorkspaceRoot(
                 }
             }
 
+            if (ui.appUpdateOpen) {
+                val updFocus = remember { FocusRequester() }
+                LaunchedEffect(Unit) { runCatching { updFocus.requestFocus() } }
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .testTag("app_update_overlay")
+                        .focusRequester(updFocus)
+                        .focusable()
+                        .onPreviewKeyEvent { e ->
+                            if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                                ui.appUpdateOpen = false
+                                true
+                            } else false
+                        },
+                ) {
+                    AppUpdateScreen(onBack = { ui.appUpdateOpen = false })
+                }
+            }
+
             // ── Add host: a FULL-PANE overlay above the workspace (multi-host, spec §3.4/§5) ──
             // Opened by the fleet chip row's `+`. Wired to the fleet's claim seams; a successful
             // add closes the overlay and jumps the filter to the new host so its (soon-arriving)
@@ -844,6 +898,8 @@ fun WorkspaceRoot(
                     )
                 }
             }
+            } // weight Box (banner column content)
+            } // Column (banner + content)
         }
     }
 }

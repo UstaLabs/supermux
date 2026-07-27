@@ -19,6 +19,7 @@ import PairDialog from "./components/PairDialog.vue"
 import AttachmentLightbox from "@/components/attachments/AttachmentLightbox.vue"
 import Sonner from "@/components/ui/sonner/Sonner.vue"
 import CachedRouterView from "@/components/CachedRouterView.vue"
+import AppUpdateBanner from "@/components/AppUpdateBanner.vue"
 
 const route = useRoute()
 const router = useRouter()
@@ -74,8 +75,10 @@ onMounted(async () => {
   <PairDialog v-if="needsPair" />
 
   <template v-else>
+    <div class="flex flex-col h-dvh bg-background text-foreground">
+    <AppUpdateBanner />
     <!-- Split layout: ≥1024px and not a fullScreen route -->
-    <div v-if="isDesktop && !route.meta.fullScreen" class="flex h-dvh bg-background text-foreground">
+    <div v-if="isDesktop && !route.meta.fullScreen" class="flex flex-1 min-h-0 bg-background text-foreground">
       <aside
         class="shrink-0 overflow-hidden"
         :style="{ width: (layout.state.sidebarCollapsed ? SIDEBAR_RAIL : layout.state.sidebarWidth) + 'px' }"
@@ -98,7 +101,10 @@ onMounted(async () => {
     </div>
 
     <!-- Full-bleed: mobile, or fullScreen routes (/devices) -->
-    <CachedRouterView v-else />
+    <div v-else class="flex-1 min-h-0 overflow-hidden">
+      <CachedRouterView />
+    </div>
+    </div>
   </template>
 
   <Sonner position="top-center" rich-colors />

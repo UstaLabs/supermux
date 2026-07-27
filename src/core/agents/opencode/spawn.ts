@@ -5,6 +5,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk"
 import type { OpenCodeClientLike, OpenCodeCommandEntry } from "./adapter"
 import { awaitServerReady } from "./spawn-readiness"
 import { makeLogger } from "../../../shared/log"
+import { resolveCommand, spawnCommand, type FileExists } from "../../process/launcher"
 
 const log = makeLogger("agents/opencode/spawn")
 
@@ -105,16 +106,21 @@ export async function spawnOpenCodeServer(opts: {
   readyTimeoutMs?: number
   /** skip the readiness poll (tests) */
   skipReady?: boolean
+  platform?: NodeJS.Platform
+  fileExists?: FileExists
 }): Promise<OpenCodeSpawnHandle> {
   const spawnFn: SpawnFn = opts.spawn ?? (defaultSpawn as unknown as SpawnFn)
   const port = opts.port ?? (await freePort())
   const baseUrl = `http://127.0.0.1:${port}`
+  const configDir = resolve(opts.configHome, "opencode")
+  const platform = opts.platform ?? process.platform
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     ...opts.authEnv,
     // session-private config (mux-shim MCP + instructions); auth (XDG_DATA_HOME)
     // is intentionally left at the user's value.
     XDG_CONFIG_HOME: opts.configHome,
+    ...(platform === "win32" ? { OPENCODE_CONFIG_DIR: configDir } : {}),
   }
   // Pre-seed session-private opencode config with permission auto-allow so
   // subagents spawned via `task` don't hang on unanswerable permission asks.
@@ -122,7 +128,6 @@ export async function spawnOpenCodeServer(opts: {
   // UI the user can't see through the broker's chat channel; the model
   // should ask via plain text instead (same reason we deny AskUserQuestion
   // in Claude Code's PreToolUse hooks).
-  const configDir = resolve(opts.configHome, "opencode")
   mkdirSync(configDir, { recursive: true })
   writeFileSync(
     resolve(configDir, "opencode.jsonc"),
@@ -148,7 +153,10 @@ export async function spawnOpenCodeServer(opts: {
     }, null, 2),
     "utf8",
   )
-  const child = spawnFn("opencode", ["serve", "--hostname", "127.0.0.1", "--port", String(port)], {
+  const shouldResolve = !opts.spawn || opts.platform !== undefined || opts.fileExists !== undefined
+  const command = shouldResolve ? (resolveCommand(["opencode"], env, platform, { fileExists: opts.fileExists }) ?? "opencode") : "opencode"
+  const child = spawnCommand(command, ["serve", "--hostname", "127.0.0.1", "--port", String(port)], {
+    platform, fileExists: opts.fileExists, spawn: spawnFn as never,
     cwd: opts.workdir,
     env,
     stdio: ["ignore", "pipe", "pipe"],

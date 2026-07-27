@@ -1,8 +1,9 @@
 // apps/iosApp/Supermux/Chat/Composer/MicButton.swift
 import SwiftUI
 
-/// Mic / on-device-dictation entry button, shared by both composers. Shows the `micStarting`
-/// spinner (first-run model download) and disables during transcription.
+/// Mic / dictation entry button, shared by both composers. Shows the `micStarting`
+/// spinner (first-run on-device model download when that path is enabled) and disables during
+/// transcription.
 struct MicButton: View {
     let model: ComposerModel
 

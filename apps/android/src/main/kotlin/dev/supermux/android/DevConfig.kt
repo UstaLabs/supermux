@@ -9,20 +9,19 @@ object DevConfig {
     const val HOME = "/home/user"
 
     /**
-     * On-device speech-to-text (live transcript) toggle. ON to mirror iOS, which tries the
-     * platform on-device recognizer FIRST and only records-and-uploads audio as a fallback — so
-     * dictation produces text even when the broker has no whisper pipeline (ffmpeg + whisper-cli)
-     * installed, which is the default.
+     * On-device speech-to-text (live transcript) toggle. OFF by default so mic dictation always
+     * records audio and POSTs to the broker's pluggable STT engine (codex-realtime / whisper) —
+     * same path as web + desktop, and the one that honors [voiceSttEngine].
      *
      * When on, [dev.supermux.android.chat.DictationEngine] supplies the transcript locally and the
-     * whisper POST is reduced to an OPTIONAL cleanup pass over that draft (the JSON `draft` branch of
-     * /transcribe, no ffmpeg needed); if cleanup fails the raw on-device draft is kept
-     * ([dev.supermux.android.chat.DictationController.runTranscription] rawFallback), exactly as iOS
-     * does. On-device recognition is OEM/locale-gated: where it isn't available the controller falls
-     * back to the audio-upload → whisper path exactly as before, so enabling this never regresses a
-     * device — it only lights up the ones that support it.
+     * /transcribe POST is reduced to an OPTIONAL cleanup pass over that draft (the JSON `draft`
+     * branch); if cleanup fails the raw on-device draft is kept
+     * ([dev.supermux.android.chat.DictationController.runTranscription] rawFallback). On-device
+     * recognition is OEM/locale-gated: where it isn't available the controller falls back to the
+     * audio-upload path, so re-enabling this never regresses a device — it only lights up the ones
+     * that support it. Prefer keeping this off now that the broker STT path is the product default.
      */
-    const val ENABLE_ONDEVICE_STT = true
+    const val ENABLE_ONDEVICE_STT = false
 
     private const val PHYSICAL_BROKER = "ws://CHANGE_ME:9898"  // set to your broker host
     private const val EMULATOR_BROKER = "ws://10.0.2.2:9898"

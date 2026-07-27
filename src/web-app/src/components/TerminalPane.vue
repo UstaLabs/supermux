@@ -296,6 +296,13 @@ onMounted(() => {
     else term?.write(data)
   })
 
+  terminal.onReset(() => {
+    predictor?.reset()
+    predAdapter?.reset()
+    lastKeyAt = 0
+    term?.reset()
+  })
+
   // Handle session exit — the shell/tmux session actually ended (a detach does
   // NOT fire this), so let the panel drop this tab.
   terminal.onExit((code: number) => {

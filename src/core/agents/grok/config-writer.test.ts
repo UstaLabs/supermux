@@ -1,11 +1,29 @@
 import { test, expect } from "bun:test"
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "fs"
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  writeFileSync,
+} from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
 import { writeGrokConfig } from "./config-writer"
 import { resolveGrokAuth } from "./auth"
 
 function home(): string { return mkdtempSync(join(tmpdir(), "mux-grok-home-")) }
+
+function auth(expiresAt: string, token: string): string {
+  return JSON.stringify({
+    "https://auth.x.ai::account": {
+      expires_at: expiresAt,
+      key: token,
+      refresh_token: `refresh-${token}`,
+    },
+  })
+}
 
 test("writeGrokConfig declares mux-shim with the session's env and disables claude import", () => {
   const sessionHome = home()
@@ -56,7 +74,7 @@ test("writeGrokConfig is idempotent (resume rewrites cleanly)", () => {
   expect(b).toBe(a)
 })
 
-test("resolveGrokAuth copies the credential into the private home and redirects HOME", () => {
+test("resolveGrokAuth symlinks the canonical credential into the private home", () => {
   const userGrokDir = home()
   const sessionHome = home()
   writeFileSync(join(userGrokDir, "auth.json"), '{"token":"abc"}')
@@ -64,11 +82,74 @@ test("resolveGrokAuth copies the credential into the private home and redirects 
   const res = resolveGrokAuth({ userGrokDir, sessionHome })
   expect(res.mode).toBe("cached_token")
   expect(res.env.HOME).toBe(sessionHome)
-  // Copied, not symlinked: grok rewrites auth.json on refresh and must not write
-  // back into the user's real ~/.grok.
-  expect(readFileSync(join(sessionHome, ".grok", "auth.json"), "utf8")).toBe('{"token":"abc"}')
-  writeFileSync(join(sessionHome, ".grok", "auth.json"), '{"token":"refreshed"}')
-  expect(readFileSync(join(userGrokDir, "auth.json"), "utf8")).toBe('{"token":"abc"}')
+  const link = join(sessionHome, ".grok", "auth.json")
+  expect(lstatSync(link).isSymbolicLink()).toBe(true)
+  expect(readlinkSync(link)).toBe(join(userGrokDir, "auth.json"))
+
+  // Grok refreshes through the session path; every session must see that refresh.
+  writeFileSync(link, '{"token":"refreshed"}')
+  expect(readFileSync(join(userGrokDir, "auth.json"), "utf8")).toBe('{"token":"refreshed"}')
+})
+
+test("a refresh through one Grok session is visible to sibling sessions", () => {
+  const userGrokDir = home()
+  const firstHome = home()
+  const secondHome = home()
+  writeFileSync(join(userGrokDir, "auth.json"), '{"token":"initial"}')
+  resolveGrokAuth({ userGrokDir, sessionHome: firstHome })
+  resolveGrokAuth({ userGrokDir, sessionHome: secondHome })
+
+  writeFileSync(join(firstHome, ".grok", "auth.json"), '{"token":"rotated"}')
+
+  expect(readFileSync(join(secondHome, ".grok", "auth.json"), "utf8")).toBe('{"token":"rotated"}')
+})
+
+test("resolveGrokAuth promotes a newer private refresh before replacing the old copy", () => {
+  const userGrokDir = home()
+  const sessionHome = home()
+  const sessionGrokDir = join(sessionHome, ".grok")
+  mkdirSync(sessionGrokDir)
+  writeFileSync(join(userGrokDir, "auth.json"), auth("2026-07-26T15:41:47Z", "stale"))
+  writeFileSync(join(sessionGrokDir, "auth.json"), auth("2026-07-26T18:33:13Z", "refreshed"))
+
+  const res = resolveGrokAuth({ userGrokDir, sessionHome })
+
+  expect(res.mode).toBe("cached_token")
+  expect(readFileSync(join(userGrokDir, "auth.json"), "utf8")).toBe(
+    auth("2026-07-26T18:33:13Z", "refreshed"),
+  )
+  expect(lstatSync(join(sessionGrokDir, "auth.json")).isSymbolicLink()).toBe(true)
+})
+
+test("resolveGrokAuth never lets a stale private copy overwrite newer canonical auth", () => {
+  const userGrokDir = home()
+  const sessionHome = home()
+  const sessionGrokDir = join(sessionHome, ".grok")
+  mkdirSync(sessionGrokDir)
+  writeFileSync(join(userGrokDir, "auth.json"), auth("2026-07-26T18:33:13Z", "canonical"))
+  writeFileSync(join(sessionGrokDir, "auth.json"), auth("2026-07-26T15:41:47Z", "stale"))
+
+  resolveGrokAuth({ userGrokDir, sessionHome })
+
+  expect(readFileSync(join(userGrokDir, "auth.json"), "utf8")).toBe(
+    auth("2026-07-26T18:33:13Z", "canonical"),
+  )
+  expect(lstatSync(join(sessionGrokDir, "auth.json")).isSymbolicLink()).toBe(true)
+})
+
+test("resolveGrokAuth recovers a private credential when the canonical file is missing", () => {
+  const userGrokDir = home()
+  const sessionHome = home()
+  const sessionGrokDir = join(sessionHome, ".grok")
+  mkdirSync(sessionGrokDir)
+  const credential = auth("2026-07-26T18:33:13Z", "only-copy")
+  writeFileSync(join(sessionGrokDir, "auth.json"), credential)
+
+  const res = resolveGrokAuth({ userGrokDir, sessionHome })
+
+  expect(res.mode).toBe("cached_token")
+  expect(readFileSync(join(userGrokDir, "auth.json"), "utf8")).toBe(credential)
+  expect(lstatSync(join(sessionGrokDir, "auth.json")).isSymbolicLink()).toBe(true)
 })
 
 test("resolveGrokAuth does not fail-closed when the user has never logged in", () => {
@@ -77,4 +158,10 @@ test("resolveGrokAuth does not fail-closed when the user has never logged in", (
   expect(res.mode).toBe("none")
   expect(res.env.HOME).toBe(sessionHome)
   expect(existsSync(join(sessionHome, ".grok"))).toBe(true)
+})
+
+test("resolveGrokAuth redirects USERPROFILE as well as HOME on Windows", () => {
+  const sessionHome = home()
+  const res = resolveGrokAuth({ userGrokDir: join(tmpdir(), "missing-grok"), sessionHome, platform: "win32" })
+  expect(res.env).toEqual({ HOME: sessionHome, USERPROFILE: sessionHome })
 })

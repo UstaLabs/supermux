@@ -5,7 +5,7 @@ import { connectShim } from "./socket-client"
 import { listTools, callTool } from "./tools"
 import type { AgentKind } from "./tools"
 import { createInboundGate } from "./inbound-gate"
-import { SOCKETS_DIR } from "../shared/paths"
+import { SOCKETS_DIR, socketPathForSession } from "../shared/paths"
 import { randomBytes } from "crypto"
 import { makeLogger } from "../shared/log"
 const log = makeLogger("shim")
@@ -81,6 +81,7 @@ async function main() {
 
   const shim = await connectShim({
     socketsDir: SOCKETS_DIR,
+    socketPath: socketPathForSession(SESSION_ID),
     sessionId: SESSION_ID,
     workdir: WORKDIR,
     pid: process.pid,

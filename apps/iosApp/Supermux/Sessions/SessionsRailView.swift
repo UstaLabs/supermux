@@ -5,7 +5,7 @@ import Shared
 /// `src/web-app/src/components/SidebarRail.vue`). Shown in place of `SessionsListView`
 /// when `layout.sidebarCollapsed` is true. Top: expand + new-session buttons; below,
 /// a flat (ungrouped) scroll of tappable avatars with a selection ring, a working dot,
-/// and a context menu (Mute / Rename / Kill) mirroring the full list's row actions.
+/// and a context menu (Mute / Rename / Settle) mirroring the full list's row actions.
 struct SessionsRailView: View {
     let fleet: Fleet
     @Binding var selected: String?
@@ -82,7 +82,7 @@ struct SessionsRailView: View {
             }
             // Rename needs a text field; surface it by re-expanding to the full list.
             Button { onExpand() } label: { Label("Rename", systemImage: "pencil") }
-            Button(role: .destructive) { b?.kill(s.id) } label: { Label("Kill", systemImage: "xmark.circle") }
+            Button(role: .destructive) { b?.kill(s.id) } label: { Label("Settle", systemImage: "checkmark.circle") }
         }
     }
 

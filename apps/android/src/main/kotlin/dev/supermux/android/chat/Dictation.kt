@@ -68,10 +68,10 @@ import kotlinx.coroutines.withContext
  * Shared voice-dictation drive logic for the chat composer AND the new-session launcher, so the
  * two can't drift apart (the launcher previously skipped the AI-cleanup pass entirely).
  *
- * Flow: mic → on-device STT (nice-to-have, gated by [DevConfig.ENABLE_ONDEVICE_STT]) falling back
- * to audio recording → broker cleanup pass → the cleaned text is appended to the composer via
- * [onAppend]. The cleanup endpoint id is supplied by the caller's [transcribeDraft]/[transcribeAudio]
- * closures, so chat passes its session id and the launcher passes none (id-less /transcribe).
+ * Flow: mic → audio recording → broker STT engine (/transcribe multipart) → append cleaned text
+ * via [onAppend]. Optionally (gated by [DevConfig.ENABLE_ONDEVICE_STT], currently off) try
+ * on-device STT first and only POST the draft for cleanup. Chat passes its session id; the
+ * launcher passes none (id-less /transcribe).
  *
  * Create with [rememberDictation]; never construct directly (it needs Compose-scoped effects).
  */

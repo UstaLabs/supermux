@@ -7,6 +7,17 @@ test("tmux command runner kills a subprocess that never returns", async () => {
   expect(Date.now() - started).toBeLessThan(1_000)
 })
 
+test("tmux command runner times out after writing stdin", async () => {
+  const started = Date.now()
+  await expect(runCommand(
+    "/bin/sh",
+    ["-c", "read value || exit 0; sleep 30"],
+    20,
+    new TextEncoder().encode("raw bytes\n"),
+  )).rejects.toThrow(/timed out/)
+  expect(Date.now() - started).toBeLessThan(1_000)
+})
+
 test("tmux command runner resolves on process exit and captures both output streams", async () => {
   const result = await runCommand("/bin/sh", ["-c", "printf stdout-value; printf stderr-value >&2"])
   expect(result).toEqual({ code: 0, stdout: "stdout-value", stderr: "stderr-value" })

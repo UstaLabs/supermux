@@ -1,4 +1,5 @@
 import { connect, Socket } from "net"
+import { localEndpoint } from "../core/local-endpoint"
 import { encodeFrame, decodeFrames } from "../shared/frame-codec"
 import { makeLogger } from "../shared/log"
 import { parseSocketFrame, type SocketFrame, type ToolOperation } from "../shared/socket-frames"
@@ -6,6 +7,7 @@ const log = makeLogger("shim.sock")
 
 export type ShimClientOpts = {
   socketsDir: string
+  socketPath?: string
   sessionId: string
   workdir: string
   pid: number
@@ -24,7 +26,7 @@ export type ShimClient = {
 }
 
 export async function connectShim(opts: ShimClientOpts): Promise<ShimClient> {
-  const sockPath = `${opts.socketsDir}/${opts.sessionId}.sock`
+  const sockPath = opts.socketPath ?? localEndpoint(opts.sessionId, { socketsDir: opts.socketsDir })
   const pending = new Map<string, (r: { ok: boolean; value?: unknown; error?: string }) => void>()
   let registered: { name: string; session_id: string } | undefined
   let sock: Socket

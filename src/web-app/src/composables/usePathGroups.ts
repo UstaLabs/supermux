@@ -9,10 +9,26 @@ const COLLAPSED_KEY = "cmux:collapsed-paths"
 // with real group keys, which are absolute filesystem paths.
 export const PA_GROUP_KEY = "__pas__"
 
+export type SectionKey = "in_progress" | "draft" | "settled"
+
+export interface PathGroupSection {
+  key: SectionKey
+  label: string
+  sessions: Session[]
+}
+
+const SECTION_ORDER: SectionKey[] = ["in_progress", "draft", "settled"]
+const SECTION_LABELS: Record<SectionKey, string> = {
+  in_progress: "In Progress",
+  draft: "Drafts",
+  settled: "Settled",
+}
+
 export interface PathGroup {
   workdir: string
   label: string
   sessions: Session[]
+  sections: PathGroupSection[]
   collapsed: boolean
 }
 
@@ -37,6 +53,32 @@ function lastMessageTs(session: Session, messages: ReturnType<typeof useMessages
   return messages.bySession[session.id]?.slice(-1)[0]?.ts ?? ""
 }
 
+/** Short repo label for a session's project tag (leaf folder of repo_root/workdir). */
+export function projectLabel(session: Session, homeDir?: string | null): string {
+  const label = workdirDisplay(session.repo_root ?? session.workdir, homeDir).label
+  const leaf = label.split("/").filter(Boolean).pop() ?? label
+  return leaf === "~" ? "home" : leaf
+}
+
+function buildSections(list: Session[], messages: ReturnType<typeof useMessages>): PathGroupSection[] {
+  const byKey: Record<SectionKey, Session[]> = { in_progress: [], draft: [], settled: [] }
+  for (const s of list) {
+    const key: SectionKey = s.userStatus === "draft" ? "draft" : s.userStatus === "settled" ? "settled" : "in_progress"
+    byKey[key].push(s)
+  }
+  const byRecency = (a: Session, b: Session) => lastMessageTs(b, messages).localeCompare(lastMessageTs(a, messages))
+  const bySort = (a: Session, b: Session) => {
+    const av = a.sortOrder ?? 0, bv = b.sortOrder ?? 0
+    return av !== bv ? av - bv : byRecency(a, b)
+  }
+  byKey.in_progress.sort(bySort)
+  byKey.draft.sort(bySort)
+  byKey.settled.sort(byRecency)
+  return SECTION_ORDER
+    .filter((k) => byKey[k].length > 0)
+    .map((k) => ({ key: k, label: SECTION_LABELS[k], sessions: byKey[k] }))
+}
+
 export function usePathGroups(sortedSessions: ComputedRef<Session[]>) {
   const sessionsStore = useSessions()
   const messages = useMessages()
@@ -57,15 +99,36 @@ export function usePathGroups(sortedSessions: ComputedRef<Session[]>) {
       workdir: PA_GROUP_KEY,
       label: "Personal Assistants",
       sessions: list,
+      sections: [],
       collapsed: collapsedSet.value.has(PA_GROUP_KEY),
     }
   })
 
+  // All non-PA sessions (live + archived-as-settled), the source for both the
+  // grouped view and the flat view.
+  const combinedSessions = computed<Session[]>(() => {
+    const archivedAsSessions: Session[] = sessionsStore.archivedSessions.map((a) => ({
+      id: a.id,
+      name: a.name,
+      workdir: a.workdir,
+      mute: false,
+      connected: false,
+      agent: a.agent,
+      repo_root: a.repo_root,
+      status: "archived",
+      userStatus: "settled",
+      sortOrder: 0,
+    }))
+    return [...sortedSessions.value, ...archivedAsSessions].filter((s) => s.role !== "personal_assistant")
+  })
+
+  // Flat view: the three task sections built across every project at once.
+  const flatSections = computed<PathGroupSection[]>(() => buildSections(combinedSessions.value, messages))
+
   const groups = computed<PathGroup[]>(() => {
     const byPath = new Map<string, Session[]>()
     const homeDir = sessionsStore.homeDir
-    for (const s of sortedSessions.value) {
-      if (s.role === "personal_assistant") continue
+    for (const s of combinedSessions.value) {
       // Worktree-backed sessions group under their project (repo_root), not the
       // internal worktree path.
       const key = workdirDisplay(s.repo_root ?? s.workdir, homeDir).key
@@ -83,6 +146,7 @@ export function usePathGroups(sortedSessions: ComputedRef<Session[]>) {
         workdir: display.key,
         label: display.label,
         sessions: list,
+        sections: buildSections(list, messages),
         collapsed: collapsedSet.value.has(display.key),
       })
     }
@@ -96,5 +160,5 @@ export function usePathGroups(sortedSessions: ComputedRef<Session[]>) {
     return result
   })
 
-  return { groups, paGroup, toggle }
+  return { groups, paGroup, flatSections, toggle }
 }

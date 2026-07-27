@@ -10,14 +10,17 @@
 # ONE canonical staging path CI and a local build share (like build-binary.sh). What lands:
 #   • supermux-broker[.exe] — the compiled Bun broker. This is the SAME artifact
 #     build-binary.sh compiles from src/cli.ts (boots src/main.ts on no subcommand), so the
-#     shipped host runs the exact release broker. Omitted on Windows (client-only).
+#     shipped host runs the exact release broker.
+#   • mux-sessiond.exe      — the persistent ConPTY/Job Object owner. Windows only.
 #   • frpc[.exe]            — frp 0.61.1 client, for the relay provider. All targets.
 #   • tmux                  — static tmux. Linux/macOS only (the broker execs bare `tmux`).
 #
 # Binary sourcing is override-first so a headless/offline build can supply prebuilts:
-#   SUPERMUX_FRPC=<path>   use this frpc instead of downloading   (per-invocation, one target)
-#   SUPERMUX_TMUX=<path>   use this static tmux instead of fetching
-#   SUPERMUX_SKIP_BROKER=1 don't compile the broker (wiring/smoke builds)
+#   SUPERMUX_BROKER=<path>  use this broker instead of compiling
+#   SUPERMUX_SESSIOND=<path> use this sessiond instead of compiling
+#   SUPERMUX_FRPC=<path>    use this frpc instead of downloading
+#   SUPERMUX_TMUX=<path>    use this static tmux instead of fetching
+#   SUPERMUX_SKIP_BROKER=1  don't compile missing broker/sessiond overrides (wiring tests)
 # Anything not overridden is fetched/built. tmux has no upstream static release; if it can't be
 # sourced the slot is left empty (a loud warning) — the host then falls back to a system tmux on
 # $PATH (preflight only warns; codex/cursor still work), matching how KCEF isn't bundled either.
@@ -42,14 +45,32 @@ esac
 
 echo "[stage] target=$TARGET version=$VERSION commit=$COMMIT -> $DEST"
 
-# ── broker (omit on Windows: client-only) ─────────────────────────────────────────────
-if [ "$TARGET" = "windows-x64" ]; then
-  echo "[stage] broker: skipped (Windows is client-only)"
+# ── broker ────────────────────────────────────────────────────────────────────────────
+if [ -n "${SUPERMUX_BROKER:-}" ]; then
+  echo "[stage] broker: from SUPERMUX_BROKER=$SUPERMUX_BROKER"
+  cp "$SUPERMUX_BROKER" "$DEST/supermux-broker$EXE"
 elif [ "${SUPERMUX_SKIP_BROKER:-}" = "1" ]; then
   echo "[stage] broker: skipped (SUPERMUX_SKIP_BROKER=1)"
 else
   echo "[stage] broker: compiling via scripts/build-binary.sh"
-  "$ROOT/scripts/build-binary.sh" "$DEST/supermux-broker$EXE" "$VERSION" "$COMMIT"
+  SUPERMUX_TARGET="$TARGET" "$ROOT/scripts/build-binary.sh" "$DEST/supermux-broker$EXE" "$VERSION" "$COMMIT"
+fi
+if [ -f "$DEST/supermux-broker$EXE" ]; then chmod +x "$DEST/supermux-broker$EXE" 2>/dev/null || true; fi
+
+# ── sessiond (Windows only) ───────────────────────────────────────────────────────────
+if [ "$TARGET" = "windows-x64" ]; then
+  if [ -n "${SUPERMUX_SESSIOND:-}" ]; then
+    echo "[stage] sessiond: from SUPERMUX_SESSIOND=$SUPERMUX_SESSIOND"
+    cp "$SUPERMUX_SESSIOND" "$DEST/mux-sessiond.exe"
+  elif [ "${SUPERMUX_SKIP_BROKER:-}" = "1" ]; then
+    echo "[stage] sessiond: skipped (SUPERMUX_SKIP_BROKER=1)"
+  else
+    echo "[stage] sessiond: compiling via scripts/build-sessiond.sh"
+    SUPERMUX_TARGET="$TARGET" "$ROOT/scripts/build-sessiond.sh" "$DEST/mux-sessiond.exe"
+  fi
+  if [ -f "$DEST/mux-sessiond.exe" ]; then chmod +x "$DEST/mux-sessiond.exe" 2>/dev/null || true; fi
+else
+  rm -f "$DEST/mux-sessiond.exe"
 fi
 
 # ── frpc (all targets) ────────────────────────────────────────────────────────────────
@@ -64,7 +85,8 @@ echo "[stage] frpc: $DEST/frpc$EXE ($(wc -c < "$DEST/frpc$EXE") bytes)"
 
 # ── tmux (Linux/macOS only) ───────────────────────────────────────────────────────────
 if [ "$TARGET" = "windows-x64" ]; then
-  echo "[stage] tmux: skipped (Windows is client-only)"
+  rm -f "$DEST/tmux" "$DEST/pty-helper" "$DEST/pty-helper.exe"
+  echo "[stage] tmux/pty-helper: skipped (Windows uses sessiond)"
 elif [ -n "${SUPERMUX_TMUX:-}" ]; then
   echo "[stage] tmux: from SUPERMUX_TMUX=$SUPERMUX_TMUX"
   cp "$SUPERMUX_TMUX" "$DEST/tmux"; chmod +x "$DEST/tmux" 2>/dev/null || true

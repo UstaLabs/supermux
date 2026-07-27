@@ -55,6 +55,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.toRoute
 import androidx.navigation.compose.rememberNavController
 import dev.supermux.android.host.AddHostScreen
 import dev.supermux.android.host.HostScopePicker
@@ -85,6 +86,7 @@ import dev.supermux.android.settings.ArchivedScreen
 import dev.supermux.android.settings.DevicesScreen
 import dev.supermux.android.settings.ProxyScreen
 import dev.supermux.android.settings.SettingsScreen
+import dev.supermux.android.update.AppUpdateBanner
 import dev.supermux.android.settings.UsageScreen
 import dev.supermux.android.theme.AppearanceMode
 import dev.supermux.android.theme.SupermuxTheme
@@ -96,6 +98,7 @@ import dev.supermux.android.push.PushPermission
 import dev.supermux.android.push.SupermuxMessagingService
 import dev.supermux.auth.SecureTokenStore
 import dev.supermux.auth.SecureTokenStoreContext
+import dev.supermux.net.ArchivedDto
 import dev.supermux.net.PairUrl
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
@@ -157,6 +160,15 @@ class MainActivity : ComponentActivity() {
                         store.load()?.isNotBlank() == true && store.loadBaseUrl()?.isNotBlank() == true,
                     )
                 }
+                // Native push: re-register FCM token with the relay whenever we are (or become)
+                // paired. onNewToken alone is insufficient — FCM often issues the token *before*
+                // pairing, and the old path used a placeholder base URL. Parity with iOS
+                // PushManager.registerIfPaired (launch + post-pair).
+                LaunchedEffect(paired) {
+                    if (paired) {
+                        SupermuxMessagingService.registerIfPaired(applicationContext)
+                    }
+                }
                 // Deep-link intake: parse supermux://pair (or a pasted https pair URL) from the
                 // current intent. Recomputed when onNewIntent swaps the intent in while foregrounded.
                 val currentIntent by intentState
@@ -177,6 +189,7 @@ class MainActivity : ComponentActivity() {
                 // users — and the session where onboarding just paired — always have a host to drive.
                 val vm: AppViewModel = viewModel(factory = AppViewModel.factory(application))
                 val sessions by vm.sessions.collectAsStateWithLifecycle()
+                val archivedSessions by vm.archivedSessions.collectAsStateWithLifecycle()
                 val messages by vm.messages.collectAsStateWithLifecycle()
                 val activity by vm.activity.collectAsStateWithLifecycle()
                 val agentState by vm.agentState.collectAsStateWithLifecycle()
@@ -256,7 +269,7 @@ class MainActivity : ComponentActivity() {
                 // Maps the screens' legacy string-route callbacks to type-safe NavHost destinations.
                 val navTo: (String) -> Unit = { dest ->
                     when (dest) {
-                        "new" -> navController.navigate(NewSession)
+                        "new" -> navController.navigate(NewSession())
                         "settings" -> navController.navigate(Settings)
                         "usage" -> navController.navigate(Usage)
                         "devices" -> navController.navigate(Devices)
@@ -268,10 +281,17 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                Column(Modifier.fillMaxSize()) {
+                // App self-update strip (versions.json). One-tap install for sideloaded APKs.
+                AppUpdateBanner(
+                    onOpenPage = { navController.navigate(Settings) },
+                )
                 NavHost(
                     navController = navController,
                     startDestination = Home,
-                    modifier = Modifier.semantics { testTagsAsResourceId = true },
+                    modifier = Modifier
+                        .weight(1f)
+                        .semantics { testTagsAsResourceId = true },
                 ) {
                     // ── Home: list ↔ chat (keep-alive). Bodies are the old `else`-branch, verbatim,
                     //    with `route = …` swapped for nav. The keep-alive / shared-element / predictive-back
@@ -300,7 +320,7 @@ class MainActivity : ComponentActivity() {
                                     .workspaceShortcuts(
                                         layout = workspaceLayout,
                                         selectedId = selected,
-                                        onNewSession = { navController.navigate(NewSession) },
+                                        onNewSession = { navController.navigate(NewSession()) },
                                     )
                                     .focusable(),
                             ) {
@@ -321,7 +341,7 @@ class MainActivity : ComponentActivity() {
                                             agentState = agentState,
                                             onSelect = { selected = it },
                                             onExpand = { workspaceLayout.sidebarCollapsed = false },
-                                            onNewSession = { navController.navigate(NewSession) },
+                                            onNewSession = { navController.navigate(NewSession()) },
                                         )
                                     } else {
                                         // requiredWidth keeps the list at its full width while the
@@ -334,13 +354,17 @@ class MainActivity : ComponentActivity() {
                                                 onOpen = { selected = it },
                                                 lastBySession = lastBySession,
                                                 agentState = agentState,
-                                                onNewSession = { navController.navigate(NewSession) },
+                                                onNewSession = { navController.navigate(NewSession()) },
                                                 loadProjects = { vm.listProjects() },
                                                 validatePath = { vm.validatePath(it) },
                                                 onNavigate = navTo,
                                                 onRename = { id, name -> vm.rename(id, name) },
                                                 onKill = { id -> vm.kill(id) },
                                                 onMute = { id, m -> vm.setMute(id, m) },
+                                                archived = archivedSessions,
+                                                onResume = { id -> vm.resume(id) },
+                                                onOpenDraft = { id -> navController.navigate(NewSession(draftId = id)) },
+                                                onReorder = { ids -> vm.reorderSessions(ids) },
                                                 hosts = hostViews,
                                                 sessionHost = sessionHost,
                                                 hostFilter = hostFilter,
@@ -421,8 +445,10 @@ class MainActivity : ComponentActivity() {
                                 commands = commands,
                                 commandsResolved = commandsResolved,
                                 lastBySession = lastBySession,
+                                archived = archivedSessions,
                                 vm = vm,
                                 onNavigate = navTo,
+                                onOpenDraft = { id -> navController.navigate(NewSession(draftId = id)) },
                                 onOpenDisplays = { navController.navigate(Displays) },
                                 hosts = hostViews,
                                 sessionHost = sessionHost,
@@ -433,7 +459,10 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     // ── New-session launcher (old "new" branch, verbatim, route→nav) ──
-                    composable<NewSession> {
+                    composable<NewSession> { entry ->
+                        val ns = entry.toRoute<NewSession>()
+                        val draftId = ns.draftId.takeIf { it.isNotBlank() }
+                        val draftSession = draftId?.let { id -> sessions.find { it.id == id } }
                         if (wide) {
                             Row(Modifier.fillMaxSize()) {
                                 Box(Modifier.width(320.dp)) {
@@ -451,6 +480,10 @@ class MainActivity : ComponentActivity() {
                                         onRename = { id, name -> vm.rename(id, name) },
                                         onKill = { id -> vm.kill(id) },
                                         onMute = { id, m -> vm.setMute(id, m) },
+                                        archived = archivedSessions,
+                                        onResume = { id -> vm.resume(id) },
+                                        onOpenDraft = { id -> navController.navigate(NewSession(draftId = id)) },
+                                        onReorder = { ids -> vm.reorderSessions(ids) },
                                         hosts = hostViews,
                                         sessionHost = sessionHost,
                                         hostFilter = hostFilter,
@@ -489,9 +522,14 @@ class MainActivity : ComponentActivity() {
                                         onLauncherPrefsChange = { vm.saveLauncherPrefs(it) },
                                         loadLauncherDraft = { vm.loadLauncherDraft() },
                                         onLauncherDraftChange = { vm.saveLauncherDraft(it) },
-                                        onSubmit = { wd, ag, md, rl, msg, wt, base, staged ->
-                                            vm.createSessionWithFirstMessage(wd, ag, md, msg, staged, worktree = wt, baseBranch = base, reasoningLevel = rl)
+                                        onSubmit = { wd, ag, md, rl, msg, wt, base, staged, replaceDraftId ->
+                                            vm.createSessionWithFirstMessage(wd, ag, md, msg, staged, worktree = wt, baseBranch = base, reasoningLevel = rl, replaceDraftId = replaceDraftId)
                                         },
+                                        onSaveDraft = { wd, ag, md, rl, msg, replaceDraftId ->
+                                            vm.createDraftSession(wd, ag, md, msg, reasoningLevel = rl, replaceDraftId = replaceDraftId)
+                                        },
+                                        initialDraftId = draftId,
+                                        initialDraft = draftSession,
                                         onOpenSession = { selected = it; navController.popBackStack() },
                                         hosts = hostViews,
                                         selectedHostId = activeHost,
@@ -523,9 +561,14 @@ class MainActivity : ComponentActivity() {
                                 onLauncherPrefsChange = { vm.saveLauncherPrefs(it) },
                                 loadLauncherDraft = { vm.loadLauncherDraft() },
                                 onLauncherDraftChange = { vm.saveLauncherDraft(it) },
-                                onSubmit = { wd, ag, md, rl, msg, wt, base, staged ->
-                                    vm.createSessionWithFirstMessage(wd, ag, md, msg, staged, worktree = wt, baseBranch = base, reasoningLevel = rl)
-                                },
+                                onSubmit = { wd, ag, md, rl, msg, wt, base, staged, replaceDraftId ->
+                                            vm.createSessionWithFirstMessage(wd, ag, md, msg, staged, worktree = wt, baseBranch = base, reasoningLevel = rl, replaceDraftId = replaceDraftId)
+                                        },
+                                onSaveDraft = { wd, ag, md, rl, msg, replaceDraftId ->
+                                            vm.createDraftSession(wd, ag, md, msg, reasoningLevel = rl, replaceDraftId = replaceDraftId)
+                                        },
+                                        initialDraftId = draftId,
+                                        initialDraft = draftSession,
                                 onOpenSession = { selected = it; navController.popBackStack() },
                                 hosts = hostViews,
                                 selectedHostId = activeHost,
@@ -541,7 +584,11 @@ class MainActivity : ComponentActivity() {
                             onClaim = { payload, name -> vm.addHost(payload, name) },
                             onClaimLegacy = { pair -> vm.addLegacyHost(pair) },
                             onClaimByUrl = { url, name, allowInsecure -> vm.addHostByUrl(url, name, allowInsecure) },
-                            onAdded = { navController.popBackStack() },
+                            onAdded = {
+                                // New host needs its own relay bootstrap → broker /push/device row.
+                                SupermuxMessagingService.registerIfPaired(applicationContext)
+                                navController.popBackStack()
+                            },
                             needsInsecureOptIn = { vm.urlNeedsInsecureOptIn(it) },
                         )
                     }
@@ -573,6 +620,7 @@ class MainActivity : ComponentActivity() {
                             // Voice
                             voiceLoadModels = { family -> vm.launcherModels(family) },
                             voiceLoadConfig = { vm.config() },
+                            voiceSaveVoiceStt = { engine -> vm.saveVoiceStt(engine) },
                             voiceSaveVoiceCleanup = { engine, model -> vm.saveVoiceCleanup(engine, model) },
                             glossaryLoad = { vm.fetchGlossary() },
                             glossarySave = { vm.updateGlossary(it) },
@@ -663,6 +711,7 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
+                } // Column (banner + NavHost)
             }
         }
     }
@@ -699,8 +748,10 @@ private fun PhoneNavHost(
     commands: Map<String, List<SlashCommand>>,
     commandsResolved: Map<String, Boolean>,
     lastBySession: Map<String, LogEntry?>,
+    archived: List<ArchivedDto> = emptyList(),
     vm: AppViewModel,
     onNavigate: (String) -> Unit,
+    onOpenDraft: (String) -> Unit = {},
     onOpenDisplays: () -> Unit,
     hosts: List<dev.supermux.android.host.HostView> = emptyList(),
     sessionHost: Map<String, String> = emptyMap(),
@@ -722,8 +773,10 @@ private fun PhoneNavHost(
         commands = commands,
         commandsResolved = commandsResolved,
         lastBySession = lastBySession,
+        archived = archived,
         vm = vm,
         onNavigate = onNavigate,
+        onOpenDraft = onOpenDraft,
         onOpenDisplays = onOpenDisplays,
         hosts = hosts,
         sessionHost = sessionHost,

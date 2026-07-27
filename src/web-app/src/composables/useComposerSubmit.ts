@@ -15,6 +15,14 @@ function webMessageId(): string {
   return `web-${Date.now()}-${random}`
 }
 
+function kindFromMime(mime?: string): AttachmentRef["kind"] {
+  if (!mime) return "document"
+  if (mime.startsWith("image/")) return "photo"
+  if (mime.startsWith("audio/")) return "audio"
+  if (mime.startsWith("video/")) return "video"
+  return "document"
+}
+
 export function useComposerSubmit(sessionId: MaybeRefOrGetter<string>) {
   const ws = useWS()
   const agentState = useAgentState()
@@ -68,12 +76,13 @@ export function useComposerSubmit(sessionId: MaybeRefOrGetter<string>) {
 
     const attachments: AttachmentRef[] = []
     for (const f of files) {
-      if (!f.file) continue
-      const kindHint = (f.file as { _cmuxKind?: AttachmentRef["kind"] })?._cmuxKind
+      const kindHint = (f.file as { _cmuxKind?: AttachmentRef["kind"] } | undefined)?._cmuxKind
       const current = uploads.get(f.id)
+      // Already uploaded (including draft-restored attachments that have a
+      // server file_id but no local File blob) — reuse the durable id.
       if (current?.status === "uploaded") {
         attachments.push({
-          kind: kindHint ?? "document",
+          kind: kindHint ?? kindFromMime(current.result.mime),
           file_id: current.result.file_id,
           mime: current.result.mime,
           size: current.result.size,
@@ -81,6 +90,7 @@ export function useComposerSubmit(sessionId: MaybeRefOrGetter<string>) {
         })
         continue
       }
+      if (!f.file) continue
       uploads.start(f.id)
       const fileName = f.file?.name ?? "file"
       const uploadingToastId = toast.loading(`Uploading ${fileName}…`)
@@ -91,7 +101,7 @@ export function useComposerSubmit(sessionId: MaybeRefOrGetter<string>) {
         toast.dismiss(uploadingToastId)
         uploads.succeed(f.id, result)
         attachments.push({
-          kind: kindHint ?? "document",
+          kind: kindHint ?? kindFromMime(result.mime),
           file_id: result.file_id,
           mime: result.mime,
           size: result.size,

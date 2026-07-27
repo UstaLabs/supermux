@@ -22,6 +22,7 @@ export const router = createRouter({
     { path: "/settings/git-hosting", component: () => import("./views/GitHostingSettingsView.vue"), meta: { fullScreen: true } },
     { path: "/settings/keyboard", component: () => import("./views/KeyboardSettingsView.vue"), meta: { fullScreen: true } },
     { path: "/settings/system", component: () => import("./views/SystemSettingsView.vue"), meta: { fullScreen: true } },
+    { path: "/settings/updates", component: () => import("./views/AppUpdateView.vue"), meta: { fullScreen: true } },
     { path: "/personal-assistants", component: () => import("./views/PersonalAssistantsView.vue"), meta: { fullScreen: true } },
   ],
 })

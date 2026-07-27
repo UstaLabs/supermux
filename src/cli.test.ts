@@ -67,8 +67,50 @@ describe("cli dispatcher", () => {
     expect(pair.stdout.toString()).toMatch(/https:\/\/h-[a-z2-7]{26}\.relay\.supermux\.dev\/pair\?t=/)
   })
 
-  test("unknown subcommand usage lists setup", () => {
+    test("unknown subcommand usage lists setup", () => {
     const r = runCli(["frobnicate"])
     expect(r.stderr).toContain("setup")
+  })
+
+  test("credential get fills from STATE_DIR forge store", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "smx-cli-cred-"))
+    const state = join(tmp, "mux", "state")
+    // Seed a forge connection via a tiny bun script against the real store helpers.
+    const seed = Bun.spawnSync([
+      "bun", "-e",
+      `
+        import { mkdirSync } from "fs"
+        import { join } from "path"
+        import { openDb, runMigrations } from "./src/core/storage/db"
+        import { MIGRATIONS } from "./src/core/storage/migrations"
+        import { ForgeStore } from "./src/core/forge/store"
+        mkdirSync(process.env.MUX_STATE_DIR!, { recursive: true })
+        const db = openDb(join(process.env.MUX_STATE_DIR!, "db.sqlite3"))
+        runMigrations(db, MIGRATIONS)
+        new ForgeStore(db).add({
+          id: "github:github.com:a", kind: "github", host: "github.com",
+          apiBase: "https://api.github.com", label: "x", account: { login: "a" },
+          source: "pat", transport: "https", status: "ok", token: "ghp_secret",
+        })
+      `,
+    ], {
+      cwd: import.meta.dirname + "/..",
+      env: { ...process.env, MUX_STATE_DIR: state },
+    })
+    expect(seed.exitCode).toBe(0)
+    const r = Bun.spawnSync(
+      ["bun", "src/cli.ts", "credential", "github:github.com:a", "get"],
+      {
+        cwd: import.meta.dirname + "/..",
+        env: { ...process.env, HOME: join(tmp, "home"), MUX_HOME: join(tmp, "mux"), MUX_STATE_DIR: state },
+      },
+    )
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout.toString()).toBe("username=x-access-token\npassword=ghp_secret\n")
+  })
+
+  test("unknown subcommand usage lists credential", () => {
+    const r = runCli(["frobnicate"])
+    expect(r.stderr).toContain("credential")
   })
 })

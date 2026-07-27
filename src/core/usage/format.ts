@@ -1,4 +1,4 @@
-import type { UsageResponse, ClaudeUsage, CodexUsage, CursorUsage, OpenCodeUsage, UsageWindow } from "./index"
+import type { UsageResponse, ClaudeUsage, CodexUsage, CursorUsage, OpenCodeUsage, GrokUsage, UsageWindow } from "./index"
 
 // ── Helpers ──
 
@@ -116,6 +116,23 @@ function fmtOpenCode(c: OpenCodeUsage): string {
   return lines.join("\n")
 }
 
+
+function fmtGrok(c: GrokUsage): string {
+  const lines: string[] = [`Grok (${c.plan})`]
+  const rst = c.billingPeriodEnd ? resetLabel(new Date(c.billingPeriodEnd).getTime()) : ""
+  lines.push(`  ${pct(c.percentUsed)}${rst ? ` · resets ${rst}` : ""}`)
+  if (c.monthlyLimit > 0) {
+    lines.push(`  Credits: ${Math.round(c.used)} / ${Math.round(c.monthlyLimit)}`)
+  }
+  if (c.onDemandCap > 0) {
+    lines.push(`  On-demand: ${Math.round(c.onDemandUsed)} / ${Math.round(c.onDemandCap)}`)
+  }
+  if (c.prepaidBalance > 0) {
+    lines.push(`  Prepaid: ${Math.round(c.prepaidBalance)}`)
+  }
+  return lines.join("\n")
+}
+
 // ── Public ──
 
 export function formatUsageTelegram(data: UsageResponse): string {
@@ -124,6 +141,7 @@ export function formatUsageTelegram(data: UsageResponse): string {
   if (data.codex) sections.push(fmtCodex(data.codex))
   if (data.cursor) sections.push(fmtCursor(data.cursor))
   if (data.opencode) sections.push(fmtOpenCode(data.opencode))
+  if (data.grok) sections.push(fmtGrok(data.grok))
   if (sections.length === 0) return "usage data unavailable"
   return sections.join("\n\n")
 }

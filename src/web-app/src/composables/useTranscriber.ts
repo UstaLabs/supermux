@@ -1,7 +1,7 @@
 export function useTranscriber() {
   // `sessionId` is OPTIONAL: a live session enriches the cleanup with prior-message context, but
   // it isn't required — the pre-spawn launcher posts to the id-less `/transcribe` and still gets
-  // the whisper + agent-cleanup pass (engine/model/glossary all come from global config).
+  // the broker STT engine + optional agent-cleanup pass (engine/model/glossary from global config).
   async function transcribe(sessionId: string | undefined, blob: Blob, filename: string): Promise<{ text: string; degraded?: boolean }> {
     const fd = new FormData()
     fd.append("audio", new File([blob], filename, { type: blob.type }))

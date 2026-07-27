@@ -1,6 +1,6 @@
 // OpenCode adapter — Zen or Go variants. One-shot text completion against the
 // OpenAI-compatible chat/completions backend, reusing the API key from
-// ~/.local/share/opencode/auth.json (Zen → `opencode.key`, Go → `opencode-go.key`).
+// opencode's native data-dir auth.json (Zen → `opencode.key`, Go → `opencode-go.key`).
 // API keys, no refresh. All I/O is injectable (fetchFn / readFileFn) so the adapter
 // is fully unit-testable with no network or disk.
 
@@ -8,6 +8,7 @@ import { homedir } from "os"
 import { join } from "path"
 import { defaultRead, readJson } from "../auth"
 import { DEFAULT_TIMEOUT_MS, type AgentApi, type CompleteOpts, type FetchFn, type ReadFileFn } from "../types"
+import { openCodeDataDir } from "../../agents/opencode/auth"
 
 export type OpencodeVariant = "zen" | "go"
 
@@ -45,7 +46,7 @@ export function opencodeAdapter(variant: OpencodeVariant, opts: OpencodeAdapterO
   const cfg = VARIANTS[variant]
   const fetchFn = opts.fetchFn ?? fetch
   const read = opts.readFileFn ?? defaultRead
-  const authPath = opts.authPath ?? join(homedir(), ".local", "share", "opencode", "auth.json")
+  const authPath = opts.authPath ?? join(openCodeDataDir({ home: homedir() }), "auth.json")
 
   const loadKey = (): string | undefined => {
     const key = readJson(read, authPath)?.[cfg.keyField]?.key

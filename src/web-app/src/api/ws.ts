@@ -97,8 +97,14 @@ export const useWS = defineStore("ws", () => {
     if (frame.type === "ping") { send({ type: "pong" }); return }
     if (frame.type === "snapshot") {
       if (typeof frame.homeDir === "string") sessions.setHomeDir(frame.homeDir)
-      sessions.replace(frame.sessions ?? [])
-      for (const s of (frame.sessions ?? [])) { finishJob.fromSnapshot(s.id, s.finish_job); gitStatus.fromSnapshot(s.id, s.git) }
+      const snapSessions = (frame.sessions ?? []).map((s: Record<string, unknown>) => ({
+        ...s,
+        userStatus: (s.user_status as any) ?? (s.userStatus as any),
+        sortOrder: (s.sort_order as number | undefined) ?? (s.sortOrder as number | undefined),
+        draftPayload: (s.draft_payload as any) ?? (s.draftPayload as any),
+      }))
+      sessions.replace(snapSessions)
+      for (const s of snapSessions) { finishJob.fromSnapshot(s.id, s.finish_job); gitStatus.fromSnapshot(s.id, s.git) }
       if (frame.logs) for (const [s, log] of Object.entries(frame.logs)) messages.replace(s, log as any)
       if (frame.activity) for (const [s, list] of Object.entries(frame.activity)) activity.replace(s, list as any)
       if (frame.bgTasks) for (const [s, list] of Object.entries(frame.bgTasks)) bgTasks.set(s, list as any)
@@ -109,7 +115,17 @@ export const useWS = defineStore("ws", () => {
       if (frame.reads) unread.seed(frame.reads)
       if (frame.drafts) drafts.seed(frame.drafts)
       onboarding.setOnboarded(frame.onboarded ?? false)
-    } else if (frame.type === "session_added")    { sessions.add(frame.session); finishJob.fromSnapshot(frame.session.id, frame.session.finish_job); gitStatus.fromSnapshot(frame.session.id, frame.session.git) }
+    } else if (frame.type === "session_added") {
+      const f = frame.session as Record<string, unknown>
+      sessions.add({
+        ...(frame.session as any),
+        userStatus: (f.user_status as any) ?? (f.userStatus as any),
+        sortOrder: (f.sort_order as number | undefined) ?? (f.sortOrder as number | undefined),
+        draftPayload: (f.draft_payload as any) ?? (f.draftPayload as any),
+      })
+      finishJob.fromSnapshot(frame.session.id, frame.session.finish_job)
+      gitStatus.fromSnapshot(frame.session.id, frame.session.git)
+    }
     else if   (frame.type === "finish_job")        finishJob.set(frame.session, frame.job)
     else if   (frame.type === "session_git")       gitStatus.set(frame.session, frame.git)
     else if   (frame.type === "commands_changed") commands.set(frame.session, frame.commands, frame.resolved ?? true)
@@ -122,7 +138,10 @@ export const useWS = defineStore("ws", () => {
       navigateAwayFromKilledSession(frame.id)
     }
     else if   (frame.type === "session_renamed")  sessions.rename(frame.id, frame.new)
-    else if   (frame.type === "session_state")    sessions.updateState(frame.session, { mute: frame.mute, connected: frame.connected, model: frame.model, reasoningLevel: frame.reasoningLevel })
+    else if   (frame.type === "session_state")    sessions.updateState(frame.session, {
+      mute: frame.mute, connected: frame.connected, model: frame.model, reasoningLevel: frame.reasoningLevel,
+      ...((frame as any).user_status !== undefined ? { userStatus: (frame as any).user_status } : {}),
+    })
     else if   (frame.type === "session_read")     unread.setLastRead(frame.session, frame.last_read_at)
     else if   (frame.type === "draft_set")        drafts.applyRemote(frame.session, frame.text ?? "")
     else if   (frame.type === "draft_clear")      drafts.applyRemote(frame.session, "")

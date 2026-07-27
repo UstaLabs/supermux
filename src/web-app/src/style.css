@@ -188,3 +188,46 @@ html, body, #app { height: 100%; }
     box-shadow: 0 1px 2px color-mix(in oklab, var(--foreground) 8%, transparent);
   }
 }
+
+
+/* Session-list reorder: kill OS selection/callout chrome while dragging */
+
+/* Pending long-press: block text selection / iOS callout, but still allow scroll */
+html.cmux-session-reorder-armed,
+html.cmux-session-reorder-armed body {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+  -webkit-user-drag: none !important;
+}
+
+html.cmux-session-reorder-armed * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+
+/* Active drag: also freeze page scroll under the finger */
+html.cmux-session-reordering,
+html.cmux-session-reordering body {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+  -webkit-user-drag: none !important;
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+html.cmux-session-reordering * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+
+/* Reorderable session rows: never offer system text selection */
+[data-reorder-id] {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-user-drag: none;
+}

@@ -8,7 +8,8 @@ import kotlinx.serialization.Serializable
  * state in MainActivity, not a nav argument.
  */
 @Serializable object Home
-@Serializable object NewSession
+/** [draftId] non-null/non-empty → reopen that draft session in the launcher (web /new?draft=). */
+@Serializable data class NewSession(val draftId: String = "")
 @Serializable object AddHost
 @Serializable object Settings
 @Serializable object Usage

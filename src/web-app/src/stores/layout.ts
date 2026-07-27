@@ -27,6 +27,7 @@ interface LayoutState {
   workDisplaySplitPct: number
   sidebarCollapsed: boolean
   sidebarPage: "sessions" | "archived"
+  groupByProject: boolean
   panels: Record<string, ChatPanelState>
 }
 
@@ -43,6 +44,7 @@ function defaults(): LayoutState {
     workDisplaySplitPct: WORK_DISPLAY_SPLIT.default,
     sidebarCollapsed: false,
     sidebarPage: "sessions",
+    groupByProject: false,
     panels: {},
   }
 }
@@ -101,6 +103,7 @@ function load(): LayoutState {
         : base.workDisplaySplitPct,
       sidebarCollapsed: typeof p.sidebarCollapsed === "boolean" ? p.sidebarCollapsed : base.sidebarCollapsed,
       sidebarPage: p.sidebarPage === "archived" ? "archived" : "sessions",
+      groupByProject: typeof p.groupByProject === "boolean" ? p.groupByProject : base.groupByProject,
       panels: loadPanels(p.panels),
     }
   } catch {
@@ -167,6 +170,7 @@ export const useLayout = defineStore("layout", () => {
   function expandSidebar() { state.sidebarCollapsed = false }
   function showArchivedPage() { state.sidebarPage = "archived" }
   function showSessionsPage() { state.sidebarPage = "sessions" }
+  function toggleGroupByProject() { state.groupByProject = !state.groupByProject }
 
-  return { state, panelsFor, selectTab, setMainView, toggleTerminal, toggleEditor, toggleDisplay, toggleChat, resetSidebar, resetChatSplit, resetEditorTermSplit, resetWorkDisplaySplit, toggleSidebarCollapsed, expandSidebar, showArchivedPage, showSessionsPage }
+  return { state, panelsFor, selectTab, setMainView, toggleTerminal, toggleEditor, toggleDisplay, toggleChat, resetSidebar, resetChatSplit, resetEditorTermSplit, resetWorkDisplaySplit, toggleSidebarCollapsed, expandSidebar, showArchivedPage, showSessionsPage, toggleGroupByProject }
 })

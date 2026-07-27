@@ -55,6 +55,15 @@ class FramesTest {
         assertEquals("xhigh", s.reasoningLevel)
     }
 
+    @Test fun session_info_parses_user_status_snake_case() {
+        val s = json.decodeFromString<SessionInfo>(
+            """{"id":"1","name":"a","workdir":"/w","agent":"claude","user_status":"draft","sort_order":3,"draft_payload":{"text":"hello"}}""",
+        )
+        assertEquals("draft", s.userStatus)
+        assertEquals(3, s.sortOrder)
+        assertEquals("hello", s.draftPayload?.text)
+    }
+
     @Test fun parses_session_removed_by_id() {
         val f = json.decodeFromString<ServerFrame>(
             """{"type":"session_removed","id":"550e8400-e29b-41d4-a716-446655440000"}""",

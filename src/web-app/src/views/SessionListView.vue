@@ -1,97 +1,23 @@
 <script setup lang="ts">
-import { computed, ref, provide, onMounted } from "vue"
-import { useRoute, useRouter } from "vue-router"
+import { computed } from "vue"
 import { PanelLeftClose } from "lucide-vue-next"
-import { useSessions } from "@/stores/sessions"
-import { useUnread } from "@/stores/unread"
 import { useLayout } from "@/stores/layout"
 import { useSortedSessions } from "@/composables/useSortedSessions"
-import { usePathGroups } from "@/composables/usePathGroups"
-import { useRenameRequest } from "@/composables/useRenameRequest"
-import { api } from "@/api/client"
-import { toast } from "vue-sonner"
-import SwipeableSessionRow from "@/components/SwipeableSessionRow.vue"
-import PathGroupSection from "@/components/PathGroupSection.vue"
-import SessionContextMenu from "@/components/SessionContextMenu.vue"
-import SessionRow from "@/components/SessionRow.vue"
 import MuxLogo from "@/components/MuxLogo.vue"
 import NotificationsBanner from "@/components/NotificationsBanner.vue"
-import KillConfirmDialog from "@/components/KillConfirmDialog.vue"
 import NewSessionListRow from "@/components/NewSessionListRow.vue"
 import MobileActionsSheet from "@/components/MobileActionsSheet.vue"
 import SidebarActionsMenu from "@/components/SidebarActionsMenu.vue"
 import AppVersionTag from "@/components/AppVersionTag.vue"
+import SessionTaskList from "@/components/SessionTaskList.vue"
 
 const props = defineProps<{ compact?: boolean }>()
 
 const productName = __PRODUCT_NAME__
 
-const sessions = useSessions()
-const unread = useUnread()
 const layout = useLayout()
-const route = useRoute()
-const router = useRouter()
-const { consumeRenameRequest } = useRenameRequest()
-const openSwipeRow = ref<string | null>(null)
-provide("openSwipeRow", openSwipeRow)
-
-const killTarget = ref<{ id: string; name: string } | null>(null)
-const showKillConfirm = ref(false)
-const renamingRow = ref<string | null>(null)
-
 const sortedSessions = useSortedSessions()
-const { groups, paGroup, toggle } = usePathGroups(sortedSessions)
-const hasPAs = computed(() => paGroup.value.sessions.length > 0)
-// PA group pinned first; path groups keep their recency order below it.
-const displayGroups = computed(() => (hasPAs.value ? [paGroup.value, ...groups.value] : groups.value))
-const activeId = computed(() => (typeof route.params.id === "string" ? route.params.id : ""))
-
-onMounted(() => {
-  const name = consumeRenameRequest()
-  if (name) renamingRow.value = name
-})
-
-function requestKill(id: string) {
-  const s = sessions.list.find((x) => x.id === id)
-  killTarget.value = { id, name: s?.name ?? id }
-  showKillConfirm.value = true
-}
-
-async function confirmKill() {
-  const target = killTarget.value
-  if (!target) return
-  showKillConfirm.value = false
-  try {
-    await api.killSession(target.id)
-  } catch (err: any) {
-    toast.error(err?.message ?? "Failed to kill session")
-  }
-  killTarget.value = null
-}
-
-async function handleMute(id: string) {
-  const session = sessions.list.find((s) => s.id === id)
-  if (!session) return
-  try {
-    await api.toggleMute(id, !session.mute)
-  } catch (err: any) {
-    toast.error(err?.message ?? "Failed to toggle mute")
-  }
-}
-
-async function handleRename(id: string, newName: string) {
-  renamingRow.value = null
-  try {
-    await api.renameSession(id, newName)
-  } catch (err: any) {
-    toast.error(err?.message ?? "Failed to rename session")
-  }
-}
-
-function navigateToSession(id: string) {
-  router.push(`/s/${id}`)
-}
-
+const isEmpty = computed(() => sortedSessions.value.length === 0)
 </script>
 
 <template>
@@ -120,46 +46,7 @@ function navigateToSession(id: string) {
 
     <div class="flex-1 overflow-y-auto">
       <NewSessionListRow />
-
-      <template v-for="group in displayGroups" :key="group.workdir">
-        <PathGroupSection
-          :label="group.label"
-          :collapsed="group.collapsed"
-          :count="group.sessions.length"
-          @toggle="toggle(group.workdir)"
-        >
-          <template v-for="s in group.sessions" :key="s.id">
-            <SessionContextMenu
-              :name="s.name"
-              :mute="s.mute"
-              @kill="requestKill(s.id)"
-              @mute="handleMute(s.id)"
-              @rename="renamingRow = s.name"
-            >
-              <template #default="{ onContextmenu }">
-                <div @contextmenu="onContextmenu">
-                  <SessionRow
-                    :id="s.id"
-                    :name="s.name"
-                    :workdir="s.workdir"
-                    :connected="s.connected"
-                    :reserve-menu-space="true"
-                    :active="s.id === activeId"
-                    :unread="unread.isUnread(s.id)"
-                    :agent="s.agent"
-                    :model="s.model"
-                    :status="s.status"
-                    :renaming="renamingRow === s.name"
-                    @navigate="navigateToSession(s.id)"
-                    @rename="(newName) => handleRename(s.id, newName)"
-                    @rename-cancel="renamingRow = null"
-                  />
-                </div>
-              </template>
-            </SessionContextMenu>
-          </template>
-        </PathGroupSection>
-      </template>
+      <SessionTaskList :mobile="false" />
     </div>
   </div>
 
@@ -187,42 +74,10 @@ function navigateToSession(id: string) {
 
     <NewSessionListRow class="mt-1" />
 
-    <div v-if="sortedSessions.length === 0" class="px-6 py-8 text-center text-muted-foreground">
+    <div v-if="isEmpty" class="px-6 py-8 text-center text-muted-foreground">
       <p class="text-xs">No sessions yet — start one above.</p>
     </div>
 
-    <template v-for="group in displayGroups" :key="group.workdir">
-      <PathGroupSection
-        :label="group.label"
-        :collapsed="group.collapsed"
-        :count="group.sessions.length"
-        @toggle="toggle(group.workdir)"
-      >
-        <SwipeableSessionRow
-          v-for="s in group.sessions"
-          :key="s.id"
-          :id="s.id"
-          :name="s.name"
-          :workdir="s.workdir"
-          :connected="s.connected"
-          :mute="s.mute"
-          :unread="unread.isUnread(s.id)"
-          :agent="s.agent"
-          :model="s.model"
-          :status="s.status"
-          @kill="requestKill"
-          @mute="handleMute"
-          @rename="handleRename"
-        />
-      </PathGroupSection>
-    </template>
-
+    <SessionTaskList :mobile="true" />
   </div>
-
-  <KillConfirmDialog
-    :open="showKillConfirm"
-    :session-name="killTarget?.name ?? ''"
-    @update:open="showKillConfirm = $event"
-    @confirm="confirmKill"
-  />
 </template>

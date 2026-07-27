@@ -3,6 +3,7 @@ import { mkdtempSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { loadOrCreateHostKey } from "../host-identity"
+import type { AuthRejectionEvent } from "./auth-plugin"
 import { createRelayControl, FileKnownHostRegistry } from "./control"
 
 const SECRET = "test-relay-secret-at-least-32-bytes"
@@ -100,6 +101,79 @@ test("frps Login and NewProxy hooks are served by the control handler", async ()
     }),
   }))
   expect((await wrongSubdomain.json() as { reject: boolean }).reject).toBe(true)
+})
+
+test("the control handler forwards structured auth rejection events", async () => {
+  let now = 1_000
+  const events: AuthRejectionEvent[] = []
+  const control = createRelayControl({
+    secret: SECRET,
+    domain: "relay.supermux.dev",
+    leaseTtlMs: 5_000,
+    now: () => now,
+    onAuthRejected: event => events.push(event),
+  })
+  const keyPath = join(mkdtempSync(join(tmpdir(), "mux-relay-key-")), "host-key")
+  const first = await signedLeaseRequest(control, keyPath)
+  const { lease: expiredLease } = await first.response.json() as { lease: string }
+  now = 7_000
+
+  const login = await control.handle(new Request("http://relay/handler", {
+    method: "POST",
+    body: JSON.stringify({
+      op: "Login",
+      content: { metas: { lease: expiredLease }, client_address: "203.0.113.9:1234" },
+    }),
+  }))
+
+  expect(await login.json()).toEqual({ reject: true, reject_reason: "invalid or missing lease" })
+  expect(events).toEqual([{
+    operation: "Login",
+    reason: "expired_lease",
+    hostId: first.identity.hostId,
+    leaseExpiresAt: 6_000,
+    expiredByMs: 1_000,
+    clientAddress: "203.0.113.9:1234",
+  }])
+
+  const second = await signedLeaseRequest(control, keyPath)
+  const { lease: validLease } = await second.response.json() as { lease: string }
+  const wrongSubdomain = await control.handle(new Request("http://relay/handler", {
+    method: "POST",
+    body: JSON.stringify({
+      op: "NewProxy",
+      content: { user: { metas: { lease: validLease } }, proxy_type: "http", subdomain: "h-wrong" },
+    }),
+  }))
+
+  expect(await wrongSubdomain.json()).toEqual({
+    reject: true,
+    reject_reason: "subdomain does not match leased hostId",
+  })
+  expect(events[1]).toEqual({
+    operation: "NewProxy",
+    reason: "subdomain_mismatch",
+    hostId: second.identity.hostId,
+    subdomain: "h-wrong",
+  })
+  expect(JSON.stringify(events)).not.toContain(expiredLease)
+  expect(JSON.stringify(events)).not.toContain(validLease)
+})
+
+test("throwing auth rejection observers do not break the control handler response", async () => {
+  const control = createRelayControl({
+    secret: SECRET,
+    domain: "relay.supermux.dev",
+    onAuthRejected: () => { throw new Error("observer failed") },
+  })
+
+  const response = await control.handle(new Request("http://relay/handler", {
+    method: "POST",
+    body: JSON.stringify({ op: "Login", content: { metas: {} } }),
+  }))
+
+  expect(response.status).toBe(200)
+  expect(await response.json()).toEqual({ reject: true, reject_reason: "invalid or missing lease" })
 })
 
 test("known host registry persists verified keys across restarts", () => {

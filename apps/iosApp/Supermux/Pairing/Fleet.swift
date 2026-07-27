@@ -131,11 +131,22 @@ final class Fleet {
             .map { hv in (hv, shown.filter { owner[$0.id] == hv.recordId }) }
     }
 
+    /// Archived sessions for the active host, folded into Settled on the task list.
+    private(set) var archivedForList: [ArchivedDto] = []
+
+    func refreshArchived() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let b = self.activeBroker else { return }
+            self.archivedForList = await b.archived()
+        }
+    }
+
     private func group(_ ss: [SessionInfo]) -> [SessionGroup] {
         let home = inferHomeDir(workdir: ss.first?.workdir) ?? ""
         return groupSessions(sessions: ss, home: home, lastTs: { [weak self] s in
             self?.broker(for: s.id)?.messages[s.id]?.last?.ts ?? ""
-        })
+        }, archived: archivedForList)
     }
 
     // MARK: - Selection / filter (persisted)
@@ -154,7 +165,7 @@ final class Fleet {
     // MARK: - Lifecycle
 
     /// Open + start a connection for every reachable paired host (idempotent).
-    func start() { sync() }
+    func start() { sync(); refreshArchived() }
 
     /// Tear down every connection (RootView leaves the hierarchy on unpair / re-pair recreation).
     func stop() {

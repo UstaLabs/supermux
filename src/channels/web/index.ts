@@ -181,9 +181,11 @@ export interface WebChannelOpts {
   reviewSession?: (id: string) => { workdir: string; repoRoot?: string; baseCommits?: Record<string, string> } | undefined
   verifySuggest?: (id: string) => { content: string; source: string } | undefined
   verifySave?: (id: string, content: string) => { ok: boolean; reason?: string }
-  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string }>
+  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; repo_root?: string; session_branch?: string }>
+  createDraft?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; draftPayload?: { text?: string; attachments?: unknown[] } }) => Promise<{ id: string; name: string; workdir: string; agent: AgentKind }>
   killSession?: (name: string) => Promise<void>
   renameSession?: (oldName: string, newName: string) => Promise<void>
+  reorderSessions?: (orderedIds: string[]) => void
   transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string }) => Promise<{ text: string; degraded?: boolean }>
   spawnPA?: (args: { name: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string }>
   listPAs?: () => SessionSnapshot[]
@@ -430,7 +432,7 @@ export class WebChannel implements Channel {
           if (ws.data.scrcpy) { this.onScrcpyWsOpen(ws); return }
           if (ws.data.display) { this.onDisplayWsOpen(ws); return }
           if (ws.data.terminal) {
-            this.onTerminalWsOpen(ws)
+            void this.onTerminalWsOpen(ws)
             return
           }
           this.onWsOpen(ws)
@@ -629,38 +631,53 @@ export class WebChannel implements Channel {
     this.opts.viewingTracker?.clear(ws.data.deviceName)
   }
 
-  private onTerminalWsOpen(ws: import("bun").ServerWebSocket<WSData>): void {
+  private async onTerminalWsOpen(ws: import("bun").ServerWebSocket<WSData>): Promise<void> {
     const tm = this.opts.terminalManager
     if (!tm) { ws.close(1011, "terminal not configured"); return }
     const sessionName = ws.data.terminalSession!
     const terminalId = ws.data.terminalId!
     const workdir = this.opts.getSessionWorkdir?.(sessionName)
     if (!workdir) { ws.close(1011, "session not found"); return }
-    const result = tm.attach({
-      deviceName: ws.data.deviceName,
-      sessionName,
-      terminalId,
-      workdir,
-      cols: 80,
-      rows: 24,
-      kind: ws.data.terminalKind ?? "scratch",
-      agentTarget: ws.data.terminalAgentTarget,
-      onData: (data) => {
-        try { ws.sendBinary(data) } catch {}
-        // Past the high-water mark: hand pumpOutput a promise that resolves on
-        // the socket's `drain`, so we stop pulling pty-helper output (→ tmux
-        // sees a slow client and redraws current state instead of replaying).
-        if (ws.getBufferedAmount() > TERMINAL_BP_HIGH_WATER) {
-          const d = ws.data._termDrain ?? makeDeferred()
-          ws.data._termDrain = d
-          return d.promise
-        }
-      },
-      onExit: (code) => { try { ws.send(JSON.stringify({ type: "exit", code })); ws.close() } catch {} },
-    })
+    try {
+      ws.send(JSON.stringify({ type: "reset" }))
+    } catch {
+      try { ws.close(1011, "terminal reset failed") } catch {}
+      return
+    }
+    let result: Awaited<ReturnType<typeof tm.attach>>
+    try {
+      result = await tm.attach({
+        deviceName: ws.data.deviceName,
+        sessionName,
+        terminalId,
+        workdir,
+        cols: 80,
+        rows: 24,
+        kind: ws.data.terminalKind ?? "scratch",
+        agentTarget: ws.data.terminalAgentTarget,
+        onData: (data) => {
+          try { ws.sendBinary(data) } catch {}
+          // Past the high-water mark: hand pumpOutput a promise that resolves on
+          // the socket's `drain`, so we stop pulling pty-helper output (→ tmux
+          // sees a slow client and redraws current state instead of replaying).
+          if (ws.getBufferedAmount() > TERMINAL_BP_HIGH_WATER) {
+            const d = ws.data._termDrain ?? makeDeferred()
+            ws.data._termDrain = d
+            return d.promise
+          }
+        },
+        onExit: (code) => { try { ws.send(JSON.stringify({ type: "exit", code })); ws.close() } catch {} },
+        onFailure: (reason) => { try { ws.close(1011, reason.slice(0, 120)) } catch {} },
+      })
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      try { ws.send(JSON.stringify({ type: "error", reason })) } catch {}
+      try { ws.close(1011, reason.slice(0, 120)) } catch {}
+      return
+    }
     if (!result.ok) {
-      ws.send(JSON.stringify({ type: "error", reason: result.error }))
-      ws.close(1011, result.error)
+      try { ws.send(JSON.stringify({ type: "error", reason: result.error })) } catch {}
+      try { ws.close(1011, result.error.slice(0, 120)) } catch {}
     }
   }
 
@@ -2213,6 +2230,22 @@ export class WebChannel implements Channel {
           return this.json({ error: `unknown agent: ${String(requestedAgent)}` }, 400)
         }
         const agent = requestedAgent == null ? undefined : requestedAgent
+        const userStatus = body.userStatus as string | undefined
+        if (userStatus === "draft") {
+          if (!this.opts.createDraft) return this.json({ error: "not configured" }, 503)
+          const draft = await this.opts.createDraft({
+            name: body.name as string | undefined,
+            workdir: normalizedWorkdir,
+            agent,
+            model: body.model as string | undefined,
+            reasoningLevel: body.reasoningLevel as string | undefined,
+            draftPayload: body.draftPayload as { text?: string; attachments?: unknown[] } | undefined,
+          })
+          return this.json(draft)
+        }
+        const inheritFrom = typeof body.inheritFrom === "string" && body.inheritFrom.trim()
+          ? body.inheritFrom.trim()
+          : undefined
         const result = await this.opts.spawnSession({
           name: body.name as string | undefined,
           workdir: normalizedWorkdir,
@@ -2221,6 +2254,7 @@ export class WebChannel implements Channel {
           reasoningLevel: body.reasoningLevel as string | undefined,
           worktree: body.worktree as boolean | undefined,
           baseBranch: body.baseBranch as string | undefined,
+          inheritFrom,
         })
         return this.json(result)
       } catch (err: any) {
@@ -2242,6 +2276,13 @@ export class WebChannel implements Channel {
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
+    }
+    if (method === "PATCH" && path === "/sessions/reorder") {
+      const body = await req.json().catch(() => ({})) as { orderedIds?: unknown }
+      const ids = Array.isArray(body.orderedIds) ? body.orderedIds.filter((x): x is string => typeof x === "string") : []
+      if (!this.opts.reorderSessions) return this.json({ error: "not configured" }, 503)
+      this.opts.reorderSessions(ids)
+      return this.json({ ok: true })
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/rename$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)

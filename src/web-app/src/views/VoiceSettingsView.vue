@@ -7,6 +7,15 @@ import { toast } from "vue-sonner"
 
 const router = useRouter()
 
+// STT engines (broker multipart /transcribe). Mirrors STT_ENGINES in
+// src/core/transcription/stt-types.ts.
+const STT_ENGINES = [
+  { id: "codex-realtime", label: "Codex Realtime (ChatGPT)" },
+  { id: "claude-voice", label: "Claude Code voice" },
+  { id: "whisper", label: "Whisper (local)" },
+] as const
+const DEFAULT_STT = "codex-realtime"
+
 // Curated voice-cleanup engines (the direct-API adapter layer). Mirrors ENGINES in
 // src/core/agent-api/index.ts, minus the gated Claude adapter (ban-risk opt-in) and
 // the internal cursor-cli fallback. `family` is the AgentKind used to list models
@@ -21,6 +30,7 @@ const DEFAULT_ENGINE = "codex"
 
 const loading = ref(true)
 const saving = ref(false)
+const sttEngine = ref<string>(DEFAULT_STT)
 const engine = ref<string>(DEFAULT_ENGINE)
 const model = ref("")
 const models = ref<{ id: string; displayName: string }[]>([])
@@ -46,6 +56,7 @@ async function load() {
   loading.value = true
   try {
     const cfg = await api.getAppConfig()
+    sttEngine.value = (typeof cfg.voiceSttEngine === "string" && cfg.voiceSttEngine) || DEFAULT_STT
     engine.value = (typeof cfg.voiceCleanupEngine === "string" && cfg.voiceCleanupEngine) || DEFAULT_ENGINE
     model.value = cfg.voiceCleanupModel ?? ""
     await loadModelsForEngine(engine.value)
@@ -68,7 +79,11 @@ async function save() {
   try {
     // model.value === "" sends "", which the broker treats as "reset to the
     // engine's default" (see sanitizeAppConfigPatch).
-    await api.saveAppConfig({ voiceCleanupEngine: engine.value, voiceCleanupModel: model.value })
+    await api.saveAppConfig({
+      voiceSttEngine: sttEngine.value,
+      voiceCleanupEngine: engine.value,
+      voiceCleanupModel: model.value,
+    })
     toast.success("Saved")
   } catch (e: any) {
     toast.error(e?.message ?? "Failed to save")
@@ -95,6 +110,27 @@ onMounted(load)
     <div v-if="loading" class="px-4 py-10 text-center text-sm text-muted-foreground">Loading…</div>
 
     <ul v-else class="divide-y divide-border">
+      <li class="flex items-center justify-between gap-3 px-4 py-3.5">
+        <label for="voice-stt-engine" class="flex items-center gap-3 min-w-0">
+          <div class="size-9 rounded-lg bg-card ring-1 ring-border flex items-center justify-center shrink-0">
+            <Cpu class="size-4 text-muted-foreground" />
+          </div>
+          <div class="min-w-0">
+            <div class="font-medium">Speech engine</div>
+            <div class="text-[11px] text-muted-foreground">
+              Cloud STT for uploaded mic audio. Claude Code voice needs a Claude.ai login.
+            </div>
+          </div>
+        </label>
+        <select
+          id="voice-stt-engine"
+          v-model="sttEngine"
+          class="rounded-md bg-card border border-border px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary shrink-0 max-w-[200px]"
+        >
+          <option v-for="e in STT_ENGINES" :key="e.id" :value="e.id">{{ e.label }}</option>
+        </select>
+      </li>
+
       <li class="flex items-center justify-between gap-3 px-4 py-3.5">
         <label for="voice-cleanup-engine" class="flex items-center gap-3 min-w-0">
           <div class="size-9 rounded-lg bg-card ring-1 ring-border flex items-center justify-center shrink-0">
