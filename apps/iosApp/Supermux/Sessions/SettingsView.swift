@@ -56,7 +56,7 @@ struct SettingsView: View {
                     SettingsRow(
                         symbol: "mic",
                         title: "Voice",
-                        subtitle: "Dictation cleanup model"
+                        subtitle: "Speech engine, cleanup model & glossary"
                     )
                 }
 
