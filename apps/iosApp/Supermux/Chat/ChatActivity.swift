@@ -36,7 +36,8 @@ func tsMs(_ s: String) -> Double {
 
 /// Merge messages + "tool" activity into time-ordered blocks; consecutive tool
 /// rows cluster together. tool_result events are folded into their tool row.
-func buildChatBlocks(messages: [LogEntry], activity: [ActivityEvent]) -> [ChatBlock] {
+/// - Parameter hideTools: when true (chat detail = low), omit tool cards; activity is still stored.
+func buildChatBlocks(messages: [LogEntry], activity: [ActivityEvent], hideTools: Bool = false) -> [ChatBlock] {
     var resultByCall: [String: ActivityEvent] = [:]
     for e in activity where e.kind == "tool_result" {
         if let c = e.callId { resultByCall[c] = e }
@@ -44,17 +45,19 @@ func buildChatBlocks(messages: [LogEntry], activity: [ActivityEvent]) -> [ChatBl
     enum Payload { case message(LogEntry); case tool(ToolRow) }
     var rows: [(ts: Double, rank: Int, payload: Payload)] = []
     for m in messages { rows.append((tsMs(m.ts), 1, .message(m))) }
-    for e in activity where e.kind == "tool" {
-        let res = e.callId.flatMap { resultByCall[$0] }
-        let status: ToolStatus = res == nil ? .running : (res?.title == "error" ? .error : .done)
-        let title = e.title ?? ""
-        let prefix = "\(e.tool ?? ""): "
-        let summary = (e.tool != nil && title.hasPrefix(prefix)) ? String(title.dropFirst(prefix.count)) : title
-        let id = e.seq.map { "a:\($0.intValue)" } ?? "a:\(e.ts):\(e.tool ?? "")"
-        let row = ToolRow(id: id, toolName: e.tool ?? "tool",
-                          summary: summary.isEmpty ? nil : summary,
-                          input: e.detail, output: res?.detail, status: status)
-        rows.append((tsMs(e.ts), 0, .tool(row)))
+    if !hideTools {
+        for e in activity where e.kind == "tool" {
+            let res = e.callId.flatMap { resultByCall[$0] }
+            let status: ToolStatus = res == nil ? .running : (res?.title == "error" ? .error : .done)
+            let title = e.title ?? ""
+            let prefix = "\(e.tool ?? ""): "
+            let summary = (e.tool != nil && title.hasPrefix(prefix)) ? String(title.dropFirst(prefix.count)) : title
+            let id = e.seq.map { "a:\($0.intValue)" } ?? "a:\(e.ts):\(e.tool ?? "")"
+            let row = ToolRow(id: id, toolName: e.tool ?? "tool",
+                              summary: summary.isEmpty ? nil : summary,
+                              input: e.detail, output: res?.detail, status: status)
+            rows.append((tsMs(e.ts), 0, .tool(row)))
+        }
     }
     rows.sort { $0.ts != $1.ts ? $0.ts < $1.ts : $0.rank < $1.rank }
     var result: [ChatBlock] = []
@@ -68,6 +71,58 @@ func buildChatBlocks(messages: [LogEntry], activity: [ActivityEvent]) -> [ChatBl
     }
     flush()
     return result
+}
+
+// MARK: - Chat detail level (web/Android parity)
+
+enum ChatDetailLevel: String, CaseIterable {
+    case low, medium, high
+    var label: String {
+        switch self {
+        case .low: return "Low"
+        case .medium: return "Medium"
+        case .high: return "High"
+        }
+    }
+    var isImplemented: Bool { self == .low || self == .medium }
+    /// Phase 1: high collapses to medium for rendering.
+    var effective: ChatDetailLevel { self == .low ? .low : .medium }
+    static func parse(_ raw: String?) -> ChatDetailLevel {
+        switch raw {
+        case "low": return .low
+        case "medium": return .medium
+        default: return .medium
+        }
+    }
+}
+
+/// Tools since last user message (`direction` starts with "in" = user on native).
+func countToolsThisTurn(messages: [LogEntry], activity: [ActivityEvent], workingSince: Double?) -> Int {
+    var sinceMs: Double = 0
+    for m in messages.reversed() {
+        if m.direction.hasPrefix("in") {
+            sinceMs = tsMs(m.ts)
+            break
+        }
+    }
+    if sinceMs == 0, let w = workingSince { sinceMs = w }
+    return activity.filter { $0.kind == "tool" && tsMs($0.ts) >= sinceMs }.count
+}
+
+func formatLowWorkingStatus(
+    baseLabel: String,
+    detail: String?,
+    tool: String?,
+    toolCount: Int,
+    durationLabel: String
+) -> String {
+    var parts = [baseLabel]
+    if detail == "running", let tool, !tool.isEmpty { parts.append(tool) }
+    if toolCount > 0 {
+        parts.append(toolCount == 1 ? "1 tool" : "\(toolCount) tools")
+    }
+    if !durationLabel.isEmpty { parts.append(durationLabel) }
+    return parts.joined(separator: " · ")
 }
 
 /// One tool-call card: icon · label · summary · status dot, expandable input/output.

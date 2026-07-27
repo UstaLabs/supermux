@@ -403,9 +403,12 @@ struct ChatPane: View {
 struct SessionTranscript: View, Equatable {
     let broker: BrokerSession
     let session: SessionInfo
+    /// Global chat density (UserDefaults; web `cmux:chat-detail` parity). Observed so Low↔Medium flips re-render.
+    @AppStorage("chatDetailLevel") private var chatDetailRaw: String = "medium"
 
     // Only the session identity gates parent-driven re-evaluation: the content is keyed by
     // `session.id` and refreshed via @Observable, so nothing else here needs comparing.
+    // chatDetailRaw is self-invalidating via @AppStorage (not compared here).
     static func == (lhs: SessionTranscript, rhs: SessionTranscript) -> Bool {
         lhs.session.id == rhs.session.id
     }
@@ -421,8 +424,11 @@ struct SessionTranscript: View, Equatable {
         (broker.bgTasks[session.id] ?? []).filter { $0.status == "running" }
     }
     private var activityEvents: [ActivityEvent] { broker.activity[session.id] ?? [] }
+    private var chatDetail: ChatDetailLevel { ChatDetailLevel.parse(chatDetailRaw) }
     /// Messages + tool-call activity, time-merged into blocks (parity with the web ChatView).
-    private var blocks: [ChatBlock] { buildChatBlocks(messages: log, activity: activityEvents) }
+    private var blocks: [ChatBlock] {
+        buildChatBlocks(messages: log, activity: activityEvents, hideTools: chatDetail.effective == .low)
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -514,9 +520,10 @@ struct SessionTranscript: View, Equatable {
         TimelineView(.periodic(from: .now, by: 1)) { _ in
             let since = broker.agentWorkingSince[session.id]
             let elapsed = since.map { max(0, Int64(Date().timeIntervalSince1970 - Double($0) / 1000.0)) }
+            let duration = elapsed.map { formatDuration(totalSeconds: $0) } ?? ""
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text(workingLabel + (elapsed.map { " · " + formatDuration(totalSeconds: $0) } ?? ""))
+                Text(workingStatusText(durationLabel: duration))
                     .font(.caption).foregroundStyle(.secondary)
                 Button { broker.interrupt(session.id) } label: {
                     HStack(spacing: 3) {
@@ -533,14 +540,37 @@ struct SessionTranscript: View, Equatable {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
-    private var workingLabel: String {
-        switch broker.agentDetail[session.id] {
-        case "running":
-            // Name the blocker while a tool runs ("Working… · Bash") — already in the frame.
-            if let tool = broker.agentTool[session.id], !tool.isEmpty { return "Working… · \(tool)" }
-            return "Working…"
-        default: return "Thinking…"
+    private func workingStatusText(durationLabel: String) -> String {
+        let detail = broker.agentDetail[session.id]
+        let tool = broker.agentTool[session.id]
+        if chatDetail.effective == .low {
+            let base: String
+            switch detail {
+            case "running": base = "Working…"
+            default: base = "Thinking…"
+            }
+            let count = countToolsThisTurn(
+                messages: log,
+                activity: activityEvents,
+                workingSince: broker.agentWorkingSince[session.id].map { Double($0) }
+            )
+            return formatLowWorkingStatus(
+                baseLabel: base,
+                detail: detail,
+                tool: tool,
+                toolCount: count,
+                durationLabel: durationLabel
+            )
         }
+        // Medium: existing platform copy + duration suffix
+        let base: String
+        switch detail {
+        case "running":
+            if let tool, !tool.isEmpty { base = "Working… · \(tool)" }
+            else { base = "Working…" }
+        default: base = "Thinking…"
+        }
+        return durationLabel.isEmpty ? base : "\(base) · \(durationLabel)"
     }
 
     /// Turn over, background tasks still open: the harness will wake the agent when

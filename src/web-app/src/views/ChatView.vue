@@ -3,7 +3,7 @@ defineOptions({ name: "ChatView" })
 
 import { computed, ref, provide, onMounted, onBeforeUnmount, nextTick, watch } from "vue"
 import { useRouter } from "vue-router"
-import { ChevronLeft, GitMerge, MessageSquarePlus } from "@lucide/vue"
+import { ChevronLeft, GitMerge } from "@lucide/vue"
 import { AlertTriangleIcon, HourglassIcon, Loader2Icon, SendHorizonalIcon, SquareIcon } from "lucide-vue-next"
 import { useMessages } from "@/stores/messages"
 import { useWS } from "@/api/ws"
@@ -17,7 +17,13 @@ import { useUploads } from "@/stores/uploads"
 import { useDisplays } from "@/stores/displays"
 import { useActivity } from "@/stores/activity"
 import { useAgentState } from "@/stores/agentState"
+import { useChatDetail } from "@/stores/chatDetail"
 import { formatDuration } from "@/lib/format-duration"
+import {
+  countToolsSince,
+  formatLowWorkingStatus,
+  turnBoundaryMs,
+} from "@/lib/chat-detail"
 import { formatWorkdir } from "@/lib/format-workdir"
 import { toWorkdirRelativePath } from "@/lib/workdir-display"
 import { toast } from "vue-sonner"
@@ -41,6 +47,7 @@ const EditorPane = defineAsyncComponent(() => import("@/components/editor/Editor
 const SessionDisplayPanel = defineAsyncComponent(() => import("@/components/SessionDisplayPanel.vue"))
 const TerminalPane = defineAsyncComponent(() => import("@/components/TerminalPane.vue"))
 import AgentViewToggle from "@/components/AgentViewToggle.vue"
+import ChatOverflowMenu from "@/components/ChatOverflowMenu.vue"
 import PaneSwitcher from "@/components/PaneSwitcher.vue"
 
 import { Conversation, ConversationContent } from "@/components/ai-elements/conversation"
@@ -65,10 +72,12 @@ const sessions = useSessions()
 const displays = useDisplays()
 const activity = useActivity()
 const agentState = useAgentState()
+const chatDetail = useChatDetail()
 const isDesktop = useIsDesktop()
 
 // Live agent-state indicator (Sending… / Working… / nothing)
 const liveState = computed(() => agentState.get(props.id))
+const detailMode = computed(() => chatDetail.renderMode)
 
 // "Working…" timer: counts continuously from workingSince — through tool
 // transitions — until working becomes false (the agent goes idle or dead).
@@ -80,6 +89,24 @@ const workingElapsed = computed(() => {
   const ws = liveState.value.workingSince
   return ws ? Math.max(0, Math.floor((now.value - ws) / 1000)) : 0
 })
+
+/** Tools since last outbound user message (low-status enrichment). */
+const toolsThisTurn = computed(() => {
+  const msgs = messages.bySession[props.id] ?? []
+  const acts = activity.bySession[props.id] ?? []
+  const since = turnBoundaryMs(msgs, liveState.value.workingSince)
+  return countToolsSince(acts, since)
+})
+
+const lowWorkingLabel = computed(() =>
+  formatLowWorkingStatus({
+    baseLabel: "Working…",
+    detail: liveState.value.detail,
+    tool: liveState.value.tool,
+    toolCount: toolsThisTurn.value,
+    durationLabel: formatDuration(workingElapsed.value),
+  }),
+)
 
 const loading = ref(true)
 const modelSwitcherOpen = ref(false)
@@ -272,32 +299,36 @@ const rows = computed<Row[]>(() => {
   const acts = activity.bySession[props.id] ?? []
   const resultByCall = new Map<string, (typeof acts)[number]>()
   for (const e of acts) if (e.kind === "tool_result" && e.callId) resultByCall.set(e.callId, e)
+  // Low: hide tool cards entirely (activity still ingested; switch to medium restores them).
+  const hideTools = detailMode.value === "low"
 
   const out: Row[] = []
   for (const e of entries.value) {
     out.push({ type: "message", ts: new Date(e.ts).getTime(), key: `m:${e.id}`, entry: e })
   }
-  for (const e of acts) {
-    const ts = new Date(e.ts).getTime()
-    const key = e.seq !== undefined ? `a:${e.seq}` : `a:${e.ts}:${e.kind}:${e.tool ?? ""}:${e.title}`
-    // "thinking" activity entries are intentionally dropped: thinking is shown
-    // only as a live indicator at the bottom, never as a persistent history pill.
-    if (e.kind === "tool") {
-      const res = e.callId ? resultByCall.get(e.callId) : undefined
-      const status: "running" | "done" | "error" = res ? (res.title === "error" ? "error" : "done") : "running"
-      const prefix = `${e.tool ?? ""}: `
-      const summary = e.tool && e.title.startsWith(prefix) ? e.title.slice(prefix.length) : e.title
-      out.push({
-        type: "tool", ts, key,
-        toolName: e.tool ?? "tool",
-        summary: summary || undefined,
-        input: e.detail || undefined,
-        output: res?.detail || undefined,
-        status,
-        truncated: e.truncated || res?.truncated || undefined,
-      })
+  if (!hideTools) {
+    for (const e of acts) {
+      const ts = new Date(e.ts).getTime()
+      const key = e.seq !== undefined ? `a:${e.seq}` : `a:${e.ts}:${e.kind}:${e.tool ?? ""}:${e.title}`
+      // "thinking" activity entries are intentionally dropped: thinking is shown
+      // only as a live indicator at the bottom, never as a persistent history pill.
+      if (e.kind === "tool") {
+        const res = e.callId ? resultByCall.get(e.callId) : undefined
+        const status: "running" | "done" | "error" = res ? (res.title === "error" ? "error" : "done") : "running"
+        const prefix = `${e.tool ?? ""}: `
+        const summary = e.tool && e.title.startsWith(prefix) ? e.title.slice(prefix.length) : e.title
+        out.push({
+          type: "tool", ts, key,
+          toolName: e.tool ?? "tool",
+          summary: summary || undefined,
+          input: e.detail || undefined,
+          output: res?.detail || undefined,
+          status,
+          truncated: e.truncated || res?.truncated || undefined,
+        })
+      }
+      // tool_result rows are absorbed into their tool card — skip
     }
-    // tool_result rows are absorbed into their tool card — skip
   }
   const rank = (t: string) => (t === "message" ? 1 : 0)
   return out.sort((a, b) => a.ts - b.ts || rank(a.type) - rank(b.type))
@@ -480,16 +511,6 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
           {{ workdirLabel }}
         </div>
       </div>
-      <button
-        v-if="!isArchived && activeSession"
-        type="button"
-        class="cmux-icon-button shrink-0"
-        aria-label="Session menu"
-        title="Continue in new conversation"
-        @click="continueOpen = true"
-      >
-        <MessageSquarePlus class="size-4" />
-      </button>
       <SessionLinks v-if="!isArchived && session?.name" :session-name="session?.name ?? ''" />
       <button
         v-if="isArchived"
@@ -521,6 +542,11 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
           :class="finishBadge === 'failed' ? 'bg-red-500' : 'bg-emerald-400'"
         />
       </button>
+      <ChatOverflowMenu
+        v-if="!isArchived"
+        :can-continue="!!activeSession"
+        @continue="continueOpen = true"
+      />
     </header>
 
     <div v-if="isArchived" class="px-4 py-2 text-xs text-muted-foreground bg-muted/30 border-b border-border text-center">
@@ -650,10 +676,16 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
               <div
                 v-else-if="!isArchived && liveState.working"
                 class="flex items-center gap-1.5 px-1 py-0.5 text-xs text-muted-foreground ml-2"
+                aria-live="polite"
               >
                 <Loader2Icon class="size-3.5 shrink-0 animate-spin text-primary" />
-                Working…<span v-if="liveState.detail === 'running' && liveState.tool" class="opacity-60">· {{ liveState.tool }}</span>
-                <span class="opacity-60">{{ formatDuration(workingElapsed) }}</span>
+                <template v-if="detailMode === 'low'">
+                  <span>{{ lowWorkingLabel }}</span>
+                </template>
+                <template v-else>
+                  Working…<span v-if="liveState.detail === 'running' && liveState.tool" class="opacity-60">· {{ liveState.tool }}</span>
+                  <span class="opacity-60">{{ formatDuration(workingElapsed) }}</span>
+                </template>
                 <button
                   type="button"
                   class="ml-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground hover:text-destructive hover:bg-destructive/10 active:scale-95 transition"

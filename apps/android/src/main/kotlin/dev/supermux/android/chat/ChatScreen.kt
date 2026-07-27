@@ -67,6 +67,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -105,6 +106,7 @@ import java.io.File
 import dev.supermux.android.R
 import dev.supermux.android.theme.MonoFontFamily
 import dev.supermux.android.theme.Radii
+import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.util.formatDuration
 import dev.supermux.util.proxyDisplayUrl
 import dev.supermux.util.proxyUrl
@@ -412,8 +414,12 @@ fun ChatScreen(
                     }
                 }
 
-                // Overflow menu (⋮): rename / mute / kill
+                // Overflow menu (⋮): Detail + rename / mute / displays / kill
                 Box {
+                    val overflowContext = LocalContext.current
+                    ChatDetailPrefs.ensureLoaded(overflowContext)
+                    val chatDetailLevel by ChatDetailPrefs.level.collectAsState()
+                    var detailSubmenu by remember { mutableStateOf(false) }
                     Icon(
                         painter = painterResource(R.drawable.ic_more_vert),
                         contentDescription = "More",
@@ -425,8 +431,28 @@ fun ChatScreen(
                     )
                     DropdownMenu(
                         expanded = headerMenuExpanded,
-                        onDismissRequest = { headerMenuExpanded = false },
+                        onDismissRequest = {
+                            headerMenuExpanded = false
+                            detailSubmenu = false
+                        },
                     ) {
+                        DropdownMenuItem(
+                            text = {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Text("Detail")
+                                    Text(
+                                        chatDetailLevel.label,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                            },
+                            modifier = Modifier.testTag("chat_overflow_detail"),
+                            onClick = { detailSubmenu = true },
+                        )
                         DropdownMenuItem(
                             text = { Text("Rename") },
                             leadingIcon = {
@@ -492,6 +518,40 @@ fun ChatScreen(
                                 showKillDialog = true
                             },
                         )
+                    }
+                    // Detail picker as a second dropdown (Material3 has no nested DropdownMenu).
+                    DropdownMenu(
+                        expanded = detailSubmenu,
+                        onDismissRequest = { detailSubmenu = false },
+                    ) {
+                        listOf(
+                            ChatDetailLevel.LOW to "Messages only · tools on status line",
+                            ChatDetailLevel.MEDIUM to "Tool chips between messages",
+                            ChatDetailLevel.HIGH to "Coming soon",
+                        ).forEach { (level, desc) ->
+                            val enabled = level != ChatDetailLevel.HIGH
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(
+                                            level.label + if (level == ChatDetailLevel.HIGH) " · Soon" else "",
+                                            fontWeight = if (chatDetailLevel == level) FontWeight.SemiBold else FontWeight.Normal,
+                                        )
+                                        Text(
+                                            desc,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                },
+                                enabled = enabled,
+                                onClick = {
+                                    ChatDetailPrefs.set(overflowContext, level)
+                                    detailSubmenu = false
+                                    headerMenuExpanded = false
+                                },
+                            )
+                        }
                     }
                 }
             }

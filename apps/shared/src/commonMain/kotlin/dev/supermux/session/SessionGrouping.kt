@@ -167,13 +167,18 @@ fun groupSessions(
 
     val byPath = LinkedHashMap<String, MutableList<SessionInfo>>()
     for (s in rest) byPath.getOrPut(s.repo_root ?: s.workdir) { mutableListOf() }.add(s)
-    val projectGroups = byPath.map { (key, list) ->
+    val projectGroups = byPath.mapNotNull { (key, list) ->
         val sorted = sessionsByUserOrder(list)
+        val sections = buildTaskSections(list, lastTs)
+        // Hide projects with no live work (in_progress / draft). Settled-only
+        // projects still appear in flat Settled; no need for an empty group card.
+        val hasActive = sections.any { it.key != SectionKey.SETTLED && it.sessions.isNotEmpty() }
+        if (!hasActive) return@mapNotNull null
         SessionGroup(
             label = formatWorkdir(key, home),
             workdir = key,
             sessions = sorted,
-            sections = buildTaskSections(list, lastTs),
+            sections = sections,
         )
     }.sortedBy { it.label }
 

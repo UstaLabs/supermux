@@ -145,6 +145,8 @@ sealed interface TimelineItem {
 fun mergeTimeline(
     messages: List<LogEntry>,
     activity: List<ActivityEvent>,
+    /** When true (chat detail = low), omit tool cards; activity is still ingested by the caller. */
+    hideTools: Boolean = false,
 ): List<TimelineItem> {
     // callId -> resolved final status + output detail from `tool_result` events
     val resultStatus = HashMap<String, ToolStatus>()
@@ -158,17 +160,19 @@ fun mergeTimeline(
     }
     val items = ArrayList<TimelineItem>(messages.size + activity.size)
     messages.forEach { items.add(TimelineItem.Msg(it)) }
-    for (e in activity) {
-        when (e.kind) {
-            "tool" -> {
-                val status = e.callId?.let { resultStatus[it] } ?: ToolStatus.RUNNING
-                val output = e.callId?.let { resultDetail[it] }
-                items.add(TimelineItem.Tool(e, status, output))
+    if (!hideTools) {
+        for (e in activity) {
+            when (e.kind) {
+                "tool" -> {
+                    val status = e.callId?.let { resultStatus[it] } ?: ToolStatus.RUNNING
+                    val output = e.callId?.let { resultDetail[it] }
+                    items.add(TimelineItem.Tool(e, status, output))
+                }
+                "tool_result" -> { /* folded into the matching tool row above */ }
+                // "thinking" (and any other non-tool kind) is intentionally dropped — thinking
+                // shows as a live indicator, not a persistent "Thought for Ns" history row.
+                else -> { /* dropped */ }
             }
-            "tool_result" -> { /* folded into the matching tool row above */ }
-            // "thinking" (and any other non-tool kind) is intentionally dropped — thinking
-            // shows as a live indicator, not a persistent "Thought for Ns" history row.
-            else -> { /* dropped */ }
         }
     }
     return items.sortedBy { item ->

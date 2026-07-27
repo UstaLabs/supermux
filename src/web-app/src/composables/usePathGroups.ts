@@ -152,12 +152,17 @@ export function usePathGroups(sortedSessions: ComputedRef<Session[]>) {
       // Within a project, row order comes from buildSections (sortOrder). Keep
       // the raw list stable too so message arrival never reshuffles.
       list.sort(bySortOrder)
+      const sections = buildSections(list, messages)
+      // Hide projects with no live work (in_progress / draft). Settled-only
+      // projects still appear in flat Settled; no need for an empty group card.
+      const hasActive = sections.some((s) => s.key !== "settled" && s.sessions.length > 0)
+      if (!hasActive) continue
       const display = workdirDisplay(workdir, homeDir)
       result.push({
         workdir: display.key,
         label: display.label,
         sessions: list,
-        sections: buildSections(list, messages),
+        sections,
         collapsed: collapsedSet.value.has(display.key),
       })
     }

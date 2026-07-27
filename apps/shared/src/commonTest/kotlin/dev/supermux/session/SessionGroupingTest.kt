@@ -167,6 +167,23 @@ class SessionGroupingTest {
         assertEquals(listOf("live"), progress.sessions.map { it.name })
     }
 
+    @Test fun groupSessions_hides_projects_with_only_settled_sessions() {
+        val live = listOf(
+            SessionInfo(id = "live", name = "live", workdir = "/home/user/active", agent = "claude", userStatus = "in_progress"),
+        )
+        val archived = listOf(
+            ArchivedDto(id = "old-a", name = "old-a", workdir = "/home/user/settled-only", agent = "claude"),
+            ArchivedDto(id = "old-b", name = "old-b", workdir = "/home/user/active", agent = "claude"),
+        )
+        val groups = groupSessions(live, home = "/home/user", archived = archived)
+        // Only the project with live work gets a group card.
+        assertEquals(listOf("/home/user/active"), groups.map { it.workdir })
+        assertEquals(
+            listOf("old-b"),
+            groups[0].sections.first { it.key == SectionKey.SETTLED }.sessions.map { it.name },
+        )
+    }
+
     @Test fun archived_status_counts_as_settled() {
         val s = SessionInfo(id = "x", name = "x", workdir = "/p", agent = "claude", status = "archived")
         assertEquals(SectionKey.SETTLED, s.sectionKey())

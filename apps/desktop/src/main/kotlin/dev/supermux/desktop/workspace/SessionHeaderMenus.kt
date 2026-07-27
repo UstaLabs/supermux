@@ -35,7 +35,9 @@ package dev.supermux.desktop.workspace
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -57,6 +59,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,6 +72,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.desktop.chat.ChatDetailPrefs
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.ui.openInBrowser
@@ -79,6 +83,7 @@ import dev.supermux.proto.GitBadgeKind
 import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.gitBadge
+import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.util.proxyDisplayUrl
 import dev.supermux.util.proxyUrl
 import kotlinx.coroutines.launch
@@ -346,7 +351,22 @@ fun OverflowMenu(
                 modifier = Modifier.size(20.dp),
             )
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        val chatDetail by ChatDetailPrefs.level.collectAsState()
+        var detailSubmenu by remember { mutableStateOf(false) }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false; detailSubmenu = false },
+        ) {
+            DropdownMenuItem(
+                text = {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Detail")
+                        Text(chatDetail.label, color = cs.onSurfaceVariant)
+                    }
+                },
+                modifier = Modifier.testTag("overflow_detail"),
+                onClick = { detailSubmenu = true },
+            )
             DropdownMenuItem(
                 text = { Text("Usage") },
                 modifier = Modifier.testTag("overflow_usage"),
@@ -372,6 +392,31 @@ fun OverflowMenu(
                 modifier = Modifier.testTag("overflow_kill"),
                 onClick = { expanded = false; showKill = true },
             )
+        }
+        DropdownMenu(
+            expanded = detailSubmenu,
+            onDismissRequest = { detailSubmenu = false },
+        ) {
+            listOf(
+                ChatDetailLevel.LOW to "Messages only · tools on status line",
+                ChatDetailLevel.MEDIUM to "Tool chips between messages",
+                ChatDetailLevel.HIGH to "Coming soon",
+            ).forEach { (level, desc) ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(level.label + if (level == ChatDetailLevel.HIGH) " · Soon" else "")
+                            Text(desc, color = cs.onSurfaceVariant)
+                        }
+                    },
+                    enabled = level != ChatDetailLevel.HIGH,
+                    onClick = {
+                        ChatDetailPrefs.set(level)
+                        detailSubmenu = false
+                        expanded = false
+                    },
+                )
+            }
         }
     }
 

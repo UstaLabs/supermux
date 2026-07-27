@@ -42,7 +42,12 @@ import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.proto.SessionInfo
+import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.ui.FilePathRef
+import dev.supermux.ui.countToolsSince
+import dev.supermux.ui.effectiveChatDetail
+import dev.supermux.ui.formatLowWorkingStatus
+import dev.supermux.ui.turnBoundaryMs
 import kotlinx.coroutines.launch
 
 /** Reading-width cap for the timeline + composer so long lines wrap at a comfortable measure on a
@@ -127,8 +132,12 @@ fun ChatPanel(
     LaunchedEffect(session.id) { modelsData = app.sessionModels(session.id) }
     LaunchedEffect(session.id) { reasoningData = app.sessionReasoning(session.id) }
 
-    val timelineItems = remember(messagesMap, activityMap, session.id) {
-        mergeTimeline(messagesMap[session.id].orEmpty(), activityMap[session.id].orEmpty())
+    val chatDetail by ChatDetailPrefs.level.collectAsState()
+    val hideTools = effectiveChatDetail(chatDetail) == ChatDetailLevel.LOW
+    val messages = messagesMap[session.id].orEmpty()
+    val activity = activityMap[session.id].orEmpty()
+    val timelineItems = remember(messagesMap, activityMap, session.id, hideTools) {
+        mergeTimeline(messages, activity, hideTools = hideTools)
     }
 
     // ── Autoscroll ────────────────────────────────────────────────────────────
@@ -165,7 +174,28 @@ fun ChatPanel(
     val statusText: String? = when {
         dead -> null // rendered as a banner below, not this thin line
         // `working` (= agent?.working == true) implies agent != null, so it smart-casts here.
-        working -> if (agent.detail == "running") "running ${agent.tool ?: "tool"}…" else "thinking…"
+        working -> {
+            if (hideTools) {
+                val base = if (agent.detail == "running") "running" else "thinking"
+                val since = turnBoundaryMs(
+                    messages = messages.map { it.direction to it.ts },
+                    isUserDirection = { it == "inbound" },
+                    tsToEpochMs = { ts ->
+                        ts.toLongOrNull()?.let { n -> if (n < 1_000_000_000_000L) n * 1000L else n }
+                            ?: runCatching { java.time.Instant.parse(ts).toEpochMilli() }.getOrDefault(0L)
+                    },
+                    workingSinceMs = agent.workingSince,
+                )
+                val toolTs = activity.filter { it.kind == "tool" }.map { e ->
+                    e.ts.toLongOrNull()?.let { n -> if (n < 1_000_000_000_000L) n * 1000L else n }
+                        ?: runCatching { java.time.Instant.parse(e.ts).toEpochMilli() }.getOrDefault(0L)
+                }
+                val count = countToolsSince(toolTs, since)
+                formatLowWorkingStatus(base, agent.detail, agent.tool, count, "")
+            } else {
+                if (agent.detail == "running") "running ${agent.tool ?: "tool"}…" else "thinking…"
+            }
+        }
         sending -> "sending…"
         agent?.waiting == true -> "waiting (${agent.bgOpen} background)"
         else -> null
