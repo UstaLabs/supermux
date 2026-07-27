@@ -128,3 +128,24 @@ test("archived sessions appear under the project's Settled section", () => {
   const g = groups.value.find((x) => x.sessions.some((s) => s.id === "p1"))!
   expect(g.sections.find((s) => s.key === "settled")!.sessions.map((s) => s.id)).toContain("s1")
 })
+
+test("grouped view hides projects that have only settled/archived sessions", () => {
+  const sessions = useSessions()
+  sessions.replace([
+    { id: "live", name: "live", workdir: "/active-proj", mute: false, connected: false, userStatus: "in_progress", sortOrder: 0 },
+  ])
+  sessions.archivedSessions = [
+    { id: "old-a", name: "old-a", workdir: "/settled-only", agent: "claude" } as any,
+    { id: "old-b", name: "old-b", workdir: "/active-proj", agent: "claude" } as any,
+  ]
+  const sorted = computed(() => sessions.list)
+  const { groups, flatSections } = usePathGroups(sorted as any)
+
+  // Only the project with live work shows a group card; settled-only is omitted.
+  expect(groups.value.map((g) => g.workdir)).toEqual(["/active-proj"])
+  expect(groups.value[0]!.sections.find((s) => s.key === "settled")!.sessions.map((s) => s.id)).toContain("old-b")
+
+  // Flat Settled still includes sessions from the hidden project.
+  const settled = flatSections.value.find((s) => s.key === "settled")!
+  expect(settled.sessions.map((s) => s.id).sort()).toEqual(["old-a", "old-b"])
+})
