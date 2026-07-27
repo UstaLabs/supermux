@@ -676,17 +676,21 @@ final class BrokerSession {
         do {
             switch kind {
             case "claude":
+                // KMP → Swift does not surface Kotlin default args; pass voiceSttEngine explicitly.
                 try await api.saveConfig(onboarded: nil, paName: nil,
+                                         voiceSttEngine: nil,
                                          voiceCleanupModel: nil, voiceCleanupEngine: nil,
                                          claudeOauthToken: value, anthropicApiKey: nil,
                                          codexApiKey: nil, cursorApiKey: nil)
             case "codex":
                 try await api.saveConfig(onboarded: nil, paName: nil,
+                                         voiceSttEngine: nil,
                                          voiceCleanupModel: nil, voiceCleanupEngine: nil,
                                          claudeOauthToken: nil, anthropicApiKey: nil,
                                          codexApiKey: value, cursorApiKey: nil)
             case "cursor":
                 try await api.saveConfig(onboarded: nil, paName: nil,
+                                         voiceSttEngine: nil,
                                          voiceCleanupModel: nil, voiceCleanupEngine: nil,
                                          claudeOauthToken: nil, anthropicApiKey: nil,
                                          codexApiKey: nil, cursorApiKey: value)
