@@ -315,12 +315,13 @@ struct SessionsListView: View {
                         selectableRow(session, host: rowHost, position: position,
                                       projectTag: projectLabel(session: session, home: inferHomeDir(workdir: session.workdir)))
                     }
-                    .deleteDisabled(true)
+                    // onMove must attach to DynamicViewContent before View-erasing modifiers.
                     .onMove { indices, newOffset in
                         var ids = section.sessions.map(\.id)
                         ids.move(fromOffsets: indices, toOffset: newOffset)
                         onReorder(ids)
                     }
+                    .deleteDisabled(true)
                 } header: {
                     Text(section.label.uppercased())
                         .font(.caption.weight(.semibold))
@@ -361,13 +362,14 @@ struct SessionsListView: View {
                     let position = SidebarRowPosition.at(index, count: openSessions.count)
                     selectableRow(session, host: rowHost, position: position)
                 }
-                .deleteDisabled(true)
+                // onMove must attach to DynamicViewContent before View-erasing modifiers.
                 .onMove { indices, newOffset in
                     guard group.workdir != PA_GROUP_KEY else { return }
                     var ids = openSessions.map(\.id)
                     ids.move(fromOffsets: indices, toOffset: newOffset)
                     onReorder(ids)
                 }
+                .deleteDisabled(true)
                 .moveDisabled(group.workdir == PA_GROUP_KEY)
                 if !settled.isEmpty {
                     Button {
