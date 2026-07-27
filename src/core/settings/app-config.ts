@@ -37,7 +37,7 @@ export interface AppConfig {
   // Set by `supermux connect`; absent when no tunnel is configured. Store-only.
   tunnel?: TunnelRecord
   // Voice pipeline settings. Store-only; absent when not configured.
-  voiceSttEngine?: string // STT backend (codex-realtime | whisper); default codex-realtime — see src/core/transcription/stt.ts
+  voiceSttEngine?: string // STT backend (codex-realtime | claude-voice | whisper); default codex-realtime — see src/core/transcription/stt.ts
   voiceCleanupEngine?: string // engine used by voice cleanup (codex | opencode-zen | opencode-go | claude | cursor | cursor-cli); default codex
   voiceCleanupModel?: string // model used by the voice-cleanup agent
   voiceCleanupGlossary?: string[] // project/technical terms the cleanup must keep verbatim; default-seeded

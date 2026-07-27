@@ -127,3 +127,10 @@ test("voiceSttEngine: unknown engine is dropped", () => {
   const patch = sanitizeAppConfigPatch({ voiceSttEngine: "not-a-real-engine" })
   expect(patch.voiceSttEngine).toBeUndefined()
 })
+
+test("voiceSttEngine: claude-voice survives sanitize + resolve", () => {
+  const patch = sanitizeAppConfigPatch({ voiceSttEngine: "claude-voice" })
+  expect(patch.voiceSttEngine).toBe("claude-voice")
+  const resolved = resolveAppConfig(patch, {} as any)
+  expect(resolved.voiceSttEngine).toBe("claude-voice")
+})

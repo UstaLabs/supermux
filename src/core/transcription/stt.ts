@@ -6,6 +6,7 @@
 // a registry entry here.
 
 import { makeLogger } from "../../shared/log"
+import { claudeVoiceEngine, type ClaudeVoiceEngineOpts } from "./engines/claude-voice"
 import { codexRealtimeEngine, type CodexRealtimeEngineOpts } from "./engines/codex-realtime"
 import { whisperEngine, type WhisperEngineOpts } from "./engines/whisper"
 import {
@@ -23,13 +24,14 @@ const log = makeLogger("stt")
 
 /** Re-exported so callers can `import { STT_ENGINES } from "./stt"`. */
 export { STT_ENGINES, FALLBACK_STT_ENGINE, DEFAULT_STT_ENGINE, type SttEngineName }
-// Future engines (not yet registered): "openai-batch" | …
 
 export interface SelectSttOpts {
   /** Whisper-specific injectables (spawn, availability). */
   whisper?: WhisperEngineOpts
   /** Codex Realtime injectables (fetch, auth, WebSocket). */
   codexRealtime?: CodexRealtimeEngineOpts
+  /** Claude Code voice_stream injectables (creds, auth, WebSocket). */
+  claudeVoice?: ClaudeVoiceEngineOpts
   /**
    * Optional full engine instances keyed by name. Used by tests and by
    * future hosts that want to inject a pre-built engine without registering
@@ -40,6 +42,7 @@ export interface SelectSttOpts {
 
 const registry: Record<SttEngineName, (o: SelectSttOpts) => SttEngine> = {
   "codex-realtime": (o) => codexRealtimeEngine(o.codexRealtime),
+  "claude-voice": (o) => claudeVoiceEngine(o.claudeVoice),
   whisper: (o) => whisperEngine(o.whisper),
 }
 
@@ -89,7 +92,12 @@ export async function runStt(audioPath: string, opts: RunSttOpts = {}): Promise<
   const want = opts.engine ?? VOICE_STT_ENGINE
   const selectOpts = opts.select ?? {}
   const allowFallback = opts.fallback !== false
-  const tOpts: SttTranscribeOpts = { model: opts.model, lang: opts.lang, signal: opts.signal }
+  const tOpts: SttTranscribeOpts = {
+    model: opts.model,
+    lang: opts.lang,
+    keyterms: opts.keyterms,
+    signal: opts.signal,
+  }
 
   const primary = selectStt(want, selectOpts)
   const tryOne = async (engine: SttEngine): Promise<RunSttResult> => {

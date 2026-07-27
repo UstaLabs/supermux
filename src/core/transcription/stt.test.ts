@@ -19,8 +19,9 @@ function fakeEngine(name: string, opts: {
   }
 }
 
-test("STT_ENGINES includes codex-realtime + whisper; whisper is fallback", () => {
+test("STT_ENGINES includes codex-realtime + claude-voice + whisper; whisper is fallback", () => {
   expect(STT_ENGINES).toContain("codex-realtime")
+  expect(STT_ENGINES).toContain("claude-voice")
   expect(STT_ENGINES).toContain("whisper")
   expect(FALLBACK_STT_ENGINE).toBe("whisper")
 })
@@ -130,4 +131,27 @@ test("runStt rethrows when primary unavailable and fallback disabled", async () 
 test("whisper engine prefersCleanup is true", () => {
   const e = selectStt("whisper", { whisper: { isAvailable: () => true } })
   expect(e.prefersCleanup).toBe(true)
+})
+
+test("selectStt('claude-voice') returns that engine", () => {
+  const e = selectStt("claude-voice", {
+    claudeVoice: { isAvailable: () => true },
+  })
+  expect(e.name).toBe("claude-voice")
+  expect(e.prefersCleanup).toBe(false)
+})
+
+test("runStt falls back to whisper when claude-voice is unavailable", async () => {
+  const r = await runStt("/tmp/a.webm", {
+    engine: "claude-voice",
+    select: {
+      overrides: {
+        "claude-voice": fakeEngine("claude-voice", { available: false, prefersCleanup: false }),
+        whisper: fakeEngine("whisper", { text: "local" }),
+      },
+    },
+  })
+  expect(r.text).toBe("local")
+  expect(r.engine).toBe("whisper")
+  expect(r.fellBack).toBe(true)
 })

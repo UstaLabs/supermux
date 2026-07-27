@@ -1723,6 +1723,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           // whisper-specific knobs stay on app-config until engines grow their own model fields
           model: cfg.whisperModel,
           lang: cfg.whisperLang,
+          // claude-voice biases recognition with the voice glossary (x-config-keyterms)
+          keyterms: cfg.voiceCleanupGlossary,
         })
         sttMs = Date.now() - t0
         draft = r.text
@@ -1734,7 +1736,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const messages = sessionId ? messageLog.get(s?.id ?? sessionId, 10) : []
       const payload = buildVoicePayload(draft, messages, skills)
       // Client-side STT drafts (no audioPath) always go through cleanup; engine-produced
-      // drafts honor prefersCleanup (whisper: true; codex-realtime: false).
+      // drafts honor prefersCleanup (whisper: true; codex-realtime / claude-voice: false).
       if (!prefersCleanup) {
         log.info("voice_transcribe_out", { sessionId: sessionId ?? null, draft, text: draft, sttMs, cleanupMs: 0, sttEngine, cleanupEngine: "skipped" })
         return { text: draft }
