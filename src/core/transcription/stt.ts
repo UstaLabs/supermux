@@ -6,8 +6,10 @@
 // a registry entry here.
 
 import { makeLogger } from "../../shared/log"
+import { codexRealtimeEngine, type CodexRealtimeEngineOpts } from "./engines/codex-realtime"
 import { whisperEngine, type WhisperEngineOpts } from "./engines/whisper"
 import {
+  DEFAULT_STT_ENGINE,
   FALLBACK_STT_ENGINE,
   STT_ENGINES,
   type SpawnFn,
@@ -20,12 +22,14 @@ import {
 const log = makeLogger("stt")
 
 /** Re-exported so callers can `import { STT_ENGINES } from "./stt"`. */
-export { STT_ENGINES, FALLBACK_STT_ENGINE, type SttEngineName }
-// Future engines (not yet registered): "codex-realtime" | "openai-batch" | …
+export { STT_ENGINES, FALLBACK_STT_ENGINE, DEFAULT_STT_ENGINE, type SttEngineName }
+// Future engines (not yet registered): "openai-batch" | …
 
 export interface SelectSttOpts {
   /** Whisper-specific injectables (spawn, availability). */
   whisper?: WhisperEngineOpts
+  /** Codex Realtime injectables (fetch, auth, WebSocket). */
+  codexRealtime?: CodexRealtimeEngineOpts
   /**
    * Optional full engine instances keyed by name. Used by tests and by
    * future hosts that want to inject a pre-built engine without registering
@@ -35,6 +39,7 @@ export interface SelectSttOpts {
 }
 
 const registry: Record<SttEngineName, (o: SelectSttOpts) => SttEngine> = {
+  "codex-realtime": (o) => codexRealtimeEngine(o.codexRealtime),
   whisper: (o) => whisperEngine(o.whisper),
 }
 
@@ -54,7 +59,7 @@ export function selectStt(engine: SttEngineName | string, opts: SelectSttOpts = 
 /** Env default; app-config may override at call time. */
 export const VOICE_STT_ENGINE: SttEngineName = ((): SttEngineName => {
   const e = process.env.MUX_VOICE_STT_ENGINE
-  return e && (STT_ENGINES as readonly string[]).includes(e) ? (e as SttEngineName) : "whisper"
+  return e && (STT_ENGINES as readonly string[]).includes(e) ? (e as SttEngineName) : DEFAULT_STT_ENGINE
 })()
 
 export interface RunSttOpts extends SttTranscribeOpts {

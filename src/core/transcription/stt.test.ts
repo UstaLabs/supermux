@@ -19,9 +19,33 @@ function fakeEngine(name: string, opts: {
   }
 }
 
-test("STT_ENGINES includes whisper as the default/fallback", () => {
+test("STT_ENGINES includes codex-realtime + whisper; whisper is fallback", () => {
+  expect(STT_ENGINES).toContain("codex-realtime")
   expect(STT_ENGINES).toContain("whisper")
   expect(FALLBACK_STT_ENGINE).toBe("whisper")
+})
+
+test("selectStt('codex-realtime') returns that engine", () => {
+  const e = selectStt("codex-realtime", {
+    codexRealtime: { isAvailable: () => true },
+  })
+  expect(e.name).toBe("codex-realtime")
+  expect(e.prefersCleanup).toBe(false)
+})
+
+test("runStt falls back to whisper when codex-realtime is unavailable", async () => {
+  const r = await runStt("/tmp/a.webm", {
+    engine: "codex-realtime",
+    select: {
+      overrides: {
+        "codex-realtime": fakeEngine("codex-realtime", { available: false, prefersCleanup: false }),
+        whisper: fakeEngine("whisper", { text: "local" }),
+      },
+    },
+  })
+  expect(r.text).toBe("local")
+  expect(r.engine).toBe("whisper")
+  expect(r.fellBack).toBe(true)
 })
 
 test("selectStt('whisper') returns a whisper engine", () => {

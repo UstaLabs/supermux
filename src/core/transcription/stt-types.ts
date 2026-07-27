@@ -41,6 +41,9 @@ export interface SttEngine {
 export type SpawnFn = (cmd: string, args: string[]) => { exited: Promise<number> }
 
 /** Registry allowlist of STT engine names (light module so settings can import it). */
-export const STT_ENGINES = ["whisper"] as const
+export const STT_ENGINES = ["codex-realtime", "whisper"] as const
 export type SttEngineName = (typeof STT_ENGINES)[number]
+/** Universal local fallback when the primary engine is offline or fails. */
 export const FALLBACK_STT_ENGINE: SttEngineName = "whisper"
+/** Product default when neither env nor app-config selects an engine. */
+export const DEFAULT_STT_ENGINE: SttEngineName = "codex-realtime"

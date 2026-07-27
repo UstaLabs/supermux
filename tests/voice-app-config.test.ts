@@ -115,3 +115,15 @@ test("voiceSttEngine: non-string input is dropped", () => {
   expect(patch.voiceSttEngine).toBeUndefined()
 })
 
+
+test("voiceSttEngine: codex-realtime survives sanitize + resolve", () => {
+  const patch = sanitizeAppConfigPatch({ voiceSttEngine: "codex-realtime" })
+  expect(patch.voiceSttEngine).toBe("codex-realtime")
+  const resolved = resolveAppConfig(patch, {} as any)
+  expect(resolved.voiceSttEngine).toBe("codex-realtime")
+})
+
+test("voiceSttEngine: unknown engine is dropped", () => {
+  const patch = sanitizeAppConfigPatch({ voiceSttEngine: "not-a-real-engine" })
+  expect(patch.voiceSttEngine).toBeUndefined()
+})

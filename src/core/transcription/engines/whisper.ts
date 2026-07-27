@@ -1,4 +1,4 @@
-// Local whisper.cpp STT engine — default and universal fallback.
+// Local whisper.cpp STT engine — universal fallback (and selectable primary).
 // Wraps the low-level `transcribeAudio` helper so the rest of the pipeline only
 // speaks `SttEngine`.
 
