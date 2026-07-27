@@ -442,7 +442,10 @@ class AppViewModel(
 
     /** Owner-resolved composite key for a UI-driven per-session action: the owner is the merged-list
      *  owner of [sessionId] (the host the UI is showing/routing to for that bare id). */
-    private fun ownerKey(sessionId: String): String = SessionKey.key(ownerOf(sessionId) ?: "", sessionId)
+    /** Prefer the session's owning host; fall back to the active host so archived opens (not
+     *  in [sessionHost]) still key under a real host and [apiFor]/flatten resolve correctly. */
+    private fun ownerKey(sessionId: String): String =
+        SessionKey.key(ownerOf(sessionId) ?: _activeHost.value.orEmpty(), sessionId)
 
     /** Replace only host [recordId]'s slice of a composite-keyed map: drop its stale keys, then add
      *  [fresh] (bare-sessionId → value) re-keyed under [recordId]. Other hosts' entries are untouched. */

@@ -398,6 +398,7 @@ class MainActivity : ComponentActivity() {
                                         pendingSend = pendingSend,
                                         commands = commands,
                                         commandsResolved = commandsResolved,
+                                        archived = archivedSessions,
                                         vm = vm,
                                         wide = true,
                                         layout = workspaceLayout,
@@ -503,6 +504,7 @@ class MainActivity : ComponentActivity() {
                                     SessionLauncherScreen(
                                         sessions = activeHostSessions,
                                         home = DevConfig.HOME,
+                                        lastBySession = lastBySession,
                                         onBack = { navController.popBackStack() },
                                         loadProjects = { vm.listProjects() },
                                         validatePath = { vm.validatePath(it) },
@@ -542,6 +544,7 @@ class MainActivity : ComponentActivity() {
                             SessionLauncherScreen(
                                 sessions = activeHostSessions,
                                 home = DevConfig.HOME,
+                                lastBySession = lastBySession,
                                 onBack = { navController.popBackStack() },
                                 loadProjects = { vm.listProjects() },
                                 validatePath = { vm.validatePath(it) },
