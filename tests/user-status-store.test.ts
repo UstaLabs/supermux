@@ -83,12 +83,32 @@ test("rowToRecord defaults user_status to in_progress when column absent", () =>
 
 import { SessionStore } from "../src/core/session-manager/session-store"
 
-test("register defaults new sessions to in_progress with sort_order 0", () => {
+test("register defaults new sessions to in_progress with sort_order 0 when alone", () => {
   const store = new SessionStore(migratedDb())
   const s = store.register({ name: "t1", agent: "claude", workdir: "/tmp", pid: 100 })
   expect(s.user_status).toBe("in_progress")
   expect(s.sort_order).toBe(0)
   expect(s.draft_payload).toBeUndefined()
+})
+
+test("register places each new session at the top of its user_status bucket", () => {
+  const store = new SessionStore(migratedDb())
+  const first = store.register({ name: "older", agent: "claude", workdir: "/tmp", pid: 1 })
+  const second = store.register({ name: "newer", agent: "claude", workdir: "/tmp", pid: 2 })
+  const third = store.register({ name: "newest", agent: "claude", workdir: "/tmp", pid: 3 })
+  expect(first.sort_order).toBe(0)
+  // Lower sort_order = higher in list; each new session is strictly above peers.
+  expect(second.sort_order).toBe(first.sort_order - 1)
+  expect(third.sort_order).toBe(second.sort_order - 1)
+  // Drafts get their own top-of-bucket (independent of in_progress mins).
+  const draft = store.register({
+    name: "d1", agent: "claude", workdir: "/tmp", pid: 0, user_status: "draft",
+  })
+  expect(draft.sort_order).toBe(0)
+  const draft2 = store.register({
+    name: "d2", agent: "claude", workdir: "/tmp", pid: 0, user_status: "draft",
+  })
+  expect(draft2.sort_order).toBe(draft.sort_order - 1)
 })
 
 test("register can create a draft with a payload and no persisted default", () => {

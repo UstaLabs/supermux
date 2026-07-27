@@ -41,19 +41,37 @@ test("PAs are partitioned out of path groups into paGroup", () => {
   expect(groups.value[0]?.sessions.map((s) => s.id).sort()).toEqual(["legacy-1", "worker-1"])
 })
 
-test("paGroup sessions sort by message recency, newest first", () => {
+test("paGroup sessions stay on sortOrder; new messages do not reshuffle", () => {
   const sessions = useSessions()
   const messages = useMessages()
   sessions.replace([
-    makeSession("pa-old", { role: "personal_assistant" }),
-    makeSession("pa-new", { role: "personal_assistant" }),
+    makeSession("pa-old", { role: "personal_assistant", sortOrder: 0 }),
+    makeSession("pa-new", { role: "personal_assistant", sortOrder: 1 }),
   ])
   messages.replace("pa-old", [{ id: "1", ts: "2026-06-01T00:00:00Z", direction: "inbound", channel: "web" }])
   messages.replace("pa-new", [{ id: "2", ts: "2026-06-02T00:00:00Z", direction: "inbound", channel: "web" }])
 
   const { paGroup } = usePathGroups(useSortedSessions())
 
-  expect(paGroup.value.sessions.map((s) => s.id)).toEqual(["pa-new", "pa-old"])
+  expect(paGroup.value.sessions.map((s) => s.id)).toEqual(["pa-old", "pa-new"])
+})
+
+test("in_progress section does not jump on newer messages when sortOrder ties", () => {
+  const sessions = useSessions()
+  const messages = useMessages()
+  sessions.replace([
+    makeSession("a", { userStatus: "in_progress", sortOrder: 0 }),
+    makeSession("b", { userStatus: "in_progress", sortOrder: 0 }),
+  ])
+  messages.replace("a", [{ id: "1", ts: "2026-06-01T00:00:00Z", direction: "inbound", channel: "web" }])
+  const sorted = useSortedSessions()
+  const { flatSections } = usePathGroups(sorted)
+  const before = flatSections.value.find((s) => s.key === "in_progress")!.sessions.map((s) => s.id)
+
+  messages.replace("b", [{ id: "2", ts: "2026-06-09T00:00:00Z", direction: "inbound", channel: "web" }])
+  const after = flatSections.value.find((s) => s.key === "in_progress")!.sessions.map((s) => s.id)
+
+  expect(after).toEqual(before)
 })
 
 test("toggle(PA_GROUP_KEY) collapses the PA group and persists", () => {

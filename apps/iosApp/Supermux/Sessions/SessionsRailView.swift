@@ -35,7 +35,8 @@ struct SessionsRailView: View {
 
             ScrollView {
                 VStack(spacing: 10) {
-                    ForEach(fleet.filteredSessions, id: \.id) { s in avatar(s) }
+                    // sortOrder only — match the expanded list; messages must not reshuffle avatars.
+                    ForEach(sessionsByUserOrder(sessions: fleet.filteredSessions), id: \.id) { s in avatar(s) }
                 }
                 .padding(.vertical, 2)
             }

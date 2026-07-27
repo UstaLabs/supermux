@@ -46,11 +46,28 @@ export class SessionStore {
     }
   }
 
+  /**
+   * Place a newly registered session at the top of its user_status bucket.
+   * sort_order is ascending (lower first); new sessions get min(peers) - 1 so
+   * they appear above existing rows without reshuffling on later messages.
+   * Explicit input.sort_order is honored (tests / migrations / resume).
+   */
+  private nextSortOrderAtTop(userStatus: string): number {
+    let min: number | null = null
+    for (const s of this.cache.values()) {
+      if (s.user_status !== userStatus) continue
+      if (min === null || s.sort_order < min) min = s.sort_order
+    }
+    return min === null ? 0 : min - 1
+  }
+
   register(input: RegisterInput): Session {
     const id = input.id ?? randomUUID()
     const now = new Date().toISOString()
     const role: SessionRole = input.role ?? "worker"
     const is_default: boolean = input.is_default ?? false
+    const user_status = input.user_status ?? "in_progress"
+    const sort_order = input.sort_order ?? this.nextSortOrderAtTop(user_status)
     const session: Session = {
       id,
       name: input.name,
@@ -75,8 +92,8 @@ export class SessionStore {
       base_branch: input.base_branch,
       session_branch: input.session_branch,
       self_renamed: false,
-      user_status: input.user_status ?? "in_progress",
-      sort_order: input.sort_order ?? 0,
+      user_status,
+      sort_order,
       draft_payload: input.draft_payload,
       pid: input.pid,
       connected: false,
@@ -90,7 +107,7 @@ export class SessionStore {
        input.base_commit ?? null,
        input.base_commits ? JSON.stringify(input.base_commits) : null,
        input.repo_root ?? null, input.base_branch ?? null, input.session_branch ?? null,
-       input.user_status ?? "in_progress", input.sort_order ?? 0,
+       user_status, sort_order,
        input.draft_payload ? JSON.stringify(input.draft_payload) : null]
     )
     this.cache.set(id, session)
@@ -151,16 +168,24 @@ export class SessionStore {
     session.pid = pid
   }
 
-  resume(id: string, name: string, pid: number): void {
+  /**
+   * Bring an archived (settled) session back to active/in_progress.
+   * Places it at the top of the in_progress list — same as a brand-new session —
+   * so resume doesn't leave it buried under its old sort_order.
+   */
+  resume(id: string, name: string, pid: number): Session | undefined {
+    // Peers are live in-progress only (archived rows are out of cache).
+    const sort_order = this.nextSortOrderAtTop("in_progress")
     this.db.run(
-      "UPDATE sessions SET status = 'active', user_status = 'in_progress', killed_at = NULL, name = ? WHERE id = ?",
-      [name, id]
+      "UPDATE sessions SET status = 'active', user_status = 'in_progress', killed_at = NULL, name = ?, sort_order = ? WHERE id = ?",
+      [name, sort_order, id]
     )
     const row = this.db.query("SELECT * FROM sessions WHERE id = ?").get(id) as SessionRow | null
-    if (!row) return
+    if (!row) return undefined
     const rec = rowToRecord(row)
     const session: Session = { ...rec, pid, connected: false }
     this.cache.set(id, session)
+    return session
   }
 
   rename(id: string, newName: string): void {

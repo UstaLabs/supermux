@@ -220,6 +220,17 @@ describe("resume (from archive)", () => {
     expect(store.getByName("new-name")).toBeDefined()
     expect(store.getByName("new-name")!.id).toBe(session.id)
   })
+
+  test("resume assigns a top-of-list sort_order among in_progress peers", () => {
+    const older = store.register({ ...BASE_INPUT, name: "older" })
+    const archived = store.register({ ...BASE_INPUT, name: "to-archive" })
+    store.archive(archived.id)
+    const liveTop = store.register({ ...BASE_INPUT, name: "live-top" })
+    const resumed = store.resume(archived.id, "to-archive", 42)!
+    expect(resumed.user_status).toBe("in_progress")
+    expect(resumed.sort_order).toBeLessThan(liveTop.sort_order)
+    expect(resumed.sort_order).toBeLessThan(older.sort_order)
+  })
 })
 
 describe("listActive / listSuspended / listArchived", () => {

@@ -2105,12 +2105,26 @@ async function resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name
       return { ok: false, error: `Cannot resume agent type: ${session.agent}` }
     }
 
-    registry.sessions.resume(sessionId, name, resumedRuntimePid ?? process.pid)
+    const resumed = registry.sessions.resume(sessionId, name, resumedRuntimePid ?? process.pid)
     if (resumedRuntimeTargetId) registry.sessions.setTmuxWindowId(sessionId, resumedRuntimeTargetId)
 
+    // Use the post-resume row (in_progress + top sort_order), not the stale archived snapshot.
+    const live = resumed ?? registry.sessions.getById(sessionId) ?? session
     webChannel?.broadcastToAll({
       type: "session_added",
-      session: { id: sessionId, name, workdir: session.workdir, agent: session.agent, status: "active", repo_root: session.repo_root || undefined, session_branch: session.session_branch || undefined, finish_job: session.finish_job, user_status: session.user_status, sort_order: session.sort_order, draft_payload: session.draft_payload },
+      session: {
+        id: sessionId,
+        name: live.name,
+        workdir: live.workdir,
+        agent: live.agent,
+        status: "active",
+        repo_root: live.repo_root || undefined,
+        session_branch: live.session_branch || undefined,
+        finish_job: live.finish_job,
+        user_status: live.user_status,
+        sort_order: live.sort_order,
+        draft_payload: live.draft_payload,
+      },
     })
 
     await refreshTelegramMenu()

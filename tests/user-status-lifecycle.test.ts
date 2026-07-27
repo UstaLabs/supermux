@@ -30,6 +30,26 @@ test("resume restores user_status to in_progress", () => {
   expect(rec.user_status).toBe("in_progress")
 })
 
+test("resume from settled places the session at the top of in_progress", () => {
+  const s = store()
+  const live = s.register({ name: "still-live", agent: "claude", workdir: "/tmp", pid: 1 })
+  const settled = s.register({ name: "was-settled", agent: "claude", workdir: "/tmp", pid: 2 })
+  // settled currently has a lower sort_order (registered later → top). After archive + resume
+  // with another live peer, it should still land at the top of in_progress.
+  expect(settled.sort_order).toBeLessThan(live.sort_order)
+  s.archive(settled.id)
+  // A newer live session takes the top while settled is archived.
+  const newer = s.register({ name: "even-newer", agent: "claude", workdir: "/tmp", pid: 3 })
+  expect(newer.sort_order).toBeLessThan(live.sort_order)
+
+  const resumed = s.resume(settled.id, "was-settled", 99)!
+  expect(resumed.user_status).toBe("in_progress")
+  expect(resumed.status).toBe("active")
+  // Resumed must be above every current in_progress peer (including newer).
+  expect(resumed.sort_order).toBeLessThan(newer.sort_order)
+  expect(resumed.sort_order).toBeLessThan(live.sort_order)
+})
+
 test("isDraftSession identifies drafts the reconcile loop must skip", () => {
   const s = store()
   const draft = s.register({ name: "sd1", agent: "claude", workdir: "/tmp", pid: 0, user_status: "draft" })
@@ -74,10 +94,11 @@ test("lifecycle: a draft is consumed on start (hard-deleted), leaving no ghost",
   expect(s.getById(d.id)).toBeUndefined()
 })
 
-test("lifecycle: in_progress → settled (archived) → resumed → in_progress", () => {
+test("lifecycle: in_progress → settled (archived) → resumed → in_progress at top", () => {
   const s = store()
   const sess = s.register({ name: "e2e-live", agent: "claude", workdir: "/tmp", pid: 10 })
   expect(s.getById(sess.id)!.user_status).toBe("in_progress")
+  const peer = s.register({ name: "peer", agent: "claude", workdir: "/tmp", pid: 11 })
 
   s.archive(sess.id)
   const settled = s.getById(sess.id)!
@@ -88,4 +109,5 @@ test("lifecycle: in_progress → settled (archived) → resumed → in_progress"
   const resumed = s.getById(sess.id)!
   expect(resumed.user_status).toBe("in_progress")
   expect(resumed.status).toBe("active")
+  expect(resumed.sort_order).toBeLessThan(peer.sort_order)
 })

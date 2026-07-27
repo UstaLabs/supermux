@@ -62,6 +62,7 @@ import dev.supermux.session.sectionKey
 import dev.supermux.session.projectLabel
 import dev.supermux.session.combinedTaskSessions
 import dev.supermux.session.buildTaskSections
+import dev.supermux.session.sessionsByUserOrder
 import dev.supermux.session.SectionKey
 import dev.supermux.net.ArchivedDto
 
@@ -860,7 +861,8 @@ fun SessionListScreen(
 
             if (!groupByProject) {
                 // PA pin (web flat list) — not part of task sections.
-                val pas = onlineSessions.filter { it.role == "personal_assistant" }
+                // User sortOrder only; new messages must not reshuffle.
+                val pas = sessionsByUserOrder(onlineSessions.filter { it.role == "personal_assistant" })
                 if (pas.isNotEmpty()) {
                     item(key = "flat:pa_hdr") {
                         Text(

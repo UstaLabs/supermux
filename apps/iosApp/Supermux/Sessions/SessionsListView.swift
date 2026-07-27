@@ -266,8 +266,8 @@ struct SessionsListView: View {
             lastTs: lastTs
         )
         // PA pin (web SessionTaskList paSection) — not in task sections.
-        let pas = online.filter { $0.role == "personal_assistant" }
-            .sorted { lastTs($0) > lastTs($1) }
+        // Stable sortOrder only; new messages must not reshuffle rows.
+        let pas = sessionsByUserOrder(sessions: online.filter { $0.role == "personal_assistant" })
         if !pas.isEmpty {
             Section {
                 ForEach(Array(pas.enumerated()), id: \.element.id) { index, session in
