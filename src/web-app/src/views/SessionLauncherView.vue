@@ -11,7 +11,7 @@ import { useLauncherDraft } from "@/stores/launcherDraft"
 import { useUploads } from "@/stores/uploads"
 import { useUploader } from "@/composables/useUploader"
 import { useIsDesktop } from "@/composables/useIsDesktop"
-import { useSortedSessions } from "@/composables/useSortedSessions"
+import { useSessionsByRecency } from "@/composables/useSortedSessions"
 import { formatWorkdir } from "@/lib/format-workdir"
 import { chooseDefaultProject } from "@/lib/default-project"
 import { orderProjectsByRecency, recentWorkdirs as toRecentWorkdirs } from "@/lib/recent-projects"
@@ -55,7 +55,9 @@ const pending = usePendingFirstMessage()
 const uploads = useUploads()
 const uploader = useUploader()
 const isDesktop = useIsDesktop()
-const sortedSessions = useSortedSessions()
+// Launcher defaults to the most-recently-active project (message recency).
+// Session list order is separate and must not reshuffle on new messages.
+const sessionsByRecency = useSessionsByRecency()
 
 const workdir = ref("~")
 const workdirTouched = ref(false)
@@ -232,7 +234,7 @@ const pageEl = ref<HTMLElement | null>(null)
 // Distinct project paths from the user's sessions, most-recently-active first
 // (recency comes from each session's latest message timestamp), then the
 // picker list of recently-used projects ahead of any other known projects.
-const recentWorkdirs = computed(() => toRecentWorkdirs(sortedSessions.value))
+const recentWorkdirs = computed(() => toRecentWorkdirs(sessionsByRecency.value))
 const orderedProjects = computed(() => orderProjectsByRecency(recentWorkdirs.value, projects.value))
 const { commands: launcherCommands, loading: launcherCommandsLoading } = useLauncherCommands(agent, workdir)
 

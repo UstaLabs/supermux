@@ -97,8 +97,17 @@ fun combinedTaskSessions(
 }
 
 /**
+ * User-controlled session order (sortOrder ascending, then id).
+ * Use for rails, flat PA pins, and any list that must not jump on new messages.
+ * Message recency belongs only in [sessionsByRecency] (launcher recent-projects).
+ */
+fun sessionsByUserOrder(sessions: List<SessionInfo>): List<SessionInfo> =
+    sessions.sortedWith(compareBy<SessionInfo> { it.sortOrder }.thenBy { it.id })
+
+/**
  * Build In Progress / Drafts / Settled sections for [list].
- * in_progress + draft: sort_order ascending, then recency; settled: recency only.
+ * in_progress + draft: user sort_order only (no message-recency reshuffle);
+ * settled: recency only (not user-reorderable).
  */
 fun buildTaskSections(
     list: List<SessionInfo>,
@@ -112,13 +121,12 @@ fun buildTaskSections(
     for (s in list) buckets.getValue(s.sectionKey()).add(s)
 
     val byRecency = compareByDescending<SessionInfo> { lastTs(it) }
-    val bySort = Comparator<SessionInfo> { a, b ->
-        val c = a.sortOrder.compareTo(b.sortOrder)
-        if (c != 0) c else lastTs(b).compareTo(lastTs(a))
-    }
+    // Message arrival must not jump rows — only explicit user reorder updates sortOrder.
+    val bySort = compareBy<SessionInfo> { it.sortOrder }.thenBy { it.id }
 
     buckets[SectionKey.IN_PROGRESS]!!.sortWith(bySort)
     buckets[SectionKey.DRAFT]!!.sortWith(bySort)
+    // Settled is not drag-reorderable; newest-message-first for findability only.
     buckets[SectionKey.SETTLED]!!.sortWith(byRecency)
 
     return SECTION_ORDER
@@ -136,13 +144,12 @@ fun projectLabel(session: SessionInfo, home: String?): String {
 
 /**
  * Group sessions by workdir, mirroring the web's usePathGroups composable:
- *  - sessions within a group are sorted by last-message timestamp, newest first
- *  - groups are ordered by their most-recent session timestamp, newest first
+ *  - sessions within a group follow user sortOrder (stable; no message reshuffle)
+ *  - project groups are ordered by label (stable)
  *  - each project group also carries task [sections]
  *  - the label uses [formatWorkdir]
  *
- * [lastTs] returns an ISO-8601 timestamp string for a session's most recent
- * message (or "" when it has none); ISO-8601 strings sort lexicographically by time.
+ * [lastTs] is used only for Settled section ordering (newest first).
  *
  * Pass [archived] (or pre-merge via [combinedTaskSessions]) so settled rows
  * appear under Settled even after kill archives them.
@@ -161,14 +168,14 @@ fun groupSessions(
     val byPath = LinkedHashMap<String, MutableList<SessionInfo>>()
     for (s in rest) byPath.getOrPut(s.repo_root ?: s.workdir) { mutableListOf() }.add(s)
     val projectGroups = byPath.map { (key, list) ->
-        val sorted = list.sortedWith(compareByDescending { lastTs(it) })
+        val sorted = sessionsByUserOrder(list)
         SessionGroup(
             label = formatWorkdir(key, home),
             workdir = key,
             sessions = sorted,
             sections = buildTaskSections(list, lastTs),
         )
-    }.sortedWith(compareByDescending { g -> g.sessions.maxOfOrNull { lastTs(it) } ?: "" })
+    }.sortedBy { it.label }
 
     val result = ArrayList<SessionGroup>(projectGroups.size + 1)
     if (pas.isNotEmpty()) {
@@ -176,7 +183,7 @@ fun groupSessions(
             SessionGroup(
                 label = "Personal Assistants",
                 workdir = PA_GROUP_KEY,
-                sessions = pas.sortedWith(compareByDescending { lastTs(it) }),
+                sessions = sessionsByUserOrder(pas),
                 sections = emptyList(),
             ),
         )

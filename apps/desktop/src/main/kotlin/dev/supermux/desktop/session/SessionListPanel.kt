@@ -91,6 +91,7 @@ import dev.supermux.session.effectiveUserStatus
 import dev.supermux.session.projectLabel
 import dev.supermux.session.combinedTaskSessions
 import dev.supermux.session.buildTaskSections
+import dev.supermux.session.sessionsByUserOrder
 import dev.supermux.session.TaskSection
 import dev.supermux.session.SectionKey
 import dev.supermux.net.ArchivedDto
@@ -527,7 +528,8 @@ fun SessionListPanel(
                     )
                 }
             } else if (!groupByProject) {
-                val pas = visibleSessions.filter { it.role == "personal_assistant" }
+                // User sortOrder only; new messages must not reshuffle (web/Android parity).
+                val pas = sessionsByUserOrder(visibleSessions.filter { it.role == "personal_assistant" })
                 if (pas.isNotEmpty()) {
                     item(key = "flat:pa_hdr") {
                         Text(

@@ -53,6 +53,14 @@ function lastMessageTs(session: Session, messages: ReturnType<typeof useMessages
   return messages.bySession[session.id]?.slice(-1)[0]?.ts ?? ""
 }
 
+/** User-controlled order: sortOrder only (no message-recency reshuffle). */
+function bySortOrder(a: Session, b: Session): number {
+  const av = a.sortOrder ?? 0
+  const bv = b.sortOrder ?? 0
+  if (av !== bv) return av - bv
+  return a.id.localeCompare(b.id)
+}
+
 /** Short repo label for a session's project tag (leaf folder of repo_root/workdir). */
 export function projectLabel(session: Session, homeDir?: string | null): string {
   const label = workdirDisplay(session.repo_root ?? session.workdir, homeDir).label
@@ -66,13 +74,11 @@ function buildSections(list: Session[], messages: ReturnType<typeof useMessages>
     const key: SectionKey = s.userStatus === "draft" ? "draft" : s.userStatus === "settled" ? "settled" : "in_progress"
     byKey[key].push(s)
   }
+  // In Progress / Drafts: only user drag-reorder (sortOrder). Settled is not
+  // user-reorderable and stays newest-message-first for findability.
   const byRecency = (a: Session, b: Session) => lastMessageTs(b, messages).localeCompare(lastMessageTs(a, messages))
-  const bySort = (a: Session, b: Session) => {
-    const av = a.sortOrder ?? 0, bv = b.sortOrder ?? 0
-    return av !== bv ? av - bv : byRecency(a, b)
-  }
-  byKey.in_progress.sort(bySort)
-  byKey.draft.sort(bySort)
+  byKey.in_progress.sort(bySortOrder)
+  byKey.draft.sort(bySortOrder)
   byKey.settled.sort(byRecency)
   return SECTION_ORDER
     .filter((k) => byKey[k].length > 0)
@@ -91,10 +97,13 @@ export function usePathGroups(sortedSessions: ComputedRef<Session[]>) {
   }
 
   // Personal assistants are not project work: they get a dedicated pinned
-  // group instead of joining their workdir's path group.
+  // group instead of joining their workdir's path group. Order is stable
+  // (sortOrder) — new messages must not jump rows.
   const paGroup = computed<PathGroup>(() => {
-    const list = sortedSessions.value.filter((s) => s.role === "personal_assistant")
-    list.sort((a, b) => lastMessageTs(b, messages).localeCompare(lastMessageTs(a, messages)))
+    const list = sortedSessions.value
+      .filter((s) => s.role === "personal_assistant")
+      .slice()
+      .sort(bySortOrder)
     return {
       workdir: PA_GROUP_KEY,
       label: "Personal Assistants",
@@ -140,7 +149,9 @@ export function usePathGroups(sortedSessions: ComputedRef<Session[]>) {
     const result: PathGroup[] = []
 
     for (const [workdir, list] of byPath) {
-      list.sort((a, b) => lastMessageTs(b, messages).localeCompare(lastMessageTs(a, messages)))
+      // Within a project, row order comes from buildSections (sortOrder). Keep
+      // the raw list stable too so message arrival never reshuffles.
+      list.sort(bySortOrder)
       const display = workdirDisplay(workdir, homeDir)
       result.push({
         workdir: display.key,
@@ -151,11 +162,9 @@ export function usePathGroups(sortedSessions: ComputedRef<Session[]>) {
       })
     }
 
-    result.sort((a, b) => {
-      const aTs = a.sessions.map((s) => lastMessageTs(s, messages)).sort().reverse()[0] ?? ""
-      const bTs = b.sessions.map((s) => lastMessageTs(s, messages)).sort().reverse()[0] ?? ""
-      return bTs.localeCompare(aTs)
-    })
+    // Project cards stay in a stable order (label). Floating a project to the
+    // top on new messages would be automatic reorder without a user gesture.
+    result.sort((a, b) => a.label.localeCompare(b.label))
 
     return result
   })

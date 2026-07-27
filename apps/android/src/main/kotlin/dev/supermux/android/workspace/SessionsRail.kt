@@ -34,6 +34,7 @@ import dev.supermux.android.session.SessionStatusRail
 import dev.supermux.android.theme.Space
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.SessionInfo
+import dev.supermux.session.sessionsByUserOrder
 
 /**
  * Slim (~64dp) collapsed sidebar shown in place of [dev.supermux.android.session.SessionListScreen]
@@ -88,7 +89,8 @@ fun SessionsRail(
             verticalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             Spacer(Modifier.height(Space.xs))
-            sessions.forEach { s ->
+            // sortOrder only — match the expanded list; messages must not reshuffle avatars.
+            sessionsByUserOrder(sessions).forEach { s ->
                 RailSessionItem(
                     session = s,
                     selected = s.id == selectedId,

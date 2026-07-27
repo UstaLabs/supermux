@@ -26,48 +26,86 @@ class SessionGroupingTest {
         )
     }
 
-    @Test fun sessions_within_group_sorted_newest_first() {
+    @Test fun sessions_within_group_sorted_by_sort_order_not_recency() {
         val ts = mapOf(
             "old" to "2026-06-01T08:00:00Z",
             "new" to "2026-06-01T10:00:00Z",
             "mid" to "2026-06-01T09:00:00Z",
         )
         val groups = groupSessions(
-            listOf(s("old", "/x/one"), s("new", "/x/one"), s("mid", "/x/one")),
+            listOf(
+                SessionInfo(id = "old", name = "old", workdir = "/x/one", agent = "claude", sortOrder = 0),
+                SessionInfo(id = "new", name = "new", workdir = "/x/one", agent = "claude", sortOrder = 2),
+                SessionInfo(id = "mid", name = "mid", workdir = "/x/one", agent = "claude", sortOrder = 1),
+            ),
             home = "/home/user",
             lastTs = { ts[it.name] ?: "" },
         )
         assertEquals(1, groups.size)
-        assertEquals(listOf("new", "mid", "old"), groups[0].sessions.map { it.name })
+        // sortOrder wins; newer messages must not jump rows
+        assertEquals(listOf("old", "mid", "new"), groups[0].sessions.map { it.name })
     }
 
-    @Test fun groups_ordered_by_most_recent_session_newest_first() {
+    @Test fun groups_ordered_by_label_stable() {
         val ts = mapOf(
-            "a1" to "2026-06-01T08:00:00Z", // group /x/a most-recent = 08:00
-            "b1" to "2026-06-01T12:00:00Z", // group /x/b most-recent = 12:00
+            "a1" to "2026-06-01T08:00:00Z",
+            "b1" to "2026-06-01T12:00:00Z",
             "b2" to "2026-06-01T07:00:00Z",
-            "c1" to "2026-06-01T10:00:00Z", // group /x/c most-recent = 10:00
+            "c1" to "2026-06-01T10:00:00Z",
         )
         val groups = groupSessions(
             listOf(s("a1", "/x/a"), s("b1", "/x/b"), s("b2", "/x/b"), s("c1", "/x/c")),
             home = "/home/user",
             lastTs = { ts[it.name] ?: "" },
         )
-        // ordered by each group's max ts, newest first: b(12:00), c(10:00), a(08:00)
-        assertEquals(listOf("/x/b", "/x/c", "/x/a"), groups.map { it.workdir })
+        // Project cards stay label-stable; message recency must not reorder groups.
+        assertEquals(listOf("/x/a", "/x/b", "/x/c"), groups.map { it.workdir })
     }
 
-    @Test fun session_without_timestamp_sorts_last_within_group() {
+    @Test fun session_order_ignores_message_timestamps_within_group() {
         val ts = mapOf(
             "dated" to "2026-06-01T10:00:00Z",
-            // "undated" intentionally absent → ""
         )
         val groups = groupSessions(
-            listOf(s("undated", "/x/one"), s("dated", "/x/one")),
+            listOf(
+                SessionInfo(id = "undated", name = "undated", workdir = "/x/one", agent = "claude", sortOrder = 0),
+                SessionInfo(id = "dated", name = "dated", workdir = "/x/one", agent = "claude", sortOrder = 1),
+            ),
             home = "/home/user",
             lastTs = { ts[it.name] ?: "" },
         )
-        assertEquals(listOf("dated", "undated"), groups[0].sessions.map { it.name })
+        assertEquals(listOf("undated", "dated"), groups[0].sessions.map { it.name })
+    }
+
+    @Test fun in_progress_does_not_use_recency_as_tiebreaker() {
+        val list = listOf(
+            SessionInfo(id = "a", name = "a", workdir = "/p", agent = "claude", userStatus = "in_progress", sortOrder = 0),
+            SessionInfo(id = "b", name = "b", workdir = "/p", agent = "claude", userStatus = "in_progress", sortOrder = 0),
+        )
+        val ts = mapOf("a" to "2026-06-01T00:00:00Z", "b" to "2026-06-09T00:00:00Z")
+        val sections = buildTaskSections(list) { ts[it.id] ?: "" }
+        // Equal sortOrder → stable by id; newer message on b must not float it above a.
+        assertEquals(listOf("a", "b"), sections[0].sessions.map { it.name })
+    }
+
+    @Test fun sessionsByUserOrder_sorts_by_sort_order() {
+        val list = listOf(
+            SessionInfo(id = "c", name = "c", workdir = "/p", agent = "claude", sortOrder = 2),
+            SessionInfo(id = "a", name = "a", workdir = "/p", agent = "claude", sortOrder = 0),
+            SessionInfo(id = "b", name = "b", workdir = "/p", agent = "claude", sortOrder = 1),
+        )
+        assertEquals(listOf("a", "b", "c"), sessionsByUserOrder(list).map { it.name })
+    }
+
+    @Test fun sessionsByUserOrder_puts_negative_sort_order_first_new_session_at_top() {
+        // Broker assigns min(peers)-1 on register so a brand-new session sorts above existing ones.
+        val list = listOf(
+            SessionInfo(id = "old", name = "old", workdir = "/p", agent = "claude", sortOrder = 0),
+            SessionInfo(id = "new", name = "new", workdir = "/p", agent = "claude", sortOrder = -1),
+        )
+        assertEquals(listOf("new", "old"), sessionsByUserOrder(list).map { it.name })
+        val sections = buildTaskSections(list) { "" }
+        assertEquals(listOf("new", "old"), sections[0].sessions.map { it.name })
     }
 
     @Test fun formatWorkdir_under_home_shows_last_two_segments() {
