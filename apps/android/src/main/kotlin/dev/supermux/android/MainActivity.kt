@@ -160,6 +160,15 @@ class MainActivity : ComponentActivity() {
                         store.load()?.isNotBlank() == true && store.loadBaseUrl()?.isNotBlank() == true,
                     )
                 }
+                // Native push: re-register FCM token with the relay whenever we are (or become)
+                // paired. onNewToken alone is insufficient — FCM often issues the token *before*
+                // pairing, and the old path used a placeholder base URL. Parity with iOS
+                // PushManager.registerIfPaired (launch + post-pair).
+                LaunchedEffect(paired) {
+                    if (paired) {
+                        SupermuxMessagingService.registerIfPaired(applicationContext)
+                    }
+                }
                 // Deep-link intake: parse supermux://pair (or a pasted https pair URL) from the
                 // current intent. Recomputed when onNewIntent swaps the intent in while foregrounded.
                 val currentIntent by intentState
@@ -575,7 +584,11 @@ class MainActivity : ComponentActivity() {
                             onClaim = { payload, name -> vm.addHost(payload, name) },
                             onClaimLegacy = { pair -> vm.addLegacyHost(pair) },
                             onClaimByUrl = { url, name, allowInsecure -> vm.addHostByUrl(url, name, allowInsecure) },
-                            onAdded = { navController.popBackStack() },
+                            onAdded = {
+                                // New host needs its own relay bootstrap → broker /push/device row.
+                                SupermuxMessagingService.registerIfPaired(applicationContext)
+                                navController.popBackStack()
+                            },
                             needsInsecureOptIn = { vm.urlNeedsInsecureOptIn(it) },
                         )
                     }

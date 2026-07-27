@@ -1,38 +1,32 @@
-# Android push (Firebase / FCM) — status & remaining step
+# Android push (Firebase / FCM) — status
 
-## ✅ Done (app side — fully wired and verified)
-- Created Firebase project **`supermux-app`** (project number `1005235485338`).
-- Registered the Android app **`dev.supermux.android`** (App ID
-  `1:1005235485338:android:0e7882d02d1bbdadb7fd23`).
-- Downloaded the real **`google-services.json`** → `apps/android/google-services.json`
-  (replaces the old placeholder; gitignored). Confirmed it's **bundled in the release AAB**.
-- **FCM v1 API is enabled** on the project.
-- Minted a **service-account key** and **validated it against FCM** (a `validate_only`
-  send authenticated successfully — only a deliberately-fake device token was rejected).
-  Key saved on the broker box at **`~/.mux/state/supermux-fcm-sa.json`** (chmod 600).
+## ✅ Done
 
-## ⚠️ Remaining step (relay side — your infrastructure)
-The broker doesn't send push itself — it forwards to the **push relay** at
-**`https://push.supermux.dev`** (the default `MUX_PUSH_RELAY_URL`, also what serves iOS
-APNs). That relay — `src/relay/main.ts`, run separately from this box — is what actually
-calls FCM, so the service-account key must live **there**:
+### App side
+- Firebase project **`supermux-app`**, package `dev.supermux.android`, real `google-services.json`
+  (gitignored; bundled in release AAB).
+- FCM client stack: `SupermuxMessagingService` + decrypt + notification channel +
+  `POST_NOTIFICATIONS`.
+- **Registration fixed (2026-07-27):**
+  1. Credentials come from `SecureTokenStore` / multi-host `PairedHostStore` — **not**
+     `DevConfig.brokerUrl()` (was `ws://CHANGE_ME:9898` on physical devices).
+  2. `registerIfPaired()` runs on cold start when paired, right after pairing, and after
+     adding a host — parity with iOS `PushManager.registerIfPaired`. `onNewToken` alone
+     was insufficient when the FCM token arrived before pairing.
 
-```
-MUX_FCM_PROJECT_ID=supermux-app
-MUX_FCM_SA_JSON=/path/on/the/relay/host/supermux-fcm-sa.json
-```
-…then restart the relay. The key file to copy over is `~/.mux/state/supermux-fcm-sa.json`.
+### Relay side (this box)
+- User unit `supermux-relay.service` with `MUX_FCM_PROJECT_ID` + `MUX_FCM_SA_JSON`.
+- Logs `relay_ready {"fcm":true,...}` on :8788; public URL `https://push.supermux.dev`.
 
-> ⚠️ During setup, **`push.supermux.dev` did not resolve from this box** (DNS timeout).
-> So before chasing Android push, confirm the relay is actually deployed and reachable —
-> if iOS push is working, it's reachable from wherever your broker runs; if not, the relay
-> itself may still need standing up. Either way, Android push needs the SA key + the two env
-> vars above on that relay host, then a relay restart.
+## Device verify checklist
+1. Install a build that includes this registration fix (Play/internal or sideload).
+2. Grant notification permission when prompted.
+3. Pair (or reopen the app if already paired) — logcat `SupermuxFCM` should show
+   `registerIfPaired` → `registered FCM token with relay` → `device registered with broker`.
+4. Broker DB: `SELECT platform,COUNT(*) FROM device_push_tokens GROUP BY platform;` must show
+   an `android` row.
+5. Trigger an agent reply while the app is backgrounded → notification banner.
 
 ## Note
-- This box runs the **broker** (`mux.service` → `src/main.ts`), **not** the relay — so adding
-  `MUX_FCM_*` to `~/.mux/state/.env` here would have no effect (I intentionally did **not**).
-- Push is **not required** for the Play closed test; the app works fully without it. Wire the
-  relay before production so public users get notifications.
-- Want me to finish the relay side? Tell me where `push.supermux.dev` runs (or give me access)
-  and I'll deploy the key, set the env, and verify a real end-to-end push to a device.
+- Push is not required for Play closed testing; wire + verify before production marketing
+  that promises notifications.
