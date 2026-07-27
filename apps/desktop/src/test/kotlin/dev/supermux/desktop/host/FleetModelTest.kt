@@ -40,7 +40,7 @@ class FleetModelTest {
         assertEquals("Host", hostShortLabel("This host"))
         assertEquals("Ahmet's", hostShortLabel("This computer (Ahmet's MacBook Air)"))
         assertEquals("Ahmet-MBP", hostShortLabel("Ahmet-MBP"))
-        assertEquals("host", hostShortLabel("   "))
+        assertEquals("Host", hostShortLabel("   "))
         assertEquals("aaaaaaaaaaaaaa", hostShortLabel("aaaaaaaaaaaaaaaaaaaa")) // capped at 14
     }
 

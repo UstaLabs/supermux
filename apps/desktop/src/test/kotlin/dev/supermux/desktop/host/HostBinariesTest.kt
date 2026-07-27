@@ -76,7 +76,8 @@ class HostBinariesTest {
     @Test fun prependPathPutsBinDirFirst() {
         val dir = Path.of("/home/u/.mux/state/desktop-assets/bin")
         val p = HostBinaries.prependPath(dir, existing = "/usr/bin:/bin")
-        assertEquals("/home/u/.mux/state/desktop-assets/bin" + java.io.File.pathSeparator + "/usr/bin:/bin", p)
+        // binDir.toString() is OS-dependent; pathSeparator is ':' on POSIX and ';' on Windows.
+        assertEquals(dir.toString() + java.io.File.pathSeparator + "/usr/bin:/bin", p)
         // No inherited PATH → just the bin dir.
         assertEquals(dir.toString(), HostBinaries.prependPath(dir, existing = null))
         assertEquals(dir.toString(), HostBinaries.prependPath(dir, existing = ""))

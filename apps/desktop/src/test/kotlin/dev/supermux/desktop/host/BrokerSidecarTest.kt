@@ -217,14 +217,16 @@ class BrokerSidecarTest {
     @Test fun devSpawnCommandRunsBunOnRepoMain() {
         val repo = Path.of("/repo")
         val cmd = BrokerSidecar.buildSpawnCommand(SidecarConfig(repoDir = repo, bunPath = "bun"))
-        assertEquals(listOf("bun", "/repo/src/main.ts"), cmd)
+        // Path string form is OS-dependent (Windows: \repo\src\main.ts).
+        assertEquals(listOf("bun", repo.resolve("src/main.ts").toString()), cmd)
     }
 
     @Test fun bundledBrokerPathWinsOverDevRepo() {
+        val broker = Path.of("/opt/app/broker")
         val cmd = BrokerSidecar.buildSpawnCommand(
-            SidecarConfig(repoDir = Path.of("/repo"), bundledBrokerPath = Path.of("/opt/app/broker")),
+            SidecarConfig(repoDir = Path.of("/repo"), bundledBrokerPath = broker),
         )
-        assertEquals(listOf("/opt/app/broker"), cmd)
+        assertEquals(listOf(broker.toString()), cmd)
     }
 
     @Test fun spawnEnvCarriesPortRelayAndOverrides() {
