@@ -10,6 +10,7 @@
 //   supermux connect    → set up a public/mesh tunnel + re-pair (src/cli-connect.ts)
 //   supermux update     → check/apply an update (src/cli-update.ts)
 //   supermux rollback   → revert to the previous binary (src/cli-update.ts)
+//   supermux credential → git credential helper for forge HTTPS (src/core/forge/credential-cli.ts)
 //
 // Dynamic imports are string literals so `bun build --compile` bundles them.
 import { versionString } from "./shared/build-info"
@@ -51,10 +52,18 @@ switch (sub) {
     const { runRollbackCommand } = await import("./cli-update")
     process.exit(await runRollbackCommand(process.argv.slice(3)))
   }
+  case "credential": {
+    // Git credential helper for forge HTTPS remotes (see src/core/forge/launcher.ts).
+    // argv after splice: [exec, <connId>, get|store|erase]
+    process.argv.splice(2, 1)
+    const { runCredentialHelper } = await import("./core/forge/credential-cli")
+    runCredentialHelper()
+    break
+  }
   default:
     console.error(`supermux: unknown subcommand '${sub}'`)
     console.error(
-      "usage: supermux [shim|pair <device>|revoke <device>|version|setup|connect|update|rollback]",
+      "usage: supermux [shim|pair <device>|revoke <device>|version|setup|connect|update|rollback|credential]",
     )
     process.exit(2)
 }
