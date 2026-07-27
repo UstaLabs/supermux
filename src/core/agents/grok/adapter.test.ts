@@ -286,3 +286,139 @@ test("formatGrokExitError prefers last stderr line", async () => {
   expect(formatGrokExitError(2).message).toBe("grok agent exited with code 2")
   expect(formatGrokExitError(0).message).toBe("grok agent exited")
 })
+
+test("start() without initialSessionId creates via session/new (never session/load)", async () => {
+  // Capture every outbound frame from first write by wrapping the runner.
+  const writes: string[] = []
+  let client!: AcpClient
+  const runner = (opts: any) => {
+    client = opts.client
+    client.setWrite((l: string) => writes.push(l))
+    return { kill: () => {} }
+  }
+  const adapter = new GrokAdapter({ sessionName: "s1", workdir: "/w", runner, persistSessionId: async () => {} })
+  const started = adapter.start()
+  await tick(); client.feed(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: 1 } }) + "\n")
+  await tick(); client.feed(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { sessionId: "sess-new" } }) + "\n")
+  await started
+
+  const methods = writes.map((w) => JSON.parse(w).method)
+  expect(methods).toContain("session/new")
+  expect(methods).not.toContain("session/load")
+  const newReq = writes.map((w) => JSON.parse(w)).find((m) => m.method === "session/new")
+  expect(newReq.params.loadSessionId).toBeUndefined()
+})
+
+test("start() with initialSessionId resumes via session/load (not loadSessionId on session/new)", async () => {
+  // Regression: broker restart used session/new + loadSessionId, which Grok ignores —
+  // every restart minted a fresh session and agents spoke as if newly spawned.
+  const writes: string[] = []
+  let client!: AcpClient
+  const runner = (opts: any) => {
+    client = opts.client
+    client.setWrite((l: string) => writes.push(l))
+    return { kill: () => {} }
+  }
+  const persisted: string[] = []
+  const events: any[] = []
+  const adapter = new GrokAdapter({
+    sessionName: "s1",
+    workdir: "/w",
+    runner,
+    persistSessionId: async (id) => { persisted.push(id) },
+    initialSessionId: "sess-prior",
+  })
+  for (const k of ["assistant-message", "tool-call"]) adapter.on(k, (e) => events.push(e))
+
+  const started = adapter.start()
+  await tick(); client.feed(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } }) + "\n")
+  await tick()
+  // Replay a prior turn during load — must NOT surface as chat/tool events.
+  client.feed(JSON.stringify({
+    jsonrpc: "2.0", method: "session/update",
+    params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "old history" } } },
+  }) + "\n")
+  client.feed(JSON.stringify({
+    jsonrpc: "2.0", method: "session/update",
+    params: { update: { sessionUpdate: "tool_call", toolCallId: "old", title: "write" } },
+  }) + "\n")
+  // Grok puts the id under _meta.sessionId (top-level sessionId is absent).
+  client.feed(JSON.stringify({
+    jsonrpc: "2.0", id: 2,
+    result: { models: { availableModels: [{ modelId: "grok-4.5" }] }, _meta: { sessionId: "sess-prior" } },
+  }) + "\n")
+  await started
+
+  const loadReq = writes.map((w) => JSON.parse(w)).find((m) => m.method === "session/load")
+  expect(loadReq?.params).toMatchObject({ cwd: "/w", sessionId: "sess-prior", mcpServers: [] })
+  expect(writes.some((w) => JSON.parse(w).method === "session/new")).toBe(false)
+
+  // Replay suppressed; registry keeps the prior id (no spurious re-persist of a new id).
+  expect(events).toEqual([])
+  expect(persisted).toEqual([])
+  expect(adapter.availableModels.map((m: any) => m.modelId)).toEqual(["grok-4.5"])
+
+  // Live prompts must still work against the loaded id.
+  const sent = adapter.send("continue")
+  await tick()
+  const prompt = writes.map((w) => JSON.parse(w)).find((m) => m.method === "session/prompt")
+  expect(prompt?.params?.sessionId).toBe("sess-prior")
+  client.feed(JSON.stringify({
+    jsonrpc: "2.0", method: "session/update",
+    params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "live" } } },
+  }) + "\n")
+  client.feed(JSON.stringify({ jsonrpc: "2.0", id: 3, result: { stopReason: "EndTurn" } }) + "\n")
+  await sent
+  expect(events.find((e) => e.kind === "assistant-message")?.text).toBe("live")
+})
+
+test("start() falls back to session/new when session/load fails", async () => {
+  const writes: string[] = []
+  let client!: AcpClient
+  const runner = (opts: any) => {
+    client = opts.client
+    client.setWrite((l: string) => writes.push(l))
+    return { kill: () => {} }
+  }
+  const persisted: string[] = []
+  const adapter = new GrokAdapter({
+    sessionName: "s1", workdir: "/w", runner,
+    persistSessionId: async (id) => { persisted.push(id) },
+    initialSessionId: "sess-missing",
+  })
+
+  const started = adapter.start()
+  await tick(); client.feed(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: 1 } }) + "\n")
+  await tick()
+  // session/load fails (stale id / missing on-disk store).
+  client.feed(JSON.stringify({
+    jsonrpc: "2.0", id: 2,
+    error: { code: -32603, message: "Path not found.", data: { code: "FS_NOT_FOUND" } },
+  }) + "\n")
+  await tick()
+  // Fallback session/new succeeds with a fresh id.
+  client.feed(JSON.stringify({ jsonrpc: "2.0", id: 3, result: { sessionId: "sess-fresh" } }) + "\n")
+  await started
+
+  const methods = writes.map((w) => JSON.parse(w).method)
+  expect(methods).toContain("session/load")
+  expect(methods).toContain("session/new")
+  expect(persisted).toEqual(["sess-fresh"])
+})
+
+test("resume() is a no-op when the child is already running", async () => {
+  const fr = fakeRunner()
+  const adapter = new GrokAdapter({
+    sessionName: "s1", workdir: "/w", runner: fr.runner, persistSessionId: async () => {},
+    initialSessionId: "sess-1",
+  })
+  const started = adapter.start()
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 1, result: { protocolVersion: 1 } })
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 2, result: { _meta: { sessionId: "sess-1" } } })
+  await started
+  // Second resume must not open another session/load (child already live).
+  const writes: string[] = []
+  fr.client.setWrite((l) => writes.push(l))
+  await adapter.resume()
+  expect(writes).toEqual([])
+})

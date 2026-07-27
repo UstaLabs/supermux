@@ -65,6 +65,10 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
   private draining = false
   private activeChatId?: string
   private turnActive = false
+  /** True while ACP `session/load` is replaying prior conversation as
+   * `session/update` notifications. Supermux already owns chat history, so
+   * those frames must not be re-emitted as assistant-message / tool-call. */
+  private loadingSession = false
   /** Disarm callback for the in-flight stall watchdog; set while a turn waits
    * for first activity. */
   private onTurnActivity?: () => void
@@ -99,7 +103,7 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
 
   /** Reasoning effort is a spawn-time flag with no ACP setter, so changing it
    * relaunches the stdio child. The grok session id is already persisted, so
-   * start() reloads the same conversation via loadSessionId — history survives. */
+   * start() reloads the same conversation via session/load — history survives. */
   async setEffort(effort: string | undefined): Promise<void> {
     if (effort === this._effort) return
     this._effort = effort
@@ -130,12 +134,51 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
     })
     this.availableModels = init?._meta?.modelState?.availableModels ?? init?.modelState?.availableModels ?? []
-    // No mcpServers here: grok ignores the param on session/new. mux-shim is
+    // No mcpServers here: grok ignores the param on session/new|load. mux-shim is
     // registered in the session-private ~/.grok/config.toml instead.
+    //
+    // Resume MUST use ACP `session/load` (agentCapabilities.loadSession). Passing
+    // `loadSessionId` on `session/new` is ignored by Grok — live-verified 2026-07-27 —
+    // and silently creates a fresh session every broker restart (history lost).
+    // Grok does not implement `session/resume` (method not found).
+    const priorId = this.sessionId
+    if (priorId) {
+      this.loadingSession = true
+      try {
+        const res: any = await this.client.request("session/load", {
+          cwd: this.workdir,
+          sessionId: priorId,
+          mcpServers: [],
+        })
+        // Grok returns sessionId under `_meta.sessionId` (not top-level). Fall back
+        // to the id we asked to load — it is the conversation key for session/prompt.
+        const loadedId = res?.sessionId ?? res?._meta?.sessionId ?? priorId
+        this.sessionId = loadedId
+        if (res?.models?.availableModels) this.availableModels = res.models.availableModels
+        // Keep the registry on the known id (no new conversation was created).
+        if (loadedId !== priorId) this.persistSessionId(loadedId).catch(() => {})
+        return
+      } catch (err) {
+        // Stale/missing on-disk session (workdir moved, home reclaimed, prior broken
+        // mint). Fall through to session/new so the session stays usable rather than
+        // dead; the new id is persisted below.
+        log.warn("grok_session_load_failed", {
+          session: this.sessionName,
+          prior_id: priorId,
+          err: String(err),
+        })
+        this.sessionId = undefined
+      } finally {
+        // Drop any text buffered during the replay; chat history is already in
+        // supermux's store and must not leak into the next live turn.
+        this.pendingAssistantText = ""
+        this.loadingSession = false
+      }
+    }
+
     const res: any = await this.client.request("session/new", {
       cwd: this.workdir,
       mcpServers: [],
-      ...(this.sessionId ? { loadSessionId: this.sessionId } : {}),
     })
     // session/new echoes modelState too; prefer it as the freshest view.
     if (res?.models?.availableModels) this.availableModels = res.models.availableModels
@@ -248,6 +291,9 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
 
   private onNotification(method: string, params: unknown): void {
     if (method !== "session/update") return
+    // session/load replays history as session/update; supermux already has that
+    // chat log. Swallow it so broker restart does not re-post old messages / tools.
+    if (this.loadingSession) return
     // Any session/update counts as turn activity for the stall watchdog
     // (thoughts, tool calls, message chunks).
     this.onTurnActivity?.()
