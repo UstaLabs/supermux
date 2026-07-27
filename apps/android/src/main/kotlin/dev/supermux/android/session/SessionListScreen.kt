@@ -253,6 +253,12 @@ fun SessionRow(
     isDragging: Boolean = false,
     rowShape: Shape = RoundedCornerShape(Radii.md),
     outerPadding: PaddingValues = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+    /**
+     * Optional override for the row Surface color. Grouped mode passes a card tone
+     * (`surfaceContainerLow`) so joined rows read as inset cards against the list background
+     * (regression from flattening the old group Surface for reorder).
+     */
+    rowColor: Color? = null,
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
 ) {
@@ -262,6 +268,8 @@ fun SessionRow(
     val hasUnread = !active && preview?.direction == "inbound"
     val rowInteraction = interactionSource ?: remember { MutableInteractionSource() }
     val actions = sessionSwipeActions(s)
+    val surfaceColor = rowColor
+        ?: if (active) cs.surfaceContainer else cs.surfaceContainerHigh
 
     val elevation by androidx.compose.animation.core.animateDpAsState(
         if (isDragging) 6.dp else 0.dp,
@@ -339,7 +347,7 @@ fun SessionRow(
                 tonalElevation = elevation,
                 shadowElevation = elevation,
                 shape = rowShape,
-                color = if (active) cs.surfaceContainer else cs.surfaceContainerHigh,
+                color = surfaceColor,
                 onClick = {
                     onOpenSwipeRowChange(null)
                     haptic(HapticKind.Tick)
@@ -1005,9 +1013,10 @@ fun SessionListScreen(
                     if (!isCollapsed) {
                         if (isPaGroup) {
                             itemsIndexed(openRows, key = { _, s -> "group:pa:${s.id}" }) { index, s ->
+                                val isActive = s.id == activeId
                                 SessionRow(
                                     s = s,
-                                    active = s.id == activeId,
+                                    active = isActive,
                                     preview = lastBySession[s.id],
                                     working = agentState[s.id]?.working == true,
                                     bgOpen = agentState[s.id]?.bgOpen ?: 0,
@@ -1019,6 +1028,8 @@ fun SessionListScreen(
                                         last = index == openRows.lastIndex,
                                     ),
                                     outerPadding = PaddingValues(horizontal = 12.dp),
+                                    // Card tone vs list bg (surfaceContainerHigh) — restores 81aad60 group look.
+                                    rowColor = if (isActive) cs.surfaceContainer else cs.surfaceContainerLow,
                                     onClick = { openSession(s) },
                                     onRename = { renameTarget = s; renameText = s.name },
                                     onKill = { killTarget = s },
@@ -1031,9 +1042,10 @@ fun SessionListScreen(
                             itemsIndexed(openRows, key = { _, s -> "task:${s.id}" }) { index, s ->
                                 ReorderableItem(reorderableState, key = "task:${s.id}") { isDragging ->
                                     val rowInteraction = remember { MutableInteractionSource() }
+                                    val isActive = s.id == activeId
                                     SessionRow(
                                         s = s,
-                                        active = s.id == activeId,
+                                        active = isActive,
                                         preview = lastBySession[s.id],
                                         working = agentState[s.id]?.working == true,
                                         bgOpen = agentState[s.id]?.bgOpen ?: 0,
@@ -1052,6 +1064,7 @@ fun SessionListScreen(
                                             last = index == openRows.lastIndex && settledRows.isEmpty(),
                                         ),
                                         outerPadding = PaddingValues(horizontal = 12.dp),
+                                        rowColor = if (isActive) cs.surfaceContainer else cs.surfaceContainerLow,
                                         onClick = { openSession(s) },
                                         onRename = { renameTarget = s; renameText = s.name },
                                         onKill = { killTarget = s },
@@ -1096,9 +1109,10 @@ fun SessionListScreen(
                                     settledRows,
                                     key = { _, s -> "group:settled:${s.id}" },
                                 ) { index, s ->
+                                    val isActive = s.id == activeId
                                     SessionRow(
                                         s = s,
-                                        active = s.id == activeId,
+                                        active = isActive,
                                         preview = lastBySession[s.id],
                                         working = false,
                                         hostBadge = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
@@ -1109,6 +1123,7 @@ fun SessionListScreen(
                                             last = index == settledRows.lastIndex,
                                         ),
                                         outerPadding = PaddingValues(horizontal = 12.dp),
+                                        rowColor = if (isActive) cs.surfaceContainer else cs.surfaceContainerLow,
                                         onClick = { openSession(s) },
                                         onResume = { onResume(s.id) },
                                         onKill = { killTarget = s },

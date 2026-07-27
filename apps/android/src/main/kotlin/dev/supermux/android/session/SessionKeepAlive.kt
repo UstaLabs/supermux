@@ -45,6 +45,7 @@ import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
+import dev.supermux.session.asSettledSession
 
 /** Short human text for a git-op result (parity with iOS SessionChrome.gitResultText). */
 private fun gitOpResultText(r: GitOpResult?): String = when (r?.status) {
@@ -60,7 +61,13 @@ private fun gitOpResultText(r: GitOpResult?): String = when (r?.status) {
     else -> r.status
 }
 
-/** Tracks session ids the user has opened; pruned when broker removes a session. */
+/**
+ * Tracks session ids the user has opened; pruned when the broker removes a live session.
+ *
+ * The currently [selected] id is always retained even when it is not in [liveSessionIds]
+ * (archived/settled rows opened from the task list) — otherwise the list slides away and no
+ * chat layer is composed, which was a solid black screen.
+ */
 @Composable
 fun rememberVisitedSessions(
     selected: String?,
@@ -72,13 +79,23 @@ fun rememberVisitedSessions(
         selected?.let { id -> visited = visited + id }
     }
 
-    LaunchedEffect(liveSessionIds) {
-        visited = visited.intersect(liveSessionIds)
+    LaunchedEffect(liveSessionIds, selected) {
+        val kept = visited.intersect(liveSessionIds)
+        visited = if (selected != null) kept + selected else kept
     }
 
     val remove: (String) -> Unit = { id -> visited = visited - id }
     return visited to remove
 }
+
+/** Live session first; fall back to an archived row so settled-from-archive opens don't blank. */
+private fun resolveSession(
+    sessionId: String,
+    sessions: List<SessionInfo>,
+    archived: List<ArchivedDto>,
+): SessionInfo? =
+    sessions.firstOrNull { it.id == sessionId }
+        ?: archived.firstOrNull { it.id == sessionId }?.asSettledSession()
 
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
@@ -111,7 +128,7 @@ fun SessionKeepAlivePhoneHost(
     SharedTransitionLayout {
         Box(Modifier.fillMaxSize()) {
             visited.forEach { sessionId ->
-                val session = sessions.firstOrNull { it.id == sessionId } ?: return@forEach
+                val session = resolveSession(sessionId, sessions, archived) ?: return@forEach
                 val visible = sessionId == selected
                 key(sessionId) {
                     SessionChatLayer(
@@ -218,6 +235,8 @@ fun SessionKeepAliveTabletHost(
     pendingSend: Set<String> = emptySet(),
     commands: Map<String, List<SlashCommand>>,
     commandsResolved: Map<String, Boolean>,
+    /** Archived rows for settled-from-archive open (same as phone host). */
+    archived: List<ArchivedDto> = emptyList(),
     vm: AppViewModel,
     wide: Boolean,
     layout: WorkspaceLayout,
@@ -235,7 +254,7 @@ fun SessionKeepAliveTabletHost(
             return@Box
         }
         visited.forEach { sessionId ->
-            val session = sessions.firstOrNull { it.id == sessionId } ?: return@forEach
+            val session = resolveSession(sessionId, sessions, archived) ?: return@forEach
             val visible = sessionId == selected
             key(sessionId) {
                 SessionChatLayer(
