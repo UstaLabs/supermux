@@ -49,7 +49,7 @@ class SessionLauncherDictationTest {
                 loadDraft = { LauncherDraft() },
                 onDraftChange = {},
                 onClearDraft = {},
-                onSubmit = { _, _, _, _, _, _, _, _ -> },
+                onSubmit = { _, _, _, _, _, _, _, _, _ -> },
                 transcribeAudio = transcribeAudio,
                 micRecorderFactory = micRecorderFactory,
             )

@@ -153,7 +153,7 @@ class SessionLauncherScreenTest {
         onPrefsChange: (LauncherPrefs) -> Unit = {},
         onDraftChange: (LauncherDraft) -> Unit = {},
         onClearDraft: () -> Unit = {},
-        onSubmit: suspend (String, String, String?, String?, String, List<StagedUpload>, Boolean, String?) -> Unit = { _, _, _, _, _, _, _, _ -> },
+        onSubmit: suspend (String, String, String?, String?, String, List<StagedUpload>, Boolean, String?, String?) -> Unit = { _, _, _, _, _, _, _, _, _ -> },
     ) {
         SupermuxTheme(appearance = AppearanceMode.DARK) {
             SessionLauncherScreen(
@@ -195,7 +195,7 @@ class SessionLauncherScreenTest {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
                 onClearDraft = { cleared = true },
-                onSubmit = { w, a, m, r, t, s, wt, b ->
+                onSubmit = { w, a, m, r, t, s, wt, b, _replaceDraftId ->
                     captured = Submitted(w, a, m, r, t, s.size, wt, b)
                 },
             )
