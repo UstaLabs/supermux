@@ -13,10 +13,13 @@ function handler() {
 }
 const req = (path: string, body: any) => new Request("http://x" + path, { method: "POST", body: JSON.stringify(body) })
 
-test("POST /register returns 202 pending (token not in the response)", async () => {
+test("POST /register returns 202 pending with routingToken", async () => {
   const res = await handler()(req("/register", { platform: "ios", pushToken: "t" }))
   expect(res.status).toBe(202)
-  expect(await res.json()).toEqual({ status: "pending" })
+  const body = await res.json() as { status: string; routingToken?: string }
+  expect(body.status).toBe("pending")
+  expect(typeof body.routingToken).toBe("string")
+  expect(body.routingToken!.length).toBeGreaterThan(0)
 })
 
 test("POST /push with an unknown token returns gone", async () => {

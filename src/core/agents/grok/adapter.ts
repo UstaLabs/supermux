@@ -124,7 +124,10 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
     })
     const init: any = await this.client.request("initialize", {
       protocolVersion: 1,
-      clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } },
+      // Do NOT claim client FS: we never implemented fs/read_text_file|write_text_file
+      // (onServerRequest returns {}), which made Grok's read_file/search_replace fail with
+      // "failed to deserialize response". false → Grok uses its local filesystem tools.
+      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
     })
     this.availableModels = init?._meta?.modelState?.availableModels ?? init?.modelState?.availableModels ?? []
     // No mcpServers here: grok ignores the param on session/new. mux-shim is

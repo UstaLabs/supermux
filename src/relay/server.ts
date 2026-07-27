@@ -12,8 +12,13 @@ export function makeRelayHandler(core: RelayCore) {
     if (pathname === "/register") {
       if (b?.platform !== "ios" && b?.platform !== "android") return json({ error: "platform" }, 400)
       if (typeof b?.pushToken !== "string") return json({ error: "pushToken" }, 400)
-      await core.register(b.platform, b.pushToken)
-      return json({ status: "pending" }, 202)
+      // Return routingToken in the HTTP body so the client can POST /push/device
+      // immediately. Bootstrap FCM/APNs still runs (proves the token works / wakes
+      // older clients) but must not be the only delivery path — data-only FCM
+      // bootstrap is often dropped when the app is killed or Play Services is flaky,
+      // which left Android with 0 device_push_tokens rows.
+      const result = await core.register(b.platform, b.pushToken)
+      return json({ status: "pending", routingToken: result.routingToken }, 202)
     }
     if (pathname === "/push") {
       if (typeof b?.routingToken !== "string" || typeof b?.ciphertext !== "string") return json({ error: "fields" }, 400)

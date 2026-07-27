@@ -152,6 +152,28 @@ test("start() passes model + effort as spawn flags, not as session/prompt params
   await sent
 })
 
+test("start() does not advertise unimplemented client FS capabilities", async () => {
+  // Regression: advertising readTextFile/writeTextFile:true without implementing
+  // fs/* handlers made Grok's read_file/search_replace fail with
+  // "failed to deserialize response" (empty {} reply). Claim false so Grok uses
+  // its local filesystem tools instead.
+  const fr = fakeRunner()
+  const writes: string[] = []
+  const runner = (opts: any) => {
+    const handle = fr.runner(opts)
+    fr.client.setWrite((l) => writes.push(l))
+    return handle
+  }
+  const adapter = new GrokAdapter({ sessionName: "s1", workdir: "/w", runner, persistSessionId: async () => {} })
+  const started = adapter.start()
+  await tick()
+  const init = writes.map((w) => JSON.parse(w)).find((m) => m.method === "initialize")
+  expect(init?.params?.clientCapabilities?.fs).toEqual({ readTextFile: false, writeTextFile: false })
+  fr.feed({ jsonrpc: "2.0", id: 1, result: { protocolVersion: 1 } })
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 2, result: { sessionId: "sess-1" } })
+  await started
+})
+
 test("setting model on a live session issues session/set_model", async () => {
   const fr = fakeRunner()
   const adapter = new GrokAdapter({ sessionName: "s1", workdir: "/w", runner: fr.runner, persistSessionId: async () => {} })
