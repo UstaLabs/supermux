@@ -56,7 +56,8 @@ export async function discoverGrokModels(opts?: {
     const init = await Promise.race([
       client.request("initialize", {
         protocolVersion: 1,
-        clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } },
+        // Match GrokAdapter: do not advertise client FS we don't implement.
+        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
       }) as Promise<any>,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error("grok model discovery timed out")), timeoutMs)
