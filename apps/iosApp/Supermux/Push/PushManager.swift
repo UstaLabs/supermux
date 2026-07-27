@@ -109,8 +109,22 @@ final class PushManager: NSObject {
                 NSLog("[supermux push] broker has no relayUrl; native push not configured")
                 return
             }
-            try await api.registerPushTokenWithRelay(relayUrl: relayUrl, platform: Self.platform, pushToken: hexToken)
-            NSLog("[supermux push] registered APNs token with relay; awaiting bootstrap push")
+            // Prefer routingToken from the HTTP response so we can POST /push/device
+            // immediately (same path as Android). Bootstrap APNs remains a backup.
+            let routingToken = try await api.registerPushTokenWithRelay(
+                relayUrl: relayUrl, platform: Self.platform, pushToken: hexToken
+            )
+            NSLog("[supermux push] registered APNs token with relay")
+            if let routingToken, !routingToken.isEmpty {
+                try await api.registerPushDevice(
+                    platform: Self.platform,
+                    routingToken: routingToken,
+                    pubkey: PushKeypair.shared.publicKeyB64Url
+                )
+                NSLog("[supermux push] device registered with broker (HTTP path)")
+            } else {
+                NSLog("[supermux push] relay omitted routingToken; awaiting bootstrap push")
+            }
         } catch {
             NSLog("[supermux push] relay registration failed: %@", error.localizedDescription)
         }

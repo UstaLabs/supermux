@@ -134,8 +134,12 @@ class BrokerApiPushTest {
 
     @Test fun registerPushTokenWithRelay_issues_POST_relay_register_with_exact_body() = runTest {
         val reqs = mutableListOf<HttpRequestData>()
-        val api = captured(body = "", status = HttpStatusCode.Accepted, sink = reqs)
-        api.registerPushTokenWithRelay(
+        val api = captured(
+            body = """{"status":"pending","routingToken":"rt-from-relay"}""",
+            status = HttpStatusCode.Accepted,
+            sink = reqs,
+        )
+        val rt = api.registerPushTokenWithRelay(
             relayUrl = "https://push.supermux.dev",
             platform = "ios",
             pushToken = "APNS_TOKEN_HEX",
@@ -146,11 +150,16 @@ class BrokerApiPushTest {
         val b = r.bodyText()
         assertTrue(b.contains("\"platform\":\"ios\""), "body=$b")
         assertTrue(b.contains("\"pushToken\":\"APNS_TOKEN_HEX\""), "body=$b")
+        assertEquals("rt-from-relay", rt)
     }
 
     @Test fun registerPushTokenWithRelay_trims_trailing_slash_from_relayUrl() = runTest {
         val reqs = mutableListOf<HttpRequestData>()
-        val api = captured(status = HttpStatusCode.Accepted, sink = reqs)
+        val api = captured(
+            body = """{"status":"pending","routingToken":"rt"}""",
+            status = HttpStatusCode.Accepted,
+            sink = reqs,
+        )
         api.registerPushTokenWithRelay(
             relayUrl = "https://push.supermux.dev/",
             platform = "android",
@@ -160,11 +169,26 @@ class BrokerApiPushTest {
         assertEquals("https://push.supermux.dev/register", r.url.toString())
     }
 
-    @Test fun registerPushTokenWithRelay_accepts_202_response() = runTest {
-        // The relay always responds 202 Accepted — verify no exception is thrown.
+    @Test fun registerPushTokenWithRelay_returns_routingToken_from_202_body() = runTest {
         val reqs = mutableListOf<HttpRequestData>()
-        val api = captured(body = "", status = HttpStatusCode.Accepted, sink = reqs)
-        api.registerPushTokenWithRelay("https://relay.example", "ios", "TOKEN")
+        val api = captured(
+            body = """{"status":"pending","routingToken":"rt-abc"}""",
+            status = HttpStatusCode.Accepted,
+            sink = reqs,
+        )
+        val rt = api.registerPushTokenWithRelay("https://relay.example", "ios", "TOKEN")
+        assertEquals("rt-abc", rt)
         assertEquals(1, reqs.size)
+    }
+
+    @Test fun registerPushTokenWithRelay_returns_null_when_old_relay_omits_token() = runTest {
+        val reqs = mutableListOf<HttpRequestData>()
+        val api = captured(
+            body = """{"status":"pending"}""",
+            status = HttpStatusCode.Accepted,
+            sink = reqs,
+        )
+        val rt = api.registerPushTokenWithRelay("https://relay.example", "android", "TOKEN")
+        assertNull(rt)
     }
 }

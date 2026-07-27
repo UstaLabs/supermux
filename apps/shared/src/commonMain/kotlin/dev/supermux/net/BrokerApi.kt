@@ -969,6 +969,13 @@ private data class RegisterPushRelayBody(
     val pushToken: String,
 )
 
+/** POST $relayUrl/register response (202). routingToken lets the client skip waiting for bootstrap FCM/APNs. */
+@Serializable
+private data class RegisterPushRelayResponse(
+    val status: String? = null,
+    val routingToken: String? = null,
+)
+
 /** Empty JSON object body (`{}`) for POSTs that take no params but return data. */
 @Serializable
 private class EmptyBody
@@ -1894,17 +1901,22 @@ class BrokerApi(
         postJson("$httpBase/push/device", RegisterPushDeviceBody(platform, routingToken, pubkey))
 
     /**
-     * POST <relayUrl>/register — tells the relay to issue a bootstrap push that
-     * delivers the `routingToken` to this device (via FCM/APNs). The relay responds
-     * 202 Accepted; the actual routingToken arrives asynchronously in the push payload.
-     * Body: `{platform, pushToken}`.
+     * POST <relayUrl>/register — tells the relay this device's FCM/APNs token and
+     * returns the sealed `routingToken` (also best-effort bootstrap-pushed).
+     *
+     * Prefer the HTTP return value for [registerPushDevice]: data-only FCM bootstrap
+     * is often dropped (killed app / OEM / flaky Play Services), which used to leave
+     * Android with zero `device_push_tokens` rows even after a successful /register.
+     *
+     * Body: `{platform, pushToken}`. Response 202: `{status, routingToken}`.
+     * Returns null only if the body lacks a usable routingToken (old relay).
      */
-    suspend fun registerPushTokenWithRelay(relayUrl: String, platform: String, pushToken: String) {
+    suspend fun registerPushTokenWithRelay(relayUrl: String, platform: String, pushToken: String): String? {
         val url = relayUrl.trimEnd('/') + "/register"
-        http.post(url) {
-            header("Authorization", bearerHeader())
-            contentType(ContentType.Application.Json)
-            setBody(json.encodeToString(RegisterPushRelayBody(platform, pushToken)))
-        }
+        val resp = postReturningJson<RegisterPushRelayBody, RegisterPushRelayResponse>(
+            url,
+            RegisterPushRelayBody(platform, pushToken),
+        )
+        return resp.routingToken?.takeIf { it.isNotBlank() }
     }
 }

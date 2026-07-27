@@ -38,11 +38,12 @@ import kotlin.math.absoluteValue
  *
  *  1. [registerIfPaired] (app launch + after pair) or [onNewToken] — an FCM token. If paired:
  *       a. `relayUrl = BrokerApi(...).pushRelayUrl()`   (skip if null — relay not configured)
- *       b. `registerPushTokenWithRelay(relayUrl, "android", fcmToken)` — asks the relay to
- *          push a *bootstrap* data message back to this device carrying a routingToken.
- *  2. [onMessageReceived] with a BOOTSTRAP `d` (`{"kind":"bootstrap","routingToken":...}`):
- *       c. `registerPushDevice("android", routingToken, publicKeyB64Url)` — tells the broker
- *          which routingToken + pubkey to seal future notifications for.
+ *       b. `registerPushTokenWithRelay(relayUrl, "android", fcmToken)` — returns
+ *          `routingToken` over HTTP (and best-effort bootstrap FCM).
+ *       c. Immediately `registerPushDevice("android", routingToken, publicKeyB64Url)` on
+ *          every paired broker — **do not wait for bootstrap FCM** (often dropped).
+ *  2. [onMessageReceived] with a BOOTSTRAP `d` (legacy / redundant path):
+ *       same as 1c if HTTP body lacked routingToken (old relay).
  *  3. [onMessageReceived] with a SEALED `d`:
  *       d. `openSealedPush(d, privatePkcs8B64)` → parse `{session, sessionId?, text}` → notify.
  *
@@ -88,28 +89,9 @@ class SupermuxMessagingService : FirebaseMessagingService() {
         }
     }
 
-    /** Step 2c: register this device (routingToken + pubkey) with every paired broker. */
+    /** Step 1c / bootstrap: register this device (routingToken + pubkey) with every paired broker. */
     private suspend fun registerDeviceWithBroker(routingToken: String) {
-        val all = resolveAllPairedCreds(applicationContext)
-        if (all.isEmpty()) {
-            Log.w(TAG, "bootstrap arrived but app is not paired; cannot register device")
-            return
-        }
-        val pubkey = try {
-            keypair.publicKeyB64Url()
-        } catch (e: Throwable) {
-            Log.w(TAG, "keypair unavailable: ${e.message}")
-            return
-        }
-        for (creds in all) {
-            try {
-                BrokerApi(creds.baseUrl, creds.token, http)
-                    .registerPushDevice(PLATFORM, routingToken, pubkey)
-                Log.i(TAG, "device registered with broker (${creds.baseUrl})")
-            } catch (e: Throwable) {
-                Log.w(TAG, "broker device registration failed (${creds.baseUrl}): ${e.message}")
-            }
-        }
+        registerDeviceWithBrokers(applicationContext, routingToken, http, keypair)
     }
 
     /** Step 3d: decrypt a sealed blob and post a notification. */
@@ -260,10 +242,10 @@ class SupermuxMessagingService : FirebaseMessagingService() {
         }
 
         /**
-         * Steps 1a–1b: resolve a push-relay URL from any paired broker and hand it our FCM
-         * token. The relay is **stateless** — the routingToken seals (platform, fcmToken), not
-         * a broker identity — so one registration + one bootstrap is enough for the whole
-         * fleet. The bootstrap handler then POSTs `/push/device` to **every** paired broker.
+         * Steps 1a–1c: resolve a push-relay URL from any paired broker, hand it our FCM
+         * token, then POST `/push/device` to **every** paired broker with the returned
+         * routingToken. The relay is **stateless** — routingToken seals (platform, fcmToken),
+         * not a broker identity — so one /register is enough for the fleet.
          */
         internal suspend fun registerWithRelayForAllHosts(
             context: Context,
@@ -284,14 +266,49 @@ class SupermuxMessagingService : FirebaseMessagingService() {
                         Log.i(TAG, "broker has no relayUrl; native push not configured (${creds.baseUrl})")
                         continue
                     }
-                    api.registerPushTokenWithRelay(relayUrl, PLATFORM, fcmToken)
-                    Log.i(TAG, "registered FCM token with relay; awaiting bootstrap push (${creds.baseUrl})")
-                    return // one bootstrap is enough (routingToken encodes the FCM token)
+                    val routingToken = api.registerPushTokenWithRelay(relayUrl, PLATFORM, fcmToken)
+                    Log.i(TAG, "registered FCM token with relay (${creds.baseUrl})")
+                    if (!routingToken.isNullOrBlank()) {
+                        // Primary path: do not depend on bootstrap FCM delivery.
+                        registerDeviceWithBrokers(context, routingToken, http, PushKeypair(context))
+                    } else {
+                        Log.i(TAG, "relay omitted routingToken; waiting for bootstrap push (old relay?)")
+                    }
+                    return // one /register is enough (routingToken encodes the FCM token)
                 } catch (e: Throwable) {
                     Log.w(TAG, "relay registration failed (${creds.baseUrl}): ${e.message}")
                 }
             }
             Log.i(TAG, "no paired broker exposed a push relayUrl")
+        }
+
+        /** POST /push/device on every paired broker (HTTP path or bootstrap). */
+        internal suspend fun registerDeviceWithBrokers(
+            context: Context,
+            routingToken: String,
+            http: HttpClient,
+            keypair: PushKeypair = PushKeypair(context),
+        ) {
+            val all = resolveAllPairedCreds(context)
+            if (all.isEmpty()) {
+                Log.w(TAG, "have routingToken but app is not paired; cannot register device")
+                return
+            }
+            val pubkey = try {
+                keypair.publicKeyB64Url()
+            } catch (e: Throwable) {
+                Log.w(TAG, "keypair unavailable: ${e.message}")
+                return
+            }
+            for (creds in all) {
+                try {
+                    BrokerApi(creds.baseUrl, creds.token, http)
+                        .registerPushDevice(PLATFORM, routingToken, pubkey)
+                    Log.i(TAG, "device registered with broker (${creds.baseUrl})")
+                } catch (e: Throwable) {
+                    Log.w(TAG, "broker device registration failed (${creds.baseUrl}): ${e.message}")
+                }
+            }
         }
 
         /**

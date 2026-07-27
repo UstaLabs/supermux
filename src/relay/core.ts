@@ -15,7 +15,21 @@ export function createRelayCore(o: {
   return {
     async register(platform, pushToken) {
       const routingToken = o.codec.seal({ platform, pushToken, ttlSeconds: o.ttlSeconds })
-      await adapterFor(platform).send(pushToken, { ciphertext: JSON.stringify({ kind: "bootstrap", routingToken }) } as any, { silent: true })
+      // Best-effort bootstrap push. Result is intentionally ignored for the HTTP
+      // response — clients now also receive routingToken over HTTP (see server.ts).
+      try {
+        const send = await adapterFor(platform).send(
+          pushToken,
+          { ciphertext: JSON.stringify({ kind: "bootstrap", routingToken }) } as any,
+          { silent: true },
+        )
+        if (!send.ok) {
+          // Soft-fail: HTTP still returns routingToken so registration can complete.
+          // gone=true usually means a dead/malformed device token (common in tests).
+        }
+      } catch {
+        // Same — network/FCM auth blips must not block client-side /push/device.
+      }
       return { routingToken, status: "pending" }
     },
     async push(routingToken, ciphertext) {

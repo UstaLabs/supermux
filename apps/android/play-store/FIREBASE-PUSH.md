@@ -13,6 +13,9 @@
   2. `registerIfPaired()` runs on cold start when paired, right after pairing, and after
      adding a host — parity with iOS `PushManager.registerIfPaired`. `onNewToken` alone
      was insufficient when the FCM token arrived before pairing.
+  3. **HTTP routingToken (same day, 2nd pass):** relay `POST /register` returns
+     `routingToken` in the 202 body; the app POSTs `/push/device` immediately.
+     Waiting only for bootstrap FCM left 0 Android rows — data-only bootstrap is flaky.
 
 ### Relay side (this box)
 - User unit `supermux-relay.service` with `MUX_FCM_PROJECT_ID` + `MUX_FCM_SA_JSON`.
