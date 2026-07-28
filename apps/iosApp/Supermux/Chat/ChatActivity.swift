@@ -434,26 +434,8 @@ struct ToolDiffView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(rendered.split(separator: "\n", omittingEmptySubsequences: false).enumerated()), id: \.offset) { _, line in
-                            let s = String(line)
-                            let isAdd = s.hasPrefix("+") && !s.hasPrefix("+++")
-                            let isDel = s.hasPrefix("-") && !s.hasPrefix("---")
-                            let isHunk = s.hasPrefix("@@")
-                            Text(s.isEmpty ? " " : s)
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(
-                                    isAdd ? Color.green.opacity(0.9)
-                                    : isDel ? Color.red.opacity(0.85)
-                                    : isHunk ? Color.cyan.opacity(0.8)
-                                    : Color.white.opacity(0.55)
-                                )
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 10)
-                                .background(
-                                    isAdd ? Color.green.opacity(0.10)
-                                    : isDel ? Color.red.opacity(0.10)
-                                    : Color.clear
-                                )
+                        ForEach(Array(diffLines.enumerated()), id: \.offset) { _, line in
+                            DiffLineRow(line: line)
                         }
                         if truncated {
                             Text("… truncated").font(.caption2).foregroundStyle(.white.opacity(0.35))
@@ -467,5 +449,40 @@ struct ToolDiffView: View {
         .background(Color(red: 0.05, green: 0.05, blue: 0.055))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5))
+    }
+
+    private var diffLines: [String] {
+        rendered.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    }
+}
+
+/// One monospaced diff line — extracted so Swift's type-checker doesn't time out on
+/// the nested ternary `.foregroundStyle`/`.background` chain inside `ToolDiffView`.
+private struct DiffLineRow: View {
+    let line: String
+
+    private var isAdd: Bool { line.hasPrefix("+") && !line.hasPrefix("+++") }
+    private var isDel: Bool { line.hasPrefix("-") && !line.hasPrefix("---") }
+    private var isHunk: Bool { line.hasPrefix("@@") }
+
+    private var fg: Color {
+        if isAdd { return Color.green.opacity(0.9) }
+        if isDel { return Color.red.opacity(0.85) }
+        if isHunk { return Color.cyan.opacity(0.8) }
+        return Color.white.opacity(0.55)
+    }
+    private var bg: Color {
+        if isAdd { return Color.green.opacity(0.10) }
+        if isDel { return Color.red.opacity(0.10) }
+        return Color.clear
+    }
+
+    var body: some View {
+        Text(line.isEmpty ? " " : line)
+            .font(.caption2.monospaced())
+            .foregroundStyle(fg)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .background(bg)
     }
 }

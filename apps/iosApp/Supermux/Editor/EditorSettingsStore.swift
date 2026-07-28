@@ -85,5 +85,6 @@ struct EditorSettingsView: View {
             }
         }
         .smPresentationDetents([.medium])
+        .smMacSheetFrame(minWidth: 400, minHeight: 280)
     }
 }

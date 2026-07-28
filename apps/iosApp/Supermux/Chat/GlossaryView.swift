@@ -36,6 +36,7 @@ struct GlossaryView: View {
                 }
             }
         }
+        .smMacSheetFrame(minWidth: 420, minHeight: 480)
         .task { await load() }
     }
 

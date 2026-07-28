@@ -270,33 +270,32 @@ struct ChatPane: View {
                 }
             }
             if composerExpanded {
-                HStack(spacing: 12) {
+                HStack(spacing: 10) {
                     AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera,
                                showVideoCamera: $showVideoCamera,
                                showPaste: pasteboardHasAttachment,
                                onPaste: { Task { await composer.pasteClipboard() } })
                     MicButton(model: composer)
-                    pill(modelPillLabel, system: "cpu") { modelSheet = true }
-                        .smOptionPicker(isPresented: $modelSheet) {
-                            OptionSwitchSheet(title: "Model", broker: broker, session: session, kind: .model)
-                        }
+                    SoftFilterPill(text: modelPillLabel, systemImage: "cpu", active: session.model != nil) {
+                        modelSheet = true
+                    }
+                    .smOptionPicker(isPresented: $modelSheet) {
+                        OptionSwitchSheet(title: "Model", broker: broker, session: session, kind: .model)
+                    }
                     if reasoning?.visible ?? false {
                         // Live session state first (kept fresh by session_state frames);
                         // the fetched payload supplies the resolved default when unset.
-                        pill(session.reasoningLevel ?? reasoning?.current ?? "reasoning", system: "brain") { reasoningSheet = true }
+                        SoftFilterPill(
+                            text: session.reasoningLevel ?? reasoning?.current ?? "reasoning",
+                            systemImage: "brain",
+                            active: session.reasoningLevel != nil
+                        ) { reasoningSheet = true }
                             .smOptionPicker(isPresented: $reasoningSheet) {
                                 OptionSwitchSheet(title: "Reasoning", broker: broker, session: session, kind: .reasoning)
                             }
                     }
-                    Spacer()
-                    Button { sendMessage() } label: {
-                        Image(systemName: "arrow.up")
-                            .font(.headline.weight(.bold)).foregroundStyle(.white)
-                            .frame(width: 34, height: 34)
-                            .background(composer.canSubmit ? Theme.teal : Color.gray.opacity(0.4), in: Circle())
-                    }
-                    .smMacPlainButton()
-                    .disabled(!composer.canSubmit)
+                    Spacer(minLength: 0)
+                    SendCircleButton(enabled: composer.canSubmit, size: 34) { sendMessage() }
                 }
             }
             }
@@ -374,20 +373,6 @@ struct ChatPane: View {
         broker.send(session.id, text, attachments: ids.isEmpty ? nil : ids)
     }
 
-    // MARK: - Shared pill helper
-
-    private func pill(_ text: String, system: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: system).font(.caption2)
-                Text(text).font(.caption.weight(.medium)).lineLimit(1)
-            }
-            .padding(.horizontal, 9).padding(.vertical, 4)
-            .background(Color.smTertiaryFill, in: Capsule())
-            .foregroundStyle(.secondary)
-        }
-        .buttonStyle(.plain)
-    }
 }
 
 /// The chat transcript (messages + tool-activity), split out of `ChatPane` as its own

@@ -167,6 +167,7 @@ private struct AddDeviceSheet: View {
         }
         .tint(Theme.teal)
         .smPresentationDetents([.medium, .large])
+        .smMacSheetFrame(minWidth: 440, minHeight: 520)
     }
 }
 
@@ -370,13 +371,13 @@ struct DisplaysView: View {
         }
         .smFullScreenCover(item: $viewing) { item in
             DisplayViewerSheet(broker: broker, stream: item.stream)
-            #if os(macOS)
             // `smFullScreenCover` degrades to a `.sheet` on macOS. A default sheet is far too
             // small for a live display surface, so give it a generous, resizable size. ESC is
             // NOT wired to dismiss here — the KeyCaptureView swallows keyCode 53 and routes it
             // to the remote; dismissal is the explicit close (xmark) button in DisplayViewerSheet.
-                .frame(minWidth: 1000, minHeight: 700)
-                .presentationSizing(.page)
+            .smMacSheetFrame(minWidth: 1000, minHeight: 700)
+            #if os(macOS)
+            .presentationSizing(.page)
             #endif
         }
         .task { await broker.refreshDisplays(); loading = false }
@@ -930,6 +931,7 @@ private struct CreatePASheet: View {
             .toolbar { ToolbarItem(placement: .smTopLeading) { Button("Cancel") { dismiss() } } }
         }
         .tint(Theme.teal)
+        .smMacSheetFrame(minWidth: 440, minHeight: 500)
     }
     private var canCreate: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty }
     private func create() {
