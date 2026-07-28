@@ -25,8 +25,12 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT INT TERM
 
 echo "[frpc] downloading $BASE/$ARCHIVE"
-curl -fsSL "$BASE/$ARCHIVE" -o "$TMP/$ARCHIVE"
-curl -fsSL "$BASE/frp_sha256_checksums.txt" -o "$TMP/checksums.txt"
+# GitHub release assets occasionally reset the connection on CI (curl exit 35).
+# Retry with backoff so a single transient blip does not fail the whole release.
+curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+  "$BASE/$ARCHIVE" -o "$TMP/$ARCHIVE"
+curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+  "$BASE/frp_sha256_checksums.txt" -o "$TMP/checksums.txt"
 
 EXPECTED="$(awk -v name="$ARCHIVE" '$2 == name { print $1 }' "$TMP/checksums.txt")"
 [ -n "$EXPECTED" ] || { echo "no upstream checksum for $ARCHIVE" >&2; exit 1; }
