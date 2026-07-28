@@ -1,17 +1,27 @@
 import type { AgentKind } from "./types"
 import type { ActivityEvent } from "./claude/activity-event"
+import type { ActivityToolBody } from "./activity-body"
+import {
+  cleanToolDescription,
+  clipToolBody,
+  ensureEditDiff,
+  numField,
+  pickDescriptionField,
+  strField,
+} from "./activity-body"
 import { normalizeToolName } from "./tool-normalize"
 import { clip, firstLine, pickString } from "./activity-format"
 import { relativizePath } from "./path-relativize"
 
 const TITLE_MAX = 120
+/** Medium expand preview cap (body carries the full High payload). */
 const DETAIL_MAX = 2000
 
 interface ToolCallEventLike { tool: string; phase: "started" | "completed" | "failed"; call_id: string; detail?: unknown }
 
-const OPENCODE_INPUT_FIELDS = [
+const OPENCODE_SUMMARY_FIELDS = [
   "command", "path", "filePath", "file_path", "file", "pattern", "query", "text", "url", "port", "name",
-  "args", "description", "glob", "include", "skill", "oldString", "newString", "content",
+  "args", "description", "glob", "include", "skill",
 ]
 
 /** Pull human-readable tool output from opencode's ToolState. Primary field is
@@ -41,8 +51,25 @@ function extractCursorResult(toolBody: Record<string, unknown> | undefined): str
   if (!caseKey) return ""
   const caseVal = result[caseKey] as Record<string, unknown> | undefined
   if (!caseVal || typeof caseVal !== "object") return ""
-  if (caseKey === "success") return pickString(caseVal, ["stdout", "interleavedOutput", "stderr"])
+  if (caseKey === "success") {
+    // Prefer interleaved full stream, then stdout; append stderr if both present.
+    const interleaved = typeof caseVal.interleavedOutput === "string" ? caseVal.interleavedOutput : ""
+    if (interleaved) return interleaved
+    const stdout = typeof caseVal.stdout === "string" ? caseVal.stdout : ""
+    const stderr = typeof caseVal.stderr === "string" ? caseVal.stderr : ""
+    if (stdout && stderr) return `${stdout}\n${stderr}`
+    return stdout || stderr
+  }
   return pickString(caseVal, ["stderr", "error", "message", "stdout"])
+}
+
+function extractCursorExitCode(toolBody: Record<string, unknown> | undefined): number | undefined {
+  const result = toolBody?.result as Record<string, unknown> | undefined
+  if (!result || typeof result !== "object") return undefined
+  const caseKey = Object.keys(result)[0]
+  if (!caseKey) return undefined
+  const caseVal = result[caseKey] as Record<string, unknown> | undefined
+  return numField(caseVal, ["exitCode", "exit_code"])
 }
 
 /** grok tool_call_update `content` is an array of `{ type:"content", content:{ type:"text", text }}`
@@ -59,7 +86,15 @@ function extractGrokContent(content: unknown): string {
   return out.join("\n")
 }
 
-type DetailSummary = { summary: string; rawSummary: string; resultDetail: string; inputDetail?: string }
+type DetailSummary = {
+  summary: string
+  rawSummary: string
+  resultDetail: string
+  inputDetail?: string
+  /** Human "why" label when the agent provides one. */
+  description?: string
+  body?: ActivityToolBody
+}
 
 function jsonText(value: unknown): string {
   if (typeof value === "string") return value
@@ -84,11 +119,17 @@ function codexOutputContent(value: unknown): string {
   return parts.join("\n")
 }
 
-function codexFileChanges(value: unknown, workdir: string | undefined): { summary: string; detail: string; result: string } {
+function codexFileChanges(value: unknown, workdir: string | undefined): {
+  summary: string
+  detail: string
+  result: string
+  body?: ActivityToolBody
+} {
   if (!Array.isArray(value)) return { summary: "", detail: "", result: "" }
   const summaries: string[] = []
   const details: string[] = []
   const results: string[] = []
+  const files: NonNullable<Extract<ActivityToolBody, { kind: "edit" }>["files"]> = []
   for (const item of value) {
     if (!item || typeof item !== "object") continue
     const change = item as Record<string, unknown>
@@ -108,13 +149,103 @@ function codexFileChanges(value: unknown, workdir: string | undefined): { summar
     results.push(`${kind} ${pathLabel}`)
     const diff = typeof change.diff === "string" ? change.diff.trim() : ""
     details.push(diff ? `${kind} ${rawPathLabel}\n${diff}` : `${kind} ${rawPathLabel}`)
+    files.push({
+      path: relativePath,
+      rawPath: change.path,
+      mode: kind,
+      ...(diff ? { diff } : {}),
+    })
   }
-  return { summary: summaries.join(", "), detail: details.join("\n\n"), result: results.join("\n") }
+  if (!files.length) return { summary: "", detail: "", result: "" }
+  const first = files[0]!
+  const joinedDiff = files.map((f) => {
+    const header = f.mode ? `${f.mode} ${f.rawPath ?? f.path}` : (f.rawPath ?? f.path)
+    return f.diff ? `${header}\n${f.diff}` : header
+  }).join("\n\n")
+  return {
+    summary: summaries.join(", "),
+    detail: details.join("\n\n"),
+    result: results.join("\n"),
+    body: {
+      kind: "edit",
+      path: first.path,
+      rawPath: first.rawPath,
+      mode: first.mode,
+      diff: joinedDiff || first.diff,
+      files: files.length > 1 ? files : undefined,
+    },
+  }
+}
+
+function editBodyFromArgs(
+  workdir: string | undefined,
+  args: Record<string, unknown> | undefined,
+  opts?: { forceWrite?: boolean },
+): ActivityToolBody | undefined {
+  if (!args) return undefined
+  const rawPath = strField(args, [
+    "file_path", "filePath", "path", "file", "target_file", "targetFile",
+  ])
+  if (!rawPath) return undefined
+  const path = relativizePath(rawPath, workdir)
+  const oldText = strField(args, ["old_string", "oldString", "old_str", "oldText", "old_text"])
+  const newText = strField(args, ["new_string", "newString", "new_str", "newText", "new_text"])
+  const content = strField(args, ["content", "contents", "file_text", "fileText", "new_file_contents", "streamContent"])
+  const diff = strField(args, ["diff", "patch", "unifiedDiff", "unified_diff"])
+
+  const isWrite = opts?.forceWrite
+    || (!oldText && !newText && !diff && !!content)
+
+  if (isWrite) {
+    return { kind: "write", path, rawPath, content: content || newText || undefined }
+  }
+  if (oldText || newText || diff || content) {
+    const resolvedDiff = ensureEditDiff({
+      path,
+      diff: diff || undefined,
+      oldText: oldText || undefined,
+      newText: newText || content || undefined,
+    })
+    return {
+      kind: "edit",
+      path,
+      rawPath,
+      mode: "update",
+      ...(resolvedDiff ? { diff: resolvedDiff } : {}),
+      ...(oldText ? { oldText } : {}),
+      ...(newText || content ? { newText: newText || content } : {}),
+    }
+  }
+  // Path-only edit (body still useful for High header).
+  return { kind: "edit", path, rawPath, mode: "update" }
+}
+
+function bashBody(command: string | undefined, output?: string, exitCode?: number | null): ActivityToolBody | undefined {
+  if (!command && !output && exitCode == null) return undefined
+  return {
+    kind: "bash",
+    ...(command ? { command } : {}),
+    ...(output ? { output } : {}),
+    ...(exitCode !== undefined ? { exitCode } : {}),
+  }
+}
+
+function isBashTool(norm: string, raw: string): boolean {
+  if (norm === "Bash") return true
+  const k = raw.toLowerCase()
+  return k.includes("shell") || k.includes("bash") || k.includes("terminal") || k.includes("command")
+}
+
+function isEditTool(norm: string, raw: string): boolean {
+  if (norm === "Edit" || norm === "Write") return true
+  const k = raw.toLowerCase()
+  return k.includes("edit") || k.includes("write") || k.includes("patch") || k.includes("filechange") || k.includes("file_change")
 }
 
 function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike, workdir: string | undefined): DetailSummary {
   const obj = ev.detail && typeof ev.detail === "object" ? ev.detail as Record<string, unknown> : undefined
   if (!obj) return { summary: "", rawSummary: "", resultDetail: "" }
+  const norm = normalizeToolName(agent, ev.tool)
 
   if (agent === "opencode") {
     const state = obj.state as Record<string, unknown> | undefined
@@ -123,21 +254,53 @@ function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike, workdir: strin
     const error = typeof state?.error === "string" ? state.error : ""
     const rawTitle = typeof state?.title === "string" ? state.title : ""
     const rawPending = typeof state?.raw === "string" ? state.raw.trim() : ""
-    // Extract summary from input args (primary), pending `raw`, or state title (for
-    // delta SSE updates where structured input may be absent on the first frame).
-    // `summary` is the workdir-relativized form (used in the card title); `rawSummary`
-    // keeps the absolute path (used in the expand panel — per Q4 we don't rewrite the
-    // raw input JSON). When no input is picked, both fall back to the same pending
-    // `raw` / state title so the title and detail match.
-    const rawPicked = input && Object.keys(input).length ? pickString(input, OPENCODE_INPUT_FIELDS) : ""
+    // Summary prefers path/command fields (not oldString/newString).
+    const rawPicked = input && Object.keys(input).length ? pickString(input, OPENCODE_SUMMARY_FIELDS) : ""
     const picked = rawPicked ? relativizePath(rawPicked, workdir) : ""
     const fallback = rawPending ? firstLine(rawPending) : rawTitle
     const summary = picked || fallback
-    // For completed events, prefer the actual output over the title — the title is a
-    // label (typically the command/input), so `rawTitle || output` showed the input as
-    // the output. Flip to `output || rawTitle` so the real result is surfaced.
     const result = ev.phase === "completed" ? (output || rawTitle) : ev.phase === "failed" ? error : ""
-    return { summary, rawSummary: rawPicked || fallback, resultDetail: result }
+
+    let body: ActivityToolBody | undefined
+    const command = input && typeof input.command === "string" ? input.command
+      : (isBashTool(norm, ev.tool) && rawPending ? rawPending : "")
+    if (isBashTool(norm, ev.tool) || command) {
+      body = bashBody(
+        command || (typeof rawPicked === "string" && !rawPicked.includes("/") ? rawPicked : undefined),
+        ev.phase === "started" ? undefined : (result || undefined),
+      )
+    } else if (isEditTool(norm, ev.tool) || norm === "Write") {
+      body = editBodyFromArgs(workdir, input, { forceWrite: norm === "Write" })
+      if (ev.phase !== "started" && result && body?.kind === "generic") {
+        body = { kind: "generic", output: result }
+      }
+    } else if (ev.phase === "started" && (rawPicked || fallback)) {
+      body = { kind: "generic", input: rawPicked || fallback }
+    } else if (result) {
+      body = { kind: "generic", output: result }
+    }
+
+    // Full command/path for medium expand (not firstLine of summary only).
+    let inputDetail: string | undefined
+    if (command) inputDetail = command
+    else if (body?.kind === "edit" && body.diff) inputDetail = body.diff
+    else if (body?.kind === "write" && body.content) inputDetail = body.content
+    else if (rawPicked || fallback) inputDetail = rawPicked || fallback
+
+    // Prefer explicit input.description; else state.title when it isn't just the command/path.
+    const description = cleanToolDescription(
+      pickDescriptionField(input) || rawTitle,
+      [command, rawPicked, picked, rawPending],
+    )
+
+    return {
+      summary,
+      rawSummary: rawPicked || fallback,
+      resultDetail: result,
+      inputDetail,
+      description,
+      body,
+    }
   }
 
   if (agent === "codex") {
@@ -156,6 +319,8 @@ function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike, workdir: strin
         rawSummary,
         inputDetail,
         resultDetail: "",
+        description: cleanToolDescription(pickDescriptionField(obj) || pickDescriptionField(action), [rawSummary]),
+        body: inputDetail ? { kind: "generic", input: inputDetail } : undefined,
       }
     }
     if (obj.type === "mcpToolCall" || obj.type === "mcp_tool_call") {
@@ -172,7 +337,16 @@ function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike, workdir: strin
         : ev.phase === "failed"
           ? (typeof obj.error === "string" ? obj.error : typeof errorObj?.message === "string" ? errorObj.message : "")
           : ""
-      return { summary: arg ? `${toolName} ${arg}` : toolName, rawSummary: arg ? `${toolName} ${rawArg}` : toolName, resultDetail: result }
+      const label = arg ? `${toolName} ${arg}` : toolName
+      return {
+        summary: label,
+        rawSummary: arg ? `${toolName} ${rawArg}` : toolName,
+        resultDetail: result,
+        description: cleanToolDescription(pickDescriptionField(obj) || pickDescriptionField(args), [label, rawArg, toolName]),
+        body: ev.phase === "started"
+          ? { kind: "generic", input: label }
+          : result ? { kind: "generic", output: result } : undefined,
+      }
     }
     if (obj.type === "dynamicToolCall" || obj.type === "dynamic_tool_call") {
       const args = (obj.arguments ?? obj.args) as Record<string, unknown> | undefined
@@ -181,7 +355,15 @@ function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike, workdir: strin
       const result = (ev.phase === "completed" || ev.phase === "failed")
         ? codexOutputContent(obj.contentItems ?? obj.content_items)
         : ""
-      return { summary: arg, rawSummary: rawArg, resultDetail: result }
+      return {
+        summary: arg,
+        rawSummary: rawArg,
+        resultDetail: result,
+        description: cleanToolDescription(pickDescriptionField(obj) || pickDescriptionField(args), [rawArg, arg]),
+        body: ev.phase === "started"
+          ? (rawArg ? { kind: "generic", input: rawArg } : undefined)
+          : result ? { kind: "generic", output: result } : undefined,
+      }
     }
     if (obj.type === "fileChange" || obj.type === "file_change") {
       const changes = codexFileChanges(obj.changes, workdir)
@@ -191,6 +373,8 @@ function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike, workdir: strin
           summary: relativizePath(legacyPath, workdir),
           rawSummary: legacyPath,
           resultDetail: ev.phase === "completed" || ev.phase === "failed" ? legacyPath : "",
+          description: cleanToolDescription(pickDescriptionField(obj), [legacyPath]),
+          body: { kind: "edit", path: relativizePath(legacyPath, workdir), rawPath: legacyPath, mode: "update" },
         }
       }
       return {
@@ -198,56 +382,143 @@ function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike, workdir: strin
         rawSummary: changes.summary,
         inputDetail: changes.detail,
         resultDetail: ev.phase === "completed" || ev.phase === "failed" ? changes.result : "",
+        description: cleanToolDescription(pickDescriptionField(obj), [changes.summary]),
+        body: changes.body,
       }
     }
-    const rawPicked = pickString(obj, ["command", "path", "file", "name", "query", "pattern", "text"])
+    // commandExecution / shell — only treat explicit `command` as the shell command
+    // (do not fall back to pickString's first-string fallback, which can grab `type`).
+    const command = typeof obj.command === "string" ? obj.command : ""
+    const rawPicked = command || pickString(obj, ["path", "file", "name", "query", "pattern", "text"])
     const summary = relativizePath(rawPicked, workdir)
     let result = ""
+    let exitCode: number | undefined
     if (ev.phase === "completed" || ev.phase === "failed") {
       result = typeof obj.aggregatedOutput === "string" ? obj.aggregatedOutput
         : typeof obj.aggregated_output === "string" ? obj.aggregated_output
         : ""
-      const exitCode = obj.exitCode ?? obj.exit_code
+      // Normalize trailing newline so medium detail matches historical expectations.
+      if (result.endsWith("\n")) result = result.replace(/\n+$/, "")
+      exitCode = numField(obj, ["exitCode", "exit_code"])
       if (!result && ev.phase === "failed" && typeof exitCode === "number") result = `Exit code ${exitCode}`
     }
-    return { summary, rawSummary: rawPicked, resultDetail: result }
+    const body = isBashTool(norm, ev.tool)
+      ? bashBody(command || undefined, ev.phase === "started" ? undefined : (result || undefined), exitCode)
+      : undefined
+    return {
+      summary,
+      rawSummary: rawPicked,
+      resultDetail: result,
+      inputDetail: command || undefined,
+      description: cleanToolDescription(pickDescriptionField(obj), [command, rawPicked]),
+      body,
+    }
   }
 
   if (agent === "cursor") {
-    // cursor-agent emits the raw protobuf `agent.v1.ToolCall` message as `tool_call`.
-    // protobuf-es toJSON() unwraps its oneof `tool` so the case name becomes the JSON
-    // key: tool_call = { <caseName>: { args: {...}, result: {...} } } — args are nested
-    // under `.args`, NOT at the top level (the old code read them flat, producing empty
-    // summaries). The result oneof similarly unwraps to { success: { stdout,... } } |
-    // { failure: { stderr,... } } | { error: {...} } — the old code looked for a
-    // non-existent `obj.result.tool_call_result.content` and always came up empty.
     const tc = obj.tool_call as Record<string, unknown> | undefined
     const toolBody = tc && typeof tc === "object" ? (tc[ev.tool] ?? Object.values(tc)[0]) as Record<string, unknown> | undefined : undefined
     const innerArgs = toolBody?.args as Record<string, unknown> | undefined
-    const rawPicked = innerArgs ? pickString(innerArgs, ["command", "pattern", "query", "globPattern", "glob_pattern", "description", "url", "path", "file", "target_file", "text"]) : ""
+    const rawPicked = innerArgs
+      ? pickString(innerArgs, [
+        "command", "pattern", "query", "globPattern", "glob_pattern", "description", "url",
+        "path", "file", "target_file", "targetFile", "file_path", "text",
+      ])
+      : ""
     const summary = rawPicked ? relativizePath(rawPicked, workdir) : ""
     const result = (ev.phase === "completed" || ev.phase === "failed") ? extractCursorResult(toolBody) : ""
-    return { summary, rawSummary: rawPicked, resultDetail: result }
+    const exitCode = (ev.phase === "completed" || ev.phase === "failed") ? extractCursorExitCode(toolBody) : undefined
+
+    let body: ActivityToolBody | undefined
+    if (isBashTool(norm, ev.tool)) {
+      const command = strField(innerArgs, ["command"])
+      body = bashBody(command || undefined, result || undefined, exitCode)
+    } else if (isEditTool(norm, ev.tool)) {
+      body = editBodyFromArgs(workdir, innerArgs, { forceWrite: norm === "Write" || /write/i.test(ev.tool) })
+      // Some cursor edit results stream a diff/content in success payload.
+      if ((ev.phase === "completed" || ev.phase === "failed") && toolBody?.result) {
+        const resultObj = toolBody.result as Record<string, unknown>
+        const caseKey = Object.keys(resultObj)[0]
+        const caseVal = caseKey ? resultObj[caseKey] as Record<string, unknown> | undefined : undefined
+        const resultDiff = strField(caseVal, ["diff", "patch", "unifiedDiff", "beforeAfterDiff"])
+        const resultContent = strField(caseVal, ["content", "contents", "fileContent", "after", "newContent"])
+        if (body?.kind === "edit" && (resultDiff || resultContent) && !body.diff) {
+          body = {
+            ...body,
+            diff: ensureEditDiff({
+              path: body.path,
+              diff: resultDiff || undefined,
+              oldText: body.oldText,
+              newText: body.newText || resultContent || undefined,
+            }),
+            ...(resultContent && !body.newText ? { newText: resultContent } : {}),
+          }
+        } else if (!body && result) {
+          body = { kind: "generic", output: result }
+        }
+      }
+    } else if (ev.phase === "started" && rawPicked) {
+      body = { kind: "generic", input: rawPicked }
+    } else if (result) {
+      body = { kind: "generic", output: result }
+    }
+
+    const command = strField(innerArgs, ["command"])
+    return {
+      summary,
+      rawSummary: rawPicked,
+      resultDetail: result,
+      inputDetail: command || rawPicked || undefined,
+      description: cleanToolDescription(pickDescriptionField(innerArgs), [command, rawPicked, summary]),
+      body,
+    }
   }
 
   if (agent === "grok") {
-    // grok ACP: `tool_call` carries `rawInput` (args) + `title`; `tool_call_update`
-    // carries `status` + `content: [{ type:"content", content:{ type:"text", text }}]`.
     const rawInput = obj.rawInput as Record<string, unknown> | undefined
+    const grokTitle = typeof obj.title === "string" ? obj.title : ""
     const rawPicked = rawInput
-      ? pickString(rawInput, ["command", "file_path", "path", "file", "pattern", "query", "url", "content", "text", "name"])
-      : (typeof obj.title === "string" ? obj.title : "")
-    // `summary` is the workdir-relativized form for the card title; `rawSummary` keeps
-    // the absolute path for anything that needs the on-disk location.
+      ? pickString(rawInput, ["command", "file_path", "path", "file", "pattern", "query", "url", "name"])
+      : grokTitle
     const summary = relativizePath(rawPicked, workdir)
     let result = ""
     if (ev.phase === "completed" || ev.phase === "failed") {
       result = extractGrokContent(obj.content)
     }
-    return { summary, rawSummary: rawPicked, resultDetail: result }
+
+    let body: ActivityToolBody | undefined
+    if (isBashTool(norm, ev.tool) || (rawInput && typeof rawInput.command === "string")) {
+      body = bashBody(
+        strField(rawInput, ["command"]) || undefined,
+        result || undefined,
+      )
+    } else if (isEditTool(norm, ev.tool) || norm === "Write") {
+      body = editBodyFromArgs(workdir, rawInput, { forceWrite: norm === "Write" || /write/i.test(ev.tool) })
+    } else if (ev.phase === "started" && rawPicked) {
+      body = { kind: "generic", input: rawPicked }
+    } else if (result) {
+      body = { kind: "generic", output: result }
+    }
+
+    const command = strField(rawInput, ["command"])
+    // Grok ACP: `title` is often a short human label ("Write `/w/poem.txt`") or bare tool name.
+    // Prefer rawInput.description; else title when it's more than a tool stem / path echo.
+    const description = cleanToolDescription(
+      pickDescriptionField(rawInput) || grokTitle,
+      [command, rawPicked, summary, ev.tool, norm],
+    )
+
+    return {
+      summary,
+      rawSummary: rawPicked,
+      resultDetail: result,
+      inputDetail: command || rawPicked || undefined,
+      description,
+      body,
+    }
   }
 
-  // claude: extract from transcript blocks (handled by transcript-parser, not this path)
+  // claude stream path (rare via adapter): extract from transcript-like blocks
   const rawPicked = pickString(obj, ["command", "path", "file", "name", "query", "pattern"])
   const summary = relativizePath(rawPicked, workdir)
   return { summary, rawSummary: rawPicked, resultDetail: "" }
@@ -256,22 +527,52 @@ function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike, workdir: strin
 export function toActivityEvents(agent: AgentKind, ev: ToolCallEventLike, now: number, workdir: string | undefined): ActivityEvent[] {
   const ts = new Date(now).toISOString()
   const callId = ev.call_id || undefined
-  const { summary: relativeSummary, rawSummary, resultDetail, inputDetail } = summarizeDetail(agent, ev, workdir)
+  const {
+    summary: relativeSummary,
+    rawSummary,
+    resultDetail,
+    inputDetail,
+    description,
+    body: rawBody,
+  } = summarizeDetail(agent, ev, workdir)
+  const { body, truncated: bodyTrunc } = clipToolBody(rawBody)
 
   if (ev.phase === "started") {
     const tool = normalizeToolName(agent, ev.tool)
     const summary = firstLine(relativeSummary)
     const titleRaw = summary ? `${tool}: ${summary}` : tool
     const title = clip(titleRaw, TITLE_MAX)
-    // The expand-panel detail keeps the raw (un-relativized) value so the user can
-    // see the real host path — only the card title gets the workdir-relative form.
-    const detail = clip(inputDetail ?? firstLine(rawSummary), DETAIL_MAX)
-    return [{ ts, kind: "tool", tool, title: title.text, detail: detail.text, phase: "started",
-      ...(callId ? { callId } : {}), ...(title.truncated || detail.truncated ? { truncated: true } : {}) }]
+    // Prefer full command / multi-line input for medium expand (not firstLine alone).
+    const detailSrc = inputDetail ?? rawSummary
+    const detail = clip(detailSrc, DETAIL_MAX)
+    const truncated = title.truncated || detail.truncated || bodyTrunc
+    return [{
+      ts,
+      kind: "tool",
+      tool,
+      title: title.text,
+      detail: detail.text,
+      phase: "started",
+      ...(callId ? { callId } : {}),
+      ...(truncated ? { truncated: true } : {}),
+      ...(description ? { description } : {}),
+      ...(body ? { body } : {}),
+    }]
   }
-  const result = agent === "codex" ? resultDetail.trim() : firstLine(resultDetail)
-  const detail = clip(result, DETAIL_MAX)
-  return [{ ts, kind: "tool_result", title: ev.phase === "failed" ? "error" : "done",
-    detail: detail.text, phase: "completed", ...(detail.truncated ? { truncated: true } : {}),
-    ...(callId ? { callId } : {}) }]
+
+  // Full multiline result for medium expand + High body (no firstLine destruction).
+  const detail = clip(resultDetail.trim(), DETAIL_MAX)
+  const truncated = detail.truncated || bodyTrunc
+  return [{
+    ts,
+    kind: "tool_result",
+    title: ev.phase === "failed" ? "error" : "done",
+    detail: detail.text,
+    phase: "completed",
+    ...(truncated ? { truncated: true } : {}),
+    ...(callId ? { callId } : {}),
+    // Results rarely re-send "why"; keep description if the agent included one.
+    ...(description ? { description } : {}),
+    ...(body ? { body } : {}),
+  }]
 }

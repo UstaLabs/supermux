@@ -30,7 +30,7 @@ function load(): ChatDetailState {
 export const useChatDetail = defineStore("chatDetail", () => {
   const state = reactive<ChatDetailState>(load())
 
-  // If storage had high/garbage, write back clamped medium so disk matches effective state.
+  // If storage had garbage, write back clamped level so disk matches parseChatDetailLevel.
   try {
     const raw = localStorage.getItem(KEY)
     if (raw) {
@@ -54,7 +54,9 @@ export const useChatDetail = defineStore("chatDetail", () => {
   }
 
   function cycleImplemented() {
-    state.level = state.level === "low" ? "medium" : "low"
+    if (state.level === "low") state.level = "medium"
+    else if (state.level === "medium") state.level = "high"
+    else state.level = "low"
   }
 
   return { state, renderMode, levelLabel, setLevel, cycleImplemented }

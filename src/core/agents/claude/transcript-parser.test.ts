@@ -11,9 +11,10 @@ test("parses a tool_use block", () => {
     message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } }] },
   })
   const events = parseTranscriptLine(line, WD)
-  expect(events).toEqual([
-    { ts: TS, kind: "tool", tool: "Bash", title: "Bash: npm test", detail: '{"command":"npm test"}', phase: "started", callId: "t1" },
-  ])
+  expect(events[0]).toMatchObject({
+    ts: TS, kind: "tool", tool: "Bash", title: "Bash: npm test", detail: '{"command":"npm test"}', phase: "started", callId: "t1",
+    body: { kind: "bash", command: "npm test" },
+  })
 })
 
 test("ignores thinking blocks (content is redacted; durations come from agent state)", () => {
@@ -29,9 +30,10 @@ test("parses a tool_result block (string content, error flag)", () => {
     type: "user", timestamp: TS,
     message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "boom", is_error: true }] },
   })
-  expect(parseTranscriptLine(line, WD)).toEqual([
-    { ts: TS, kind: "tool_result", title: "error", detail: "boom", phase: "completed", callId: "t1" },
-  ])
+  expect(parseTranscriptLine(line, WD)[0]).toMatchObject({
+    ts: TS, kind: "tool_result", title: "error", detail: "boom", phase: "completed", callId: "t1",
+    body: { kind: "generic", output: "boom" },
+  })
 })
 
 test("ignores text blocks and unknown top-level types", () => {
@@ -44,9 +46,9 @@ test("defensive: never throws on malformed input", () => {
   expect(parseTranscriptLine("", WD)).toEqual([])
   expect(parseTranscriptLine(JSON.stringify({ type: "assistant", message: { content: "a plain string" } }), WD)).toEqual([])
   const mixed = JSON.stringify({ type: "assistant", timestamp: TS, message: { content: [{ type: "weird" }, { type: "tool_use", name: "Read", input: { file_path: "a.ts" } }] } })
-  expect(parseTranscriptLine(mixed, WD)).toEqual([
-    { ts: TS, kind: "tool", tool: "Read", title: "Read: a.ts", detail: '{"file_path":"a.ts"}', phase: "started" },
-  ])
+  expect(parseTranscriptLine(mixed, WD)[0]).toMatchObject({
+    ts: TS, kind: "tool", tool: "Read", title: "Read: a.ts", detail: '{"file_path":"a.ts"}', phase: "started",
+  })
 })
 
 test("truncates long detail and flags it", () => {
@@ -122,9 +124,66 @@ test("absolute file_path is relativized against workdir", () => {
     type: "assistant", timestamp: TS,
     message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/h/u/proj/src/main.ts" } }] },
   })
-  expect(parseTranscriptLine(line, WD)).toEqual([
-    { ts: TS, kind: "tool", tool: "Read", title: "Read: src/main.ts", detail: '{"file_path":"/h/u/proj/src/main.ts"}', phase: "started", callId: "t1" },
-  ])
+  expect(parseTranscriptLine(line, WD)[0]).toMatchObject({
+    ts: TS, kind: "tool", tool: "Read", title: "Read: src/main.ts", detail: '{"file_path":"/h/u/proj/src/main.ts"}', phase: "started", callId: "t1",
+  })
+})
+
+test("Edit tool_use carries structured body with synthesized diff", () => {
+  const line = JSON.stringify({
+    type: "assistant", timestamp: TS,
+    message: {
+      content: [{
+        type: "tool_use", id: "e1", name: "Edit",
+        input: { file_path: "/h/u/proj/a.ts", old_string: "x", new_string: "y" },
+      }],
+    },
+  })
+  const [ev] = parseTranscriptLine(line, WD)
+  expect(ev).toMatchObject({
+    tool: "Edit",
+    title: "Edit: a.ts",
+    body: { kind: "edit", path: "a.ts", oldText: "x", newText: "y" },
+  })
+  expect(ev!.body && ev!.body.kind === "edit" && ev!.body.diff).toContain("-x")
+  expect(ev!.body && ev!.body.kind === "edit" && ev!.body.diff).toContain("+y")
+})
+
+test("Bash tool_use description is captured as ActivityEvent.description", () => {
+  const line = JSON.stringify({
+    type: "assistant", timestamp: TS,
+    message: {
+      content: [{
+        type: "tool_use", id: "b1", name: "Bash",
+        input: {
+          command: "gradlew :android:compileDebugKotlin",
+          description: "Recompile Android Kotlin",
+        },
+      }],
+    },
+  })
+  const [ev] = parseTranscriptLine(line, WD)
+  expect(ev).toMatchObject({
+    tool: "Bash",
+    description: "Recompile Android Kotlin",
+    body: { kind: "bash", command: "gradlew :android:compileDebugKotlin" },
+  })
+  // title still uses the command (primary arg), not the description
+  expect(ev!.title).toContain("gradlew")
+})
+
+test("description equal to command is not stored", () => {
+  const line = JSON.stringify({
+    type: "assistant", timestamp: TS,
+    message: {
+      content: [{
+        type: "tool_use", id: "b2", name: "Bash",
+        input: { command: "npm test", description: "npm test" },
+      }],
+    },
+  })
+  const [ev] = parseTranscriptLine(line, WD)
+  expect(ev!.description).toBeUndefined()
 })
 
 test("absolute file_path outside workdir stays absolute", () => {

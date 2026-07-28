@@ -9,33 +9,41 @@ const WD = "/w"
 
 test("codex shell started -> tool card with command summary", () => {
   const ev = { kind: "tool-call", tool: "shell", phase: "started", call_id: "c1", detail: { type: "command_execution", command: "npm test" } } as const
-  expect(toActivityEvents("codex", ev, NOW, WD)).toEqual([
-    { ts: ISO, kind: "tool", tool: "Bash", title: "Bash: npm test", detail: "npm test", phase: "started", callId: "c1" },
-  ])
+  expect(toActivityEvents("codex", ev, NOW, WD)[0]).toMatchObject({
+    ts: ISO, kind: "tool", tool: "Bash", title: "Bash: npm test", detail: "npm test", phase: "started", callId: "c1",
+    body: { kind: "bash", command: "npm test" },
+  })
 })
 
 test("codex completed -> tool_result done with aggregated_output as detail", () => {
   const ev = { kind: "tool-call", tool: "shell", phase: "completed", call_id: "c1", detail: { type: "command_execution", aggregated_output: "ok" } } as const
   const [r] = toActivityEvents("codex", ev, NOW, WD)
-  expect(r).toEqual({ ts: ISO, kind: "tool_result", title: "done", detail: "ok", phase: "completed", callId: "c1" })
+  expect(r).toMatchObject({
+    ts: ISO, kind: "tool_result", title: "done", detail: "ok", phase: "completed", callId: "c1",
+    body: { kind: "bash", output: "ok" },
+  })
 })
 
 test("codex commandExecution completed -> multiline output from current app-server fields", () => {
   const ev = { kind: "tool-call", tool: "commandExecution", phase: "completed", call_id: "c1", detail: { type: "commandExecution", aggregatedOutput: "first\nsecond\n", exitCode: 0 } } as const
   const [r] = toActivityEvents("codex", ev, NOW, WD)
-  expect(r).toEqual({ ts: ISO, kind: "tool_result", title: "done", detail: "first\nsecond", phase: "completed", callId: "c1" })
+  expect(r).toMatchObject({
+    ts: ISO, kind: "tool_result", title: "done", detail: "first\nsecond", phase: "completed", callId: "c1",
+    body: { kind: "bash", output: "first\nsecond", exitCode: 0 },
+  })
 })
 
 test("codex failed command with no output -> exit code detail", () => {
   const ev = { kind: "tool-call", tool: "commandExecution", phase: "failed", call_id: "c1", detail: { type: "commandExecution", aggregatedOutput: null, exitCode: 7 } } as const
   const [r] = toActivityEvents("codex", ev, NOW, WD)
-  expect(r).toMatchObject({ kind: "tool_result", title: "error", detail: "Exit code 7" })
+  expect(r).toMatchObject({ kind: "tool_result", title: "error", detail: "Exit code 7", body: { kind: "bash", output: "Exit code 7", exitCode: 7 } })
 })
 
 test("codex completed with no aggregated_output -> empty detail", () => {
   const ev = { kind: "tool-call", tool: "shell", phase: "completed", call_id: "c1", detail: { type: "command_execution" } } as const
   const [r] = toActivityEvents("codex", ev, NOW, WD)
-  expect(r).toEqual({ ts: ISO, kind: "tool_result", title: "done", detail: "", phase: "completed", callId: "c1" })
+  expect(r).toMatchObject({ ts: ISO, kind: "tool_result", title: "done", detail: "", phase: "completed", callId: "c1" })
+  expect(r!.body).toBeUndefined()
 })
 
 test("failed -> tool_result error", () => {
@@ -119,7 +127,7 @@ test("codex webSearch open-page action previews its URL", () => {
 test("codex mcpToolCall started -> Tool card with mcp tool name + arg", () => {
   const ev = { kind: "tool-call", tool: "mcp_tool_call", phase: "started", call_id: "m1", detail: { type: "mcpToolCall", toolName: "spawn_session", arguments: { name: "test", workdir: "/tmp" } } } as const
   const [r] = toActivityEvents("codex", ev, NOW, WD)
-  expect(r).toEqual({ ts: ISO, kind: "tool", tool: "Tool", title: "Tool: spawn_session /tmp", detail: "spawn_session /tmp", phase: "started", callId: "m1" })
+  expect(r).toMatchObject({ ts: ISO, kind: "tool", tool: "Tool", title: "Tool: spawn_session /tmp", detail: "spawn_session /tmp", phase: "started", callId: "m1" })
 })
 
 test("codex mcpToolCall started with no arg -> just tool name", () => {
@@ -131,7 +139,7 @@ test("codex mcpToolCall started with no arg -> just tool name", () => {
 test("codex mcpToolCall completed -> result detail", () => {
   const ev = { kind: "tool-call", tool: "mcp_tool_call", phase: "completed", call_id: "m1", detail: { type: "mcpToolCall", toolName: "spawn_session", arguments: { name: "test" }, result: '{"session_id":"abc"}' } } as const
   const [r] = toActivityEvents("codex", ev, NOW, WD)
-  expect(r).toEqual({ ts: ISO, kind: "tool_result", title: "done", detail: '{"session_id":"abc"}', phase: "completed", callId: "m1" })
+  expect(r).toMatchObject({ ts: ISO, kind: "tool_result", title: "done", detail: '{"session_id":"abc"}', phase: "completed", callId: "m1" })
 })
 
 test("codex mcpToolCall current shape -> tool name and text content", () => {
@@ -158,9 +166,9 @@ test("codex dynamicToolCall -> input and multiline output", () => {
 
 test("cursor read started -> Read card with path summary (workdir-relative)", () => {
   const ev = { kind: "tool-call", tool: "readToolCall", phase: "started", call_id: "x", detail: { tool_call: { readToolCall: { args: { path: "/w/a/b.ts" } } } } } as const
-  expect(toActivityEvents("cursor", ev, NOW, WD)).toEqual([
-    { ts: ISO, kind: "tool", tool: "Read", title: "Read: a/b.ts", detail: "/w/a/b.ts", phase: "started", callId: "x" },
-  ])
+  expect(toActivityEvents("cursor", ev, NOW, WD)[0]).toMatchObject({
+    ts: ISO, kind: "tool", tool: "Read", title: "Read: a/b.ts", detail: "/w/a/b.ts", phase: "started", callId: "x",
+  })
 })
 
 test("cursor shell started -> Bash with command", () => {
@@ -176,7 +184,10 @@ test("cursor grep started -> Grep with pattern from args", () => {
 test("cursor completed -> detail from result.success.stdout", () => {
   const ev = { kind: "tool-call", tool: "shellToolCall", phase: "completed", call_id: "b1", detail: { tool_call: { shellToolCall: { args: { command: "npm test" }, result: { success: { stdout: "tests passed", stderr: "" } } } } } } as const
   const [r] = toActivityEvents("cursor", ev, NOW, WD)
-  expect(r).toEqual({ ts: ISO, kind: "tool_result", title: "done", detail: "tests passed", phase: "completed", callId: "b1" })
+  expect(r).toMatchObject({
+    ts: ISO, kind: "tool_result", title: "done", detail: "tests passed", phase: "completed", callId: "b1",
+    body: { kind: "bash", command: "npm test", output: "tests passed" },
+  })
 })
 
 test("cursor failed -> error title with detail from result.failure.stderr", () => {
@@ -189,9 +200,10 @@ test("cursor failed -> error title with detail from result.failure.stderr", () =
 
 test("opencode bash started -> Bash with command from state.input", () => {
   const ev = { kind: "tool-call", tool: "bash", phase: "started", call_id: "oc1", detail: { type: "tool", tool: "bash", callID: "oc1", state: { status: "running", input: { command: "npm install" } } } } as const
-  expect(toActivityEvents("opencode", ev, NOW, WD)).toEqual([
-    { ts: ISO, kind: "tool", tool: "Bash", title: "Bash: npm install", detail: "npm install", phase: "started", callId: "oc1" },
-  ])
+  expect(toActivityEvents("opencode", ev, NOW, WD)[0]).toMatchObject({
+    ts: ISO, kind: "tool", tool: "Bash", title: "Bash: npm install", detail: "npm install", phase: "started", callId: "oc1",
+    body: { kind: "bash", command: "npm install" },
+  })
 })
 
 test("opencode read started -> Read with path from state.input (workdir-relative)", () => {
@@ -214,13 +226,19 @@ test("opencode MCP tool no arg -> just tool name", () => {
 test("opencode completed -> detail from state.output (not title)", () => {
   const ev = { kind: "tool-call", tool: "bash", phase: "completed", call_id: "oc1", detail: { type: "tool", tool: "bash", callID: "oc1", state: { status: "completed", input: { command: "npm install" }, output: "added 42 packages", title: "npm install" } } } as const
   const [r] = toActivityEvents("opencode", ev, NOW, WD)
-  expect(r).toEqual({ ts: ISO, kind: "tool_result", title: "done", detail: "added 42 packages", phase: "completed", callId: "oc1" })
+  expect(r).toMatchObject({
+    ts: ISO, kind: "tool_result", title: "done", detail: "added 42 packages", phase: "completed", callId: "oc1",
+    body: { kind: "bash", command: "npm install", output: "added 42 packages" },
+  })
 })
 
-test("opencode completed with output but no title -> uses output", () => {
+test("opencode completed with output but no title -> keeps multiline output", () => {
   const ev = { kind: "tool-call", tool: "bash", phase: "completed", call_id: "oc5", detail: { type: "tool", tool: "bash", callID: "oc5", state: { status: "completed", input: { command: "ls" }, output: "file1\nfile2" } } } as const
   const [r] = toActivityEvents("opencode", ev, NOW, WD)
-  expect(r).toMatchObject({ kind: "tool_result", title: "done", detail: "file1" }) // firstLine
+  expect(r).toMatchObject({
+    kind: "tool_result", title: "done", detail: "file1\nfile2",
+    body: { kind: "bash", command: "ls", output: "file1\nfile2" },
+  })
 })
 
 test("opencode started with state.title but no input -> uses title as summary", () => {
@@ -244,7 +262,7 @@ test("opencode failed -> detail from state.error", () => {
 test("opencode completed -> detail from state.content when output absent", () => {
   const ev = { kind: "tool-call", tool: "bash", phase: "completed", call_id: "oc9", detail: { type: "tool", tool: "bash", callID: "oc9", state: { status: "completed", input: { command: "ls" }, title: "ls", content: [{ type: "text", text: "file1\nfile2" }] } } } as const
   const [r] = toActivityEvents("opencode", ev, NOW, WD)
-  expect(r).toMatchObject({ kind: "tool_result", title: "done", detail: "file1", callId: "oc9" })
+  expect(r).toMatchObject({ kind: "tool_result", title: "done", detail: "file1\nfile2", callId: "oc9" })
 })
 
 test("opencode started -> summary from pending raw when input absent", () => {
@@ -257,6 +275,167 @@ test("opencode edit started -> Edit with filePath from state.input (workdir-rela
   const ev = { kind: "tool-call", tool: "edit", phase: "started", call_id: "oc11", detail: { type: "tool", tool: "edit", callID: "oc11", state: { status: "running", input: { filePath: "/w/src/main.ts" } } } } as const
   const [r] = toActivityEvents("opencode", ev, NOW, WD)
   expect(r).toMatchObject({ kind: "tool", tool: "Edit", title: "Edit: src/main.ts", detail: "/w/src/main.ts" })
+})
+
+test("opencode edit started -> body includes oldString/newString as unified diff", () => {
+  const ev = {
+    kind: "tool-call", tool: "edit", phase: "started" as const, call_id: "oc12",
+    detail: {
+      type: "tool", tool: "edit", callID: "oc12",
+      state: {
+        status: "running",
+        input: { filePath: "/w/src/main.ts", oldString: "const a = 1", newString: "const a = 2" },
+      },
+    },
+  }
+  const [r] = toActivityEvents("opencode", ev, NOW, WD)
+  expect(r).toMatchObject({
+    tool: "Edit",
+    title: "Edit: src/main.ts",
+    body: {
+      kind: "edit",
+      path: "src/main.ts",
+      oldText: "const a = 1",
+      newText: "const a = 2",
+    },
+  })
+  expect(r!.body && r!.body.kind === "edit" && r!.body.diff).toContain("-const a = 1")
+  expect(r!.body && r!.body.kind === "edit" && r!.body.diff).toContain("+const a = 2")
+})
+
+test("codex fileChange body carries unified diff", () => {
+  const changes = [{ path: "/w/src/a.ts", kind: { type: "update" }, diff: "@@ -1 +1 @@\n-old\n+new" }]
+  const ev = { kind: "tool-call", tool: "fileChange", phase: "started", call_id: "c2", detail: { type: "fileChange", changes } } as const
+  const [r] = toActivityEvents("codex", ev, NOW, WD)
+  expect(r).toMatchObject({
+    body: { kind: "edit", path: "src/a.ts", mode: "update" },
+  })
+  expect(r!.body && r!.body.kind === "edit" && r!.body.diff).toContain("-old")
+})
+
+test("cursor editToolCall body from old/new strings", () => {
+  const ev = {
+    kind: "tool-call", tool: "editToolCall", phase: "started" as const, call_id: "e1",
+    detail: {
+      tool_call: {
+        editToolCall: {
+          args: { path: "/w/a.ts", old_string: "foo", new_string: "bar" },
+        },
+      },
+    },
+  }
+  const [r] = toActivityEvents("cursor", ev, NOW, WD)
+  expect(r).toMatchObject({
+    tool: "Edit",
+    body: { kind: "edit", path: "a.ts", oldText: "foo", newText: "bar" },
+  })
+})
+
+test("grok write body includes content", () => {
+  const ev = {
+    tool: "write", phase: "started" as const, call_id: "g1",
+    detail: { title: "write", rawInput: { file_path: "/w/poem.txt", content: "hello\nworld" } },
+  }
+  const [r] = toActivityEvents("grok", ev, NOW, WD)
+  expect(r).toMatchObject({
+    tool: "Write",
+    body: { kind: "write", path: "poem.txt", content: "hello\nworld" },
+  })
+  // bare "write" title is not a useful description
+  expect(r!.description).toBeUndefined()
+})
+
+test("claude-style via opencode: description from input.description", () => {
+  // opencode can also carry description on input for some tools
+  const ev = {
+    kind: "tool-call", tool: "bash", phase: "started" as const, call_id: "oc-d",
+    detail: {
+      type: "tool", tool: "bash", callID: "oc-d",
+      state: {
+        status: "running",
+        title: "npm test",
+        input: { command: "npm test", description: "Run unit tests before shipping" },
+      },
+    },
+  }
+  const [r] = toActivityEvents("opencode", ev, NOW, WD)
+  expect(r).toMatchObject({
+    tool: "Bash",
+    description: "Run unit tests before shipping",
+    body: { kind: "bash", command: "npm test" },
+  })
+})
+
+test("opencode state.title becomes description when it differs from command", () => {
+  const ev = {
+    kind: "tool-call", tool: "task", phase: "started" as const, call_id: "oc-t",
+    detail: {
+      type: "tool", tool: "task", callID: "oc-t",
+      state: { status: "running", title: "Searching codebase for API routes" },
+    },
+  }
+  const [r] = toActivityEvents("opencode", ev, NOW, WD)
+  expect(r).toMatchObject({
+    description: "Searching codebase for API routes",
+  })
+})
+
+test("opencode title equal to command is not stored as description", () => {
+  const ev = {
+    kind: "tool-call", tool: "bash", phase: "started" as const, call_id: "oc-e",
+    detail: {
+      type: "tool", tool: "bash", callID: "oc-e",
+      state: { status: "running", title: "npm test", input: { command: "npm test" } },
+    },
+  }
+  const [r] = toActivityEvents("opencode", ev, NOW, WD)
+  expect(r!.description).toBeUndefined()
+})
+
+test("cursor shell description from args", () => {
+  const ev = {
+    kind: "tool-call", tool: "shellToolCall", phase: "started" as const, call_id: "c-d",
+    detail: {
+      tool_call: {
+        shellToolCall: {
+          args: { command: "rg TODO", description: "Find remaining TODOs in the tree" },
+        },
+      },
+    },
+  }
+  const [r] = toActivityEvents("cursor", ev, NOW, WD)
+  expect(r).toMatchObject({
+    tool: "Bash",
+    description: "Find remaining TODOs in the tree",
+    body: { kind: "bash", command: "rg TODO" },
+  })
+})
+
+test("codex shell description when provided", () => {
+  const ev = {
+    kind: "tool-call", tool: "shell", phase: "started" as const, call_id: "cx-d",
+    detail: { type: "command_execution", command: "npm test", description: "Verify green before merge" },
+  }
+  const [r] = toActivityEvents("codex", ev, NOW, WD)
+  expect(r).toMatchObject({
+    description: "Verify green before merge",
+    body: { kind: "bash", command: "npm test" },
+  })
+})
+
+test("grok description from rawInput.description", () => {
+  const ev = {
+    tool: "bash", phase: "started" as const, call_id: "g-d",
+    detail: {
+      title: "bash",
+      rawInput: { command: "ls -la", description: "List project root contents" },
+    },
+  }
+  const [r] = toActivityEvents("grok", ev, NOW, WD)
+  expect(r).toMatchObject({
+    description: "List project root contents",
+    body: { kind: "bash", command: "ls -la" },
+  })
 })
 
 // --- defensive ---

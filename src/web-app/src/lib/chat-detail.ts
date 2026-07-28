@@ -1,4 +1,4 @@
-/** Chat transcript density: low | medium | high (high stubbed until designed). */
+/** Chat transcript density: low | medium | high. */
 
 export type ChatDetailLevel = "low" | "medium" | "high"
 
@@ -14,20 +14,18 @@ export const CHAT_DETAIL_LABELS: Record<ChatDetailLevel, string> = {
 
 /** Levels that are fully implemented for rendering. */
 export function isChatDetailImplemented(level: ChatDetailLevel): boolean {
-  return level === "low" || level === "medium"
+  return level === "low" || level === "medium" || level === "high"
 }
 
-/**
- * Phase 1 render mode. Collapses high → medium.
- * When high ships, widen the return type or branch on stored level at one helper.
- */
-export function effectiveChatDetail(level: ChatDetailLevel): "low" | "medium" {
-  return level === "low" ? "low" : "medium"
+/** Effective render mode — all three levels are live. */
+export function effectiveChatDetail(level: ChatDetailLevel): ChatDetailLevel {
+  if (level === "low" || level === "high") return level
+  return "medium"
 }
 
-/** Persistable levels in Phase 1 — high/garbage clamp to medium. */
+/** Persistable levels — garbage clamps to medium; high is accepted. */
 export function parseChatDetailLevel(raw: unknown): ChatDetailLevel {
-  if (raw === "low" || raw === "medium") return raw
+  if (raw === "low" || raw === "medium" || raw === "high") return raw
   return "medium"
 }
 

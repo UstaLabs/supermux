@@ -8,25 +8,25 @@ import {
   turnBoundaryMs,
 } from "./chat-detail"
 
-test("parseChatDetailLevel accepts low/medium and clamps high/garbage", () => {
+test("parseChatDetailLevel accepts low/medium/high and clamps garbage", () => {
   expect(parseChatDetailLevel("low")).toBe("low")
   expect(parseChatDetailLevel("medium")).toBe("medium")
-  expect(parseChatDetailLevel("high")).toBe("medium")
+  expect(parseChatDetailLevel("high")).toBe("high")
   expect(parseChatDetailLevel("nope")).toBe("medium")
   expect(parseChatDetailLevel(null)).toBe("medium")
   expect(parseChatDetailLevel(undefined)).toBe("medium")
 })
 
-test("effectiveChatDetail collapses high to medium", () => {
+test("effectiveChatDetail preserves all implemented levels", () => {
   expect(effectiveChatDetail("low")).toBe("low")
   expect(effectiveChatDetail("medium")).toBe("medium")
-  expect(effectiveChatDetail("high")).toBe("medium")
+  expect(effectiveChatDetail("high")).toBe("high")
 })
 
 test("isChatDetailImplemented", () => {
   expect(isChatDetailImplemented("low")).toBe(true)
   expect(isChatDetailImplemented("medium")).toBe(true)
-  expect(isChatDetailImplemented("high")).toBe(false)
+  expect(isChatDetailImplemented("high")).toBe(true)
 })
 
 test("turnBoundaryMs uses last outbound message, not workingSince", () => {

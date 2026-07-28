@@ -17,6 +17,8 @@ import {
 const props = defineProps<{
   toolName: string
   summary?: string
+  /** Human "why" label when the agent provided one. */
+  description?: string
   input?: string
   output?: string
   status: 'running' | 'done' | 'error'
@@ -83,11 +85,12 @@ const hasContent = computed(() => !!(props.input || props.output))
       <!-- Tool name -->
       <span class="font-medium text-foreground shrink-0">{{ displayLabel }}</span>
 
-      <!-- Summary -->
+      <!-- Description (why) preferred over primary arg summary when present -->
       <span
-        v-if="summary"
+        v-if="description || summary"
         class="flex-1 min-w-0 truncate text-xs text-muted-foreground"
-      >{{ summary }}</span>
+        :title="description && summary && description !== summary ? `${description} · ${summary}` : (description || summary)"
+      >{{ description || summary }}</span>
       <span v-else class="flex-1" />
 
       <!-- Status badge -->

@@ -60,7 +60,9 @@ import type { PromptInputMessage } from "@/components/ai-elements/prompt-input"
 import PromptInputDraftSync from "@/components/PromptInputDraftSync.vue"
 import { Suggestion } from "@/components/ai-elements/suggestion"
 import Tool from "@/components/ai-elements/tool/Tool.vue"
+import ToolHigh from "@/components/ai-elements/tool/ToolHigh.vue"
 import ChatComposer from "@/components/ChatComposer.vue"
+import type { ActivityToolBody } from "@/lib/activity-body"
 
 const props = defineProps<{ id: string }>()
 const router = useRouter()
@@ -290,7 +292,20 @@ function handleOpenFile(path: string, line?: number, endLine?: number) {
 
 const entries = computed(() => messages.bySession[props.id] ?? [])
 
-type ToolRow = { type: "tool"; ts: number; key: string; toolName: string; summary?: string; input?: string; output?: string; status: "running" | "done" | "error"; truncated?: boolean }
+type ToolRow = {
+  type: "tool"
+  ts: number
+  key: string
+  toolName: string
+  summary?: string
+  input?: string
+  output?: string
+  status: "running" | "done" | "error"
+  truncated?: boolean
+  description?: string
+  body?: ActivityToolBody
+  resultBody?: ActivityToolBody
+}
 type Row =
   | { type: "message"; ts: number; key: string; entry: (typeof entries.value)[number] }
   | ToolRow
@@ -299,7 +314,7 @@ const rows = computed<Row[]>(() => {
   const acts = activity.bySession[props.id] ?? []
   const resultByCall = new Map<string, (typeof acts)[number]>()
   for (const e of acts) if (e.kind === "tool_result" && e.callId) resultByCall.set(e.callId, e)
-  // Low: hide tool cards entirely (activity still ingested; switch to medium restores them).
+  // Low: hide tool cards entirely (activity still ingested; switch to medium/high restores them).
   const hideTools = detailMode.value === "low"
 
   const out: Row[] = []
@@ -325,6 +340,9 @@ const rows = computed<Row[]>(() => {
           output: res?.detail || undefined,
           status,
           truncated: e.truncated || res?.truncated || undefined,
+          description: e.description || undefined,
+          body: e.body,
+          resultBody: res?.body,
         })
       }
       // tool_result rows are absorbed into their tool card — skip
@@ -616,9 +634,23 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
                 </Message>
                 <div v-else class="flex flex-col gap-1.5">
                   <template v-for="row in block.items" :key="row.key">
-                    <Tool
+                    <ToolHigh
+                      v-if="detailMode === 'high'"
                       :tool-name="row.toolName"
                       :summary="row.summary"
+                      :input="row.input"
+                      :output="row.output"
+                      :status="row.status"
+                      :truncated="row.truncated"
+                      :description="row.description"
+                      :body="row.body"
+                      :result-body="row.resultBody"
+                    />
+                    <Tool
+                      v-else
+                      :tool-name="row.toolName"
+                      :summary="row.summary"
+                      :description="row.description"
                       :input="row.input"
                       :output="row.output"
                       :status="row.status"

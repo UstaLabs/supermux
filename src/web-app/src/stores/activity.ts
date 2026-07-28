@@ -1,5 +1,6 @@
 import { defineStore } from "pinia"
 import { ref } from "vue"
+import type { ActivityToolBody } from "@/lib/activity-body"
 
 export interface ActivityEntry {
   ts: string
@@ -7,10 +8,13 @@ export interface ActivityEntry {
   tool?: string
   title: string
   detail?: string
+  /** Human "why" label from the agent when present. */
+  description?: string
   phase?: "started" | "completed"
   truncated?: boolean
   seq?: number
   callId?: string
+  body?: ActivityToolBody
 }
 
 export const useActivity = defineStore("activity", () => {
