@@ -13,6 +13,14 @@ export type GrokModelEntry = {
   }
 }
 
+/** An unauthenticated Grok ACP handshake advertises this one synthetic fallback
+ * model instead of returning an auth error. Treating it as a successful catalog
+ * refresh would replace a previously good list (for example grok-4.5) every time
+ * the six-hour access token expires. */
+function isUnauthenticatedFallback(models: GrokModelEntry[]): boolean {
+  return models.length === 1 && models[0]?.modelId === "grok-build"
+}
+
 /** Map grok's ACP modelState into the broker's ModelInfo. Reasoning levels come
  * straight from the agent, so a model that doesn't support effort correctly gets
  * none (the picker then hides the control) instead of an assumed high/medium/low. */
@@ -64,6 +72,7 @@ export async function discoverGrokModels(opts?: {
       }),
     ])
     const models = init?._meta?.modelState?.availableModels ?? init?.modelState?.availableModels ?? []
+    if (isUnauthenticatedFallback(models)) return []
     return mapGrokModels(models)
   } catch {
     return []
