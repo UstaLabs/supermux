@@ -39,7 +39,7 @@ const statusClass = computed(() => {
     <!-- Title bar -->
     <div class="flex items-center gap-2 px-3 py-1.5 bg-[#16161a] border-b border-white/5 select-none">
       <span class="flex items-center gap-1 shrink-0">
-        <span class="size-2 rounded-full bg-[#ff5f57]/span>
+        <span class="size-2 rounded-full bg-[#ff5f57] opacity-80" />
         <span class="size-2 rounded-full bg-[#febc2e] opacity-80" />
         <span class="size-2 rounded-full bg-[#28c840] opacity-80" />
       </span>
