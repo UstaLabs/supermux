@@ -70,6 +70,13 @@ test("discoverGrokModels reads modelState from the ACP handshake", async () => {
   expect(models[0]?.reasoningLevels?.map((r) => r.id)).toEqual(["high", "medium", "low"])
 })
 
+test("discoverGrokModels rejects Grok's unauthenticated fallback catalog", async () => {
+  const models = await discoverGrokModels({
+    runner: fakeGrokRunner({ availableModels: [{ modelId: "grok-build", name: "Grok Build" }] }) as any,
+  })
+  expect(models).toEqual([])
+})
+
 test("discoverGrokModels kills the probe child once the handshake completes", async () => {
   let killed = false
   const runner = (opts: any) => {

@@ -38,3 +38,11 @@ test("grok tool stems normalize to canonical names", () => {
   expect(normalizeToolName("grok", "edit")).toBe("Edit")
   expect(normalizeToolName("grok", "shell")).toBe("Bash")
 })
+test("search_replace / str_replace map to Edit (not Grep search)", () => {
+  expect(normalizeToolName("grok", "search_replace")).toBe("Edit")
+  expect(normalizeToolName("grok", "searchReplace")).toBe("Edit")
+  expect(normalizeToolName("cursor", "search_replace")).toBe("Edit")
+  expect(normalizeToolName("cursor", "strReplaceToolCall")).toBe("Edit")
+  // bare "search" still Grep
+  expect(normalizeToolName("cursor", "search")).toBe("Grep")
+})

@@ -407,7 +407,9 @@ fun ChatPanel(
         // Chat detail (low/medium): hide tool cards in low; activity still arrives via [activity].
         ChatDetailPrefs.ensureLoaded(context)
         val chatDetail by ChatDetailPrefs.level.collectAsState()
-        val hideTools = effectiveChatDetail(chatDetail) == ChatDetailLevel.LOW
+        val detailMode = effectiveChatDetail(chatDetail)
+        val hideTools = detailMode == ChatDetailLevel.LOW
+        val highDetail = detailMode == ChatDetailLevel.HIGH
         val timelineItems = remember(messages, activity, hideTools) {
             mergeTimeline(messages, activity, hideTools = hideTools)
         }
@@ -512,7 +514,7 @@ fun ChatPanel(
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 items(timelineItems, key = { timelineItemKey(it) }) { item ->
-                    TimelineItemRow(item, loadBytes, onOpenFile)
+                    TimelineItemRow(item, loadBytes, onOpenFile, highDetail = highDetail)
                 }
                 // Background-task chips (bg shells / subagents / workflows): only RUNNING
                 // tasks get a chip, so a chip clears the moment its task finishes and they

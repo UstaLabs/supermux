@@ -108,7 +108,10 @@ import dev.supermux.android.theme.MonoFontFamily
 import dev.supermux.android.theme.Radii
 import dev.supermux.android.theme.Space
 import dev.supermux.proto.ActivityEvent
+import dev.supermux.proto.ActivityToolBody
 import dev.supermux.proto.LogEntry
+import dev.supermux.ui.resolveBashParts
+import dev.supermux.ui.resolveEditParts
 import coil3.compose.AsyncImage
 import dev.supermux.ui.ColumnAlign
 import dev.supermux.ui.FilePathRef
@@ -129,6 +132,7 @@ sealed interface TimelineItem {
         val event: ActivityEvent,
         val status: ToolStatus,
         val output: String? = null,   // detail from the matching tool_result event (iOS folds as Output)
+        val resultBody: ActivityToolBody? = null,
     ) : TimelineItem
 }
 
@@ -149,13 +153,16 @@ fun mergeTimeline(
     hideTools: Boolean = false,
 ): List<TimelineItem> {
     // callId -> resolved final status + output detail from `tool_result` events
+    // Broker sets phase=completed and title=error|done (not phase=failed).
     val resultStatus = HashMap<String, ToolStatus>()
     val resultDetail = HashMap<String, String?>()
+    val resultBodies = HashMap<String, ActivityToolBody?>()
     for (e in activity) {
         val id = e.callId
         if (e.kind == "tool_result" && id != null) {
-            resultStatus[id] = if (e.phase == "failed") ToolStatus.ERROR else ToolStatus.DONE
+            resultStatus[id] = if (e.title == "error" || e.phase == "failed") ToolStatus.ERROR else ToolStatus.DONE
             resultDetail[id] = e.detail
+            resultBodies[id] = e.body
         }
     }
     val items = ArrayList<TimelineItem>(messages.size + activity.size)
@@ -166,7 +173,8 @@ fun mergeTimeline(
                 "tool" -> {
                     val status = e.callId?.let { resultStatus[it] } ?: ToolStatus.RUNNING
                     val output = e.callId?.let { resultDetail[it] }
-                    items.add(TimelineItem.Tool(e, status, output))
+                    val resultBody = e.callId?.let { resultBodies[it] }
+                    items.add(TimelineItem.Tool(e, status, output, resultBody))
                 }
                 "tool_result" -> { /* folded into the matching tool row above */ }
                 // "thinking" (and any other non-tool kind) is intentionally dropped — thinking
@@ -602,95 +610,335 @@ private fun toolLabel(tool: String): String =
     if (tool.startsWith("mcp__")) tool.substringAfterLast("__") else tool
 
 /**
- * Calm Premium — tool-use activity.
- * Quiet row: per-tool leading icon + thin accent rail + tool label + mono summary ellipsis
- * + trailing status indicator. Tappable to expand split Input / Output blocks (collapsed by
- * default; expand affordance only when there is input or output).
+ * Tool-use activity.
+ * Medium: quiet inline row (no chip card). High: terminal pane for Bash, diff pane for Edit/Write.
  */
 @Composable
-fun ToolCard(event: ActivityEvent, status: ToolStatus, output: String? = null) {
+fun ToolCard(
+    event: ActivityEvent,
+    status: ToolStatus,
+    output: String? = null,
+    resultBody: ActivityToolBody? = null,
+    highDetail: Boolean = false,
+) {
     val cs = MaterialTheme.colorScheme
     var expanded by remember { mutableStateOf(false) }
 
     val input = event.detail
+    val toolName = event.tool ?: "tool"
+    val bash = if (highDetail) resolveBashParts(event.body, resultBody, input, output, toolName) else null
+    val edit = if (highDetail) resolveEditParts(event.body, input, toolName) else null
+
+    if (bash != null) {
+        ToolTerminalPane(
+            command = bash.command,
+            output = bash.output,
+            exitCode = bash.exitCode,
+            description = event.description,
+            status = status,
+            truncated = event.truncated == true,
+        )
+        return
+    }
+    if (edit != null) {
+        ToolDiffPane(
+            path = edit.path,
+            mode = edit.mode,
+            diff = edit.diff,
+            content = edit.content,
+            description = event.description,
+            status = status,
+            truncated = event.truncated == true,
+        )
+        return
+    }
+
     val hasContent = !input.isNullOrBlank() || !output.isNullOrBlank()
-    val verb = toolLabel(event.tool ?: "tool").lowercase()
-    // Strip a leading "<Tool>: " label — Claude puts it in the title; other agents
-    // (codex/cursor/opencode) emit the bare command/path, so this is a no-op for them.
-    val arg = event.title?.let { t -> event.tool?.let { t.removePrefix("$it: ") } ?: t }
+    val verb = toolLabel(toolName)
+    val primary = event.description
+        ?: event.title?.let { t -> event.tool?.let { t.removePrefix("$it: ") } ?: t }
 
     Column(Modifier.fillMaxWidth().testTag("tool_card")) {
-        // Terminal-style operation line: ▸ verb · arg … status. A sunken surface, mono
-        // throughout, so a tool call reads as an executed command, not a chat card.
         Row(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(Radii.sm))
-                .background(cs.surfaceContainerLowest)
                 .clickable(enabled = hasContent) { expanded = !expanded }
-                .padding(horizontal = Space.sm + Space.xs, vertical = Space.sm),
+                .padding(vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("▸", color = cs.primary, fontFamily = MonoFontFamily, fontSize = 13.sp)
-            Spacer(Modifier.width(Space.sm))
+            if (status == ToolStatus.RUNNING) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(11.dp),
+                    color = cs.onSurfaceVariant.copy(alpha = 0.7f),
+                    strokeWidth = 1.5.dp,
+                )
+            } else {
+                Icon(
+                    painter = painterResource(toolIcon(toolName)),
+                    contentDescription = null,
+                    tint = if (status == ToolStatus.ERROR) cs.error.copy(alpha = 0.7f)
+                    else cs.onSurfaceVariant.copy(alpha = 0.55f),
+                    modifier = Modifier.size(12.dp),
+                )
+            }
+            Spacer(Modifier.width(Space.xs + 2.dp))
             Text(
                 text = verb,
-                color = cs.onSurface,
-                fontFamily = MonoFontFamily,
-                fontSize = 13.sp,
+                color = cs.onSurfaceVariant.copy(alpha = 0.9f),
+                style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Medium,
             )
-            if (arg != null) {
+            if (!primary.isNullOrBlank()) {
                 Text(
-                    text = arg,
-                    color = cs.onSurfaceVariant,
-                    fontFamily = MonoFontFamily,
-                    fontSize = 12.5.sp,
+                    text = primary,
+                    color = cs.onSurfaceVariant.copy(alpha = 0.65f),
+                    style = MaterialTheme.typography.labelMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).padding(start = Space.sm),
+                    modifier = Modifier.weight(1f).padding(start = Space.xs),
                 )
             } else {
                 Spacer(Modifier.weight(1f))
             }
-            Spacer(Modifier.width(Space.sm))
-            when (status) {
-                ToolStatus.RUNNING -> CircularProgressIndicator(
-                    modifier = Modifier.size(11.dp),
-                    color = cs.primary,
-                    strokeWidth = 1.5.dp,
-                )
-                ToolStatus.DONE -> Icon(
-                    painter = painterResource(R.drawable.ic_check),
-                    contentDescription = null,
-                    tint = cs.onSurfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.size(13.dp),
-                )
-                ToolStatus.ERROR -> Icon(
-                    painter = painterResource(R.drawable.ic_x),
-                    contentDescription = null,
-                    tint = cs.error,
-                    modifier = Modifier.size(13.dp),
+            if (status == ToolStatus.ERROR) {
+                Text(
+                    text = "failed",
+                    color = cs.error.copy(alpha = 0.8f),
+                    style = MaterialTheme.typography.labelSmall,
                 )
             }
         }
 
-        // Expandable Input + Output (mono; a diff renders with semantic add/remove).
         AnimatedVisibility(
             visible = expanded,
             enter = expandVertically(),
             exit = shrinkVertically(),
         ) {
             Column(
-                Modifier.padding(top = Space.xs),
+                Modifier
+                    .padding(start = 16.dp, top = 2.dp, bottom = 4.dp)
+                    .drawBehind {
+                        drawLine(
+                            color = Color.Gray.copy(alpha = 0.25f),
+                            start = Offset(0f, 0f),
+                            end = Offset(0f, size.height),
+                            strokeWidth = 1.dp.toPx(),
+                        )
+                    }
+                    .padding(start = Space.sm),
                 verticalArrangement = Arrangement.spacedBy(Space.xs),
             ) {
-                input?.takeIf { it.isNotBlank() }?.let { ioBlock("input", it, error = false) }
+                input?.takeIf { it.isNotBlank() }?.let {
+                    Text(
+                        text = it,
+                        fontFamily = MonoFontFamily,
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp,
+                        color = cs.onSurfaceVariant.copy(alpha = 0.75f),
+                        modifier = Modifier
+                            .heightIn(max = 160.dp)
+                            .verticalScroll(rememberScrollState()),
+                    )
+                }
                 output?.takeIf { it.isNotBlank() }?.let {
                     if (looksLikeDiff(it)) InlineDiff(it)
-                    else ioBlock("output", it, error = status == ToolStatus.ERROR)
+                    else Text(
+                        text = it + if (event.truncated == true) " …" else "",
+                        fontFamily = MonoFontFamily,
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp,
+                        color = if (status == ToolStatus.ERROR) cs.error.copy(alpha = 0.8f)
+                        else cs.onSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier
+                            .heightIn(max = 160.dp)
+                            .verticalScroll(rememberScrollState()),
+                    )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ToolTerminalPane(
+    command: String?,
+    output: String?,
+    exitCode: Int?,
+    description: String?,
+    status: ToolStatus,
+    truncated: Boolean,
+) {
+    val cs = MaterialTheme.colorScheme
+    val statusLabel = when {
+        status == ToolStatus.RUNNING -> "running"
+        status == ToolStatus.ERROR && exitCode != null -> "exit $exitCode"
+        status == ToolStatus.ERROR -> "error"
+        exitCode != null -> "exit $exitCode"
+        else -> "done"
+    }
+    val statusColor = when (status) {
+        ToolStatus.RUNNING -> cs.tertiary
+        ToolStatus.ERROR -> cs.error
+        ToolStatus.DONE -> cs.primary.copy(alpha = 0.85f)
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radii.sm))
+            .background(Color(0xFF0C0C0E))
+            .border(0.5.dp, cs.outline.copy(alpha = 0.35f), RoundedCornerShape(Radii.sm))
+            .testTag("tool_terminal"),
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF16161A))
+                .padding(horizontal = Space.sm + 2.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("●", color = Color(0xFFFF5F57), fontSize = 8.sp)
+            Text(" ●", color = Color(0xFFFEBC2E).copy(alpha = 0.85f), fontSize = 8.sp)
+            Text(" ●", color = Color(0xFF28C840).copy(alpha = 0.85f), fontSize = 8.sp)
+            Spacer(Modifier.width(Space.sm))
+            Icon(
+                painter = painterResource(R.drawable.ic_terminal),
+                contentDescription = null,
+                tint = Color(0xFFA1A1AA),
+                modifier = Modifier.size(12.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            Text("terminal", color = Color(0xFFA1A1AA), fontSize = 11.sp)
+            if (!description.isNullOrBlank()) {
+                Text(
+                    text = description,
+                    color = Color(0xFFD4D4D8),
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(start = Space.xs),
+                )
+            } else Spacer(Modifier.weight(1f))
+            if (status == ToolStatus.RUNNING) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(10.dp),
+                    color = statusColor,
+                    strokeWidth = 1.2.dp,
+                )
+                Spacer(Modifier.width(4.dp))
+            }
+            Text(statusLabel, color = statusColor, fontSize = 10.sp, fontFamily = MonoFontFamily)
+        }
+        Column(
+            Modifier
+                .heightIn(max = 220.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Space.sm + 2.dp, vertical = Space.sm),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            if (!command.isNullOrBlank()) {
+                Row {
+                    Text("$ ", color = Color(0xFF4ADE80).copy(alpha = 0.9f), fontFamily = MonoFontFamily, fontSize = 12.sp)
+                    Text(command, color = Color(0xFFF4F4F5), fontFamily = MonoFontFamily, fontSize = 12.sp)
+                }
+            }
+            if (!output.isNullOrBlank()) {
+                Text(
+                    text = output + if (truncated) " …" else "",
+                    color = if (status == ToolStatus.ERROR) Color(0xFFFCA5A5) else Color(0xFFD4D4D8),
+                    fontFamily = MonoFontFamily,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                )
+            } else if (status == ToolStatus.RUNNING && command.isNullOrBlank()) {
+                Text("Running…", color = Color(0xFF71717A), fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolDiffPane(
+    path: String,
+    mode: String?,
+    diff: String?,
+    content: String?,
+    description: String?,
+    status: ToolStatus,
+    truncated: Boolean,
+) {
+    val cs = MaterialTheme.colorScheme
+    val rendered = diff ?: content?.lineSequence()?.joinToString("\n") { "+$it" }.orEmpty()
+    val modeLabel = when (mode?.lowercase()) {
+        "add", "added" -> "added"
+        "delete", "deleted" -> "deleted"
+        "move", "renamed" -> "moved"
+        else -> "edited"
+    }
+    val statusLabel = when (status) {
+        ToolStatus.RUNNING -> "applying"
+        ToolStatus.ERROR -> "error"
+        ToolStatus.DONE -> "done"
+    }
+    val statusColor = when (status) {
+        ToolStatus.RUNNING -> cs.tertiary
+        ToolStatus.ERROR -> cs.error
+        ToolStatus.DONE -> cs.primary.copy(alpha = 0.85f)
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radii.sm))
+            .background(Color(0xFF0C0C0E))
+            .border(0.5.dp, cs.outline.copy(alpha = 0.35f), RoundedCornerShape(Radii.sm))
+            .testTag("tool_diff"),
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF16161A))
+                .padding(horizontal = Space.sm + 2.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_pencil),
+                contentDescription = null,
+                tint = Color(0xFFA1A1AA),
+                modifier = Modifier.size(12.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = path,
+                color = Color(0xFFF4F4F5),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (!description.isNullOrBlank()) {
+                Text(
+                    text = description,
+                    color = Color(0xFFA1A1AA),
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(start = Space.xs),
+                )
+            }
+            Spacer(Modifier.width(Space.xs))
+            Text(modeLabel, color = Color(0xFF71717A), fontSize = 10.sp)
+            Spacer(Modifier.width(Space.xs))
+            Text(statusLabel, color = statusColor, fontSize = 10.sp)
+        }
+        if (rendered.isNotBlank()) {
+            InlineDiff(rendered + if (truncated) "\n… truncated" else "")
+        } else {
+            Text(
+                text = if (status == ToolStatus.RUNNING) "Preparing edit…" else "No diff content",
+                color = Color(0xFF71717A),
+                fontSize = 11.sp,
+                modifier = Modifier.padding(Space.sm),
+            )
         }
     }
 }
@@ -846,6 +1094,7 @@ fun TimelineItemRow(
     item: TimelineItem,
     loadBytes: suspend (String) -> ByteArray? = { null },
     onOpenFile: (FilePathRef) -> Unit = {},
+    highDetail: Boolean = false,
 ) {
     when (item) {
         is TimelineItem.Msg -> {
@@ -874,7 +1123,13 @@ fun TimelineItemRow(
                 ToolStatus.DONE -> StreamNode.DONE
             }
             StreamRow(node = node, spine = true, time = gutterTime(item.event.ts)) {
-                ToolCard(item.event, item.status, item.output)
+                ToolCard(
+                    event = item.event,
+                    status = item.status,
+                    output = item.output,
+                    resultBody = item.resultBody,
+                    highDetail = highDetail,
+                )
             }
         }
     }

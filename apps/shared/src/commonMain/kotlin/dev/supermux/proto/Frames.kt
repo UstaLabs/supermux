@@ -96,6 +96,26 @@ data class DraftPayload(
     val attachments: List<Attachment>? = null,
 )
 
+/**
+ * Structured tool payload for High-detail chat (bash terminal / file diffs).
+ * Mirrors broker `ActivityToolBody` — all fields optional; [kind] discriminates.
+ */
+@Serializable
+data class ActivityToolBody(
+    val kind: String, // bash | edit | write | generic
+    val command: String? = null,
+    val output: String? = null,
+    val exitCode: Int? = null,
+    val path: String? = null,
+    val rawPath: String? = null,
+    val mode: String? = null,
+    val diff: String? = null,
+    val oldText: String? = null,
+    val newText: String? = null,
+    val content: String? = null,
+    val input: String? = null,
+)
+
 @Serializable
 data class ActivityEvent(
     val ts: String,
@@ -104,8 +124,13 @@ data class ActivityEvent(
     val seq: Int? = null,
     val tool: String? = null,
     val detail: String? = null,
+    /** Human "why" label when the agent provided one. */
+    val description: String? = null,
     val phase: String? = null,
     val callId: String? = null,
+    val truncated: Boolean? = null,
+    /** Structured High-detail payload (bash/edit/write/generic). */
+    val body: ActivityToolBody? = null,
 )
 
 @Serializable
