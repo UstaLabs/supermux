@@ -386,6 +386,10 @@ struct ToolDiffView: View {
         }
         return ""
     }
+    /// Pre-split so the type checker does not expand a huge nested ForEach expression.
+    private var lines: [String] {
+        rendered.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    }
     private var modeLabel: String {
         switch (mode ?? "").lowercased() {
         case "add", "added": return "added"
@@ -411,21 +415,7 @@ struct ToolDiffView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: "square.and.pencil").font(.caption2).foregroundStyle(.white.opacity(0.45))
-                Text(path).font(.caption2.weight(.medium)).foregroundStyle(.white.opacity(0.92))
-                    .lineLimit(1)
-                if let description, !description.isEmpty {
-                    Text(description).font(.caption2).foregroundStyle(.white.opacity(0.5))
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 4)
-                Text(modeLabel).font(.caption2).foregroundStyle(.white.opacity(0.4))
-                Text(statusLabel).font(.caption2).foregroundStyle(statusColor)
-            }
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(Color(red: 0.09, green: 0.09, blue: 0.10))
-
+            header
             if rendered.isEmpty {
                 Text(status == .running ? "Preparing edit…" : "No diff content")
                     .font(.caption2)
@@ -434,26 +424,8 @@ struct ToolDiffView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(rendered.split(separator: "\n", omittingEmptySubsequences: false).enumerated()), id: \.offset) { _, line in
-                            let s = String(line)
-                            let isAdd = s.hasPrefix("+") && !s.hasPrefix("+++")
-                            let isDel = s.hasPrefix("-") && !s.hasPrefix("---")
-                            let isHunk = s.hasPrefix("@@")
-                            Text(s.isEmpty ? " " : s)
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(
-                                    isAdd ? Color.green.opacity(0.9)
-                                    : isDel ? Color.red.opacity(0.85)
-                                    : isHunk ? Color.cyan.opacity(0.8)
-                                    : Color.white.opacity(0.55)
-                                )
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 10)
-                                .background(
-                                    isAdd ? Color.green.opacity(0.10)
-                                    : isDel ? Color.red.opacity(0.10)
-                                    : Color.clear
-                                )
+                        ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                            DiffLineRow(text: line)
                         }
                         if truncated {
                             Text("… truncated").font(.caption2).foregroundStyle(.white.opacity(0.35))
@@ -467,5 +439,62 @@ struct ToolDiffView: View {
         .background(Color(red: 0.05, green: 0.05, blue: 0.055))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5))
+    }
+
+    private var header: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "square.and.pencil").font(.caption2).foregroundStyle(.white.opacity(0.45))
+            Text(path).font(.caption2.weight(.medium)).foregroundStyle(.white.opacity(0.92))
+                .lineLimit(1)
+            if let description, !description.isEmpty {
+                Text(description).font(.caption2).foregroundStyle(.white.opacity(0.5))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            Text(modeLabel).font(.caption2).foregroundStyle(.white.opacity(0.4))
+            Text(statusLabel).font(.caption2).foregroundStyle(statusColor)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(Color(red: 0.09, green: 0.09, blue: 0.10))
+    }
+}
+
+/// One diff line — extracted so SwiftUI type-checking stays bounded (CI xcodebuild).
+private struct DiffLineRow: View {
+    let text: String
+
+    private var kind: Kind {
+        if text.hasPrefix("+") && !text.hasPrefix("+++") { return .add }
+        if text.hasPrefix("-") && !text.hasPrefix("---") { return .del }
+        if text.hasPrefix("@@") { return .hunk }
+        return .ctx
+    }
+
+    private enum Kind { case add, del, hunk, ctx }
+
+    private var fg: Color {
+        switch kind {
+        case .add: return Color.green.opacity(0.9)
+        case .del: return Color.red.opacity(0.85)
+        case .hunk: return Color.cyan.opacity(0.8)
+        case .ctx: return Color.white.opacity(0.55)
+        }
+    }
+
+    private var bg: Color {
+        switch kind {
+        case .add: return Color.green.opacity(0.10)
+        case .del: return Color.red.opacity(0.10)
+        case .hunk, .ctx: return Color.clear
+        }
+    }
+
+    var body: some View {
+        Text(text.isEmpty ? " " : text)
+            .font(.caption2.monospaced())
+            .foregroundStyle(fg)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .background(bg)
     }
 }
