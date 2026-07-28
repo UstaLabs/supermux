@@ -654,17 +654,17 @@ fun SessionWorkspaceDetail(
                 ) {
                     listOf(
                         ChatDetailLevel.LOW to "Messages only · tools on status line",
-                        ChatDetailLevel.MEDIUM to "Tool chips between messages",
-                        ChatDetailLevel.HIGH to "Coming soon",
+                        ChatDetailLevel.MEDIUM to "Quiet tool lines between messages",
+                        ChatDetailLevel.HIGH to "Terminal windows & file diffs",
                     ).forEach { (level, desc) ->
                         DropdownMenuItem(
                             text = {
                                 Column {
-                                    Text(level.label + if (level == ChatDetailLevel.HIGH) " · Soon" else "")
+                                    Text(level.label)
                                     Text(desc, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
                                 }
                             },
-                            enabled = level != ChatDetailLevel.HIGH,
+                            enabled = true,
                             onClick = {
                                 ChatDetailPrefs.set(overflowContext, level)
                                 detailSubmenu = false

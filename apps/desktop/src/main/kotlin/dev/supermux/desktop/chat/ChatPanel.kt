@@ -133,7 +133,9 @@ fun ChatPanel(
     LaunchedEffect(session.id) { reasoningData = app.sessionReasoning(session.id) }
 
     val chatDetail by ChatDetailPrefs.level.collectAsState()
-    val hideTools = effectiveChatDetail(chatDetail) == ChatDetailLevel.LOW
+    val detailMode = effectiveChatDetail(chatDetail)
+    val hideTools = detailMode == ChatDetailLevel.LOW
+    val highDetail = detailMode == ChatDetailLevel.HIGH
     val messages = messagesMap[session.id].orEmpty()
     val activity = activityMap[session.id].orEmpty()
     val timelineItems = remember(messagesMap, activityMap, session.id, hideTools) {
@@ -262,6 +264,7 @@ fun ChatPanel(
                         item = item,
                         loadBytes = { null }, // M4: attachment bytes fetch (chip-only for now)
                         onOpenFile = onOpenFile,
+                        highDetail = highDetail,
                     )
                 }
             }

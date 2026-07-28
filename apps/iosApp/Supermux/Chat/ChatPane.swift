@@ -447,8 +447,8 @@ struct SessionTranscript: View, Equatable {
                             case .message(let m): MessageRow(entry: m, broker: broker,
                                                              sessionId: session.id, workdir: session.workdir)
                             case .tools(let rows):
-                                VStack(alignment: .leading, spacing: 4) {
-                                    ForEach(rows) { ToolRowView(row: $0) }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    ForEach(rows) { ToolRowView(row: $0, highDetail: chatDetail.effective == .high) }
                                 }
                             }
                         }

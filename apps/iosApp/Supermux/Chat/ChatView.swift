@@ -275,17 +275,15 @@ struct ChatView: View {
             Menu {
                 ForEach(ChatDetailLevel.allCases, id: \.self) { level in
                     Button {
-                        guard level.isImplemented else { return }
                         UserDefaults.standard.set(level.rawValue, forKey: "chatDetailLevel")
                     } label: {
                         HStack {
-                            Text(level.label + (level == .high ? " · Soon" : ""))
+                            Text(level.label)
                             if ChatDetailLevel.parse(UserDefaults.standard.string(forKey: "chatDetailLevel")) == level {
                                 Image(systemName: "checkmark")
                             }
                         }
                     }
-                    .disabled(!level.isImplemented)
                 }
             } label: {
                 let cur = ChatDetailLevel.parse(UserDefaults.standard.string(forKey: "chatDetailLevel"))

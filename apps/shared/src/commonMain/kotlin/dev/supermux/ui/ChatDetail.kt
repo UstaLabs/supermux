@@ -1,8 +1,8 @@
 package dev.supermux.ui
 
 /**
- * Chat transcript density levels (web/iOS/Android/Desktop parity).
- * High is stubbed until a dedicated high-detail design ships.
+ * Chat transcript density levels (web/iOS/Android/Desktop/macOS parity).
+ * High: terminal windows + file diffs for Bash/Edit/Write; quiet rows for other tools.
  */
 enum class ChatDetailLevel {
     LOW,
@@ -28,21 +28,26 @@ enum class ChatDetailLevel {
         fun parse(raw: String?): ChatDetailLevel = when (raw?.lowercase()) {
             "low" -> LOW
             "medium" -> MEDIUM
-            else -> MEDIUM // high + garbage clamp
+            "high" -> HIGH
+            else -> MEDIUM
         }
     }
 }
 
-/** Fully implemented levels for Phase 1. */
+/** All three levels are implemented. */
 fun isChatDetailImplemented(level: ChatDetailLevel): Boolean =
-    level == ChatDetailLevel.LOW || level == ChatDetailLevel.MEDIUM
+    level == ChatDetailLevel.LOW || level == ChatDetailLevel.MEDIUM || level == ChatDetailLevel.HIGH
 
-/** Phase 1 render mode — high collapses to medium. */
+/** Effective render mode — all implemented levels pass through. */
 fun effectiveChatDetail(level: ChatDetailLevel): ChatDetailLevel =
-    if (level == ChatDetailLevel.LOW) ChatDetailLevel.LOW else ChatDetailLevel.MEDIUM
+    when (level) {
+        ChatDetailLevel.LOW -> ChatDetailLevel.LOW
+        ChatDetailLevel.HIGH -> ChatDetailLevel.HIGH
+        else -> ChatDetailLevel.MEDIUM
+    }
 
 /**
- * Reject high for set-level APIs.
+ * Reject unimplemented levels for set-level APIs.
  * @return the level to store, or null if the request should no-op.
  */
 fun sanitizeSetLevel(level: ChatDetailLevel): ChatDetailLevel? =
