@@ -121,6 +121,7 @@ struct RootView: View {
         .smFullScreenCover(item: $debugArchived) { item in
             if let b = fleet.activeBroker {
                 NavigationStack { ArchivedChatView(broker: b, archived: item.dto) }
+                    .smMacSheetFrame(minWidth: 760, minHeight: 560)
             }
         }
         .onReceive(PushRouter.shared.$pendingSessionId) { id in
@@ -236,7 +237,7 @@ struct RootView: View {
                         }
                     }
             }
-            .frame(minWidth: 760, minHeight: 560)
+            .smMacSheetFrame(minWidth: 760, minHeight: 560)
         }
         #endif
     }

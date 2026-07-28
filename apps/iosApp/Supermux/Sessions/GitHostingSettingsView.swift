@@ -414,9 +414,7 @@ private struct AddForgeSheet: View {
         }
         .tint(Theme.teal)
         .smPresentationDetents([.medium, .large])
-        #if os(macOS)
-        .frame(minWidth: 620, minHeight: 540)
-        #endif
+        .smMacSheetFrame(minWidth: 620, minHeight: 540)
         .onAppear {
             if let presetKind, let preset = ForgeProvider(rawValue: presetKind) { kind = preset }
             Task { cliStatus = try? await broker.api.listForges().cli }

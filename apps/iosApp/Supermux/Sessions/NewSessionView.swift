@@ -133,12 +133,6 @@ struct NewSessionView: View {
             #endif
         }
         .navigationTitle("New session").smInlineNavigationTitle()
-        .toolbar {
-            ToolbarItem(placement: .smTopTrailing) {
-                Button("Save draft") { saveAsDraft() }
-                    .disabled(workdir.isEmpty || composer.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || spawning)
-            }
-        }
         .tint(Theme.teal)
         // Keyed on the active host (baseURL) so a host switch re-wires the composer context and
         // reloads that host's projects + installed agents (spec §5). Single-host: runs once on appear.
@@ -270,14 +264,6 @@ struct NewSessionView: View {
             )
         }
         #endif
-        .sheet(isPresented: $worktreeSheet) {
-            WorktreeSheet(
-                useWorktree: $useWorktree, baseBranch: $baseBranch,
-                branches: repoInfo?.branches, currentBranch: repoInfo?.currentBranch,
-                loading: worktreeFetching, onAppearRefresh: onWorktreeRefresh
-            )
-            .smPresentationDetents([.medium, .large])
-        }
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
             Task { await composer.loadPhotos(items); photoItems = [] }
@@ -406,17 +392,40 @@ struct NewSessionView: View {
 
     private var worktreePill: some View {
         Button { worktreeSheet = true } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
                 Image(systemName: "arrow.triangle.branch")
-                    .font(.caption2).opacity(useWorktree ? 0.9 : 0.5)
-                Text(worktreeLabel).font(.caption.weight(.medium)).lineLimit(1)
-                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).opacity(0.6)
+                    .font(.system(size: 11, weight: .semibold))
+                    .opacity(useWorktree ? 1 : 0.55)
+                Text(worktreeLabel)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .opacity(0.55)
             }
             .foregroundStyle(useWorktree ? AnyShapeStyle(Theme.teal) : AnyShapeStyle(.secondary))
-            .padding(.horizontal, 11).padding(.vertical, 5)
-            .background(Color.smSecondaryBackground, in: Capsule())
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .background(
+                useWorktree ? Theme.teal.opacity(0.10) : Color.smSecondaryBackground,
+                in: Capsule()
+            )
+            .overlay(
+                Capsule().strokeBorder(
+                    useWorktree ? Theme.teal.opacity(0.28) : Theme.hairline,
+                    lineWidth: 1
+                )
+            )
         }
         .smMacPlainButton()
+        // Mac: popover anchored to the pill (default sheet is tiny / unreadable).
+        // iOS: detented sheet via smOptionPicker.
+        .smOptionPicker(isPresented: $worktreeSheet) {
+            WorktreeSheet(
+                useWorktree: $useWorktree, baseBranch: $baseBranch,
+                branches: repoInfo?.branches, currentBranch: repoInfo?.currentBranch,
+                loading: worktreeFetching, onAppearRefresh: onWorktreeRefresh
+            )
+        }
     }
 
     /// Re-list branches whenever the worktree sheet opens. Network `git fetch` is
@@ -466,23 +475,27 @@ struct NewSessionView: View {
             }
             // Pickers get their own row so "Claude" / a long model name never get squeezed
             // into vertical letter-columns (the action buttons used to share this row and
-            // overflow it on a narrow iPhone).
-            HStack(spacing: 12) {
+            // overflow it on a narrow iPhone). Soft filter-pill chrome matches chat composer.
+            HStack(spacing: 8) {
                 #if os(macOS)
                 // The logo sits OUTSIDE the Menu label on the Mac: AppKit flattens custom
                 // menu-button labels and draws asset images at intrinsic size — a giant
                 // unscaled logo. iOS below keeps the logo inside the tap target, unchanged.
-                HStack(spacing: 5) {
+                HStack(spacing: 6) {
                     AgentLogo(agent: agent, size: 18)
                     Menu {
                         ForEach(agents, id: \.self) { a in
                             Button(a.capitalized) { agent = a; launcherState.prefs.agent = a }
                         }
                     } label: {
-                        HStack(spacing: 5) {
-                            Text(agent.capitalized).font(.subheadline.weight(.medium)).lineLimit(1)
-                            Image(systemName: "chevron.down").font(.caption2)
-                        }.foregroundStyle(.primary)
+                        HStack(spacing: 4) {
+                            Text(agent.capitalized).font(.caption.weight(.semibold)).lineLimit(1)
+                            Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.5)
+                        }
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Color.smTertiaryFill, in: Capsule())
+                        .overlay(Capsule().strokeBorder(Theme.hairline, lineWidth: 1))
                     }
                     .smMacBorderlessMenu()
                 }
@@ -494,14 +507,15 @@ struct NewSessionView: View {
                 } label: {
                     HStack(spacing: 5) {
                         AgentLogo(agent: agent, size: 18)
-                        Text(agent.capitalized).font(.subheadline.weight(.medium)).lineLimit(1)
-                        Image(systemName: "chevron.down").font(.caption2)
-                    }.foregroundStyle(.primary)
+                        Text(agent.capitalized).font(.caption.weight(.semibold)).lineLimit(1)
+                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.5)
+                    }
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(Color.smTertiaryFill, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Theme.hairline, lineWidth: 1))
                 }
                 #endif
-                // Always show the model menu (web LauncherModelPicker parity). Hiding it
-                // when the list is empty made cursor/opencode look model-less after a
-                // transient /models miss or before the cache warmed.
                 Menu {
                     Button("Default") {
                         model = nil
@@ -515,13 +529,16 @@ struct NewSessionView: View {
                     }
                 } label: {
                     HStack(spacing: 4) {
-                        Text(modelLabel).font(.subheadline.weight(.medium)).lineLimit(1)
-                        Image(systemName: "chevron.down").font(.caption2)
-                    }.foregroundStyle(.secondary)
+                        Image(systemName: "cpu").font(.system(size: 10, weight: .semibold))
+                        Text(modelLabel).font(.caption.weight(.semibold)).lineLimit(1)
+                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.5)
+                    }
+                    .foregroundStyle(model != nil ? Theme.teal : Color.secondary)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(model != nil ? Theme.teal.opacity(0.10) : Color.smTertiaryFill, in: Capsule())
+                    .overlay(Capsule().strokeBorder(model != nil ? Theme.teal.opacity(0.28) : Theme.hairline, lineWidth: 1))
                 }
                 .smMacBorderlessMenu()
-                // Thinking-level menu (web LauncherEffortPicker parity) — only when the agent offers
-                // a real choice. Mirrors the model menu's style.
                 if reasoningVisible {
                     Menu {
                         ForEach(reasoningLevels, id: \.id) { l in
@@ -532,36 +549,29 @@ struct NewSessionView: View {
                         }
                     } label: {
                         HStack(spacing: 4) {
-                            Image(systemName: "brain").font(.caption2)
-                            Text((reasoningLevel ?? "").capitalized).font(.subheadline.weight(.medium)).lineLimit(1)
-                            Image(systemName: "chevron.down").font(.caption2)
-                        }.foregroundStyle(.secondary)
+                            Image(systemName: "brain").font(.system(size: 10, weight: .semibold))
+                            Text((reasoningLevel ?? "").capitalized).font(.caption.weight(.semibold)).lineLimit(1)
+                            Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.5)
+                        }
+                        .foregroundStyle(Theme.teal)
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Theme.teal.opacity(0.10), in: Capsule())
+                        .overlay(Capsule().strokeBorder(Theme.teal.opacity(0.28), lineWidth: 1))
                     }
                     .smMacBorderlessMenu()
                 }
                 Spacer(minLength: 0)
             }
-            // Action row — attach · mic · send.
-            HStack(spacing: 16) {
+            // Action row — attach · mic · save draft · send.
+            HStack(spacing: 10) {
                 AttachMenu(showPhotos: $showPhotos, showFiles: $showFiles, showCamera: $showCamera,
                            showVideoCamera: $showVideoCamera)
-                // Hidden while recording/dictating (the RecordingBar above owns stop/cancel) —
-                // parity with the original launcher + the chat composer.
                 if !composer.recorder.isRecording && !composer.dictation.isListening {
                     MicButton(model: composer)
                 }
-                Spacer()
-                Button(action: spawn) {
-                    if spawning {
-                        ProgressView().tint(.white).frame(width: 40, height: 40)
-                    } else {
-                        Image(systemName: "arrow.up").font(.headline.weight(.bold)).foregroundStyle(.white)
-                            .frame(width: 40, height: 40)
-                            .background(canSpawn ? Theme.teal : Color.gray.opacity(0.5), in: Circle())
-                    }
-                }
-                .smMacPlainButton()
-                .disabled(!canSpawn || spawning)
+                Spacer(minLength: 0)
+                OutlinePillButton(title: "Save draft", enabled: canSaveDraft && !spawning) { saveAsDraft() }
+                SendCircleButton(enabled: canSpawn, spinning: spawning) { spawn() }
             }
         }
         .padding(16)
@@ -569,10 +579,13 @@ struct NewSessionView: View {
     }
 
     private var canSpawn: Bool { !workdir.isEmpty }
+    private var canSaveDraft: Bool {
+        !workdir.isEmpty && !composer.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     private func saveAsDraft() {
         let text = composer.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !workdir.isEmpty, !text.isEmpty else { return }
+        guard canSaveDraft else { return }
         spawning = true
         Task {
             if let old = reopenDraft?.id {
@@ -1157,9 +1170,9 @@ private struct MacProjectPickerOverlay: View {
 }
 #endif
 
-/// Worktree + base-branch picker — native take on the web LauncherWorktreePicker:
-/// a toggle for the isolated worktree plus a searchable list of local/remote
-/// branches to cut it from. Fetches origin once when it opens (via onAppearRefresh).
+/// Worktree + base-branch picker — desktop-native menu (matches Mac project picker +
+/// web LauncherWorktreePicker): toggle, inline search, hoverable branch rows. No stock
+/// List/Form chrome — that looked dated and put search in an unreachable toolbar on Mac.
 private struct WorktreeSheet: View {
     @Binding var useWorktree: Bool
     @Binding var baseBranch: String
@@ -1169,52 +1182,190 @@ private struct WorktreeSheet: View {
     var onAppearRefresh: () async -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var search = ""
+    @FocusState private var searchFocused: Bool
 
-    private var allBranches: [String] { (branches?.local ?? []) + (branches?.remote ?? []) }
-    private var filtered: [String] {
+    private struct BranchItem: Identifiable {
+        let name: String
+        let isRemote: Bool
+        var id: String { "\(isRemote ? "r" : "l"):\(name)" }
+    }
+    private var allBranches: [BranchItem] {
+        (branches?.local ?? []).map { BranchItem(name: $0, isRemote: false) }
+            + (branches?.remote ?? []).map { BranchItem(name: $0, isRemote: true) }
+    }
+    private var filtered: [BranchItem] {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
-        return q.isEmpty ? allBranches : allBranches.filter { $0.lowercased().contains(q) }
+        return q.isEmpty ? allBranches : allBranches.filter { $0.name.lowercased().contains(q) }
     }
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    Toggle(isOn: $useWorktree) {
-                        Label("Run in isolated worktree", systemImage: "arrow.triangle.branch")
-                    }.tint(Theme.teal)
-                } footer: {
-                    Text("Runs the session on a fresh branch cut from the base below, so your working copy stays untouched.")
-                }
-                if useWorktree {
-                    Section {
-                        if loading && allBranches.isEmpty {
-                            HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Fetching…").foregroundStyle(.secondary) }
-                        } else if filtered.isEmpty {
-                            Text(allBranches.isEmpty ? "No branches" : "No match").foregroundStyle(.secondary)
+        VStack(spacing: 0) {
+            #if os(iOS)
+            HStack {
+                Text("Worktree").font(.headline)
+                Spacer()
+                Button("Done") { dismiss() }.fontWeight(.semibold)
+            }
+            .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 8)
+            #endif
+
+            VStack(alignment: .leading, spacing: 12) {
+                // Toggle row
+                Button {
+                    useWorktree.toggle()
+                    if useWorktree { searchFocused = true }
+                } label: {
+                    HStack(spacing: 10) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Theme.teal.opacity(useWorktree ? 0.16 : 0.08))
+                            Image(systemName: "arrow.triangle.branch")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(useWorktree ? Theme.teal : Color.primary.opacity(0.55))
                         }
-                        ForEach(filtered, id: \.self) { b in
-                            Button { baseBranch = b; useWorktree = true; dismiss() } label: {
-                                HStack {
-                                    Text(b).font(.callout.monospaced()).foregroundStyle(.primary).lineLimit(1)
-                                    Spacer()
-                                    if baseBranch == b { Image(systemName: "checkmark").foregroundStyle(Theme.teal) }
-                                }
-                            }
+                        .frame(width: 32, height: 32)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Isolated worktree")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                            Text("Fresh branch · leaves your working copy alone")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         }
-                    } header: {
-                        HStack {
-                            Text("Base branch")
-                            if loading && !allBranches.isEmpty { Spacer(); ProgressView().controlSize(.small) }
-                        }
+                        Spacer(minLength: 8)
+                        Image(systemName: useWorktree ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(useWorktree ? Theme.teal : Color.primary.opacity(0.22))
+                            .symbolRenderingMode(.hierarchical)
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 9)
+                    .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .background(
+                        useWorktree ? Theme.teal.opacity(0.07) : Color.primary.opacity(0.03),
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(useWorktree ? Theme.teal.opacity(0.22) : Theme.hairline, lineWidth: 1)
                     }
                 }
+                .buttonStyle(.plain)
+
+                if useWorktree {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Text("BASE BRANCH")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .tracking(0.6)
+                            Spacer()
+                            if loading {
+                                ProgressView().controlSize(.mini)
+                            }
+                        }
+                        .padding(.horizontal, 4)
+
+                        // Inline search field (command-palette style)
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(searchFocused ? Theme.teal : Color.primary.opacity(0.4))
+                            TextField("Search branches…", text: $search)
+                                .textFieldStyle(.plain)
+                                .font(.subheadline)
+                                .autocorrectionDisabled()
+                                .smNoAutocapitalization()
+                                .focused($searchFocused)
+                            if !search.isEmpty {
+                                Button {
+                                    search = ""
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(.tertiary)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Clear search")
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .frame(height: 34)
+                        .background(
+                            Color.smTertiaryBackground.opacity(0.72),
+                            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        )
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .strokeBorder(
+                                    searchFocused ? Theme.teal.opacity(0.6) : Theme.hairline,
+                                    lineWidth: searchFocused ? 1.5 : 1
+                                )
+                        }
+
+                        // Branch list
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 2) {
+                                if loading && allBranches.isEmpty {
+                                    HStack(spacing: 8) {
+                                        ProgressView().controlSize(.small)
+                                        Text("Fetching branches…")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 20)
+                                } else if filtered.isEmpty {
+                                    Text(allBranches.isEmpty ? "No branches found" : "No match")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 20)
+                                } else {
+                                    ForEach(filtered) { b in
+                                        MenuOptionRow(
+                                            title: b.name,
+                                            systemImage: b.isRemote ? "cloud" : "arrow.triangle.branch",
+                                            monospaced: true,
+                                            selected: baseBranch == b.name
+                                        ) {
+                                            baseBranch = b.name
+                                            useWorktree = true
+                                            dismiss()
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                        .frame(maxHeight: .infinity)
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                } else {
+                    Text("Turn this on to cut a fresh branch from a base, so the session never touches your working tree.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 4)
+                        .padding(.bottom, 4)
+                }
             }
-            .searchable(text: $search, placement: .smNavDrawerAlways, prompt: "Search branches")
-            .navigationTitle("Worktree").smInlineNavigationTitle()
-            .toolbar { ToolbarItem(placement: .smTopTrailing) { Button("Done") { dismiss() } } }
+            .padding(12)
+            .animation(.smooth(duration: 0.22), value: useWorktree)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color.smBackground)
         .tint(Theme.teal)
-        .task { await onAppearRefresh() }
+        .smPresentationDetents([.medium, .large])
+        // Compact desktop menu size — closer to web dropdown than a form sheet.
+        .smMacFixedFrame(width: 300, height: 400)
+        .task {
+            await onAppearRefresh()
+            #if os(macOS)
+            if useWorktree {
+                DispatchQueue.main.async { searchFocused = true }
+            }
+            #endif
+        }
     }
 }
+
+

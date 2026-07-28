@@ -87,6 +87,7 @@ struct AddHostView: View {
             #endif
         }
         .tint(Theme.teal)
+        .smMacSheetFrame(minWidth: 480, minHeight: 440)
     }
 
     @ViewBuilder private var modeContent: some View {
