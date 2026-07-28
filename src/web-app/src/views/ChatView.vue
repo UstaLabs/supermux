@@ -632,7 +632,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
                     />
                   </MessageContent>
                 </Message>
-                <div v-else class="flex flex-col gap-1.5">
+                <div v-else class="flex flex-col gap-0.5 py-0.5">
                   <template v-for="row in block.items" :key="row.key">
                     <ToolHigh
                       v-if="detailMode === 'high'"

@@ -31,7 +31,7 @@ const levelLabel = computed(() => chatDetail.levelLabel)
 
 const levels: { id: ChatDetailLevel; title: string; desc: string; disabled?: boolean }[] = [
   { id: "low", title: "Low", desc: "Messages only · tools on status line" },
-  { id: "medium", title: "Medium", desc: "Tool chips between messages" },
+  { id: "medium", title: "Medium", desc: "Quiet tool lines between messages" },
   { id: "high", title: "High", desc: "Terminal windows & file diffs" },
 ]
 

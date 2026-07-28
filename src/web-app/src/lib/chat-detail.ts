@@ -1,4 +1,5 @@
-/** Chat transcript density: low | medium | high. */
+/** Chat transcript density: low | medium | high.
+ *  Medium renders quiet inline tool rows (not chips); High adds terminal/diff panes. */
 
 export type ChatDetailLevel = "low" | "medium" | "high"
 
