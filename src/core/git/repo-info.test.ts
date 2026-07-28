@@ -45,3 +45,14 @@ test("getRepoInfo: a parent dir containing a sub-repo is not a repo root", () =>
   const info = getRepoInfo(parent)
   expect(info.eligible).toBe(false)
 })
+
+test("getRepoInfo: remote list drops origin/HEAD symref (bare origin and …/HEAD)", () => {
+  const dir = tmpRepo()
+  // Simulate a remote-tracking layout with the origin/HEAD symref git fetch creates.
+  execFileSync("git", ["-C", dir, "update-ref", "refs/remotes/origin/main", "HEAD"])
+  execFileSync("git", ["-C", dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"])
+  const info = getRepoInfo(dir)
+  expect(info.branches?.remote).toContain("origin/main")
+  expect(info.branches?.remote).not.toContain("origin")
+  expect(info.branches?.remote?.some((n) => n.endsWith("/HEAD"))).toBe(false)
+})

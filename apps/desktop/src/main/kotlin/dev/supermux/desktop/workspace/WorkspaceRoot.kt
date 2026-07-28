@@ -613,7 +613,7 @@ fun WorkspaceRoot(
                         validatePath = { hostApp.validatePath(it) },
                         loadModels = { hostApp.launcherModels(it) },
                         loadReasoningLevels = { a, m -> hostApp.launcherReasoning(a, m) },
-                        loadRepoInfo = { hostApp.launcherRepoInfo(it) },
+                        loadRepoInfo = { wd, fetch -> hostApp.launcherRepoInfo(wd, fetch) },
                         transcribeAudio = { bytes, name -> hostApp.transcribeAudio(null, bytes, name)?.text },
                         loadPrefs = { launcherStore.loadPrefs() },
                         onPrefsChange = { launcherStore.savePrefs(it) },

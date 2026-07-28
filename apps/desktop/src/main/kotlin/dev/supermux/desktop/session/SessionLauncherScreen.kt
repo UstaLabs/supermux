@@ -226,7 +226,8 @@ fun SessionLauncherScreen(
     validatePath: suspend (String) -> PathValidation?,
     loadModels: suspend (agent: String) -> List<ModelInfo>,
     loadReasoningLevels: suspend (agent: String, model: String?) -> ReasoningResponse?,
-    loadRepoInfo: suspend (workdir: String) -> RepoInfo?,
+    /** `fetch=true` refreshes origin remote-tracking refs (once per repo on dialog open). */
+    loadRepoInfo: suspend (workdir: String, fetch: Boolean) -> RepoInfo?,
     loadPrefs: suspend () -> LauncherPrefs,
     onPrefsChange: (LauncherPrefs) -> Unit,
     loadDraft: suspend () -> LauncherDraft,
@@ -346,16 +347,36 @@ fun SessionLauncherScreen(
     var useWorktree by remember { mutableStateOf(true) }
     var baseBranch by remember { mutableStateOf("") }
     var showWorktreeDialog by remember { mutableStateOf(false) }
+    var worktreeFetching by remember { mutableStateOf(false) }
+    var fetchedRepos by remember { mutableStateOf(setOf<String>()) }
     LaunchedEffect(selectedHost, workdir, launcherRestoring) {
         if (launcherRestoring) { repoInfo = null; return@LaunchedEffect }
-        val info = if (workdir.isBlank()) null else loadRepoInfo(workdir)
-        repoInfo = info
         val switchedRepoHost = lastRepoHost != null && lastRepoHost != selectedHost
+        if (switchedRepoHost) fetchedRepos = emptySet()
+        val info = if (workdir.isBlank()) null else loadRepoInfo(workdir, false)
+        repoInfo = info
         lastRepoHost = selectedHost
         if (switchedRepoHost || shouldResetBaseBranchOnWorkdirChange(lastSeenWorkdir, workdir, baseBranch, launcherRestoring)) {
             baseBranch = info?.currentBranch ?: ""
         }
         lastSeenWorkdir = workdir
+    }
+    // Re-list branches whenever the worktree dialog opens; network fetch once per repo (web/iOS parity).
+    LaunchedEffect(showWorktreeDialog, workdir) {
+        if (!showWorktreeDialog || workdir.isBlank()) return@LaunchedEffect
+        val root = repoInfo?.repoRoot
+        val shouldFetch = root != null && root !in fetchedRepos
+        worktreeFetching = shouldFetch
+        val fresh = loadRepoInfo(workdir, shouldFetch)
+        if (fresh != null) {
+            repoInfo = fresh
+            if (baseBranch.isBlank()) baseBranch = fresh.currentBranch.orEmpty()
+            if (shouldFetch) {
+                val r = fresh.repoRoot
+                if (r != null) fetchedRepos = fetchedRepos + r
+            }
+        }
+        worktreeFetching = false
     }
 
     // Restore persisted prefs + draft ONCE. Flipping launcherRestoring false is the LAST assignment
@@ -840,6 +861,7 @@ fun SessionLauncherScreen(
             onToggle = { useWorktree = it },
             baseBranch = baseBranch,
             repoInfo = repoInfo,
+            loading = worktreeFetching,
             onPickBranch = { branch ->
                 baseBranch = branch
                 useWorktree = true
@@ -1105,6 +1127,7 @@ private fun WorktreeDialog(
     onToggle: (Boolean) -> Unit,
     baseBranch: String,
     repoInfo: RepoInfo?,
+    loading: Boolean = false,
     onPickBranch: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1146,7 +1169,20 @@ private fun WorktreeDialog(
             }
 
             if (useWorktree) {
-                Text("Base branch", color = cs.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("Base branch", color = cs.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    if (loading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = cs.onSurfaceVariant,
+                        )
+                    }
+                }
                 OutlinedTextField(
                     value = search,
                     onValueChange = { search = it },
@@ -1157,7 +1193,11 @@ private fun WorktreeDialog(
                 Spacer(Modifier.height(8.dp))
                 if (filtered.isEmpty()) {
                     Text(
-                        if (allBranches.isEmpty()) "No branches" else "No match",
+                        when {
+                            loading && allBranches.isEmpty() -> "Fetching…"
+                            allBranches.isEmpty() -> "No branches"
+                            else -> "No match"
+                        },
                         color = cs.onSurfaceVariant,
                         fontSize = 13.sp,
                         modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),

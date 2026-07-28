@@ -419,15 +419,18 @@ struct NewSessionView: View {
         .smMacPlainButton()
     }
 
-    /// Fetch origin once per repo when the worktree sheet opens, so the branch
-    /// list reflects what's been pushed since the last local fetch (web parity).
+    /// Re-list branches whenever the worktree sheet opens. Network `git fetch` is
+    /// once per repo (fetchedRepos); we always re-read local + remote-tracking refs
+    /// so newly created branches show up (web SessionLauncherView parity).
     private func onWorktreeRefresh() async {
-        guard let root = repoInfo?.repoRoot, !workdir.isEmpty, !fetchedRepos.contains(root) else { return }
-        worktreeFetching = true
-        if let fresh = await broker.repoInfo(workdir, fetch: true) {
+        guard !workdir.isEmpty else { return }
+        let root = repoInfo?.repoRoot
+        let shouldFetch = root.map { !fetchedRepos.contains($0) } ?? false
+        worktreeFetching = shouldFetch
+        if let fresh = await broker.repoInfo(workdir, fetch: shouldFetch) {
             repoInfo = fresh
             if baseBranch.isEmpty { baseBranch = fresh.currentBranch ?? "" }
-            fetchedRepos.insert(root)
+            if shouldFetch, let r = fresh.repoRoot { fetchedRepos.insert(r) }
         }
         worktreeFetching = false
     }

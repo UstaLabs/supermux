@@ -974,8 +974,8 @@ class DesktopAppState(
         runApi("launcherReasoning") { api.getReasoningLevels(agent, model) }
 
     /** GET /repos/info?path= → git status for the launcher's worktree picker. Null on failure. */
-    suspend fun launcherRepoInfo(workdir: String): RepoInfo? =
-        runApi("launcherRepoInfo") { api.getRepoInfo(workdir) }
+    suspend fun launcherRepoInfo(workdir: String, fetch: Boolean = false): RepoInfo? =
+        runApi("launcherRepoInfo") { api.getRepoInfo(workdir, fetch) }
 
     /** GET /commands/preview?agent=&workdir= → the agent's slash commands for the launcher (no
      *  session yet). Empty on failure OR a blank workdir (AppViewModel.launcherCommands parity —

@@ -113,7 +113,8 @@ fun SessionLauncherScreen(
     // refetched when either changes. Codex's are per-model; Cursor/OpenCode have none.
     loadReasoningLevels: suspend (agent: String, model: String?) -> ReasoningResponse? = { _, _ -> null },
     // Git status for the chosen project; gates the worktree picker on RepoInfo.eligible.
-    loadRepoInfo: suspend (workdir: String) -> RepoInfo? = { null },
+    // `fetch=true` refreshes origin remote-tracking refs (once per repo on sheet open).
+    loadRepoInfo: suspend (workdir: String, fetch: Boolean) -> RepoInfo? = { _, _ -> null },
     // Agent slash commands for the composer's "/" menu (no session yet); refetched on agent/project
     // change, empty = no menu (iOS NewSessionView previewCommands parity).
     loadCommands: suspend (agent: String, workdir: String) -> List<SlashCommand> = { _, _ -> emptyList() },
@@ -251,11 +252,14 @@ fun SessionLauncherScreen(
 
     // Worktree picker (iOS: useWorktree defaults on; gated on repoInfo.eligible).
     var showWorktreeSheet by remember { mutableStateOf(false) }
+    var worktreeFetching by remember { mutableStateOf(false) }
+    var fetchedRepos by remember { mutableStateOf(setOf<String>()) }
     LaunchedEffect(selectedHostId, workdir, launcherRestoring) {
         if (launcherRestoring) { repoInfo = null; return@LaunchedEffect }
-        val info = if (workdir.isBlank()) null else loadRepoInfo(workdir)
-        repoInfo = info
         val switchedRepoHost = lastRepoHostId != null && lastRepoHostId != selectedHostId
+        if (switchedRepoHost) fetchedRepos = emptySet()
+        val info = if (workdir.isBlank()) null else loadRepoInfo(workdir, false)
+        repoInfo = info
         lastRepoHostId = selectedHostId
         if (switchedRepoHost || (lastSeenWorkdir != null && lastSeenWorkdir != workdir)) {
             baseBranch = info?.currentBranch ?: ""
@@ -263,6 +267,23 @@ fun SessionLauncherScreen(
             baseBranch = info?.currentBranch ?: ""
         }
         lastSeenWorkdir = workdir
+    }
+    // Re-list branches whenever the worktree sheet opens; network fetch once per repo (web/iOS parity).
+    LaunchedEffect(showWorktreeSheet, workdir) {
+        if (!showWorktreeSheet || workdir.isBlank()) return@LaunchedEffect
+        val root = repoInfo?.repoRoot
+        val shouldFetch = root != null && root !in fetchedRepos
+        worktreeFetching = shouldFetch
+        val fresh = loadRepoInfo(workdir, shouldFetch)
+        if (fresh != null) {
+            repoInfo = fresh
+            if (baseBranch.isBlank()) baseBranch = fresh.currentBranch.orEmpty()
+            if (shouldFetch) {
+                val r = fresh.repoRoot
+                if (r != null) fetchedRepos = fetchedRepos + r
+            }
+        }
+        worktreeFetching = false
     }
 
     // Agent slash commands for the composer "/" menu — refetched when the agent or project changes
@@ -1009,6 +1030,7 @@ fun SessionLauncherScreen(
             onToggle = { useWorktree = it },
             baseBranch = baseBranch,
             repoInfo = repoInfo,
+            loading = worktreeFetching,
             onPickBranch = { branch ->
                 baseBranch = branch
                 useWorktree = true
@@ -1228,6 +1250,7 @@ private fun WorktreeSheet(
     onToggle: (Boolean) -> Unit,
     baseBranch: String,
     repoInfo: RepoInfo?,
+    loading: Boolean = false,
     onPickBranch: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1287,13 +1310,27 @@ private fun WorktreeSheet(
             }
 
             if (useWorktree) {
-                Text(
-                    text = "Base branch",
-                    color = cs.onSurfaceVariant,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = "Base branch",
+                        color = cs.onSurfaceVariant,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    if (loading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = cs.onSurfaceVariant,
+                        )
+                    }
+                }
                 OutlinedTextField(
                     value = search,
                     onValueChange = { search = it },
@@ -1307,7 +1344,11 @@ private fun WorktreeSheet(
                 Spacer(Modifier.height(8.dp))
                 if (filtered.isEmpty()) {
                     Text(
-                        if (allBranches.isEmpty()) "No branches" else "No match",
+                        when {
+                            loading && allBranches.isEmpty() -> "Fetching…"
+                            allBranches.isEmpty() -> "No branches"
+                            else -> "No match"
+                        },
                         color = cs.onSurfaceVariant,
                         fontSize = 13.sp,
                         modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),

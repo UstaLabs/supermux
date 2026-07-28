@@ -164,7 +164,7 @@ class SessionLauncherScreenTest {
                 validatePath = { null },
                 loadModels = { models(it) },
                 loadReasoningLevels = { a, m -> reasoning(a, m) },
-                loadRepoInfo = { repoInfo },
+                loadRepoInfo = { _, _ -> repoInfo },
                 loadPrefs = { prefs },
                 onPrefsChange = onPrefsChange,
                 loadDraft = { draft },
