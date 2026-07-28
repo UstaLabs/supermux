@@ -239,7 +239,9 @@ function isBashTool(norm: string, raw: string): boolean {
 function isEditTool(norm: string, raw: string): boolean {
   if (norm === "Edit" || norm === "Write") return true
   const k = raw.toLowerCase()
-  return k.includes("edit") || k.includes("write") || k.includes("patch") || k.includes("filechange") || k.includes("file_change")
+  // "replace" covers search_replace / str_replace (Grok Build, Cursor, etc.)
+  return k.includes("edit") || k.includes("write") || k.includes("patch")
+    || k.includes("replace") || k.includes("filechange") || k.includes("file_change")
 }
 
 function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike, workdir: string | undefined): DetailSummary {

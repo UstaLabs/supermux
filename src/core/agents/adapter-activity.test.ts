@@ -438,6 +438,34 @@ test("grok description from rawInput.description", () => {
   })
 })
 
+test("grok search_replace synthesizes unified diff from old_string/new_string", () => {
+  // Edit tools don't return a diff in the tool result — we build one from the args.
+  const ev = {
+    tool: "search_replace", phase: "started" as const, call_id: "g-sr",
+    detail: {
+      title: "search_replace",
+      rawInput: {
+        path: "/w/hello.ts",
+        old_string: "return `hello ${name}`",
+        new_string: "return `Hello, ${name}!`",
+      },
+    },
+  }
+  const [r] = toActivityEvents("grok", ev, NOW, WD)
+  expect(r).toMatchObject({
+    tool: "Edit",
+    title: "Edit: hello.ts",
+    body: {
+      kind: "edit",
+      path: "hello.ts",
+      oldText: "return `hello ${name}`",
+      newText: "return `Hello, ${name}!`",
+    },
+  })
+  expect(r!.body && r!.body.kind === "edit" && r!.body.diff).toContain("-return `hello ${name}`")
+  expect(r!.body && r!.body.kind === "edit" && r!.body.diff).toContain("+return `Hello, ${name}!`")
+})
+
 // --- defensive ---
 
 test("defensive: missing detail -> no summary, no throw", () => {
