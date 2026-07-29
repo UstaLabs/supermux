@@ -509,7 +509,7 @@ fun ChatPanel(
                 state = listState,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(start = Space.sm, end = Space.md, top = Space.md),
+                    .padding(horizontal = Space.md, vertical = Space.md),
                 contentPadding = PaddingValues(bottom = with(density) { composerHeightPx.toDp() } + Space.md),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
@@ -1134,15 +1134,11 @@ private fun WorkingIndicator(
             (agent.tool?.takeIf { agent.detail == "running" }?.let { " · $it" } ?: "")
         base + (if (durationLabel.isNotEmpty()) " · $durationLabel" else "")
     }
-    // Terminal-prompt status line: a gutter-aligned live pulse continues the spine's thread,
-    // then a mono status + elapsed, then a compact stop. Reads as the prompt of a live session.
+    // Minimal live status: mono label + elapsed, compact stop — no gutter pulse dots.
     Row(
         modifier = Modifier.fillMaxWidth().padding(top = Space.sm, bottom = Space.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.width(44.dp)) {
-            BreathingDot(cs.primary, Modifier.align(Alignment.CenterEnd).padding(end = 6.dp), size = 7.dp)
-        }
         Text(
             text = label,
             fontFamily = MonoFontFamily,
@@ -1179,7 +1175,6 @@ private fun WorkingIndicator(
 @Composable
 private fun BgTaskChipsRow(tasks: List<ServerFrame.BgTask>) {
     val cs = MaterialTheme.colorScheme
-    val sem = LocalSemantics.current
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -1191,7 +1186,7 @@ private fun BgTaskChipsRow(tasks: List<ServerFrame.BgTask>) {
         modifier = Modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(start = 44.dp, top = Space.xs, bottom = Space.xs, end = Space.md),
+            .padding(top = Space.xs, bottom = Space.xs),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1204,7 +1199,6 @@ private fun BgTaskChipsRow(tasks: List<ServerFrame.BgTask>) {
                     .border(1.dp, cs.outlineVariant, RoundedCornerShape(999.dp))
                     .padding(horizontal = 10.dp, vertical = 3.dp),
             ) {
-                BreathingDot(sem.warning, size = 6.dp)
                 Text(
                     text = t.label + " · " + formatDuration(((now - t.startedAt).coerceAtLeast(0)) / 1000),
                     fontFamily = MonoFontFamily,
@@ -1229,9 +1223,6 @@ private fun WaitingIndicator(bgOpen: Int) {
         modifier = Modifier.fillMaxWidth().padding(top = Space.sm, bottom = Space.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.width(44.dp)) {
-            BreathingDot(sem.warning, Modifier.align(Alignment.CenterEnd).padding(end = 6.dp), size = 7.dp)
-        }
         Text(
             text = "waiting · " + if (bgOpen == 1) "1 background task" else "$bgOpen background tasks",
             fontFamily = MonoFontFamily,
@@ -1254,9 +1245,6 @@ private fun SendingIndicator(onStop: () -> Unit) {
         modifier = Modifier.fillMaxWidth().padding(top = Space.sm, bottom = Space.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.width(44.dp)) {
-            BreathingDot(cs.primary, Modifier.align(Alignment.CenterEnd).padding(end = 6.dp), size = 7.dp)
-        }
         Text(
             text = "sending",
             fontFamily = MonoFontFamily,
