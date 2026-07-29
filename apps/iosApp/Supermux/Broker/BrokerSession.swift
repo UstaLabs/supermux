@@ -38,6 +38,11 @@ final class BrokerSession {
     private(set) var sessions: [SessionInfo] = []
     private(set) var messages: [String: [LogEntry]] = [:]
     private(set) var activity: [String: [ActivityEvent]] = [:]
+    /// Per-session transcript buffers. Nested `@Observable` so a `message_append` for session A
+    /// does **not** invalidate a `SessionTranscript` that only reads session B — which the flat
+    /// `messages`/`activity` dictionaries always did (Observation tracks the whole property).
+    /// Session list previews still read the flat maps (they *want* cross-session updates).
+    @ObservationIgnored private var chatBuffers: [String: SessionChatBuffer] = [:]
     private(set) var agentPhase: [String: String] = [:]
     private(set) var agentSince: [String: Int64] = [:]
     private(set) var agentWorking: [String: Bool] = [:]
@@ -215,6 +220,28 @@ final class BrokerSession {
     }
     #endif
 
+    /// Observable per-session log+activity. Call sites that render ONE session's transcript
+    /// must read through this — not `messages[id]` — so other sessions' traffic doesn't
+    /// re-render the open chat.
+    func chatBuffer(for sessionId: String) -> SessionChatBuffer {
+        if let b = chatBuffers[sessionId] { return b }
+        let b = SessionChatBuffer()
+        b.messages = messages[sessionId] ?? []
+        b.activity = activity[sessionId] ?? []
+        chatBuffers[sessionId] = b
+        return b
+    }
+
+    /// Keep the flat maps (session-list previews) and the per-session buffer in lockstep.
+    private func writeMessages(_ sessionId: String, _ log: [LogEntry]) {
+        messages[sessionId] = log
+        chatBuffer(for: sessionId).messages = log
+    }
+    private func writeActivity(_ sessionId: String, _ events: [ActivityEvent]) {
+        activity[sessionId] = events
+        chatBuffer(for: sessionId).activity = events
+    }
+
     // Not `private`: SupermuxTests drives this directly (no fake-server seam exists on
     // `client`/`BrokerClient`, so the unit tests for the `agent_state` reduction — see
     // `AgentDeadStateTests` — call this the same way the `start()` frame loop does).
@@ -224,6 +251,10 @@ final class BrokerSession {
             sessions = s.sessions
             messages = s.logs
             activity = s.activity
+            // Refresh / create per-session buffers so open transcripts observe the new contents
+            // without going through the flat maps.
+            for (id, log) in s.logs { chatBuffer(for: id).messages = log }
+            for (id, events) in s.activity { chatBuffer(for: id).activity = events }
             agentPhase = s.agentState.mapValues { $0.phase }
             agentSince = s.agentState.compactMapValues { $0.since?.int64Value }
             agentWorking = s.agentState.mapValues { $0.working }
@@ -287,6 +318,7 @@ final class BrokerSession {
             agentWaiting.removeValue(forKey: r.id)
             agentBgOpen.removeValue(forKey: r.id)
             bgTasks.removeValue(forKey: r.id)
+            chatBuffers.removeValue(forKey: r.id) // per-session transcript observation buffer
             evictTerminalHosts(sessionId: r.id)   // session killed → tear down its live terminals
             dropEditorHost(sessionId: r.id)       // …its editor webview (stop() breaks the bridge cycle)
             if let removedName { evictDisplayHosts(sessionName: removedName) }  // …and its displays
@@ -319,11 +351,16 @@ final class BrokerSession {
             }
         case .messageAppend(let m):
             // Drop the optimistic local echo when the real inbound message arrives.
+            var log = messages[m.session] ?? []
             if m.entry.direction.hasPrefix("in") {
-                messages[m.session]?.removeAll { $0.id.hasPrefix("local-") && $0.text == m.entry.text }
+                log.removeAll { $0.id.hasPrefix("local-") && $0.text == m.entry.text }
             }
-            messages[m.session, default: []].append(m.entry)
-        case .activityAppend(let a): activity[a.session, default: []].append(a.event)
+            log.append(m.entry)
+            writeMessages(m.session, log)
+        case .activityAppend(let a):
+            var events = activity[a.session] ?? []
+            events.append(a.event)
+            writeActivity(a.session, events)
         case .bgTasks(let f): bgTasks[f.session] = f.tasks
         case .agentState(let st):
             agentPhase[st.session] = st.phase
@@ -380,13 +417,15 @@ final class BrokerSession {
         // Optimistic local echo so the message appears instantly (web parity).
         // The broker's real inbound echo replaces it (deduped in reduce()).
         if !t.isEmpty {
+            var log = messages[sessionId] ?? []
             let optimistic = LogEntry(
-                id: "local-\(messages[sessionId]?.count ?? 0)-\(abs(t.hashValue))",
+                id: "local-\(log.count)-\(abs(t.hashValue))",
                 ts: ISO8601DateFormatter().string(from: Date()),
                 direction: "inbound", text: t,
                 op: nil, channel: nil, chat_id: nil, message_id: nil, attachments: nil
             )
-            messages[sessionId, default: []].append(optimistic)
+            log.append(optimistic)
+            writeMessages(sessionId, log)
         }
         let frame = ClientFrameSend(session: sessionId, op: "reply",
                                     args: SendArgs(text: t, attachments: atts.isEmpty ? nil : atts))
@@ -624,7 +663,7 @@ final class BrokerSession {
         // snapshot may have populated the buffer while the fetch was in flight — don't clobber
         // newer state with the historical fetch.
         guard messages[sessionId]?.isEmpty ?? true else { return }
-        if !fetched.isEmpty { messages[sessionId] = fetched }
+        if !fetched.isEmpty { writeMessages(sessionId, fetched) }
     }
 
     // Usage (typed), device mint/revoke, proxy privacy — mirror the web pages.
@@ -1053,6 +1092,14 @@ final class BrokerSession {
             displayHosts.removeValue(forKey: id)?.host.stop()
         }
     }
+}
+
+/// Per-session messages + activity. Nested under `BrokerSession` so Observation can track one
+/// session's transcript without invalidating every other open chat view.
+@Observable
+final class SessionChatBuffer {
+    var messages: [LogEntry] = []
+    var activity: [ActivityEvent] = []
 }
 
 /// Tiny reference relay so `BrokerSession.init` can hand the shared `BrokerClient` a connection

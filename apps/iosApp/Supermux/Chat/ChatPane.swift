@@ -417,7 +417,10 @@ struct SessionTranscript: View, Equatable {
         lhs.session.id == rhs.session.id
     }
 
-    private var log: [LogEntry] { broker.messages[session.id] ?? [] }
+    /// Per-session buffer (not the flat `messages`/`activity` maps) so other sessions' traffic
+    /// does not re-render this transcript. See `BrokerSession.chatBuffer(for:)`.
+    private var chat: SessionChatBuffer { broker.chatBuffer(for: session.id) }
+    private var log: [LogEntry] { chat.messages }
     private var phase: String? { broker.agentPhase[session.id] }
     private var working: Bool { broker.agentWorking[session.id] == true }
     private var sending: Bool { broker.pendingSend.contains(session.id) }
@@ -427,7 +430,7 @@ struct SessionTranscript: View, Equatable {
     private var visibleBgTasks: [ServerFrameBgTask] {
         (broker.bgTasks[session.id] ?? []).filter { $0.status == "running" }
     }
-    private var activityEvents: [ActivityEvent] { broker.activity[session.id] ?? [] }
+    private var activityEvents: [ActivityEvent] { chat.activity }
     private var chatDetail: ChatDetailLevel { ChatDetailLevel.parse(chatDetailRaw) }
     /// Messages + tool-call activity, time-merged into blocks (parity with the web ChatView).
     private var blocks: [ChatBlock] {
@@ -526,7 +529,11 @@ struct SessionTranscript: View, Equatable {
     @ViewBuilder private func blockRow(_ block: ChatBlock) -> some View {
         switch block {
         case .message(let m):
+            // `.equatable()` keeps MessageRow (and its MarkdownView) from re-running body when
+            // SessionTranscript rebuilds for an unrelated broker observation (other sessions
+            // appending messages into the shared `messages` dict, phase ticks, etc.).
             MessageRow(entry: m, broker: broker, sessionId: session.id, workdir: session.workdir)
+                .equatable()
         case .tools(let rows):
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(rows) { ToolRowView(row: $0, highDetail: chatDetail.effective == .high) }

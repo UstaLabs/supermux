@@ -9,12 +9,22 @@ import QuickLook
 import UniformTypeIdentifiers
 import AVKit
 
-struct MessageRow: View {
+struct MessageRow: View, Equatable {
     let entry: LogEntry
     let broker: BrokerSession
     let sessionId: String
     let workdir: String
     private var isAgent: Bool { entry.direction.hasPrefix("out") }
+
+    /// Skip re-render when the parent transcript rebuilds for an unrelated observation
+    /// (other sessions' messages, agent phase ticks) but this entry is unchanged.
+    static func == (lhs: MessageRow, rhs: MessageRow) -> Bool {
+        lhs.entry.id == rhs.entry.id
+            && lhs.entry.text == rhs.entry.text
+            && lhs.entry.direction == rhs.entry.direction
+            && (lhs.entry.attachments?.count ?? 0) == (rhs.entry.attachments?.count ?? 0)
+            && lhs.sessionId == rhs.sessionId
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -24,7 +34,8 @@ struct MessageRow: View {
                     MarkdownView(text: text, onOpenFile: { ref in
                         broker.openFileFromMessage(sessionId: sessionId, workdir: workdir, ref: ref)
                     })
-                        .transcriptBody()
+                    .equatable()
+                    .transcriptBody()
                 } else {
                     Text(text).font(messageFont.weight(.medium))
                         .textSelection(.enabled)
