@@ -195,12 +195,31 @@ test("appends the static reply fallback when no plugins registry is present", ()
 // in the resulting command pointed at a non-existent src/prompts/ and
 // claude crashed on startup. We now verify the LAST --append-system-prompt-file
 // path (the dynamic memory-preamble) actually exists on disk.
+// Read the memory-preamble path off the STRUCTURED spec, never by regexing the
+// rendered shell command. Two ways the regex version lied:
+//   - `(\S+)` swallows the closing quote of the surrounding `bash -lc '…'` when
+//     the path lands last in the argv, producing a path that cannot exist;
+//   - "last --append-system-prompt-file" is the memory preamble only when the
+//     mux-core reply hook is installed. Without it (fresh machine, CI) the
+//     reply-fallback is appended after, and the tests silently assert about the
+//     wrong file.
+function memoryPreamblePathOf(spec: ClaudeSpawnSpec): string {
+  const paths = spec.argv.flatMap((a, i) => (a === "--append-system-prompt-file" ? [spec.argv[i + 1]!] : []))
+  expect(paths.length).toBeGreaterThan(0)
+  const preamble = paths.find((p) => p.includes("memory-preambles"))
+  expect(preamble).toBeDefined()
+  return preamble!
+}
+
 test("the resolved prompts path actually exists on disk", () => {
-  const cmd = buildClaudeSpawnCommand({ name: "x" })
-  const matches = [...cmd.matchAll(/--append-system-prompt-file\s+(\S+)/g)]
-  expect(matches.length).toBeGreaterThan(0)
-  const preamblePath = matches[matches.length - 1]![1]!
-  expect(existsSync(preamblePath)).toBe(true)
+  const spec = buildClaudeSpawnSpec({ name: "x" })
+  expect(existsSync(memoryPreamblePathOf(spec))).toBe(true)
+  // Every appended prompt file must exist, not just the preamble — a missing one
+  // is a spawn-time crash. (This is what the old last-match assertion was
+  // reaching for, minus the quoting bug.)
+  for (const a of spec.argv.flatMap((v, i) => (v === "--append-system-prompt-file" ? [spec.argv[i + 1]!] : []))) {
+    expect(existsSync(a)).toBe(true)
+  }
 })
 
 test("the resolved --add-dir path actually exists on disk", () => {
@@ -299,10 +318,8 @@ test("workdir soul.md and focus.md are injected into the memory preamble", () =>
   mkdirSync(workdir, { recursive: true })
   writeFileSync(join(workdir, "soul.md"), "## Project Soul\nBe helpful.")
   writeFileSync(join(workdir, "focus.md"), "## Focus\nFix the bug.")
-  const cmd = buildClaudeSpawnCommand({ name: "test-pa", sessionRole: "personal_assistant", workdir })
-  const matches = [...cmd.matchAll(/--append-system-prompt-file\s+(\S+)/g)]
-  expect(matches.length).toBeGreaterThan(0)
-  const preamblePath = matches[matches.length - 1]![1]!
+  const spec = buildClaudeSpawnSpec({ name: "test-pa", sessionRole: "personal_assistant", workdir })
+  const preamblePath = memoryPreamblePathOf(spec)
   const preamble = readFileSync(preamblePath, "utf8")
   expect(preamble).toContain("Be helpful.")
   expect(preamble).toContain("Fix the bug.")

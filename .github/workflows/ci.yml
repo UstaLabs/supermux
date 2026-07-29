@@ -137,11 +137,18 @@ jobs:
       # measured 4m23s locally, which is too slow for a push lane.
       - uses: gradle/actions/setup-gradle@v4
 
+      # Skiko (Compose Desktop's renderer) needs an X display even for the
+      # "headless" in-process UI tests — without one, SessionDetailTest dies with
+      # IllegalStateException at InteropContainer.skiko.kt. Passes on a developer
+      # machine, fails on a bare runner.
+      - name: Install xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
       # :shared and :desktop always run together — :desktop depends on :shared,
       # so splitting them buys nothing and pays the Gradle startup cost twice.
       - name: Shared + desktop (JVM, incl. Compose Desktop UI tests)
         working-directory: apps
-        run: ./gradlew :shared:jvmTest :desktop:test --build-cache --console=plain
+        run: xvfb-run -a ./gradlew :shared:jvmTest :desktop:test --build-cache --console=plain
 
       # apps/android/google-services.json is gitignored (the real one carries the
       # app's API key), and without it :android:processDebugGoogleServices fails
