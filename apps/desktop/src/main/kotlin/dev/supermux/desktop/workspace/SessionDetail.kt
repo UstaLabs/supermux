@@ -233,6 +233,23 @@ fun SessionDetail(
             modifier = Modifier.fillMaxSize().testTag("pane_editor"),
         )
     },
+    // Injectable seam for the Terminal panel — defaults to the real [TerminalTabs]. Same reason as
+    // editorPanelContent/nativePanelContent: TerminalTabs mounts JediTerm through a `SwingPanel`,
+    // and SwingPanel needs a LocalInteropContainer that `runComposeUiTest` does not provide, so
+    // composing it under test dies with "IllegalStateException: LocalInteropContainer not provided".
+    // That failure is invisible on a developer machine and only shows up on a bare CI runner, which
+    // is exactly the class of drift CI exists to catch — so tests inject a pure-Compose fake tagged
+    // `pane_terminal` instead of skipping the case.
+    terminalPanelContent: @Composable () -> Unit = {
+        // Only ever composed when the terminal pane is on (the split slot is null otherwise), so
+        // active=true here; the intra-strip active/inactive tab distinction is handled inside.
+        TerminalTabs(
+            app = app,
+            sessionId = session.id,
+            active = true,
+            modifier = Modifier.fillMaxSize().testTag("pane_terminal"),
+        )
+    },
     // Injectable seam for the session-links menu's proxy load — defaults to the real broker fetch.
     // The header needs to know which proxies belong to this session to decide whether to show the
     // globe menu. The reducer does NOT fold any proxy_* frame (proxies aren't in the WS snapshot),
@@ -347,16 +364,7 @@ fun SessionDetail(
         editorPanelContent(pendingEditorOpen) { pendingEditorOpen = null }
     }
     // Real scratch terminal with web-parity tabs (list/add/close). One strip per session.
-    val terminalPane: @Composable () -> Unit = {
-        // Only ever composed when the terminal pane is on (the split slot is null otherwise), so
-        // active=true here; the intra-strip active/inactive tab distinction is handled inside.
-        TerminalTabs(
-            app = app,
-            sessionId = session.id,
-            active = true,
-            modifier = Modifier.fillMaxSize().testTag("pane_terminal"),
-        )
-    }
+    val terminalPane: @Composable () -> Unit = { terminalPanelContent() }
     // Real VNC display (M5-2). No injectable seam (unlike editorPanelContent/nativePanelContent):
     // DisplayPanel's default (no running stream) state is pure Compose with no heavyweight native
     // child, so it's safe to run un-faked under runComposeUiTest — same precedent terminalPane

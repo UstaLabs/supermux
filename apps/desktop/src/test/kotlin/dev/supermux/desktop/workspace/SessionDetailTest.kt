@@ -65,6 +65,13 @@ class SessionDetailTest {
         Box(Modifier.fillMaxSize().testTag("pane_editor"))
     }
 
+    // Same idea for the terminal: the real TerminalTabs mounts JediTerm through a SwingPanel, which
+    // needs a LocalInteropContainer that runComposeUiTest doesn't provide ("IllegalStateException:
+    // LocalInteropContainer not provided"). Only bites on a bare CI runner, not on a dev machine.
+    private val fakeTerminal: @Composable () -> Unit = {
+        Box(Modifier.fillMaxSize().testTag("pane_terminal"))
+    }
+
     // Records every pendingOpen the seam was invoked with (across recompositions) and exposes the
     // onPendingOpenConsumed callback so a test can drive the "consumed exactly once" assertion.
     private class PendingOpenLedger {
@@ -93,6 +100,7 @@ class SessionDetailTest {
                     draft = "",
                     onDraftChange = {},
                     editorPanelContent = fakeEditor,
+                    terminalPanelContent = fakeTerminal,
                 )
             }
         }
