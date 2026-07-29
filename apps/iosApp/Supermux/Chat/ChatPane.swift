@@ -443,47 +443,64 @@ struct SessionTranscript: View, Equatable {
         // evaluation; bind it once here instead.
         let blocks = self.blocks
         ScrollViewReader { proxy in
-            scroller(blocks: blocks)
+            scroller(blocks: blocks, proxy: proxy)
                 .onChange(of: log.count) { _, _ in scrollToBottom(proxy) }
                 .task(id: session.id) {
                     // Assert the bottom on open. `onChange(log.count)` doesn't fire here (the count
-                    // hasn't changed), and neither container positions itself at the bottom purely
-                    // from `defaultScrollAnchor` on first layout. Immediate pass, then one delayed
-                    // pass as a safety net for a container that hasn't finished laying out yet; both
-                    // are un-animated and idempotent, so running twice is invisible.
+                    // hasn't changed). Immediate + delayed passes: LazyVStack content-size settles
+                    // across a few frames, and an early scrollTo alone can land on empty estimates.
                     scrollToBottom(proxy, animated: false)
-                    try? await Task.sleep(nanoseconds: 100_000_000)
-                    scrollToBottom(proxy, animated: false)
+                    for _ in 0..<3 {
+                        try? await Task.sleep(nanoseconds: 50_000_000)
+                        scrollToBottom(proxy, animated: false)
+                    }
                 }
         }
         .id(session.id)
     }
 
+    /// How many of the newest timeline blocks are always fully laid out (non-lazy) on macOS.
+    ///
+    /// LazyVStack estimates unrealized rows near zero height. With only lazy rows +
+    /// `defaultScrollAnchor(.bottom)`, the scroll view thinks content is tiny, pins to an
+    /// empty region, and the chat opens **blank until the user scrolls** (which forces
+    /// measurement). Keeping the latest ~viewport of blocks in an eager `VStack` gives the
+    /// bottom real height on first layout so the anchor and `scrollTo` land on content.
+    private static let macEagerTailCount = 24
+
     /// The scrolling container.
     ///
-    /// **macOS uses `ScrollView` + `LazyVStack`; iOS keeps `List`.** This split is deliberate and
-    /// load-bearing in both directions:
+    /// **macOS uses `ScrollView` + lazy head + eager tail; iOS keeps `List`.** This split is
+    /// deliberate and load-bearing in both directions:
     ///
-    /// - `List` realizes a fixed batch of rows far beyond the viewport. Measured on a 1440x900
-    ///   window with a fresh 200-message session: **23 rows / 11,684 pt realized for a 900 pt
-    ///   viewport** — 13x more than is visible — costing ~257 ms of blocked main thread per session
-    ///   switch. `LazyVStack` realizes strictly by viewport (7 rows / 1,554 pt) and the same switch
-    ///   costs **~34 ms**. That is the whole macOS session-switch lag, and it matches how Android
-    ///   renders the same screen (`LazyColumn`).
-    /// - iOS must keep `List`: this code moved FROM `ScrollView`+`LazyVStack` TO `List` precisely
-    ///   because LazyVStack blanked on the **keyboard-avoidance relayout** (blank-on-keyboard,
-    ///   blank-on-open). macOS has no keyboard avoidance, so it doesn't inherit that bug — but iOS
-    ///   still does. Do not "unify" these without re-testing the iOS keyboard case.
-    @ViewBuilder private func scroller(blocks: [ChatBlock]) -> some View {
+    /// - A pure `List` realized a fixed batch of rows far beyond the viewport (measured ~257 ms
+    ///   on a 200-message session). Pure `LazyVStack` fixed that cost but opened blank until
+    ///   scroll when estimates under-measured the content.
+    /// - iOS must keep `List`: LazyVStack blanked on the **keyboard-avoidance relayout**
+    ///   (blank-on-keyboard, blank-on-open). Do not "unify" without re-testing that case.
+    @ViewBuilder private func scroller(blocks: [ChatBlock], proxy: ScrollViewProxy) -> some View {
         #if os(macOS)
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                if blocks.isEmpty {
-                    starterPrompts
-                        .frame(maxWidth: .infinity)
-                        .smContentWidthCap()
-                } else {
-                    ForEach(blocks) { block in
+            if blocks.isEmpty {
+                starterPrompts
+                    .frame(maxWidth: .infinity)
+                    .smContentWidthCap()
+            } else {
+                let eagerStart = max(0, blocks.count - Self.macEagerTailCount)
+                let older = Array(blocks.prefix(eagerStart))
+                let recent = Array(blocks.suffix(blocks.count - eagerStart))
+                // Older history: lazy (only measured when scrolled into view).
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(older) { block in
+                        blockRow(block)
+                            .smContentWidthCap()
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 5)
+                    }
+                }
+                // Recent tail + trailers: always realized so bottom height is real on open.
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(recent) { block in
                         blockRow(block)
                             .smContentWidthCap()
                             .padding(.horizontal, 16)
@@ -491,9 +508,9 @@ struct SessionTranscript: View, Equatable {
                     }
                     trailers
                     Color.clear.frame(height: 1).id("__bottom__")
+                        .onAppear { scrollToBottom(proxy, animated: false) }
                 }
             }
-            .frame(maxWidth: .infinity)
         }
         .defaultScrollAnchor(.bottom)
         .softScrollEdges()
