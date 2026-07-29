@@ -68,11 +68,15 @@ func buildChatBlocks(messages: [LogEntry], activity: [ActivityEvent], hideTools:
             let prefix = "\(e.tool ?? ""): "
             let summary = (e.tool != nil && title.hasPrefix(prefix)) ? String(title.dropFirst(prefix.count)) : title
             let id = e.seq.map { "a:\($0.intValue)" } ?? "a:\(e.ts):\(e.tool ?? "")"
+            // SKIE/Kotlin-Native renames Kotlin `description` → `description_` because it collides
+            // with KotlinBase.description() (NSObject). Using `.description` here reads the debug
+            // object dump, not the agent's human "why" label — Android (direct Kotlin) is fine.
+            let why = e.description_
             let row = ToolRow(
                 id: id,
                 toolName: e.tool ?? "tool",
                 summary: summary.isEmpty ? nil : summary,
-                description: e.description,
+                description: why,
                 input: e.detail,
                 output: res?.detail,
                 status: status,
@@ -244,14 +248,20 @@ struct ToolQuietRow: View {
                     Text(label)
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: true, vertical: false)
                     if let p = primary, !p.isEmpty {
+                        // Android uses weight(1f) so the explanation ellipsizes in remaining space.
+                        // Without a flexible frame, HStack gives Text its ideal width and truncation
+                        // never kicks in (especially visible on macOS window layouts).
                         Text(p)
                             .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.secondary.opacity(0.65))
                             .lineLimit(1)
-                            .truncationMode(.middle)
+                            .truncationMode(.tail)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Spacer(minLength: 4)
                     }
-                    Spacer(minLength: 4)
                     if row.status == .error {
                         Text("failed").font(.caption2).foregroundStyle(.red.opacity(0.8))
                     }
@@ -341,11 +351,15 @@ struct ToolTerminalView: View {
                 }
                 Image(systemName: "terminal").font(.caption2).foregroundStyle(.white.opacity(0.45))
                 Text("terminal").font(.caption2).foregroundStyle(.white.opacity(0.45))
+                    .fixedSize(horizontal: true, vertical: false)
                 if let description, !description.isEmpty {
                     Text(description).font(.caption2).foregroundStyle(.white.opacity(0.75))
                         .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Spacer(minLength: 4)
                 }
-                Spacer(minLength: 4)
                 if status == .running { ProgressView().controlSize(.mini).tint(statusColor) }
                 Text(statusLabel).font(.caption2.monospaced()).foregroundStyle(statusColor)
             }
@@ -457,13 +471,20 @@ struct ToolDiffView: View {
             Image(systemName: "square.and.pencil").font(.caption2).foregroundStyle(.white.opacity(0.45))
             Text(path).font(.caption2.weight(.medium)).foregroundStyle(.white.opacity(0.92))
                 .lineLimit(1)
+                .truncationMode(.middle)
+                .layoutPriority(1)
             if let description, !description.isEmpty {
                 Text(description).font(.caption2).foregroundStyle(.white.opacity(0.5))
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Spacer(minLength: 4)
             }
-            Spacer(minLength: 4)
             Text(modeLabel).font(.caption2).foregroundStyle(.white.opacity(0.4))
+                .fixedSize(horizontal: true, vertical: false)
             Text(statusLabel).font(.caption2).foregroundStyle(statusColor)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(Color(red: 0.09, green: 0.09, blue: 0.10))

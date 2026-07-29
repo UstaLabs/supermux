@@ -21,6 +21,15 @@ class ChatFramesTest {
         assertTrue(f is ServerFrame.ActivityAppend)
         assertEquals("Bash", (f as ServerFrame.ActivityAppend).event.tool)
     }
+
+    @Test fun parses_activity_append_tool_description() {
+        // Wire field is `description` (human "why"). Apple clients must read it via SKIE
+        // `description_` — not `.description` (KotlinBase/NSObject collision).
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"activity_append","session":"s1","event":{"ts":"2026-06-01T00:00:00Z","kind":"tool","tool":"Bash","title":"Bash: ls","description":"List workspace files","phase":"started","seq":1,"callId":"c1"}}""")
+        assertTrue(f is ServerFrame.ActivityAppend)
+        assertEquals("List workspace files", (f as ServerFrame.ActivityAppend).event.description)
+    }
     @Test fun parses_snapshot_with_logs_activity_agentState() {
         val f = json.decodeFromString<ServerFrame>(
             """{"type":"snapshot","sessions":[],"logs":{"s1":[{"id":"o1","ts":"t","direction":"outbound","text":"hello"}]},"activity":{"s1":[{"ts":"t","kind":"thinking","title":"Thought for 3s","seq":0}]},"agentState":{"s1":{"phase":"working","since":1717200000000}}}""")
