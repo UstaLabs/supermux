@@ -10,12 +10,13 @@ import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 /**
- * Desktop read-aloud: OS CLI TTS (platform) or ChatGPT via broker /speak (codex).
- * Wire [resolveEngine] / [speakRemote] from the host connection layer when available.
+ * Desktop read-aloud: OS CLI TTS (platform) or ChatGPT via broker /speak stream (codex).
+ * Wire [resolveEngine] / [speakRemoteStream] from the host connection layer when available.
  */
 object MessageTts {
     private val gen = AtomicInteger(0)
@@ -23,7 +24,7 @@ object MessageTts {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     var resolveEngine: (suspend () -> String)? = null
-    var speakRemote: (suspend (text: String) -> ByteArray)? = null
+    var speakRemoteStream: (suspend (text: String, onChunk: (ByteArray) -> Unit) -> Unit)? = null
 
     var speakingKey by mutableStateOf<String?>(null)
         private set
@@ -39,7 +40,7 @@ object MessageTts {
         }
         scope.launch {
             val eng = runCatching { resolveEngine?.invoke() }.getOrNull()?.ifBlank { null } ?: "platform"
-            if (eng == "codex" && speakRemote != null) {
+            if (eng == "codex" && speakRemoteStream != null) {
                 speakCodex(plain, rawText)
             } else {
                 speakPlatform(plain)
@@ -54,33 +55,56 @@ object MessageTts {
     }
 
     private fun speakCodex(plain: String, rawText: String) {
-        val remote = speakRemote ?: return speakPlatform(plain)
+        val remote = speakRemoteStream ?: return speakPlatform(plain)
         stop()
         val g = gen.incrementAndGet()
         speakingKey = plain
         thread(name = "message-tts-codex", isDaemon = true) {
-            try {
-                val bytes = runBlocking { remote(rawText) }
-                if (gen.get() != g) return@thread
-                val file = File.createTempFile("read-aloud-", ".mp3")
-                file.deleteOnExit()
-                file.writeBytes(bytes)
-                val playCmd = playCommand(file.absolutePath)
-                if (playCmd == null) {
-                    if (gen.get() == g) speakingKey = null
-                    return@thread
+            val queue = Channel<ByteArray>(Channel.UNLIMITED)
+            val producer = Thread({
+                try {
+                    runBlocking {
+                        remote(rawText) { bytes ->
+                            if (gen.get() == g) queue.trySend(bytes)
+                        }
+                    }
+                } catch (_: Exception) {
+                } finally {
+                    queue.close()
                 }
-                val p = ProcessBuilder(playCmd).redirectErrorStream(true).start()
-                process.set(p)
-                p.waitFor()
+            }, "message-tts-codex-fetch").also { it.isDaemon = true; it.start() }
+
+            try {
+                runBlocking {
+                    for (bytes in queue) {
+                        if (gen.get() != g) break
+                        playBytesBlocking(bytes, g)
+                    }
+                }
             } catch (_: Exception) {
-                // fall through
             } finally {
+                producer.interrupt()
                 if (gen.get() == g) {
                     process.compareAndSet(process.get(), null)
                     speakingKey = null
                 }
             }
+        }
+    }
+
+    private fun playBytesBlocking(bytes: ByteArray, g: Int) {
+        val file = File.createTempFile("read-aloud-", ".mp3")
+        file.deleteOnExit()
+        file.writeBytes(bytes)
+        val playCmd = playCommand(file.absolutePath) ?: return
+        try {
+            val p = ProcessBuilder(playCmd).redirectErrorStream(true).start()
+            process.set(p)
+            p.waitFor()
+        } catch (_: Exception) {
+        } finally {
+            process.compareAndSet(process.get(), null)
+            try { file.delete() } catch (_: Exception) {}
         }
     }
 

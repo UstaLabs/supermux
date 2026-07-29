@@ -13,15 +13,18 @@ import java.io.File
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.resume
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
 /**
- * Process-wide read-aloud: platform [TextToSpeech] or ChatGPT (codex) via broker /speak.
- * [resolveEngine] / [speakRemote] are wired from AppViewModel when a host is connected.
+ * Process-wide read-aloud: platform [TextToSpeech] or ChatGPT (codex) via broker /speak stream.
+ * [resolveEngine] / [speakRemoteStream] are wired from AppViewModel when a host is connected.
  */
 object MessageTts {
     private val engine = AtomicReference<TextToSpeech?>(null)
@@ -34,8 +37,11 @@ object MessageTts {
     /** Returns "platform" | "codex" (default platform). */
     var resolveEngine: (suspend () -> String)? = null
 
-    /** POST /speak — returns MP3 bytes. Required for codex engine. */
-    var speakRemote: (suspend (text: String) -> ByteArray)? = null
+    /**
+     * POST /speak NDJSON stream. Invokes [onChunk] for each audio piece as it arrives.
+     * Required for codex engine.
+     */
+    var speakRemoteStream: (suspend (text: String, onChunk: (ByteArray) -> Unit) -> Unit)? = null
 
     var speakingKey by mutableStateOf<String?>(null)
         private set
@@ -67,7 +73,7 @@ object MessageTts {
             mediaPlayer?.release()
         } catch (_: Exception) { /* ignore */ }
         mediaPlayer = null
-        setSpeakingKey(null)
+        setSpeakingKeyMainThread(null)
     }
 
     fun shutdown() {
@@ -76,7 +82,8 @@ object MessageTts {
         ready.set(0)
     }
 
-    private fun setSpeakingKey(key: String?) {
+    /** Named to avoid JVM clash with the Compose `speakingKey` property setter. */
+    private fun setSpeakingKeyMainThread(key: String?) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             speakingKey = key
         } else {
@@ -85,46 +92,76 @@ object MessageTts {
     }
 
     private suspend fun speakCodex(appCtx: Context, plain: String, rawText: String) {
-        val remote = speakRemote
+        val remote = speakRemoteStream
         if (remote == null) {
-            // Fallback to platform if remote not wired
             speakPlatform(appCtx, plain)
             return
         }
         val g = gen.incrementAndGet()
-        setSpeakingKey(plain)
-        try {
-            val bytes = withContext(Dispatchers.IO) { remote(rawText) }
-            if (gen.get() != g) return
-            withContext(Dispatchers.Main) {
-                if (gen.get() != g) return@withContext
-                playMp3(appCtx, bytes, g, plain)
+        setSpeakingKeyMainThread(plain)
+        val queue = Channel<ByteArray>(Channel.UNLIMITED)
+        val producer = scope.launch(Dispatchers.IO) {
+            try {
+                remote(rawText) { bytes ->
+                    if (gen.get() == g) {
+                        // trySend is non-suspending; channel is unlimited so it shouldn't fail.
+                        queue.trySend(bytes)
+                    }
+                }
+            } catch (_: Exception) {
+                // consumer will see close and clear speaking
+            } finally {
+                queue.close()
             }
-        } catch (_: Exception) {
-            if (gen.get() == g) setSpeakingKey(null)
+        }
+        try {
+            var first = true
+            for (bytes in queue) {
+                if (gen.get() != g) break
+                first = false
+                withContext(Dispatchers.Main) {
+                    if (gen.get() == g) playMp3AndWait(appCtx, bytes, g)
+                }
+            }
+            // empty stream
+            if (first && gen.get() == g) setSpeakingKeyMainThread(null)
+            else if (gen.get() == g) setSpeakingKeyMainThread(null)
+        } finally {
+            producer.cancel()
+            queue.close()
         }
     }
 
-    private fun playMp3(appCtx: Context, bytes: ByteArray, g: Int, plain: String) {
-        try {
-            mediaPlayer?.release()
-            val file = File(appCtx.cacheDir, "read-aloud-$g.mp3")
-            file.writeBytes(bytes)
-            val mp = MediaPlayer()
-            mediaPlayer = mp
-            mp.setDataSource(file.absolutePath)
-            mp.setOnCompletionListener {
-                if (gen.get() == g) setSpeakingKey(null)
-                try { file.delete() } catch (_: Exception) {}
+    private suspend fun playMp3AndWait(appCtx: Context, bytes: ByteArray, g: Int) {
+        suspendCancellableCoroutine { cont ->
+            try {
+                mediaPlayer?.release()
+                val file = File(appCtx.cacheDir, "read-aloud-$g-${System.nanoTime()}.mp3")
+                file.writeBytes(bytes)
+                val mp = MediaPlayer()
+                mediaPlayer = mp
+                mp.setDataSource(file.absolutePath)
+                mp.setOnCompletionListener {
+                    try { file.delete() } catch (_: Exception) {}
+                    if (cont.isActive) cont.resume(Unit)
+                }
+                mp.setOnErrorListener { _, _, _ ->
+                    try { file.delete() } catch (_: Exception) {}
+                    if (cont.isActive) cont.resume(Unit)
+                    true
+                }
+                cont.invokeOnCancellation {
+                    try {
+                        mp.stop()
+                        mp.release()
+                    } catch (_: Exception) {}
+                    try { file.delete() } catch (_: Exception) {}
+                }
+                mp.prepare()
+                mp.start()
+            } catch (_: Exception) {
+                if (cont.isActive) cont.resume(Unit)
             }
-            mp.setOnErrorListener { _, _, _ ->
-                if (gen.get() == g) setSpeakingKey(null)
-                true
-            }
-            mp.prepare()
-            mp.start()
-        } catch (_: Exception) {
-            if (gen.get() == g) setSpeakingKey(null)
         }
     }
 
@@ -132,18 +169,18 @@ object MessageTts {
         ensureEngine(appCtx) { tts ->
             if (tts == null) return@ensureEngine
             val g = gen.incrementAndGet()
-            setSpeakingKey(plain)
+            setSpeakingKeyMainThread(plain)
             tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {}
                 override fun onDone(utteranceId: String?) {
-                    if (gen.get() == g) setSpeakingKey(null)
+                    if (gen.get() == g) setSpeakingKeyMainThread(null)
                 }
                 @Deprecated("Deprecated in Java")
                 override fun onError(utteranceId: String?) {
-                    if (gen.get() == g) setSpeakingKey(null)
+                    if (gen.get() == g) setSpeakingKeyMainThread(null)
                 }
                 override fun onError(utteranceId: String?, errorCode: Int) {
-                    if (gen.get() == g) setSpeakingKey(null)
+                    if (gen.get() == g) setSpeakingKeyMainThread(null)
                 }
             })
             @Suppress("DEPRECATION")

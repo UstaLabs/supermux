@@ -55,11 +55,18 @@ export interface RunTtsOpts extends TtsSpeakOpts {
   flattenMarkdown?: boolean
 }
 
-/**
- * Run server-side TTS. Throws if engine is platform (client should speak) or
- * unavailable/fails. Chunks long text for codex pronunciation limit.
- */
-export async function runTts(text: string, opts: RunTtsOpts = {}): Promise<TtsResult> {
+export interface TtsStreamChunk extends TtsResult {
+  /** 0-based index of this audio piece. */
+  index: number
+  /** Total number of pieces for this speak request. */
+  total: number
+}
+
+function prepareTts(text: string, opts: RunTtsOpts): {
+  engine: TtsEngine
+  chunks: string[]
+  plain: string
+} {
   const want = opts.engine ?? VOICE_TTS_ENGINE
   if (want === "platform") {
     throw new Error("tts engine is platform — speak on the client")
@@ -76,17 +83,69 @@ export async function runTts(text: string, opts: RunTtsOpts = {}): Promise<TtsRe
       ? splitForTts(plain, CODEX_PRONUNCIATION_MAX_CHARS)
       : [plain]
 
-  if (chunks.length === 1) {
-    return engine.speak(chunks[0]!, opts)
+  return { engine, chunks, plain }
+}
+
+/**
+ * Stream server-side TTS: yield each audio piece as soon as it is ready.
+ * Pipelines one-ahead synthesis so chunk N+1 is already synthesizing while
+ * chunk N is being sent to the client (and can start playing).
+ */
+export async function* runTtsStream(
+  text: string,
+  opts: RunTtsOpts = {},
+): AsyncGenerator<TtsStreamChunk, void, unknown> {
+  const { engine, chunks, plain } = prepareTts(text, opts)
+  if (chunks.length > 1) {
+    log.info("tts_stream", { engine: engine.name, chunks: chunks.length, chars: plain.length })
   }
 
-  log.info("tts_chunked", { engine: engine.name, chunks: chunks.length, chars: plain.length })
+  // Start first synth immediately; always keep the next one in flight after yield.
+  let inflight = engine.speak(chunks[0]!, opts)
+  for (let i = 0; i < chunks.length; i++) {
+    if (i + 1 < chunks.length) {
+      // Kick off N+1 before awaiting N's network/send path fully drains.
+      const next = engine.speak(chunks[i + 1]!, opts)
+      const r = await inflight
+      yield {
+        audio: r.audio,
+        mime: r.mime || "audio/mpeg",
+        engine: r.engine || engine.name,
+        chunked: chunks.length > 1,
+        index: i,
+        total: chunks.length,
+      }
+      inflight = next
+    } else {
+      const r = await inflight
+      yield {
+        audio: r.audio,
+        mime: r.mime || "audio/mpeg",
+        engine: r.engine || engine.name,
+        chunked: chunks.length > 1,
+        index: i,
+        total: chunks.length,
+      }
+    }
+  }
+}
+
+/**
+ * Buffer the full stream into one audio blob (tests / non-streaming callers).
+ */
+export async function runTts(text: string, opts: RunTtsOpts = {}): Promise<TtsResult> {
   const parts: Uint8Array[] = []
   let mime = "audio/mpeg"
-  for (const c of chunks) {
-    const r = await engine.speak(c, opts)
-    parts.push(r.audio)
-    mime = r.mime || mime
+  let engine = "unknown"
+  let chunked = false
+  for await (const c of runTtsStream(text, opts)) {
+    parts.push(c.audio)
+    mime = c.mime || mime
+    engine = c.engine
+    chunked = !!c.chunked || c.total > 1
+  }
+  if (parts.length === 1) {
+    return { audio: parts[0]!, mime, engine, chunked }
   }
   const total = parts.reduce((n, p) => n + p.byteLength, 0)
   const audio = new Uint8Array(total)
@@ -95,5 +154,5 @@ export async function runTts(text: string, opts: RunTtsOpts = {}): Promise<TtsRe
     audio.set(p, off)
     off += p.byteLength
   }
-  return { audio, mime, engine: engine.name, chunked: true }
+  return { audio, mime, engine, chunked: true }
 }

@@ -187,10 +187,21 @@ export interface WebChannelOpts {
   renameSession?: (oldName: string, newName: string) => Promise<void>
   reorderSessions?: (orderedIds: string[]) => void
   transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string }) => Promise<{ text: string; degraded?: boolean }>
-  /** Server-side TTS (codex). Returns audio bytes or a soft {error,status} for platform. */
+  /**
+   * Server-side TTS (codex). Returns either a soft platform error, or an async
+   * iterable of audio chunks (streamed NDJSON: play first while later synth).
+   */
   speak?: (input: { text: string; engine?: string; lang?: string }) => Promise<
-    | { audio: Uint8Array; mime: string; engine: string; chunked?: boolean }
     | { error: string; status: 400 }
+    | {
+        engine: string
+        chunks: AsyncIterable<{
+          audio: Uint8Array
+          mime: string
+          index: number
+          total: number
+        }>
+      }
   >
   spawnPA?: (args: { name: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string }>
   listPAs?: () => SessionSnapshot[]
@@ -2303,6 +2314,9 @@ export class WebChannel implements Channel {
       }
     }
     // ── Read-aloud TTS (server engines; platform is client-native) ──────────
+    // Streams NDJSON audio chunks so the client can start playback on the first
+    // piece while later pieces are still being synthesized.
+    // Line shape: {"i":0,"n":3,"mime":"audio/mpeg","audio":"<base64>","engine":"codex"}
     if (method === "POST" && path === "/speak") {
       if (!this.opts.speak) return this.json({ error: "not configured" }, 503)
       const body = await req.json().catch(() => ({})) as { text?: string; engine?: string; lang?: string }
@@ -2318,13 +2332,37 @@ export class WebChannel implements Channel {
         if ("error" in result) {
           return this.json({ error: result.error }, result.status)
         }
-        // Binary audio response; engine/chunked also in headers for debugging.
-        return new Response(result.audio, {
+        const enc = new TextEncoder()
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            try {
+              for await (const c of result.chunks) {
+                const b64 = Buffer.from(c.audio).toString("base64")
+                const line = JSON.stringify({
+                  i: c.index,
+                  n: c.total,
+                  mime: c.mime || "audio/mpeg",
+                  audio: b64,
+                  engine: result.engine,
+                }) + "\n"
+                controller.enqueue(enc.encode(line))
+              }
+              controller.close()
+            } catch (e) {
+              try {
+                const msg = e instanceof Error ? e.message : String(e)
+                controller.enqueue(enc.encode(JSON.stringify({ error: msg }) + "\n"))
+              } catch { /* ignore */ }
+              controller.close()
+            }
+          },
+        })
+        return new Response(stream, {
           status: 200,
           headers: {
-            "content-type": result.mime || "audio/mpeg",
+            "content-type": "application/x-ndjson; charset=utf-8",
             "x-tts-engine": result.engine,
-            ...(result.chunked ? { "x-tts-chunked": "1" } : {}),
+            "x-tts-stream": "1",
             "cache-control": "no-store",
           },
         })

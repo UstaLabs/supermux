@@ -703,10 +703,28 @@ final class BrokerSession {
                                   codexApiKey: codexApiKey, cursorApiKey: cursorApiKey)
     }
 
-    /// POST /speak — server TTS (codex). Returns audio data or nil on failure.
+    /// POST /speak — NDJSON stream of audio chunks. Calls [onChunk] as each piece arrives.
+    func speakStream(_ text: String, engine: String = "codex", onChunk: @escaping (Data) -> Void) async -> Bool {
+        do {
+            // SKIE maps Kotlin (ByteArray) -> Unit as a regular Swift closure.
+            try await api.speakStream(text: text, engine: engine, lang: nil) { (bytes: KotlinByteArray) in
+                onChunk(Data(bytes.toUInt8()))
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Collect full /speak stream into one Data (simple callers).
     func speak(_ text: String, engine: String = "codex") async -> Data? {
-        guard let bytes = try? await api.speak(text: text, engine: engine, lang: nil) else { return nil }
-        return Data(bytes.toUInt8())
+        var parts: [Data] = []
+        let ok = await speakStream(text, engine: engine) { parts.append($0) }
+        guard ok, !parts.isEmpty else { return nil }
+        if parts.count == 1 { return parts[0] }
+        var out = Data()
+        for p in parts { out.append(p) }
+        return out
     }
 
     // Soul (system prompt / persona markdown).
