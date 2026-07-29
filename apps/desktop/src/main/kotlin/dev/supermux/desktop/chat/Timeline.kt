@@ -50,6 +50,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.CircularProgressIndicator
@@ -336,17 +337,94 @@ fun FencedCodeBlock(code: String) {
  * Calm Premium — outbound (assistant) message.
  * Splits text into prose and fenced code blocks; renders each accordingly.
  * Prose: bodyLarge, full width, no box or border. Code: FencedCodeBlock (mono, scroll, accent).
+ * Footer: copy + native read-aloud (Android/web parity).
  */
 @Composable
-fun AssistantMessage(text: String, onOpenFile: (FilePathRef) -> Unit = {}) {
-    // SelectionContainer makes the prose mouse-selectable/copyable; links inside stay clickable.
-    SelectionContainer {
-        MarkdownBody(
-            text = text,
-            modifier = Modifier.fillMaxWidth(),
-            onOpenFile = onOpenFile,
-            linkify = true,
-        )
+fun AssistantMessage(text: String, onOpenFile: (FilePathRef) -> Unit = {}, ts: String? = null) {
+    Column(Modifier.fillMaxWidth()) {
+        // SelectionContainer makes the prose mouse-selectable/copyable; links inside stay clickable.
+        SelectionContainer {
+            MarkdownBody(
+                text = text,
+                modifier = Modifier.fillMaxWidth(),
+                onOpenFile = onOpenFile,
+                linkify = true,
+            )
+        }
+        MessageMetaRow(text = text, ts = ts)
+    }
+}
+
+private val messageTimeFmt: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+
+private fun formatMessageTime(ts: String?): String? {
+    if (ts.isNullOrBlank()) return null
+    val instant = ts.toLongOrNull()?.let { n ->
+        Instant.ofEpochMilli(if (n < 1_000_000_000_000L) n * 1000L else n)
+    } ?: runCatching { Instant.parse(ts) }.getOrNull()
+    return instant?.atZone(ZoneId.systemDefault())?.format(messageTimeFmt)
+}
+
+/** Compact time + copy + read-aloud under an agent reply. */
+@Composable
+private fun MessageMetaRow(text: String, ts: String?) {
+    val cs = MaterialTheme.colorScheme
+    val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    var copied by remember { mutableStateOf(false) }
+    val speechKey = remember(text) { plainTextForSpeech(text) }
+    val speaking = MessageTts.isSpeaking(speechKey)
+    val time = formatMessageTime(ts)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = Space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        if (time != null) {
+            Text(
+                text = time,
+                color = cs.onSurfaceVariant.copy(alpha = 0.55f),
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = MonoFontFamily,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(end = Space.xs),
+            )
+        }
+        IconButton(
+            onClick = {
+                clipboard.setText(AnnotatedString(text))
+                copied = true
+                scope.launch {
+                    delay(1500)
+                    copied = false
+                }
+            },
+            modifier = Modifier
+                .size(28.dp)
+                .testTag("message_copy"),
+        ) {
+            Icon(
+                imageVector = if (copied) Icons.Filled.Check else Icons.Filled.ContentCopy,
+                contentDescription = if (copied) "Copied" else "Copy response",
+                tint = if (copied) cs.primary else cs.onSurfaceVariant.copy(alpha = 0.65f),
+                modifier = Modifier.size(14.dp),
+            )
+        }
+        IconButton(
+            onClick = { if (speechKey.isNotBlank()) MessageTts.toggle(text) },
+            modifier = Modifier
+                .size(28.dp)
+                .testTag("message_read_aloud"),
+        ) {
+            Icon(
+                imageVector = if (speaking) Icons.Filled.Stop else Icons.AutoMirrored.Filled.VolumeUp,
+                contentDescription = if (speaking) "Stop reading" else "Read aloud",
+                tint = if (speaking) cs.primary else cs.onSurfaceVariant.copy(alpha = 0.65f),
+                modifier = Modifier.size(14.dp),
+            )
+        }
     }
 }
 
@@ -1067,7 +1145,7 @@ fun TimelineItemRow(
                 ) {
                     Column {
                         if (!text.isNullOrBlank()) {
-                            if (isUser) UserMessage(text) else AssistantMessage(text, onOpenFile)
+                            if (isUser) UserMessage(text) else AssistantMessage(text, onOpenFile, ts = item.entry.ts)
                         }
                         if (!atts.isNullOrEmpty()) AttachmentList(atts, alignEnd = false, loadBytes = loadBytes)
                     }
