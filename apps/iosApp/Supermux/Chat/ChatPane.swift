@@ -446,11 +446,13 @@ struct SessionTranscript: View, Equatable {
             scroller(blocks: blocks)
                 .onChange(of: log.count) { _, _ in scrollToBottom(proxy) }
                 .task(id: session.id) {
-                    // Assert the bottom on open. `onChange(log.count)` doesn't fire here (count
-                    // unchanged). One delayed pass after first layout — the inverted LazyVStack
-                    // already realizes newest rows first, so we don't need a multi-frame hammer.
+                    // Assert the bottom on open. `onChange(log.count)` doesn't fire here (the count
+                    // hasn't changed), and neither container positions itself at the bottom purely
+                    // from `defaultScrollAnchor` on first layout. Immediate pass, then one delayed
+                    // pass as a safety net for a container that hasn't finished laying out yet; both
+                    // are un-animated and idempotent, so running twice is invisible.
                     scrollToBottom(proxy, animated: false)
-                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    try? await Task.sleep(nanoseconds: 100_000_000)
                     scrollToBottom(proxy, animated: false)
                 }
         }
@@ -459,52 +461,41 @@ struct SessionTranscript: View, Equatable {
 
     /// The scrolling container.
     ///
-    /// **macOS uses an inverted `ScrollView`+`LazyVStack`; iOS keeps `List`.**
+    /// **macOS uses `ScrollView` + `LazyVStack`; iOS keeps `List`.** This split is deliberate and
+    /// load-bearing in both directions:
     ///
-    /// - `List` realized far too many rows on macOS (~257 ms on a 200-message session).
-    /// - A chronological `LazyVStack` + `defaultScrollAnchor(.bottom)` was fast but opened
-    ///   **blank until scroll**: unrealized rows estimate ~0 height, so the bottom anchor
-    ///   parked in an empty region.
-    /// - An eager non-lazy tail of ~24 full markdown rows fixed blank but paid first-open
-    ///   cost again (same class of work as List).
-    ///
-    /// **Inverted lazy stack** (newest first in layout order, whole stack + each row
-    /// `scaleEffect(y: -1)`): LazyVStack realizes from the *start* of its content, which is
-    /// the newest messages — the ones on screen. Oldest stay unrealized until the user
-    /// scrolls up. Natural scroll position is the top of content (= visual bottom of the
-    /// chat). No eager multi-row VStack, no bottom-anchor estimate trap.
-    ///
-    /// iOS must keep `List` (keyboard-avoidance blanking). Do not unify without retesting.
+    /// - `List` realizes a fixed batch of rows far beyond the viewport. Measured on a 1440x900
+    ///   window with a fresh 200-message session: **23 rows / 11,684 pt realized for a 900 pt
+    ///   viewport** — 13x more than is visible — costing ~257 ms of blocked main thread per session
+    ///   switch. `LazyVStack` realizes strictly by viewport (7 rows / 1,554 pt) and the same switch
+    ///   costs **~34 ms**. That is the whole macOS session-switch lag, and it matches how Android
+    ///   renders the same screen (`LazyColumn`).
+    /// - iOS must keep `List`: this code moved FROM `ScrollView`+`LazyVStack` TO `List` precisely
+    ///   because LazyVStack blanked on the **keyboard-avoidance relayout** (blank-on-keyboard,
+    ///   blank-on-open). macOS has no keyboard avoidance, so it doesn't inherit that bug — but iOS
+    ///   still does. Do not "unify" these without re-testing the iOS keyboard case.
     @ViewBuilder private func scroller(blocks: [ChatBlock]) -> some View {
         #if os(macOS)
         ScrollView {
-            if blocks.isEmpty {
-                starterPrompts
-                    .frame(maxWidth: .infinity)
-                    .smContentWidthCap()
-            } else {
-                // Layout order is newest → oldest. Outer flip makes that visual bottom → top.
-                // Each child is flipped back so text/controls read upright. LazyVStack then
-                // materializes the newest end first (viewport) and leaves history deferred.
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    Color.clear.frame(height: 1).id("__bottom__")
-                        .scaleEffect(x: 1, y: -1)
-                    trailers
-                        .scaleEffect(x: 1, y: -1)
-                    ForEach(blocks.reversed()) { block in
+            LazyVStack(alignment: .leading, spacing: 0) {
+                if blocks.isEmpty {
+                    starterPrompts
+                        .frame(maxWidth: .infinity)
+                        .smContentWidthCap()
+                } else {
+                    ForEach(blocks) { block in
                         blockRow(block)
                             .smContentWidthCap()
                             .padding(.horizontal, 16)
                             .padding(.vertical, 5)
-                            .scaleEffect(x: 1, y: -1)
                     }
+                    trailers
+                    Color.clear.frame(height: 1).id("__bottom__")
                 }
-                .scaleEffect(x: 1, y: -1)
-                .frame(maxWidth: .infinity)
             }
+            .frame(maxWidth: .infinity)
         }
-        // Top of (inverted) content = latest messages. Do NOT use `.bottom` — that reintroduces
-        // the zero-estimate blank on a chronological LazyVStack.
+        .defaultScrollAnchor(.bottom)
         .softScrollEdges()
         #else
         List {
@@ -565,15 +556,8 @@ struct SessionTranscript: View, Equatable {
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
-        // macOS inverted stack: `__bottom__` sits at the *start* of the layout (newest end).
-        // Anchor `.top` keeps that marker at the visible bottom of the chat after the flip.
-        #if os(macOS)
-        let anchor = UnitPoint.top
-        #else
-        let anchor = UnitPoint.bottom
-        #endif
-        if animated { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("__bottom__", anchor: anchor) } }
-        else { proxy.scrollTo("__bottom__", anchor: anchor) }
+        if animated { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("__bottom__", anchor: .bottom) } }
+        else { proxy.scrollTo("__bottom__", anchor: .bottom) }
     }
 
     private var workingIndicator: some View {
