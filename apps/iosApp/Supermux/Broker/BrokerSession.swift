@@ -1129,8 +1129,28 @@ final class BrokerSession {
 /// session's transcript without invalidating every other open chat view.
 @Observable
 final class SessionChatBuffer {
-    var messages: [LogEntry] = []
-    var activity: [ActivityEvent] = []
+    var messages: [LogEntry] = [] { didSet { rebuildBlocks() } }
+    var activity: [ActivityEvent] = [] { didSet { rebuildBlocks() } }
+
+    /// The time-merged message + tool-cluster timeline, derived from `messages` + `activity`.
+    ///
+    /// Derived ONCE per change to the source arrays — NOT per view evaluation. `SessionTranscript`
+    /// used to call `buildChatBlocks` from its `body`, which re-sorts and re-clusters the WHOLE
+    /// history and allocates a `ToolRow` per activity event, each one reading several SKIE-bridged
+    /// Kotlin properties (`description_`, `detail`, `body` → Kotlin→Swift string conversions).
+    /// The transcript's body also reads `agentPhase` / `agentWorking` / `pendingSend` / `bgTasks`
+    /// for its working indicator, so every phase tick of a running agent re-ran that whole merge
+    /// even though the transcript itself had not changed. Measured at 5.5 ms/s of blocked main
+    /// thread while switching sessions, second only to the sidebar sort.
+    ///
+    /// Tools are always included here; low chat-detail filters them out at the view (dropping the
+    /// `.tools` clusters from the full timeline is exactly `buildChatBlocks(hideTools: true)`,
+    /// which is pinned by `ChatBlocksDerivationTests`).
+    private(set) var blocks: [ChatBlock] = []
+
+    private func rebuildBlocks() {
+        blocks = buildChatBlocks(messages: messages, activity: activity)
+    }
 }
 
 /// Tiny reference relay so `BrokerSession.init` can hand the shared `BrokerClient` a connection
