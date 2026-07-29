@@ -42,7 +42,7 @@ object MessageTts {
     fun stop() {
         gen.incrementAndGet()
         engine.get()?.stop()
-        setSpeakingKey(null)
+        setSpeakingKeyMainThread(null)
     }
 
     fun shutdown() {
@@ -51,7 +51,7 @@ object MessageTts {
         ready.set(0)
     }
 
-    private fun setSpeakingKey(key: String?) {
+    private fun setSpeakingKeyMainThread(key: String?) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             speakingKey = key
         } else {
@@ -63,18 +63,18 @@ object MessageTts {
         ensureEngine(context.applicationContext) { tts ->
             if (tts == null) return@ensureEngine
             val g = gen.incrementAndGet()
-            setSpeakingKey(plain)
+            setSpeakingKeyMainThread(plain)
             tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {}
                 override fun onDone(utteranceId: String?) {
-                    if (gen.get() == g) setSpeakingKey(null)
+                    if (gen.get() == g) setSpeakingKeyMainThread(null)
                 }
                 @Deprecated("Deprecated in Java")
                 override fun onError(utteranceId: String?) {
-                    if (gen.get() == g) setSpeakingKey(null)
+                    if (gen.get() == g) setSpeakingKeyMainThread(null)
                 }
                 override fun onError(utteranceId: String?, errorCode: Int) {
-                    if (gen.get() == g) setSpeakingKey(null)
+                    if (gen.get() == g) setSpeakingKeyMainThread(null)
                 }
             })
             @Suppress("DEPRECATION")
