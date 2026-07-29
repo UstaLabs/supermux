@@ -218,10 +218,11 @@ enum FilePathLinks {
     /// Tag every detected file-path range in `s` with a `supermux-file://` link + teal underline.
     static func decorate(_ s: NSMutableAttributedString) {
         let length = (s.string as NSString).length
-        for m in findFilePathRefs(text: s.string) {   // shared KMP
-            // KMP String offsets are UTF-16 (Kotlin Char == UTF-16 code unit) and
-            // NSAttributedString is UTF-16-backed, so start/end map straight onto an NSRange.
-            let range = NSRange(location: Int(m.start), length: Int(m.end - m.start))
+        // `FilePathScanner`, not the shared `findFilePathRefs`: same pattern and same semantics, but
+        // Foundation's regex engine instead of Kotlin/Native's — see FilePathScanner for the
+        // measurements (this call was ~636 ms for one 5 KB agent message before).
+        for m in FilePathScanner.matches(in: s.string) {
+            let range = m.range
             guard range.length > 0, range.location + range.length <= length else { continue }
             guard let url = url(for: m.ref) else { continue }
             s.addAttributes([

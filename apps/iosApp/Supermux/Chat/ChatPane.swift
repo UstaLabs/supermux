@@ -385,6 +385,25 @@ struct ChatPane: View {
 /// Liveness is unaffected: `BrokerSession` is `@Observable`, so new messages/activity invalidate
 /// this node directly (it reads `broker.messages[...]` / `broker.activity[...]`), independent of
 /// the Equatable gate — the gate only suppresses redundant, composer-driven re-evaluations.
+
+/// Per-row chrome for the transcript. On iOS these are `List` row modifiers; on macOS the rows
+/// live in a `LazyVStack`, where the same spacing is plain padding and there are no separators or
+/// row backgrounds to suppress.
+private extension View {
+    @ViewBuilder func transcriptRow() -> some View {
+        #if os(macOS)
+        self.smContentWidthCap()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 5)
+        #else
+        self.smContentWidthCap()
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+            .listRowBackground(Color.clear)
+        #endif
+    }
+}
+
 struct SessionTranscript: View, Equatable {
     let broker: BrokerSession
     let session: SessionInfo
@@ -416,84 +435,117 @@ struct SessionTranscript: View, Equatable {
     }
 
     var body: some View {
+        // `buildChatBlocks` sorts + clusters the WHOLE history. Reading the `blocks` computed
+        // property in BOTH the empty-check and the `ForEach` ran that merge twice per body
+        // evaluation; bind it once here instead.
+        let blocks = self.blocks
         ScrollViewReader { proxy in
-            List {
+            scroller(blocks: blocks)
+                .onChange(of: log.count) { _, _ in scrollToBottom(proxy) }
+                .task(id: session.id) {
+                    // Assert the bottom on open. `onChange(log.count)` doesn't fire here (the count
+                    // hasn't changed), and neither container positions itself at the bottom purely
+                    // from `defaultScrollAnchor` on first layout. Immediate pass, then one delayed
+                    // pass as a safety net for a container that hasn't finished laying out yet; both
+                    // are un-animated and idempotent, so running twice is invisible.
+                    scrollToBottom(proxy, animated: false)
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    scrollToBottom(proxy, animated: false)
+                }
+        }
+        .id(session.id)
+    }
+
+    /// The scrolling container.
+    ///
+    /// **macOS uses `ScrollView` + `LazyVStack`; iOS keeps `List`.** This split is deliberate and
+    /// load-bearing in both directions:
+    ///
+    /// - `List` realizes a fixed batch of rows far beyond the viewport. Measured on a 1440x900
+    ///   window with a fresh 200-message session: **23 rows / 11,684 pt realized for a 900 pt
+    ///   viewport** — 13x more than is visible — costing ~257 ms of blocked main thread per session
+    ///   switch. `LazyVStack` realizes strictly by viewport (7 rows / 1,554 pt) and the same switch
+    ///   costs **~34 ms**. That is the whole macOS session-switch lag, and it matches how Android
+    ///   renders the same screen (`LazyColumn`).
+    /// - iOS must keep `List`: this code moved FROM `ScrollView`+`LazyVStack` TO `List` precisely
+    ///   because LazyVStack blanked on the **keyboard-avoidance relayout** (blank-on-keyboard,
+    ///   blank-on-open). macOS has no keyboard avoidance, so it doesn't inherit that bug — but iOS
+    ///   still does. Do not "unify" these without re-testing the iOS keyboard case.
+    @ViewBuilder private func scroller(blocks: [ChatBlock]) -> some View {
+        #if os(macOS)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 if blocks.isEmpty {
                     starterPrompts
                         .frame(maxWidth: .infinity)
                         .smContentWidthCap()
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
                 } else {
                     ForEach(blocks) { block in
-                        Group {
-                            switch block {
-                            case .message(let m): MessageRow(entry: m, broker: broker,
-                                                             sessionId: session.id, workdir: session.workdir)
-                            case .tools(let rows):
-                                VStack(alignment: .leading, spacing: 2) {
-                                    ForEach(rows) { ToolRowView(row: $0, highDetail: chatDetail.effective == .high) }
-                                }
-                            }
-                        }
-                        .smContentWidthCap()
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
-                        .listRowBackground(Color.clear)
+                        blockRow(block)
+                            .smContentWidthCap()
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 5)
                     }
-                    if !visibleBgTasks.isEmpty {
-                        BgTaskChipsView(tasks: visibleBgTasks)
-                            .smContentWidthCap()
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
-                            .listRowBackground(Color.clear)
-                    }
-                    if working {
-                        workingIndicator
-                            .smContentWidthCap()
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
-                            .listRowBackground(Color.clear)
-                    } else if sending {
-                        sendingIndicator
-                            .smContentWidthCap()
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
-                            .listRowBackground(Color.clear)
-                    } else if waiting {
-                        waitingIndicator
-                            .smContentWidthCap()
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
-                            .listRowBackground(Color.clear)
-                    }
+                    trailers
                     Color.clear.frame(height: 1).id("__bottom__")
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
                 }
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            // List (collection-view-backed) re-displays its rows correctly on every
-            // relayout — including the keyboard-avoidance shrink — instead of blanking
-            // like ScrollView+LazyVStack did (blank-on-keyboard, blank-on-open). Keyed
-            // per session so each open builds fresh and defaultScrollAnchor lands at bottom.
-            .defaultScrollAnchor(.bottom)
-            .scrollDismissesKeyboard(.interactively)
-            .softScrollEdges()
-            .onChange(of: log.count) { _, _ in scrollToBottom(proxy) }
-            .task(id: session.id) {
-                // List needs an explicit initial scroll to the bottom — it doesn't honor
-                // defaultScrollAnchor for first positioning the way ScrollView does, and
-                // onChange(log.count) doesn't fire on open (count unchanged). List's
-                // scroll-to-row is reliable, so this can't race/blank like LazyVStack did.
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                scrollToBottom(proxy, animated: false)
+            .frame(maxWidth: .infinity)
+        }
+        .defaultScrollAnchor(.bottom)
+        .softScrollEdges()
+        #else
+        List {
+            if blocks.isEmpty {
+                starterPrompts
+                    .frame(maxWidth: .infinity)
+                    .smContentWidthCap()
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+            } else {
+                ForEach(blocks) { block in
+                    blockRow(block).transcriptRow()
+                }
+                trailers
+                Color.clear.frame(height: 1).id("__bottom__")
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
             }
         }
-        .id(session.id)
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .defaultScrollAnchor(.bottom)
+        .scrollDismissesKeyboard(.interactively)
+        .softScrollEdges()
+        #endif
+    }
+
+    /// One timeline block — a message, or a cluster of tool rows.
+    @ViewBuilder private func blockRow(_ block: ChatBlock) -> some View {
+        switch block {
+        case .message(let m):
+            MessageRow(entry: m, broker: broker, sessionId: session.id, workdir: session.workdir)
+        case .tools(let rows):
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(rows) { ToolRowView(row: $0, highDetail: chatDetail.effective == .high) }
+            }
+        }
+    }
+
+    /// Background-task chips + the single working/sending/waiting indicator, in that order.
+    @ViewBuilder private var trailers: some View {
+        if !visibleBgTasks.isEmpty {
+            BgTaskChipsView(tasks: visibleBgTasks).transcriptRow()
+        }
+        if working {
+            workingIndicator.transcriptRow()
+        } else if sending {
+            sendingIndicator.transcriptRow()
+        } else if waiting {
+            waitingIndicator.transcriptRow()
+        }
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
