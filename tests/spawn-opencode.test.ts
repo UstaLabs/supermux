@@ -1,14 +1,21 @@
-import { afterEach, beforeEach, expect, mock, test } from "bun:test"
+import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test"
 import { mkdtempSync, rmSync, readFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { STATE_DIR } from "../src/shared/paths"
 
-// NOTE on mocking: bun's mock.module is process-global, so we mock ONLY the
-// opencode modules that have no sibling unit test (auth / spawn / preamble).
-// adapter and config-writer are left REAL — they have their own *.test.ts and a
-// module mock here would leak into those files. The UUID guardrail is therefore
-// asserted by reading the config the REAL writer actually produced.
+// NOTE on mocking: bun's mock.module is process-global — a mock installed here
+// stays installed for every test file loaded afterwards. The original note said
+// auth/spawn/preamble were safe to mock because they had "no sibling unit test";
+// that stopped being true (src/core/agents/opencode/config-writer.test.ts imports
+// resolveOpenCodeAuth, tests/agents/windows-launch.test.ts imports
+// spawnOpenCodeServer) and both started failing in a full `bun test` while
+// passing standalone. So: capture the real modules first and restore them in
+// afterAll — same pattern as src/core/tunnels/cloudflared.test.ts.
+const realAuth = await import("../src/core/agents/opencode/auth")
+const realPreamble = await import("../src/core/agents/opencode/preamble-writer")
+const realSpawn = await import("../src/core/agents/opencode/spawn")
+
 let authed = true
 const boundIds: string[] = []
 
@@ -44,6 +51,12 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true })
   for (const n of createdNames) rmSync(join(STATE_DIR, "agents", "opencode", n), { recursive: true, force: true })
+})
+// Undo the process-global module mocks so later test files see the real modules.
+afterAll(() => {
+  mock.module("../src/core/agents/opencode/auth", () => realAuth)
+  mock.module("../src/core/agents/opencode/preamble-writer", () => realPreamble)
+  mock.module("../src/core/agents/opencode/spawn", () => realSpawn)
 })
 
 function deps(registry: any) {

@@ -8,7 +8,7 @@
   "scripts": {
     "broker": "bun src/main.ts",
     "shim": "bun src/shim/index.ts",
-    "test": "bun test",
+    "test": "bun test --isolate",
     "typecheck": "tsc --noEmit",
     "pair": "bun scripts/pair.ts",
     "revoke": "bun scripts/revoke.ts",

@@ -1,0 +1,165 @@
+# .github/workflows/ci.yml — the gate that runs on ordinary work.
+#
+# release.yml only fires on v* tags, so until this file existed nothing ran on a
+# push or a PR. Ten tests were failing across the repo at the time it was added,
+# every one of them a test that had been correct when written and had silently
+# drifted since (a renamed attachment kind, a provider card added to a screen, a
+# withTimeout that broke under a virtual test clock). None were product bugs.
+# That is the failure mode this workflow exists to stop: not bugs — rot.
+#
+# Shape:
+#   push  → change-scoped. Only the lanes the diff can plausibly break, and only
+#           lanes that are cheap (no emulator, no simulator, no packaging).
+#   PR    → everything, unconditionally. Filters optimize the inner loop; the
+#           merge gate stays complete.
+#
+# Two rules keep the filtering honest:
+#   1. A `wire` change (the protocol seam shared by broker + Kotlin + Swift)
+#      bypasses every filter. A TS-side protocol edit silently breaks the native
+#      clients otherwise, which is exactly what teaches people to distrust path
+#      filters.
+#   2. A `shared` (KMP) change fans out to every client that consumes it.
+#
+# Deliberately NOT here — they belong in a PR-only / nightly workflow:
+#   Android emulator, iOS simulator, packaged-app install smoke, Playwright
+#   journeys (those need the hermetic broker fixture that does not exist yet).
+name: ci
+
+on:
+  push:
+    paths-ignore: ["**.md", "docs/**", "assets/**", "LICENSE"]
+  pull_request:
+    branches: [main, dev]
+
+# A push storm should leave one run standing, not six.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ── which lanes does this diff need? ────────────────────────────────────────
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      ts: ${{ steps.f.outputs.ts }}
+      shared: ${{ steps.f.outputs.shared }}
+      android: ${{ steps.f.outputs.android }}
+      desktop: ${{ steps.f.outputs.desktop }}
+      wire: ${{ steps.f.outputs.wire }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: f
+        with:
+          filters: |
+            ts:
+              - 'src/**'
+              - 'tests/**'
+              - 'scripts/**'
+              - 'package.json'
+              - 'bunfig.toml'
+              - 'tsconfig.json'
+            shared:
+              - 'apps/shared/**'
+              - 'apps/build.gradle.kts'
+              - 'apps/settings.gradle.kts'
+              - 'apps/gradle/**'
+            android:
+              - 'apps/android/**'
+            desktop:
+              - 'apps/desktop/**'
+            # The protocol seam. Any touch here runs every lane — see rule 1.
+            wire:
+              - 'src/shared/**'
+              - 'apps/shared/src/commonMain/kotlin/dev/supermux/proto/**'
+              - '.github/workflows/ci.yml'
+
+  # ── TypeScript: broker, channels, shim, relay, CLI, and the PWA's logic ─────
+  ts:
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request' ||
+      needs.changes.outputs.ts == 'true' ||
+      needs.changes.outputs.wire == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      # Both manifests: 441 test files span the broker AND src/web-app, and a
+      # missing node_modules turns ~100 of them into "Cannot find package"
+      # failures rather than an honest red.
+      # No --frozen-lockfile at the root: bun.lock is gitignored there, so there
+      # is nothing to freeze against. src/web-app/bun.lock IS committed.
+      - run: bun install
+      - run: bun install --frozen-lockfile
+        working-directory: src/web-app
+
+      # --isolate gives each test file a fresh global. Without it, the
+      # process-global `mock.module` in tests/spawn-opencode.test.ts leaks into
+      # every file loaded after it and two unrelated tests fail. Do NOT swap this
+      # for --parallel: it is ~3x faster but timing-sensitive tests flake under
+      # the load, and a gate you learn to ignore is worse than no gate.
+      - name: Test
+        run: bun test --isolate
+
+      # Non-blocking on purpose: 14 pre-existing type errors in files unrelated
+      # to any current work (src/core/push/encrypt.ts, src/relay/{apns,fcm}.ts,
+      # src/core/settings/app-config.ts and two test files). Flip this to a hard
+      # failure the moment those are cleared — a permanently-yellow check is only
+      # marginally better than no check.
+      - name: Typecheck (non-blocking until the existing 14 errors are fixed)
+        run: bun run typecheck
+        continue-on-error: true
+
+  # ── Kotlin, host-side only: no emulator, no display server ─────────────────
+  # apps/desktop already declares compose.desktop.uiTestJUnit4, so this lane runs
+  # real Compose UI assertions (TestTag, node counts, assertDoesNotExist)
+  # in-process on the JVM. UI coverage does not require a device.
+  kotlin:
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request' ||
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.android == 'true' ||
+      needs.changes.outputs.desktop == 'true' ||
+      needs.changes.outputs.wire == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      # Caching is load-bearing, not an optimization: a cold run of these tasks
+      # measured 4m23s locally, which is too slow for a push lane.
+      - uses: gradle/actions/setup-gradle@v4
+
+      # :shared and :desktop always run together — :desktop depends on :shared,
+      # so splitting them buys nothing and pays the Gradle startup cost twice.
+      - name: Shared + desktop (JVM, incl. Compose Desktop UI tests)
+        working-directory: apps
+        run: ./gradlew :shared:jvmTest :desktop:test --build-cache --console=plain
+
+      # apps/android/google-services.json is gitignored (the real one carries the
+      # app's API key), and without it :android:processDebugGoogleServices fails
+      # before a single test runs. The committed .example is a valid stand-in for
+      # unit tests, which never reach Firebase.
+      - name: Stage Firebase config for unit tests
+        run: cp apps/android/google-services.json.example apps/android/google-services.json
+
+      - name: Android unit tests (host-side)
+        working-directory: apps
+        run: ./gradlew :android:testDebugUnitTest --build-cache --console=plain
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kotlin-test-reports
+          path: |
+            apps/*/build/reports/tests/**
+            apps/*/build/test-results/**
+          retention-days: 7

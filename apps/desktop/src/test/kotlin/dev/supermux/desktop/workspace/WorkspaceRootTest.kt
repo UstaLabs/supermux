@@ -2,6 +2,7 @@ package dev.supermux.desktop.workspace
 
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
@@ -25,8 +26,8 @@ import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
 import dev.supermux.net.BrokerApi
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import java.nio.file.Files
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -87,7 +88,7 @@ class WorkspaceRootTest {
         return DesktopAppState(
             baseUrl = "ws://test:9898",
             token = "t",
-            scope = TestScope(UnconfinedTestDispatcher()),
+            scope = CoroutineScope(Dispatchers.Default), // real clock: BrokerApi.spawn uses withTimeout
             connectOnInit = false,
             sendFrameOverride = { sent.add(it) },
             apiOverride = api,
@@ -126,6 +127,9 @@ class WorkspaceRootTest {
         waitForIdle()
         onNodeWithTag("launcher_message").performTextInput("hello there")
         onNodeWithTag("launcher_submit").performClick()
+        // The spawn runs on a real dispatcher (see the scope in appFor), so waitForIdle()
+        // returns before it lands — wait for the effect, not for composition to settle.
+        waitUntil { ui.selectedId != null }
         waitForIdle()
 
         assertEquals("sess-new", ui.selectedId)
@@ -156,6 +160,8 @@ class WorkspaceRootTest {
         waitForIdle()
         onNodeWithTag("launcher_message").performTextInput("hello there")
         onNodeWithTag("launcher_submit").performClick()
+        // Same real-dispatcher wait as above; here the observable outcome is the error row.
+        waitUntil { onAllNodesWithTag("launcher_error").fetchSemanticsNodes().isNotEmpty() }
         waitForIdle()
 
         assertNull(ui.selectedId)
