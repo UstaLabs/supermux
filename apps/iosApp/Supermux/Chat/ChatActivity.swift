@@ -29,10 +29,21 @@ struct ToolRow: Identifiable {
 
 enum ToolStatus { case running, done, error }
 
+/// `tsMs` is hot: `buildChatBlocks` calls it once per message AND once per activity event over the
+/// whole history on every transcript rebuild. `ISO8601DateFormatter` is expensive to construct
+/// (it wraps a CFDateFormatter), so building one per entry was pure waste — the format never
+/// changes. Broker timestamps are `new Date().toISOString()` (fractional-seconds form), so
+/// `isoFractionalParser` is the hit path; `isoPlainParser` is the fallback.
+private let isoFractionalParser: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return f
+}()
+private let isoPlainParser = ISO8601DateFormatter()
+
 func tsMs(_ s: String) -> Double {
     if let d = Double(s) { return d > 1_000_000_000_000 ? d : d * 1000 }
-    let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let date = f.date(from: s) ?? ISO8601DateFormatter().date(from: s) {
+    if let date = isoFractionalParser.date(from: s) ?? isoPlainParser.date(from: s) {
         return date.timeIntervalSince1970 * 1000
     }
     return 0

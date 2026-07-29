@@ -1095,8 +1095,8 @@ class AppViewModel(
         runCatching { activeApi()?.listModels(agent)?.models }.getOrNull() ?: emptyList()
     suspend fun launcherReasoning(agent: String, model: String?): ReasoningResponse? =
         runCatching { activeApi()?.getReasoningLevels(agent, model) }.getOrNull()
-    suspend fun launcherRepoInfo(workdir: String): RepoInfo? =
-        runCatching { activeApi()?.getRepoInfo(workdir) }.getOrNull()
+    suspend fun launcherRepoInfo(workdir: String, fetch: Boolean = false): RepoInfo? =
+        runCatching { activeApi()?.getRepoInfo(workdir, fetch) }.getOrNull()
     suspend fun launcherCommands(agent: String, workdir: String): List<SlashCommand> =
         if (workdir.isBlank()) emptyList()
         else runCatching { activeApi()?.previewCommands(agent, workdir)?.commands }.getOrNull() ?: emptyList()

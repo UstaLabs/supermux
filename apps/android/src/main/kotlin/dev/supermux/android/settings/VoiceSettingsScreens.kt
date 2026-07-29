@@ -69,6 +69,7 @@ private data class SttEngine(val id: String, val label: String)
 private val STT_ENGINES = listOf(
     SttEngine("codex-realtime", "Codex Realtime (ChatGPT)"),
     SttEngine("claude-voice", "Claude Code voice"),
+    SttEngine("cursor-stt", "Cursor voice"),
     SttEngine("whisper", "Whisper (local)"),
 )
 private const val DEFAULT_STT_ENGINE = "codex-realtime"

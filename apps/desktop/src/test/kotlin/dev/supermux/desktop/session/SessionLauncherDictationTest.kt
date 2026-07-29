@@ -43,7 +43,7 @@ class SessionLauncherDictationTest {
                 validatePath = { null },
                 loadModels = { emptyList() },
                 loadReasoningLevels = { _, _ -> null },
-                loadRepoInfo = { null },
+                loadRepoInfo = { _, _ -> null },
                 loadPrefs = { LauncherPrefs() },
                 onPrefsChange = {},
                 loadDraft = { LauncherDraft() },

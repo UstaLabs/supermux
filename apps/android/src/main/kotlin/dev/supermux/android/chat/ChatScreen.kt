@@ -526,15 +526,14 @@ fun ChatScreen(
                     ) {
                         listOf(
                             ChatDetailLevel.LOW to "Messages only · tools on status line",
-                            ChatDetailLevel.MEDIUM to "Tool chips between messages",
-                            ChatDetailLevel.HIGH to "Coming soon",
+                            ChatDetailLevel.MEDIUM to "Quiet tool lines between messages",
+                            ChatDetailLevel.HIGH to "Terminal windows & file diffs",
                         ).forEach { (level, desc) ->
-                            val enabled = level != ChatDetailLevel.HIGH
                             DropdownMenuItem(
                                 text = {
                                     Column {
                                         Text(
-                                            level.label + if (level == ChatDetailLevel.HIGH) " · Soon" else "",
+                                            level.label,
                                             fontWeight = if (chatDetailLevel == level) FontWeight.SemiBold else FontWeight.Normal,
                                         )
                                         Text(
@@ -544,7 +543,7 @@ fun ChatScreen(
                                         )
                                     }
                                 },
-                                enabled = enabled,
+                                enabled = true,
                                 onClick = {
                                     ChatDetailPrefs.set(overflowContext, level)
                                     detailSubmenu = false

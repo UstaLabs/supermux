@@ -60,6 +60,7 @@ struct FinishSheet: View {
         }
         .tint(Theme.teal)
         .smPresentationDetents([.medium, .large])
+        .smMacSheetFrame(minWidth: 480, minHeight: 520)
     }
 
     private var navTitle: String {
@@ -73,124 +74,181 @@ struct FinishSheet: View {
     // MARK: - Menu
 
     @ViewBuilder private var menu: some View {
-        List {
-            if let err = chrome.runError {
-                Section {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if let err = chrome.runError {
                     Label(err, systemImage: "exclamationmark.triangle.fill")
                         .font(.footnote).foregroundStyle(.red)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
-            }
-            if let r = readiness {
-                Section { readinessCard(r) } header: { Text("\(r.branch) → \(r.base)") }
-            } else {
-                Section {
-                    HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Checking branch…").foregroundStyle(.secondary) }
-                        .font(.footnote)
-                }
-            }
 
-            Section {
-                if readiness?.nothingToLand == true {
-                    Text("No new commits to land").font(.footnote).foregroundStyle(.secondary)
-                    actionRow("Keep", systemImage: "archivebox") { pendingVerify = nil; chrome.run(action: "keep"); dismiss() }
-                    discardRow
+                if let r = readiness {
+                    readinessCard(r)
                 } else {
-                    actionRow("Merge locally", systemImage: "arrow.triangle.merge",
-                              highlighted: readiness?.recommended == "merge") {
-                        confirmingDiscard = false
-                        pendingVerify = pendingVerify == "merge" ? nil : "merge"
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Checking branch…").font(.footnote).foregroundStyle(.secondary)
                     }
-                    if pendingVerify == "merge" { verifyChoiceRows(action: "merge", prompt: "Run tests before merging?") }
-                    prRow
-                    if pendingVerify == "pr" { verifyChoiceRows(action: "pr", prompt: "Run tests before opening the PR?") }
-                    actionRow("Keep", systemImage: "archivebox") { pendingVerify = nil; chrome.run(action: "keep"); dismiss() }
-                    discardRow
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    MenuSectionLabel("ACTIONS")
+                    if readiness?.nothingToLand == true {
+                        Text("No new commits to land")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .padding(.horizontal, 4).padding(.bottom, 2)
+                        MenuOptionRow(title: "Keep", systemImage: "archivebox") {
+                            pendingVerify = nil; chrome.run(action: "keep"); dismiss()
+                        }
+                        discardBlock
+                    } else {
+                        MenuOptionRow(
+                            title: "Merge locally",
+                            systemImage: "arrow.triangle.merge",
+                            emphasized: readiness?.recommended == "merge"
+                        ) {
+                            confirmingDiscard = false
+                            pendingVerify = pendingVerify == "merge" ? nil : "merge"
+                        }
+                        if pendingVerify == "merge" { verifyChoiceRows(action: "merge", prompt: "Run tests before merging?") }
+                        prRow
+                        if pendingVerify == "pr" { verifyChoiceRows(action: "pr", prompt: "Run tests before opening the PR?") }
+                        MenuOptionRow(title: "Keep", systemImage: "archivebox") {
+                            pendingVerify = nil; chrome.run(action: "keep"); dismiss()
+                        }
+                        discardBlock
+                    }
                 }
             }
+            .padding(16)
         }
     }
 
     private func readinessCard(_ r: FinishReadiness) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 12) {
-                Text(r.behind > 0 ? "↑\(r.ahead) · ↓\(r.behind)" : "↑\(r.ahead)")
-                    .font(.footnote.weight(.semibold))
-                Text("\(r.filesChanged) files · +\(r.insertions)/−\(r.deletions)")
-                    .font(.footnote).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.teal)
+                Text("\(r.branch) → \(r.base)")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
-            HStack(spacing: 12) {
+            HStack(spacing: 14) {
+                Text(r.behind > 0 ? "↑\(r.ahead) · ↓\(r.behind)" : "↑\(r.ahead)")
+                    .font(.caption.weight(.semibold).monospaced())
+                Text("\(r.filesChanged) files · +\(r.insertions)/−\(r.deletions)")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 10) {
                 if r.conflictPreflight == "will_conflict" {
-                    Label("may conflict", systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption).foregroundStyle(.orange)
+                    statusChip("may conflict", system: "exclamationmark.triangle.fill", color: .orange)
                 } else if r.conflictPreflight == "clean" {
-                    Label("no conflict", systemImage: "checkmark").font(.caption).foregroundStyle(.green)
+                    statusChip("no conflict", system: "checkmark", color: .green)
                 }
                 if !r.dirtyFiles.isEmpty {
-                    Label("\(r.dirtyFiles.count) uncommitted", systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption).foregroundStyle(.orange)
+                    statusChip("\(r.dirtyFiles.count) uncommitted", system: "exclamationmark.triangle.fill", color: .orange)
                 }
             }
         }
-        .padding(.vertical, 2)
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.teal.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Theme.teal.opacity(0.18), lineWidth: 1)
+        )
+    }
+
+    private func statusChip(_ title: String, system: String, color: Color) -> some View {
+        Label(title, systemImage: system)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(color)
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(color.opacity(0.12), in: Capsule())
     }
 
     /// Open PR / "Push & open PR" — disabled without a remote (matches web).
     @ViewBuilder private var prRow: some View {
         let r = readiness
         let label = (r?.hasRemote == true && r?.ghAvailable == false) ? "Push & open PR" : "Open PR"
-        Button { confirmingDiscard = false; pendingVerify = pendingVerify == "pr" ? nil : "pr" } label: {
-            HStack {
-                Label(label, systemImage: "arrow.triangle.pull")
-                Spacer()
-                if r != nil && r?.hasRemote == false {
-                    Text("no remote").font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            .fontWeight(.medium)
-            .foregroundStyle(r?.recommended == "pr" ? Theme.teal : .primary)
+        let disabled = r != nil && r?.hasRemote == false
+        MenuOptionRow(
+            title: label,
+            subtitle: disabled ? "no remote" : nil,
+            systemImage: "arrow.triangle.pull",
+            emphasized: r?.recommended == "pr"
+        ) {
+            confirmingDiscard = false
+            pendingVerify = pendingVerify == "pr" ? nil : "pr"
         }
-        .disabled(r != nil && r?.hasRemote == false)
+        .disabled(disabled)
+        .opacity(disabled ? 0.45 : 1)
     }
 
-    @ViewBuilder private var discardRow: some View {
-        Button(role: .destructive) { pendingVerify = nil; confirmingDiscard = true } label: {
-            Label("Discard", systemImage: "trash")
+    @ViewBuilder private var discardBlock: some View {
+        MenuOptionRow(title: "Discard", systemImage: "trash", destructive: true) {
+            pendingVerify = nil
+            confirmingDiscard = true
         }
         if confirmingDiscard {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Discard all work on this branch?").font(.footnote)
-                HStack(spacing: 10) {
-                    Button("Discard", role: .destructive) { confirmingDiscard = false; chrome.run(action: "discard") }
-                        .buttonStyle(.borderedProminent).controlSize(.small)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Discard all work on this branch?")
+                    .font(.footnote.weight(.medium))
+                HStack(spacing: 8) {
+                    Button("Discard") {
+                        confirmingDiscard = false
+                        chrome.run(action: "discard")
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12).frame(height: 28)
+                    .background(Color.red, in: Capsule())
+                    .buttonStyle(.plain)
                     Button("Cancel") { confirmingDiscard = false }
-                        .buttonStyle(.bordered).controlSize(.small)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12).frame(height: 28)
+                        .background(Color.primary.opacity(0.06), in: Capsule())
+                        .buttonStyle(.plain)
                 }
             }
-            .padding(.vertical, 2)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.red.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.red.opacity(0.18), lineWidth: 1)
+            )
         }
     }
 
-    /// A primary menu action; `highlighted` tints it teal (web's emerald `recommended`).
-    private func actionRow(_ title: String, systemImage: String, highlighted: Bool = false,
-                           action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .fontWeight(.medium)
-                .foregroundStyle(highlighted ? Theme.teal : .primary)
-        }
-    }
-
-    /// Inline Run/Skip choice — shown under Merge/Open PR (mirrors discardRow confirm).
+    /// Inline Run/Skip choice — shown under Merge/Open PR.
     @ViewBuilder private func verifyChoiceRows(action: String, prompt: String) -> some View {
-        Text(prompt).font(.footnote).foregroundStyle(.secondary)
-        Button { pendingVerify = nil; chrome.run(action: action, skipVerify: false) } label: {
-            Label("Run tests", systemImage: "checkmark.circle")
+        VStack(alignment: .leading, spacing: 6) {
+            Text(prompt)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+            MenuOptionRow(title: "Run tests", systemImage: "checkmark.circle", emphasized: true) {
+                pendingVerify = nil
+                chrome.run(action: action, skipVerify: false)
+            }
+            if canSkipTests(action: action, prRequiresGreen: readiness?.prRequiresGreen ?? false) {
+                MenuOptionRow(title: "Skip tests", systemImage: "forward") {
+                    pendingVerify = nil
+                    chrome.run(action: action, skipVerify: true)
+                }
+            }
         }
-        if canSkipTests(action: action, prRequiresGreen: readiness?.prRequiresGreen ?? false) {
-            Button { pendingVerify = nil; chrome.run(action: action, skipVerify: true) } label: {
-                Label("Skip tests", systemImage: "forward")
-            }.foregroundStyle(.orange)
-        }
+        .padding(8)
+        .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     // MARK: - Running

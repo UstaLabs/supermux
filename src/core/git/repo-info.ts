@@ -46,6 +46,11 @@ export function getRepoInfo(path: string, opts?: { fetch?: boolean }): RepoInfo 
   let currentBranch: string | undefined
   try { currentBranch = git(real, ["branch", "--show-current"]) || undefined } catch { /* detached */ }
 
+  // %(refname:short) renders the origin/HEAD symref as "origin/HEAD" or bare
+  // "origin" depending on git version — drop those, matching listBranches.
+  const remote = safeLines(real, ["for-each-ref", "--format=%(refname:short)", "refs/remotes"])
+    .filter((n) => n.includes("/") && !n.endsWith("/HEAD"))
+
   return {
     isGitRepo: true,
     eligible,
@@ -53,7 +58,7 @@ export function getRepoInfo(path: string, opts?: { fetch?: boolean }): RepoInfo 
     currentBranch,
     branches: {
       local: safeLines(real, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]),
-      remote: safeLines(real, ["for-each-ref", "--format=%(refname:short)", "refs/remotes"]),
+      remote,
     },
   }
 }

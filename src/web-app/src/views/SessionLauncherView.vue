@@ -134,40 +134,55 @@ baseBranch.value = launcherDraft.state.baseBranch
 // restore-triggered call — later calls (the user picking a different project) still
 // reset it, matching today's behavior for a fresh pick.
 let repoInfoInitialized = false
+// Monotonic generation so a slow getRepoInfo for a previous workdir can't overwrite
+// a newer pick (recency hydration / rapid project switches race without this).
+let repoInfoSeq = 0
 async function refreshRepoInfo(p: string) {
+  const seq = ++repoInfoSeq
   try {
     const validation = await api.validatePath(p)
+    if (seq !== repoInfoSeq) return
     if (!validation.ok || !validation.path) { repoInfo.value = null; return }
-    repoInfo.value = await api.getRepoInfo(validation.path)
+    const info = await api.getRepoInfo(validation.path)
+    if (seq !== repoInfoSeq) return
+    repoInfo.value = info
     if (repoInfoInitialized) {
-      baseBranch.value = repoInfo.value?.currentBranch ?? ""
+      baseBranch.value = info?.currentBranch ?? ""
     } else {
       repoInfoInitialized = true
-      if (!baseBranch.value) baseBranch.value = repoInfo.value?.currentBranch ?? ""
+      if (!baseBranch.value) baseBranch.value = info?.currentBranch ?? ""
     }
-  } catch { repoInfo.value = null }
+  } catch {
+    if (seq !== repoInfoSeq) return
+    repoInfo.value = null
+  }
 }
 watch(workdir, (p) => { if (p?.trim()) void refreshRepoInfo(p) }, { immediate: true })
 
-// Fetch origin (once per repo) when the worktree picker opens, so the branch
-// list reflects what's been pushed since the last local fetch.
+// Re-list local + remote-tracking branches whenever the worktree picker opens.
+// Network `git fetch` is once per repo (fetchedRepos) so reopening stays cheap,
+// but we always re-read refs so newly created local branches show up.
 const worktreeFetching = ref(false)
 const fetchedRepos = new Set<string>()
 async function onWorktreeRefresh() {
-  const root = repoInfo.value?.repoRoot
   const p = workdir.value?.trim()
-  if (!root || !p || fetchedRepos.has(root)) return
-  worktreeFetching.value = true
+  if (!p) return
+  const root = repoInfo.value?.repoRoot
+  const shouldFetch = !!root && !fetchedRepos.has(root)
+  const seq = ++repoInfoSeq
+  worktreeFetching.value = shouldFetch
   try {
     const validation = await api.validatePath(p)
+    if (seq !== repoInfoSeq) return
     if (validation.ok && validation.path) {
-      const fresh = await api.getRepoInfo(validation.path, { fetch: true })
+      const fresh = await api.getRepoInfo(validation.path, { fetch: shouldFetch })
+      if (seq !== repoInfoSeq) return
       repoInfo.value = fresh
       if (!baseBranch.value) baseBranch.value = fresh.currentBranch ?? ""
-      fetchedRepos.add(root)
+      if (shouldFetch && fresh.repoRoot) fetchedRepos.add(fresh.repoRoot)
     }
   } catch { /* keep existing branches */ } finally {
-    worktreeFetching.value = false
+    if (seq === repoInfoSeq) worktreeFetching.value = false
   }
 }
 

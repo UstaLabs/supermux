@@ -8,6 +8,7 @@
 import { makeLogger } from "../../shared/log"
 import { claudeVoiceEngine, type ClaudeVoiceEngineOpts } from "./engines/claude-voice"
 import { codexRealtimeEngine, type CodexRealtimeEngineOpts } from "./engines/codex-realtime"
+import { cursorSttEngine, type CursorSttEngineOpts } from "./engines/cursor-stt"
 import { whisperEngine, type WhisperEngineOpts } from "./engines/whisper"
 import {
   DEFAULT_STT_ENGINE,
@@ -32,6 +33,8 @@ export interface SelectSttOpts {
   codexRealtime?: CodexRealtimeEngineOpts
   /** Claude Code voice_stream injectables (creds, auth, WebSocket). */
   claudeVoice?: ClaudeVoiceEngineOpts
+  /** Cursor IDE TranscribeAudio injectables (auth, fetch). */
+  cursorStt?: CursorSttEngineOpts
   /**
    * Optional full engine instances keyed by name. Used by tests and by
    * future hosts that want to inject a pre-built engine without registering
@@ -43,6 +46,7 @@ export interface SelectSttOpts {
 const registry: Record<SttEngineName, (o: SelectSttOpts) => SttEngine> = {
   "codex-realtime": (o) => codexRealtimeEngine(o.codexRealtime),
   "claude-voice": (o) => claudeVoiceEngine(o.claudeVoice),
+  "cursor-stt": (o) => cursorSttEngine(o.cursorStt),
   whisper: (o) => whisperEngine(o.whisper),
 }
 

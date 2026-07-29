@@ -9,5 +9,8 @@
         <activity
             android:name=".debug.GroupPreviewActivity"
             android:exported="true" />
+        <activity
+            android:name=".debug.ChatPreviewActivity"
+            android:exported="true" />
     </application>
 </manifest>

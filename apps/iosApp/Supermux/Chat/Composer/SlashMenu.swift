@@ -11,24 +11,57 @@ struct SlashMenu: View {
     let onApply: (SlashCommand) -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 2) {
             ForEach(matches, id: \.id) { cmd in
-                Button { onApply(cmd) } label: {
-                    HStack(spacing: 8) {
-                        Text(cmd.sigil + cmd.name).font(.callout.weight(.semibold)).foregroundStyle(Theme.teal)
-                        Text(cmd.family).font(.caption2).foregroundStyle(.tertiary)
-                        Spacer(minLength: 0)
-                        if showsActionGlyph && cmd.action != nil {
-                            Image(systemName: "bolt.fill").font(.caption2).foregroundStyle(.tertiary)
-                        }
-                    }
-                    .padding(.horizontal, 14).padding(.vertical, 9).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                if cmd.id != matches.last?.id { Divider() }
+                SlashMenuRow(
+                    title: cmd.sigil + cmd.name,
+                    subtitle: cmd.family,
+                    showsBolt: showsActionGlyph && cmd.action != nil
+                ) { onApply(cmd) }
             }
         }
+        .padding(6)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 1))
+        .shadow(color: .black.opacity(0.10), radius: 10, y: 3)
+    }
+}
+
+private struct SlashMenuRow: View {
+    let title: String
+    let subtitle: String
+    let showsBolt: Bool
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(Theme.teal)
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if showsBolt {
+                    Image(systemName: "bolt.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(
+                hovered ? Theme.teal.opacity(0.08) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            )
+        }
+        .buttonStyle(.plain)
+        #if os(macOS)
+        .onHover { hovered = $0 }
+        #endif
     }
 }

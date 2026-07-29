@@ -23,19 +23,26 @@ import Shared
 /// Tables can't live inside that single attributed string (TextKit table layout
 /// is unreliable and can't scroll), so a message is split into segments at table
 /// boundaries: text-runs stay one selectable block; tables become grid views.
-struct MarkdownView: View {
+struct MarkdownView: View, Equatable {
     let text: String
     /// When set (agent messages), tapped file-path links call back here; nil leaves the
     /// links inert (taps are still intercepted, never opened by the system).
     var onOpenFile: ((FilePathRef) -> Void)? = nil
 
+    /// Text identity is enough: logged message text is immutable, and linkify follows
+    /// `onOpenFile != nil`. Parent re-evaluations (broker observation noise) skip re-parse.
+    static func == (lhs: MarkdownView, rhs: MarkdownView) -> Bool {
+        lhs.text == rhs.text && (lhs.onOpenFile != nil) == (rhs.onOpenFile != nil)
+    }
+
     var body: some View {
         let segments = groupSegments(parseMarkdown(text))
+        let linkify = onOpenFile != nil
         VStack(alignment: .leading, spacing: 8) {
             ForEach(segments.indices, id: \.self) { i in
                 switch segments[i] {
                 case .text(let blocks):
-                    SelectableText(attributed: MarkdownAttributed.build(blocks: blocks, linkify: onOpenFile != nil), onOpenFile: onOpenFile)
+                    SelectableText(attributed: MarkdownAttributed.build(blocks: blocks, linkify: linkify), onOpenFile: onOpenFile)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 case .table(let table):
                     MarkdownTableView(table: table)
@@ -168,39 +175,15 @@ private enum MarkdownAttributed {
         ])
     }
 
-    /// Parse inline markdown (bold/italic/code/strikethrough/links) and normalize
-    /// every run onto our base font/color so the UITextView renders consistently.
+    /// Parse inline markdown and apply fonts/colors in one pass.
+    ///
+    /// **Does not use `AttributedString(markdown:)`.** That Foundation API was the dominant
+    /// per-paragraph cost on first layout (prior bench: most of a multi-ms "cache miss" row),
+    /// because every paragraph/list/heading called it and then walked `.inlinePresentationIntent`.
+    /// The hand parser matches the GFM subset we render (bold/italic/code/strike/links).
     private static func styledInline(_ s: String, font: PlatformFont, color: PlatformColor,
                                      paragraph: NSParagraphStyle?) -> NSAttributedString {
-        let m = NSMutableAttributedString(attributedString: MarkdownInline.nsAttributed(s))
-        let whole = NSRange(location: 0, length: m.length)
-        m.addAttributes([.font: font, .foregroundColor: color], range: whole)
-
-        // Collect inline-intent spans first; applying attributes *during*
-        // enumerateAttribute mutates the receiver mid-walk (undefined behavior).
-        var spans: [(NSRange, InlinePresentationIntent)] = []
-        m.enumerateAttribute(.inlinePresentationIntent, in: whole) { val, range, _ in
-            let intent: InlinePresentationIntent?
-            if let i = val as? InlinePresentationIntent { intent = i }
-            else if let n = val as? NSNumber { intent = InlinePresentationIntent(rawValue: n.uintValue) }
-            else { intent = nil }
-            if let intent { spans.append((range, intent)) }
-        }
-        for (range, intent) in spans {
-            var f = font
-            if intent.contains(.stronglyEmphasized) { f = f.withTraits(.traitBold) }
-            if intent.contains(.emphasized) { f = f.withTraits(.traitItalic) }
-            if intent.contains(.code) {
-                f = .monospacedSystemFont(ofSize: max(11, font.pointSize - 0.5), weight: .regular)
-                m.addAttribute(.backgroundColor, value: PlatformColor.smTertiaryFill, range: range)
-            }
-            if intent.contains(.strikethrough) {
-                m.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range)
-            }
-            m.addAttribute(.font, value: f, range: range)
-        }
-        if let paragraph { m.addAttribute(.paragraphStyle, value: paragraph, range: whole) }
-        return m
+        MarkdownInline.nsAttributed(s, baseFont: font, color: color, paragraph: paragraph)
     }
 }
 
@@ -218,10 +201,11 @@ enum FilePathLinks {
     /// Tag every detected file-path range in `s` with a `supermux-file://` link + teal underline.
     static func decorate(_ s: NSMutableAttributedString) {
         let length = (s.string as NSString).length
-        for m in findFilePathRefs(text: s.string) {   // shared KMP
-            // KMP String offsets are UTF-16 (Kotlin Char == UTF-16 code unit) and
-            // NSAttributedString is UTF-16-backed, so start/end map straight onto an NSRange.
-            let range = NSRange(location: Int(m.start), length: Int(m.end - m.start))
+        // `FilePathScanner`, not the shared `findFilePathRefs`: same pattern and same semantics, but
+        // Foundation's regex engine instead of Kotlin/Native's — see FilePathScanner for the
+        // measurements (this call was ~636 ms for one 5 KB agent message before).
+        for m in FilePathScanner.matches(in: s.string) {
+            let range = m.range
             guard range.length > 0, range.location + range.length <= length else { continue }
             guard let url = url(for: m.ref) else { continue }
             s.addAttributes([
@@ -261,22 +245,219 @@ enum FilePathLinks {
 
 // MARK: - Inline markdown parsing (shared by flow blocks and table cells)
 
-/// Parses inline-only markdown (bold/italic/code/strikethrough/links). Used both
-/// for the attributed-string flow blocks and for SwiftUI `Text` table cells.
+/// Fast pure-Swift inline markdown (bold / italic / `code` / ~~strike~~ / [label](url)).
+///
+/// Replaces Foundation's `AttributedString(markdown:)`, which is correct but far too heavy to
+/// run once per paragraph for every visible agent message on first layout. Semantics match the
+/// GFM subset the transcript actually uses; unmatched markers stay literal (same as before).
 enum MarkdownInline {
-    private static var options: AttributedString.MarkdownParsingOptions {
-        .init(interpretedSyntax: .inlineOnlyPreservingWhitespace,
-              failurePolicy: .returnPartiallyParsedIfPossible)
+    private struct Flags: OptionSet {
+        let rawValue: Int
+        static let bold = Flags(rawValue: 1 << 0)
+        static let italic = Flags(rawValue: 1 << 1)
+        static let code = Flags(rawValue: 1 << 2)
+        static let strike = Flags(rawValue: 1 << 3)
     }
 
-    /// SwiftUI-friendly `AttributedString` (Text renders bold/italic/code/links).
+    private struct Run {
+        var text: String
+        var flags: Flags
+        var link: String?
+    }
+
+    /// SwiftUI-friendly `AttributedString` for table cells (no NS font plumbing needed).
     static func attributed(_ s: String) -> AttributedString {
-        (try? AttributedString(markdown: s, options: options)) ?? AttributedString(s)
+        var out = AttributedString()
+        for run in parse(s) {
+            var piece = AttributedString(run.text)
+            if run.flags.contains(.bold) { piece.inlinePresentationIntent = .stronglyEmphasized }
+            if run.flags.contains(.italic) {
+                piece.inlinePresentationIntent =
+                    (piece.inlinePresentationIntent ?? []).union(.emphasized)
+            }
+            if run.flags.contains(.code) {
+                piece.inlinePresentationIntent =
+                    (piece.inlinePresentationIntent ?? []).union(.code)
+            }
+            if run.flags.contains(.strike) {
+                piece.inlinePresentationIntent =
+                    (piece.inlinePresentationIntent ?? []).union(.strikethrough)
+            }
+            if let link = run.link, let url = URL(string: link) { piece.link = url }
+            out.append(piece)
+        }
+        return out
     }
 
-    /// Bridge to `NSAttributedString` (intents only; callers layer font/color).
-    static func nsAttributed(_ s: String) -> NSAttributedString {
-        NSAttributedString(attributed(s))
+    /// Build a fully-styled `NSAttributedString` (fonts/colors applied — no second intent pass).
+    static func nsAttributed(_ s: String, baseFont: PlatformFont, color: PlatformColor,
+                             paragraph: NSParagraphStyle?) -> NSAttributedString {
+        let out = NSMutableAttributedString()
+        for run in parse(s) {
+            var font = baseFont
+            if run.flags.contains(.bold) { font = font.withTraits(.traitBold) }
+            if run.flags.contains(.italic) { font = font.withTraits(.traitItalic) }
+            if run.flags.contains(.code) {
+                font = .monospacedSystemFont(ofSize: max(11, baseFont.pointSize - 0.5), weight: .regular)
+            }
+            var attrs: [NSAttributedString.Key: Any] = [
+                .font: font,
+                .foregroundColor: color,
+            ]
+            if run.flags.contains(.code) {
+                attrs[.backgroundColor] = PlatformColor.smTertiaryFill
+            }
+            if run.flags.contains(.strike) {
+                attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+            }
+            if let link = run.link, let url = URL(string: link) {
+                attrs[.link] = url
+                attrs[.foregroundColor] = PlatformColor(Theme.teal)
+                attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
+            }
+            out.append(NSAttributedString(string: run.text, attributes: attrs))
+        }
+        if let paragraph, out.length > 0 {
+            out.addAttribute(.paragraphStyle, value: paragraph,
+                             range: NSRange(location: 0, length: out.length))
+        }
+        return out
+    }
+
+    /// Scan `s` left-to-right. Delimiters that don't form a closed pair are emitted literally.
+    private static func parse(_ s: String) -> [Run] {
+        if s.isEmpty { return [] }
+        var runs: [Run] = []
+        var buf = ""
+        var i = s.startIndex
+
+        func flush() {
+            guard !buf.isEmpty else { return }
+            runs.append(Run(text: buf, flags: [], link: nil))
+            buf = ""
+        }
+        func peek(_ n: Int) -> String {
+            guard let end = s.index(i, offsetBy: n, limitedBy: s.endIndex) else { return "" }
+            return String(s[i..<end])
+        }
+        func advance(_ n: Int) {
+            i = s.index(i, offsetBy: n, limitedBy: s.endIndex) ?? s.endIndex
+        }
+        /// Find closing delimiter `mark` after `i`, not counting escapes. Returns the index of the
+        /// closer's first character, or nil.
+        func findClose(_ mark: String) -> String.Index? {
+            var j = i
+            let m0 = mark[mark.startIndex]
+            while j < s.endIndex {
+                if s[j] == "\\" {
+                    j = s.index(after: j)
+                    if j < s.endIndex { j = s.index(after: j) }
+                    continue
+                }
+                if s[j] == m0 {
+                    if mark.count == 1 { return j }
+                    let next = s.index(after: j)
+                    if next < s.endIndex, String(s[j...next]) == mark { return j }
+                }
+                j = s.index(after: j)
+            }
+            return nil
+        }
+
+        while i < s.endIndex {
+            // Escape: emit the next character literally.
+            if s[i] == "\\", s.index(after: i) < s.endIndex {
+                flush()
+                let next = s.index(after: i)
+                buf.append(s[next])
+                flush()
+                i = s.index(after: next)
+                continue
+            }
+            // Inline code `...` (no nesting; first closer wins).
+            if s[i] == "`", let close = findClose("`"), close > i {
+                flush()
+                let innerStart = s.index(after: i)
+                let inner = String(s[innerStart..<close])
+                runs.append(Run(text: inner, flags: .code, link: nil))
+                i = s.index(after: close)
+                continue
+            }
+            // Link [label](url)
+            if s[i] == "[",
+               let labelEnd = findClose("]"),
+               s.index(after: labelEnd) < s.endIndex,
+               s[s.index(after: labelEnd)] == "(" {
+                let urlStart = s.index(labelEnd, offsetBy: 2)
+                if let urlEnd = s[urlStart...].firstIndex(of: ")") {
+                    flush()
+                    let label = String(s[s.index(after: i)..<labelEnd])
+                    let url = String(s[urlStart..<urlEnd])
+                    runs.append(Run(text: label.isEmpty ? url : label, flags: [], link: url))
+                    i = s.index(after: urlEnd)
+                    continue
+                }
+            }
+            // ~~strike~~
+            if peek(2) == "~~" {
+                var j = s.index(i, offsetBy: 2)
+                var closeAt: String.Index?
+                while j < s.endIndex {
+                    if s[j] == "~", s.index(after: j) < s.endIndex, s[s.index(after: j)] == "~" {
+                        closeAt = j; break
+                    }
+                    j = s.index(after: j)
+                }
+                if let closeAt, closeAt > s.index(i, offsetBy: 1) {
+                    flush()
+                    let innerStart = s.index(i, offsetBy: 2)
+                    for r in parse(String(s[innerStart..<closeAt])) {
+                        runs.append(Run(text: r.text, flags: r.flags.union(.strike), link: r.link))
+                    }
+                    i = s.index(closeAt, offsetBy: 2)
+                    continue
+                }
+            }
+            // **bold** or __bold__
+            let two = peek(2)
+            if two == "**" || two == "__" {
+                let mark = two
+                var j = s.index(i, offsetBy: 2)
+                var closeAt: String.Index?
+                while j < s.endIndex {
+                    if String(s[j...]).hasPrefix(mark) { closeAt = j; break }
+                    j = s.index(after: j)
+                }
+                if let closeAt, closeAt >= s.index(i, offsetBy: 2) {
+                    flush()
+                    let innerStart = s.index(i, offsetBy: 2)
+                    for r in parse(String(s[innerStart..<closeAt])) {
+                        runs.append(Run(text: r.text, flags: r.flags.union(.bold), link: r.link))
+                    }
+                    i = s.index(closeAt, offsetBy: 2)
+                    continue
+                }
+            }
+            // *italic* or _italic_ (single; not ** / __)
+            if (s[i] == "*" || s[i] == "_"), peek(2) != "**", peek(2) != "__" {
+                let mark = String(s[i])
+                if let close = findClose(mark), close > i {
+                    let innerStart = s.index(after: i)
+                    if close > innerStart {
+                        flush()
+                        for r in parse(String(s[innerStart..<close])) {
+                            runs.append(Run(text: r.text, flags: r.flags.union(.italic), link: r.link))
+                        }
+                        i = s.index(after: close)
+                        continue
+                    }
+                }
+            }
+            buf.append(s[i])
+            i = s.index(after: i)
+        }
+        flush()
+        return runs
     }
 }
 
@@ -584,21 +765,38 @@ struct SelectableText: UIViewRepresentable {
 
     func updateUIView(_ tv: UITextView, context: Context) {
         context.coordinator.onOpenFile = onOpenFile
-        if !tv.attributedText.isEqual(attributed) { tv.attributedText = attributed }
+        if !tv.attributedText.isEqual(attributed) {
+            tv.attributedText = attributed
+            context.coordinator.invalidateLayout()
+        }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView tv: UITextView, context: Context) -> CGSize? {
         let proposed = proposal.width ?? SMScreen.mainWidth
         let width = (proposed.isFinite && proposed > 0) ? proposed : SMScreen.mainWidth
+        if let cached = context.coordinator.cachedSize(forWidth: width) { return cached }
         let fit = tv.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
-        return CGSize(width: width, height: ceil(fit.height))
+        let size = CGSize(width: width, height: ceil(fit.height))
+        context.coordinator.remember(size: size, width: width)
+        return size
     }
 
     /// Intercepts taps on our `supermux-file://` links (→ open in the editor) while letting
     /// every other link (http(s), etc.) fall through to the system's default handling.
     final class Coordinator: NSObject, UITextViewDelegate {
         var onOpenFile: ((FilePathRef) -> Void)?
+        private var laidOutWidth: CGFloat = -1
+        private var laidOutSize: CGSize = .zero
         init(onOpenFile: ((FilePathRef) -> Void)?) { self.onOpenFile = onOpenFile }
+
+        func invalidateLayout() { laidOutWidth = -1 }
+        func cachedSize(forWidth width: CGFloat) -> CGSize? {
+            abs(width - laidOutWidth) < 0.5 ? laidOutSize : nil
+        }
+        func remember(size: CGSize, width: CGFloat) {
+            laidOutWidth = width
+            laidOutSize = size
+        }
 
         // NOTE: `shouldInteractWith` is deprecated on iOS 17+ but still functional, and is the
         // simplest way to intercept a custom scheme; the modern UITextItem API needs more wiring.
@@ -625,7 +823,7 @@ struct SelectableText: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(onOpenFile: onOpenFile) }
 
     func makeNSView(context: Context) -> NSTextView {
-        let tv = NSTextView()
+        let tv = NSTextView(frame: .zero)
         tv.isEditable = false
         tv.isSelectable = true
         tv.drawsBackground = false
@@ -634,6 +832,20 @@ struct SelectableText: NSViewRepresentable {
         tv.textContainer?.widthTracksTextView = true
         tv.isVerticallyResizable = false
         tv.isHorizontallyResizable = false
+        // Display-only: turn off the full editor surface. `usesFontPanel` alone has been measured
+        // to drag NSTextView layout through Touch-Bar/font-panel machinery on large strings;
+        // the rest of these are free no-ops for a non-editable view and keep first-layout lean.
+        tv.usesFontPanel = false
+        tv.usesRuler = false
+        tv.importsGraphics = false
+        tv.allowsUndo = false
+        tv.isAutomaticQuoteSubstitutionEnabled = false
+        tv.isAutomaticDashSubstitutionEnabled = false
+        tv.isAutomaticTextReplacementEnabled = false
+        tv.isAutomaticSpellingCorrectionEnabled = false
+        tv.isContinuousSpellCheckingEnabled = false
+        tv.isGrammarCheckingEnabled = false
+        tv.isRichText = true
         // The attributed string already carries explicit teal + underline on file links;
         // pin the default link styling to the same look so plain markdown links match the
         // iOS tint (NSTextView would otherwise paint every .link range system-blue).
@@ -650,17 +862,25 @@ struct SelectableText: NSViewRepresentable {
 
     func updateNSView(_ tv: NSTextView, context: Context) {
         context.coordinator.onOpenFile = onOpenFile
-        if tv.textStorage?.isEqual(attributed) != true { tv.textStorage?.setAttributedString(attributed) }
+        if tv.textStorage?.isEqual(attributed) != true {
+            tv.textStorage?.setAttributedString(attributed)
+            context.coordinator.invalidateLayout()
+        }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView tv: NSTextView, context: Context) -> CGSize? {
         let proposed = proposal.width ?? SMScreen.mainWidth
         let width = (proposed.isFinite && proposed > 0) ? proposed : SMScreen.mainWidth
+        // SwiftUI asks sizeThatFits many times per frame with the same width. Re-running
+        // ensureLayout for identical inputs is pure main-thread waste on long agent replies.
+        if let cached = context.coordinator.cachedSize(forWidth: width) { return cached }
         guard let container = tv.textContainer, let lm = tv.layoutManager else { return nil }
         container.size = NSSize(width: width, height: .greatestFiniteMagnitude)
         lm.ensureLayout(for: container)
         let fit = lm.usedRect(for: container)
-        return CGSize(width: width, height: ceil(fit.height))
+        let size = CGSize(width: width, height: ceil(fit.height))
+        context.coordinator.remember(size: size, width: width)
+        return size
     }
 
     /// Intercepts clicks on our `supermux-file://` links (→ open in the editor) while letting
@@ -668,7 +888,18 @@ struct SelectableText: NSViewRepresentable {
     /// Note the inverted contract vs UIKit: returning `true` here means "handled".
     final class Coordinator: NSObject, NSTextViewDelegate {
         var onOpenFile: ((FilePathRef) -> Void)?
+        private var laidOutWidth: CGFloat = -1
+        private var laidOutSize: CGSize = .zero
         init(onOpenFile: ((FilePathRef) -> Void)?) { self.onOpenFile = onOpenFile }
+
+        func invalidateLayout() { laidOutWidth = -1 }
+        func cachedSize(forWidth width: CGFloat) -> CGSize? {
+            abs(width - laidOutWidth) < 0.5 ? laidOutSize : nil
+        }
+        func remember(size: CGSize, width: CGFloat) {
+            laidOutWidth = width
+            laidOutSize = size
+        }
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
             let url = (link as? URL) ?? (link as? String).flatMap { URL(string: $0) }

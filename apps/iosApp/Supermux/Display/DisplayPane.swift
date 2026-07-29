@@ -275,6 +275,7 @@ private struct VncStreamView: View {
             }
         }
         .smPresentationDetents([.medium])
+        .smMacSheetFrame(minWidth: 380, minHeight: 240)
     }
 }
 

@@ -349,6 +349,24 @@ extension View {
         self
         #endif
     }
+    /// Give sheet content a usable size on macOS. SwiftUI's default sheet for
+    /// `NavigationStack` + `List`/`Form` often collapses to a near-empty window;
+    /// `smPresentationDetents` is a no-op on Mac. No-op on iOS (detents size the sheet).
+    @ViewBuilder func smMacSheetFrame(minWidth: CGFloat = 480, minHeight: CGFloat = 420) -> some View {
+        #if os(macOS)
+        frame(minWidth: minWidth, minHeight: minHeight)
+        #else
+        self
+        #endif
+    }
+    /// Fixed size for Mac popovers / compact choosers (model, reasoning, worktree). No-op on iOS.
+    @ViewBuilder func smMacFixedFrame(width: CGFloat, height: CGFloat) -> some View {
+        #if os(macOS)
+        frame(width: width, height: height)
+        #else
+        self
+        #endif
+    }
     /// The composer's option lists (model / reasoning) anchor to their pill as a popover on
     /// macOS — the native idiom for a small anchored chooser — and stay a detented sheet on iOS.
     @ViewBuilder func smOptionPicker<C: View>(isPresented: Binding<Bool>, @ViewBuilder content: @escaping () -> C) -> some View {

@@ -134,3 +134,10 @@ test("voiceSttEngine: claude-voice survives sanitize + resolve", () => {
   const resolved = resolveAppConfig(patch, {} as any)
   expect(resolved.voiceSttEngine).toBe("claude-voice")
 })
+
+test("voiceSttEngine: cursor-stt survives sanitize + resolve", () => {
+  const patch = sanitizeAppConfigPatch({ voiceSttEngine: "cursor-stt" })
+  expect(patch.voiceSttEngine).toBe("cursor-stt")
+  const resolved = resolveAppConfig(patch, {} as any)
+  expect(resolved.voiceSttEngine).toBe("cursor-stt")
+})
