@@ -12,6 +12,7 @@ const router = useRouter()
 const STT_ENGINES = [
   { id: "codex-realtime", label: "Codex Realtime (ChatGPT)" },
   { id: "claude-voice", label: "Claude Code voice" },
+  { id: "cursor-stt", label: "Cursor voice" },
   { id: "whisper", label: "Whisper (local)" },
 ] as const
 const DEFAULT_STT = "codex-realtime"

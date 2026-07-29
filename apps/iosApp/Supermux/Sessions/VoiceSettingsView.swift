@@ -11,6 +11,7 @@ private struct SttEngine: Identifiable {
 private let sttEngines: [SttEngine] = [
     .init(id: "codex-realtime", label: "Codex Realtime (ChatGPT)"),
     .init(id: "claude-voice", label: "Claude Code voice"),
+    .init(id: "cursor-stt", label: "Cursor voice"),
     .init(id: "whisper", label: "Whisper (local)"),
 ]
 private let defaultSttEngine = "codex-realtime"

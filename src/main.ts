@@ -1736,7 +1736,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const messages = sessionId ? messageLog.get(s?.id ?? sessionId, 10) : []
       const payload = buildVoicePayload(draft, messages, skills)
       // Client-side STT drafts (no audioPath) always go through cleanup; engine-produced
-      // drafts honor prefersCleanup (whisper: true; codex-realtime / claude-voice: false).
+      // drafts honor prefersCleanup (whisper: true; codex-realtime / claude-voice / cursor-stt: false).
       if (!prefersCleanup) {
         log.info("voice_transcribe_out", { sessionId: sessionId ?? null, draft, text: draft, sttMs, cleanupMs: 0, sttEngine, cleanupEngine: "skipped" })
         return { text: draft }

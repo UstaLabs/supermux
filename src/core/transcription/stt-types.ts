@@ -1,6 +1,6 @@
 // Speech-to-text engine interface. Mirrors the agent-api cleanup adapter seam:
 // each engine is a small, injectable unit selected by name so the broker can
-// swap whisper / codex-realtime / claude-voice / future backends without
+// swap whisper / codex-realtime / claude-voice / cursor-stt / future backends without
 // touching the HTTP endpoint or client composers.
 
 export interface SttTranscribeOpts {
@@ -10,7 +10,7 @@ export interface SttTranscribeOpts {
   lang?: string
   /**
    * Optional recognition bias terms (project glossary, tech names). Used by
-   * claude-voice as `x-config-keyterms`; ignored by whisper / codex-realtime.
+   * claude-voice as `x-config-keyterms`; ignored by whisper / codex-realtime / cursor-stt.
    */
   keyterms?: string[]
   signal?: AbortSignal
@@ -46,7 +46,7 @@ export interface SttEngine {
 export type SpawnFn = (cmd: string, args: string[]) => { exited: Promise<number> }
 
 /** Registry allowlist of STT engine names (light module so settings can import it). */
-export const STT_ENGINES = ["codex-realtime", "claude-voice", "whisper"] as const
+export const STT_ENGINES = ["codex-realtime", "claude-voice", "cursor-stt", "whisper"] as const
 export type SttEngineName = (typeof STT_ENGINES)[number]
 /** Universal local fallback when the primary engine is offline or fails. */
 export const FALLBACK_STT_ENGINE: SttEngineName = "whisper"
