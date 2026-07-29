@@ -54,6 +54,7 @@ import { Conversation, ConversationContent } from "@/components/ai-elements/conv
 import { Message, MessageContent } from "@/components/ai-elements/message"
 import MessageText from "@/components/MessageText.vue"
 import MessageCopyButton from "@/components/MessageCopyButton.vue"
+import MessageReadAloudButton from "@/components/MessageReadAloudButton.vue"
 import AttachmentList from "@/components/attachments/AttachmentList.vue"
 import { PromptInput } from "@/components/ai-elements/prompt-input"
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input"
@@ -626,10 +627,13 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
                   <MessageContent>
                     <MessageText v-if="block.entry.text" :content="block.entry.text" @open-file="handleOpenFile" />
                     <AttachmentList :attachments="block.entry.attachments" />
-                    <MessageCopyButton
+                    <div
                       v-if="block.entry.direction !== 'outbound' && block.entry.text"
-                      :text="block.entry.text"
-                    />
+                      class="flex flex-wrap items-center gap-0.5"
+                    >
+                      <MessageCopyButton :text="block.entry.text" />
+                      <MessageReadAloudButton :text="block.entry.text" />
+                    </div>
                   </MessageContent>
                 </Message>
                 <div v-else class="flex flex-col gap-0.5 py-0.5">
