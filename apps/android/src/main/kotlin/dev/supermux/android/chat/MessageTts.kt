@@ -1,6 +1,7 @@
 package dev.supermux.android.chat
 
 import android.content.Context
+import android.media.MediaPlayer
 import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
@@ -8,22 +9,34 @@ import android.speech.tts.UtteranceProgressListener
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import java.io.File
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
- * Process-wide native [TextToSpeech] for agent-message "Read aloud".
- * One engine so only one message speaks at a time.
- * [speakingKey] is Compose-observable (plain text currently being spoken, or null).
+ * Process-wide read-aloud: platform [TextToSpeech] or ChatGPT (codex) via broker /speak.
+ * [resolveEngine] / [speakRemote] are wired from AppViewModel when a host is connected.
  */
 object MessageTts {
     private val engine = AtomicReference<TextToSpeech?>(null)
     private val ready = AtomicInteger(0) // 0=idle, 1=initing, 2=ready, -1=failed
     private val gen = AtomicInteger(0)
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var mediaPlayer: MediaPlayer? = null
 
-    /** Plain text key of the utterance in flight, or null when idle. */
+    /** Returns "platform" | "codex" (default platform). */
+    var resolveEngine: (suspend () -> String)? = null
+
+    /** POST /speak — returns MP3 bytes. Required for codex engine. */
+    var speakRemote: (suspend (text: String) -> ByteArray)? = null
+
     var speakingKey by mutableStateOf<String?>(null)
         private set
 
@@ -36,12 +49,24 @@ object MessageTts {
             stop()
             return
         }
-        speak(context, plain)
+        scope.launch {
+            val eng = runCatching { resolveEngine?.invoke() }.getOrNull()?.ifBlank { null } ?: "platform"
+            if (eng == "codex") {
+                speakCodex(context.applicationContext, plain, rawText)
+            } else {
+                speakPlatform(context.applicationContext, plain)
+            }
+        }
     }
 
     fun stop() {
         gen.incrementAndGet()
         engine.get()?.stop()
+        try {
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+        } catch (_: Exception) { /* ignore */ }
+        mediaPlayer = null
         setSpeakingKey(null)
     }
 
@@ -59,8 +84,52 @@ object MessageTts {
         }
     }
 
-    private fun speak(context: Context, plain: String) {
-        ensureEngine(context.applicationContext) { tts ->
+    private suspend fun speakCodex(appCtx: Context, plain: String, rawText: String) {
+        val remote = speakRemote
+        if (remote == null) {
+            // Fallback to platform if remote not wired
+            speakPlatform(appCtx, plain)
+            return
+        }
+        val g = gen.incrementAndGet()
+        setSpeakingKey(plain)
+        try {
+            val bytes = withContext(Dispatchers.IO) { remote(rawText) }
+            if (gen.get() != g) return
+            withContext(Dispatchers.Main) {
+                if (gen.get() != g) return@withContext
+                playMp3(appCtx, bytes, g, plain)
+            }
+        } catch (_: Exception) {
+            if (gen.get() == g) setSpeakingKey(null)
+        }
+    }
+
+    private fun playMp3(appCtx: Context, bytes: ByteArray, g: Int, plain: String) {
+        try {
+            mediaPlayer?.release()
+            val file = File(appCtx.cacheDir, "read-aloud-$g.mp3")
+            file.writeBytes(bytes)
+            val mp = MediaPlayer()
+            mediaPlayer = mp
+            mp.setDataSource(file.absolutePath)
+            mp.setOnCompletionListener {
+                if (gen.get() == g) setSpeakingKey(null)
+                try { file.delete() } catch (_: Exception) {}
+            }
+            mp.setOnErrorListener { _, _, _ ->
+                if (gen.get() == g) setSpeakingKey(null)
+                true
+            }
+            mp.prepare()
+            mp.start()
+        } catch (_: Exception) {
+            if (gen.get() == g) setSpeakingKey(null)
+        }
+    }
+
+    private fun speakPlatform(appCtx: Context, plain: String) {
+        ensureEngine(appCtx) { tts ->
             if (tts == null) return@ensureEngine
             val g = gen.incrementAndGet()
             setSpeakingKey(plain)
@@ -126,7 +195,6 @@ fun plainTextForSpeech(md: String): String {
     s = s.replace(Regex("\\n{2,}"), ". ")
     s = s.replace('\n', ' ')
     s = s.replace(Regex("\\s+"), " ").trim()
-    // Clean up artifacts from stripped fences ("Hello. . world")
     s = s.replace(Regex("(?:\\.\\s*){2,}"), ". ").replace(Regex("\\s+"), " ").trim()
     return s
 }

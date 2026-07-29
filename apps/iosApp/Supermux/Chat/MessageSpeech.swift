@@ -7,18 +7,15 @@ import UIKit
 import AppKit
 #endif
 
-/// Process-wide AVSpeechSynthesizer for agent-message "Read aloud".
-/// Only one message speaks at a time; [speakingKey] is the plain text currently spoken.
+/// Process-wide read-aloud: AVSpeechSynthesizer (platform) or ChatGPT via broker /speak.
 @MainActor
 final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     static let shared = MessageSpeech()
 
     private let synth = AVSpeechSynthesizer()
-    /// Monotonic generation so a cancelled/finished utterance can't clear a newer session.
     private var gen = 0
-    private var activeGen = 0
+    private var audioPlayer: AVAudioPlayer?
 
-    /// Plain text key of the utterance in flight, or nil when idle.
     @Published private(set) var speakingKey: String?
 
     private override init() {
@@ -28,27 +25,43 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
 
     func isSpeaking(_ key: String) -> Bool { speakingKey == key }
 
-    func toggle(rawText: String) {
+    func toggle(rawText: String, broker: BrokerSession?) {
         let plain = Self.plainTextForSpeech(rawText)
         guard !plain.isEmpty else { return }
         if speakingKey == plain {
             stop()
             return
         }
-        speak(plain)
+        Task {
+            let engine = await Self.resolveEngine(broker: broker)
+            if engine == "codex", let broker {
+                await speakCodex(rawText: rawText, plain: plain, broker: broker)
+            } else {
+                speakPlatform(plain)
+            }
+        }
     }
 
     func stop() {
         gen &+= 1
-        activeGen = gen
         if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
+        audioPlayer?.stop()
+        audioPlayer = nil
         speakingKey = nil
     }
 
-    private func speak(_ plain: String) {
+    private static func resolveEngine(broker: BrokerSession?) async -> String {
+        guard let broker else { return "platform" }
+        let cfg = await broker.config()
+        let e = cfg?.voiceTtsEngine ?? ""
+        return e.isEmpty ? "platform" : e
+    }
+
+    private func speakPlatform(_ plain: String) {
         gen &+= 1
-        activeGen = gen
         if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
+        audioPlayer?.stop()
+        audioPlayer = nil
         speakingKey = plain
         let u = AVSpeechUtterance(string: plain)
         u.voice = AVSpeechSynthesisVoice(language: Locale.current.identifier)
@@ -57,25 +70,40 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         synth.speak(u)
     }
 
+    private func speakCodex(rawText: String, plain: String, broker: BrokerSession) async {
+        gen &+= 1
+        let myGen = gen
+        if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
+        audioPlayer?.stop()
+        audioPlayer = nil
+        speakingKey = plain
+        guard let data = await broker.speak(rawText, engine: "codex") else {
+            if gen == myGen { speakingKey = nil }
+            return
+        }
+        guard gen == myGen else { return }
+        do {
+            let player = try AVAudioPlayer(data: data)
+            audioPlayer = player
+            player.delegate = self
+            player.play()
+        } catch {
+            if gen == myGen { speakingKey = nil }
+        }
+    }
+
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         Task { @MainActor in self.clearIfCurrent() }
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        // stop() already cleared; ignore cancel that follows an intentional stop.
         Task { @MainActor in self.clearIfCurrent() }
     }
 
     private func clearIfCurrent() {
-        // Only clear if we still own the active generation (no newer toggle/stop).
-        // When stop() bumps gen and clears, activeGen matches gen and speakingKey is already nil.
-        // When utterance finishes naturally, activeGen still matches gen.
-        if speakingKey != nil {
-            speakingKey = nil
-        }
+        if speakingKey != nil { speakingKey = nil }
     }
 
-    /// Flatten markdown-ish agent text for TTS (mirrors web `plainTextForSpeech`).
     static func plainTextForSpeech(_ md: String) -> String {
         if md.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "" }
         var s = md
@@ -100,9 +128,16 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     }
 }
 
+extension MessageSpeech: AVAudioPlayerDelegate {
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor in self.clearIfCurrent() }
+    }
+}
+
 /// Copy + Read aloud under an agent reply (web/Android parity).
 struct MessageMetaRow: View {
     let text: String
+    var broker: BrokerSession?
     @ObservedObject private var speech = MessageSpeech.shared
     @State private var copied = false
 
@@ -133,7 +168,7 @@ struct MessageMetaRow: View {
                 label: speaking ? "Stop reading" : "Read aloud",
                 tinted: speaking
             ) {
-                speech.toggle(rawText: text)
+                speech.toggle(rawText: text, broker: broker)
             }
             Spacer(minLength: 0)
         }

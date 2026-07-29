@@ -75,6 +75,14 @@ private val STT_ENGINES = listOf(
 private const val DEFAULT_STT_ENGINE = "codex-realtime"
 private fun sttEngineLabel(id: String): String = STT_ENGINES.firstOrNull { it.id == id }?.label ?: id
 
+// Read-aloud engines — mirror TTS_ENGINES in src/core/tts/tts-types.ts.
+private val TTS_ENGINES = listOf(
+    SttEngine("platform", "Device (system voice)"),
+    SttEngine("codex", "ChatGPT (Codex login)"),
+)
+private const val DEFAULT_TTS_ENGINE = "platform"
+private fun ttsEngineLabel(id: String): String = TTS_ENGINES.firstOrNull { it.id == id }?.label ?: id
+
 // Curated mirror of ENGINES in src/core/agent-api/index.ts. `family` is the
 // AgentKind whose models GET /models?agent= returns for that engine.
 private val VOICE_ENGINES = listOf(
@@ -94,6 +102,7 @@ fun VoiceSettingsPage(
     loadModels: suspend (family: String) -> List<dev.supermux.net.ModelInfo>,
     loadConfig: suspend () -> dev.supermux.net.AppConfigDto?,
     saveVoiceStt: (engine: String?) -> Unit,
+    saveVoiceTts: (engine: String?) -> Unit = {},
     saveVoiceCleanup: (engine: String?, model: String?) -> Unit,
     onOpenGlossary: () -> Unit,
 ) {
@@ -101,16 +110,19 @@ fun VoiceSettingsPage(
     val scope = rememberCoroutineScope()
     var models by remember { mutableStateOf<List<dev.supermux.net.ModelInfo>>(emptyList()) }
     var sttEngine by remember { mutableStateOf(DEFAULT_STT_ENGINE) }
+    var ttsEngine by remember { mutableStateOf(DEFAULT_TTS_ENGINE) }
     var engine by remember { mutableStateOf(DEFAULT_VOICE_ENGINE) }
     var selectedModel by remember { mutableStateOf("") }   // "" = the engine's default
     var loading by remember { mutableStateOf(true) }
     var showSttPicker by remember { mutableStateOf(false) }
+    var showTtsPicker by remember { mutableStateOf(false) }
     var showEnginePicker by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         val cfg = loadConfig()
         sttEngine = cfg?.voiceSttEngine?.ifBlank { null } ?: DEFAULT_STT_ENGINE
+        ttsEngine = cfg?.voiceTtsEngine?.ifBlank { null } ?: DEFAULT_TTS_ENGINE
         engine = cfg?.voiceCleanupEngine?.ifBlank { null } ?: DEFAULT_VOICE_ENGINE
         selectedModel = cfg?.voiceCleanupModel ?: ""
         models = loadModels(voiceEngineFamily(engine))
@@ -156,7 +168,24 @@ fun VoiceSettingsPage(
                 }
                 HorizontalDivider(color = cs.outlineVariant)
 
-                // Row 2: Cleanup engine → tappable value chip → picker.
+                // Row 2: Read aloud engine
+                VoiceSettingRow(
+                    label = "Read aloud",
+                    desc = "Device uses the OS voice. ChatGPT needs a Codex login.",
+                ) {
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(cs.surfaceContainer)
+                            .clickable { showTtsPicker = true }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        Text(ttsEngineLabel(ttsEngine).take(28), color = cs.onSurface, fontSize = 13.sp, maxLines = 1)
+                    }
+                }
+                HorizontalDivider(color = cs.outlineVariant)
+
+                // Row 3: Cleanup engine → tappable value chip → picker.
                 VoiceSettingRow(
                     label = "Cleanup engine",
                     desc = "Direct-API agent that cleans up voice-dictation transcripts.",
@@ -231,6 +260,18 @@ fun VoiceSettingsPage(
                 saveVoiceStt(picked)
             },
             onDismiss = { showSttPicker = false },
+        )
+    }
+    if (showTtsPicker) {
+        PickerSheet(
+            title = "Read aloud",
+            options = TTS_ENGINES.map { it.id to it.label },
+            current = ttsEngine,
+            onPick = { picked ->
+                ttsEngine = picked
+                saveVoiceTts(picked)
+            },
+            onDismiss = { showTtsPicker = false },
         )
     }
     if (showEnginePicker) {
