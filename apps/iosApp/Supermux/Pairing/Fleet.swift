@@ -94,6 +94,24 @@ final class Fleet {
         return brokers[recordId]
     }
 
+    /// sessionId → newest message timestamp, for every LIVE session, built in ONE pass.
+    ///
+    /// This is the `lastTs` source for `buildTaskSections` / `groupSessions` (Settled ordering).
+    /// Resolving it per session through `broker(for:)` re-scanned every host's session array on
+    /// each lookup — and always missed for archived rows, which no host owns — so the sidebar
+    /// paid a full fleet scan per lookup to produce an empty string. One pass, then dictionary
+    /// hits. Archived sessions are absent by construction and fall back to "" as before.
+    func lastMessageTsBySession() -> [String: String] {
+        var m: [String: String] = [:]
+        for h in hosts {
+            guard let b = brokers[h.recordId] else { continue }
+            for s in b.sessions {
+                if let ts = b.messages[s.id]?.last?.ts { m[s.id] = ts }
+            }
+        }
+        return m
+    }
+
     /// The host that owns a session (the one whose live list contains it).
     func broker(for sessionId: String) -> BrokerSession? {
         for h in hosts {
@@ -144,9 +162,11 @@ final class Fleet {
 
     private func group(_ ss: [SessionInfo]) -> [SessionGroup] {
         let home = inferHomeDir(workdir: ss.first?.workdir) ?? ""
-        return groupSessions(sessions: ss, home: home, lastTs: { [weak self] s in
-            self?.broker(for: s.id)?.messages[s.id]?.last?.ts ?? ""
-        }, archived: archivedForList)
+        // One pass up front: `groupSessions` calls `buildTaskSections` once PER project group,
+        // so a fleet-scanning closure here is paid over and over. See `lastMessageTsBySession`.
+        let ts = lastMessageTsBySession()
+        return groupSessions(sessions: ss, home: home, lastTs: { ts[$0.id] ?? "" },
+                             archived: archivedForList)
     }
 
     // MARK: - Selection / filter (persisted)

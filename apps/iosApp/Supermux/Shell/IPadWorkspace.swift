@@ -45,10 +45,20 @@ struct IPadWorkspace<NewSessionContent: View>: View {
     @Environment(\.openSettings) private var openSettings
     #endif
 
-    private var session: SessionInfo? { fleet.sessions.first { $0.id == selected } }
-    /// The selected session's OWNING host (or the active host when nothing is selected). Everything
+    /// The session the DETAIL column is showing. Trails `selected` by one run-loop turn on purpose.
+    ///
+    /// `selected` drives the sidebar's selection highlight, which is cheap; the detail column
+    /// (header + transcript + panes) is the expensive part of a switch. When both read the same
+    /// state they update in ONE SwiftUI transaction, so the highlight cannot paint until the whole
+    /// new transcript has been built and laid out — measured at 100-400 ms, which is exactly the
+    /// "the row colour waits for the session to render" symptom. Splitting them lets the click
+    /// commit a cheap sidebar-only frame first, then build the detail in the next frame.
+    @State private var detailSessionId: String?
+
+    private var session: SessionInfo? { fleet.sessions.first { $0.id == detailSessionId } }
+    /// The detail session's OWNING host (or the active host when nothing is selected). Everything
     /// in the detail column drives this concrete broker; the sidebar renders the merged fleet.
-    private var broker: BrokerSession? { selected.flatMap { fleet.broker(for: $0) } ?? fleet.activeBroker }
+    private var broker: BrokerSession? { detailSessionId.flatMap { fleet.broker(for: $0) } ?? fleet.activeBroker }
 
     /// The id of the current session's newest running display stream, or nil. Drives the
     /// Display column's auto-open (PWA `SessionDisplayPanel` parity): nil→non-nil = a stream
@@ -58,7 +68,7 @@ struct IPadWorkspace<NewSessionContent: View>: View {
     var body: some View {
         workspaceShell
         .animation(.snappy(duration: 0.25), value: layout.sidebarCollapsed)
-        .workspaceShortcuts(layout: layout, session: selected) { route = .newSession }
+        .workspaceShortcuts(layout: layout, session: detailSessionId) { route = .newSession }
         // The session header lives in the detail column (see `WorkspaceDetail`), so the stack's
         // own nav bar is hidden — it would otherwise span both columns and double the chrome.
         .smHideNavigationBar()
@@ -71,11 +81,21 @@ struct IPadWorkspace<NewSessionContent: View>: View {
             Button("Kill session", role: .destructive) { if let s = session, let b = broker { b.kill(s.id) } }
             Button("Cancel", role: .cancel) {}
         }
-        .onAppear { syncChrome(); applyEnvHooksIfReady() }
-        // Keep the chrome pointed at the selected session (load git/proxies on switch). The env
-        // hooks need a selected session, which arrives async after onAppear — apply them here on
-        // the first selection too (the guard makes it one-shot, so a later switch won't re-fire).
-        .onChange(of: selected) { _, _ in syncChrome(); applyEnvHooksIfReady() }
+        .onAppear {
+            if detailSessionId == nil { detailSessionId = selected }
+            syncChrome(); applyEnvHooksIfReady()
+        }
+        // Hand the detail column its session on the NEXT run-loop turn, so the transaction that
+        // moves the sidebar highlight does not also have to build the new transcript. The very
+        // first selection is applied inline — there is no highlight to preserve yet, and deferring
+        // it would flash "Pick a session" on launch.
+        .onChange(of: selected) { _, new in
+            guard detailSessionId != nil else { detailSessionId = new; return }
+            DispatchQueue.main.async { detailSessionId = new }
+        }
+        // Chrome (git status / proxies) follows the DETAIL session, not the highlight, so the
+        // header never renders one session's title against another's branch.
+        .onChange(of: detailSessionId) { _, _ in syncChrome(); applyEnvHooksIfReady() }
         #if os(macOS)
         // Web parity: choosing a sidebar session leaves the launcher and reveals that session in
         // the detail workspace. New Session itself never hides or disables the sidebar.
@@ -167,8 +187,13 @@ struct IPadWorkspace<NewSessionContent: View>: View {
         SessionsRailView(fleet: fleet, selected: $selected,
                          onExpand: { layout.sidebarCollapsed = false },
                          onNewSession: { launcherDraftId = nil; route = .newSession },
-                         onSessionSelected: { id in
-                             selected = id
+                         onSessionSelected: { _ in
+                             // No `selected = id` here: every caller (list row, rail row,
+                             // continue-sheet) sets the binding immediately before invoking this,
+                             // so it was a redundant second write of the same value. Removing it
+                             // was measured and made NO difference to render counts — SwiftUI
+                             // coalesces the two writes — so this is hygiene, not an optimisation.
+                             // The callback exists only to leave the New Session workspace.
                              if route == .newSession { route = nil }
                          })
             .frame(width: WorkspaceLayoutModel.B.rail)
@@ -189,8 +214,9 @@ struct IPadWorkspace<NewSessionContent: View>: View {
                              onNewSession: { launcherDraftId = nil; route = .newSession },
                              onArchived: { route = .archived },
                              onAddHost: onAddHost,
-                             onSessionSelected: { id in
-                                 selected = id
+                             onSessionSelected: { _ in
+                                 // See the rail's callback above: the caller already set
+                                 // `selected`, so re-assigning it here was redundant.
                                  if route == .newSession { route = nil }
                              },
                              onOpenDraft: { id in launcherDraftId = id; route = .newSession },
