@@ -120,6 +120,7 @@ fun SettingsScreen(
     voiceLoadModels: suspend (family: String) -> List<dev.supermux.net.ModelInfo>,
     voiceLoadConfig: suspend () -> dev.supermux.net.AppConfigDto?,
     voiceSaveVoiceStt: (engine: String?) -> Unit,
+    voiceSaveVoiceTts: (engine: String?) -> Unit = {},
     voiceSaveVoiceCleanup: (engine: String?, model: String?) -> Unit,
     glossaryLoad: suspend () -> List<String>,
     glossarySave: suspend (List<String>) -> List<String>?,
@@ -179,6 +180,7 @@ fun SettingsScreen(
             loadModels = voiceLoadModels,
             loadConfig = voiceLoadConfig,
             saveVoiceStt = voiceSaveVoiceStt,
+            saveVoiceTts = voiceSaveVoiceTts,
             saveVoiceCleanup = voiceSaveVoiceCleanup,
             onOpenGlossary = { opened = "glossary" },
         )

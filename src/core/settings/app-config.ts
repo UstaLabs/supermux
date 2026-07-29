@@ -5,6 +5,7 @@
 
 import { ENGINES } from "../agent-api/index"
 import { STT_ENGINES } from "../transcription/stt-types"
+import { TTS_ENGINES } from "../tts/tts-types"
 
 export type ExposureMode = "local" | "public"
 
@@ -41,6 +42,8 @@ export interface AppConfig {
   voiceCleanupEngine?: string // engine used by voice cleanup (codex | opencode-zen | opencode-go | claude | cursor | cursor-cli); default codex
   voiceCleanupModel?: string // model used by the voice-cleanup agent
   voiceCleanupGlossary?: string[] // project/technical terms the cleanup must keep verbatim; default-seeded
+  /** Read-aloud backend: platform (client OS TTS) | codex (ChatGPT pronunciation via broker). Default platform. */
+  voiceTtsEngine?: string
   whisperModel?: string // path or name of the Whisper model file
   whisperLang?: string // language code (e.g. "tr", "en") or "auto"
 }
@@ -163,6 +166,7 @@ export function resolveAppConfig(stored: Partial<AppConfig>, env: AppConfigEnv):
     ...(stored.voiceCleanupModel !== undefined ? { voiceCleanupModel: stored.voiceCleanupModel } : {}),
     // Glossary is default-seeded: a stored array (incl. empty) wins; otherwise the built-in seed.
     voiceCleanupGlossary: Array.isArray(stored.voiceCleanupGlossary) ? stored.voiceCleanupGlossary : DEFAULT_VOICE_CLEANUP_GLOSSARY,
+    ...(stored.voiceTtsEngine !== undefined ? { voiceTtsEngine: stored.voiceTtsEngine } : {}),
     ...(stored.whisperModel !== undefined ? { whisperModel: stored.whisperModel } : {}),
     ...(stored.whisperLang !== undefined ? { whisperLang: stored.whisperLang } : {}),
   }
@@ -196,6 +200,7 @@ export function sanitizeAppConfigPatch(input: unknown): Partial<AppConfig> {
   }
   if (typeof o.voiceSttEngine === "string" && (STT_ENGINES as string[]).includes(o.voiceSttEngine)) out.voiceSttEngine = o.voiceSttEngine
   if (typeof o.voiceCleanupEngine === "string" && (ENGINES as string[]).includes(o.voiceCleanupEngine)) out.voiceCleanupEngine = o.voiceCleanupEngine
+  if (typeof o.voiceTtsEngine === "string" && (TTS_ENGINES as string[]).includes(o.voiceTtsEngine)) out.voiceTtsEngine = o.voiceTtsEngine
   // "" is a reset sentinel: it maps to undefined so the sparse merge in
   // SettingsStore.setAppConfig CLEARS a previously-stored model (reverting to the
   // engine's own default) instead of persisting an empty, broken model id. This is

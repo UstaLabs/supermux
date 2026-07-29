@@ -13,10 +13,14 @@ import AppKit
 struct ChatView: View {
     let broker: BrokerSession
     let session: SessionInfo
+    /// Called after a successful "Continue in new conversation" with the new session id
+    /// (RootView selects it; SessionWindow may open a new window).
+    var onOpenSession: ((String) -> Void)? = nil
     @State private var proxies: [ProxyDto] = []
     @State private var showRename = false
     @State private var renameText = ""
     @State private var showKillConfirm = false
+    @State private var showContinue = false
     @State private var git: GitRemoteStatus?
     // Transient git-action banner. Owned here (git actions live in the toolbar menu) and
     // passed to ChatPane, which renders it above the composer.
@@ -189,6 +193,17 @@ struct ChatView: View {
         .sheet(isPresented: $finishSheet) {
             if let chrome { FinishSheet(chrome: chrome) }
         }
+        .sheet(isPresented: $showContinue) {
+            ContinueConversationSheet(
+                broker: broker,
+                source: session,
+                onStarted: { id in
+                    showContinue = false
+                    onOpenSession?(id)
+                },
+                onCancel: { showContinue = false }
+            )
+        }
         .alert("Rename session", isPresented: $showRename) {
             TextField("Name", text: $renameText)
             Button("Cancel", role: .cancel) {}
@@ -268,10 +283,14 @@ struct ChatView: View {
         return formatWorkdir(workdir: session.workdir, home: inferHomeDir(workdir: session.workdir))
     }
 
-    /// Overflow menu (•••): Detail density + git actions + session links.
-    /// Always shown (not only when git/links exist) so Detail is always reachable.
+    /// Overflow menu (•••): Continue + Detail density + git actions + session links.
+    /// Always shown (not only when git/links exist) so Detail / Continue are always reachable.
     @ViewBuilder private var navMenu: some View {
         Menu {
+            Button { showContinue = true } label: {
+                Label("Continue in new conversation", systemImage: "bubble.left.and.text.bubble.right")
+            }
+            Divider()
             Menu {
                 ForEach(ChatDetailLevel.allCases, id: \.self) { level in
                     Button {

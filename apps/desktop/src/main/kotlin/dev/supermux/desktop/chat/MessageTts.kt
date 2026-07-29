@@ -3,21 +3,27 @@ package dev.supermux.desktop.chat
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 /**
- * Desktop native "Read aloud" via the host OS speech CLI:
- * - macOS: `say`
- * - Linux: `spd-say` (speech-dispatcher), else `espeak-ng` / `espeak`
- * - Windows: PowerShell System.Speech
- *
- * Only one utterance at a time; [speakingKey] is Compose-observable.
+ * Desktop read-aloud: OS CLI TTS (platform) or ChatGPT via broker /speak (codex).
+ * Wire [resolveEngine] / [speakRemote] from the host connection layer when available.
  */
 object MessageTts {
     private val gen = AtomicInteger(0)
     private val process = AtomicReference<Process?>(null)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    var resolveEngine: (suspend () -> String)? = null
+    var speakRemote: (suspend (text: String) -> ByteArray)? = null
 
     var speakingKey by mutableStateOf<String?>(null)
         private set
@@ -31,7 +37,14 @@ object MessageTts {
             stop()
             return
         }
-        speak(plain)
+        scope.launch {
+            val eng = runCatching { resolveEngine?.invoke() }.getOrNull()?.ifBlank { null } ?: "platform"
+            if (eng == "codex" && speakRemote != null) {
+                speakCodex(plain, rawText)
+            } else {
+                speakPlatform(plain)
+            }
+        }
     }
 
     fun stop() {
@@ -40,7 +53,38 @@ object MessageTts {
         speakingKey = null
     }
 
-    private fun speak(plain: String) {
+    private fun speakCodex(plain: String, rawText: String) {
+        val remote = speakRemote ?: return speakPlatform(plain)
+        stop()
+        val g = gen.incrementAndGet()
+        speakingKey = plain
+        thread(name = "message-tts-codex", isDaemon = true) {
+            try {
+                val bytes = runBlocking { remote(rawText) }
+                if (gen.get() != g) return@thread
+                val file = File.createTempFile("read-aloud-", ".mp3")
+                file.deleteOnExit()
+                file.writeBytes(bytes)
+                val playCmd = playCommand(file.absolutePath)
+                if (playCmd == null) {
+                    if (gen.get() == g) speakingKey = null
+                    return@thread
+                }
+                val p = ProcessBuilder(playCmd).redirectErrorStream(true).start()
+                process.set(p)
+                p.waitFor()
+            } catch (_: Exception) {
+                // fall through
+            } finally {
+                if (gen.get() == g) {
+                    process.compareAndSet(process.get(), null)
+                    speakingKey = null
+                }
+            }
+        }
+    }
+
+    private fun speakPlatform(plain: String) {
         stop()
         val g = gen.incrementAndGet()
         speakingKey = plain
@@ -50,31 +94,31 @@ object MessageTts {
         }
         thread(name = "message-tts", isDaemon = true) {
             try {
-                val p = ProcessBuilder(cmd)
-                    .redirectErrorStream(true)
-                    .start()
+                val p = ProcessBuilder(cmd).redirectErrorStream(true).start()
                 process.set(p)
                 p.waitFor()
             } catch (_: Exception) {
-                // CLI missing or killed
             } finally {
                 if (gen.get() == g) {
                     process.compareAndSet(process.get(), null)
-                    // Compose state must flip on the EDT-ish main thread when possible;
-                    // desktop Compose accepts updates from any thread for mutableStateOf.
                     speakingKey = null
                 }
             }
         }
     }
 
-    /** Best-effort OS command; null if nothing available. */
+    private fun playCommand(path: String): List<String>? = when {
+        which("ffplay") -> listOf("ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", path)
+        which("mpv") -> listOf("mpv", "--no-video", "--really-quiet", path)
+        which("afplay") -> listOf("afplay", path) // macOS
+        else -> null
+    }
+
     internal fun speechCommand(plain: String): List<String>? {
         val os = System.getProperty("os.name").orEmpty().lowercase()
         return when {
             os.contains("mac") || os.contains("darwin") -> listOf("say", plain)
             os.contains("win") -> {
-                // Escape single quotes for PowerShell single-quoted string.
                 val escaped = plain.replace("'", "''")
                 listOf(
                     "powershell",
@@ -84,7 +128,6 @@ object MessageTts {
                         "(New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('$escaped')",
                 )
             }
-            // Linux / other Unix
             which("spd-say") -> listOf("spd-say", "-e", plain)
             which("espeak-ng") -> listOf("espeak-ng", plain)
             which("espeak") -> listOf("espeak", plain)
@@ -101,7 +144,6 @@ object MessageTts {
     }
 }
 
-/** Flatten markdown-ish agent text for TTS (mirrors web/Android). */
 fun plainTextForSpeech(md: String): String {
     if (md.isBlank()) return ""
     var s = md

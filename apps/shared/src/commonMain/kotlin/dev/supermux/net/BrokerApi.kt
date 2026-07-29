@@ -81,6 +81,8 @@ data class AppConfigDto(
     val voiceCleanupEngine: String? = null,
     /** Model the cleanup engine uses. null/empty = that engine's own default. */
     val voiceCleanupModel: String? = null,
+    /** Read-aloud backend: platform (OS TTS) | codex (ChatGPT pronunciation). null = platform. */
+    val voiceTtsEngine: String? = null,
 )
 
 @Serializable
@@ -154,6 +156,12 @@ data class SpawnRequest(
     val userStatus: String? = null,
     /** Composer body when [userStatus] is draft (broker camelCase on POST body). */
     val draftPayload: DraftPayloadDto? = null,
+    /**
+     * Source session id for "Continue in new conversation": broker reuses that session's
+     * display-name base and worktree metadata (repo_root, session_branch) instead of deriving
+     * a name from the workdir basename (often a uuid under ~/.mux/worktrees).
+     */
+    val inheritFrom: String? = null,
 )
 
 /** Draft composer payload on POST /sessions (mirrors web draftPayload). */
@@ -916,11 +924,15 @@ private data class ConfigPatchBody(
     val voiceSttEngine: String? = null,
     val voiceCleanupModel: String? = null,
     val voiceCleanupEngine: String? = null,
+    val voiceTtsEngine: String? = null,
     val claudeOauthToken: String? = null,
     val anthropicApiKey: String? = null,
     val codexApiKey: String? = null,
     val cursorApiKey: String? = null,
 )
+
+@Serializable
+private data class SpeakBody(val text: String, val engine: String? = null, val lang: String? = null)
 
 @Serializable
 private data class LspServerEnable(val enabled: Boolean)
@@ -1231,6 +1243,7 @@ class BrokerApi(
         voiceSttEngine: String? = null,
         voiceCleanupModel: String? = null,
         voiceCleanupEngine: String? = null,
+        voiceTtsEngine: String? = null,
         claudeOauthToken: String? = null,
         anthropicApiKey: String? = null,
         codexApiKey: String? = null,
@@ -1243,12 +1256,30 @@ class BrokerApi(
             voiceSttEngine = voiceSttEngine,
             voiceCleanupModel = voiceCleanupModel,
             voiceCleanupEngine = voiceCleanupEngine,
+            voiceTtsEngine = voiceTtsEngine,
             claudeOauthToken = claudeOauthToken,
             anthropicApiKey = anthropicApiKey,
             codexApiKey = codexApiKey,
             cursorApiKey = cursorApiKey,
         ),
     )
+
+    /**
+     * POST /speak — server TTS (codex ChatGPT pronunciation). Returns MP3/AAC bytes.
+     * Throws on non-success (including when engine is "platform").
+     */
+    suspend fun speak(text: String, engine: String? = "codex", lang: String? = null): ByteArray {
+        val resp = http.post("$httpBase/speak") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(SpeakBody(text = text, engine = engine, lang = lang)))
+        }
+        if (!resp.status.isSuccess()) {
+            val detail = runCatching { resp.bodyAsText() }.getOrNull().orEmpty()
+            error("speak ${resp.status.value}: $detail")
+        }
+        return resp.bodyAsBytes()
+    }
 
     /** GET /settings/soul → soul.md text ("" on any failure — never throws). */
     suspend fun getSoul(): String {

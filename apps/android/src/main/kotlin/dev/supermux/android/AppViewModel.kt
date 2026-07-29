@@ -285,6 +285,7 @@ class AppViewModel(
         rebuildSessions()
         // Opens one control WS + api per paired host; frames flow into reduce(), tagged by recordId.
         hostConns.sync(store.list())
+        bindMessageTts()
     }
 
     // ── Multi-host reducer + derived state ─────────────────────────────────────────
@@ -1107,6 +1108,21 @@ class AppViewModel(
 
     fun saveVoiceCleanup(engine: String?, model: String?) {
         viewModelScope.launch { runCatching { activeApi()?.saveConfig(voiceCleanupEngine = engine, voiceCleanupModel = model) } }
+    }
+
+    fun saveVoiceTts(engine: String?) {
+        viewModelScope.launch { runCatching { activeApi()?.saveConfig(voiceTtsEngine = engine) } }
+    }
+
+    /** Wire read-aloud to the active host (platform OS TTS vs ChatGPT /speak). */
+    fun bindMessageTts() {
+        dev.supermux.android.chat.MessageTts.resolveEngine = {
+            activeApi()?.getConfig()?.voiceTtsEngine?.ifBlank { null } ?: "platform"
+        }
+        dev.supermux.android.chat.MessageTts.speakRemote = { text ->
+            val api = activeApi() ?: error("no host")
+            api.speak(text, engine = "codex")
+        }
     }
 
     suspend fun fetchGlossary(): List<String> = runCatching { activeApi()?.fetchGlossary() }.getOrNull() ?: emptyList()

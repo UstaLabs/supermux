@@ -36,7 +36,7 @@ struct MessageRow: View, Equatable {
                     })
                     .equatable()
                     .transcriptBody()
-                    MessageMetaRow(text: text)
+                    MessageMetaRow(text: text, broker: broker)
                 } else {
                     Text(text).font(messageFont.weight(.medium))
                         .textSelection(.enabled)

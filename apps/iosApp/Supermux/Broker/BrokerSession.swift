@@ -551,12 +551,13 @@ final class BrokerSession {
     func sendMessage(_ id: String, _ text: String) { Task { [api] in try? await api.sendMessage(id: id, text: text) } }
     func projects() async -> [String] { (try? await api.listProjects()) ?? [] }
     func spawn(workdir: String, agent: String?, name: String?, model: String? = nil,
-               worktree: Bool? = nil, baseBranch: String? = nil, reasoningLevel: String? = nil) async -> String? {
+               worktree: Bool? = nil, baseBranch: String? = nil, reasoningLevel: String? = nil,
+               inheritFrom: String? = nil) async -> String? {
         // Resolve ~ to an absolute path so the worktree is cut from the real repo root (web parity).
         let resolved = (try? await api.validatePath(path: workdir)).flatMap { $0.ok ? $0.path : nil } ?? workdir
         let req = SpawnRequest(workdir: resolved, name: name, agent: agent, model: model,
                                worktree: worktree?.kb, baseBranch: baseBranch, reasoningLevel: reasoningLevel,
-                               userStatus: nil, draftPayload: nil)
+                               userStatus: nil, draftPayload: nil, inheritFrom: inheritFrom)
         return (try? await api.spawn(req: req))?.id
     }
 
@@ -642,7 +643,8 @@ final class BrokerSession {
             baseBranch: nil,
             reasoningLevel: reasoningLevel,
             userStatus: "draft",
-            draftPayload: payload
+            draftPayload: payload,
+            inheritFrom: nil
         )
         return try? await api.spawn(req: req).id
     }
@@ -690,6 +692,7 @@ final class BrokerSession {
                     voiceSttEngine: String? = nil,
                     voiceCleanupModel: String? = nil,
                     voiceCleanupEngine: String? = nil,
+                    voiceTtsEngine: String? = nil,
                     claudeOauthToken: String? = nil, anthropicApiKey: String? = nil,
                     codexApiKey: String? = nil, cursorApiKey: String? = nil) async {
         try? await api.saveConfig(onboarded: onboarded?.kb,
@@ -697,8 +700,15 @@ final class BrokerSession {
                                   voiceSttEngine: voiceSttEngine,
                                   voiceCleanupModel: voiceCleanupModel,
                                   voiceCleanupEngine: voiceCleanupEngine,
+                                  voiceTtsEngine: voiceTtsEngine,
                                   claudeOauthToken: claudeOauthToken, anthropicApiKey: anthropicApiKey,
                                   codexApiKey: codexApiKey, cursorApiKey: cursorApiKey)
+    }
+
+    /// POST /speak — server TTS (codex). Returns audio data or nil on failure.
+    func speak(_ text: String, engine: String = "codex") async -> Data? {
+        guard let bytes = try? await api.speak(text: text, engine: engine, lang: nil) else { return nil }
+        return Data(bytes.toUInt8())
     }
 
     // Soul (system prompt / persona markdown).
@@ -715,22 +725,25 @@ final class BrokerSession {
         do {
             switch kind {
             case "claude":
-                // KMP → Swift does not surface Kotlin default args; pass voiceSttEngine explicitly.
+                // KMP → Swift does not surface Kotlin default args; pass voice fields explicitly.
                 try await api.saveConfig(onboarded: nil, paName: nil,
                                          voiceSttEngine: nil,
                                          voiceCleanupModel: nil, voiceCleanupEngine: nil,
+                                         voiceTtsEngine: nil,
                                          claudeOauthToken: value, anthropicApiKey: nil,
                                          codexApiKey: nil, cursorApiKey: nil)
             case "codex":
                 try await api.saveConfig(onboarded: nil, paName: nil,
                                          voiceSttEngine: nil,
                                          voiceCleanupModel: nil, voiceCleanupEngine: nil,
+                                         voiceTtsEngine: nil,
                                          claudeOauthToken: nil, anthropicApiKey: nil,
                                          codexApiKey: value, cursorApiKey: nil)
             case "cursor":
                 try await api.saveConfig(onboarded: nil, paName: nil,
                                          voiceSttEngine: nil,
                                          voiceCleanupModel: nil, voiceCleanupEngine: nil,
+                                         voiceTtsEngine: nil,
                                          claudeOauthToken: nil, anthropicApiKey: nil,
                                          codexApiKey: nil, cursorApiKey: value)
             default:
