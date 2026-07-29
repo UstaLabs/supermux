@@ -3,11 +3,6 @@ package dev.supermux.android.chat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -28,7 +23,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -100,7 +94,6 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
@@ -342,21 +335,85 @@ fun FencedCodeBlock(code: String) {
 // ---------------------------------------------------------------------------
 
 /**
- * Calm Premium — outbound (assistant) message.
- * Splits text into prose and fenced code blocks; renders each accordingly.
- * Prose: bodyLarge (15sp / 24sp line-height), full width, no box or border.
- * Code: FencedCodeBlock composable (mono, horizontal scroll, left accent).
+ * Outbound (assistant) message — full-width prose, no card.
+ * Footer: small local time + one-tap copy of the whole response (minimal chrome).
  */
 @Composable
-fun AssistantMessage(text: String, onOpenFile: (FilePathRef) -> Unit = {}) {
-    // SelectionContainer makes the prose selectable/copyable; links inside stay tappable.
-    SelectionContainer {
-        MarkdownBody(
-            text = text,
-            modifier = Modifier.fillMaxWidth(),
-            onOpenFile = onOpenFile,
-            linkify = true,
-        )
+fun AssistantMessage(
+    text: String,
+    ts: String? = null,
+    onOpenFile: (FilePathRef) -> Unit = {},
+) {
+    Column(Modifier.fillMaxWidth()) {
+        // SelectionContainer makes the prose selectable; links inside stay tappable.
+        SelectionContainer {
+            MarkdownBody(
+                text = text,
+                modifier = Modifier.fillMaxWidth(),
+                onOpenFile = onOpenFile,
+                linkify = true,
+            )
+        }
+        MessageMetaRow(text = text, ts = ts)
+    }
+}
+
+private val messageTimeFmt: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+
+/** ISO-8601 or epoch-ms/s → local `HH:mm` (null if unparseable). */
+private fun formatMessageTime(ts: String?): String? {
+    if (ts.isNullOrBlank()) return null
+    val instant = ts.toLongOrNull()?.let { n ->
+        Instant.ofEpochMilli(if (n < 1_000_000_000_000L) n * 1000L else n)
+    } ?: runCatching { Instant.parse(ts) }.getOrNull()
+    return instant?.atZone(ZoneId.systemDefault())?.format(messageTimeFmt)
+}
+
+/** Compact time + copy control under an agent reply — quiet, no animation beyond a brief check. */
+@Composable
+private fun MessageMetaRow(text: String, ts: String?) {
+    val cs = MaterialTheme.colorScheme
+    val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    var copied by remember { mutableStateOf(false) }
+    val time = formatMessageTime(ts)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = Space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        if (time != null) {
+            Text(
+                text = time,
+                color = cs.onSurfaceVariant.copy(alpha = 0.55f),
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = MonoFontFamily,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(end = Space.xs),
+            )
+        }
+        IconButton(
+            onClick = {
+                clipboard.setText(AnnotatedString(text))
+                copied = true
+                scope.launch {
+                    delay(1500)
+                    copied = false
+                }
+            },
+            modifier = Modifier
+                .size(28.dp)
+                .testTag("message_copy"),
+        ) {
+            Icon(
+                painter = painterResource(if (copied) R.drawable.ic_check else R.drawable.ic_copy),
+                contentDescription = if (copied) "Copied" else "Copy response",
+                tint = if (copied) cs.primary else cs.onSurfaceVariant.copy(alpha = 0.65f),
+                modifier = Modifier.size(14.dp),
+            )
+        }
     }
 }
 
@@ -551,43 +608,44 @@ fun MarkdownImage(image: MdBlock.Image) {
 }
 
 /**
- * Calm Premium — inbound (user) message.
- * Subtle end-aligned bubble: card background @85%, 1px border, rounded with a
- * tightened bottom-end corner, max 84% width, bodyMedium text.
+ * Inbound (user) message — right-aligned chat bubble, capped at ~75% width.
+ * Short text hugs content; long text wraps inside the cap. No gutter, no label.
  */
 @Composable
 fun UserMessage(text: String) {
     val cs = MaterialTheme.colorScheme
-    // Inbound entry in the session log: left-aligned, a mono "you" label, a tightened
-    // leading corner so it reads as the human's turn on the thread.
+    // Tail sits on the bottom-end (right) so it reads as a sent bubble.
     val bubbleShape = RoundedCornerShape(
-        topStart = 4.dp,
+        topStart = Radii.md,
         topEnd = Radii.md,
         bottomStart = Radii.md,
-        bottomEnd = Radii.md,
+        bottomEnd = 4.dp,
     )
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(bubbleShape)
-            .background(cs.surfaceContainer.copy(alpha = 0.9f))
-            .border(1.dp, cs.outlineVariant, bubbleShape)
-            .padding(horizontal = Space.md, vertical = Space.sm),
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End,
     ) {
-        Text(
-            text = "you",
-            color = cs.primary,
-            fontFamily = MonoFontFamily,
-            fontSize = 10.sp,
-            letterSpacing = 1.2.sp,
-            modifier = Modifier.padding(bottom = 2.dp),
-        )
-        SelectionContainer {
-            Text(
-                text = mdAnnotated(text),
-                color = cs.onSurface,
-                style = MaterialTheme.typography.bodyMedium,
-            )
+        // Cap width at 75%; inner wrap keeps short messages snug.
+        Box(
+            modifier = Modifier.fillMaxWidth(0.75f),
+            contentAlignment = Alignment.CenterEnd,
+        ) {
+            Column(
+                Modifier
+                    .wrapContentWidth()
+                    .clip(bubbleShape)
+                    .background(cs.surfaceContainer.copy(alpha = 0.92f))
+                    .border(1.dp, cs.outlineVariant, bubbleShape)
+                    .padding(horizontal = Space.md, vertical = Space.sm),
+            ) {
+                SelectionContainer {
+                    Text(
+                        text = mdAnnotated(text),
+                        color = cs.onSurface,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
         }
     }
 }
@@ -1015,80 +1073,11 @@ private fun ioBlock(label: String, text: String, error: Boolean) {
 }
 
 // ---------------------------------------------------------------------------
-// Session-log stream layout — a mono gutter (time + status node, threaded by a
-// hairline spine) beside each entry. Consecutive spine rows join into one thread.
+// Chat timeline layout — clean message stream (no gutter dots / spine).
+// User: right bubble · Agent: full-width prose + time/copy meta · Tools: plain rows.
 // ---------------------------------------------------------------------------
 
-/** Status marker drawn in a stream row's gutter. */
-enum class StreamNode { NONE, RUNNING, DONE, ERROR, USER }
-
-private val gutterFmt: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
-
-/** ISO-8601 ts → local `HH:mm` for the gutter (null if unparseable). */
-private fun gutterTime(ts: String?): String? =
-    ts?.let { runCatching { Instant.parse(it).atZone(ZoneId.systemDefault()).format(gutterFmt) }.getOrNull() }
-
-@Composable
-private fun NodeDot(node: StreamNode, modifier: Modifier) {
-    val cs = MaterialTheme.colorScheme
-    when (node) {
-        StreamNode.NONE -> Box(modifier.size(7.dp))
-        StreamNode.USER -> Text("▸", color = cs.primary, fontFamily = MonoFontFamily, fontSize = 11.sp, modifier = modifier)
-        StreamNode.DONE -> Box(modifier.size(7.dp).clip(CircleShape).background(cs.primary))
-        StreamNode.ERROR -> Box(modifier.size(7.dp).clip(CircleShape).background(cs.error))
-        StreamNode.RUNNING -> Box(modifier.size(7.dp).clip(CircleShape).background(cs.surface).border(1.5.dp, cs.primary, CircleShape))
-    }
-}
-
-/** A softly breathing dot — the live pulse of a running/thinking agent. Respects the theme accent. */
-@Composable
-fun BreathingDot(color: Color, modifier: Modifier = Modifier, size: Dp = 7.dp) {
-    val transition = rememberInfiniteTransition(label = "breathe")
-    val alpha by transition.animateFloat(
-        initialValue = 1f,
-        targetValue = 0.32f,
-        animationSpec = infiniteRepeatable(tween(1100), RepeatMode.Reverse),
-        label = "alpha",
-    )
-    Box(modifier.size(size).clip(CircleShape).background(color.copy(alpha = alpha)))
-}
-
-/**
- * One entry in the session log: a 44dp mono gutter (time + status [node]) beside [content],
- * with a hairline [spine] drawn full-height via drawBehind so consecutive spine rows join into
- * one continuous thread. drawBehind (not IntrinsicSize) keeps it safe with video/scroll content.
- */
-@Composable
-fun StreamRow(node: StreamNode, spine: Boolean, time: String?, content: @Composable () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    val lineColor = cs.outlineVariant
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .drawBehind {
-                if (spine) {
-                    val x = 33.dp.toPx()
-                    drawLine(lineColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.5.dp.toPx())
-                }
-            },
-    ) {
-        Box(Modifier.width(44.dp)) {
-            if (time != null) {
-                Text(
-                    text = time,
-                    fontFamily = MonoFontFamily,
-                    fontSize = 10.sp,
-                    color = if (node == StreamNode.USER) cs.primary else cs.onSurfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.align(Alignment.TopStart).padding(start = 2.dp, top = 12.dp),
-                )
-            }
-            NodeDot(node, Modifier.align(Alignment.TopEnd).padding(end = 6.dp, top = 11.dp))
-        }
-        Box(Modifier.weight(1f).padding(top = 7.dp, bottom = 7.dp)) { content() }
-    }
-}
-
-/** Dispatches a single TimelineItem to a gutter-threaded stream row. */
+/** Dispatches a single TimelineItem into the chat stream. */
 @Composable
 fun TimelineItemRow(
     item: TimelineItem,
@@ -1102,27 +1091,31 @@ fun TimelineItemRow(
             val atts = item.entry.attachments
             val isUser = item.entry.direction == "inbound"
             if (!text.isNullOrBlank() || !atts.isNullOrEmpty()) {
-                StreamRow(
-                    node = if (isUser) StreamNode.USER else StreamNode.DONE,
-                    spine = !isUser,
-                    time = if (isUser) gutterTime(item.entry.ts) else null,
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = Space.sm),
+                    horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
                 ) {
-                    Column {
-                        if (!text.isNullOrBlank()) {
-                            if (isUser) UserMessage(text) else AssistantMessage(text, onOpenFile)
+                    if (!text.isNullOrBlank()) {
+                        if (isUser) {
+                            UserMessage(text)
+                        } else {
+                            AssistantMessage(text, ts = item.entry.ts, onOpenFile = onOpenFile)
                         }
-                        if (!atts.isNullOrEmpty()) AttachmentList(atts, alignEnd = false, loadBytes = loadBytes)
+                    }
+                    if (!atts.isNullOrEmpty()) {
+                        AttachmentList(atts, alignEnd = isUser, loadBytes = loadBytes)
                     }
                 }
             }
         }
         is TimelineItem.Tool -> {
-            val node = when (item.status) {
-                ToolStatus.RUNNING -> StreamNode.RUNNING
-                ToolStatus.ERROR -> StreamNode.ERROR
-                ToolStatus.DONE -> StreamNode.DONE
-            }
-            StreamRow(node = node, spine = true, time = gutterTime(item.event.ts)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = Space.xs),
+            ) {
                 ToolCard(
                     event = item.event,
                     status = item.status,
