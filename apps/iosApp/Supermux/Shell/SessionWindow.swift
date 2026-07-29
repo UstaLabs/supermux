@@ -9,6 +9,7 @@ import Shared
 struct SessionWindow: View {
     @State private var fleet: Fleet
     let sessionId: String
+    @Environment(\.openWindow) private var openWindow
 
     init(sessionId: String) {
         _fleet = State(initialValue: Fleet())
@@ -24,7 +25,10 @@ struct SessionWindow: View {
     var body: some View {
         Group {
             if let (broker, session) = owner {
-                ChatView(broker: broker, session: session)
+                ChatView(broker: broker, session: session, onOpenSession: { id in
+                    // Detached window has a fixed session id — open the handoff child in a new window.
+                    openWindow(id: "session", value: id)
+                })
                     .navigationTitle(session.name)
             } else {
                 // Until the snapshot lands (or if the session is gone) show a spinner.

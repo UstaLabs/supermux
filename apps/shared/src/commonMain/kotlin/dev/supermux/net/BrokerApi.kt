@@ -154,6 +154,12 @@ data class SpawnRequest(
     val userStatus: String? = null,
     /** Composer body when [userStatus] is draft (broker camelCase on POST body). */
     val draftPayload: DraftPayloadDto? = null,
+    /**
+     * Source session id for "Continue in new conversation": broker reuses that session's
+     * display-name base and worktree metadata (repo_root, session_branch) instead of deriving
+     * a name from the workdir basename (often a uuid under ~/.mux/worktrees).
+     */
+    val inheritFrom: String? = null,
 )
 
 /** Draft composer payload on POST /sessions (mirrors web draftPayload). */

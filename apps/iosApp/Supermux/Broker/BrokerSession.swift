@@ -551,12 +551,13 @@ final class BrokerSession {
     func sendMessage(_ id: String, _ text: String) { Task { [api] in try? await api.sendMessage(id: id, text: text) } }
     func projects() async -> [String] { (try? await api.listProjects()) ?? [] }
     func spawn(workdir: String, agent: String?, name: String?, model: String? = nil,
-               worktree: Bool? = nil, baseBranch: String? = nil, reasoningLevel: String? = nil) async -> String? {
+               worktree: Bool? = nil, baseBranch: String? = nil, reasoningLevel: String? = nil,
+               inheritFrom: String? = nil) async -> String? {
         // Resolve ~ to an absolute path so the worktree is cut from the real repo root (web parity).
         let resolved = (try? await api.validatePath(path: workdir)).flatMap { $0.ok ? $0.path : nil } ?? workdir
         let req = SpawnRequest(workdir: resolved, name: name, agent: agent, model: model,
                                worktree: worktree?.kb, baseBranch: baseBranch, reasoningLevel: reasoningLevel,
-                               userStatus: nil, draftPayload: nil)
+                               userStatus: nil, draftPayload: nil, inheritFrom: inheritFrom)
         return (try? await api.spawn(req: req))?.id
     }
 
@@ -642,7 +643,8 @@ final class BrokerSession {
             baseBranch: nil,
             reasoningLevel: reasoningLevel,
             userStatus: "draft",
-            draftPayload: payload
+            draftPayload: payload,
+            inheritFrom: nil
         )
         return try? await api.spawn(req: req).id
     }

@@ -255,7 +255,8 @@ struct IPadWorkspace<NewSessionContent: View>: View {
         if let s = session, let b = broker, let chrome {
             WorkspaceDetail(broker: b, session: s, layout: layout, chrome: chrome,
                             showRename: $showRename, renameText: $renameText,
-                            showKillConfirm: $showKillConfirm)
+                            showKillConfirm: $showKillConfirm,
+                            onContinued: { id in selected = id })
         } else {
             ContentUnavailableView("Pick a session", systemImage: "bubble.left.and.bubble.right")
         }
@@ -318,7 +319,9 @@ private struct WorkspaceDetail: View {
     @Binding var showRename: Bool
     @Binding var renameText: String
     @Binding var showKillConfirm: Bool
+    var onContinued: (String) -> Void = { _ in }
     @State private var finishSheet = false
+    @State private var showContinue = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -342,6 +345,17 @@ private struct WorkspaceDetail: View {
         }
         // The Finish bottom sheet (readiness → action → live job → recovery), shared chrome.
         .sheet(isPresented: $finishSheet) { FinishSheet(chrome: chrome) }
+        .sheet(isPresented: $showContinue) {
+            ContinueConversationSheet(
+                broker: broker,
+                source: session,
+                onStarted: { id in
+                    showContinue = false
+                    onContinued(id)
+                },
+                onCancel: { showContinue = false }
+            )
+        }
     }
 
     // MARK: - Session header bar
@@ -412,11 +426,14 @@ private struct WorkspaceDetail: View {
         }
     }
 
-    /// The overflow ⋯ menu: session-scoped git ops (Fetch/Push/Pull/Publish). Only shown for
-    /// sessions that are git repos, so non-repo sessions never render an empty `⋯`.
+    /// The overflow ⋯ menu: Continue (always) + session-scoped git ops when the workdir is a repo.
+    /// Always rendered so non-repo sessions still get "Continue in new conversation" (web parity).
     @ViewBuilder private var overflowMenu: some View {
-        if let g = chrome.git, g.isRepo {
-            Menu {
+        Menu {
+            Button { showContinue = true } label: {
+                Label("Continue in new conversation", systemImage: "bubble.left.and.text.bubble.right")
+            }
+            if let g = chrome.git, g.isRepo {
                 Section("Git") {
                     Button { chrome.fetch() } label: { Label("Fetch", systemImage: "arrow.down") }
                     Button { chrome.push() } label: { Label("Push", systemImage: "arrow.up") }
@@ -425,12 +442,12 @@ private struct WorkspaceDetail: View {
                         Button { chrome.publish() } label: { Label("Publish", systemImage: "arrow.up.to.line") }
                     }
                 }
-            } label: {
-                Image(systemName: "ellipsis.circle").font(.body)
             }
-            .smMacBorderlessMenu()
-            .smHoverHighlight()
+        } label: {
+            Image(systemName: "ellipsis.circle").font(.body)
         }
+        .smMacBorderlessMenu()
+        .smHoverHighlight()
     }
 
     // MARK: - Multi-pane content
