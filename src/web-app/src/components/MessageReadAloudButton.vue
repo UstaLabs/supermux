@@ -1,46 +1,61 @@
 <script setup lang="ts">
 defineOptions({ name: "MessageReadAloudButton" })
 
-import { onBeforeUnmount, ref } from "vue"
+import { onBeforeUnmount, onMounted, ref } from "vue"
 import { Volume2, Square } from "lucide-vue-next"
 import { toast } from "vue-sonner"
 import { cn } from "@/lib/utils"
 import { plainTextForSpeech } from "@/lib/speech-text"
+import { api } from "@/api/client"
+import { getVoiceTtsEngineCached, loadVoiceTtsEngine } from "@/lib/voice-tts-pref"
 
 const props = defineProps<{ text: string; class?: string }>()
 
 const speaking = ref(false)
 /** Token so a finished utterance from an earlier click can't clear a newer session. */
 let speakGen = 0
+let audioEl: HTMLAudioElement | null = null
+let audioUrl: string | null = null
 
-function supported(): boolean {
+function platformSupported(): boolean {
   return typeof window !== "undefined" && typeof window.speechSynthesis !== "undefined"
+}
+
+function stopPlatform() {
+  try {
+    window.speechSynthesis?.cancel()
+  } catch { /* ignore */ }
+}
+
+function stopAudio() {
+  if (audioEl) {
+    try {
+      audioEl.pause()
+      audioEl.removeAttribute("src")
+      audioEl.load()
+    } catch { /* ignore */ }
+    audioEl = null
+  }
+  if (audioUrl) {
+    URL.revokeObjectURL(audioUrl)
+    audioUrl = null
+  }
 }
 
 function stop() {
   speakGen++
-  try {
-    window.speechSynthesis?.cancel()
-  } catch { /* ignore */ }
+  stopPlatform()
+  stopAudio()
   speaking.value = false
 }
 
-function start() {
-  if (!supported()) {
+function startPlatform(plain: string) {
+  if (!platformSupported()) {
     toast.error("Read aloud isn't supported in this browser")
     return
   }
-  const plain = plainTextForSpeech(props.text)
-  if (!plain) {
-    toast.error("Nothing to read")
-    return
-  }
-
-  // Cancel any other message that's currently speaking.
-  try {
-    window.speechSynthesis.cancel()
-  } catch { /* ignore */ }
-
+  stopPlatform()
+  stopAudio()
   const gen = ++speakGen
   const u = new SpeechSynthesisUtterance(plain)
   u.onend = () => {
@@ -58,10 +73,60 @@ function start() {
   }
 }
 
-function toggle() {
-  if (speaking.value) stop()
-  else start()
+async function startCodex() {
+  stopPlatform()
+  stopAudio()
+  const gen = ++speakGen
+  speaking.value = true
+  try {
+    const blob = await api.speak(props.text, { engine: "codex" })
+    if (gen !== speakGen) return
+    audioUrl = URL.createObjectURL(blob)
+    const el = new Audio(audioUrl)
+    audioEl = el
+    el.onended = () => {
+      if (gen === speakGen) speaking.value = false
+      stopAudio()
+    }
+    el.onerror = () => {
+      if (gen === speakGen) {
+        speaking.value = false
+        toast.error("Couldn't play read aloud audio")
+      }
+      stopAudio()
+    }
+    await el.play()
+  } catch (e: any) {
+    if (gen === speakGen) {
+      speaking.value = false
+      toast.error(e?.message ?? "Couldn't start ChatGPT read aloud")
+    }
+  }
 }
+
+async function toggle() {
+  if (speaking.value) {
+    stop()
+    return
+  }
+  const engine = await loadVoiceTtsEngine(() => api.getAppConfig())
+  if (engine === "codex") {
+    await startCodex()
+    return
+  }
+  const plain = plainTextForSpeech(props.text)
+  if (!plain) {
+    toast.error("Nothing to read")
+    return
+  }
+  startPlatform(plain)
+}
+
+onMounted(() => {
+  // Warm the cache; ignore errors (defaults to platform).
+  void loadVoiceTtsEngine(() => api.getAppConfig())
+  void getVoiceTtsEngineCached()
+})
 
 onBeforeUnmount(() => {
   if (speaking.value) stop()

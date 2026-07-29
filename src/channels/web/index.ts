@@ -187,6 +187,11 @@ export interface WebChannelOpts {
   renameSession?: (oldName: string, newName: string) => Promise<void>
   reorderSessions?: (orderedIds: string[]) => void
   transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string }) => Promise<{ text: string; degraded?: boolean }>
+  /** Server-side TTS (codex). Returns audio bytes or a soft {error,status} for platform. */
+  speak?: (input: { text: string; engine?: string; lang?: string }) => Promise<
+    | { audio: Uint8Array; mime: string; engine: string; chunked?: boolean }
+    | { error: string; status: 400 }
+  >
   spawnPA?: (args: { name: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string }>
   listPAs?: () => SessionSnapshot[]
   updatePA?: (name: string, patch: { model?: string; reasoningLevel?: string }) => Promise<{ ok: boolean; error?: string }>
@@ -2295,6 +2300,36 @@ export class WebChannel implements Channel {
         return this.json({ ok: true })
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)
+      }
+    }
+    // ── Read-aloud TTS (server engines; platform is client-native) ──────────
+    if (method === "POST" && path === "/speak") {
+      if (!this.opts.speak) return this.json({ error: "not configured" }, 503)
+      const body = await req.json().catch(() => ({})) as { text?: string; engine?: string; lang?: string }
+      if (typeof body.text !== "string" || !body.text.trim()) {
+        return this.json({ error: "text required" }, 400)
+      }
+      try {
+        const result = await this.opts.speak({
+          text: body.text,
+          engine: typeof body.engine === "string" ? body.engine : undefined,
+          lang: typeof body.lang === "string" ? body.lang : undefined,
+        })
+        if ("error" in result) {
+          return this.json({ error: result.error }, result.status)
+        }
+        // Binary audio response; engine/chunked also in headers for debugging.
+        return new Response(result.audio, {
+          status: 200,
+          headers: {
+            "content-type": result.mime || "audio/mpeg",
+            "x-tts-engine": result.engine,
+            ...(result.chunked ? { "x-tts-chunked": "1" } : {}),
+            "cache-control": "no-store",
+          },
+        })
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 502)
       }
     }
     if (method === "POST" && (path === "/transcribe" || path.match(/^\/sessions\/[^/]+\/transcribe$/))) {

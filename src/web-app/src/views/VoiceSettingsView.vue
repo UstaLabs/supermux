@@ -4,6 +4,7 @@ import { useRouter } from "vue-router"
 import { ArrowLeft, Bot, Cpu } from "lucide-vue-next"
 import { api } from "@/api/client"
 import { toast } from "vue-sonner"
+import { setVoiceTtsEngineCached } from "@/lib/voice-tts-pref"
 
 const router = useRouter()
 
@@ -16,6 +17,13 @@ const STT_ENGINES = [
   { id: "whisper", label: "Whisper (local)" },
 ] as const
 const DEFAULT_STT = "codex-realtime"
+
+// Read-aloud engines. Mirrors TTS_ENGINES in src/core/tts/tts-types.ts.
+const TTS_ENGINES = [
+  { id: "platform", label: "Device (system voice)" },
+  { id: "codex", label: "ChatGPT (Codex login)" },
+] as const
+const DEFAULT_TTS = "platform"
 
 // Curated voice-cleanup engines (the direct-API adapter layer). Mirrors ENGINES in
 // src/core/agent-api/index.ts, minus the gated Claude adapter (ban-risk opt-in) and
@@ -32,6 +40,7 @@ const DEFAULT_ENGINE = "codex"
 const loading = ref(true)
 const saving = ref(false)
 const sttEngine = ref<string>(DEFAULT_STT)
+const ttsEngine = ref<string>(DEFAULT_TTS)
 const engine = ref<string>(DEFAULT_ENGINE)
 const model = ref("")
 const models = ref<{ id: string; displayName: string }[]>([])
@@ -58,8 +67,10 @@ async function load() {
   try {
     const cfg = await api.getAppConfig()
     sttEngine.value = (typeof cfg.voiceSttEngine === "string" && cfg.voiceSttEngine) || DEFAULT_STT
+    ttsEngine.value = (typeof cfg.voiceTtsEngine === "string" && cfg.voiceTtsEngine) || DEFAULT_TTS
     engine.value = (typeof cfg.voiceCleanupEngine === "string" && cfg.voiceCleanupEngine) || DEFAULT_ENGINE
     model.value = cfg.voiceCleanupModel ?? ""
+    setVoiceTtsEngineCached(ttsEngine.value)
     await loadModelsForEngine(engine.value)
   } catch (e: any) {
     toast.error(e?.message ?? "Failed to load voice settings")
@@ -82,9 +93,11 @@ async function save() {
     // engine's default" (see sanitizeAppConfigPatch).
     await api.saveAppConfig({
       voiceSttEngine: sttEngine.value,
+      voiceTtsEngine: ttsEngine.value,
       voiceCleanupEngine: engine.value,
       voiceCleanupModel: model.value,
     })
+    setVoiceTtsEngineCached(ttsEngine.value)
     toast.success("Saved")
   } catch (e: any) {
     toast.error(e?.message ?? "Failed to save")
@@ -105,7 +118,7 @@ onMounted(load)
       <button class="text-muted-foreground hover:text-foreground transition -ml-1 p-1" aria-label="Back" @click="goBack">
         <ArrowLeft class="size-5" />
       </button>
-      <h1 class="text-base font-semibold tracking-tight">Voice dictation</h1>
+      <h1 class="text-base font-semibold tracking-tight">Voice</h1>
     </header>
 
     <div v-if="loading" class="px-4 py-10 text-center text-sm text-muted-foreground">Loading…</div>
@@ -129,6 +142,27 @@ onMounted(load)
           class="rounded-md bg-card border border-border px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary shrink-0 max-w-[200px]"
         >
           <option v-for="e in STT_ENGINES" :key="e.id" :value="e.id">{{ e.label }}</option>
+        </select>
+      </li>
+
+      <li class="flex items-center justify-between gap-3 px-4 py-3.5">
+        <label for="voice-tts-engine" class="flex items-center gap-3 min-w-0">
+          <div class="size-9 rounded-lg bg-card ring-1 ring-border flex items-center justify-center shrink-0">
+            <Cpu class="size-4 text-muted-foreground" />
+          </div>
+          <div class="min-w-0">
+            <div class="font-medium">Read aloud</div>
+            <div class="text-[11px] text-muted-foreground">
+              Device uses the OS voice. ChatGPT needs a Codex login (subscription TTS).
+            </div>
+          </div>
+        </label>
+        <select
+          id="voice-tts-engine"
+          v-model="ttsEngine"
+          class="rounded-md bg-card border border-border px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary shrink-0 max-w-[200px]"
+        >
+          <option v-for="e in TTS_ENGINES" :key="e.id" :value="e.id">{{ e.label }}</option>
         </select>
       </li>
 

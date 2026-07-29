@@ -122,6 +122,8 @@ export interface AppConfig {
   voiceSttEngine?: string
   voiceCleanupEngine?: string
   voiceCleanupModel?: string
+  /** platform (OS TTS) | codex (ChatGPT pronunciation via broker) */
+  voiceTtsEngine?: string
   whisperLang?: string
   [key: string]: unknown
 }
@@ -284,6 +286,26 @@ export const api = {
   finishOpenCodeOAuth: (providerId: string, method: number, code: string) => request("POST", "/opencode/auth/oauth/finish", { providerId, method, code }),
   getAppConfig: () => request("GET", "/settings/config") as Promise<AppConfig>,
   saveAppConfig: (patch: Partial<AppConfig>) => request("PUT", "/settings/config", patch),
+  /**
+   * POST /speak — server TTS (codex). Returns an audio Blob (mp3).
+   * Throws if engine is platform (client should use speechSynthesis) or synthesis fails.
+   */
+  speak: async (text: string, opts?: { engine?: string; lang?: string }): Promise<Blob> => {
+    const res = await fetch("/speak", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text, engine: opts?.engine, lang: opts?.lang }),
+    })
+    if (!res.ok) {
+      let detail = ""
+      try {
+        const j = await res.json()
+        detail = String(j?.error ?? j?.message ?? "")
+      } catch { /* ignore */ }
+      throw new Error(detail || `POST /speak → ${res.status}`)
+    }
+    return res.blob()
+  },
   claimPair: (name = "setup") => request("POST", "/pair/claim", { name }),
   getSoul: async (): Promise<string> => { const r = await fetch("/settings/soul"); if (!r.ok) throw new Error(`GET /settings/soul → ${r.status}`); return r.text() },
   saveSoul: async (content: string): Promise<void> => { const r = await fetch("/settings/soul", { method: "PUT", headers: { "content-type": "text/plain" }, body: content }); if (!r.ok) throw new Error(`PUT /settings/soul → ${r.status}`) },

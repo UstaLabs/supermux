@@ -268,6 +268,12 @@ class BrokerApiSettingsTest {
         assertEquals("claude-voice", c.voiceSttEngine)
     }
 
+    @Test fun app_config_decodes_voice_tts_engine() {
+        val c = json.decodeFromString<AppConfigDto>(
+            """{"voiceTtsEngine":"codex"}""")
+        assertEquals("codex", c.voiceTtsEngine)
+    }
+
     @Test fun app_config_voice_stt_null_when_absent() {
         val c = json.decodeFromString<AppConfigDto>("""{"paName":"x"}""")
         assertNull(c.voiceSttEngine)

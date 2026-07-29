@@ -44,6 +44,7 @@ import { buildRpcPrompt } from "./core/agent-rpc/prompts"
 import { runStt, VOICE_STT_ENGINE } from "./core/transcription/stt"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
+import { runTts, VOICE_TTS_ENGINE } from "./core/tts/tts"
 import { cursorSpawnArgs, codexSpawnArgs, claudeSpawnArgs, codexPrepareGlobal, codexPrepareSessionHome, opencodeConfigEntries, ensureOpenCodePluginScopes } from "./core/plugins"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider } from "./core/slash-commands"
@@ -1755,6 +1756,29 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       } catch (e) {
         log.warn("voice_cleanup_failed", { sessionId: sessionId ?? null, draft, sttMs, sttEngine, err: String(e) })
         return { text: draft, degraded: true }
+      }
+    },
+    // Read-aloud: server-side TTS (codex ChatGPT pronunciation). `platform` is client-native.
+    speak: async (input) => {
+      const cfg = settings.getAppConfig(appConfigEnv)
+      const engine = input.engine ?? cfg.voiceTtsEngine ?? VOICE_TTS_ENGINE
+      if (engine === "platform") {
+        return { error: "platform", status: 400 as const }
+      }
+      const t0 = Date.now()
+      try {
+        const r = await runTts(input.text, { engine, lang: input.lang })
+        log.info("voice_speak_out", {
+          engine: r.engine,
+          chars: input.text.length,
+          bytes: r.audio.byteLength,
+          chunked: !!r.chunked,
+          ms: Date.now() - t0,
+        })
+        return { audio: r.audio, mime: r.mime, engine: r.engine, chunked: r.chunked }
+      } catch (e) {
+        log.warn("voice_speak_failed", { engine, err: String(e), ms: Date.now() - t0 })
+        throw e
       }
     },
   })

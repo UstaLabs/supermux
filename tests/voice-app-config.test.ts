@@ -60,6 +60,19 @@ test("voiceCleanupEngine: unknown string is rejected by the allowlist", () => {
   expect(resolved.voiceCleanupEngine).toBeUndefined()
 })
 
+test("voiceTtsEngine: platform and codex survive sanitize + resolve", () => {
+  for (const id of ["platform", "codex"]) {
+    const patch = sanitizeAppConfigPatch({ voiceTtsEngine: id })
+    expect(patch.voiceTtsEngine).toBe(id)
+    expect(resolveAppConfig(patch, {} as any).voiceTtsEngine).toBe(id)
+  }
+})
+
+test("voiceTtsEngine: unknown string is rejected", () => {
+  const patch = sanitizeAppConfigPatch({ voiceTtsEngine: "edge" })
+  expect(patch.voiceTtsEngine).toBeUndefined()
+})
+
 test("voiceCleanupGlossary: defaults to the built-in seed when not configured", () => {
   const resolved = resolveAppConfig({}, {} as any)
   expect(resolved.voiceCleanupGlossary).toEqual(DEFAULT_VOICE_CLEANUP_GLOSSARY)
