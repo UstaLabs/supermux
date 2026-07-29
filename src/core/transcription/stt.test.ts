@@ -19,9 +19,10 @@ function fakeEngine(name: string, opts: {
   }
 }
 
-test("STT_ENGINES includes codex-realtime + claude-voice + whisper; whisper is fallback", () => {
+test("STT_ENGINES includes codex-realtime + claude-voice + cursor-stt + whisper; whisper is fallback", () => {
   expect(STT_ENGINES).toContain("codex-realtime")
   expect(STT_ENGINES).toContain("claude-voice")
+  expect(STT_ENGINES).toContain("cursor-stt")
   expect(STT_ENGINES).toContain("whisper")
   expect(FALLBACK_STT_ENGINE).toBe("whisper")
 })
@@ -147,6 +148,29 @@ test("runStt falls back to whisper when claude-voice is unavailable", async () =
     select: {
       overrides: {
         "claude-voice": fakeEngine("claude-voice", { available: false, prefersCleanup: false }),
+        whisper: fakeEngine("whisper", { text: "local" }),
+      },
+    },
+  })
+  expect(r.text).toBe("local")
+  expect(r.engine).toBe("whisper")
+  expect(r.fellBack).toBe(true)
+})
+
+test("selectStt('cursor-stt') returns that engine", () => {
+  const e = selectStt("cursor-stt", {
+    cursorStt: { isAvailable: () => true },
+  })
+  expect(e.name).toBe("cursor-stt")
+  expect(e.prefersCleanup).toBe(false)
+})
+
+test("runStt falls back to whisper when cursor-stt is unavailable", async () => {
+  const r = await runStt("/tmp/a.webm", {
+    engine: "cursor-stt",
+    select: {
+      overrides: {
+        "cursor-stt": fakeEngine("cursor-stt", { available: false, prefersCleanup: false }),
         whisper: fakeEngine("whisper", { text: "local" }),
       },
     },
