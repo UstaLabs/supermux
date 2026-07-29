@@ -13,15 +13,18 @@ import java.io.File
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.resume
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
 /**
- * Process-wide read-aloud: platform [TextToSpeech] or ChatGPT (codex) via broker /speak.
- * [resolveEngine] / [speakRemote] are wired from AppViewModel when a host is connected.
+ * Process-wide read-aloud: platform [TextToSpeech] or ChatGPT (codex) via broker /speak stream.
+ * [resolveEngine] / [speakRemoteStream] are wired from AppViewModel when a host is connected.
  */
 object MessageTts {
     private val engine = AtomicReference<TextToSpeech?>(null)
@@ -34,8 +37,11 @@ object MessageTts {
     /** Returns "platform" | "codex" (default platform). */
     var resolveEngine: (suspend () -> String)? = null
 
-    /** POST /speak — returns MP3 bytes. Required for codex engine. */
-    var speakRemote: (suspend (text: String) -> ByteArray)? = null
+    /**
+     * POST /speak NDJSON stream. Invokes [onChunk] for each audio piece as it arrives.
+     * Required for codex engine.
+     */
+    var speakRemoteStream: (suspend (text: String, onChunk: (ByteArray) -> Unit) -> Unit)? = null
 
     var speakingKey by mutableStateOf<String?>(null)
         private set
@@ -86,46 +92,72 @@ object MessageTts {
     }
 
     private suspend fun speakCodex(appCtx: Context, plain: String, rawText: String) {
-        val remote = speakRemote
+        val remote = speakRemoteStream
         if (remote == null) {
-            // Fallback to platform if remote not wired
             speakPlatform(appCtx, plain)
             return
         }
         val g = gen.incrementAndGet()
         setSpeakingKeyMainThread(plain)
-        try {
-            val bytes = withContext(Dispatchers.IO) { remote(rawText) }
-            if (gen.get() != g) return
-            withContext(Dispatchers.Main) {
-                if (gen.get() != g) return@withContext
-                playMp3(appCtx, bytes, g)
+        val queue = Channel<ByteArray>(Channel.UNLIMITED)
+        val producer = scope.launch(Dispatchers.IO) {
+            try {
+                remote(rawText) { bytes ->
+                    if (gen.get() == g) {
+                        // trySend is non-suspending; channel is unlimited so it shouldn't fail.
+                        queue.trySend(bytes)
+                    }
+                }
+            } catch (_: Exception) {
+                // consumer will see close and clear speaking
+            } finally {
+                queue.close()
             }
-        } catch (_: Exception) {
+        }
+        try {
+            for (bytes in queue) {
+                if (gen.get() != g) break
+                withContext(Dispatchers.Main) {
+                    if (gen.get() == g) playMp3AndWait(appCtx, bytes, g)
+                }
+            }
             if (gen.get() == g) setSpeakingKeyMainThread(null)
+        } finally {
+            producer.cancel()
+            queue.close()
         }
     }
 
-    private fun playMp3(appCtx: Context, bytes: ByteArray, g: Int) {
-        try {
-            mediaPlayer?.release()
-            val file = File(appCtx.cacheDir, "read-aloud-$g.mp3")
-            file.writeBytes(bytes)
-            val mp = MediaPlayer()
-            mediaPlayer = mp
-            mp.setDataSource(file.absolutePath)
-            mp.setOnCompletionListener {
-                if (gen.get() == g) setSpeakingKeyMainThread(null)
-                try { file.delete() } catch (_: Exception) {}
+    private suspend fun playMp3AndWait(appCtx: Context, bytes: ByteArray, g: Int) {
+        suspendCancellableCoroutine { cont ->
+            try {
+                mediaPlayer?.release()
+                val file = File(appCtx.cacheDir, "read-aloud-$g-${System.nanoTime()}.mp3")
+                file.writeBytes(bytes)
+                val mp = MediaPlayer()
+                mediaPlayer = mp
+                mp.setDataSource(file.absolutePath)
+                mp.setOnCompletionListener {
+                    try { file.delete() } catch (_: Exception) {}
+                    if (cont.isActive) cont.resume(Unit)
+                }
+                mp.setOnErrorListener { _, _, _ ->
+                    try { file.delete() } catch (_: Exception) {}
+                    if (cont.isActive) cont.resume(Unit)
+                    true
+                }
+                cont.invokeOnCancellation {
+                    try {
+                        mp.stop()
+                        mp.release()
+                    } catch (_: Exception) {}
+                    try { file.delete() } catch (_: Exception) {}
+                }
+                mp.prepare()
+                mp.start()
+            } catch (_: Exception) {
+                if (cont.isActive) cont.resume(Unit)
             }
-            mp.setOnErrorListener { _, _, _ ->
-                if (gen.get() == g) setSpeakingKeyMainThread(null)
-                true
-            }
-            mp.prepare()
-            mp.start()
-        } catch (_: Exception) {
-            if (gen.get() == g) setSpeakingKeyMainThread(null)
         }
     }
 

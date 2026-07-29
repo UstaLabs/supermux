@@ -287,14 +287,18 @@ export const api = {
   getAppConfig: () => request("GET", "/settings/config") as Promise<AppConfig>,
   saveAppConfig: (patch: Partial<AppConfig>) => request("PUT", "/settings/config", patch),
   /**
-   * POST /speak — server TTS (codex). Returns an audio Blob (mp3).
-   * Throws if engine is platform (client should use speechSynthesis) or synthesis fails.
+   * POST /speak — server TTS (codex) as NDJSON stream of audio chunks.
+   * Yields { mime, blob } as each piece arrives so the UI can start playback immediately.
    */
-  speak: async (text: string, opts?: { engine?: string; lang?: string }): Promise<Blob> => {
+  speakStream: async function* (
+    text: string,
+    opts?: { engine?: string; lang?: string; signal?: AbortSignal },
+  ): AsyncGenerator<{ mime: string; blob: Blob; index: number; total: number }> {
     const res = await fetch("/speak", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", accept: "application/x-ndjson" },
       body: JSON.stringify({ text, engine: opts?.engine, lang: opts?.lang }),
+      signal: opts?.signal,
     })
     if (!res.ok) {
       let detail = ""
@@ -304,7 +308,37 @@ export const api = {
       } catch { /* ignore */ }
       throw new Error(detail || `POST /speak → ${res.status}`)
     }
-    return res.blob()
+    if (!res.body) throw new Error("POST /speak → empty body")
+    const reader = res.body.getReader()
+    const dec = new TextDecoder()
+    let buf = ""
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += dec.decode(value, { stream: true })
+      let nl: number
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim()
+        buf = buf.slice(nl + 1)
+        if (!line) continue
+        let obj: any
+        try {
+          obj = JSON.parse(line)
+        } catch {
+          continue
+        }
+        if (obj?.error) throw new Error(String(obj.error))
+        if (typeof obj?.audio !== "string") continue
+        const bin = Uint8Array.from(atob(obj.audio), (c) => c.charCodeAt(0))
+        const mime = typeof obj.mime === "string" ? obj.mime : "audio/mpeg"
+        yield {
+          mime,
+          blob: new Blob([bin], { type: mime }),
+          index: typeof obj.i === "number" ? obj.i : 0,
+          total: typeof obj.n === "number" ? obj.n : 1,
+        }
+      }
+    }
   },
   claimPair: (name = "setup") => request("POST", "/pair/claim", { name }),
   getSoul: async (): Promise<string> => { const r = await fetch("/settings/soul"); if (!r.ok) throw new Error(`GET /settings/soul → ${r.status}`); return r.text() },
