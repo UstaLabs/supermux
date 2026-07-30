@@ -33,6 +33,16 @@ env:
     text: "Allow"
     optional: true
 
+# The pair link is only consumed by ConnectPage, the LAST of the four intro
+# pages, and a fresh install opens on page 0 — so the deep link sits unread until
+# the carousel is advanced. This mirrors what a real user scanning a QR code has
+# to do today; see the note in scripts/test-android.sh if that ever changes.
+- repeat:
+    times: 3
+    commands:
+      - swipe:
+          direction: LEFT
+
 # Paired and synced: the session list is on screen with the seeded session.
 - extendedWaitUntil:
     visible:
