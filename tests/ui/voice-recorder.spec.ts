@@ -6,13 +6,11 @@
  * synthesize a mic stream. The VoiceRecorder + MediaRecorder flow then runs
  * end-to-end exactly as it would in a real session.
  *
- * Run: bun tests/ui/voice-recorder.spec.ts
+ * Run: scripts/test-broker.sh bun tests/ui/voice-recorder.spec.ts
  */
 
-import { chromium, type Browser } from "playwright"
-import { DeviceStore } from "../../src/channels/web/device-store"
-import { existsSync } from "fs"
-import { join } from "path"
+import type { Browser } from "playwright"
+import { launchBrowser, uiFixture } from "./fixture-env"
 
 declare const document: {
   querySelector(selector: string): { disabled?: boolean } | null
@@ -22,33 +20,18 @@ type PromptInputHook = {
   setTextInput(value: string): void
 }
 
-const STATE_DIR = process.env.MUX_STATE_DIR ?? join(process.env.HOME ?? "", ".mux/state")
-const MUX_WEB_PORT = parseInt(process.env.MUX_WEB_PORT ?? "9898", 10)
-const APP_URL = `http://127.0.0.1:${MUX_WEB_PORT}`
-const CHROME_BIN = "/usr/bin/google-chrome"
-
 async function main(): Promise<void> {
   if (process.env.MUX_RUN_UI_SMOKE !== "1") {
-    console.log("skipping UI smoke; set MUX_RUN_UI_SMOKE=1 to run")
+    console.log("skipping UI smoke; run through scripts/test-broker.sh")
     return
   }
 
-  const res = await fetch(`${APP_URL}/sessions`).catch(() => null)
-  if (!res) throw new Error(`broker not reachable at ${APP_URL}`)
-
-  const ds = new DeviceStore(join(STATE_DIR, "devices.json"))
-  const minted = ds.mint("voice-test-temp")
-  const token = minted.token
+  const fixture = uiFixture()
 
   let browser: Browser | null = null
   try {
-    if (!existsSync(CHROME_BIN)) throw new Error(`chrome not found at ${CHROME_BIN}`)
-    browser = await chromium.launch({
-      executablePath: CHROME_BIN,
-      headless: true,
+    browser = await launchBrowser({
       args: [
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
         "--use-fake-ui-for-media-stream",
         "--use-fake-device-for-media-stream",
       ],
@@ -58,10 +41,9 @@ async function main(): Promise<void> {
     page.on("console", (msg) => console.log(`[console.${msg.type()}] ${msg.text()}`))
     page.on("pageerror", (err) => console.log(`[pageerror] ${err.message}`))
 
-    await page.goto(`${APP_URL}/pair?t=${encodeURIComponent(token)}`, { waitUntil: "networkidle" })
-    await page.waitForSelector("text=ana", { timeout: 10_000 })
-    await page.click("text=ana")
-    await page.waitForSelector('textarea[placeholder*="Message"]', { timeout: 10_000 })
+    await page.goto(`${fixture.baseUrl}/pair?t=${encodeURIComponent(fixture.token)}`, { waitUntil: "networkidle" })
+    await page.locator(`[data-testid="session-row"][data-session-id="${fixture.sessionId}"]`).click()
+    await page.locator('[data-testid="composer-input"]').waitFor({ state: "visible", timeout: 10_000 })
 
     // Stub the transcribe endpoint so the assertion is deterministic
     // (the fake mic produces non-speech audio; real whisper won't return useful text)
@@ -103,7 +85,6 @@ async function main(): Promise<void> {
     console.log("\n=== TEST PASSED ===")
   } finally {
     if (browser) await browser.close()
-    new DeviceStore(join(STATE_DIR, "devices.json")).revoke("voice-test-temp")
   }
 }
 

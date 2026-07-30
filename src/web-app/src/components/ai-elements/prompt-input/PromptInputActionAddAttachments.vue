@@ -15,7 +15,7 @@ const { openFileDialog } = usePromptInput()
 </script>
 
 <template>
-  <DropdownMenuItem @select.prevent="openFileDialog">
+  <DropdownMenuItem @select="openFileDialog">
     <ImageIcon class="mr-2 size-4" />
     {{ props.label || 'Add photos or files' }}
   </DropdownMenuItem>

@@ -21,8 +21,9 @@
 #   2. A `shared` (KMP) change fans out to every client that consumes it.
 #
 # Deliberately NOT here — they belong in a PR-only / nightly workflow:
-#   Android emulator, iOS simulator, packaged-app install smoke, Playwright
-#   journeys (those need the hermetic broker fixture that does not exist yet).
+#   Android emulator, iOS simulator, packaged-app install smoke, and the heavier
+#   Playwright journeys. The core PWA journey is cheap and hermetic, so it runs
+#   below against scripts/test-broker.sh.
 name: ci
 
 on:
@@ -113,6 +114,34 @@ jobs:
       - name: Typecheck (non-blocking until the existing 14 errors are fixed)
         run: bun run typecheck
         continue-on-error: true
+
+  # ── PWA journey: real browser + broker + shim, all on throwaway state ──────
+  ui:
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request' ||
+      needs.changes.outputs.ts == 'true' ||
+      needs.changes.outputs.wire == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+      - run: bun install --frozen-lockfile
+        working-directory: src/web-app
+      - name: Ensure a Playwright browser is available
+        run: command -v google-chrome >/dev/null 2>&1 || bunx playwright install --with-deps chromium
+      - name: Core browser journey
+        run: bun run test:ui
+        env:
+          MUX_TEST_KEEP_FIXTURE: "1"
+      - name: Upload fixture logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-fixture-logs
+          path: /tmp/supermux-test-broker.*/**/*.log
+          retention-days: 7
 
   # ── Kotlin, host-side only: no emulator, no display server ─────────────────
   # apps/desktop already declares compose.desktop.uiTestJUnit4, so this lane runs

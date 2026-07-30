@@ -9,6 +9,7 @@
     "broker": "bun src/main.ts",
     "shim": "bun src/shim/index.ts",
     "test": "bun test --isolate",
+    "test:ui": "scripts/test-broker.sh bun tests/ui/core-journey.spec.ts",
     "typecheck": "tsc --noEmit",
     "pair": "bun scripts/pair.ts",
     "revoke": "bun scripts/revoke.ts",
