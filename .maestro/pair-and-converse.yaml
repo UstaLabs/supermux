@@ -1,6 +1,6 @@
-# Journey 1+2 on a real Android device/emulator: pair from a deep link, open the
-# seeded session, send a prompt through the real WebSocket, and see the fake
-# agent's reply rendered.
+# Journey 1+2 on a real Android device/emulator: pair, open the seeded session,
+# send a prompt through the real WebSocket, and see the fake agent's reply
+# rendered.
 #
 # Deliberately written against the SHARED test ids (src/shared/test-ids.ts), not
 # Android-specific tags, so the same selectors describe the same elements on iOS.
@@ -23,25 +23,29 @@ env:
     permissions:
       all: allow
 
-# Pairing arrives as supermux://pair?t=…&base=… — the same link a QR scan opens.
-# The app is already running, so this lands in onNewIntent.
-- openLink: "supermux://pair?t=${PAIR_TOKEN}&base=${BASE_URL}"
-
-# Belt and braces: if the platform still raises a permission prompt, dismiss it
-# rather than let it swallow the rest of the flow.
-- tapOn:
-    text: "Allow"
-    optional: true
-
-# The pair link is only consumed by ConnectPage, the LAST of the four intro
-# pages, and a fresh install opens on page 0 — so the deep link sits unread until
-# the carousel is advanced. This mirrors what a real user scanning a QR code has
-# to do today; see the note in scripts/test-android.sh if that ever changes.
+# Pair through the on-screen "paste a pairing link" field — the app's own manual
+# path, and the one a user takes when they cannot scan a QR code. Deliberately
+# NOT the supermux://pair deep link: that link is only read by ConnectPage, the
+# last of four intro pages, so on a fresh install it is delivered while page 0 is
+# showing and is gone by the time ConnectPage composes. See the note below.
 - repeat:
     times: 3
     commands:
       - swipe:
           direction: LEFT
+
+- extendedWaitUntil:
+    visible: "https://host/pair?t=…"
+    timeout: 30000
+- tapOn: "https://host/pair?t=…"
+- inputText: "${BASE_URL}/pair?t=${PAIR_TOKEN}"
+- tapOn: "Pair"
+
+# Trust-on-first-connect: the broker is unknown, so confirm it.
+- extendedWaitUntil:
+    visible: "Connect to this broker?"
+    timeout: 30000
+- tapOn: "Connect"
 
 # Paired and synced: the session list is on screen with the seeded session.
 - extendedWaitUntil:
