@@ -1,5 +1,6 @@
 package dev.supermux.desktop.workspace
 
+import dev.supermux.ui.TestIds
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -96,7 +97,7 @@ class WorkspaceRootTest {
     }
 
     @Test fun on_new_session_opens_the_launcher_overlay() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { layout.sidebarCollapsed = true } // rail mode → "rail_new"
+        val ui = WorkspaceUiState().apply { layout.sidebarCollapsed = true } // rail mode → TestIds.NEW_SESSION
         val app = appFor(mutableListOf())
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
@@ -106,7 +107,7 @@ class WorkspaceRootTest {
         waitForIdle()
         onNodeWithTag("launcher_overlay").assertDoesNotExist()
 
-        onNodeWithTag("rail_new").performClick()
+        onNodeWithTag(TestIds.NEW_SESSION).performClick()
         waitForIdle()
 
         assertTrue(ui.launcherOpen)

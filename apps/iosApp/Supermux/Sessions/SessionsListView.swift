@@ -124,7 +124,7 @@ struct SessionsListView: View {
                     .smMacSidebarCard(position: .only, accented: true)
                 }
                 .buttonStyle(.plain)
-                .accessibilityIdentifier("new-session")
+                .accessibilityIdentifier(TestIds.newSession)
                 .moveDisabled(true)
                 .deleteDisabled(true)
                 #if os(macOS)
@@ -190,6 +190,7 @@ struct SessionsListView: View {
         // the "Reorder" control in the group-by section so selection stays normal.
         .environment(\.editMode, $listEditMode)
         #endif
+        .accessibilityIdentifier(TestIds.sessionList)
         #if os(macOS)
         // The reveal must not participate in scroll layout on AppKit. The overlay also keeps a
         // fixed frame while its contents translate into view, so rubber-banding never changes
@@ -542,12 +543,14 @@ struct SessionsListView: View {
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             swipeButtons(for: s)
         }
+        .accessibilityIdentifier(TestIds.sessionRow(s.id))
         #else
         row(s, host: host, position: position, projectTag: projectTag)
             .tag(s.id)
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 swipeButtons(for: s)
             }
+            .accessibilityIdentifier(TestIds.sessionRow(s.id))
         #endif
     }
 
