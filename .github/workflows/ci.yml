@@ -92,9 +92,10 @@ jobs:
       # Both manifests: 441 test files span the broker AND src/web-app, and a
       # missing node_modules turns ~100 of them into "Cannot find package"
       # failures rather than an honest red.
-      # No --frozen-lockfile at the root: bun.lock is gitignored there, so there
-      # is nothing to freeze against. src/web-app/bun.lock IS committed.
-      - run: bun install
+      # --frozen-lockfile on both: a floating root install made CI non-reproducible
+      # (a different vue-tsc/typescript resolution failed the PWA build on a file
+      # that compiles clean locally), so bun.lock is committed at the root now too.
+      - run: bun install --frozen-lockfile
       - run: bun install --frozen-lockfile
         working-directory: src/web-app
 
@@ -125,7 +126,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      - run: bun install
+      - run: bun install --frozen-lockfile
       - run: bun install --frozen-lockfile
         working-directory: src/web-app
       - name: Ensure a Playwright browser is available
