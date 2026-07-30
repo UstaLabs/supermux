@@ -21,23 +21,26 @@ beforeEach(async () => {
   const db = openDb(join(tmpDir, "test.sqlite3"))
   runMigrations(db, join(import.meta.dir, "../src/core/storage/migrations"))
   fileStore = new FileStore(db, join(tmpDir, "files"))
-
-  port = 40100 + Math.floor(Math.random() * 500)
   const devicesFile = join(tmpDir, "devices.json")
   const ds = new DeviceStore(devicesFile)
   token = ds.mint("iphone").token
 
   channel = new WebChannel({
-    port,
+    port: 0,
     devicesFile,
-    publicUrl: `http://127.0.0.1:${port}`,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
     setMute: () => {},
     onSendFromWeb: (msg: any) => { inboundReceived.push(msg) },
     fileStore,
   } as any)
+  // port 0 = OS-assigned, read back off the channel. A random pick from a
+  // fixed range collides under a full `bun test` run (two of these files even
+  // shared the 18900+ range) and fails with EADDRINUSE for reasons unrelated to
+  // the code under test.
   await channel.start()
+  port = channel.boundPort
 })
 afterEach(async () => {
   await channel.stop()

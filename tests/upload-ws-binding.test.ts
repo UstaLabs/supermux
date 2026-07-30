@@ -24,15 +24,18 @@ beforeEach(async () => {
   runMigrations(db, join(import.meta.dir, "../src/core/storage/migrations"))
   store = new FileStore(db, join(tmpDir, "files"))
 
-  port = 39600 + Math.floor(Math.random() * 500)
   const devicesFile = join(tmpDir, "devices.json")
   const ds = new DeviceStore(devicesFile)
   tokenA = ds.mint("iphone").token
   tokenB = ds.mint("laptop").token
 
+  // port 0 = let the OS pick a free one, then read it back off the channel.
+  // A random pick from a fixed 500-wide range collides under a full `bun test`
+  // run and fails with EADDRINUSE for reasons unrelated to the code under test —
+  // which is exactly how a gate earns a reputation for being flaky.
   channel = new WebChannel({
-    port, devicesFile,
-    publicUrl: `http://127.0.0.1:${port}`,
+    port: 0, devicesFile,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
     setMute: () => {},
@@ -40,6 +43,7 @@ beforeEach(async () => {
     fileStore: store,
   } as any)
   await channel.start()
+  port = channel.boundPort
 })
 afterEach(async () => {
   await channel.stop()

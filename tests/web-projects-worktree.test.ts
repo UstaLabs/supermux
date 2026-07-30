@@ -9,7 +9,7 @@ import { DeviceStore } from "../src/channels/web/device-store"
 // ~/.mux/worktrees — so the new-session project picker stays clean.
 
 const DEV_PATH = `/tmp/devices-projects-wt-${process.pid}.json`
-const PORT = 18900 + Math.floor(Math.random() * 100)
+let PORT = 0
 let ch: WebChannel
 let token: string
 let tmpRoot: string
@@ -26,9 +26,9 @@ beforeEach(async () => {
 
   const wt = join(tmpRoot, ".mux", "worktrees")
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [
       // worktree-backed active session → should surface its repo_root, not the worktree
       { id: "wt", name: "wt", workdir: join(wt, "myrepo-abc", "uuid1"), repo_root: join(tmpRoot, "myrepo"), mute: false, connected: true, agent: "claude" as const },
@@ -41,7 +41,12 @@ beforeEach(async () => {
     // an archived session living in a worktree dir (no repo_root in its snapshot) → dropped
     listArchivedSessions: () => [{ id: "old", name: "old", workdir: join(wt, "oldrepo-def", "uuid2"), agent: "claude" as const }],
   } as any)
+  // port 0 = OS-assigned, read back off the channel. A random pick from a
+  // fixed range collides under a full `bun test` run (two of these files even
+  // shared the 18900+ range) and fails with EADDRINUSE for reasons unrelated to
+  // the code under test.
   await ch.start()
+  PORT = ch.boundPort
 })
 
 afterEach(async () => {
