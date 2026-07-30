@@ -350,12 +350,28 @@ final class BrokerSession {
                     userStatus: old.userStatus, sortOrder: old.sortOrder, draftPayload: old.draftPayload)
             }
         case .messageAppend(let m):
-            // Drop the optimistic local echo when the real inbound message arrives.
+            // Fold the broker's real inbound echo into the optimistic local row in place.
+            // removeAll+append destroyed the bottom bubble (new ForEach id → layout jump right
+            // after send). Keep the local id so SwiftUI treats it as the same row; text already
+            // matches, so MessageRow's equatable gate also holds.
             var log = messages[m.session] ?? []
-            if m.entry.direction.hasPrefix("in") {
-                log.removeAll { $0.id.hasPrefix("local-") && $0.text == m.entry.text }
+            if m.entry.direction.hasPrefix("in"),
+               let idx = log.lastIndex(where: { $0.id.hasPrefix("local-") && $0.text == m.entry.text }) {
+                let localId = log[idx].id
+                log[idx] = LogEntry(
+                    id: localId,
+                    ts: m.entry.ts,
+                    direction: m.entry.direction,
+                    text: m.entry.text,
+                    op: m.entry.op,
+                    channel: m.entry.channel,
+                    chat_id: m.entry.chat_id,
+                    message_id: m.entry.message_id,
+                    attachments: m.entry.attachments
+                )
+            } else {
+                log.append(m.entry)
             }
-            log.append(m.entry)
             writeMessages(m.session, log)
         case .activityAppend(let a):
             var events = activity[a.session] ?? []

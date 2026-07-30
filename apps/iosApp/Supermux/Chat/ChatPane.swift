@@ -375,8 +375,15 @@ struct ChatPane: View {
         }
         let ids = composer.pending.compactMap { $0.uploadedFileId }
         let text = composer.draft
-        composer.draft = ""
-        composer.pending = []
+        // Collapse the composer without the expand/collapse animation. That 0.28s height
+        // tween raced the transcript's post-send pin (optimistic row + Sending… trailer) and
+        // read as a jump on macOS; the next keystroke still animates expansion normally.
+        var collapse = Transaction()
+        collapse.disablesAnimations = true
+        withTransaction(collapse) {
+            composer.draft = ""
+            composer.pending = []
+        }
         broker.send(session.id, text, attachments: ids.isEmpty ? nil : ids)
     }
 
@@ -412,19 +419,33 @@ private extension View {
 }
 
 #if os(macOS)
-/// Owns the semantic scroll position for one macOS transcript.
+/// Owns stick-to-bottom for one macOS transcript.
 ///
-/// A bottom `defaultScrollAnchor` is only an initial layout hint. With variable-height rows,
-/// `LazyVStack` can revise its estimates after that hint has been applied and leave the viewport in
-/// an unrealized gap until a wheel event forces another layout. The caller keeps a small eager tail
-/// at the bottom, while `ScrollPosition` keeps that real bottom edge stable as estimates settle.
+/// Live chat updates (send, tools, working trailer, composer height) change content size often.
+/// Three things used to produce visible jumps:
+/// 1. Pinning only on `messageCount` — tool activity and trailer toggles resized the transcript
+///    without re-asserting the bottom edge.
+/// 2. Unconditional `scrollTo(.bottom)` on every count change — even while the user was reading
+///    history, and even mid-layout when LazyVStack estimates were still settling.
+/// 3. Missing `sizeChanges` scroll anchor — content/inset growth (new rows, composer collapse)
+///    did not keep a bottom-following viewport glued to the edge.
+///
+/// `ScrollPosition` + `.sizeChanges` keep the bottom stable while following; `onScrollGeometryChange`
+/// drops follow when the user wheels up. `pinGeneration` re-asserts only while following, and only
+/// for real timeline changes (messages, tools, trailers) — never with animation.
 struct MacTranscriptScrollView<Content: View>: View {
-    let messageCount: Int
+    /// Bumps when the timeline or bottom trailers change in a way that should keep a following
+    /// viewport pinned. Built by the caller from blocks / activity / working state — not raw
+    /// message count alone (tools arrive without a new message).
+    let pinGeneration: Int
     let content: Content
     @State private var position = ScrollPosition(idType: String.self, edge: .bottom)
+    /// True while the user is at/near the bottom. Cleared by scrolling up; restored by scrolling
+    /// back down or by opening the chat (`onAppear`).
+    @State private var followingBottom = true
 
-    init(messageCount: Int, @ViewBuilder content: () -> Content) {
-        self.messageCount = messageCount
+    init(pinGeneration: Int, @ViewBuilder content: () -> Content) {
+        self.pinGeneration = pinGeneration
         self.content = content()
     }
 
@@ -433,18 +454,46 @@ struct MacTranscriptScrollView<Content: View>: View {
             content
         }
         .scrollPosition($position, anchor: .bottom)
-        // Only use the default anchor to align transcripts shorter than the viewport. Initial
-        // positioning is owned by `position`, so the two mechanisms never race.
+        // Alignment: short transcripts sit on the bottom edge of the viewport.
         .defaultScrollAnchor(.bottom, for: .alignment)
+        // Size-change stickiness ONLY while following. Applied unconditionally it would re-pin
+        // on every tool/message growth even after the user scrolled up to read history — that
+        // is the "always stuck to bottom" trap. When not following, content grows below the
+        // viewport and the place you're reading stays put.
+        .defaultScrollAnchor(followingBottom ? .bottom : .top, for: .sizeChanges)
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            // Distance from the visible bottom to the content bottom. ~0 when pinned; grows as
+            // the user scrolls up into history.
+            let visibleBottom = geo.contentOffset.y + geo.containerSize.height
+            return geo.contentSize.height - visibleBottom + geo.contentInsets.bottom
+        } action: { _, distanceFromBottom in
+            // Hysteresis: easier to engage follow than to drop it, so a single frame of layout
+            // thrash while content grows does not un-stick a following chat mid-stream.
+            if distanceFromBottom <= 48 {
+                followingBottom = true
+            } else if distanceFromBottom > 96 {
+                followingBottom = false
+            }
+        }
         .onAppear {
+            followingBottom = true
             position.scrollTo(edge: .bottom)
         }
-        // Un-animated on purpose. `withAnimation` here drove the bottom-pin through a 0.2s
-        // animated transaction, which re-lays out the transcript every frame for the duration —
-        // and `messageCount` also changes on a session switch, so opening a chat paid for an
-        // animation nobody asked for. Jumping straight to the bottom is what the user wants and
-        // costs one layout pass.
-        .onChange(of: messageCount) { _, _ in
+        // LazyVStack revises unrealized-row estimates over a few frames after open. Without a
+        // couple of un-animated re-pins, the bottom edge can sit on a zero-height estimate and
+        // the chat opens blank until the user scrolls (the old pure-LazyVStack bug). Idempotent
+        // while already at bottom — no visible jump.
+        .task {
+            for _ in 0..<3 {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                guard followingBottom else { return }
+                position.scrollTo(edge: .bottom)
+            }
+        }
+        // Un-animated on purpose — a 0.2s animated pin re-lays out every frame and feels like a
+        // jump on every tool row. Only re-assert while the user is following the live edge.
+        .onChange(of: pinGeneration) { _, _ in
+            guard followingBottom else { return }
             position.scrollTo(edge: .bottom)
         }
         .softScrollEdges()
@@ -491,10 +540,19 @@ struct SessionTranscript: View, Equatable {
         return chat.blocks.filter { if case .message = $0 { return true } else { return false } }
     }
 
-    /// Roughly one viewport. Unlike the reverted 24-row experiment, this does not render more
-    /// message rows than the fast pure-LazyVStack path normally realizes (~7), but it gives the
-    /// bottom edge a real height so macOS cannot initially park in an unrealized estimate gap.
-    private static let macEagerTailCount = 8
+    /// Token that changes when a *new* bottom-edge item appears (block append, trailer toggle).
+    /// In-place height growth inside an existing block (tool_result filling a running row) is
+    /// handled by `defaultScrollAnchor(.bottom, for: .sizeChanges)` — do not bump this on every
+    /// activity event or each tool status flip re-runs `scrollTo` and feels like a jump.
+    private var macPinGeneration: Int {
+        var h = blocks.count &* 73856093
+        h &+= (blocks.last?.id.hashValue ?? 0)
+        if working { h &+= 1 }
+        if sending { h &+= 2 }
+        if waiting { h &+= 4 }
+        h &+= visibleBgTasks.count &* 83492791
+        return h
+    }
 
     var body: some View {
         // Bound once: `blocks` is read by both the empty-check and the `ForEach`, and in low chat
@@ -532,29 +590,34 @@ struct SessionTranscript: View, Equatable {
 
     /// The scrolling container.
     ///
-    /// **macOS uses `ScrollView` + lazy history + an 8-block eager tail; iOS keeps `List`.**
-    /// This split is deliberate and load-bearing in both directions:
+    /// **macOS uses `ScrollView` + one `LazyVStack` of timeline blocks + a small non-lazy footer;
+    /// iOS keeps `List`.** This split is deliberate and load-bearing in both directions:
     ///
     /// - `List` realizes a fixed batch of rows far beyond the viewport. Measured on a 1440x900
     ///   window with a fresh 200-message session: **23 rows / 11,684 pt realized for a 900 pt
     ///   viewport** — 13x more than is visible — costing ~257 ms of blocked main thread per session
-    ///   switch. Lazy history realizes strictly by viewport (7 rows / 1,554 pt); the 8-block
-    ///   eager tail prevents bottom-anchor estimate gaps while keeping work in that same range.
+    ///   switch. `LazyVStack` realizes strictly by viewport (~7 rows / 1,554 pt).
+    /// - An earlier "eager tail of last N blocks in a plain `VStack`" fixed blank-on-open but
+    ///   **hopped rows between LazyVStack and VStack** every time a new block arrived (the oldest
+    ///   eager row moved into history). That container hop destroyed/recreated views and produced
+    ///   the live-update jumps. Stickiness is now owned by `MacTranscriptScrollView` (ScrollPosition
+    ///   + sizeChanges + follow gate); the footer only holds trailers + the bottom sentinel.
     /// - iOS must keep `List`: this code moved FROM `ScrollView`+`LazyVStack` TO `List` precisely
     ///   because LazyVStack blanked on the **keyboard-avoidance relayout** (blank-on-keyboard,
     ///   blank-on-open). macOS has no keyboard avoidance, so it doesn't inherit that bug — but iOS
     ///   still does. Do not "unify" these without re-testing the iOS keyboard case.
     @ViewBuilder private func scroller(blocks: [ChatBlock]) -> some View {
         #if os(macOS)
-        MacTranscriptScrollView(messageCount: log.count) {
+        MacTranscriptScrollView(pinGeneration: macPinGeneration) {
             if blocks.isEmpty {
                 starterPrompts
                     .frame(maxWidth: .infinity)
                     .smContentWidthCap()
             } else {
-                let eagerStart = max(0, blocks.count - Self.macEagerTailCount)
+                // All timeline blocks stay in ONE LazyVStack for their whole life — never reparented
+                // into an eager VStack as the window slides. That was the live-update jump source.
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(blocks.prefix(eagerStart)) { block in
+                    ForEach(blocks) { block in
                         blockRow(block)
                             .smContentWidthCap()
                             .padding(.horizontal, 16)
@@ -562,13 +625,9 @@ struct SessionTranscript: View, Equatable {
                     }
                 }
                 .frame(maxWidth: .infinity)
+                // Trailers are small and short-lived; keep them non-lazy so the bottom edge always
+                // has a realized height for ScrollPosition / sizeChanges to pin against.
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(blocks.suffix(from: eagerStart)) { block in
-                        blockRow(block)
-                            .smContentWidthCap()
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 5)
-                    }
                     trailers
                     Color.clear.frame(height: 1).id("__bottom__")
                 }
