@@ -69,24 +69,15 @@ fi
 FLOWS="$*"
 [ -n "$FLOWS" ] || FLOWS=".maestro"
 
-# test-broker.sh exports MUX_TEST_BASE_URL / MUX_TEST_PAIR_TOKEN / MUX_TEST_SESSION_ID
-# for whatever it runs, so the maestro invocation just re-shapes them into flow env.
+# test-broker.sh exports MUX_TEST_BASE_URL / MUX_TEST_PAIR_TOKEN /
+# MUX_TEST_SESSION_ID for whatever it runs; scripts/lib/maestro-run.sh consumes
+# them and does the rendering + maestro invocation.
 #
 # The native app never fetches the PWA shell, so skip building it: it costs ~30s
 # and needs src/web-app/node_modules, which a device lane otherwise has no reason
 # to install.
 export MUX_TEST_SKIP_WEB_BUILD="${MUX_TEST_SKIP_WEB_BUILD:-1}"
+export MUX_TEST_FLOWS="$FLOWS"
+export MAESTRO_BIN="$MAESTRO"
 
-exec scripts/test-broker.sh sh -c '
-  set -eu
-  host_addr="${MUX_TEST_HOST_ADDR:-10.0.2.2}"
-  port="${MUX_TEST_BASE_URL##*:}"
-  base="http://${host_addr}:${port}"
-  echo "android journey → $base" >&2
-  "$0" test \
-    -e BASE_URL="$base" \
-    -e PAIR_TOKEN="$MUX_TEST_PAIR_TOKEN" \
-    -e SESSION_ID="$MUX_TEST_SESSION_ID" \
-    -e PROMPT="maestro-$(date +%s)" \
-    $1
-' "$MAESTRO" "$FLOWS"
+exec scripts/test-broker.sh scripts/lib/maestro-run.sh

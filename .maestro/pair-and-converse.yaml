@@ -8,12 +8,11 @@
 # testTags to Maestro as resource ids.
 #
 # Run: scripts/test-android.sh   (boots the hermetic broker and passes the env below)
+# BASE_URL / PAIR_TOKEN / SESSION_ID / PROMPT are substituted by
+# scripts/test-android.sh before maestro sees this file. They are NOT declared as
+# `env:` defaults on purpose: maestro preferred the defaults over -e overrides,
+# which produced a run that typed "…/pair?t=unset" and looked like a UI bug.
 appId: dev.supermux.android
-env:
-  BASE_URL: http://10.0.2.2:9898
-  PAIR_TOKEN: unset
-  SESSION_ID: "00000000-0000-4000-8000-000000000001"
-  PROMPT: maestro-journey
 ---
 # clearState REVOKES runtime permissions, so `adb install -g` is not enough — the
 # POST_NOTIFICATIONS dialog then opens over the app and every subsequent
@@ -41,6 +40,8 @@ env:
     timeout: 30000
 - tapOn: "https://host/pair?t=…"
 - inputText: "${BASE_URL}/pair?t=${PAIR_TOKEN}"
+# The soft keyboard covers the Pair button, so the tap misses without this.
+- hideKeyboard
 - tapOn: "Pair"
 
 # Trust-on-first-connect: the broker is unknown, so confirm it.
