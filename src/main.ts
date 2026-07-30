@@ -1808,15 +1808,19 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         const iter = stream[Symbol.asyncIterator]()
         const first = await iter.next()
         if (first.done) throw new Error("tts: empty stream")
+        // Bind the narrowed chunk to a const: inside rest() the `first.done` check
+        // above no longer narrows (closure boundary), so `first.value` would widen
+        // back to `void | TtsStreamChunk` and the generator's element type with it.
+        const firstChunk = first.value
         log.info("voice_speak_stream_start", {
-          engine: first.value.engine,
+          engine: firstChunk.engine,
           chars: input.text.length,
-          total: first.value.total,
-          firstBytes: first.value.audio.byteLength,
+          total: firstChunk.total,
+          firstBytes: firstChunk.audio.byteLength,
           ms: Date.now() - t0,
         })
-        async function* rest() {
-          yield first.value
+        async function* rest(): AsyncGenerator<typeof firstChunk, void, unknown> {
+          yield firstChunk
           let n = 1
           try {
             while (true) {
@@ -1826,7 +1830,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
               yield nres.value
             }
             log.info("voice_speak_stream_done", {
-              engine: first.value.engine,
+              engine: firstChunk.engine,
               chunks: n,
               ms: Date.now() - t0,
             })
@@ -1836,7 +1840,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           }
         }
         return {
-          engine: first.value.engine,
+          engine: firstChunk.engine,
           chunks: rest(),
         }
       } catch (e) {

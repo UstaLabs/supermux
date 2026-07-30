@@ -106,14 +106,13 @@ jobs:
       - name: Test
         run: bun test --isolate
 
-      # Non-blocking on purpose: 14 pre-existing type errors in files unrelated
-      # to any current work (src/core/push/encrypt.ts, src/relay/{apns,fcm}.ts,
-      # src/core/settings/app-config.ts and two test files). Flip this to a hard
-      # failure the moment those are cleared — a permanently-yellow check is only
-      # marginally better than no check.
-      - name: Typecheck (non-blocking until the existing 14 errors are fixed)
+      # Blocking. This lane started out continue-on-error against 14 pre-existing
+      # errors; those are fixed, so it gates now. Keep it that way — the errors it
+      # was carrying (WebCrypto BufferSource variance, a const-tuple cast, a
+      # generator element type widened across a closure) are all the kind that
+      # compile fine and fail at runtime.
+      - name: Typecheck
         run: bun run typecheck
-        continue-on-error: true
 
   # ── PWA journey: real browser + broker + shim, all on throwaway state ──────
   ui:
