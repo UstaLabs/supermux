@@ -71,6 +71,12 @@ FLOWS="$*"
 
 # test-broker.sh exports MUX_TEST_BASE_URL / MUX_TEST_PAIR_TOKEN / MUX_TEST_SESSION_ID
 # for whatever it runs, so the maestro invocation just re-shapes them into flow env.
+#
+# The native app never fetches the PWA shell, so skip building it: it costs ~30s
+# and needs src/web-app/node_modules, which a device lane otherwise has no reason
+# to install.
+export MUX_TEST_SKIP_WEB_BUILD="${MUX_TEST_SKIP_WEB_BUILD:-1}"
+
 exec scripts/test-broker.sh sh -c '
   set -eu
   host_addr="${MUX_TEST_HOST_ADDR:-10.0.2.2}"
