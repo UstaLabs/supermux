@@ -83,6 +83,26 @@ export function __resetAuthFailures(): void {}
 const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host"]
 const MAX_CLIENT_LOG_RING = 800
 
+// Vue routes and REST APIs share several top-level paths (/settings, /devices,
+// /usage, /proxies, /displays). API_PREFIXES keeps fetch() from those prefixes
+// from being swallowed by the SPA shell — but a browser document navigation
+// (refresh, open-in-new-tab, PWA relaunch) must still get index.html so
+// vue-router can mount. Sec-Fetch-Dest: document is the modern signal; Accept:
+// text/html covers older/non-browser clients that still mean "HTML page".
+// XHR/fetch default to Accept: */* and Sec-Fetch-Dest: empty, so they keep
+// hitting the JSON handlers.
+export function isDocumentNavigation(req: Request): boolean {
+  const dest = req.headers.get("sec-fetch-dest")
+  if (dest === "document") return true
+  if (dest != null && dest !== "") return false
+  const accept = req.headers.get("accept") ?? ""
+  return accept.includes("text/html")
+}
+
+function isApiPath(path: string): boolean {
+  return API_PREFIXES.some((p) => path === p || path.startsWith(p + "/"))
+}
+
 export type StoredClientLogEntry = {
   ts: number
   category: string
@@ -1174,7 +1194,7 @@ export class WebChannel implements Channel {
     // origin. SameSite=Lax already blocks cross-site POST cookies; this also
     // rejects a missing Origin. /internal/* carries its own secret (not in
     // API_PREFIXES); GET/WS are exempt.
-    if (MUTATING_METHODS.has(method) && API_PREFIXES.some((p) => path === p || path.startsWith(p + "/"))) {
+    if (MUTATING_METHODS.has(method) && isApiPath(path)) {
       // Bearer-authed native clients carry no ambient cookie, so CSRF doesn't
       // apply; the same-origin guard is only meaningful for cookie browsers.
       if (!authedViaBearer(req) && !sameOriginOk(
@@ -1186,15 +1206,19 @@ export class WebChannel implements Channel {
       }
     }
 
-    // static-serve: any GET that isn't an API path tries the static directory first.
-    // Cache-Control matters here because the broker is typically fronted by Cloudflare,
-    // which caches asset-shaped responses by default — without explicit headers, CF can
-    // serve a stale index.html or sw.js that points to old hashed bundles, and PWAs see
-    // no update. Hashed files in /assets/ are content-addressed (e.g. index-DaYj1-bp.js)
-    // and safe to cache forever; everything else (HTML shell, SW, manifest, registerSW)
-    // is an entry point and must revalidate every request. Resolution (disk-first, then
-    // embedded PWA for compiled binaries, then SPA fallback) lives in serveStatic.
-    if (method === "GET" && !API_PREFIXES.some((p) => path === p || path.startsWith(p + "/"))) {
+    // static-serve: GETs that aren't API calls try the static directory first.
+    // Document navigations also try static even when the path is under an API
+    // prefix, because several vue-router pages share those prefixes (see
+    // isDocumentNavigation). Cache-Control matters here because the broker is
+    // typically fronted by Cloudflare, which caches asset-shaped responses by
+    // default — without explicit headers, CF can serve a stale index.html or
+    // sw.js that points to old hashed bundles, and PWAs see no update. Hashed
+    // files in /assets/ are content-addressed (e.g. index-DaYj1-bp.js) and safe
+    // to cache forever; everything else (HTML shell, SW, manifest, registerSW)
+    // is an entry point and must revalidate every request. Resolution
+    // (disk-first, then embedded PWA for compiled binaries, then SPA fallback)
+    // lives in serveStatic.
+    if (method === "GET" && (!isApiPath(path) || isDocumentNavigation(req))) {
       const res = serveStatic({ staticDir: this.opts.staticDir, embedded: this.opts.staticEmbedded ?? {}, path, acceptEncoding: req.headers.get("accept-encoding") ?? undefined })
       if (res) return res
     }
