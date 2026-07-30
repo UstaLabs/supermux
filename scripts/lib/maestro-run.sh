@@ -38,4 +38,18 @@ find "$MUX_TEST_FLOWS" \( -name '*.yaml' -o -name '*.yml' \) -print | while IFS=
     "$f" > "$RENDERED/$(basename "$f")"
 done
 
-exec "$MAESTRO_BIN" test "$RENDERED"
+# On failure, capture what was actually on screen. maestro writes its own
+# hierarchy, but not when the run dies because the device went offline — and a
+# device lane you cannot see is a device lane you cannot fix.
+if "$MAESTRO_BIN" test "$RENDERED"; then
+  exit 0
+fi
+status=$?
+OUT="${MUX_TEST_STATE_DIR:-${TMPDIR:-/tmp}}/maestro-failure"
+mkdir -p "$OUT"
+adb shell uiautomator dump /sdcard/mux-ui.xml >/dev/null 2>&1 &&
+  adb pull /sdcard/mux-ui.xml "$OUT/hierarchy.xml" >/dev/null 2>&1 || true
+adb exec-out screencap -p > "$OUT/screen.png" 2>/dev/null || true
+adb shell dumpsys window 2>/dev/null | grep -m1 mCurrentFocus > "$OUT/focus.txt" || true
+echo "captured device state → $OUT" >&2
+exit "$status"
