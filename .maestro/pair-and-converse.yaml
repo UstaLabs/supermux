@@ -15,10 +15,23 @@ env:
   SESSION_ID: "00000000-0000-4000-8000-000000000001"
   PROMPT: maestro-journey
 ---
-- clearState
+# clearState REVOKES runtime permissions, so `adb install -g` is not enough — the
+# POST_NOTIFICATIONS dialog then opens over the app and every subsequent
+# assertion sees only the permission dialog. Grant at launch instead.
+- launchApp:
+    clearState: true
+    permissions:
+      all: allow
 
 # Pairing arrives as supermux://pair?t=…&base=… — the same link a QR scan opens.
+# The app is already running, so this lands in onNewIntent.
 - openLink: "supermux://pair?t=${PAIR_TOKEN}&base=${BASE_URL}"
+
+# Belt and braces: if the platform still raises a permission prompt, dismiss it
+# rather than let it swallow the rest of the flow.
+- tapOn:
+    text: "Allow"
+    optional: true
 
 # Paired and synced: the session list is on screen with the seeded session.
 - extendedWaitUntil:
