@@ -30,8 +30,8 @@ struct HostDot: View {
     }
 }
 
-/// Compact per-row host badge: identity dot + short host name. Rendered only in multi-host mode,
-/// dimmed when its host is offline.
+/// Compact per-row host badge: identity dot + short host name. Multi-host + "All" filter only
+/// (hidden when a specific host pill is selected); dimmed when its host is offline.
 struct HostBadge: View {
     let host: HostView
 

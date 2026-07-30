@@ -28,8 +28,8 @@ final class SidebarArchiveRevealState {
 }
 
 /// Sidebar / root list — the merged multi-host fleet (spec §5): grouped (PA + project) sessions
-/// across every paired host, a per-row host badge + an `All · <host…> · +` filter chip row (both
-/// shown only when ≥2 hosts are paired), and offline hosts rendered as greyed "last seen" groups.
+/// across every paired host, a per-row host badge (All filter only) + an `All · <host…> · +` filter
+/// chip row (both when ≥2 hosts are paired), and offline hosts as greyed "last seen" groups.
 /// Per-row reads (preview/agent state) and actions (settle/rename/mute) route to the session's OWNING
 /// `BrokerSession` via `Fleet`. Single-host is the unchanged path: no chips, no badges.
 ///
@@ -70,6 +70,8 @@ struct SessionsListView: View {
         let hostViews = fleet.hostViews
         let hostByRecord = Dictionary(hostViews.map { ($0.recordId, $0) }, uniquingKeysWith: { a, _ in a })
         let multiHost = fleet.multiHost
+        // When a specific host pill is selected, every row is already that host — hide the redundant badge.
+        let showRowHostBadge = multiHost && fleet.filter == nil
 
         return VStack(spacing: 0) {
             #if os(macOS)
@@ -92,11 +94,11 @@ struct SessionsListView: View {
                 .background(.bar)
                 Divider()
             }
-            list(owner: owner, hostByRecord: hostByRecord, multiHost: multiHost)
+            list(owner: owner, hostByRecord: hostByRecord, multiHost: multiHost, showRowHostBadge: showRowHostBadge)
         }
     }
 
-    private func list(owner: [String: String], hostByRecord: [String: HostView], multiHost: Bool) -> some View {
+    private func list(owner: [String: String], hostByRecord: [String: HostView], multiHost: Bool, showRowHostBadge: Bool) -> some View {
         List(selection: $selected) {
             Section {
                 Button(action: onNewSession) {
@@ -156,15 +158,15 @@ struct SessionsListView: View {
 
             if groupByProject {
                 ForEach(fleet.onlineGroups(), id: \.workdir) { group in
-                    onlineSection(group, owner: owner, hostByRecord: hostByRecord, multiHost: multiHost)
+                    onlineSection(group, owner: owner, hostByRecord: hostByRecord, showRowHostBadge: showRowHostBadge)
                 }
             } else {
-                flatSectionsView(owner: owner, hostByRecord: hostByRecord, multiHost: multiHost)
+                flatSectionsView(owner: owner, hostByRecord: hostByRecord, multiHost: multiHost, showRowHostBadge: showRowHostBadge)
             }
 
             // Offline hosts: greyed group per host with a "last seen" header (multi-host only).
             ForEach(fleet.offlineHostGroups(), id: \.host.recordId) { entry in
-                offlineSection(host: entry.host, sessions: entry.sessions, hostByRecord: hostByRecord)
+                offlineSection(host: entry.host, sessions: entry.sessions, hostByRecord: hostByRecord, showRowHostBadge: showRowHostBadge)
             }
         }
         .listStyle(.plain)
@@ -268,7 +270,8 @@ struct SessionsListView: View {
     @ViewBuilder private func flatSectionsView(
         owner: [String: String],
         hostByRecord: [String: HostView],
-        multiHost: Bool
+        multiHost: Bool,
+        showRowHostBadge: Bool
     ) -> some View {
         let online = flatOnlineSessions(owner: owner, multiHost: multiHost)
         // Built once per body evaluation, not once per lookup: `buildTaskSections` asks for the
@@ -287,7 +290,7 @@ struct SessionsListView: View {
             Section {
                 ForEach(pas, id: \.id) { session in
                     let recordId = owner[session.id] ?? ""
-                    let rowHost: HostView? = multiHost ? hostByRecord[recordId] : nil
+                    let rowHost: HostView? = showRowHostBadge ? hostByRecord[recordId] : nil
                     selectableRow(session, host: rowHost, reorderable: false)
                 }
                 .moveDisabled(true)
@@ -316,7 +319,7 @@ struct SessionsListView: View {
                     if flatSettledExpanded {
                         ForEach(section.sessions, id: \.id) { session in
                             let recordId = owner[session.id] ?? ""
-                            let rowHost: HostView? = multiHost ? hostByRecord[recordId] : nil
+                            let rowHost: HostView? = showRowHostBadge ? hostByRecord[recordId] : nil
                             selectableRow(session, host: rowHost, reorderable: false,
                                           projectTag: projectLabel(session: session, home: inferHomeDir(workdir: session.workdir)))
                         }
@@ -333,7 +336,7 @@ struct SessionsListView: View {
                 Section {
                     ForEach(rows, id: \.id) { session in
                         let recordId = owner[session.id] ?? ""
-                        let rowHost: HostView? = multiHost ? hostByRecord[recordId] : nil
+                        let rowHost: HostView? = showRowHostBadge ? hostByRecord[recordId] : nil
                         selectableRow(
                             session,
                             host: rowHost,
@@ -365,7 +368,7 @@ struct SessionsListView: View {
         _ group: SessionGroup,
         owner: [String: String],
         hostByRecord: [String: HostView],
-        multiHost: Bool
+        showRowHostBadge: Bool
     ) -> some View {
         let openSessions: [SessionInfo] = {
             if group.workdir == PA_GROUP_KEY { return group.sessions }
@@ -386,7 +389,7 @@ struct SessionsListView: View {
             if !collapsed.contains(group.workdir) {
                 ForEach(rows, id: \.id) { session in
                     let recordId = owner[session.id] ?? ""
-                    let rowHost: HostView? = multiHost ? hostByRecord[recordId] : nil
+                    let rowHost: HostView? = showRowHostBadge ? hostByRecord[recordId] : nil
                     selectableRow(
                         session,
                         host: rowHost,
@@ -418,7 +421,7 @@ struct SessionsListView: View {
                     if settledExpanded.contains(group.workdir) {
                         ForEach(settled, id: \.id) { session in
                             let recordId = owner[session.id] ?? ""
-                            let rowHost: HostView? = multiHost ? hostByRecord[recordId] : nil
+                            let rowHost: HostView? = showRowHostBadge ? hostByRecord[recordId] : nil
                             selectableRow(session, host: rowHost, reorderable: false)
                         }
                         .moveDisabled(true)
@@ -434,11 +437,12 @@ struct SessionsListView: View {
     @ViewBuilder private func offlineSection(
         host: HostView,
         sessions: [SessionInfo],
-        hostByRecord: [String: HostView]
+        hostByRecord: [String: HostView],
+        showRowHostBadge: Bool
     ) -> some View {
         Section {
             ForEach(sessions, id: \.id) { session in
-                let rowHost = hostByRecord[host.recordId]
+                let rowHost: HostView? = showRowHostBadge ? hostByRecord[host.recordId] : nil
                 selectableRow(session, host: rowHost, reorderable: false)
                     .opacity(0.55)
             }

@@ -493,6 +493,8 @@ fun SessionListScreen(
     val cs = MaterialTheme.colorScheme
     // Chips + badges appear only with 2+ paired hosts — the common single-host case stays uncluttered.
     val multiHost = hosts.size >= 2
+    // When a specific host pill is selected, every row is already that host — hide the redundant badge.
+    val showRowHostBadge = multiHost && hostFilter == null
     val hostByRecord = remember(hosts) { hosts.associateBy { it.recordId } }
     val offlineIds = remember(hosts) { hosts.filter { !it.online }.map { it.recordId }.toSet() }
 
@@ -881,7 +883,7 @@ fun SessionListScreen(
                             preview = lastBySession[s.id],
                             working = agentState[s.id]?.working == true,
                             bgOpen = agentState[s.id]?.bgOpen ?: 0,
-                            hostBadge = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
+                            hostBadge = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
                             openSwipeRowId = openSwipeRowId,
                             onOpenSwipeRowChange = { openSwipeRowId = it },
                             onClick = { openSession(s) },
@@ -911,7 +913,7 @@ fun SessionListScreen(
                                     preview = lastBySession[s.id],
                                     working = agentState[s.id]?.working == true,
                                     bgOpen = agentState[s.id]?.bgOpen ?: 0,
-                                    hostBadge = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
+                                    hostBadge = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
                                     projectTag = projectLabel(s, effectiveHome),
                                     openSwipeRowId = openSwipeRowId,
                                     onOpenSwipeRowChange = { openSwipeRowId = it },
@@ -948,7 +950,7 @@ fun SessionListScreen(
                                     preview = lastBySession[s.id],
                                     working = agentState[s.id]?.working == true,
                                     bgOpen = agentState[s.id]?.bgOpen ?: 0,
-                                    hostBadge = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
+                                    hostBadge = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
                                     projectTag = projectLabel(s, effectiveHome),
                                     isDragging = isDragging,
                                     interactionSource = rowInteraction,
@@ -1022,7 +1024,7 @@ fun SessionListScreen(
                                     preview = lastBySession[s.id],
                                     working = agentState[s.id]?.working == true,
                                     bgOpen = agentState[s.id]?.bgOpen ?: 0,
-                                    hostBadge = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
+                                    hostBadge = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
                                     openSwipeRowId = openSwipeRowId,
                                     onOpenSwipeRowChange = { openSwipeRowId = it },
                                     rowShape = groupedRowShape(
@@ -1051,7 +1053,7 @@ fun SessionListScreen(
                                         preview = lastBySession[s.id],
                                         working = agentState[s.id]?.working == true,
                                         bgOpen = agentState[s.id]?.bgOpen ?: 0,
-                                        hostBadge = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
+                                        hostBadge = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
                                         openSwipeRowId = openSwipeRowId,
                                         onOpenSwipeRowChange = { openSwipeRowId = it },
                                         isDragging = isDragging,
@@ -1117,7 +1119,7 @@ fun SessionListScreen(
                                         active = isActive,
                                         preview = lastBySession[s.id],
                                         working = false,
-                                        hostBadge = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
+                                        hostBadge = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
                                         openSwipeRowId = openSwipeRowId,
                                         onOpenSwipeRowChange = { openSwipeRowId = it },
                                         rowShape = groupedRowShape(
@@ -1149,7 +1151,7 @@ fun SessionListScreen(
                             s,
                             active = false,
                             preview = lastBySession[s.id],
-                            hostBadge = hostByRecord[host.recordId],
+                            hostBadge = if (showRowHostBadge) hostByRecord[host.recordId] else null,
                             openSwipeRowId = openSwipeRowId,
                             onOpenSwipeRowChange = { openSwipeRowId = it },
                             onClick = { onOpen(s.id) },

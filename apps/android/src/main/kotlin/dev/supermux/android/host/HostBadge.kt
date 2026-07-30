@@ -72,7 +72,7 @@ fun HostDot(colorIndex: Int, size: Dp = 8.dp, modifier: Modifier = Modifier) {
     Box(modifier.size(size).clip(CircleShape).background(hostDotColor(colorIndex)))
 }
 
-/** Compact per-row host badge: identity dot + short host name. Rendered only in multi-host mode. */
+/** Compact per-row host badge: identity dot + short host name. Multi-host + "All" filter only. */
 @Composable
 fun HostBadge(host: HostView, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
