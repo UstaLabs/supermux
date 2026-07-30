@@ -23,8 +23,11 @@ struct NewSessionView: View {
     let fleet: Fleet
     var onSpawned: (String) -> Void
 
-    @State private var projects: [String] = []
+    /// Broker-known project paths (unordered). UI order is derived via recency below.
+    @State private var knownProjects: [String] = []
     @State private var workdir: String
+    /// User explicitly chose a path (or restored a draft with one) — freezes recency follow.
+    @State private var workdirTouched: Bool
     @State private var agent: String
     @State private var model: String?
     @State private var models: [ModelInfo] = []
@@ -107,7 +110,10 @@ struct NewSessionView: View {
         _agent = State(initialValue: resolvedAgent)
         _model = State(initialValue: draft?.model ?? store.prefs.models[resolvedAgent])
         _reasoningLevel = State(initialValue: draft?.reasoningLevel ?? store.prefs.reasoningLevels[resolvedAgent])
-        _workdir = State(initialValue: draft?.workdir ?? store.draft.workdir ?? "")
+        let restoredWorkdir = draft?.workdir ?? store.draft.workdir ?? ""
+        _workdir = State(initialValue: restoredWorkdir)
+        // Web/Android: restoring a draft path freezes recency so we don't overwrite it.
+        _workdirTouched = State(initialValue: !restoredWorkdir.isEmpty)
         _useWorktree = State(initialValue: store.draft.useWorktree)
         _baseBranch = State(initialValue: store.draft.baseBranch)
         // The real glossary/transcribe closures need `broker`, wired in `.task` once the view
@@ -117,6 +123,45 @@ struct NewSessionView: View {
             context: ComposerContext(glossary: { [] }, cleanupTranscript: nil, audioFallbackTranscribe: nil),
             initialDraft: draft?.draftPayload?.text ?? store.draft.text
         ))
+    }
+
+    /// Distinct project paths from sessions, most-recently-active first (message timestamp).
+    /// Shared KMP `DefaultProject` — same order web/Android use for the launcher default.
+    private var recentProjectPaths: [String] {
+        let sorted = sessionsByRecency(sessions: broker.sessions) { s in
+            broker.messages[s.id]?.last?.ts ?? ""
+        }
+        return recentWorkdirs(sessionsNewestFirst: sorted)
+    }
+
+    /// Picker list: recently-active projects first, then remaining known projects.
+    private var projects: [String] {
+        orderProjectsByRecency(recent: recentProjectPaths, known: knownProjects)
+    }
+
+    /// True once the user is typing / attaching — freezes recency follow (web composeStarted).
+    private var isComposing: Bool {
+        !composer.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !composer.pending.isEmpty
+    }
+
+    /// Fingerprint of recency order so SwiftUI can re-run default selection as messages hydrate.
+    private var recencyKey: String {
+        recentProjectPaths.joined(separator: "\u{1e}")
+    }
+
+    private func applyDefaultProject() {
+        workdir = chooseDefaultProject(
+            current: workdir,
+            recent: recentProjectPaths,
+            picked: workdirTouched,
+            composing: isComposing
+        )
+    }
+
+    private func pickWorkdir(_ path: String) {
+        workdirTouched = true
+        workdir = path
     }
 
     var body: some View {
@@ -143,7 +188,7 @@ struct NewSessionView: View {
                 model = nil
             }
             // Never show or submit host A's cached choices while host B is loading.
-            projects = []
+            knownProjects = []
             hostAgents = []
             models = []
             reasoningLevels = []
@@ -161,7 +206,7 @@ struct NewSessionView: View {
             ))
             await composer.loadGlossary()
             let loadedProjects = await broker.projects()
-            projects = loadedProjects
+            knownProjects = loadedProjects
             // The selected host's installed agents drive the agent menu; keep `agent` valid for it.
             let installed = (await broker.agentStatuses()).filter { $0.installed }.map { $0.kind }
             hostAgents = installed
@@ -169,11 +214,21 @@ struct NewSessionView: View {
             // Debug: force the initial project for headless screenshots (e.g. an eligible repo).
             if let forced = ProcessInfo.processInfo.environment["SM_WORKDIR"], !forced.isEmpty {
                 workdir = forced
-            } else if workdir.isEmpty || (workdir != "~" && !loadedProjects.contains(workdir)) {
-                // A persisted project from another host must never be spawned on this one.
-                workdir = loadedProjects.first ?? "~"
+                workdirTouched = true
+            } else {
+                // Invalid host-local paths (e.g. draft workdir from another host) are corrected
+                // without freezing — only an explicit picker choice sets workdirTouched.
+                let known = Set(projects)
+                if workdir.isEmpty || (workdir != "~" && !known.contains(workdir) && !recentProjectPaths.contains(workdir)) {
+                    workdir = recentProjectPaths.first ?? knownProjects.first ?? "~"
+                }
+                applyDefaultProject()
             }
         }
+        // Follow most-recently-used project as session/message data hydrates; freeze once the
+        // user engages (picked a path or started composing) — web/Android chooseDefaultProject.
+        .onChange(of: recencyKey) { _, _ in applyDefaultProject() }
+        .onChange(of: isComposing) { _, _ in applyDefaultProject() }
         .task {
             // Debug: auto-open a launcher picker for headless screenshots.
             guard let which = ProcessInfo.processInfo.environment["SM_OPEN_PICKER"] else { return }
@@ -247,7 +302,7 @@ struct NewSessionView: View {
                         broker: broker,
                         projects: projects,
                         current: workdir,
-                        onPick: { workdir = $0 },
+                        onPick: { pickWorkdir($0) },
                         onClose: { projectSearch = false }
                     )
                 }
@@ -259,7 +314,7 @@ struct NewSessionView: View {
                 broker: broker,
                 projects: projects,
                 current: workdir,
-                onPick: { workdir = $0 },
+                onPick: { pickWorkdir($0) },
                 onClose: { projectSearch = false }
             )
         }

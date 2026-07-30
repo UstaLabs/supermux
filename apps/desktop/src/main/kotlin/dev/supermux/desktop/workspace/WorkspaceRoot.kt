@@ -607,6 +607,7 @@ fun WorkspaceRoot(
                         sessions = activeHostSessions,
                         home = home,
                         onBack = { ui.launcherOpen = false; ui.launcherDraftId = null },
+                        lastBySession = lastBySession,
                         // Host-global lookups + spawn target the ACTIVE host (`hostApp`); the host
                         // picker below switches it. Single-host → [app].
                         loadProjects = { hostApp.listProjects() },
