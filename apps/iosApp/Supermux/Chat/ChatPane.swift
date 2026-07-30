@@ -37,6 +37,12 @@ struct ChatPane: View {
     @State private var reasoningSheet = false
     @State private var reasoning: ReasoningResponse?
 
+    /// Global chat density. Observed HERE (not only inside the Equatable transcript) so a Detail
+    /// menu change from WorkspaceDetail / ChatView invalidates ChatPane, which re-creates
+    /// SessionTranscript with a new `chatDetailRaw` and breaks the equatable gate. Internal
+    /// @AppStorage alone does not reliably re-render an `.equatable()` child on macOS.
+    @AppStorage("chatDetailLevel") private var chatDetailRaw: String = "medium"
+
     // MARK: - Init
 
     init(broker: BrokerSession, session: SessionInfo,
@@ -87,11 +93,12 @@ struct ChatPane: View {
 
     var body: some View {
         // The transcript is a *separate, Equatable* view. Composer keystrokes mutate this view's
-        // composer @State and re-run `body`, but `.equatable()` (keyed on session.id) makes
-        // SwiftUI skip re-evaluating the transcript on those re-runs — so the message list is NOT
-        // rebuilt (no buildChatBlocks, no List re-diff) on each keypress, which is what keeps typing
-        // fast in long chats. New messages still update it directly via @Observable (BrokerSession).
-        SessionTranscript(broker: broker, session: session)
+        // composer @State and re-run `body`, but `.equatable()` (keyed on session.id + detail)
+        // makes SwiftUI skip re-evaluating the transcript on those re-runs — so the message list is
+        // NOT rebuilt (no List re-diff) on each keypress, which is what keeps typing fast in long
+        // chats. New messages still update it directly via @Observable (BrokerSession).
+        // Detail density is an equatable input so Low/Medium/High flips re-render tool rows.
+        SessionTranscript(broker: broker, session: session, chatDetailRaw: chatDetailRaw)
             .equatable()
             // Tap anywhere on the transcript to dismiss the keyboard ("tap outside"). Applied here,
             // not inside SessionTranscript, so the transcript stays free of composer focus state and
@@ -448,14 +455,15 @@ struct MacTranscriptScrollView<Content: View>: View {
 struct SessionTranscript: View, Equatable {
     let broker: BrokerSession
     let session: SessionInfo
-    /// Global chat density (UserDefaults; web `cmux:chat-detail` parity). Observed so Low↔Medium flips re-render.
-    @AppStorage("chatDetailLevel") private var chatDetailRaw: String = "medium"
+    /// Global chat density (web `cmux:chat-detail` parity). Passed in from ChatPane so it is
+    /// part of the Equatable gate — an internal @AppStorage alone does not pierce `.equatable()`.
+    let chatDetailRaw: String
 
-    // Only the session identity gates parent-driven re-evaluation: the content is keyed by
-    // `session.id` and refreshed via @Observable, so nothing else here needs comparing.
-    // chatDetailRaw is self-invalidating via @AppStorage (not compared here).
+    // Session identity + detail density gate parent-driven re-evaluation. Transcript content is
+    // refreshed via @Observable (BrokerSession / SessionChatBuffer), so messages/activity do not
+    // need comparing here. Composer-driven ChatPane re-runs still skip when both are unchanged.
     static func == (lhs: SessionTranscript, rhs: SessionTranscript) -> Bool {
-        lhs.session.id == rhs.session.id
+        lhs.session.id == rhs.session.id && lhs.chatDetailRaw == rhs.chatDetailRaw
     }
 
     /// Per-session buffer (not the flat `messages`/`activity` maps) so other sessions' traffic
