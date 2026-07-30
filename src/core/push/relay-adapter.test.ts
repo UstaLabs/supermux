@@ -17,11 +17,16 @@ test("seals the payload and POSTs {routingToken, ciphertext} to the relay", asyn
   const s = store(); s.putNative("phone", "ios", "rt-1", await deviceKey())
   let captured: any
   const client = createRelayClient({ store: s, relayUrl: "https://relay.test", fetchImpl: async (_u, init) => { captured = JSON.parse((init as any).body); return new Response('{"ok":true}') } })
-  const r = await client.sendToDevice("phone", { session: "s", text: "hi", ts: "t" })
+  // A long, distinctive plaintext on purpose. The original asserted the
+  // ciphertext did not contain "hi" — but ciphertext is base64, and a 2-char
+  // needle turns up in a ~200-char base64 string roughly 5% of the time by pure
+  // chance, so the test failed at random with nothing wrong.
+  const secret = "plaintext-must-not-appear-in-ciphertext"
+  const r = await client.sendToDevice("phone", { session: "s", text: secret, ts: "t" })
   expect(r).toEqual({ ok: true })
   expect(captured.routingToken).toBe("rt-1")
   expect(typeof captured.ciphertext).toBe("string")
-  expect(captured.ciphertext).not.toContain("hi")
+  expect(captured.ciphertext).not.toContain(secret)
 })
 
 test("relay 'gone' prunes the device row", async () => {

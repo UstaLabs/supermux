@@ -29,6 +29,21 @@ adb devices | awk 'NR>1 && $2=="device"' | grep -q . || {
   echo "no attached adb device — boot an emulator first" >&2; exit 2
 }
 
+# A freshly-booted CI emulator reports `device` before it can actually serve adb
+# transports: maestro then dies mid-flow with "device offline". Wait for the
+# platform to say it finished booting AND for a trivial shell round-trip to work.
+adb wait-for-device
+i=0
+while [ "$i" -lt 120 ]; do
+  if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] \
+     && adb shell true >/dev/null 2>&1; then
+    break
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+[ "$i" -lt 120 ] || { echo "device never finished booting" >&2; exit 1; }
+
 APK="apps/android/build/outputs/apk/debug/android-debug.apk"
 if [ ! -f "$APK" ] || [ "${MUX_TEST_REBUILD_APK:-0}" = "1" ]; then
   echo "building debug APK…" >&2
