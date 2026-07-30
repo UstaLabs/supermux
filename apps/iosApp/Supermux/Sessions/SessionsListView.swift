@@ -27,26 +27,15 @@ final class SidebarArchiveRevealState {
     }
 }
 
-private enum SidebarRowPosition {
-    case only, first, middle, last
-
-    static func at(_ index: Int, count: Int) -> SidebarRowPosition {
-        if count == 1 { return .only }
-        if index == 0 { return .first }
-        if index == count - 1 { return .last }
-        return .middle
-    }
-
-    var roundsTop: Bool { self == .only || self == .first }
-    var roundsBottom: Bool { self == .only || self == .last }
-    var hasDivider: Bool { self == .first || self == .middle }
-}
-
 /// Sidebar / root list — the merged multi-host fleet (spec §5): grouped (PA + project) sessions
 /// across every paired host, a per-row host badge + an `All · <host…> · +` filter chip row (both
 /// shown only when ≥2 hosts are paired), and offline hosts rendered as greyed "last seen" groups.
 /// Per-row reads (preview/agent state) and actions (settle/rename/mute) route to the session's OWNING
 /// `BrokerSession` via `Fleet`. Single-host is the unchanged path: no chips, no badges.
+///
+/// Interaction: whole-row free drag reorder (Android / desktop / web parity) via onDrag + drop
+/// with a live working order — not List.onMove/edit mode. macOS: press+drag; iOS: long-press
+/// drag. Settled / PA / offline rows stay fixed.
 struct SessionsListView: View {
     let fleet: Fleet
     @Binding var selected: String?
@@ -73,9 +62,8 @@ struct SessionsListView: View {
     @State private var groupByProject = UserDefaults.standard.object(forKey: "cmux:group-by-project") as? Bool ?? false
     @State private var settledExpanded: Set<String> = []
     @State private var flatSettledExpanded = false
-    #if os(iOS)
-    @State private var listEditMode: EditMode = .inactive
-    #endif
+    /// Live whole-row drag reorder (section-scoped). See `SessionSectionReorderState`.
+    @State private var reorderState = SessionSectionReorderState()
 
     var body: some View {
         let owner = fleet.sessionHost
@@ -113,57 +101,57 @@ struct SessionsListView: View {
             Section {
                 Button(action: onNewSession) {
                     HStack(spacing: 12) {
-                        Image(systemName: "plus.circle.fill").font(.title2).foregroundStyle(Theme.teal)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Start a new session").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                            Text("Start a project and send your first message")
-                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Image(systemName: "plus")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(Theme.teal)
+                            .frame(width: 28, height: 28)
+                            .background(Theme.teal.opacity(0.14), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("New session")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                            Text("Pick a project and start chatting")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         }
                         Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.tertiary)
                     }
-                    .smMacSidebarCard(position: .only, accented: true)
+                    .smSessionRowSurface(selected: false, accented: true)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("new-session")
                 .moveDisabled(true)
                 .deleteDisabled(true)
-                #if os(macOS)
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
-                #endif
+                .smSessionListRowChrome(spacing: EdgeInsets(top: 6, leading: 0, bottom: 4, trailing: 0))
             }
 
             Section {
-                Toggle(isOn: Binding(
-                    get: { groupByProject },
-                    set: {
-                        groupByProject = $0
-                        UserDefaults.standard.set($0, forKey: "cmux:group-by-project")
-                    }
-                )) {
+                HStack(spacing: 10) {
                     Label("Group by project", systemImage: "folder")
+                        .font(.subheadline.weight(.medium))
+                        .labelStyle(.titleAndIcon)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    Toggle("", isOn: Binding(
+                        get: { groupByProject },
+                        set: {
+                            groupByProject = $0
+                            UserDefaults.standard.set($0, forKey: "cmux:group-by-project")
+                        }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .accessibilityLabel("Group by project")
+                    .accessibilityIdentifier("group-by-project")
                 }
-                .toggleStyle(.switch)
-                .accessibilityLabel("Group by project")
-                .accessibilityIdentifier("group-by-project")
                 .moveDisabled(true)
                 .deleteDisabled(true)
-                #if os(iOS)
-                Button {
-                    withAnimation {
-                        listEditMode = listEditMode == .active ? .inactive : .active
-                    }
-                } label: {
-                    Label(
-                        listEditMode == .active ? "Done reordering" : "Reorder sessions",
-                        systemImage: listEditMode == .active ? "checkmark" : "arrow.up.arrow.down"
-                    )
-                }
-                .accessibilityIdentifier("reorder-sessions")
-                .moveDisabled(true)
-                .deleteDisabled(true)
-                #endif
+                .smSessionListRowChrome(spacing: EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
             }
 
             if groupByProject {
@@ -179,18 +167,11 @@ struct SessionsListView: View {
                 offlineSection(host: entry.host, sessions: entry.sessions, hostByRecord: hostByRecord)
             }
         }
-        #if os(macOS)
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(Color.smGroupedBackground)
-        .contentMargins(.horizontal, 12, for: .scrollContent)
-        #else
-        .smInsetGroupedListStyle()
-        // iOS List only allows onMove (system drag ghost) in edit mode. Toggle via
-        // the "Reorder" control in the group-by section so selection stays normal.
-        .environment(\.editMode, $listEditMode)
-        #endif
         #if os(macOS)
+        .contentMargins(.horizontal, 10, for: .scrollContent)
         // The reveal must not participate in scroll layout on AppKit. The overlay also keeps a
         // fixed frame while its contents translate into view, so rubber-banding never changes
         // the List's geometry.
@@ -198,6 +179,7 @@ struct SessionsListView: View {
             SidebarArchiveRevealBar(state: archiveReveal, onArchived: onArchived)
         }
         #else
+        .contentMargins(.horizontal, 12, for: .scrollContent)
         .safeAreaInset(edge: .top, spacing: 0) {
             SidebarArchiveRevealBar(state: archiveReveal, onArchived: onArchived)
         }
@@ -218,6 +200,7 @@ struct SessionsListView: View {
         }
         .onAppear { fleet.refreshArchived() }
         .onChange(of: selected) { _, id in
+            if reorderState.isDragging { reorderState.cancel() }
             guard let id,
                   let s = fleet.sessions.first(where: { $0.id == id }),
                   (s.userStatus ?? "") == "draft"
@@ -270,6 +253,11 @@ struct SessionsListView: View {
         }
     }
 
+    private func commitReorder(_ orderedIds: [String]) {
+        guard !orderedIds.isEmpty else { return }
+        onReorder(orderedIds)
+    }
+
     /// Identifiable wrapper so `.sheet(item:)` can present continue for a session row.
     private struct ContinueSheetItem: Identifiable {
         let session: SessionInfo
@@ -297,36 +285,39 @@ struct SessionsListView: View {
         let pas = sessionsByUserOrder(sessions: online.filter { $0.role == "personal_assistant" })
         if !pas.isEmpty {
             Section {
-                ForEach(Array(pas.enumerated()), id: \.element.id) { index, session in
+                ForEach(pas, id: \.id) { session in
                     let recordId = owner[session.id] ?? ""
                     let rowHost: HostView? = multiHost ? hostByRecord[recordId] : nil
-                    let position = SidebarRowPosition.at(index, count: pas.count)
-                    selectableRow(session, host: rowHost, position: position)
+                    selectableRow(session, host: rowHost, reorderable: false)
                 }
+                .moveDisabled(true)
+                .deleteDisabled(true)
             } header: {
-                Text("Personal Assistants")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                sessionSectionHeader("Personal Assistants")
             }
         }
         ForEach(sections, id: \.key) { section in
             if section.key == .settled {
                 Section {
                     Button {
-                        flatSettledExpanded.toggle()
+                        withAnimation(.snappy(duration: 0.2)) { flatSettledExpanded.toggle() }
                     } label: {
                         Text(flatSettledExpanded
                              ? "Hide \(section.sessions.count) settled"
                              : "Show \(section.sessions.count) settled")
-                            .font(.caption)
+                            .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 4)
                     }
+                    .buttonStyle(.plain)
+                    .moveDisabled(true)
+                    .deleteDisabled(true)
                     if flatSettledExpanded {
-                        ForEach(Array(section.sessions.enumerated()), id: \.element.id) { index, session in
+                        ForEach(section.sessions, id: \.id) { session in
                             let recordId = owner[session.id] ?? ""
                             let rowHost: HostView? = multiHost ? hostByRecord[recordId] : nil
-                            let position = SidebarRowPosition.at(index, count: section.sessions.count)
-                            selectableRow(session, host: rowHost, position: position,
+                            selectableRow(session, host: rowHost, reorderable: false,
                                           projectTag: projectLabel(session: session, home: inferHomeDir(workdir: session.workdir)))
                         }
                         .moveDisabled(true)
@@ -334,25 +325,28 @@ struct SessionsListView: View {
                     }
                 }
             } else {
+                // Section key string is stable for live-order scope (flat: task status).
+                let sectionKey = "flat:\(section.key.wire)"
+                let base = section.sessions
+                let rows = reorderState.displaySessions(sectionKey: sectionKey, fallback: base)
+                let ids = base.map(\.id)
                 Section {
-                    ForEach(Array(section.sessions.enumerated()), id: \.element.id) { index, session in
+                    ForEach(rows, id: \.id) { session in
                         let recordId = owner[session.id] ?? ""
                         let rowHost: HostView? = multiHost ? hostByRecord[recordId] : nil
-                        let position = SidebarRowPosition.at(index, count: section.sessions.count)
-                        selectableRow(session, host: rowHost, position: position,
-                                      projectTag: projectLabel(session: session, home: inferHomeDir(workdir: session.workdir)))
-                    }
-                    // onMove must attach to DynamicViewContent before View-erasing modifiers.
-                    .onMove { indices, newOffset in
-                        var ids = section.sessions.map(\.id)
-                        ids.move(fromOffsets: indices, toOffset: newOffset)
-                        onReorder(ids)
+                        selectableRow(
+                            session,
+                            host: rowHost,
+                            reorderable: true,
+                            projectTag: projectLabel(session: session, home: inferHomeDir(workdir: session.workdir)),
+                            sectionKey: sectionKey,
+                            sectionIds: ids
+                        )
                     }
                     .deleteDisabled(true)
+                    .moveDisabled(true)
                 } header: {
-                    Text(section.label.uppercased())
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                    sessionSectionHeader(section.label)
                 }
             }
         }
@@ -367,7 +361,7 @@ struct SessionsListView: View {
         return shown
     }
 
-        @ViewBuilder private func onlineSection(
+    @ViewBuilder private func onlineSection(
         _ group: SessionGroup,
         owner: [String: String],
         hostByRecord: [String: HostView],
@@ -381,40 +375,54 @@ struct SessionsListView: View {
         }()
         let settled = group.sections.first(where: { $0.key == .settled })?.sessions ?? []
         let activeCount = group.workdir == PA_GROUP_KEY ? group.sessions.count : openSessions.count
+        let canReorderGroup = group.workdir != PA_GROUP_KEY
+        let sectionKey = "group:\(group.workdir)"
+        let baseOpen = openSessions
+        let rows = canReorderGroup
+            ? reorderState.displaySessions(sectionKey: sectionKey, fallback: baseOpen)
+            : baseOpen
+        let ids = baseOpen.map(\.id)
         Section {
             if !collapsed.contains(group.workdir) {
-                ForEach(Array(openSessions.enumerated()), id: \.element.id) { index, session in
+                ForEach(rows, id: \.id) { session in
                     let recordId = owner[session.id] ?? ""
                     let rowHost: HostView? = multiHost ? hostByRecord[recordId] : nil
-                    let position = SidebarRowPosition.at(index, count: openSessions.count)
-                    selectableRow(session, host: rowHost, position: position)
-                }
-                // onMove must attach to DynamicViewContent before View-erasing modifiers.
-                .onMove { indices, newOffset in
-                    guard group.workdir != PA_GROUP_KEY else { return }
-                    var ids = openSessions.map(\.id)
-                    ids.move(fromOffsets: indices, toOffset: newOffset)
-                    onReorder(ids)
+                    selectableRow(
+                        session,
+                        host: rowHost,
+                        reorderable: canReorderGroup,
+                        sectionKey: sectionKey,
+                        sectionIds: ids
+                    )
                 }
                 .deleteDisabled(true)
-                .moveDisabled(group.workdir == PA_GROUP_KEY)
+                .moveDisabled(true)
                 if !settled.isEmpty {
                     Button {
-                        if settledExpanded.contains(group.workdir) { settledExpanded.remove(group.workdir) }
-                        else { settledExpanded.insert(group.workdir) }
+                        withAnimation(.snappy(duration: 0.2)) {
+                            if settledExpanded.contains(group.workdir) { settledExpanded.remove(group.workdir) }
+                            else { settledExpanded.insert(group.workdir) }
+                        }
                     } label: {
                         Text(settledExpanded.contains(group.workdir)
                              ? "Hide \(settled.count) settled"
                              : "Show \(settled.count) settled")
-                            .font(.caption)
+                            .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 4)
                     }
+                    .buttonStyle(.plain)
+                    .moveDisabled(true)
+                    .deleteDisabled(true)
                     if settledExpanded.contains(group.workdir) {
                         ForEach(settled, id: \.id) { session in
                             let recordId = owner[session.id] ?? ""
                             let rowHost: HostView? = multiHost ? hostByRecord[recordId] : nil
-                            selectableRow(session, host: rowHost, position: .middle)
+                            selectableRow(session, host: rowHost, reorderable: false)
                         }
+                        .moveDisabled(true)
+                        .deleteDisabled(true)
                     }
                 }
             }
@@ -429,126 +437,167 @@ struct SessionsListView: View {
         hostByRecord: [String: HostView]
     ) -> some View {
         Section {
-            ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
+            ForEach(sessions, id: \.id) { session in
                 let rowHost = hostByRecord[host.recordId]
-                let position = SidebarRowPosition.at(index, count: sessions.count)
-                selectableRow(session, host: rowHost, position: position)
-                    .opacity(0.5)
+                selectableRow(session, host: rowHost, reorderable: false)
+                    .opacity(0.55)
             }
+            .moveDisabled(true)
+            .deleteDisabled(true)
         } header: {
             offlineHeader(host)
         }
     }
 
+    private func sessionSectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .tracking(0.4)
+            .textCase(nil)
+    }
+
     private func header(_ group: SessionGroup, count: Int? = nil) -> some View {
         Button { toggle(group.workdir) } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 Image(systemName: collapsed.contains(group.workdir) ? "chevron.right" : "chevron.down")
-                    .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
-                Text(group.label).textCase(nil)
-                Spacer()
-                Text("\(count ?? group.sessions.count)").foregroundStyle(.tertiary)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 10)
+                Text(group.label)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .tracking(0.3)
+                    .textCase(nil)
+                Spacer(minLength: 0)
+                Text("\(count ?? group.sessions.count)")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Color.primary.opacity(0.05), in: Capsule())
             }
             .contentShape(Rectangle())
+            .padding(.vertical, 2)
         }
         .buttonStyle(.plain)
     }
 
     /// Greyed header for an offline host group: dot + name + a relative "last seen" (spec §5).
     private func offlineHeader(_ host: HostView) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             HostDot(colorIndex: host.colorIndex, size: 8)
-            Text(host.displayLabel).textCase(nil).foregroundStyle(.secondary)
+            Text(host.displayLabel)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .textCase(nil)
             let seen = FleetModelKt.formatLastSeen(nowMs: Int64(Date().timeIntervalSince1970 * 1000),
                                                    lastSeenAt: host.lastSeenAt)
             Text(seen.isEmpty ? "offline" : "offline · \(seen)")
-                .font(.caption2).foregroundStyle(.tertiary)
-            Spacer()
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            Spacer(minLength: 0)
         }
-        .opacity(0.85)
+        .opacity(0.9)
     }
 
-    @ViewBuilder private func row(_ s: SessionInfo, host: HostView?, position: SidebarRowPosition, projectTag: String? = nil) -> some View {
+    @ViewBuilder private func row(
+        _ s: SessionInfo,
+        host: HostView?,
+        projectTag: String? = nil,
+        reorderable: Bool = false
+    ) -> some View {
         let b = fleet.broker(for: s.id)
         let muted = s.mute?.boolValue ?? false
-        SessionRow(session: s, preview: b?.messages[s.id]?.last?.text,
-                   phase: b?.agentPhase[s.id],
-                   working: b?.agentWorking[s.id] == true,
-                   bgOpen: b?.agentBgOpen[s.id] ?? 0, muted: muted, host: host,
-                   projectTag: projectTag)
-            .smMacSidebarCard(position: position, selected: selected == s.id)
-            .contextMenu {
-                #if os(macOS)
-                if (s.userStatus ?? "in_progress") != "draft" {
-                    Button { openWindow(id: "session", value: s.id) } label: {
-                        Label("Open in New Window", systemImage: "macwindow.badge.plus")
-                    }
-                    Divider()
+        let previewEntry = b?.messages[s.id]?.last
+        SessionRow(
+            session: s,
+            preview: previewEntry?.text,
+            previewTs: previewEntry?.ts,
+            phase: b?.agentPhase[s.id],
+            working: b?.agentWorking[s.id] == true,
+            bgOpen: b?.agentBgOpen[s.id] ?? 0,
+            muted: muted,
+            host: host,
+            projectTag: projectTag,
+            selected: selected == s.id,
+            showsDragHint: reorderable,
+            isDragging: reorderState.draggingId == s.id
+        )
+        .contextMenu {
+            #if os(macOS)
+            if (s.userStatus ?? "in_progress") != "draft" {
+                Button { openWindow(id: "session", value: s.id) } label: {
+                    Label("Open in New Window", systemImage: "macwindow.badge.plus")
                 }
-                #endif
-                if (s.status ?? "") == "archived" || (s.userStatus ?? "") == "settled" {
-                    Button { b?.resume(s.id); fleet.refreshArchived() } label: {
-                        Label("Resume", systemImage: "arrow.uturn.backward")
-                    }
-                    Button { continueTarget = s } label: {
-                        Label("Continue in new conversation", systemImage: "bubble.left.and.text.bubble.right")
-                    }
-                } else if (s.userStatus ?? "") == "draft" {
-                    Button { onOpenDraft(s.id) } label: {
-                        Label("Open draft", systemImage: "pencil")
-                    }
-                    Button(role: .destructive) { killTarget = s } label: {
-                        Label("Discard", systemImage: "trash")
-                    }
-                } else {
-                    Button { b?.toggleMute(s) } label: {
-                        Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
-                    }
-                    Button { renameText = s.name; renameTarget = s } label: { Label("Rename", systemImage: "pencil") }
-                    Button { continueTarget = s } label: {
-                        Label("Continue in new conversation", systemImage: "bubble.left.and.text.bubble.right")
-                    }
-                    Button(role: .destructive) { killTarget = s } label: { Label("Settle", systemImage: "checkmark.circle") }
-                }
+                Divider()
             }
+            #endif
+            if (s.status ?? "") == "archived" || (s.userStatus ?? "") == "settled" {
+                Button { b?.resume(s.id); fleet.refreshArchived() } label: {
+                    Label("Resume", systemImage: "arrow.uturn.backward")
+                }
+                Button { continueTarget = s } label: {
+                    Label("Continue in new conversation", systemImage: "bubble.left.and.text.bubble.right")
+                }
+            } else if (s.userStatus ?? "") == "draft" {
+                Button { onOpenDraft(s.id) } label: {
+                    Label("Open draft", systemImage: "pencil")
+                }
+                Button(role: .destructive) { killTarget = s } label: {
+                    Label("Discard", systemImage: "trash")
+                }
+            } else {
+                Button { b?.toggleMute(s) } label: {
+                    Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
+                }
+                Button { renameText = s.name; renameTarget = s } label: { Label("Rename", systemImage: "pencil") }
+                Button { continueTarget = s } label: {
+                    Label("Continue in new conversation", systemImage: "bubble.left.and.text.bubble.right")
+                }
+                Button(role: .destructive) { killTarget = s } label: { Label("Settle", systemImage: "checkmark.circle") }
+            }
+        }
     }
 
-    /// AppKit's `List(selection:)` does not emit a selection change when the already-selected
-    /// row is clicked. Make the row a real button on macOS so callers can still react to that
-    /// click (notably, leaving the New Session workspace), while retaining native list selection.
+    /// Selection without a full-row Button (that blocked drag). Free drag uses onDrag +
+    /// DropDelegate for Android/desktop/web-style whole-row reorder within a section.
     @ViewBuilder private func selectableRow(
         _ s: SessionInfo,
         host: HostView?,
-        position: SidebarRowPosition,
-        projectTag: String? = nil
+        reorderable: Bool,
+        projectTag: String? = nil,
+        sectionKey: String = "",
+        sectionIds: [String] = []
     ) -> some View {
-        #if os(macOS)
-        Button {
-            if (s.userStatus ?? "") == "draft" {
-                onOpenDraft(s.id)
-            } else {
-                selected = s.id
-                onSessionSelected(s.id)
-            }
-        } label: {
-            row(s, host: host, position: position, projectTag: projectTag)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .tag(s.id)
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            swipeButtons(for: s)
-        }
-        #else
-        row(s, host: host, position: position, projectTag: projectTag)
+        let ids = sectionIds.isEmpty ? [s.id] : sectionIds
+        row(s, host: host, projectTag: projectTag, reorderable: reorderable)
+            .contentShape(Rectangle())
+            .opacity(reorderState.draggingId == s.id ? 0.35 : 1)
+            .simultaneousGesture(TapGesture().onEnded {
+                guard !reorderState.isDragging else { return }
+                if (s.userStatus ?? "") == "draft" {
+                    onOpenDraft(s.id)
+                } else {
+                    selected = s.id
+                    onSessionSelected(s.id)
+                }
+            })
+            .modifier(SessionRowDragReorderModifier(
+                enabled: reorderable && !sectionKey.isEmpty,
+                sessionId: s.id,
+                sessionName: s.name,
+                sectionKey: sectionKey,
+                sectionIds: ids,
+                state: reorderState,
+                onCommit: commitReorder
+            ))
             .tag(s.id)
+            .moveDisabled(true)
+            .smSessionListRowChrome()
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 swipeButtons(for: s)
             }
-        #endif
     }
 
     /// Keep swipe actions on the actual List row. Putting them inside the macOS row Button's
@@ -635,6 +684,8 @@ private struct SidebarArchiveRevealBar: View {
 struct SessionRow: View {
     let session: SessionInfo
     var preview: String?
+    /// ISO timestamp of the last message (relative time on the trailing edge).
+    var previewTs: String? = nil
     var phase: String?
     // `working`/`bgOpen` are passed IN from the parent (which reads them in its own `body`)
     // instead of read from `broker` here. A child View's own @Observable read inside a `List`
@@ -650,43 +701,118 @@ struct SessionRow: View {
     var host: HostView? = nil
     /// Flat-mode project leaf tag (web projectLabel).
     var projectTag: String? = nil
+    var selected: Bool = false
+    /// Subtle grab affordance for reorderable rows (macOS hover).
+    var showsDragHint: Bool = false
+    /// Dimmed list slot while this row's free-drag ghost is active.
+    var isDragging: Bool = false
+
+    #if os(macOS)
+    @State private var hovered = false
+    #endif
 
     private var isDraft: Bool { (session.userStatus ?? "") == "draft" }
+    private var timeLabel: String {
+        guard let previewTs, !previewTs.isEmpty else { return "" }
+        let full = relTime(previewTs)
+        // Compact list form: drop the trailing " ago" ("3m ago" → "3m").
+        if full.hasSuffix(" ago") { return String(full.dropLast(4)) }
+        if full == "just now" { return "now" }
+        if full == "never" { return "" }
+        return full
+    }
 
     var body: some View {
-        HStack(spacing: 8) {
-            // Web parity: agent working-state only in the list (no per-row git).
+        HStack(alignment: .center, spacing: 10) {
+            leadingIndicator
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(session.name)
+                        .font(titleFont)
+                        .fontWeight(selected ? .semibold : .medium)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if muted {
+                        Image(systemName: "bell.slash.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    if let projectTag {
+                        Text(projectTag)
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.primary.opacity(0.05), in: Capsule())
+                    }
+                    Spacer(minLength: 4)
+                    if let host { HostBadge(host: host) }
+                    if !timeLabel.isEmpty {
+                        Text(timeLabel)
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(.tertiary)
+                            .monospacedDigit()
+                    }
+                }
+                Text(previewLine)
+                    .font(previewFont)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            #if os(macOS)
+            if showsDragHint {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary.opacity(hovered || selected ? 0.9 : 0.35))
+                    .frame(width: 12)
+                    .accessibilityHidden(true)
+            }
+            #endif
+        }
+        .smSessionRowSurface(selected: selected, accented: false, hovered: isHovered && !isDragging)
+        .scaleEffect(isDragging ? 0.98 : 1)
+        .animation(.easeOut(duration: 0.12), value: isDragging)
+        #if os(macOS)
+        .onHover { hovered = $0 }
+        #endif
+    }
+
+    private var isHovered: Bool {
+        #if os(macOS)
+        hovered
+        #else
+        false
+        #endif
+    }
+
+    private var previewLine: String {
+        if let preview, !preview.isEmpty {
+            return preview.replacingOccurrences(of: "\n", with: " ")
+        }
+        if isDraft { return "draft" }
+        return session.agent
+    }
+
+    @ViewBuilder private var leadingIndicator: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(selected ? Theme.teal.opacity(0.16) : Color.primary.opacity(0.045))
+                .frame(width: 28, height: 28)
             if isDraft {
                 Image(systemName: "pencil")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.teal.opacity(0.85))
-                    .frame(width: 14)
+                    .foregroundStyle(Theme.teal.opacity(0.9))
             } else {
                 SessionStatusRail(git: nil, working: working, bgOpen: bgOpen)
             }
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(session.name).font(titleFont.weight(.semibold)).lineLimit(1)
-                    if muted { Image(systemName: "bell.slash.fill").font(.caption2).foregroundStyle(.tertiary) }
-                    if let projectTag {
-                        Text(projectTag)
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                    if let host { HostBadge(host: host) }
-                }
-                Text(preview ?? (isDraft ? "draft" : session.agent))
-                    .font(previewFont).foregroundStyle(.secondary).lineLimit(1)
-            }
         }
-        .padding(.vertical, 3)
+        .frame(width: 28, height: 28)
     }
 
     private var titleFont: Font {
         #if os(macOS)
-        .body
+        .system(size: 13.5, weight: .medium)
         #else
         .subheadline
         #endif
@@ -694,7 +820,7 @@ struct SessionRow: View {
 
     private var previewFont: Font {
         #if os(macOS)
-        .callout
+        .system(size: 11.5)
         #else
         .caption
         #endif
@@ -702,42 +828,48 @@ struct SessionRow: View {
 }
 
 private extension View {
-    /// iOS gets its grouped cards from `.insetGrouped`; AppKit's `.inset` has no equivalent,
-    /// so give Mac rows an explicit grouped surface and an obvious teal selection state.
-    @ViewBuilder func smMacSidebarCard(
-        position: SidebarRowPosition,
-        selected: Bool = false,
-        accented: Bool = false
+    /// Independent soft rows (not joined Settings-style cards): hover wash, teal selection,
+    /// no hairline dividers. Used on macOS and the plain iOS/iPad session list.
+    @ViewBuilder func smSessionRowSurface(
+        selected: Bool,
+        accented: Bool = false,
+        hovered: Bool = false
     ) -> some View {
-        #if os(macOS)
-        let radius: CGFloat = 10
-        let shape = UnevenRoundedRectangle(
-            cornerRadii: RectangleCornerRadii(
-                topLeading: position.roundsTop ? radius : 0,
-                bottomLeading: position.roundsBottom ? radius : 0,
-                bottomTrailing: position.roundsBottom ? radius : 0,
-                topTrailing: position.roundsTop ? radius : 0
-            ),
-            style: .continuous
-        )
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        let fill: Color = {
+            if selected { return Theme.teal.opacity(0.14) }
+            if accented { return Theme.teal.opacity(0.08) }
+            if hovered { return Color.primary.opacity(0.05) }
+            return Color.primary.opacity(0.028)
+        }()
         self
             .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(
-                selected ? Theme.teal.opacity(0.18)
-                    : (accented ? Theme.teal.opacity(0.10) : Color(nsColor: .controlBackgroundColor)),
-                in: shape
-            )
-            .overlay {
-                if selected { shape.strokeBorder(Theme.teal.opacity(0.34)) }
-            }
-            .overlay(alignment: .bottom) {
-                if position.hasDivider {
-                    Divider().padding(.leading, 10)
+            .padding(.vertical, 9)
+            .background(fill, in: shape)
+            .overlay(alignment: .leading) {
+                if selected {
+                    Capsule()
+                        .fill(Theme.teal)
+                        .frame(width: 3, height: 22)
+                        .padding(.leading, 3)
                 }
             }
-        #else
-        if accented { self.padding(.vertical, 3) } else { self }
-        #endif
+            .overlay {
+                if accented {
+                    shape.strokeBorder(Theme.teal.opacity(0.18), lineWidth: 1)
+                }
+            }
+            .animation(.easeOut(duration: 0.12), value: selected)
+            .animation(.easeOut(duration: 0.1), value: hovered)
+    }
+
+    /// List row chrome: clear backgrounds, hidden separators, tight vertical rhythm.
+    @ViewBuilder func smSessionListRowChrome(
+        spacing: EdgeInsets = EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0)
+    ) -> some View {
+        self
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(spacing)
     }
 }
