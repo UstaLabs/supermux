@@ -115,6 +115,18 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      # Separate from the broker typecheck above, and separate from the ui lane's
+      # build: vue-tsc shells out to `node`, so on a machine without node it exits
+      # 127 and `bun run build` reports success having checked nothing. That is how
+      # 11 real PWA type errors reached dev. Node is guaranteed on a runner, so this
+      # step is the one place the PWA is actually type-checked.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Typecheck PWA
+        run: ./node_modules/.bin/vue-tsc --noEmit
+        working-directory: src/web-app
+
   # ── PWA journey: real browser + broker + shim, all on throwaway state ──────
   ui:
     needs: changes

@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import type { ToasterProps } from 'vue-sonner'
+import { computed } from 'vue'
 
 import {
   CircleCheckIcon,
@@ -13,6 +14,14 @@ import { Toaster as Sonner } from 'vue-sonner'
 import { cn } from '@/lib/utils'
 
 const props = defineProps<ToasterProps>()
+
+// toastOptions is bound explicitly below AND was being re-applied by v-bind="props",
+// so the spread silently clobbered the rounded-2xl default. Spread everything except
+// toastOptions, and merge the caller's on top of the default instead.
+const rest = computed(() => {
+  const { toastOptions: _toastOptions, ...others } = props
+  return others
+})
 </script>
 
 <template>
@@ -25,11 +34,10 @@ const props = defineProps<ToasterProps>()
       '--border-radius': 'var(--radius)',
     }"
     :toast-options="{
-      classes: {
-        toast: 'rounded-2xl',
-      },
+      ...{ classes: { toast: 'rounded-2xl' } },
+      ...props.toastOptions,
     }"
-    v-bind="props"
+    v-bind="rest"
   >
     <template #success-icon>
       <CircleCheckIcon class="size-4" />
