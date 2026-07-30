@@ -12,7 +12,7 @@ import { handleSlash } from "./core/commands"
 import { Registry, type ProxyEntry } from "./core/session-manager/registry"
 import { makeReadAdvancer } from "./core/session-manager/read-status"
 import { ProxyLivenessMonitor, type ProxyStatus } from "./core/proxy/liveness"
-import { exposedLinksPublicUrl } from "./core/relay/public-url"
+import { exposedLinksPublicUrl, hostRelayUrl } from "./core/relay/public-url"
 
 function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
   return {
@@ -1118,7 +1118,17 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       protocolVersion: 1,
     }),
     claimStore,
-    getRelayUrl: () => relayProvider.status().relayUrl,
+    // CSRF trusts this as a second allowed Origin for cookie browsers on the
+    // hosted relay. Prefer the live online URL, but fall back to the
+    // deterministic host URL whenever MUX_RELAY_DOMAIN is set — frpc can be
+    // mid-reconnect (status.state !== "online", relayUrl cleared) while a
+    // browser still POSTs from https://h-<hostId>.relay… and must not get
+    // "bad origin". Same fallback as exposedLinksPublicUrl.
+    getRelayUrl: () =>
+      relayProvider.status().relayUrl
+      ?? (process.env.MUX_RELAY_DOMAIN
+        ? hostRelayUrl(hostIdentity.hostId, process.env.MUX_RELAY_DOMAIN)
+        : undefined),
     port: MUX_WEB_PORT,
     devicesFile: DEVICES_FILE,
     publicUrl: MUX_WEB_PUBLIC_URL,

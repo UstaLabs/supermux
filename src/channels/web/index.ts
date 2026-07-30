@@ -80,7 +80,7 @@ function clientIp(req: Request): string {
 // case — each new instance already starts with an empty bucket.
 export function __resetAuthFailures(): void {}
 
-const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host"]
+const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak"]
 const MAX_CLIENT_LOG_RING = 800
 
 export type StoredClientLogEntry = {
@@ -2375,28 +2375,43 @@ export class WebChannel implements Channel {
       // or `/transcribe?session=<id>` or the legacy `/sessions/<id>/transcribe`. When present
       // it only enriches cleanup context (recent messages + skills); the cleanup engine/model/
       // glossary always come from global config, so a live session is never required.
+      //
+      // MUST catch throws: runStt throws when every engine is unavailable (common on
+      // fresh/docker installs without Codex login + whisper-cli). An uncaught throw
+      // becomes Bun's opaque 500 "Something went wrong!" — which is what clients
+      // show as an "instant 500" on voice over the relay.
       const id = path === "/transcribe"
         ? (url.searchParams.get("session")?.trim() || undefined)
         : decodeURIComponent(path.split("/")[2]!)
       if (!this.opts.transcribe) return this.json({ error: "not configured" }, 503)
-      const ctype = req.headers.get("content-type") ?? ""
-      let input: { draft?: string; audioPath?: string }
-      if (ctype.includes("multipart/form-data")) {
-        if (!this.fileStore) return this.json({ error: "file store not mounted" }, 500)
-        const form = await req.formData().catch(() => null)
-        const file = form?.get("audio")
-        if (!(file instanceof Blob)) return this.json({ error: "audio field required" }, 400)
-        const bytes = new Uint8Array(await file.arrayBuffer())
-        const { file_id } = await this.fileStore.put({ kind: "voice", mime: file.type || undefined, name: (file as any).name, session: id, origin: "web-upload", device: "web", bytes })
-        const meta = await this.fileStore.get(file_id)
-        input = { audioPath: meta!.path }
-      } else {
-        const body = await req.json().catch(() => ({})) as { draft?: string }
-        if (typeof body.draft !== "string") return this.json({ error: "draft required" }, 400)
-        input = { draft: body.draft }
+      try {
+        const ctype = req.headers.get("content-type") ?? ""
+        let input: { draft?: string; audioPath?: string }
+        if (ctype.includes("multipart/form-data")) {
+          if (!this.fileStore) return this.json({ error: "file store not mounted" }, 503)
+          const form = await req.formData().catch(() => null)
+          const file = form?.get("audio")
+          if (!(file instanceof Blob)) return this.json({ error: "audio field required" }, 400)
+          const bytes = new Uint8Array(await file.arrayBuffer())
+          const { file_id } = await this.fileStore.put({ kind: "voice", mime: file.type || undefined, name: (file as any).name, session: id, origin: "web-upload", device: "web", bytes })
+          const meta = await this.fileStore.get(file_id)
+          if (!meta?.path) return this.json({ error: "audio store failed" }, 500)
+          input = { audioPath: meta.path }
+        } else {
+          const body = await req.json().catch(() => ({})) as { draft?: string }
+          if (typeof body.draft !== "string") return this.json({ error: "draft required" }, 400)
+          input = { draft: body.draft }
+        }
+        const result = await this.opts.transcribe(id, input)
+        return this.json(result)
+      } catch (err: any) {
+        const msg = err?.message ?? String(err)
+        log.error("transcribe_failed", { sessionId: id ?? null, err: msg })
+        // Engine missing / no auth → 503 (client can show "speech not configured").
+        // Everything else (ffmpeg/network/mint) → 502.
+        const unavailable = /unavailable|not configured|no access_token|file store/i.test(msg)
+        return this.json({ error: msg }, unavailable ? 503 : 502)
       }
-      const result = await this.opts.transcribe(id, input)
-      return this.json(result)
     }
     if (method === "GET" && path === "/devices") {
       return this.json(this.store.list().map((d) => ({ name: d.name, created_at: d.created_at, last_seen_at: d.last_seen_at })))
