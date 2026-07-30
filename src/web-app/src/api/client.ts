@@ -425,6 +425,8 @@ export const api = {
   removeClonedRepo: (path: string) => request("DELETE", "/forge/cloned", { path }),
   pullClonedRepo: (path: string) => request("POST", "/forge/cloned/pull", { path }),
   getUpdateStatus: () => request("GET", "/api/update/status") as Promise<UpdateStatusDTO>,
+  /** Force a live versions.json poll (Recheck); returns post-check status. */
+  checkUpdate: () => request("POST", "/api/update/check", {}) as Promise<UpdateStatusDTO>,
   runUpdate: () =>
     request("POST", "/api/update/run", {}) as Promise<{ started: boolean } | { error: string; instruction?: string }>,
   // Web terminals (tmux-backed). Source of truth for the tab set is the broker.

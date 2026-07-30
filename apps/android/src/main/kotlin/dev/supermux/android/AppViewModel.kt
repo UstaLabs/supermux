@@ -1303,6 +1303,8 @@ class AppViewModel(
     // ── System ─────────────────────────────────────────────────────────────────
 
     suspend fun updateStatus(): UpdateStatus? = runCatching { activeApi()?.updateStatus() }.getOrNull()
+    /** Force broker versions.json poll (Recheck). */
+    suspend fun checkUpdate(): UpdateStatus? = runCatching { activeApi()?.checkUpdate() }.getOrNull()
     suspend fun runUpdate(): RunUpdateResult? = runCatching { activeApi()?.runUpdate() }.getOrNull()
     fun restartBroker() { viewModelScope.launch { runCatching { activeApi()?.restartBroker() } } }
 

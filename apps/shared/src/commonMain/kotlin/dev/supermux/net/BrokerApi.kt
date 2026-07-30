@@ -1450,9 +1450,19 @@ class BrokerApi(
         http.post("$httpBase/system/restart") { header("Authorization", bearerHeader()) }
     }
 
-    /** GET /api/update/status → in-app updater state. */
+    /** GET /api/update/status → in-app updater state (cached; no network re-poll). */
     suspend fun updateStatus(): UpdateStatus =
         getJson("$httpBase/api/update/status")
+
+    /**
+     * POST /api/update/check → force the broker to poll versions.json now and
+     * return the post-check status (same shape as [updateStatus]). Used by
+     * client Recheck buttons so they don't only re-read a stale cache.
+     */
+    suspend fun checkUpdate(): UpdateStatus {
+        val resp = http.post("$httpBase/api/update/check") { header("Authorization", bearerHeader()) }
+        return decode(resp)
+    }
 
     /** POST /api/update/run → start the broker's self-update (binary mode only).
      *  The broker returns 202 `{started:true}` and updates asynchronously (poll
