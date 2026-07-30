@@ -1,0 +1,50 @@
+# Journey 1+2 on a real Android device/emulator: pair from a deep link, open the
+# seeded session, send a prompt through the real WebSocket, and see the fake
+# agent's reply rendered.
+#
+# Deliberately written against the SHARED test ids (src/shared/test-ids.ts), not
+# Android-specific tags, so the same selectors describe the same elements on iOS.
+# MainActivity sets testTagsAsResourceId = true, which is what publishes Compose
+# testTags to Maestro as resource ids.
+#
+# Run: scripts/test-android.sh   (boots the hermetic broker and passes the env below)
+appId: dev.supermux.android
+env:
+  BASE_URL: http://10.0.2.2:9898
+  PAIR_TOKEN: unset
+  SESSION_ID: "00000000-0000-4000-8000-000000000001"
+  PROMPT: maestro-journey
+---
+- clearState
+
+# Pairing arrives as supermux://pair?t=…&base=… — the same link a QR scan opens.
+- openLink: "supermux://pair?t=${PAIR_TOKEN}&base=${BASE_URL}"
+
+# Paired and synced: the session list is on screen with the seeded session.
+- extendedWaitUntil:
+    visible:
+      id: "session-list"
+    timeout: 60000
+- extendedWaitUntil:
+    visible:
+      id: "session-row:${SESSION_ID}"
+    timeout: 30000
+
+- tapOn:
+    id: "session-row:${SESSION_ID}"
+- extendedWaitUntil:
+    visible:
+      id: "chat-view"
+    timeout: 30000
+
+- tapOn:
+    id: "composer-input"
+- inputText: "${PROMPT}"
+- tapOn:
+    id: "composer-submit"
+
+# The prompt round-trips through broker → shim → fake agent and comes back.
+# Asserting the REPLY (not just the echo) is what proves the whole path works.
+- extendedWaitUntil:
+    visible: "Fixture reply: ${PROMPT}"
+    timeout: 60000
