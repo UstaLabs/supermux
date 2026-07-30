@@ -28,11 +28,13 @@ env:
 # NOT the supermux://pair deep link: that link is only read by ConnectPage, the
 # last of four intro pages, so on a fresh install it is delivered while page 0 is
 # showing and is gone by the time ConnectPage composes. See the note below.
-- repeat:
-    times: 3
-    commands:
-      - swipe:
-          direction: LEFT
+# Advance with the intro's own CTA rather than swiping: `swipe: direction: LEFT`
+# does not reliably move a HorizontalPager on a CI emulator with animations
+# disabled, and it silently left the flow on page 0. The button's label changes
+# per page, so naming each one also documents the path.
+- tapOn: "See what it does"
+- tapOn: "It never sleeps"
+- tapOn: "Connect your computer"
 
 - extendedWaitUntil:
     visible: "https://host/pair?t=…"
