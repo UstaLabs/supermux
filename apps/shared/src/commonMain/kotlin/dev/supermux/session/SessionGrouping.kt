@@ -120,14 +120,25 @@ fun buildTaskSections(
     )
     for (s in list) buckets.getValue(s.sectionKey()).add(s)
 
-    val byRecency = compareByDescending<SessionInfo> { lastTs(it) }
     // Message arrival must not jump rows — only explicit user reorder updates sortOrder.
     val bySort = compareBy<SessionInfo> { it.sortOrder }.thenBy { it.id }
 
     buckets[SectionKey.IN_PROGRESS]!!.sortWith(bySort)
     buckets[SectionKey.DRAFT]!!.sortWith(bySort)
     // Settled is not drag-reorderable; newest-message-first for findability only.
-    buckets[SectionKey.SETTLED]!!.sortWith(byRecency)
+    //
+    // Do NOT write this as `sortWith(compareByDescending { lastTs(it) })`: a Comparator
+    // re-evaluates its selector on EVERY comparison (twice per compare), so an N-row bucket
+    // calls [lastTs] ~2·N·log2(N) times. [lastTs] is host-resolving and, on Apple, a
+    // Kotlin/Native → Swift callback (Function1 trampoline + String bridging). With hundreds of
+    // archived rows folded in by [combinedTaskSessions] that turned ONE sidebar render into
+    // ~13k bridge crossings and made the sessions list the single most expensive view in the
+    // macOS app. Decorate-sort-undecorate evaluates the key exactly once per session; the sort
+    // is stable, so equal keys keep input order (the server's `killed_at DESC` for archived).
+    val settled = buckets.getValue(SectionKey.SETTLED)
+    val byRecency = settled.map { lastTs(it) to it }.sortedByDescending { it.first }
+    settled.clear()
+    for ((_, s) in byRecency) settled.add(s)
 
     return SECTION_ORDER
         .filter { buckets.getValue(it).isNotEmpty() }

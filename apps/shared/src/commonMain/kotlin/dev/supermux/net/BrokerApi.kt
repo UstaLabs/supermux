@@ -13,12 +13,14 @@ import io.ktor.client.request.forms.MultiPartFormDataContent
 import io.ktor.client.request.forms.formData
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsBytes
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
 import io.ktor.http.ContentType
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
+import io.ktor.utils.io.readUTF8Line
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SlashCommand
 import kotlinx.coroutines.CancellationException
@@ -26,6 +28,11 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 
 // ─── DTOs ────────────────────────────────────────────────────────────────────
 
@@ -1265,12 +1272,22 @@ class BrokerApi(
     )
 
     /**
-     * POST /speak — server TTS (codex ChatGPT pronunciation). Returns MP3/AAC bytes.
-     * Throws on non-success (including when engine is "platform").
+     * POST /speak — server TTS as NDJSON stream of audio chunks.
+     * Invokes [onChunk] as each piece arrives so the UI can start playback immediately
+     * while later pieces are still being synthesized.
+     *
+     * Line shape: `{"i":0,"n":3,"mime":"audio/mpeg","audio":"<base64>","engine":"codex"}`
      */
-    suspend fun speak(text: String, engine: String? = "codex", lang: String? = null): ByteArray {
+    suspend fun speakStream(
+        text: String,
+        engine: String? = "codex",
+        lang: String? = null,
+        // Non-suspend for clean SKIE/Swift interop; callers that need suspend hop themselves.
+        onChunk: (ByteArray) -> Unit,
+    ) {
         val resp = http.post("$httpBase/speak") {
             header("Authorization", bearerHeader())
+            header(HttpHeaders.Accept, "application/x-ndjson")
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(SpeakBody(text = text, engine = engine, lang = lang)))
         }
@@ -1278,7 +1295,33 @@ class BrokerApi(
             val detail = runCatching { resp.bodyAsText() }.getOrNull().orEmpty()
             error("speak ${resp.status.value}: $detail")
         }
-        return resp.bodyAsBytes()
+        val channel = resp.bodyAsChannel()
+        while (true) {
+            val line = channel.readUTF8Line() ?: break
+            val trimmed = line.trim()
+            if (trimmed.isEmpty()) continue
+            val obj = runCatching { json.parseToJsonElement(trimmed).jsonObject }.getOrNull() ?: continue
+            obj["error"]?.jsonPrimitive?.contentOrNull?.let { error("speak: $it") }
+            val b64 = obj["audio"]?.jsonPrimitive?.contentOrNull ?: continue
+            val bytes = decodeBase64(b64)
+            onChunk(bytes)
+        }
+    }
+
+    /** Collect full /speak stream into one byte array (tests / simple callers). */
+    suspend fun speak(text: String, engine: String? = "codex", lang: String? = null): ByteArray {
+        val parts = ArrayList<ByteArray>()
+        speakStream(text, engine, lang) { parts.add(it) }
+        if (parts.isEmpty()) return ByteArray(0)
+        if (parts.size == 1) return parts[0]
+        val total = parts.sumOf { it.size }
+        val out = ByteArray(total)
+        var off = 0
+        for (p in parts) {
+            p.copyInto(out, off)
+            off += p.size
+        }
+        return out
     }
 
     /** GET /settings/soul → soul.md text ("" on any failure — never throws). */
@@ -1950,4 +1993,7 @@ class BrokerApi(
         )
         return resp.routingToken?.takeIf { it.isNotBlank() }
     }
+
+    @OptIn(ExperimentalEncodingApi::class)
+    private fun decodeBase64(s: String): ByteArray = Base64.decode(s)
 }

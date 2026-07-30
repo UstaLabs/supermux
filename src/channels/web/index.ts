@@ -80,8 +80,28 @@ function clientIp(req: Request): string {
 // case — each new instance already starts with an empty bucket.
 export function __resetAuthFailures(): void {}
 
-const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host"]
+const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak"]
 const MAX_CLIENT_LOG_RING = 800
+
+// Vue routes and REST APIs share several top-level paths (/settings, /devices,
+// /usage, /proxies, /displays). API_PREFIXES keeps fetch() from those prefixes
+// from being swallowed by the SPA shell — but a browser document navigation
+// (refresh, open-in-new-tab, PWA relaunch) must still get index.html so
+// vue-router can mount. Sec-Fetch-Dest: document is the modern signal; Accept:
+// text/html covers older/non-browser clients that still mean "HTML page".
+// XHR/fetch default to Accept: */* and Sec-Fetch-Dest: empty, so they keep
+// hitting the JSON handlers.
+export function isDocumentNavigation(req: Request): boolean {
+  const dest = req.headers.get("sec-fetch-dest")
+  if (dest === "document") return true
+  if (dest != null && dest !== "") return false
+  const accept = req.headers.get("accept") ?? ""
+  return accept.includes("text/html")
+}
+
+function isApiPath(path: string): boolean {
+  return API_PREFIXES.some((p) => path === p || path.startsWith(p + "/"))
+}
 
 export type StoredClientLogEntry = {
   ts: number
@@ -187,10 +207,21 @@ export interface WebChannelOpts {
   renameSession?: (oldName: string, newName: string) => Promise<void>
   reorderSessions?: (orderedIds: string[]) => void
   transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string }) => Promise<{ text: string; degraded?: boolean }>
-  /** Server-side TTS (codex). Returns audio bytes or a soft {error,status} for platform. */
+  /**
+   * Server-side TTS (codex). Returns either a soft platform error, or an async
+   * iterable of audio chunks (streamed NDJSON: play first while later synth).
+   */
   speak?: (input: { text: string; engine?: string; lang?: string }) => Promise<
-    | { audio: Uint8Array; mime: string; engine: string; chunked?: boolean }
     | { error: string; status: 400 }
+    | {
+        engine: string
+        chunks: AsyncIterable<{
+          audio: Uint8Array
+          mime: string
+          index: number
+          total: number
+        }>
+      }
   >
   spawnPA?: (args: { name: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string }>
   listPAs?: () => SessionSnapshot[]
@@ -1163,7 +1194,7 @@ export class WebChannel implements Channel {
     // origin. SameSite=Lax already blocks cross-site POST cookies; this also
     // rejects a missing Origin. /internal/* carries its own secret (not in
     // API_PREFIXES); GET/WS are exempt.
-    if (MUTATING_METHODS.has(method) && API_PREFIXES.some((p) => path === p || path.startsWith(p + "/"))) {
+    if (MUTATING_METHODS.has(method) && isApiPath(path)) {
       // Bearer-authed native clients carry no ambient cookie, so CSRF doesn't
       // apply; the same-origin guard is only meaningful for cookie browsers.
       if (!authedViaBearer(req) && !sameOriginOk(
@@ -1175,15 +1206,19 @@ export class WebChannel implements Channel {
       }
     }
 
-    // static-serve: any GET that isn't an API path tries the static directory first.
-    // Cache-Control matters here because the broker is typically fronted by Cloudflare,
-    // which caches asset-shaped responses by default — without explicit headers, CF can
-    // serve a stale index.html or sw.js that points to old hashed bundles, and PWAs see
-    // no update. Hashed files in /assets/ are content-addressed (e.g. index-DaYj1-bp.js)
-    // and safe to cache forever; everything else (HTML shell, SW, manifest, registerSW)
-    // is an entry point and must revalidate every request. Resolution (disk-first, then
-    // embedded PWA for compiled binaries, then SPA fallback) lives in serveStatic.
-    if (method === "GET" && !API_PREFIXES.some((p) => path === p || path.startsWith(p + "/"))) {
+    // static-serve: GETs that aren't API calls try the static directory first.
+    // Document navigations also try static even when the path is under an API
+    // prefix, because several vue-router pages share those prefixes (see
+    // isDocumentNavigation). Cache-Control matters here because the broker is
+    // typically fronted by Cloudflare, which caches asset-shaped responses by
+    // default — without explicit headers, CF can serve a stale index.html or
+    // sw.js that points to old hashed bundles, and PWAs see no update. Hashed
+    // files in /assets/ are content-addressed (e.g. index-DaYj1-bp.js) and safe
+    // to cache forever; everything else (HTML shell, SW, manifest, registerSW)
+    // is an entry point and must revalidate every request. Resolution
+    // (disk-first, then embedded PWA for compiled binaries, then SPA fallback)
+    // lives in serveStatic.
+    if (method === "GET" && (!isApiPath(path) || isDocumentNavigation(req))) {
       const res = serveStatic({ staticDir: this.opts.staticDir, embedded: this.opts.staticEmbedded ?? {}, path, acceptEncoding: req.headers.get("accept-encoding") ?? undefined })
       if (res) return res
     }
@@ -2303,6 +2338,9 @@ export class WebChannel implements Channel {
       }
     }
     // ── Read-aloud TTS (server engines; platform is client-native) ──────────
+    // Streams NDJSON audio chunks so the client can start playback on the first
+    // piece while later pieces are still being synthesized.
+    // Line shape: {"i":0,"n":3,"mime":"audio/mpeg","audio":"<base64>","engine":"codex"}
     if (method === "POST" && path === "/speak") {
       if (!this.opts.speak) return this.json({ error: "not configured" }, 503)
       const body = await req.json().catch(() => ({})) as { text?: string; engine?: string; lang?: string }
@@ -2318,13 +2356,37 @@ export class WebChannel implements Channel {
         if ("error" in result) {
           return this.json({ error: result.error }, result.status)
         }
-        // Binary audio response; engine/chunked also in headers for debugging.
-        return new Response(result.audio, {
+        const enc = new TextEncoder()
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            try {
+              for await (const c of result.chunks) {
+                const b64 = Buffer.from(c.audio).toString("base64")
+                const line = JSON.stringify({
+                  i: c.index,
+                  n: c.total,
+                  mime: c.mime || "audio/mpeg",
+                  audio: b64,
+                  engine: result.engine,
+                }) + "\n"
+                controller.enqueue(enc.encode(line))
+              }
+              controller.close()
+            } catch (e) {
+              try {
+                const msg = e instanceof Error ? e.message : String(e)
+                controller.enqueue(enc.encode(JSON.stringify({ error: msg }) + "\n"))
+              } catch { /* ignore */ }
+              controller.close()
+            }
+          },
+        })
+        return new Response(stream, {
           status: 200,
           headers: {
-            "content-type": result.mime || "audio/mpeg",
+            "content-type": "application/x-ndjson; charset=utf-8",
             "x-tts-engine": result.engine,
-            ...(result.chunked ? { "x-tts-chunked": "1" } : {}),
+            "x-tts-stream": "1",
             "cache-control": "no-store",
           },
         })
@@ -2337,28 +2399,43 @@ export class WebChannel implements Channel {
       // or `/transcribe?session=<id>` or the legacy `/sessions/<id>/transcribe`. When present
       // it only enriches cleanup context (recent messages + skills); the cleanup engine/model/
       // glossary always come from global config, so a live session is never required.
+      //
+      // MUST catch throws: runStt throws when every engine is unavailable (common on
+      // fresh/docker installs without Codex login + whisper-cli). An uncaught throw
+      // becomes Bun's opaque 500 "Something went wrong!" — which is what clients
+      // show as an "instant 500" on voice over the relay.
       const id = path === "/transcribe"
         ? (url.searchParams.get("session")?.trim() || undefined)
         : decodeURIComponent(path.split("/")[2]!)
       if (!this.opts.transcribe) return this.json({ error: "not configured" }, 503)
-      const ctype = req.headers.get("content-type") ?? ""
-      let input: { draft?: string; audioPath?: string }
-      if (ctype.includes("multipart/form-data")) {
-        if (!this.fileStore) return this.json({ error: "file store not mounted" }, 500)
-        const form = await req.formData().catch(() => null)
-        const file = form?.get("audio")
-        if (!(file instanceof Blob)) return this.json({ error: "audio field required" }, 400)
-        const bytes = new Uint8Array(await file.arrayBuffer())
-        const { file_id } = await this.fileStore.put({ kind: "voice", mime: file.type || undefined, name: (file as any).name, session: id, origin: "web-upload", device: "web", bytes })
-        const meta = await this.fileStore.get(file_id)
-        input = { audioPath: meta!.path }
-      } else {
-        const body = await req.json().catch(() => ({})) as { draft?: string }
-        if (typeof body.draft !== "string") return this.json({ error: "draft required" }, 400)
-        input = { draft: body.draft }
+      try {
+        const ctype = req.headers.get("content-type") ?? ""
+        let input: { draft?: string; audioPath?: string }
+        if (ctype.includes("multipart/form-data")) {
+          if (!this.fileStore) return this.json({ error: "file store not mounted" }, 503)
+          const form = await req.formData().catch(() => null)
+          const file = form?.get("audio")
+          if (!(file instanceof Blob)) return this.json({ error: "audio field required" }, 400)
+          const bytes = new Uint8Array(await file.arrayBuffer())
+          const { file_id } = await this.fileStore.put({ kind: "voice", mime: file.type || undefined, name: (file as any).name, session: id, origin: "web-upload", device: "web", bytes })
+          const meta = await this.fileStore.get(file_id)
+          if (!meta?.path) return this.json({ error: "audio store failed" }, 500)
+          input = { audioPath: meta.path }
+        } else {
+          const body = await req.json().catch(() => ({})) as { draft?: string }
+          if (typeof body.draft !== "string") return this.json({ error: "draft required" }, 400)
+          input = { draft: body.draft }
+        }
+        const result = await this.opts.transcribe(id, input)
+        return this.json(result)
+      } catch (err: any) {
+        const msg = err?.message ?? String(err)
+        log.error("transcribe_failed", { sessionId: id ?? null, err: msg })
+        // Engine missing / no auth → 503 (client can show "speech not configured").
+        // Everything else (ffmpeg/network/mint) → 502.
+        const unavailable = /unavailable|not configured|no access_token|file store/i.test(msg)
+        return this.json({ error: msg }, unavailable ? 503 : 502)
       }
-      const result = await this.opts.transcribe(id, input)
-      return this.json(result)
     }
     if (method === "GET" && path === "/devices") {
       return this.json(this.store.list().map((d) => ({ name: d.name, created_at: d.created_at, last_seen_at: d.last_seen_at })))

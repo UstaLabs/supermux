@@ -16,6 +16,10 @@ const speaking = ref(false)
 let speakGen = 0
 let audioEl: HTMLAudioElement | null = null
 let audioUrl: string | null = null
+/** Pending codex audio pieces (already arrived; play sequentially). */
+let playQueue: { blob: Blob; url: string }[] = []
+let queuePlaying = false
+let abortCtl: AbortController | null = null
 
 function platformSupported(): boolean {
   return typeof window !== "undefined" && typeof window.speechSynthesis !== "undefined"
@@ -27,7 +31,18 @@ function stopPlatform() {
   } catch { /* ignore */ }
 }
 
+function revokeUrl(url: string | null) {
+  if (url) {
+    try { URL.revokeObjectURL(url) } catch { /* ignore */ }
+  }
+}
+
 function stopAudio() {
+  abortCtl?.abort()
+  abortCtl = null
+  queuePlaying = false
+  for (const q of playQueue) revokeUrl(q.url)
+  playQueue = []
   if (audioEl) {
     try {
       audioEl.pause()
@@ -36,10 +51,8 @@ function stopAudio() {
     } catch { /* ignore */ }
     audioEl = null
   }
-  if (audioUrl) {
-    URL.revokeObjectURL(audioUrl)
-    audioUrl = null
-  }
+  revokeUrl(audioUrl)
+  audioUrl = null
 }
 
 function stop() {
@@ -73,34 +86,85 @@ function startPlatform(plain: string) {
   }
 }
 
+function playNextInQueue(gen: number) {
+  if (gen !== speakGen) return
+  if (queuePlaying) return
+  const next = playQueue.shift()
+  if (!next) {
+    // Queue empty — if stream still open, speaking stays true until stream ends
+    // and queue drains. Caller clears speaking when stream done AND queue empty.
+    return
+  }
+  queuePlaying = true
+  revokeUrl(audioUrl)
+  audioUrl = next.url
+  const el = new Audio(next.url)
+  audioEl = el
+  el.onended = () => {
+    queuePlaying = false
+    audioEl = null
+    if (gen !== speakGen) return
+    if (playQueue.length) {
+      playNextInQueue(gen)
+    } else if (!abortCtl) {
+      // Stream finished and queue drained
+      speaking.value = false
+      revokeUrl(audioUrl)
+      audioUrl = null
+    }
+  }
+  el.onerror = () => {
+    queuePlaying = false
+    audioEl = null
+    if (gen === speakGen) {
+      speaking.value = false
+      toast.error("Couldn't play read aloud audio")
+    }
+    stopAudio()
+  }
+  void el.play().catch(() => {
+    if (gen === speakGen) {
+      speaking.value = false
+      toast.error("Couldn't play read aloud audio")
+    }
+    stopAudio()
+  })
+}
+
 async function startCodex() {
   stopPlatform()
   stopAudio()
   const gen = ++speakGen
   speaking.value = true
+  const ctl = new AbortController()
+  abortCtl = ctl
   try {
-    const blob = await api.speak(props.text, { engine: "codex" })
+    let got = 0
+    for await (const chunk of api.speakStream(props.text, { engine: "codex", signal: ctl.signal })) {
+      if (gen !== speakGen) return
+      got++
+      const url = URL.createObjectURL(chunk.blob)
+      playQueue.push({ blob: chunk.blob, url })
+      // Start playback as soon as the first chunk arrives.
+      playNextInQueue(gen)
+    }
+    abortCtl = null
     if (gen !== speakGen) return
-    audioUrl = URL.createObjectURL(blob)
-    const el = new Audio(audioUrl)
-    audioEl = el
-    el.onended = () => {
-      if (gen === speakGen) speaking.value = false
-      stopAudio()
-    }
-    el.onerror = () => {
-      if (gen === speakGen) {
-        speaking.value = false
-        toast.error("Couldn't play read aloud audio")
-      }
-      stopAudio()
-    }
-    await el.play()
-  } catch (e: any) {
-    if (gen === speakGen) {
+    if (got === 0) {
       speaking.value = false
-      toast.error(e?.message ?? "Couldn't start ChatGPT read aloud")
+      toast.error("Nothing to read")
+      return
     }
+    // If the last chunk already finished playing, onended cleared speaking.
+    // If still playing / queued, onended of the last item will clear it.
+    if (!queuePlaying && playQueue.length === 0) {
+      speaking.value = false
+    }
+  } catch (e: any) {
+    if (ctl.signal.aborted || gen !== speakGen) return
+    speaking.value = false
+    stopAudio()
+    toast.error(e?.message ?? "Couldn't start ChatGPT read aloud")
   }
 }
 
@@ -123,7 +187,6 @@ async function toggle() {
 }
 
 onMounted(() => {
-  // Warm the cache; ignore errors (defaults to platform).
   void loadVoiceTtsEngine(() => api.getAppConfig())
   void getVoiceTtsEngineCached()
 })

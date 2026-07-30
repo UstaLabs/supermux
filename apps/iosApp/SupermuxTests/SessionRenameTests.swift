@@ -9,7 +9,8 @@ final class SessionRenameTests: XCTestCase {
         let session = SessionInfo(
             id: "s1", name: "debug-session-renaming", workdir: "/w", agent: "codex",
             status: nil, mute: nil, connected: nil, model: nil, reasoningLevel: nil,
-            repo_root: nil, role: nil, session_branch: nil, git: nil, finish_job: nil)
+            repo_root: nil, role: nil, session_branch: nil, git: nil, finish_job: nil,
+            userStatus: nil, sortOrder: 0, draftPayload: nil)
         broker.reduce(ServerFrameSnapshot(
             sessions: [session], logs: [:], activity: [:], bgTasks: [:],
             agentState: [:], commands: [:], commandsResolved: [:]))

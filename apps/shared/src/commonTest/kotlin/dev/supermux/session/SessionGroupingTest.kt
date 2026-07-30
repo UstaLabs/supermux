@@ -4,6 +4,7 @@ import dev.supermux.net.ArchivedDto
 import dev.supermux.proto.SessionInfo
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 private fun s(name: String, workdir: String) =
     SessionInfo(name = name, workdir = workdir, agent = "claude", status = "active")
@@ -187,6 +188,35 @@ class SessionGroupingTest {
     @Test fun archived_status_counts_as_settled() {
         val s = SessionInfo(id = "x", name = "x", workdir = "/p", agent = "claude", status = "archived")
         assertEquals(SectionKey.SETTLED, s.sectionKey())
+    }
+
+    /// [buildTaskSections] used `compareByDescending { lastTs(it) }`, which re-evaluates its
+    /// selector on EVERY comparison — ~2·N·log2(N) calls for an N-item Settled bucket. On Apple
+    /// that selector is a Kotlin/Native → Swift callback that scans the fleet for the owning
+    /// host, so a 700-row archive turned one sidebar render into ~13,000 bridge crossings and
+    /// made `SessionsListView.body` the most expensive view in the macOS app (measured: ~24% of
+    /// all main-thread work). The key must be computed exactly once per element.
+    @Test fun settled_recency_key_is_evaluated_once_per_session() {
+        val live = (0 until 64).map {
+            SessionInfo(id = "s$it", name = "s$it", workdir = "/p", agent = "claude", userStatus = "settled")
+        }
+        var calls = 0
+        buildTaskSections(live, lastTs = { calls++; "" })
+        assertTrue(calls <= live.size, "lastTs called $calls times for ${live.size} sessions")
+    }
+
+    /// Precomputing the key must not change the resulting order. Equal keys (the common case —
+    /// archived rows have no resolvable timestamp) keep input order, which is the server's
+    /// `killed_at DESC`; distinct keys still sort newest-first.
+    @Test fun settled_orders_newest_first_and_is_stable_for_equal_keys() {
+        val ts = mapOf("b" to "2026-06-01T10:00:00Z", "c" to "2026-06-01T12:00:00Z")
+        val sessions = listOf("a", "b", "c", "d").map {
+            SessionInfo(id = it, name = it, workdir = "/p", agent = "claude", userStatus = "settled")
+        }
+        val settled = buildTaskSections(sessions, lastTs = { ts[it.id] ?: "" })
+            .first { it.key == SectionKey.SETTLED }
+        // c (newest) then b; a and d share the empty key and keep their input order.
+        assertEquals(listOf("c", "b", "a", "d"), settled.sessions.map { it.name })
     }
 
     @Test fun moveId_reorders() {

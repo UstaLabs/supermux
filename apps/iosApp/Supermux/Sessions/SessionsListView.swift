@@ -283,9 +283,11 @@ struct SessionsListView: View {
         multiHost: Bool
     ) -> some View {
         let online = flatOnlineSessions(owner: owner, multiHost: multiHost)
-        let lastTs: (SessionInfo) -> String = { s in
-            fleet.broker(for: s.id)?.messages[s.id]?.last?.ts ?? ""
-        }
+        // Built once per body evaluation, not once per lookup: `buildTaskSections` asks for the
+        // Settled recency key of every row (hundreds, once archived sessions are folded in), and
+        // the old closure ran a full fleet scan each time. See `Fleet.lastMessageTsBySession`.
+        let ts = fleet.lastMessageTsBySession()
+        let lastTs: (SessionInfo) -> String = { ts[$0.id] ?? "" }
         let sections = buildTaskSections(
             list: combinedTaskSessions(live: online, archived: fleet.archivedForList),
             lastTs: lastTs

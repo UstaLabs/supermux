@@ -77,18 +77,79 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         audioPlayer?.stop()
         audioPlayer = nil
         speakingKey = plain
-        guard let data = await broker.speak(rawText, engine: "codex") else {
-            if gen == myGen { speakingKey = nil }
-            return
+
+        // Collect chunks as they arrive; play each to completion before the next,
+        // starting as soon as the first piece is ready (stream continues in parallel).
+        actor ChunkQueue {
+            private var items: [Data] = []
+            private var cont: CheckedContinuation<Data?, Never>?
+            private var closed = false
+
+            func push(_ d: Data) {
+                if let c = cont {
+                    cont = nil
+                    c.resume(returning: d)
+                } else {
+                    items.append(d)
+                }
+            }
+
+            func close() {
+                closed = true
+                if let c = cont {
+                    cont = nil
+                    c.resume(returning: nil)
+                }
+            }
+
+            func next() async -> Data? {
+                if !items.isEmpty { return items.removeFirst() }
+                if closed { return nil }
+                return await withCheckedContinuation { (c: CheckedContinuation<Data?, Never>) in
+                    cont = c
+                }
+            }
         }
-        guard gen == myGen else { return }
-        do {
-            let player = try AVAudioPlayer(data: data)
-            audioPlayer = player
-            player.delegate = self
-            player.play()
-        } catch {
-            if gen == myGen { speakingKey = nil }
+
+        let queue = ChunkQueue()
+        let streamTask = Task {
+            let ok = await broker.speakStream(rawText, engine: "codex") { data in
+                Task { await queue.push(data) }
+            }
+            _ = ok
+            await queue.close()
+        }
+
+        while true {
+            guard gen == myGen else {
+                streamTask.cancel()
+                break
+            }
+            guard let data = await queue.next() else { break }
+            guard gen == myGen else { break }
+            await playDataAndWait(data, myGen: myGen)
+        }
+        if gen == myGen { speakingKey = nil }
+    }
+
+    private var finishBox: FinishBox?
+
+    private func playDataAndWait(_ data: Data, myGen: Int) async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            do {
+                let player = try AVAudioPlayer(data: data)
+                audioPlayer = player
+                let box = FinishBox {
+                    cont.resume()
+                }
+                finishBox = box
+                player.delegate = box
+                if !player.play() {
+                    cont.resume()
+                }
+            } catch {
+                cont.resume()
+            }
         }
     }
 
@@ -111,11 +172,10 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         s = s.replacingOccurrences(of: #"`([^`]+)`"#, with: "$1", options: .regularExpression)
         s = s.replacingOccurrences(of: #"!\[([^\]]*)\]\([^)]*\)"#, with: "$1", options: .regularExpression)
         s = s.replacingOccurrences(of: #"\[([^\]]+)\]\([^)]*\)"#, with: "$1", options: .regularExpression)
-        let lineStart: NSRegularExpression.Options = [.anchorsMatchLines]
-        s = s.replacingOccurrences(of: #"^#{1,6}\s+"#, with: "", options: lineStart)
-        s = s.replacingOccurrences(of: #"^\s*[-*+]\s+"#, with: "", options: lineStart)
-        s = s.replacingOccurrences(of: #"^\s*\d+\.\s+"#, with: "", options: lineStart)
-        s = s.replacingOccurrences(of: #"^\s*>\s?"#, with: "", options: lineStart)
+        s = s.replacingOccurrences(of: #"(?m)^#{1,6}\s+"#, with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"(?m)^\s*[-*+]\s+"#, with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"(?m)^\s*\d+\.\s+"#, with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"(?m)^\s*>\s?"#, with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: #"(\*\*|__)(.*?)\1"#, with: "$2", options: .regularExpression)
         s = s.replacingOccurrences(of: #"(\*|_)(.*?)\1"#, with: "$2", options: .regularExpression)
         s = s.replacingOccurrences(of: #"~~(.*?)~~"#, with: "$1", options: .regularExpression)
@@ -128,9 +188,20 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     }
 }
 
-extension MessageSpeech: AVAudioPlayerDelegate {
-    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        Task { @MainActor in self.clearIfCurrent() }
+/// AVAudioPlayerDelegate that resumes a single continuation when playback ends.
+private final class FinishBox: NSObject, AVAudioPlayerDelegate {
+    private let onFinish: () -> Void
+    private var done = false
+    init(_ onFinish: @escaping () -> Void) { self.onFinish = onFinish }
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        guard !done else { return }
+        done = true
+        onFinish()
+    }
+    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        guard !done else { return }
+        done = true
+        onFinish()
     }
 }
 

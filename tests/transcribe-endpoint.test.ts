@@ -218,3 +218,100 @@ test("POST /transcribe (multipart, no session) → stores audio with no session,
   expect(typeof transcribeCalls[0]!.input.audioPath).toBe("string")
   expect(existsSync(transcribeCalls[0]!.input.audioPath!)).toBe(true)
 })
+
+// ── Error surface + relay-origin CSRF ────────────────────────────────────────
+// Uncaught throws used to become Bun's opaque 500 "Something went wrong!" —
+// the "instant 500" clients saw for voice over the relay when STT was
+// unavailable (no Codex login + no whisper-cli).
+
+test("POST /transcribe STT-unavailable throw → 503 JSON error (not opaque 500)", async () => {
+  await start({
+    transcribe: async () => {
+      throw new Error("stt fallback unavailable: whisper")
+    },
+  })
+  const res = await fetch(`http://127.0.0.1:${port}/transcribe`, {
+    method: "POST",
+    headers: authedJson(),
+    body: JSON.stringify({ draft: "helo" }),
+  })
+  expect(res.status).toBe(503)
+  const body = await res.json() as { error: string }
+  expect(body.error).toContain("unavailable")
+  // Must not be Bun's default body for uncaught handler errors.
+  expect(body.error).not.toBe("Something went wrong!")
+})
+
+test("POST /sessions/:id/transcribe STT engine throw → 502 JSON error", async () => {
+  await start({
+    transcribe: async () => {
+      throw new Error("codex-realtime: mint 500 boom")
+    },
+  })
+  const res = await fetch(`http://127.0.0.1:${port}/sessions/sess-1/transcribe`, {
+    method: "POST",
+    headers: authedJson(),
+    body: JSON.stringify({ draft: "helo" }),
+  })
+  expect(res.status).toBe(502)
+  expect(await res.json()).toEqual({ error: "codex-realtime: mint 500 boom" })
+})
+
+test("POST /sessions/:id/transcribe accepts cookie + relay Origin when getRelayUrl is set", async () => {
+  const relayUrl = "https://h-abc.relay.supermux.dev"
+  await start({
+    publicUrl: "http://localhost:8787",
+    getRelayUrl: () => relayUrl,
+    transcribe: async (_id: string | undefined, input: any) => ({ text: input.draft }),
+  })
+  const res = await fetch(`http://127.0.0.1:${port}/sessions/sess-1/transcribe`, {
+    method: "POST",
+    headers: {
+      Cookie: `cmux_token=${token}`,
+      Origin: relayUrl,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ draft: "via-relay" }),
+  })
+  expect(res.status).toBe(200)
+  expect(await res.json()).toEqual({ text: "via-relay" })
+})
+
+test("POST /transcribe (id-less) accepts cookie + relay Origin when getRelayUrl is set", async () => {
+  // /transcribe is in API_PREFIXES so CSRF applies; relay origin must be trusted.
+  const relayUrl = "https://h-abc.relay.supermux.dev"
+  await start({
+    publicUrl: "http://localhost:8787",
+    getRelayUrl: () => relayUrl,
+    transcribe: async (_id: string | undefined, input: any) => ({ text: input.draft }),
+  })
+  const res = await fetch(`http://127.0.0.1:${port}/transcribe`, {
+    method: "POST",
+    headers: {
+      Cookie: `cmux_token=${token}`,
+      Origin: relayUrl,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ draft: "launcher" }),
+  })
+  expect(res.status).toBe(200)
+  expect(await res.json()).toEqual({ text: "launcher" })
+})
+
+test("POST /sessions/:id/transcribe rejects cookie + foreign Origin", async () => {
+  await start({
+    publicUrl: "http://localhost:8787",
+    getRelayUrl: () => "https://h-abc.relay.supermux.dev",
+    transcribe: async () => ({ text: "nope" }),
+  })
+  const res = await fetch(`http://127.0.0.1:${port}/sessions/sess-1/transcribe`, {
+    method: "POST",
+    headers: {
+      Cookie: `cmux_token=${token}`,
+      Origin: "https://evil.example",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ draft: "helo" }),
+  })
+  expect(res.status).toBe(403)
+})

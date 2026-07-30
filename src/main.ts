@@ -12,7 +12,7 @@ import { handleSlash } from "./core/commands"
 import { Registry, type ProxyEntry } from "./core/session-manager/registry"
 import { makeReadAdvancer } from "./core/session-manager/read-status"
 import { ProxyLivenessMonitor, type ProxyStatus } from "./core/proxy/liveness"
-import { exposedLinksPublicUrl } from "./core/relay/public-url"
+import { exposedLinksPublicUrl, hostRelayUrl } from "./core/relay/public-url"
 
 function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
   return {
@@ -44,7 +44,7 @@ import { buildRpcPrompt } from "./core/agent-rpc/prompts"
 import { runStt, VOICE_STT_ENGINE } from "./core/transcription/stt"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
-import { runTts, VOICE_TTS_ENGINE } from "./core/tts/tts"
+import { runTtsStream, VOICE_TTS_ENGINE } from "./core/tts/tts"
 import { cursorSpawnArgs, codexSpawnArgs, claudeSpawnArgs, codexPrepareGlobal, codexPrepareSessionHome, opencodeConfigEntries, ensureOpenCodePluginScopes } from "./core/plugins"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider } from "./core/slash-commands"
@@ -1118,7 +1118,17 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       protocolVersion: 1,
     }),
     claimStore,
-    getRelayUrl: () => relayProvider.status().relayUrl,
+    // CSRF trusts this as a second allowed Origin for cookie browsers on the
+    // hosted relay. Prefer the live online URL, but fall back to the
+    // deterministic host URL whenever MUX_RELAY_DOMAIN is set — frpc can be
+    // mid-reconnect (status.state !== "online", relayUrl cleared) while a
+    // browser still POSTs from https://h-<hostId>.relay… and must not get
+    // "bad origin". Same fallback as exposedLinksPublicUrl.
+    getRelayUrl: () =>
+      relayProvider.status().relayUrl
+      ?? (process.env.MUX_RELAY_DOMAIN
+        ? hostRelayUrl(hostIdentity.hostId, process.env.MUX_RELAY_DOMAIN)
+        : undefined),
     port: MUX_WEB_PORT,
     devicesFile: DEVICES_FILE,
     publicUrl: MUX_WEB_PUBLIC_URL,
@@ -1758,7 +1768,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         return { text: draft, degraded: true }
       }
     },
-    // Read-aloud: server-side TTS (codex ChatGPT pronunciation). `platform` is client-native.
+    // Read-aloud: server-side TTS stream (codex). `platform` is client-native.
+    // Yields audio chunks as soon as each is synthesized (one-ahead pipeline).
     speak: async (input) => {
       const cfg = settings.getAppConfig(appConfigEnv)
       const engine = input.engine ?? cfg.voiceTtsEngine ?? VOICE_TTS_ENGINE
@@ -1766,16 +1777,45 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         return { error: "platform", status: 400 as const }
       }
       const t0 = Date.now()
+      // Validate engine/auth before opening the stream body (so clients get 502 JSON
+      // instead of a half-open NDJSON error mid-stream when possible).
       try {
-        const r = await runTts(input.text, { engine, lang: input.lang })
-        log.info("voice_speak_out", {
-          engine: r.engine,
+        const stream = runTtsStream(input.text, { engine, lang: input.lang })
+        // Peek first chunk so auth/empty failures surface as HTTP error responses.
+        const iter = stream[Symbol.asyncIterator]()
+        const first = await iter.next()
+        if (first.done) throw new Error("tts: empty stream")
+        log.info("voice_speak_stream_start", {
+          engine: first.value.engine,
           chars: input.text.length,
-          bytes: r.audio.byteLength,
-          chunked: !!r.chunked,
+          total: first.value.total,
+          firstBytes: first.value.audio.byteLength,
           ms: Date.now() - t0,
         })
-        return { audio: r.audio, mime: r.mime, engine: r.engine, chunked: r.chunked }
+        async function* rest() {
+          yield first.value
+          let n = 1
+          try {
+            while (true) {
+              const nres = await iter.next()
+              if (nres.done) break
+              n++
+              yield nres.value
+            }
+            log.info("voice_speak_stream_done", {
+              engine: first.value.engine,
+              chunks: n,
+              ms: Date.now() - t0,
+            })
+          } catch (e) {
+            log.warn("voice_speak_stream_failed", { engine, err: String(e), after: n, ms: Date.now() - t0 })
+            throw e
+          }
+        }
+        return {
+          engine: first.value.engine,
+          chunks: rest(),
+        }
       } catch (e) {
         log.warn("voice_speak_failed", { engine, err: String(e), ms: Date.now() - t0 })
         throw e

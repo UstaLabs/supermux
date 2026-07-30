@@ -1114,14 +1114,14 @@ class AppViewModel(
         viewModelScope.launch { runCatching { activeApi()?.saveConfig(voiceTtsEngine = engine) } }
     }
 
-    /** Wire read-aloud to the active host (platform OS TTS vs ChatGPT /speak). */
+    /** Wire read-aloud to the active host (platform OS TTS vs ChatGPT /speak stream). */
     fun bindMessageTts() {
         dev.supermux.android.chat.MessageTts.resolveEngine = {
             activeApi()?.getConfig()?.voiceTtsEngine?.ifBlank { null } ?: "platform"
         }
-        dev.supermux.android.chat.MessageTts.speakRemote = { text ->
+        dev.supermux.android.chat.MessageTts.speakRemoteStream = { text, onChunk ->
             val api = activeApi() ?: error("no host")
-            api.speak(text, engine = "codex")
+            api.speakStream(text = text, engine = "codex", onChunk = onChunk)
         }
     }
 
