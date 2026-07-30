@@ -81,6 +81,13 @@ MSG
   fi
 fi
 
+# Clear app data here rather than via maestro's launchApp(clearState): `pm clear`
+# briefly drops the adb transport, and maestro running it mid-flow died with
+# "device offline". Doing it up front, then re-waiting, keeps the flow stable.
+adb shell pm clear "$APP_ID" >/dev/null 2>&1 || true
+adb wait-for-device
+adb shell true >/dev/null 2>&1 || sleep 2
+
 FLOWS="$*"
 [ -n "$FLOWS" ] || FLOWS=".maestro"
 

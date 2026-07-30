@@ -14,11 +14,14 @@
 # which produced a run that typed "…/pair?t=unset" and looked like a UI bug.
 appId: dev.supermux.android
 ---
-# clearState REVOKES runtime permissions, so `adb install -g` is not enough — the
-# POST_NOTIFICATIONS dialog then opens over the app and every subsequent
-# assertion sees only the permission dialog. Grant at launch instead.
+# App data is cleared by scripts/test-android.sh BEFORE maestro starts, not here:
+# `pm clear` drops the adb transport for a moment, and maestro's own clearState
+# hit that window and died with "device offline" four seconds into every run.
+#
+# Permissions still have to be granted at launch — the clear revokes whatever
+# `adb install -g` granted, and the POST_NOTIFICATIONS dialog would otherwise
+# open over the app and swallow every later assertion.
 - launchApp:
-    clearState: true
     permissions:
       all: allow
 
