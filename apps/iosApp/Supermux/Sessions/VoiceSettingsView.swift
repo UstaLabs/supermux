@@ -19,6 +19,13 @@ private func sttEngineLabel(_ id: String) -> String {
     sttEngines.first { $0.id == id }?.label ?? id
 }
 
+/// Read-aloud engines — mirror TTS_ENGINES in src/core/tts/tts-types.ts.
+private let ttsEngines: [SttEngine] = [
+    .init(id: "platform", label: "Device (system voice)"),
+    .init(id: "codex", label: "ChatGPT (Codex login)"),
+]
+private let defaultTtsEngine = "platform"
+
 /// One selectable voice-cleanup engine (direct-API adapter layer). `family` is the
 /// AgentKind whose models `listModels` returns for that engine.
 private struct VoiceEngine: Identifiable {
@@ -55,6 +62,7 @@ struct VoiceSettingsView: View {
 
     @State private var models: [ModelInfo] = []
     @State private var sttEngine = defaultSttEngine
+    @State private var ttsEngine = defaultTtsEngine
     @State private var engine = defaultVoiceEngine
     @State private var selected = ""   // "" = the engine's default
     @State private var loading = true
@@ -104,6 +112,16 @@ struct VoiceSettingsView: View {
                 }
             } footer: {
                 Text("Cloud STT for uploaded mic audio. Claude Code voice needs a Claude.ai login on the host.")
+            }
+
+            Section {
+                Picker("Read aloud", selection: $ttsEngine) {
+                    ForEach(ttsEngines) { e in
+                        Text(e.label).tag(e.id)
+                    }
+                }
+            } footer: {
+                Text("Device uses the OS voice. ChatGPT needs a Codex login on the host (subscription TTS).")
             }
 
             Section {
@@ -168,6 +186,8 @@ struct VoiceSettingsView: View {
         let cfg = await broker.config()
         let cfgStt = cfg?.voiceSttEngine ?? ""
         sttEngine = cfgStt.isEmpty ? defaultSttEngine : cfgStt
+        let cfgTts = cfg?.voiceTtsEngine ?? ""
+        ttsEngine = cfgTts.isEmpty ? defaultTtsEngine : cfgTts
         let cfgEngine = cfg?.voiceCleanupEngine ?? ""
         engine = cfgEngine.isEmpty ? defaultVoiceEngine : cfgEngine
         selected = cfg?.voiceCleanupModel ?? ""
@@ -184,7 +204,8 @@ struct VoiceSettingsView: View {
         await broker.saveConfig(
             voiceSttEngine: sttEngine,
             voiceCleanupModel: selected,
-            voiceCleanupEngine: engine
+            voiceCleanupEngine: engine,
+            voiceTtsEngine: ttsEngine
         )
         saved = true
         try? await Task.sleep(for: .seconds(2))

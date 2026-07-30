@@ -11,6 +11,7 @@ import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 class BrokerApiTest {
     private val json = Json { ignoreUnknownKeys = true }
@@ -109,6 +110,23 @@ class BrokerApiTest {
         val encoded = Json.encodeToString(SpawnRequest.serializer(), req)
         val decoded = json.decodeFromString<SpawnRequest>(encoded)
         assertEquals(req, decoded)
+    }
+
+    @Test
+    fun spawn_request_encodes_inheritFrom_for_continue_conversation() {
+        val req = SpawnRequest(
+            workdir = "/home/user/.mux/worktrees/foo/bar",
+            name = "Fix auth race",
+            agent = "codex",
+            worktree = false,
+            inheritFrom = "sess-abc",
+        )
+        val encoded = Json.encodeToString(SpawnRequest.serializer(), req)
+        assertTrue("inheritFrom" in encoded, "expected inheritFrom in $encoded")
+        assertTrue("sess-abc" in encoded, "expected source id in $encoded")
+        val decoded = json.decodeFromString<SpawnRequest>(encoded)
+        assertEquals("sess-abc", decoded.inheritFrom)
+        assertEquals(false, decoded.worktree)
     }
 
     @Test

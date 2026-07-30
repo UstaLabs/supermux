@@ -13,12 +13,14 @@ import io.ktor.client.request.forms.MultiPartFormDataContent
 import io.ktor.client.request.forms.formData
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsBytes
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
 import io.ktor.http.ContentType
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
+import io.ktor.utils.io.readUTF8Line
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SlashCommand
 import kotlinx.coroutines.CancellationException
@@ -26,6 +28,11 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 
 // ─── DTOs ────────────────────────────────────────────────────────────────────
 
@@ -81,6 +88,8 @@ data class AppConfigDto(
     val voiceCleanupEngine: String? = null,
     /** Model the cleanup engine uses. null/empty = that engine's own default. */
     val voiceCleanupModel: String? = null,
+    /** Read-aloud backend: platform (OS TTS) | codex (ChatGPT pronunciation). null = platform. */
+    val voiceTtsEngine: String? = null,
 )
 
 @Serializable
@@ -154,6 +163,12 @@ data class SpawnRequest(
     val userStatus: String? = null,
     /** Composer body when [userStatus] is draft (broker camelCase on POST body). */
     val draftPayload: DraftPayloadDto? = null,
+    /**
+     * Source session id for "Continue in new conversation": broker reuses that session's
+     * display-name base and worktree metadata (repo_root, session_branch) instead of deriving
+     * a name from the workdir basename (often a uuid under ~/.mux/worktrees).
+     */
+    val inheritFrom: String? = null,
 )
 
 /** Draft composer payload on POST /sessions (mirrors web draftPayload). */
@@ -916,11 +931,15 @@ private data class ConfigPatchBody(
     val voiceSttEngine: String? = null,
     val voiceCleanupModel: String? = null,
     val voiceCleanupEngine: String? = null,
+    val voiceTtsEngine: String? = null,
     val claudeOauthToken: String? = null,
     val anthropicApiKey: String? = null,
     val codexApiKey: String? = null,
     val cursorApiKey: String? = null,
 )
+
+@Serializable
+private data class SpeakBody(val text: String, val engine: String? = null, val lang: String? = null)
 
 @Serializable
 private data class LspServerEnable(val enabled: Boolean)
@@ -1231,6 +1250,7 @@ class BrokerApi(
         voiceSttEngine: String? = null,
         voiceCleanupModel: String? = null,
         voiceCleanupEngine: String? = null,
+        voiceTtsEngine: String? = null,
         claudeOauthToken: String? = null,
         anthropicApiKey: String? = null,
         codexApiKey: String? = null,
@@ -1243,12 +1263,66 @@ class BrokerApi(
             voiceSttEngine = voiceSttEngine,
             voiceCleanupModel = voiceCleanupModel,
             voiceCleanupEngine = voiceCleanupEngine,
+            voiceTtsEngine = voiceTtsEngine,
             claudeOauthToken = claudeOauthToken,
             anthropicApiKey = anthropicApiKey,
             codexApiKey = codexApiKey,
             cursorApiKey = cursorApiKey,
         ),
     )
+
+    /**
+     * POST /speak — server TTS as NDJSON stream of audio chunks.
+     * Invokes [onChunk] as each piece arrives so the UI can start playback immediately
+     * while later pieces are still being synthesized.
+     *
+     * Line shape: `{"i":0,"n":3,"mime":"audio/mpeg","audio":"<base64>","engine":"codex"}`
+     */
+    suspend fun speakStream(
+        text: String,
+        engine: String? = "codex",
+        lang: String? = null,
+        // Non-suspend for clean SKIE/Swift interop; callers that need suspend hop themselves.
+        onChunk: (ByteArray) -> Unit,
+    ) {
+        val resp = http.post("$httpBase/speak") {
+            header("Authorization", bearerHeader())
+            header(HttpHeaders.Accept, "application/x-ndjson")
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(SpeakBody(text = text, engine = engine, lang = lang)))
+        }
+        if (!resp.status.isSuccess()) {
+            val detail = runCatching { resp.bodyAsText() }.getOrNull().orEmpty()
+            error("speak ${resp.status.value}: $detail")
+        }
+        val channel = resp.bodyAsChannel()
+        while (true) {
+            val line = channel.readUTF8Line() ?: break
+            val trimmed = line.trim()
+            if (trimmed.isEmpty()) continue
+            val obj = runCatching { json.parseToJsonElement(trimmed).jsonObject }.getOrNull() ?: continue
+            obj["error"]?.jsonPrimitive?.contentOrNull?.let { error("speak: $it") }
+            val b64 = obj["audio"]?.jsonPrimitive?.contentOrNull ?: continue
+            val bytes = decodeBase64(b64)
+            onChunk(bytes)
+        }
+    }
+
+    /** Collect full /speak stream into one byte array (tests / simple callers). */
+    suspend fun speak(text: String, engine: String? = "codex", lang: String? = null): ByteArray {
+        val parts = ArrayList<ByteArray>()
+        speakStream(text, engine, lang) { parts.add(it) }
+        if (parts.isEmpty()) return ByteArray(0)
+        if (parts.size == 1) return parts[0]
+        val total = parts.sumOf { it.size }
+        val out = ByteArray(total)
+        var off = 0
+        for (p in parts) {
+            p.copyInto(out, off)
+            off += p.size
+        }
+        return out
+    }
 
     /** GET /settings/soul → soul.md text ("" on any failure — never throws). */
     suspend fun getSoul(): String {
@@ -1376,9 +1450,19 @@ class BrokerApi(
         http.post("$httpBase/system/restart") { header("Authorization", bearerHeader()) }
     }
 
-    /** GET /api/update/status → in-app updater state. */
+    /** GET /api/update/status → in-app updater state (cached; no network re-poll). */
     suspend fun updateStatus(): UpdateStatus =
         getJson("$httpBase/api/update/status")
+
+    /**
+     * POST /api/update/check → force the broker to poll versions.json now and
+     * return the post-check status (same shape as [updateStatus]). Used by
+     * client Recheck buttons so they don't only re-read a stale cache.
+     */
+    suspend fun checkUpdate(): UpdateStatus {
+        val resp = http.post("$httpBase/api/update/check") { header("Authorization", bearerHeader()) }
+        return decode(resp)
+    }
 
     /** POST /api/update/run → start the broker's self-update (binary mode only).
      *  The broker returns 202 `{started:true}` and updates asynchronously (poll
@@ -1919,4 +2003,7 @@ class BrokerApi(
         )
         return resp.routingToken?.takeIf { it.isNotBlank() }
     }
+
+    @OptIn(ExperimentalEncodingApi::class)
+    private fun decodeBase64(s: String): ByteArray = Base64.decode(s)
 }

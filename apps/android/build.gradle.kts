@@ -54,6 +54,16 @@ android {
         }
     }
     buildTypes {
+        // When upload-keystore.jks is present, BOTH debug and release sign with the same
+        // key as GitHub/Play (CN=Supermux). That way `installDebug` / local deploy can
+        // upgrade over a sideloaded release APK without INSTALL_FAILED_UPDATE_INCOMPATIBLE.
+        // Without the keystore (fresh CI checkout), both fall back to the Android debug key.
+        getByName("debug") {
+            signingConfig = if (keystorePropsFile.exists())
+                signingConfigs.getByName("release")
+            else
+                signingConfigs.getByName("debug")
+        }
         getByName("release") {
             // Minification is intentionally OFF. R8 renamed/stripped code that several
             // subsystems resolve BY NAME at runtime and that static analysis can't see:

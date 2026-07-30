@@ -224,6 +224,13 @@ class DesktopAppState(
     val connected: Boolean get() = client.sync.synced
 
     init {
+        // Read-aloud: platform OS TTS or ChatGPT /speak stream depending on app-config.
+        dev.supermux.desktop.chat.MessageTts.resolveEngine = {
+            runCatching { api.getConfig().voiceTtsEngine }.getOrNull()?.ifBlank { null } ?: "platform"
+        }
+        dev.supermux.desktop.chat.MessageTts.speakRemoteStream = { text, onChunk ->
+            api.speakStream(text = text, engine = "codex", onChunk = onChunk)
+        }
         if (connectOnInit) {
             // Guarded per-frame: one poison frame drops one update, never the whole collector.
             stateScope.launch { client.frames.collect { guarded("reduce") { reduce(it) } } }

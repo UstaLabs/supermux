@@ -551,12 +551,13 @@ final class BrokerSession {
     func sendMessage(_ id: String, _ text: String) { Task { [api] in try? await api.sendMessage(id: id, text: text) } }
     func projects() async -> [String] { (try? await api.listProjects()) ?? [] }
     func spawn(workdir: String, agent: String?, name: String?, model: String? = nil,
-               worktree: Bool? = nil, baseBranch: String? = nil, reasoningLevel: String? = nil) async -> String? {
+               worktree: Bool? = nil, baseBranch: String? = nil, reasoningLevel: String? = nil,
+               inheritFrom: String? = nil) async -> String? {
         // Resolve ~ to an absolute path so the worktree is cut from the real repo root (web parity).
         let resolved = (try? await api.validatePath(path: workdir)).flatMap { $0.ok ? $0.path : nil } ?? workdir
         let req = SpawnRequest(workdir: resolved, name: name, agent: agent, model: model,
                                worktree: worktree?.kb, baseBranch: baseBranch, reasoningLevel: reasoningLevel,
-                               userStatus: nil, draftPayload: nil)
+                               userStatus: nil, draftPayload: nil, inheritFrom: inheritFrom)
         return (try? await api.spawn(req: req))?.id
     }
 
@@ -642,7 +643,8 @@ final class BrokerSession {
             baseBranch: nil,
             reasoningLevel: reasoningLevel,
             userStatus: "draft",
-            draftPayload: payload
+            draftPayload: payload,
+            inheritFrom: nil
         )
         return try? await api.spawn(req: req).id
     }
@@ -690,6 +692,7 @@ final class BrokerSession {
                     voiceSttEngine: String? = nil,
                     voiceCleanupModel: String? = nil,
                     voiceCleanupEngine: String? = nil,
+                    voiceTtsEngine: String? = nil,
                     claudeOauthToken: String? = nil, anthropicApiKey: String? = nil,
                     codexApiKey: String? = nil, cursorApiKey: String? = nil) async {
         try? await api.saveConfig(onboarded: onboarded?.kb,
@@ -697,8 +700,33 @@ final class BrokerSession {
                                   voiceSttEngine: voiceSttEngine,
                                   voiceCleanupModel: voiceCleanupModel,
                                   voiceCleanupEngine: voiceCleanupEngine,
+                                  voiceTtsEngine: voiceTtsEngine,
                                   claudeOauthToken: claudeOauthToken, anthropicApiKey: anthropicApiKey,
                                   codexApiKey: codexApiKey, cursorApiKey: cursorApiKey)
+    }
+
+    /// POST /speak — NDJSON stream of audio chunks. Calls [onChunk] as each piece arrives.
+    func speakStream(_ text: String, engine: String = "codex", onChunk: @escaping (Data) -> Void) async -> Bool {
+        do {
+            // SKIE maps Kotlin (ByteArray) -> Unit as a regular Swift closure.
+            try await api.speakStream(text: text, engine: engine, lang: nil) { (bytes: KotlinByteArray) in
+                onChunk(Data(bytes.toUInt8()))
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Collect full /speak stream into one Data (simple callers).
+    func speak(_ text: String, engine: String = "codex") async -> Data? {
+        var parts: [Data] = []
+        let ok = await speakStream(text, engine: engine) { parts.append($0) }
+        guard ok, !parts.isEmpty else { return nil }
+        if parts.count == 1 { return parts[0] }
+        var out = Data()
+        for p in parts { out.append(p) }
+        return out
     }
 
     // Soul (system prompt / persona markdown).
@@ -715,22 +743,25 @@ final class BrokerSession {
         do {
             switch kind {
             case "claude":
-                // KMP → Swift does not surface Kotlin default args; pass voiceSttEngine explicitly.
+                // KMP → Swift does not surface Kotlin default args; pass voice fields explicitly.
                 try await api.saveConfig(onboarded: nil, paName: nil,
                                          voiceSttEngine: nil,
                                          voiceCleanupModel: nil, voiceCleanupEngine: nil,
+                                         voiceTtsEngine: nil,
                                          claudeOauthToken: value, anthropicApiKey: nil,
                                          codexApiKey: nil, cursorApiKey: nil)
             case "codex":
                 try await api.saveConfig(onboarded: nil, paName: nil,
                                          voiceSttEngine: nil,
                                          voiceCleanupModel: nil, voiceCleanupEngine: nil,
+                                         voiceTtsEngine: nil,
                                          claudeOauthToken: nil, anthropicApiKey: nil,
                                          codexApiKey: value, cursorApiKey: nil)
             case "cursor":
                 try await api.saveConfig(onboarded: nil, paName: nil,
                                          voiceSttEngine: nil,
                                          voiceCleanupModel: nil, voiceCleanupEngine: nil,
+                                         voiceTtsEngine: nil,
                                          claudeOauthToken: nil, anthropicApiKey: nil,
                                          codexApiKey: nil, cursorApiKey: value)
             default:
@@ -798,6 +829,8 @@ final class BrokerSession {
     // System.
     func restartBroker() { Task { [api] in try? await api.restartBroker() } }
     func updateStatus() async -> UpdateStatus? { try? await api.updateStatus() }
+    /// Force the broker to re-poll versions.json (Recheck). Same shape as updateStatus.
+    func checkUpdate() async -> UpdateStatus? { try? await api.checkUpdate() }
     /// Trigger the broker's self-update (binary mode). Returns the broker's verdict:
     /// `started` (poll updateStatus for progress), or `error`/`instruction` when the
     /// install can't self-update (source/docker/disabled) or is already busy.
@@ -1098,8 +1131,28 @@ final class BrokerSession {
 /// session's transcript without invalidating every other open chat view.
 @Observable
 final class SessionChatBuffer {
-    var messages: [LogEntry] = []
-    var activity: [ActivityEvent] = []
+    var messages: [LogEntry] = [] { didSet { rebuildBlocks() } }
+    var activity: [ActivityEvent] = [] { didSet { rebuildBlocks() } }
+
+    /// The time-merged message + tool-cluster timeline, derived from `messages` + `activity`.
+    ///
+    /// Derived ONCE per change to the source arrays — NOT per view evaluation. `SessionTranscript`
+    /// used to call `buildChatBlocks` from its `body`, which re-sorts and re-clusters the WHOLE
+    /// history and allocates a `ToolRow` per activity event, each one reading several SKIE-bridged
+    /// Kotlin properties (`description_`, `detail`, `body` → Kotlin→Swift string conversions).
+    /// The transcript's body also reads `agentPhase` / `agentWorking` / `pendingSend` / `bgTasks`
+    /// for its working indicator, so every phase tick of a running agent re-ran that whole merge
+    /// even though the transcript itself had not changed. Measured at 5.5 ms/s of blocked main
+    /// thread while switching sessions, second only to the sidebar sort.
+    ///
+    /// Tools are always included here; low chat-detail filters them out at the view (dropping the
+    /// `.tools` clusters from the full timeline is exactly `buildChatBlocks(hideTools: true)`,
+    /// which is pinned by `ChatBlocksDerivationTests`).
+    private(set) var blocks: [ChatBlock] = []
+
+    private func rebuildBlocks() {
+        blocks = buildChatBlocks(messages: messages, activity: activity)
+    }
 }
 
 /// Tiny reference relay so `BrokerSession.init` can hand the shared `BrokerClient` a connection

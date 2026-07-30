@@ -16,6 +16,7 @@ struct SessionsRailView: View {
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
     #endif
+    @State private var continueTarget: SessionInfo?
 
     var body: some View {
         VStack(spacing: 12) {
@@ -46,6 +47,28 @@ struct SessionsRailView: View {
         .padding(.top, 8)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(.bar)
+        .sheet(item: Binding(
+            get: { continueTarget.map { ContinueSheetItem(session: $0) } },
+            set: { continueTarget = $0?.session }
+        )) { item in
+            if let b = fleet.broker(for: item.session.id) {
+                ContinueConversationSheet(
+                    broker: b,
+                    source: item.session,
+                    onStarted: { id in
+                        continueTarget = nil
+                        selected = id
+                        onSessionSelected(id)
+                    },
+                    onCancel: { continueTarget = nil }
+                )
+            }
+        }
+    }
+
+    private struct ContinueSheetItem: Identifiable {
+        let session: SessionInfo
+        var id: String { session.id }
     }
 
     @ViewBuilder private func avatar(_ s: SessionInfo) -> some View {
@@ -83,6 +106,9 @@ struct SessionsRailView: View {
             }
             // Rename needs a text field; surface it by re-expanding to the full list.
             Button { onExpand() } label: { Label("Rename", systemImage: "pencil") }
+            Button { continueTarget = s } label: {
+                Label("Continue in new conversation", systemImage: "bubble.left.and.text.bubble.right")
+            }
             Button(role: .destructive) { b?.kill(s.id) } label: { Label("Settle", systemImage: "checkmark.circle") }
         }
     }

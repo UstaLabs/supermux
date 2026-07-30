@@ -68,6 +68,8 @@ struct SessionsListView: View {
     @State private var renameTarget: SessionInfo?
     @State private var renameText = ""
     @State private var killTarget: SessionInfo?
+    /// Source session for "Continue in new conversation" (web SessionContextMenu parity).
+    @State private var continueTarget: SessionInfo?
     @State private var groupByProject = UserDefaults.standard.object(forKey: "cmux:group-by-project") as? Bool ?? false
     @State private var settledExpanded: Set<String> = []
     @State private var flatSettledExpanded = false
@@ -249,6 +251,29 @@ struct SessionsListView: View {
             }
             Button("Cancel", role: .cancel) { killTarget = nil }
         }
+        .sheet(item: Binding(
+            get: { continueTarget.map { ContinueSheetItem(session: $0) } },
+            set: { continueTarget = $0?.session }
+        )) { item in
+            if let b = fleet.broker(for: item.session.id) {
+                ContinueConversationSheet(
+                    broker: b,
+                    source: item.session,
+                    onStarted: { id in
+                        continueTarget = nil
+                        selected = id
+                        onSessionSelected(id)
+                    },
+                    onCancel: { continueTarget = nil }
+                )
+            }
+        }
+    }
+
+    /// Identifiable wrapper so `.sheet(item:)` can present continue for a session row.
+    private struct ContinueSheetItem: Identifiable {
+        let session: SessionInfo
+        var id: String { session.id }
     }
 
     /// Flat task list (web !groupByProject): In Progress / Drafts / Settled across all projects.
@@ -258,9 +283,11 @@ struct SessionsListView: View {
         multiHost: Bool
     ) -> some View {
         let online = flatOnlineSessions(owner: owner, multiHost: multiHost)
-        let lastTs: (SessionInfo) -> String = { s in
-            fleet.broker(for: s.id)?.messages[s.id]?.last?.ts ?? ""
-        }
+        // Built once per body evaluation, not once per lookup: `buildTaskSections` asks for the
+        // Settled recency key of every row (hundreds, once archived sessions are folded in), and
+        // the old closure ran a full fleet scan each time. See `Fleet.lastMessageTsBySession`.
+        let ts = fleet.lastMessageTsBySession()
+        let lastTs: (SessionInfo) -> String = { ts[$0.id] ?? "" }
         let sections = buildTaskSections(
             list: combinedTaskSessions(live: online, archived: fleet.archivedForList),
             lastTs: lastTs
@@ -463,6 +490,9 @@ struct SessionsListView: View {
                     Button { b?.resume(s.id); fleet.refreshArchived() } label: {
                         Label("Resume", systemImage: "arrow.uturn.backward")
                     }
+                    Button { continueTarget = s } label: {
+                        Label("Continue in new conversation", systemImage: "bubble.left.and.text.bubble.right")
+                    }
                 } else if (s.userStatus ?? "") == "draft" {
                     Button { onOpenDraft(s.id) } label: {
                         Label("Open draft", systemImage: "pencil")
@@ -475,6 +505,9 @@ struct SessionsListView: View {
                         Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
                     }
                     Button { renameText = s.name; renameTarget = s } label: { Label("Rename", systemImage: "pencil") }
+                    Button { continueTarget = s } label: {
+                        Label("Continue in new conversation", systemImage: "bubble.left.and.text.bubble.right")
+                    }
                     Button(role: .destructive) { killTarget = s } label: { Label("Settle", systemImage: "checkmark.circle") }
                 }
             }

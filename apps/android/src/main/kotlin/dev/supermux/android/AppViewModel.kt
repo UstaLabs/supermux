@@ -285,6 +285,7 @@ class AppViewModel(
         rebuildSessions()
         // Opens one control WS + api per paired host; frames flow into reduce(), tagged by recordId.
         hostConns.sync(store.list())
+        bindMessageTts()
     }
 
     // ── Multi-host reducer + derived state ─────────────────────────────────────────
@@ -1109,6 +1110,21 @@ class AppViewModel(
         viewModelScope.launch { runCatching { activeApi()?.saveConfig(voiceCleanupEngine = engine, voiceCleanupModel = model) } }
     }
 
+    fun saveVoiceTts(engine: String?) {
+        viewModelScope.launch { runCatching { activeApi()?.saveConfig(voiceTtsEngine = engine) } }
+    }
+
+    /** Wire read-aloud to the active host (platform OS TTS vs ChatGPT /speak stream). */
+    fun bindMessageTts() {
+        dev.supermux.android.chat.MessageTts.resolveEngine = {
+            activeApi()?.getConfig()?.voiceTtsEngine?.ifBlank { null } ?: "platform"
+        }
+        dev.supermux.android.chat.MessageTts.speakRemoteStream = { text, onChunk ->
+            val api = activeApi() ?: error("no host")
+            api.speakStream(text = text, engine = "codex", onChunk = onChunk)
+        }
+    }
+
     suspend fun fetchGlossary(): List<String> = runCatching { activeApi()?.fetchGlossary() }.getOrNull() ?: emptyList()
     suspend fun updateGlossary(terms: List<String>): List<String>? =
         runCatching { activeApi()?.updateGlossary(terms) }.getOrNull()
@@ -1287,6 +1303,8 @@ class AppViewModel(
     // ── System ─────────────────────────────────────────────────────────────────
 
     suspend fun updateStatus(): UpdateStatus? = runCatching { activeApi()?.updateStatus() }.getOrNull()
+    /** Force broker versions.json poll (Recheck). */
+    suspend fun checkUpdate(): UpdateStatus? = runCatching { activeApi()?.checkUpdate() }.getOrNull()
     suspend fun runUpdate(): RunUpdateResult? = runCatching { activeApi()?.runUpdate() }.getOrNull()
     fun restartBroker() { viewModelScope.launch { runCatching { activeApi()?.restartBroker() } } }
 

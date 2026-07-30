@@ -122,6 +122,8 @@ export interface AppConfig {
   voiceSttEngine?: string
   voiceCleanupEngine?: string
   voiceCleanupModel?: string
+  /** platform (OS TTS) | codex (ChatGPT pronunciation via broker) */
+  voiceTtsEngine?: string
   whisperLang?: string
   [key: string]: unknown
 }
@@ -284,6 +286,60 @@ export const api = {
   finishOpenCodeOAuth: (providerId: string, method: number, code: string) => request("POST", "/opencode/auth/oauth/finish", { providerId, method, code }),
   getAppConfig: () => request("GET", "/settings/config") as Promise<AppConfig>,
   saveAppConfig: (patch: Partial<AppConfig>) => request("PUT", "/settings/config", patch),
+  /**
+   * POST /speak — server TTS (codex) as NDJSON stream of audio chunks.
+   * Yields { mime, blob } as each piece arrives so the UI can start playback immediately.
+   */
+  speakStream: async function* (
+    text: string,
+    opts?: { engine?: string; lang?: string; signal?: AbortSignal },
+  ): AsyncGenerator<{ mime: string; blob: Blob; index: number; total: number }> {
+    const res = await fetch("/speak", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/x-ndjson" },
+      body: JSON.stringify({ text, engine: opts?.engine, lang: opts?.lang }),
+      signal: opts?.signal,
+    })
+    if (!res.ok) {
+      let detail = ""
+      try {
+        const j = await res.json()
+        detail = String(j?.error ?? j?.message ?? "")
+      } catch { /* ignore */ }
+      throw new Error(detail || `POST /speak → ${res.status}`)
+    }
+    if (!res.body) throw new Error("POST /speak → empty body")
+    const reader = res.body.getReader()
+    const dec = new TextDecoder()
+    let buf = ""
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += dec.decode(value, { stream: true })
+      let nl: number
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim()
+        buf = buf.slice(nl + 1)
+        if (!line) continue
+        let obj: any
+        try {
+          obj = JSON.parse(line)
+        } catch {
+          continue
+        }
+        if (obj?.error) throw new Error(String(obj.error))
+        if (typeof obj?.audio !== "string") continue
+        const bin = Uint8Array.from(atob(obj.audio), (c) => c.charCodeAt(0))
+        const mime = typeof obj.mime === "string" ? obj.mime : "audio/mpeg"
+        yield {
+          mime,
+          blob: new Blob([bin], { type: mime }),
+          index: typeof obj.i === "number" ? obj.i : 0,
+          total: typeof obj.n === "number" ? obj.n : 1,
+        }
+      }
+    }
+  },
   claimPair: (name = "setup") => request("POST", "/pair/claim", { name }),
   getSoul: async (): Promise<string> => { const r = await fetch("/settings/soul"); if (!r.ok) throw new Error(`GET /settings/soul → ${r.status}`); return r.text() },
   saveSoul: async (content: string): Promise<void> => { const r = await fetch("/settings/soul", { method: "PUT", headers: { "content-type": "text/plain" }, body: content }); if (!r.ok) throw new Error(`PUT /settings/soul → ${r.status}`) },
@@ -369,6 +425,8 @@ export const api = {
   removeClonedRepo: (path: string) => request("DELETE", "/forge/cloned", { path }),
   pullClonedRepo: (path: string) => request("POST", "/forge/cloned/pull", { path }),
   getUpdateStatus: () => request("GET", "/api/update/status") as Promise<UpdateStatusDTO>,
+  /** Force a live versions.json poll (Recheck); returns post-check status. */
+  checkUpdate: () => request("POST", "/api/update/check", {}) as Promise<UpdateStatusDTO>,
   runUpdate: () =>
     request("POST", "/api/update/run", {}) as Promise<{ started: boolean } | { error: string; instruction?: string }>,
   // Web terminals (tmux-backed). Source of truth for the tab set is the broker.

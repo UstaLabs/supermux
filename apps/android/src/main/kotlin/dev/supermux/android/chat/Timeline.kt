@@ -369,13 +369,17 @@ private fun formatMessageTime(ts: String?): String? {
     return instant?.atZone(ZoneId.systemDefault())?.format(messageTimeFmt)
 }
 
-/** Compact time + copy control under an agent reply — quiet, no animation beyond a brief check. */
+/** Compact time + copy + read-aloud under an agent reply — quiet, minimal chrome. */
 @Composable
 private fun MessageMetaRow(text: String, ts: String?) {
     val cs = MaterialTheme.colorScheme
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var copied by remember { mutableStateOf(false) }
+    val speechKey = remember(text) { plainTextForSpeech(text) }
+    // Reads Compose state from MessageTts so all rows recompose when speak starts/stops.
+    val speaking = MessageTts.isSpeaking(speechKey)
     val time = formatMessageTime(ts)
     Row(
         modifier = Modifier
@@ -411,6 +415,25 @@ private fun MessageMetaRow(text: String, ts: String?) {
                 painter = painterResource(if (copied) R.drawable.ic_check else R.drawable.ic_copy),
                 contentDescription = if (copied) "Copied" else "Copy response",
                 tint = if (copied) cs.primary else cs.onSurfaceVariant.copy(alpha = 0.65f),
+                modifier = Modifier.size(14.dp),
+            )
+        }
+        IconButton(
+            onClick = {
+                if (speechKey.isBlank()) {
+                    Toast.makeText(context, "Nothing to read", Toast.LENGTH_SHORT).show()
+                } else {
+                    MessageTts.toggle(context, text)
+                }
+            },
+            modifier = Modifier
+                .size(28.dp)
+                .testTag("message_read_aloud"),
+        ) {
+            Icon(
+                painter = painterResource(if (speaking) R.drawable.ic_square else R.drawable.ic_volume_2),
+                contentDescription = if (speaking) "Stop reading" else "Read aloud",
+                tint = if (speaking) cs.primary else cs.onSurfaceVariant.copy(alpha = 0.65f),
                 modifier = Modifier.size(14.dp),
             )
         }

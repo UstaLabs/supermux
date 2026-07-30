@@ -18,6 +18,7 @@ const router = useRouter()
 const status = ref<UpdateStatusDTO | null>(null)
 const statusError = ref<string | null>(null)
 const phase = ref<UpdateStatusDTO["state"] | "restarting" | null>(null)
+const rechecking = ref(false)
 const buildId = typeof __APP_BUILD_ID__ !== "undefined" ? __APP_BUILD_ID__ : "unknown"
 
 let pollTimer: ReturnType<typeof setTimeout> | null = null
@@ -28,17 +29,34 @@ function goBack() {
   else router.push("/settings")
 }
 
+function applyStatus(s: UpdateStatusDTO) {
+  status.value = s
+  statusError.value = null
+  if (s.mode === "binary" && phase.value === null &&
+      (s.state === "checking" || s.state === "downloading" || s.state === "swapping")) {
+    startPolling(s.current)
+  }
+}
+
+/** Initial open: read cached checker status (no network re-poll). */
 async function loadStatus() {
   try {
-    const s = await api.getUpdateStatus()
-    status.value = s
-    statusError.value = null
-    if (s.mode === "binary" && phase.value === null &&
-        (s.state === "checking" || s.state === "downloading" || s.state === "swapping")) {
-      startPolling(s.current)
-    }
+    applyStatus(await api.getUpdateStatus())
   } catch (e: any) {
     statusError.value = e?.message ?? "Failed to check for updates"
+  }
+}
+
+/** Recheck: force the broker to poll versions.json now. */
+async function recheck() {
+  if (rechecking.value || phase.value) return
+  rechecking.value = true
+  try {
+    applyStatus(await api.checkUpdate())
+  } catch (e: any) {
+    statusError.value = e?.message ?? "Failed to check for updates"
+  } finally {
+    rechecking.value = false
   }
 }
 
@@ -130,10 +148,11 @@ function phaseLabel(p: string): string {
       </button>
       <h1 class="text-base font-semibold tracking-tight">Check for updates</h1>
       <button
-        class="ml-auto text-sm text-muted-foreground hover:text-foreground px-2 py-1"
-        :disabled="!!phase"
-        @click="loadStatus"
+        class="ml-auto text-sm text-muted-foreground hover:text-foreground px-2 py-1 disabled:opacity-50 inline-flex items-center gap-1.5"
+        :disabled="!!phase || rechecking"
+        @click="recheck"
       >
+        <Loader2 v-if="rechecking" class="size-3.5 animate-spin" />
         Recheck
       </button>
     </header>

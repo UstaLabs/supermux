@@ -197,7 +197,7 @@ struct RootView: View {
                 }
         } detail: {
             if let s = selectedSession, let b = fleet.broker(for: s.id) {
-                ChatView(broker: b, session: s)
+                ChatView(broker: b, session: s, onOpenSession: { selected = $0 })
             } else {
                 ContentUnavailableView("Pick a session",
                                        systemImage: "bubble.left.and.bubble.right")
