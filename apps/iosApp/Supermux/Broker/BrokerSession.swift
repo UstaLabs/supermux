@@ -829,6 +829,8 @@ final class BrokerSession {
     // System.
     func restartBroker() { Task { [api] in try? await api.restartBroker() } }
     func updateStatus() async -> UpdateStatus? { try? await api.updateStatus() }
+    /// Force the broker to re-poll versions.json (Recheck). Same shape as updateStatus.
+    func checkUpdate() async -> UpdateStatus? { try? await api.checkUpdate() }
     /// Trigger the broker's self-update (binary mode). Returns the broker's verdict:
     /// `started` (poll updateStatus for progress), or `error`/`instruction` when the
     /// install can't self-update (source/docker/disabled) or is already busy.

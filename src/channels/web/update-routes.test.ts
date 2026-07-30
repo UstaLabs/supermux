@@ -1,4 +1,4 @@
-// Route tests for /api/update/status + /api/update/run.
+// Route tests for /api/update/status + /api/update/check + /api/update/run.
 //
 // These boot a real WebChannel on an ephemeral port (port:0 → boundPort) and
 // drive it over HTTP — the same way the broker serves it — because routeRequest
@@ -119,6 +119,117 @@ describe("GET /api/update/status", () => {
     expect(body.state).toBe("idle")
     // mode is whatever the host detects (source under bun test).
     expect(typeof body.mode).toBe("string")
+  })
+})
+
+describe("POST /api/update/check", () => {
+  test("unauthed → 401", async () => {
+    const made = makeChannel(null)
+    channel = made.channel
+    await channel.start()
+    const res = await fetch(`${base()}/api/update/check`, { method: "POST" })
+    expect(res.status).toBe(401)
+  })
+
+  test("authed with checker → forces checkNow and returns fresh status", async () => {
+    let fetchCalls = 0
+    const fetchImpl = async (): Promise<Response> => {
+      fetchCalls++
+      return new Response(
+        JSON.stringify({
+          schemaVersion: 1,
+          channels: {
+            stable: {
+              version: "9.9.9",
+              publishedAt: "2026-01-01T00:00:00Z",
+              notesUrl: "https://example.com/notes",
+              assets: {
+                "linux-x64": {
+                  url: "https://example.com/bin",
+                  sha256: "a".repeat(64),
+                },
+              },
+            },
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )
+    }
+    const checker = new UpdateChecker({
+      url: "http://127.0.0.1:1/versions.json",
+      currentVersion: "1.0.0",
+      commit: "abc1234",
+      mode: "binary",
+      fetchImpl,
+    })
+    const made = makeChannel(checker)
+    channel = made.channel
+    await channel.start()
+    const token = mintToken(made.devicesFile)
+
+    // Cached GET has never checked → latest still null.
+    const before = await fetch(`${base()}/api/update/status`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+    expect((await before.json() as { latest: string | null }).latest).toBeNull()
+    expect(fetchCalls).toBe(0)
+
+    const res = await fetch(`${base()}/api/update/check`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(fetchCalls).toBe(1)
+    expect(body.latest).toBe("9.9.9")
+    expect(body.updateAvailable).toBe(true)
+    expect(body.state).toBe("idle")
+    expect(typeof body.lastChecked).toBe("number")
+  })
+
+  test("no checker → 200 + disabled:true (no network)", async () => {
+    const made = makeChannel(null)
+    channel = made.channel
+    await channel.start()
+    const token = mintToken(made.devicesFile)
+
+    const res = await fetch(`${base()}/api/update/check`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body.disabled).toBe(true)
+    expect(body.updateAvailable).toBe(false)
+  })
+
+  test("apply mid-flight (downloading) → returns current status without re-fetch", async () => {
+    let fetchCalls = 0
+    const fetchImpl = async (): Promise<Response> => {
+      fetchCalls++
+      throw new Error("should not fetch during apply")
+    }
+    const checker = new UpdateChecker({
+      url: "http://127.0.0.1:1/versions.json",
+      currentVersion: "1.0.0",
+      commit: "abc1234",
+      mode: "binary",
+      fetchImpl,
+    })
+    checker.setState("downloading")
+    const made = makeChannel(checker)
+    channel = made.channel
+    await channel.start()
+    const token = mintToken(made.devicesFile)
+
+    const res = await fetch(`${base()}/api/update/check`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body.state).toBe("downloading")
+    expect(fetchCalls).toBe(0)
   })
 })
 

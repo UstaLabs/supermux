@@ -1053,6 +1053,41 @@ export class WebChannel implements Channel {
   }
 
   /**
+   * POST /api/update/check handler. Forces a live UpdateChecker.checkNow() so
+   * client "Recheck" buttons don't just re-read a cached status (the background
+   * poller only runs every 6h after boot jitter). Returns the post-check status
+   * body (same shape as GET /api/update/status).
+   *
+   * When checks are disabled (no checker) we return the disabled stub — same as
+   * GET status. When an apply is mid-flight (downloading/swapping) we skip the
+   * network poll so we don't clobber apply progress via setState("checking"),
+   * and return the current status instead.
+   */
+  private async handleUpdateCheck(): Promise<Response> {
+    const checker = this.opts.updateChecker
+    if (!checker) {
+      return this.json({
+        current: BUILD_VERSION,
+        commit: BUILD_COMMIT,
+        mode: detectUpdateMode(),
+        updateAvailable: false,
+        latest: null,
+        notesUrl: null,
+        state: "idle",
+        lastChecked: null,
+        lastError: null,
+        disabled: true,
+      })
+    }
+    const s = checker.status()
+    if (s.state === "downloading" || s.state === "swapping") {
+      return this.json(s)
+    }
+    await checker.checkNow()
+    return this.json(checker.status())
+  }
+
+  /**
    * POST /api/update/run handler. The checker's STATE is the in-flight guard:
    * if it's already checking/downloading/swapping we 409 rather than starting a
    * second apply. Only `binary` mode self-updates; source/docker (and the
@@ -2655,6 +2690,9 @@ export class WebChannel implements Channel {
         })
       }
       return this.json(checker.status())
+    }
+    if (method === "POST" && path === "/api/update/check") {
+      return this.handleUpdateCheck()
     }
     if (method === "POST" && path === "/api/update/run") {
       return this.handleUpdateRun()
