@@ -49,6 +49,7 @@ jobs:
       shared: ${{ steps.f.outputs.shared }}
       android: ${{ steps.f.outputs.android }}
       desktop: ${{ steps.f.outputs.desktop }}
+      ios: ${{ steps.f.outputs.ios }}
       wire: ${{ steps.f.outputs.wire }}
     steps:
       - uses: actions/checkout@v4
@@ -72,6 +73,8 @@ jobs:
               - 'apps/android/**'
             desktop:
               - 'apps/desktop/**'
+            ios:
+              - 'apps/iosApp/**'
             # The protocol seam. Any touch here runs every lane — see rule 1.
             wire:
               - 'src/shared/**'
@@ -286,4 +289,64 @@ jobs:
             ~/.maestro/tests/**
             /tmp/maestro-failure/**
             /tmp/supermux-test-broker.*/**/*.log
+          retention-days: 7
+
+  # ── iOS: unit tests on a simulator ──────────────────────────────────────────
+  # PR only and path-filtered. macOS runners are free on a public repo but the
+  # scarce resource is capacity, not money: this job builds the Kotlin
+  # Shared.framework for iOS before Xcode can compile anything, so it is the most
+  # expensive lane by a distance.
+  #
+  # iOS had 29 XCTest files and NOTHING ran them — release.yml only compile-checks
+  # the app, and a compile check cannot tell you a parser broke. This runs them.
+  #
+  # Not here yet: the Maestro journey on a simulator. The flow is already written
+  # against shared test ids so it will point at a simulator unchanged, and a
+  # simulator can reach the fixture on 127.0.0.1 directly (no 10.0.2.2 hop). It
+  # goes in once this lane is proven, rather than debugging both at once on the
+  # slowest runner we have.
+  ios-tests:
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request' ||
+      needs.changes.outputs.ios == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.wire == 'true'
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        working-directory: apps/iosApp
+        run: xcodegen generate
+
+      # The Supermux scheme's test action runs SupermuxTests. Signing is off: a
+      # simulator build needs no identity, and requiring one would make this lane
+      # depend on secrets a fork does not have.
+      - name: Run SupermuxTests on a simulator
+        working-directory: apps/iosApp
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -scheme Supermux \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
+            -derivedDataPath build/dd-ios-test \
+            -resultBundlePath build/ios-tests.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            test
+
+      - name: Upload xcresult
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-xcresult
+          path: apps/iosApp/build/ios-tests.xcresult
           retention-days: 7
