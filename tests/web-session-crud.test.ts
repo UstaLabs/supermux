@@ -216,3 +216,37 @@ test("PATCH /sessions/reorder → renumbers the section", async () => {
   expect(body.ok).toBe(true)
   expect(reorderCalls).toEqual([["x", "y"]])
 })
+
+test("PATCH /sessions/reorder → main-style callback can broadcast sessions_reordered", async () => {
+  // Mirrors src/main.ts reorderSessions: store reorder + WS fan-out.
+  const orig = ch["opts"].reorderSessions
+  ch["opts"].reorderSessions = (orderedIds: string[]) => {
+    reorderCalls.push(orderedIds)
+    ch.broadcastToAll({ type: "sessions_reordered", orderedIds })
+  }
+  const ws = await new Promise<WebSocket>((resolve, reject) => {
+    const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws`, {
+      headers: { Cookie: `cmux_token=${token}` },
+    })
+    sock.onopen = () => resolve(sock)
+    sock.onerror = (e) => reject(e)
+    setTimeout(() => reject(new Error("ws connect timeout")), 2000)
+  })
+  const next = () => new Promise<any>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error("ws message timeout")), 2000)
+    ws.onmessage = (e) => { clearTimeout(t); resolve(JSON.parse(String(e.data))) }
+  })
+  ws.send(JSON.stringify({ type: "subscribe" }))
+  await next() // snapshot
+  const pending = next()
+  const res = await fetch(`http://127.0.0.1:${PORT}/sessions/reorder`, {
+    method: "PATCH",
+    headers: authed(),
+    body: JSON.stringify({ orderedIds: ["c", "a", "b"] }),
+  })
+  expect(res.status).toBe(200)
+  expect(await pending).toEqual({ type: "sessions_reordered", orderedIds: ["c", "a", "b"] })
+  expect(reorderCalls).toEqual([["c", "a", "b"]])
+  ws.close()
+  ch["opts"].reorderSessions = orig
+})

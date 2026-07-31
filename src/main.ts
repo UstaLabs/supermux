@@ -1548,7 +1548,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       await refreshTelegramMenu()
       webChannel?.broadcastToAll({ type: "session_renamed", id: s.id, old: oldName, new: newName })
     },
-    reorderSessions: (orderedIds) => registry.sessions.reorder(orderedIds),
+    reorderSessions: (orderedIds) => {
+      registry.sessions.reorder(orderedIds)
+      // Fan out so every connected client (web / native) re-sorts live —
+      // the drag origin already applied optimistically; peers need this frame.
+      webChannel?.broadcastToAll({ type: "sessions_reordered", orderedIds })
+    },
     proxyBaseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
     proxyMainHost: MUX_WEB_PUBLIC_URL ? new URL(MUX_WEB_PUBLIC_URL).host : undefined,
     proxyLookup: (domain: string) => {

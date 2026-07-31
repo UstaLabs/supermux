@@ -333,6 +333,15 @@ class DesktopAppState(
                     current.map { s -> if (s.id == frame.id) s.copy(name = frame.newName) else s }
                 }
             }
+            is ServerFrame.SessionsReordered -> {
+                // Live fan-out of PATCH /sessions/reorder (peer clients re-sort).
+                val order = frame.orderedIds.withIndex().associate { (i, id) -> id to i }
+                if (order.isNotEmpty()) {
+                    _sessions.update { current ->
+                        current.map { s -> order[s.id]?.let { s.copy(sortOrder = it) } ?: s }
+                    }
+                }
+            }
             is ServerFrame.MessageAppend -> {
                 // Optimistic-echo dedup (iOS BrokerSession parity): when the real inbound message
                 // lands, drop the matching local-… placeholder we appended on send.
@@ -792,8 +801,8 @@ class DesktopAppState(
 
     /** GET /archived-sessions — every killed/archived session. Empty on any failure. */
     fun reorderSessions(orderedIds: List<String>) {
-        // Optimistic sort_order so the list doesn't snap back when live drag ends
-        // (broker PATCH does not broadcast a session frame).
+        // Optimistic sort_order so the list doesn't snap back while the PATCH is
+        // in flight. Peers re-sort from the sessions_reordered WS frame.
         _sessions.update { current ->
             val order = orderedIds.withIndex().associate { (i, id) -> id to i }
             current.map { s -> order[s.id]?.let { s.copy(sortOrder = it) } ?: s }

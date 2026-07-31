@@ -189,6 +189,17 @@ sealed interface ServerFrame {
         @SerialName("new") val newName: String,
     ) : ServerFrame
 
+    /**
+     * Batch renumber of [SessionInfo.sortOrder] after PATCH /sessions/reorder.
+     * [orderedIds] is the full section order (index = new sort_order). Broker
+     * broadcasts this so every client re-sorts live; the drag origin already
+     * applied the same mapping optimistically.
+     */
+    @Serializable @SerialName("sessions_reordered")
+    data class SessionsReordered(
+        val orderedIds: List<String> = emptyList(),
+    ) : ServerFrame
+
     /** Per-session live config/state patch (mute toggles, shim connect, model/effort
      *  switches). Every field except [session] is optional — apply only what's present.
      *  Was silently dropped by natives before 2026-07-11 (no serializer) → stale

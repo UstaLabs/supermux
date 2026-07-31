@@ -367,6 +367,26 @@ class AppViewModel(
             }
             is ServerFrame.SessionRenamed ->
                 patchSessionIn(recordId, f.id) { it.copy(name = f.newName) }
+            is ServerFrame.SessionsReordered -> {
+                // Live fan-out of PATCH /sessions/reorder — renumber sortOrder by
+                // array index so peer clients re-sort without a reconnect.
+                val order = f.orderedIds.withIndex().associate { (i, id) -> id to i }
+                if (order.isNotEmpty()) {
+                    val bucket = sessionsByHost[recordId].orEmpty()
+                    var hostChanged = false
+                    val next = bucket.map { s ->
+                        val so = order[s.id] ?: return@map s
+                        if (s.sortOrder == so) s else {
+                            hostChanged = true
+                            s.copy(sortOrder = so)
+                        }
+                    }
+                    if (hostChanged) {
+                        sessionsByHost[recordId] = next
+                        rebuildSessions()
+                    }
+                }
+            }
             is ServerFrame.SessionState ->
                 patchSessionIn(recordId, f.session) {
                     it.copy(

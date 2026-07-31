@@ -333,6 +333,21 @@ final class BrokerSession {
                     git: old.git, finish_job: old.finish_job,
                     userStatus: old.userStatus, sortOrder: old.sortOrder, draftPayload: old.draftPayload)
             }
+        case .sessionsReordered(let r):
+            // Live fan-out of PATCH /sessions/reorder — renumber sortOrder by array
+            // index so peer clients re-sort without a reconnect.
+            let order = Dictionary(uniqueKeysWithValues: r.orderedIds.enumerated().map { ($1, $0) })
+            guard !order.isEmpty else { break }
+            sessions = sessions.map { s in
+                guard let i = order[s.id] else { return s }
+                return s.doCopy(
+                    id: s.id, name: s.name, workdir: s.workdir, agent: s.agent,
+                    status: s.status, mute: s.mute, connected: s.connected,
+                    model: s.model, reasoningLevel: s.reasoningLevel,
+                    repo_root: s.repo_root, role: s.role, session_branch: s.session_branch,
+                    git: s.git, finish_job: s.finish_job,
+                    userStatus: s.userStatus, sortOrder: Int32(i), draftPayload: s.draftPayload)
+            }
         case .sessionState(let st):
             // Per-session patch (model/effort switch, mute, shim connect): merge only the
             // fields present (web parity: ws.ts updateState). Natives dropped this frame
@@ -627,7 +642,8 @@ final class BrokerSession {
     func archived() async -> [ArchivedDto] { (try? await api.archived()) ?? [] }
     func resume(_ id: String) { Task { [api] in try? await api.resume(id: id) } }
     func reorderSessions(_ orderedIds: [String]) {
-        // Optimistic sort_order so List.onMove doesn't snap back (PATCH has no WS broadcast).
+        // Optimistic sort_order so List.onMove doesn't snap back while the PATCH
+        // is in flight. Peers re-sort from the sessions_reordered WS frame.
         let order = Dictionary(uniqueKeysWithValues: orderedIds.enumerated().map { ($1, $0) })
         sessions = sessions.map { s in
             guard let i = order[s.id] else { return s }
