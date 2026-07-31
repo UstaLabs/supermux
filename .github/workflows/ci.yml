@@ -212,14 +212,78 @@ jobs:
             apps/*/build/test-results/**
           retention-days: 7
 
-# ── Android device journey ──────────────────────────────────────────────────
-# NOT wired in yet, on purpose. The flow (.maestro/pair-and-converse.yaml) and
-# its harness (scripts/test-android.sh, scripts/lib/maestro-run.sh) are in the
-# repo and pairing genuinely works — a local run reached the paired session list
-# with the seeded session on screen. What does not work yet is the assertion
-# layer: Compose testTags are not reaching uiautomator as resource ids, so
-# `id: session-list` never matches even when the list is plainly rendered.
-#
-# Adding the lane before that is fixed would put a permanently-red required
-# check in front of every PR, which is the fastest way to teach everyone to
-# ignore CI. It gets wired in when it passes.
+  # ── Android device journey: the app driven on a real emulator ───────────────
+  # PR only. An emulator boot plus an APK build is 8–12 minutes: a reasonable
+  # merge gate, far too slow for the push loop. The host-side Android unit tests
+  # in `kotlin` already cover pushes.
+  #
+  # This is the lane that proves what no host-side test can — that pairing works,
+  # that the WebSocket reaches a real broker, and that the reply renders. It runs
+  # the same journey the browser lane runs, against the same hermetic fixture.
+  #
+  # Verified locally end to end (5m28s) before being wired in. Every earlier
+  # failure traced to emulator health, not the flow, so the emulator options
+  # below are load-bearing rather than cargo-culted.
+  android-journey:
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request' ||
+      needs.changes.outputs.android == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.wire == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: bun install --frozen-lockfile
+
+      # The runner user is not in the kvm group by default. Without hardware
+      # acceleration the AVD falls back to software rendering, and a software
+      # emulator is exactly what made every local run ANR on system UI.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install Maestro
+        run: |
+          curl -fsSL https://get.maestro.mobile.dev | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+      - name: Stage Firebase config
+        run: cp apps/android/google-services.json.example apps/android/google-services.json
+
+      - name: Build debug APK
+        working-directory: apps
+        run: ./gradlew :android:assembleDebug --build-cache --console=plain
+
+      - name: Run the journey on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          # A fresh runner emulator has no prior install, so the reinstall path
+          # this opts into never actually triggers there.
+          script: MUX_TEST_FORCE_REINSTALL=1 scripts/test-android.sh
+
+      - name: Upload Maestro output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maestro-android
+          path: |
+            ~/.maestro/tests/**
+            /tmp/maestro-failure/**
+            /tmp/supermux-test-broker.*/**/*.log
+          retention-days: 7
