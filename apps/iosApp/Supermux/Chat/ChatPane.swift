@@ -36,6 +36,10 @@ struct ChatPane: View {
     @State private var modelSheet = false
     @State private var reasoningSheet = false
     @State private var reasoning: ReasoningResponse?
+    /// macOS: brief hold after the text view resigns so a click on the model/reasoning pill
+    /// can finish (action + popover present) before expanded chrome is torn down. See
+    /// `composerExpanded` and `presentOptionPicker`.
+    @State private var expandGrace = false
 
     /// Global chat density. Observed HERE (not only inside the Equatable transcript) so a Detail
     /// menu change from WorkspaceDetail / ChatView invalidates ChatPane, which re-creates
@@ -84,9 +88,19 @@ struct ChatPane: View {
     }
 
     /// Composer is expanded (full controls) when focused, when there's a draft or a
-    /// staged attachment, or while recording; otherwise it rests as a slim glass pill.
+    /// staged attachment, while recording, or while a model/reasoning picker is open.
+    ///
+    /// The pickers matter on macOS: `smOptionPicker` is a pill-anchored `.popover`, and the
+    /// pills live only in the expanded chrome. Opening the popover resigns the NSTextView
+    /// (first-responder moves into the popover) → `composing` flips false. Without holding
+    /// expanded open for `modelSheet`/`reasoningSheet`/`expandGrace`, the anchor is removed
+    /// from the tree on the next body pass and the popover dismisses immediately —
+    /// "impossible to switch model" with an empty focused composer. Same hold keeps
+    /// `/model` usable when the composer was collapsed (popover modifier only exists
+    /// while expanded).
     private var composerExpanded: Bool {
         composing || composer.hasContent || composer.isBusy
+            || modelSheet || reasoningSheet || expandGrace
     }
 
     // MARK: - Body
@@ -128,6 +142,19 @@ struct ChatPane: View {
             }
             .onChange(of: composer.draft) { _, new in UserDefaults.standard.set(new, forKey: draftKey) }
             .onChange(of: composer.refocusToken) { _, _ in composing = true }
+            .onChange(of: composing) { was, now in
+                // macOS: when the NSTextView resigns (click moved to a toolbar control),
+                // keep expanded chrome alive for one short beat so the pill's Button action
+                // still runs against a mounted anchor. Without this, mouse-down resigns focus,
+                // expanded collapses, the pill is removed, and the model popover never sticks.
+                #if os(macOS)
+                guard was && !now else { return }
+                expandGrace = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    expandGrace = false
+                }
+                #endif
+            }
             .onChange(of: composer.status) { _, s in
                 guard let s else { return }
                 showBanner(s)
@@ -165,13 +192,27 @@ struct ChatPane: View {
     /// Handle a control slash command (lifted from the old inline `applyCommand` switch).
     private func handleControlCommand(_ cmd: SlashCommand) {
         switch cmd.action?.kind {
-        case "model": modelSheet = true
+        case "model": presentOptionPicker { modelSheet = true }
         case "rename": renameText = session.name; showRename = true
         case "mute": broker.toggleMute(session)
         case "stop": broker.interrupt(session.id)
         case "kill": showKillConfirm = true
         default: break   // spawn needs navigation we don't have from chat
         }
+    }
+
+    /// Present a composer option popover (model / reasoning).
+    ///
+    /// On macOS the popover must open *after* the triggering click fully ends: presenting
+    /// synchronously from the Button action lets the same mouse-up count as an outside click
+    /// and dismiss the popover immediately. `composerExpanded` holds the anchor while open
+    /// via `modelSheet` / `reasoningSheet` (and `expandGrace` covers the pre-present beat).
+    private func presentOptionPicker(_ open: @escaping () -> Void) {
+        #if os(macOS)
+        DispatchQueue.main.async(execute: open)
+        #else
+        open()
+        #endif
     }
 
     // MARK: - Bottom cluster
@@ -284,7 +325,7 @@ struct ChatPane: View {
                                onPaste: { Task { await composer.pasteClipboard() } })
                     MicButton(model: composer)
                     SoftFilterPill(text: modelPillLabel, systemImage: "cpu", active: session.model != nil) {
-                        modelSheet = true
+                        presentOptionPicker { modelSheet = true }
                     }
                     .smOptionPicker(isPresented: $modelSheet) {
                         OptionSwitchSheet(title: "Model", broker: broker, session: session, kind: .model)
@@ -296,7 +337,7 @@ struct ChatPane: View {
                             text: session.reasoningLevel ?? reasoning?.current ?? "reasoning",
                             systemImage: "brain",
                             active: session.reasoningLevel != nil
-                        ) { reasoningSheet = true }
+                        ) { presentOptionPicker { reasoningSheet = true } }
                             .smOptionPicker(isPresented: $reasoningSheet) {
                                 OptionSwitchSheet(title: "Reasoning", broker: broker, session: session, kind: .reasoning)
                             }
