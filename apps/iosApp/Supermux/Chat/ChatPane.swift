@@ -430,9 +430,19 @@ private extension View {
 /// 3. Missing `sizeChanges` scroll anchor — content/inset growth (new rows, composer collapse)
 ///    did not keep a bottom-following viewport glued to the edge.
 ///
+/// Blank-on-open is a separate problem: chronological `LazyVStack` estimates unrealized rows near
+/// zero height, so a pure bottom pin can park in an empty region until a wheel event forces
+/// measurement. Semantic `ScrollPosition` alone does **not** realize that gap on macOS (measured
+/// 2026-07-29). The caller keeps a small non-lazy **eager tail** of newest blocks so the bottom
+/// edge has real height; this scroller only keeps that edge stable while following.
+///
 /// `ScrollPosition` + `.sizeChanges` keep the bottom stable while following; `onScrollGeometryChange`
 /// drops follow when the user wheels up. `pinGeneration` re-asserts only while following, and only
 /// for real timeline changes (messages, tools, trailers) — never with animation.
+///
+/// During the first ~400 ms after open, follow mode is **locked** so LazyVStack estimate thrash
+/// cannot trip the unstick hysteresis and cancel settle re-pins (that race re-introduced blank
+/// screens after the eager tail was briefly removed).
 struct MacTranscriptScrollView<Content: View>: View {
     /// Bumps when the timeline or bottom trailers change in a way that should keep a following
     /// viewport pinned. Built by the caller from blocks / activity / working state — not raw
@@ -443,6 +453,8 @@ struct MacTranscriptScrollView<Content: View>: View {
     /// True while the user is at/near the bottom. Cleared by scrolling up; restored by scrolling
     /// back down or by opening the chat (`onAppear`).
     @State private var followingBottom = true
+    /// While true, geometry thrash cannot clear `followingBottom` (open / session-switch settle).
+    @State private var followLocked = true
 
     init(pinGeneration: Int, @ViewBuilder content: () -> Content) {
         self.pinGeneration = pinGeneration
@@ -469,26 +481,26 @@ struct MacTranscriptScrollView<Content: View>: View {
         } action: { _, distanceFromBottom in
             // Hysteresis: easier to engage follow than to drop it, so a single frame of layout
             // thrash while content grows does not un-stick a following chat mid-stream.
+            // Open-settle lock: never unstick while LazyVStack estimates are still revising.
             if distanceFromBottom <= 48 {
                 followingBottom = true
-            } else if distanceFromBottom > 96 {
+            } else if !followLocked && distanceFromBottom > 96 {
                 followingBottom = false
             }
         }
         .onAppear {
             followingBottom = true
+            followLocked = true
             position.scrollTo(edge: .bottom)
         }
-        // LazyVStack revises unrealized-row estimates over a few frames after open. Without a
-        // couple of un-animated re-pins, the bottom edge can sit on a zero-height estimate and
-        // the chat opens blank until the user scrolls (the old pure-LazyVStack bug). Idempotent
-        // while already at bottom — no visible jump.
+        // Re-pin across a few frames while the eager tail + lazy history settle. Follow is locked
+        // for the whole settle window so hysteresis cannot abort early and leave a blank viewport.
         .task {
-            for _ in 0..<3 {
+            for _ in 0..<8 {
                 try? await Task.sleep(nanoseconds: 50_000_000)
-                guard followingBottom else { return }
                 position.scrollTo(edge: .bottom)
             }
+            followLocked = false
         }
         // Un-animated on purpose — a 0.2s animated pin re-lays out every frame and feels like a
         // jump on every tool row. Only re-assert while the user is following the live edge.
@@ -554,6 +566,11 @@ struct SessionTranscript: View, Equatable {
         return h
     }
 
+    /// Newest blocks kept non-lazy on macOS so the bottom edge has real height on first layout.
+    /// Matches the pure-lazy path's measured ~7 realized rows; larger (24) repaid too much
+    /// markdown cost. Required for blank-on-open — ScrollPosition re-pins alone are insufficient.
+    private static let macEagerTailCount = 8
+
     var body: some View {
         // Bound once: `blocks` is read by both the empty-check and the `ForEach`, and in low chat
         // detail it filters the buffer's timeline. (The whole-history merge itself now happens in
@@ -590,18 +607,21 @@ struct SessionTranscript: View, Equatable {
 
     /// The scrolling container.
     ///
-    /// **macOS uses `ScrollView` + one `LazyVStack` of timeline blocks + a small non-lazy footer;
-    /// iOS keeps `List`.** This split is deliberate and load-bearing in both directions:
+    /// **macOS uses `ScrollView` + lazy history + an 8-block eager tail; iOS keeps `List`.**
+    /// This split is deliberate and load-bearing in both directions:
     ///
     /// - `List` realizes a fixed batch of rows far beyond the viewport. Measured on a 1440x900
     ///   window with a fresh 200-message session: **23 rows / 11,684 pt realized for a 900 pt
     ///   viewport** — 13x more than is visible — costing ~257 ms of blocked main thread per session
-    ///   switch. `LazyVStack` realizes strictly by viewport (~7 rows / 1,554 pt).
-    /// - An earlier "eager tail of last N blocks in a plain `VStack`" fixed blank-on-open but
-    ///   **hopped rows between LazyVStack and VStack** every time a new block arrived (the oldest
-    ///   eager row moved into history). That container hop destroyed/recreated views and produced
-    ///   the live-update jumps. Stickiness is now owned by `MacTranscriptScrollView` (ScrollPosition
-    ///   + sizeChanges + follow gate); the footer only holds trailers + the bottom sentinel.
+    ///   switch. Lazy history realizes strictly by viewport; the 8-block eager tail prevents
+    ///   bottom-anchor estimate gaps while keeping open work near that same range.
+    /// - A pure chronological `LazyVStack` is fast but opens **blank until scroll**: unrealized
+    ///   rows estimate ~0 height, so the bottom pin parks in an empty region. An inverted
+    ///   LazyVStack (newest-first + `scaleEffect`) was tried; it risks NSTextView hit-testing
+    ///   bugs in the markdown twin and was reverted. Eager tail is the reliable fix.
+    /// - Sliding the eager window reparents one row Lazy↔VStack per new block. That hop is
+    ///   acceptable when stickiness is un-animated and follow-gated (`MacTranscriptScrollView`);
+    ///   re-removing the tail re-broke blank-on-open for long sessions (e.g. testing-strategy).
     /// - iOS must keep `List`: this code moved FROM `ScrollView`+`LazyVStack` TO `List` precisely
     ///   because LazyVStack blanked on the **keyboard-avoidance relayout** (blank-on-keyboard,
     ///   blank-on-open). macOS has no keyboard avoidance, so it doesn't inherit that bug — but iOS
@@ -614,10 +634,10 @@ struct SessionTranscript: View, Equatable {
                     .frame(maxWidth: .infinity)
                     .smContentWidthCap()
             } else {
-                // All timeline blocks stay in ONE LazyVStack for their whole life — never reparented
-                // into an eager VStack as the window slides. That was the live-update jump source.
+                let eagerStart = max(0, blocks.count - Self.macEagerTailCount)
+                // Older history: lazy (only measured when scrolled into view).
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(blocks) { block in
+                    ForEach(blocks.prefix(eagerStart)) { block in
                         blockRow(block)
                             .smContentWidthCap()
                             .padding(.horizontal, 16)
@@ -625,13 +645,21 @@ struct SessionTranscript: View, Equatable {
                     }
                 }
                 .frame(maxWidth: .infinity)
-                // Trailers are small and short-lived; keep them non-lazy so the bottom edge always
-                // has a realized height for ScrollPosition / sizeChanges to pin against.
+                // Newest tail + trailers: always realized so bottom height is real on open/switch.
+                // Without this, LazyVStack zero-estimates leave ScrollPosition in a blank gap.
                 VStack(alignment: .leading, spacing: 0) {
+                    ForEach(blocks.suffix(blocks.count - eagerStart)) { block in
+                        blockRow(block)
+                            .smContentWidthCap()
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 5)
+                    }
                     trailers
                     Color.clear.frame(height: 1).id("__bottom__")
                 }
                 .frame(maxWidth: .infinity)
+                // Suppress the one-frame hop animation when the oldest eager row ages into history.
+                .transaction { $0.animation = nil }
             }
         }
         #else

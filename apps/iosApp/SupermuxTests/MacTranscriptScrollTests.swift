@@ -28,18 +28,26 @@ final class MacTranscriptScrollTests: XCTestCase {
     private struct Harness: View {
         let store: ProbeStore
         var pinGeneration: Int = 240
+        /// Matches `SessionTranscript.macEagerTailCount` — newest rows stay non-lazy.
+        private let eagerTail = 8
 
         var body: some View {
-            // Mirrors SessionTranscript's mac layout: one LazyVStack of timeline rows + a
-            // non-lazy footer sentinel. No sliding eager-message tail (that reparented rows).
+            // Mirrors SessionTranscript's mac layout: lazy history + small eager tail + sentinel.
+            // Pure LazyVStack alone blanks on real markdown heights; this landing zone is required.
             MacTranscriptScrollView(pinGeneration: pinGeneration) {
+                let total = 240
+                let eagerStart = max(0, total - eagerTail)
                 LazyVStack(spacing: 0) {
-                    ForEach(0..<240, id: \.self) { id in
+                    ForEach(0..<eagerStart, id: \.self) { id in
                         ProbeRow(id: id, store: store)
                             .frame(height: CGFloat(28 + (id % 7) * 19))
                     }
                 }
                 VStack(spacing: 0) {
+                    ForEach(eagerStart..<total, id: \.self) { id in
+                        ProbeRow(id: id, store: store)
+                            .frame(height: CGFloat(28 + (id % 7) * 19))
+                    }
                     Color.clear.frame(height: 1).id("__bottom__")
                 }
             }
