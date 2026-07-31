@@ -150,10 +150,10 @@ class SessionLauncherScreenTest {
         models: (String) -> List<ModelInfo> = { emptyList() },
         reasoning: (String, String?) -> ReasoningResponse? = { _, _ -> null },
         repoInfo: RepoInfo? = null,
-        // The screen resets a restored draft workdir that is not in the project list
-        // (SessionLauncherScreen: `workdir != "~" && workdir !in loaded` → first project
-        // or "~"). A test that restores a draft workdir must therefore also list it here,
-        // or the restore is silently undone and the submit sees "~".
+        // A restored draft workdir survives an EMPTY project list now — that reset
+        // used to fire on "could not enumerate projects" and silently rewrite the
+        // workdir to "~". Kept parameterised so a test can still exercise the
+        // genuine "workdir is not among the known projects" reset.
         projects: List<String> = emptyList(),
         onPrefsChange: (LauncherPrefs) -> Unit = {},
         onDraftChange: (LauncherDraft) -> Unit = {},
@@ -199,7 +199,6 @@ class SessionLauncherScreenTest {
         setContent {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
-                projects = listOf("/proj/x"), // else the restored workdir is reset to "~"
                 onClearDraft = { cleared = true },
                 onSubmit = { w, a, m, r, t, s, wt, b, _replaceDraftId ->
                     captured = Submitted(w, a, m, r, t, s.size, wt, b)

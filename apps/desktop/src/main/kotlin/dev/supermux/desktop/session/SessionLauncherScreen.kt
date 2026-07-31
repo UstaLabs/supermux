@@ -444,9 +444,13 @@ fun SessionLauncherScreen(
         projects = emptyList()
         val loaded = loadProjects()
         projects = loaded
-        if (workdir.isBlank() || (workdir != "~" && workdir !in loaded)) {
-            workdir = loaded.firstOrNull() ?: "~"
-            workdirTouched = loaded.isNotEmpty()
+        // An EMPTY project list means "we could not enumerate projects" (slow host,
+        // failed fetch, offline) — not "your workdir is gone". Resetting on that
+        // silently threw away a restored draft's workdir and replaced it with "~",
+        // so a draft you came back to pointed at the wrong directory.
+        if (loaded.isNotEmpty() && (workdir.isBlank() || (workdir != "~" && workdir !in loaded))) {
+            workdir = loaded.first()
+            workdirTouched = true
         }
     }
 

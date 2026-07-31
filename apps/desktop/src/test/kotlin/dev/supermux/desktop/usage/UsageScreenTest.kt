@@ -236,12 +236,12 @@ class UsageScreenTest {
             codex = null,
             cursor = null,
             // One entry per card UsageScreen actually renders, or the ones left out
-            // fall back to "Not available" and the assertion below fails. Note there
-            // is no OpenCode card on desktop even though UsageResponse has the field.
+            // fall back to "Not available" and the assertion below fails.
             errors = mapOf(
                 "claude" to "not configured",
                 "codex" to "no api key",
                 "cursor" to "request timed out",
+                "opencode" to "no local usage",
                 "grok" to "no credits",
             ),
         )
@@ -267,8 +267,8 @@ class UsageScreenTest {
         waitForIdle()
         // Every card falls back to "Not available" — assert the count, not a single node
         // (onNodeWithText requires a UNIQUE match). One per card UsageScreen renders:
-        // claude, codex, cursor, grok. Bump this when a provider card is added.
-        onAllNodesWithText("Not available").assertCountEquals(4)
+        // claude, codex, cursor, opencode, grok. Bump this when a card is added.
+        onAllNodesWithText("Not available").assertCountEquals(5)
     }
 
     // ── (4) the Codex "Use a reset" button + confirm dialog ─────────────────────────────────────────
