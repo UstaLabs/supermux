@@ -25,6 +25,12 @@ appId: dev.supermux.android
     permissions:
       all: allow
 
+# A cold start right after `pm clear` needs a beat before the first frame is up;
+# without this the intro CTA is looked for while the window is still blank.
+- extendedWaitUntil:
+    visible: "See what it does"
+    timeout: 60000
+
 # Pair through the on-screen "paste a pairing link" field — the app's own manual
 # path, and the one a user takes when they cannot scan a QR code. Deliberately
 # NOT the supermux://pair deep link: that link is only read by ConnectPage, the
