@@ -381,23 +381,16 @@ fun SessionRow(
                             git = null,
                             working = working,
                             bgOpen = bgOpen,
+                            // Unread lives in the leading rail (green dot when idle); spinner
+                            // wins while the agent is working so we don't double-signal.
+                            unread = hasUnread,
+                            unreadTestTag = "session_unread_${s.id}",
                             modifier = Modifier.align(Alignment.CenterVertically),
                         )
                     }
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            if (hasUnread) {
-                                // Watch/web parity: a clear unread mark (bold alone was easy to miss).
-                                Box(
-                                    Modifier
-                                        .padding(end = 6.dp)
-                                        .size(7.dp)
-                                        .clip(CircleShape)
-                                        .background(cs.primary)
-                                        .testTag("session_unread_${s.id}"),
-                                )
-                            }
                             Text(
                                 s.name,
                                 color = cs.onSurface,

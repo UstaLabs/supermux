@@ -825,7 +825,8 @@ struct SessionRow: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Theme.teal.opacity(0.9))
             } else {
-                SessionStatusRail(git: nil, working: working, bgOpen: bgOpen)
+                // Unread lives in the rail (green dot when idle); spinner wins while working.
+                SessionStatusRail(git: nil, working: working, bgOpen: bgOpen, unread: unread)
             }
         }
         .frame(width: 28, height: 28)

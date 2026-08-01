@@ -305,7 +305,13 @@ fun SessionRow(
                     modifier = Modifier.align(Alignment.CenterVertically),
                 )
             } else {
-                SessionStatusRail(git = null, working = working, bgOpen = bgOpen, modifier = Modifier.align(Alignment.CenterVertically))
+                SessionStatusRail(
+                    git = null,
+                    working = working,
+                    bgOpen = bgOpen,
+                    unread = hasUnread,
+                    modifier = Modifier.align(Alignment.CenterVertically),
+                )
             }
             Spacer(Modifier.width(12.dp))
 
