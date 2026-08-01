@@ -7,7 +7,6 @@ import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.nativeKeyEvent
 import androidx.compose.ui.input.key.type
 
 /**
@@ -41,13 +40,16 @@ fun isPhysicalKeyboardSource(
     if (flags and AndroidKeyEvent.FLAG_VIRTUAL_HARD_KEY != 0) return false
     if (deviceId <= 0) return false
     if (isVirtualDevice == true) return false
-    if (sources != null && (sources and InputDevice.SOURCE_CLASS_KEYBOARD) == 0) return false
+    // API 36 android.jar no longer exposes SOURCE_CLASS_KEYBOARD; SOURCE_KEYBOARD is the
+    // concrete keyboard source (includes the class bits). Soft IMEs typically don't set it.
+    if (sources != null && (sources and InputDevice.SOURCE_KEYBOARD) == 0) return false
     return true
 }
 
 /** Compose [KeyEvent] originated from a physical/hardware keyboard (not the soft IME). */
 fun KeyEvent.isFromPhysicalKeyboard(): Boolean {
-    val native = nativeKeyEvent as? AndroidKeyEvent ?: return false
+    // On Android, KeyEvent is a value class wrapping android.view.KeyEvent as nativeKeyEvent.
+    val native: AndroidKeyEvent = nativeKeyEvent
     val device = if (native.deviceId > 0) InputDevice.getDevice(native.deviceId) else null
     return isPhysicalKeyboardSource(
         deviceId = native.deviceId,
