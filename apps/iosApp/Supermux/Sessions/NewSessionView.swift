@@ -76,6 +76,9 @@ struct NewSessionView: View {
     @State private var showCamera = false
     @State private var showVideoCamera = false
     @State private var photoItems: [PhotosPickerItem] = []
+    /// Transient composer status ("Didn't catch that" / "Transcription failed") — chat has a
+    /// teal banner; the launcher uses a short-lived line above the compose card.
+    @State private var composerStatus: String?
     // Installed agent kinds for the ACTIVE host (GET /agents/status) — replaces the hardcoded four
     // so the picker only offers what THAT host actually has (spec §5). Reloaded on host switch; the
     // literal list is the fallback until the fetch lands / when the host doesn't answer.
@@ -330,6 +333,15 @@ struct NewSessionView: View {
         .smFullScreenCover(isPresented: $showVideoCamera) { CameraPicker(mode: .video, onVideo: { composer.addCameraVideo($0) }) }
         #endif
         .onChange(of: composer.refocusToken) { _, _ in composing = true }
+        .onChange(of: composer.status) { _, s in
+            guard let s else { return }
+            composerStatus = s
+            composer.status = nil
+            Task {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                if composerStatus == s { composerStatus = nil }
+            }
+        }
         .onChange(of: workdir) { _, new in
             launcherState.draft.workdir = new.isEmpty ? nil : new
         }
@@ -364,6 +376,15 @@ struct NewSessionView: View {
             projectPicker
             if fleet.multiHost, let h = activeHost { hostPickerPill(h) }
             if repoInfo?.eligible == true { worktreePill }
+            if let composerStatus {
+                Text(composerStatus)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(Theme.teal, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .transition(.opacity)
+            }
             composeCard
             if !workdir.isEmpty {
                 Label(workdirLabel, systemImage: "folder")
@@ -518,6 +539,12 @@ struct NewSessionView: View {
                 RecordingBar(elapsed: composer.dictation.isListening ? composer.dictation.elapsed : composer.recorder.elapsed,
                              onStop: { Task { await composer.toggleMic() } },
                              onCancel: { composer.cancelMic() })
+            } else if composer.transcribing {
+                // After STOP, the clip is POSTed to /transcribe (often 10–30s). Chat already
+                // showed this pill; the launcher was silent and looked frozen on macOS.
+                ComposerBusyBar(label: "Transcribing…")
+            } else if composer.micStarting {
+                ComposerBusyBar(label: "Preparing speech…")
             }
             TextField("What should the agent do?", text: $composer.draft, axis: .vertical)
                 // Plain style: the card is the field's chrome — without this, macOS wraps it
