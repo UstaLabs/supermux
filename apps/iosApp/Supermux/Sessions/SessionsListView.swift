@@ -517,7 +517,9 @@ struct SessionsListView: View {
         let previewEntry = b?.messages[s.id]?.last
         let working = b?.agentWorking[s.id] == true
         // Spinner wins while working; green rail only when idle + unread (native rail parity).
-        let unread = selected != s.id && !working && isSessionUnread(
+        let unread = sessionListShowsUnreadMark(
+            active: selected == s.id,
+            working: working,
             lastMessageTs: previewEntry?.ts,
             lastReadAt: b?.lastRead[s.id]
         )
@@ -700,6 +702,28 @@ func isSessionUnread(lastMessageTs: String?, lastReadAt: String?) -> Bool {
     guard let lastMessageTs, !lastMessageTs.isEmpty else { return false }
     guard let lastReadAt, !lastReadAt.isEmpty else { return true }
     return lastMessageTs > lastReadAt
+}
+
+/// Whether the list row should request the unread green rail mark (KMP `sessionListShowsUnread`).
+func sessionListShowsUnreadMark(
+    active: Bool,
+    working: Bool,
+    lastMessageTs: String?,
+    lastReadAt: String?
+) -> Bool {
+    if active || working { return false }
+    return isSessionUnread(lastMessageTs: lastMessageTs, lastReadAt: lastReadAt)
+}
+
+/// Leading rail kind after working/unread priority (KMP `sessionListRailIndicator`).
+enum SessionListRailKind {
+    case working, unread, other
+}
+
+func sessionListRailKind(working: Bool, unread: Bool) -> SessionListRailKind {
+    if working { return .working }
+    if unread { return .unread }
+    return .other
 }
 
 struct SessionRow: View {

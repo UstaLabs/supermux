@@ -38,6 +38,9 @@ import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.SessionStatusKind
 import dev.supermux.proto.SessionStatusLevel
 import dev.supermux.proto.sessionStatus
+import dev.supermux.session.SessionListRailIndicator
+import dev.supermux.session.sessionListRailIndicator
+import androidx.compose.ui.platform.testTag
 
 /**
  * Leading per-session state, priority order:
@@ -62,17 +65,23 @@ fun SessionStatusRail(
             Text("⧗$bgOpen", color = sem.warning, fontFamily = MonoFontFamily, fontSize = 10.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.width(4.dp))
         }
-        if (working) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(14.dp),
-                strokeWidth = 2.dp,
-                color = MaterialTheme.colorScheme.primary,
-            )
-            return@Row
-        }
-        if (unread) {
-            UnreadDot(sem.success)
-            return@Row
+        when (sessionListRailIndicator(working = working, unread = unread)) {
+            SessionListRailIndicator.Working -> {
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .size(14.dp)
+                        .testTag("session_rail_working")
+                        .semantics { contentDescription = "working" },
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                return@Row
+            }
+            SessionListRailIndicator.Unread -> {
+                UnreadDot(sem.success)
+                return@Row
+            }
+            SessionListRailIndicator.Other -> Unit
         }
         val st = sessionStatus(git)
         when {
@@ -95,13 +104,21 @@ fun SessionStatusRail(
 }
 
 @Composable private fun NeutralDot() {
-    Box(Modifier.size(6.dp).clip(CircleShape).background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)))
+    Box(
+        Modifier
+            .size(6.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f))
+            .testTag("session_rail_neutral")
+            .semantics { contentDescription = "idle" },
+    )
 }
 
 @Composable private fun UnreadDot(color: Color) {
     Box(
         modifier = Modifier
             .size(10.dp)
+            .testTag("session_rail_unread")
             .semantics { contentDescription = "unread" }
             .border(width = 1.5.dp, color = color.copy(alpha = 0.35f), shape = CircleShape),
         contentAlignment = Alignment.Center,

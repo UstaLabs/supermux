@@ -31,6 +31,8 @@ import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.SessionStatusKind
 import dev.supermux.proto.SessionStatusLevel
 import dev.supermux.proto.sessionStatus
+import dev.supermux.session.SessionListRailIndicator
+import dev.supermux.session.sessionListRailIndicator
 
 /**
  * Leading per-session state, priority order:
@@ -58,19 +60,23 @@ fun SessionStatusRail(
             Text("⧗$bgOpen", color = sem.warning, fontFamily = MonoFontFamily, fontSize = 10.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.width(4.dp))
         }
-        if (working) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(14.dp),
-                strokeWidth = 2.dp,
-                color = MaterialTheme.colorScheme.primary,
-            )
-            return@Row
-        }
-        // Idle + unread: replace the quiet gray neutral with a clear "needs you" mark.
-        // Takes priority over git icons so attention is unambiguous on the list.
-        if (unread) {
-            UnreadDot(sem.success, unreadTestTag)
-            return@Row
+        when (sessionListRailIndicator(working = working, unread = unread)) {
+            SessionListRailIndicator.Working -> {
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .size(14.dp)
+                        .testTag("session_rail_working")
+                        .semantics { contentDescription = "working" },
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                return@Row
+            }
+            SessionListRailIndicator.Unread -> {
+                UnreadDot(sem.success, unreadTestTag ?: "session_rail_unread")
+                return@Row
+            }
+            SessionListRailIndicator.Other -> Unit
         }
         val st = sessionStatus(git)
         when {
@@ -94,7 +100,14 @@ fun SessionStatusRail(
 
 /** Quiet idle mark — intentionally smaller/dimmer than [UnreadDot]. */
 @Composable private fun NeutralDot() {
-    Box(Modifier.size(6.dp).clip(CircleShape).background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)))
+    Box(
+        Modifier
+            .size(6.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f))
+            .testTag("session_rail_neutral")
+            .semantics { contentDescription = "idle" },
+    )
 }
 
 /**

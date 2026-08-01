@@ -47,7 +47,7 @@ import dev.supermux.desktop.theme.Space
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
-import dev.supermux.session.isSessionUnread
+import dev.supermux.session.sessionListShowsUnread
 import dev.supermux.session.sessionsByUserOrder
 
 /**
@@ -107,8 +107,12 @@ fun SessionsRail(
             // sortOrder only — match the expanded list; messages must not reshuffle avatars.
             sessionsByUserOrder(sessions).forEach { s ->
                 val working = agentState[s.id]?.working == true
-                val unread = s.id != selectedId &&
-                    isSessionUnread(lastBySession[s.id]?.ts, lastRead[s.id])
+                val unread = sessionListShowsUnread(
+                    active = s.id == selectedId,
+                    working = working,
+                    lastMessageTs = lastBySession[s.id]?.ts,
+                    lastReadAt = lastRead[s.id],
+                )
                 RailSessionItem(
                     session = s,
                     selected = s.id == selectedId,

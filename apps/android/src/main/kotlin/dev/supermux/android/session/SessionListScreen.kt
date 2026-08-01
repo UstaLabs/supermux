@@ -269,10 +269,13 @@ fun SessionRow(
     val c = LocalPanes.current
     val cs = MaterialTheme.colorScheme
     val haptic = rememberHaptics()
-    // Server-authoritative: last message newer than last_read_at (web/watch parity).
-    // Spinner wins while working — unread green only when idle with a new message.
-    val hasUnread = !active && !working &&
-        dev.supermux.session.isSessionUnread(preview?.ts, lastReadAt)
+    // Server-authoritative unread mark (shared sessionListShowsUnread — spinner wins while working).
+    val hasUnread = dev.supermux.session.sessionListShowsUnread(
+        active = active,
+        working = working,
+        lastMessageTs = preview?.ts,
+        lastReadAt = lastReadAt,
+    )
     val rowInteraction = interactionSource ?: remember { MutableInteractionSource() }
     val actions = sessionSwipeActions(s)
     val surfaceColor = rowColor

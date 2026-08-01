@@ -2,6 +2,7 @@
 import { computed, ref, nextTick, inject } from "vue"
 import { useMessages } from "@/stores/messages"
 import { useAgentState, isAgentWorking } from "@/stores/agentState"
+import { sessionListRailKind } from "@/lib/sessionListRail"
 import { Check, Pencil, Play, Loader2Icon } from "lucide-vue-next"
 
 const props = defineProps<{
@@ -47,8 +48,16 @@ const bgOpen = computed(() => agentState.get(props.id).bgOpen ?? 0)
 const isDraft = computed(() => props.variant === "draft")
 const isSettled = computed(() => props.variant === "settled")
 
-// Idle + unread only (native SessionStatusRail parity): spinner wins while working.
-const showUnread = computed(() => !!props.unread && !working.value && !props.active)
+// Leading rail kind (native SessionStatusRail parity): working spinner › green unread › other.
+const railKind = computed(() =>
+  sessionListRailKind({
+    active: !!props.active,
+    working: working.value,
+    unread: !!props.unread,
+  }),
+)
+const showUnread = computed(() => railKind.value === "unread")
+const showWorking = computed(() => railKind.value === "working")
 
 const renameValue = ref(props.name)
 const renameInput = ref<HTMLInputElement | null>(null)
@@ -188,16 +197,27 @@ defineExpose({ startRename })
           :class="{ 'animate-pulse': !working }"
           aria-label="background tasks"
         >⧗{{ bgOpen }}</span>
-        <Loader2Icon v-if="working" class="size-4 animate-spin text-primary" aria-label="working" />
+        <Loader2Icon
+          v-if="showWorking"
+          class="size-4 animate-spin text-primary"
+          aria-label="working"
+          data-testid="session-rail-working"
+        />
         <span
           v-else-if="showUnread"
           class="relative grid size-2.5 place-items-center rounded-full ring-[1.5px] ring-emerald-400/40"
           aria-label="unread"
+          data-testid="session-rail-unread"
         >
           <span class="size-1.5 rounded-full bg-emerald-400" />
         </span>
         <Check v-else-if="isSettled" class="size-4 text-emerald-400/80" aria-label="settled" />
-        <span v-else class="size-1.5 rounded-full bg-muted-foreground/30" aria-hidden="true" />
+        <span
+          v-else
+          class="size-1.5 rounded-full bg-muted-foreground/30"
+          aria-hidden="true"
+          data-testid="session-rail-neutral"
+        />
       </div>
 
       <div class="min-w-0 flex-1">
