@@ -117,6 +117,8 @@ fun SessionKeepAlivePhoneHost(
     commands: Map<String, List<SlashCommand>>,
     commandsResolved: Map<String, Boolean>,
     lastBySession: Map<String, LogEntry?>,
+    /** Bare sessionId → ISO last_read_at (server + optimistic marks). */
+    lastRead: Map<String, String> = emptyMap(),
     archived: List<ArchivedDto> = emptyList(),
     vm: AppViewModel,
     onNavigate: (String) -> Unit,
@@ -189,6 +191,7 @@ fun SessionKeepAlivePhoneHost(
                         activeId = null,
                         onOpen = onSelect,
                         lastBySession = lastBySession,
+                        lastRead = lastRead,
                         agentState = agentState,
                         onNewSession = { onNavigate("new") },
                         loadProjects = { vm.listProjects() },

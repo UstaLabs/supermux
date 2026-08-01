@@ -374,7 +374,7 @@ class MainActivity : ComponentActivity() {
                                                 onAddHost = { navController.navigate(AddHost) },
                                                 onRenameHost = { id, name -> vm.renameHost(id, name) },
                                                 onForgetHost = { id -> vm.forgetHost(id) },
-                                            }
+                                            )
                                         }
                                     }
                                 }
@@ -448,6 +448,7 @@ class MainActivity : ComponentActivity() {
                                 commands = commands,
                                 commandsResolved = commandsResolved,
                                 lastBySession = lastBySession,
+                                lastRead = lastRead,
                                 archived = archivedSessions,
                                 vm = vm,
                                 onNavigate = navTo,
@@ -759,6 +760,7 @@ private fun PhoneNavHost(
     commands: Map<String, List<SlashCommand>>,
     commandsResolved: Map<String, Boolean>,
     lastBySession: Map<String, LogEntry?>,
+    lastRead: Map<String, String> = emptyMap(),
     archived: List<ArchivedDto> = emptyList(),
     vm: AppViewModel,
     onNavigate: (String) -> Unit,
@@ -784,6 +786,7 @@ private fun PhoneNavHost(
         commands = commands,
         commandsResolved = commandsResolved,
         lastBySession = lastBySession,
+        lastRead = lastRead,
         archived = archived,
         vm = vm,
         onNavigate = onNavigate,

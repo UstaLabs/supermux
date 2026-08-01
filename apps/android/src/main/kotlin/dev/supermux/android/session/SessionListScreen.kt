@@ -387,6 +387,17 @@ fun SessionRow(
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            if (hasUnread) {
+                                // Watch/web parity: a clear unread mark (bold alone was easy to miss).
+                                Box(
+                                    Modifier
+                                        .padding(end = 6.dp)
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(cs.primary)
+                                        .testTag("session_unread_${s.id}"),
+                                )
+                            }
                             Text(
                                 s.name,
                                 color = cs.onSurface,
