@@ -3773,7 +3773,17 @@ const modelRefreshInterval = setInterval(() => {
       repoPath: MUX_HOME,
       promptPath: curatorPromptPath(STATE_DIR),
       spawn: async ({ workdir, name }) => {
-        const r = await spawnSession({ workdir, requestedName: name, agent: "claude" })
+        // Agent/model/effort come from curator settings (Settings → Curator),
+        // same knobs as session launch / PA create. Read live so a Save mid-day
+        // applies to the next run without restarting the broker.
+        const c = settings.getCurator()
+        const r = await spawnSession({
+          workdir,
+          requestedName: name,
+          agent: c.agent,
+          model: c.model,
+          reasoningLevel: c.reasoningLevel,
+        })
         return { name: r.name }
       },
       waitReady: async (name) => {

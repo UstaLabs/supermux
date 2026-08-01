@@ -1151,8 +1151,26 @@ class AppViewModel(
     suspend fun usage(): String? = runCatching { activeApi()?.usageRaw() }.getOrNull()
     suspend fun redeemCodexReset(): CodexResetResult? = runCatching { activeApi()?.redeemCodexReset() }.getOrNull()
     suspend fun curatorSettings(): CuratorSettingsResponse? = runCatching { activeApi()?.getCuratorSettings() }.getOrNull()
-    suspend fun saveCurator(enabled: Boolean, hour: Int, minute: Int): CuratorSettingsResponse? =
-        runCatching { activeApi()?.saveCuratorSettings(enabled, hour, minute) }.getOrNull()
+    suspend fun saveCurator(
+        enabled: Boolean,
+        hour: Int,
+        minute: Int,
+        agent: String = "claude",
+        model: String? = null,
+        reasoningLevel: String? = null,
+    ): CuratorSettingsResponse? =
+        runCatching {
+            activeApi()?.saveCuratorSettings(
+                dev.supermux.net.CuratorConfig(
+                    enabled = enabled,
+                    hour = hour,
+                    minute = minute,
+                    agent = agent,
+                    model = model,
+                    reasoningLevel = reasoningLevel,
+                ),
+            )
+        }.getOrNull()
     suspend fun runCuratorNow() { runCatching { activeApi()?.runCuratorNow() } }
     suspend fun devices(): List<DeviceDto> = runCatching { activeApi()?.devices() }.getOrNull() ?: emptyList()
     suspend fun addDevice(name: String): AddDeviceResponse? = runCatching { activeApi()?.addDevice(name) }.getOrNull()

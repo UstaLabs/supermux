@@ -24,9 +24,13 @@ test("write-through get/set + getCurator default", () => {
 
 test("curator config persists across store instances (same db)", () => {
   const db = freshDb()
-  new SettingsStore(db).setCurator({ enabled: true, hour: 9, minute: 15 })
+  new SettingsStore(db).setCurator({
+    enabled: true, hour: 9, minute: 15, agent: "codex", model: "gpt-5.4", reasoningLevel: "high",
+  })
   const reloaded = new SettingsStore(db)
-  expect(reloaded.getCurator()).toEqual({ enabled: true, hour: 9, minute: 15 })
+  expect(reloaded.getCurator()).toEqual({
+    enabled: true, hour: 9, minute: 15, agent: "codex", model: "gpt-5.4", reasoningLevel: "high",
+  })
   expect(reloaded.has("curator")).toBe(true)
 })
 

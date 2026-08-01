@@ -2,7 +2,7 @@ import { test, expect } from "bun:test"
 import { CuratorScheduler } from "./scheduler"
 import type { CuratorConfig } from "../settings/curator-config"
 
-const cfg = (o: Partial<CuratorConfig>): CuratorConfig => ({ enabled: true, hour: 1, minute: 0, ...o })
+const cfg = (o: Partial<CuratorConfig>): CuratorConfig => ({ enabled: true, hour: 1, minute: 0, agent: "claude", ...o })
 
 test("enabled config produces a nextRun; disabled clears it", () => {
   const s = new CuratorScheduler(async () => {})

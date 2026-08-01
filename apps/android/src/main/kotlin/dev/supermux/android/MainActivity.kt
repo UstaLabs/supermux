@@ -618,8 +618,12 @@ class MainActivity : ComponentActivity() {
                             openCodeFinishOAuth = { id, method, code -> vm.openCodeFinishOAuth(id, method, code) },
                             // Curator
                             curatorLoad = { vm.curatorSettings() },
-                            curatorSave = { e, h, m -> vm.saveCurator(e, h, m) },
+                            curatorSave = { e, h, m, agent, model, reasoning ->
+                                vm.saveCurator(e, h, m, agent, model, reasoning)
+                            },
                             curatorRunNow = { vm.runCuratorNow() },
+                            curatorLoadModels = { agent -> vm.launcherModels(agent) },
+                            curatorLoadReasoning = { agent, model -> vm.launcherReasoning(agent, model) },
                             // Voice
                             voiceLoadModels = { family -> vm.launcherModels(family) },
                             voiceLoadConfig = { vm.config() },

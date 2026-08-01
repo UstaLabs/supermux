@@ -55,12 +55,19 @@ import dev.supermux.net.ForgeConnectionsResponse
 import dev.supermux.net.LspInstallResult
 import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
+import dev.supermux.net.ModelInfo
 import dev.supermux.net.OpenCodeOAuthStart
 import dev.supermux.net.OpenCodeProvider
 import dev.supermux.net.PADto
 import dev.supermux.net.ProxyDto
+import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RunUpdateResult
 import dev.supermux.net.UpdateStatus
+import dev.supermux.net.resolveReasoningLevel
+import dev.supermux.net.showReasoningPicker
+import dev.supermux.android.chat.EffortPill
+import dev.supermux.android.chat.ModelPill
+import dev.supermux.android.chat.PickerSheet
 import dev.supermux.android.session.relTime
 import dev.supermux.session.archivedProjects
 import dev.supermux.session.filterArchivedByProject
@@ -114,8 +121,17 @@ fun SettingsScreen(
     openCodeFinishOAuth: (providerId: String, method: Int, code: String) -> Unit,
     // Curator
     curatorLoad: suspend () -> CuratorSettingsResponse?,
-    curatorSave: suspend (Boolean, Int, Int) -> CuratorSettingsResponse?,
+    curatorSave: suspend (
+        enabled: Boolean,
+        hour: Int,
+        minute: Int,
+        agent: String,
+        model: String?,
+        reasoningLevel: String?,
+    ) -> CuratorSettingsResponse?,
     curatorRunNow: suspend () -> Unit,
+    curatorLoadModels: suspend (agent: String) -> List<ModelInfo>,
+    curatorLoadReasoning: suspend (agent: String, model: String?) -> ReasoningResponse?,
     // Voice (Voice track)
     voiceLoadModels: suspend (family: String) -> List<dev.supermux.net.ModelInfo>,
     voiceLoadConfig: suspend () -> dev.supermux.net.AppConfigDto?,
@@ -174,6 +190,8 @@ fun SettingsScreen(
             curatorLoad = curatorLoad,
             curatorSave = curatorSave,
             curatorRunNow = curatorRunNow,
+            loadModels = curatorLoadModels,
+            loadReasoning = curatorLoadReasoning,
         )
         "voice" -> VoiceSettingsPage(
             onBack = { opened = null },
@@ -502,13 +520,25 @@ private fun SettingsNavRow(
 
 // ─── Curator page ──────────────────────────────────────────────────────────────
 
+private val CURATOR_AGENTS = listOf("claude", "codex", "cursor", "opencode", "grok")
+private const val CURATOR_DEFAULT_MODEL = "__default__"
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CuratorSettingsPage(
     onBack: () -> Unit,
     curatorLoad: suspend () -> CuratorSettingsResponse?,
-    curatorSave: suspend (Boolean, Int, Int) -> CuratorSettingsResponse?,
+    curatorSave: suspend (
+        enabled: Boolean,
+        hour: Int,
+        minute: Int,
+        agent: String,
+        model: String?,
+        reasoningLevel: String?,
+    ) -> CuratorSettingsResponse?,
     curatorRunNow: suspend () -> Unit,
+    loadModels: suspend (agent: String) -> List<ModelInfo>,
+    loadReasoning: suspend (agent: String, model: String?) -> ReasoningResponse?,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -517,10 +547,19 @@ private fun CuratorSettingsPage(
     var enabled by remember { mutableStateOf(false) }
     var hour by remember { mutableStateOf(1) }
     var minute by remember { mutableStateOf(0) }
+    var agent by remember { mutableStateOf("claude") }
+    var model by remember { mutableStateOf<String?>(null) }
+    var reasoningLevel by remember { mutableStateOf<String?>(null) }
+    var models by remember { mutableStateOf<List<ModelInfo>>(emptyList()) }
+    var reasoningVisible by remember { mutableStateOf(false) }
+    var reasoningOptions by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var nextRun by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
     var running by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
+    var showModelSheet by remember { mutableStateOf(false) }
+    var showReasoningSheet by remember { mutableStateOf(false) }
+    var agentMenu by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         val r = curatorLoad()
@@ -528,9 +567,27 @@ private fun CuratorSettingsPage(
             enabled = r.config.enabled
             hour = r.config.hour
             minute = r.config.minute
+            agent = r.config.agent.takeIf { it in CURATOR_AGENTS } ?: "claude"
+            model = r.config.model
+            reasoningLevel = r.config.reasoningLevel
             nextRun = r.nextRun
         }
         loaded = true
+    }
+
+    LaunchedEffect(agent, loaded) {
+        if (!loaded) return@LaunchedEffect
+        models = loadModels(agent)
+        if (model != null && models.none { it.id == model }) model = null
+    }
+
+    LaunchedEffect(agent, model, loaded) {
+        if (!loaded) return@LaunchedEffect
+        val resp = loadReasoning(agent, model)
+        val levels = resp?.levels.orEmpty()
+        reasoningVisible = resp != null && resp.visible && showReasoningPicker(levels)
+        reasoningOptions = levels.map { it.id to (it.description ?: it.id) }
+        reasoningLevel = if (reasoningVisible) resolveReasoningLevel(levels, reasoningLevel) else null
     }
 
     BackHandler { onBack() }
@@ -605,7 +662,53 @@ private fun CuratorSettingsPage(
                 }
                 HorizontalDivider(color = cs.outlineVariant)
 
-                // 3. Next run (read-only)
+                // 3. Agent / model / thinking (same knobs as session launch)
+                CuratorRow(
+                    label = "Agent",
+                    desc = "Which agent runs the nightly curation.",
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box {
+                            FilterChip(
+                                selected = true,
+                                onClick = { agentMenu = true },
+                                label = {
+                                    Text(agent.replaceFirstChar { it.uppercase() }, fontSize = 12.sp)
+                                },
+                            )
+                            DropdownMenu(expanded = agentMenu, onDismissRequest = { agentMenu = false }) {
+                                CURATOR_AGENTS.forEach { a ->
+                                    DropdownMenuItem(
+                                        text = { Text(a.replaceFirstChar { it.uppercase() }) },
+                                        onClick = {
+                                            if (a != agent) {
+                                                agent = a
+                                                model = null
+                                                reasoningLevel = null
+                                            }
+                                            agentMenu = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                        val modelLabel = model?.let { id -> models.firstOrNull { it.id == id }?.displayName ?: id }
+                            ?: "Default"
+                        ModelPill(current = modelLabel, onClick = { showModelSheet = true })
+                        if (reasoningVisible) {
+                            EffortPill(
+                                current = reasoningLevel?.replaceFirstChar { it.uppercase() },
+                                onClick = { showReasoningSheet = true },
+                            )
+                        }
+                    }
+                }
+                HorizontalDivider(color = cs.outlineVariant)
+
+                // 4. Next run (read-only)
                 CuratorRow(
                     label = "Next run",
                     desc = "The digest notifies all your devices.",
@@ -628,7 +731,7 @@ private fun CuratorSettingsPage(
                         onClick = {
                             scope.launch {
                                 saving = true
-                                val r = curatorSave(enabled, hour, minute)
+                                val r = curatorSave(enabled, hour, minute, agent, model, reasoningLevel)
                                 if (r != null) nextRun = r.nextRun
                                 saving = false
                             }
@@ -689,6 +792,34 @@ private fun CuratorSettingsPage(
                     TimePicker(state = tpState)
                 }
             },
+        )
+    }
+
+    if (showModelSheet) {
+        val options = listOf(CURATOR_DEFAULT_MODEL to "Default") +
+            models.map { it.id to it.displayName }
+        PickerSheet(
+            title = "Model",
+            options = options,
+            current = model ?: CURATOR_DEFAULT_MODEL,
+            onPick = { id ->
+                model = id.takeUnless { it == CURATOR_DEFAULT_MODEL }
+                showModelSheet = false
+            },
+            onDismiss = { showModelSheet = false },
+        )
+    }
+
+    if (showReasoningSheet) {
+        PickerSheet(
+            title = "Thinking level",
+            options = reasoningOptions,
+            current = reasoningLevel,
+            onPick = { id ->
+                reasoningLevel = id
+                showReasoningSheet = false
+            },
+            onDismiss = { showReasoningSheet = false },
         )
     }
 }

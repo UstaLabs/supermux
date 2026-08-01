@@ -869,8 +869,25 @@ final class BrokerSession {
     func runUpdate() async -> RunUpdateResult? { try? await api.runUpdate() }
 
     func curatorSettings() async -> CuratorSettingsResponse? { try? await api.getCuratorSettings() }
-    func saveCurator(enabled: Bool, hour: Int, minute: Int) {
-        Task { [api] in _ = try? await api.saveCuratorSettings(enabled: enabled, hour: Int32(hour), minute: Int32(minute)) }
+    func saveCurator(
+        enabled: Bool,
+        hour: Int,
+        minute: Int,
+        agent: String = "claude",
+        model: String? = nil,
+        reasoningLevel: String? = nil
+    ) {
+        Task { [api] in
+            let cfg = CuratorConfig(
+                enabled: enabled,
+                hour: Int32(hour),
+                minute: Int32(minute),
+                agent: agent,
+                model: model,
+                reasoningLevel: reasoningLevel
+            )
+            _ = try? await api.saveCuratorSettings(config: cfg)
+        }
     }
     func runCuratorNow() { Task { [api] in try? await api.runCuratorNow() } }
 
