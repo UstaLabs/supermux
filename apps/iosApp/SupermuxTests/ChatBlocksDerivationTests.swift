@@ -43,7 +43,7 @@ final class ChatBlocksDerivationTests: XCTestCase {
 
         broker.reduce(ServerFrameSnapshot(
             sessions: [], logs: ["s1": messages], activity: ["s1": activity],
-            bgTasks: [:], agentState: [:], commands: [:], commandsResolved: [:]))
+            bgTasks: [:], agentState: [:], commands: [:], commandsResolved: [:], reads: [:]))
 
         let derived = broker.chatBuffer(for: "s1").blocks
         let expected = buildChatBlocks(messages: messages, activity: activity)
@@ -60,7 +60,8 @@ final class ChatBlocksDerivationTests: XCTestCase {
         let broker = makeBroker()
         broker.reduce(ServerFrameSnapshot(
             sessions: [], logs: ["s1": [msg("m1", "2026-07-29T10:00:00Z", "first")]],
-            activity: [:], bgTasks: [:], agentState: [:], commands: [:], commandsResolved: [:]))
+            activity: [:], bgTasks: [:], agentState: [:], commands: [:], commandsResolved: [:],
+            reads: [:]))
         XCTAssertEqual(broker.chatBuffer(for: "s1").blocks.count, 1)
 
         broker.reduce(ServerFrameMessageAppend(
