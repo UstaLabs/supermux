@@ -58,6 +58,9 @@ final class BrokerSession {
     private(set) var commands: [String: [SlashCommand]] = [:]
     private(set) var displays: [DisplayStream] = []
     private(set) var finishJobs: [String: FinishJobDto] = [:]
+    /// Session id → ISO last_read_at. Seeded from snapshot `reads`, updated by `session_read`
+    /// and optimistic markRead when the user opens a chat (web/Android/desktop parity).
+    private(set) var lastRead: [String: String] = [:]
     private(set) var synced = false
 
     /// Per-host reachability for the merged fleet list (spec §5): true once this host's control WS
@@ -268,6 +271,11 @@ final class BrokerSession {
             bgTasks = s.bgTasks
             commands = s.commands
             finishJobs = Dictionary(uniqueKeysWithValues: s.sessions.compactMap { sess in sess.finish_job.map { (sess.id, $0) } })
+            // Monotonic merge of read pointers (web unread.seed parity): never rewind an
+            // optimistic local mark with a slightly-older server timestamp.
+            for (sid, ts) in s.reads {
+                lastRead[sid] = advanceLastRead(current: lastRead[sid], candidate: ts)
+            }
             synced = true
             // A (re)connect always begins with a snapshot; re-assert viewing presence so the
             // broker's per-device tracker is current after a reconnect (we may have expired out
@@ -318,6 +326,7 @@ final class BrokerSession {
             agentWaiting.removeValue(forKey: r.id)
             agentBgOpen.removeValue(forKey: r.id)
             bgTasks.removeValue(forKey: r.id)
+            lastRead.removeValue(forKey: r.id)
             chatBuffers.removeValue(forKey: r.id) // per-session transcript observation buffer
             evictTerminalHosts(sessionId: r.id)   // session killed → tear down its live terminals
             dropEditorHost(sessionId: r.id)       // …its editor webview (stop() breaks the bridge cycle)
@@ -388,6 +397,8 @@ final class BrokerSession {
                 log.append(m.entry)
             }
             writeMessages(m.session, log)
+        case .sessionRead(let r):
+            lastRead[r.session] = advanceLastRead(current: lastRead[r.session], candidate: r.lastReadAt)
         case .activityAppend(let a):
             var events = activity[a.session] ?? []
             events.append(a.event)
@@ -472,8 +483,23 @@ final class BrokerSession {
     func updateViewing(session: String?, visible: Bool) {
         viewingSession = session
         viewingVisible = visible
+        // Optimistic clear (web useUnread.markRead / Android parity). Server confirms via
+        // session_read after the viewing frame advances the read pointer.
+        if visible, let session { markRead(session) }
         sendViewingIfChanged()
         ensureViewingHeartbeat()
+    }
+
+    /// Optimistically advance this session's read pointer to now so the list un-bolds immediately.
+    func markRead(_ sessionId: String) {
+        let now = ISO8601DateFormatter().string(from: Date())
+        lastRead[sessionId] = advanceLastRead(current: lastRead[sessionId], candidate: now)
+    }
+
+    /// Monotonic advance of a read pointer (matches shared KMP `advanceLastRead`).
+    private func advanceLastRead(current: String?, candidate: String) -> String {
+        if let current, current >= candidate { return current }
+        return candidate
     }
 
     /// Emit a `viewing` frame only when the (session, visible) pair actually changed — the

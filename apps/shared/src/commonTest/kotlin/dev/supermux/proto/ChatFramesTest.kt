@@ -164,4 +164,26 @@ class ChatFramesTest {
         assertEquals(1, snap.bgTasks["s1"]?.size)
         assertEquals("shell", snap.bgTasks["s1"]!![0].kind)
     }
+
+    @Test fun parses_session_read_frame() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"session_read","session":"s1","last_read_at":"2026-06-13T10:00:00.000Z"}""")
+        assertTrue(f is ServerFrame.SessionRead)
+        val frame = f as ServerFrame.SessionRead
+        assertEquals("s1", frame.session)
+        assertEquals("2026-06-13T10:00:00.000Z", frame.lastReadAt)
+    }
+
+    @Test fun parses_snapshot_reads_map() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"snapshot","sessions":[],"reads":{"s1":"2026-06-13T10:00:00.000Z","s2":"2026-06-13T11:00:00.000Z"}}""")
+        val snap = f as ServerFrame.Snapshot
+        assertEquals("2026-06-13T10:00:00.000Z", snap.reads["s1"])
+        assertEquals("2026-06-13T11:00:00.000Z", snap.reads["s2"])
+    }
+
+    @Test fun snapshot_without_reads_defaults_empty() {
+        val f = json.decodeFromString<ServerFrame>("""{"type":"snapshot","sessions":[]}""")
+        assertEquals(emptyMap(), (f as ServerFrame.Snapshot).reads)
+    }
 }

@@ -46,11 +46,41 @@ class DesktopAppStateReducerTest {
                 sessions = listOf(session("s1")),
                 logs = mapOf("s1" to listOf(entry)),
                 agentState = mapOf("s1" to AgentStatus(phase = "idle")),
+                reads = mapOf("s1" to "2026-01-01T00:00:00Z"),
             ),
         )
         assertEquals(listOf("s1"), s.sessions.value.map { it.id })
         assertEquals(listOf("m1"), s.messages.value["s1"]?.map { it.id })
         assertTrue(s.agentState.value.containsKey("s1"))
+        assertEquals("2026-01-01T00:00:00Z", s.lastRead.value["s1"])
+    }
+
+    @Test fun session_read_advances_last_read_monotonically() {
+        val s = state()
+        s.reduce(ServerFrame.SessionRead(session = "s1", lastReadAt = "2026-01-01T00:00:00Z"))
+        assertEquals("2026-01-01T00:00:00Z", s.lastRead.value["s1"])
+        s.reduce(ServerFrame.SessionRead(session = "s1", lastReadAt = "2026-01-01T00:05:00Z"))
+        assertEquals("2026-01-01T00:05:00Z", s.lastRead.value["s1"])
+        // Older server stamp must not rewind.
+        s.reduce(ServerFrame.SessionRead(session = "s1", lastReadAt = "2026-01-01T00:01:00Z"))
+        assertEquals("2026-01-01T00:05:00Z", s.lastRead.value["s1"])
+    }
+
+    @Test fun mark_read_and_viewing_clear_unread_optimistically() {
+        val s = state()
+        s.reduce(
+            ServerFrame.Snapshot(
+                sessions = listOf(session("s1")),
+                logs = mapOf(
+                    "s1" to listOf(
+                        LogEntry(id = "m1", ts = "2026-01-01T00:10:00Z", direction = "outbound", text = "hi"),
+                    ),
+                ),
+            ),
+        )
+        assertTrue(dev.supermux.session.isSessionUnread(s.messages.value["s1"]?.last()?.ts, s.lastRead.value["s1"]))
+        s.updateViewing("s1", visible = true)
+        assertFalse(dev.supermux.session.isSessionUnread(s.messages.value["s1"]?.last()?.ts, s.lastRead.value["s1"]))
     }
 
     @Test fun message_append_dedups_local_echo() {
