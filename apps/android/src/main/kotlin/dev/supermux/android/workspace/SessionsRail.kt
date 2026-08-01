@@ -1,5 +1,6 @@
 package dev.supermux.android.workspace
 
+import dev.supermux.ui.TestIds
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -72,7 +73,7 @@ fun SessionsRail(
                 modifier = Modifier.size(20.dp),
             )
         }
-        IconButton(onClick = onNewSession, modifier = Modifier.testTag("rail_new")) {
+        IconButton(onClick = onNewSession, modifier = Modifier.testTag(TestIds.NEW_SESSION)) {
             Icon(
                 painter = painterResource(R.drawable.ic_plus),
                 contentDescription = "New session",

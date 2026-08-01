@@ -72,6 +72,17 @@ test("ws with valid token → subscribe → snapshot", async () => {
   ws.close()
 })
 
+test("broadcastToAll fans out sessions_reordered to subscribers", async () => {
+  const ws = await connect(token)
+  ws.send(JSON.stringify({ type: "subscribe" }))
+  await nextMessage(ws) // snapshot
+  const got = nextMessage(ws)
+  ch.broadcastToAll({ type: "sessions_reordered", orderedIds: ["b", "a"] })
+  const frame = await got
+  expect(frame).toEqual({ type: "sessions_reordered", orderedIds: ["b", "a"] })
+  ws.close()
+})
+
 test("agent terminal: rejects non-claude, accepts claude and attaches with target", async () => {
   const attachCalls: any[] = []
   await ch.stop()

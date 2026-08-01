@@ -138,6 +138,12 @@ export const useWS = defineStore("ws", () => {
       navigateAwayFromKilledSession(frame.id)
     }
     else if   (frame.type === "session_renamed")  sessions.rename(frame.id, frame.new)
+    else if   (frame.type === "sessions_reordered") {
+      const ids = Array.isArray(frame.orderedIds)
+        ? (frame.orderedIds as unknown[]).filter((x): x is string => typeof x === "string")
+        : []
+      if (ids.length) sessions.applyReorder(ids)
+    }
     else if   (frame.type === "session_state")    sessions.updateState(frame.session, {
       mute: frame.mute, connected: frame.connected, model: frame.model, reasoningLevel: frame.reasoningLevel,
       ...((frame as any).user_status !== undefined ? { userStatus: (frame as any).user_status } : {}),

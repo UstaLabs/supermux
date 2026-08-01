@@ -97,6 +97,12 @@ data class CuratorConfig(
     val enabled: Boolean = false,
     val hour: Int = 1,
     val minute: Int = 0,
+    /** Agent kind for the nightly curator session (claude/codex/cursor/opencode/grok). */
+    val agent: String = "claude",
+    /** Optional model id; null → agent default. */
+    val model: String? = null,
+    /** Optional thinking/effort level; null → agent default. */
+    val reasoningLevel: String? = null,
 )
 
 @Serializable
@@ -1479,16 +1485,16 @@ class BrokerApi(
         }
     }
 
-    /** GET /settings/curator → {config:{enabled,hour,minute}, nextRun} */
+    /** GET /settings/curator → {config:{enabled,hour,minute,agent,model,reasoningLevel}, nextRun} */
     suspend fun getCuratorSettings(): CuratorSettingsResponse =
         getJson("$httpBase/settings/curator")
 
-    /** PUT /settings/curator {enabled,hour,minute} → updated {config, nextRun} */
-    suspend fun saveCuratorSettings(enabled: Boolean, hour: Int, minute: Int): CuratorSettingsResponse =
+    /** PUT /settings/curator → updated {config, nextRun} */
+    suspend fun saveCuratorSettings(config: CuratorConfig): CuratorSettingsResponse =
         decode(http.put("$httpBase/settings/curator") {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
-            setBody(json.encodeToString(CuratorConfig(enabled, hour, minute)))
+            setBody(json.encodeToString(config))
         })
 
     /** POST /settings/curator/run-now */

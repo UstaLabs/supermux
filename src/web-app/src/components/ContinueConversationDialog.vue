@@ -110,7 +110,7 @@ async function start() {
       repo_root: result.repo_root ?? source.repo_root,
       session_branch: result.session_branch ?? source.session_branch,
     })
-    pending.set(result.id, { text })
+    pending.set(result.id, { text, files: [] })
     close()
     await router.push(`/s/${result.id}`)
   } catch (err: unknown) {

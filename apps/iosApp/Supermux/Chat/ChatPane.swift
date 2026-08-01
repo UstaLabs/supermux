@@ -36,6 +36,16 @@ struct ChatPane: View {
     @State private var modelSheet = false
     @State private var reasoningSheet = false
     @State private var reasoning: ReasoningResponse?
+    /// macOS: brief hold after the text view resigns so a click on the model/reasoning pill
+    /// can finish (action + popover present) before expanded chrome is torn down. See
+    /// `composerExpanded` and `presentOptionPicker`.
+    @State private var expandGrace = false
+
+    /// Global chat density. Observed HERE (not only inside the Equatable transcript) so a Detail
+    /// menu change from WorkspaceDetail / ChatView invalidates ChatPane, which re-creates
+    /// SessionTranscript with a new `chatDetailRaw` and breaks the equatable gate. Internal
+    /// @AppStorage alone does not reliably re-render an `.equatable()` child on macOS.
+    @AppStorage("chatDetailLevel") private var chatDetailRaw: String = "medium"
 
     // MARK: - Init
 
@@ -78,20 +88,31 @@ struct ChatPane: View {
     }
 
     /// Composer is expanded (full controls) when focused, when there's a draft or a
-    /// staged attachment, or while recording; otherwise it rests as a slim glass pill.
+    /// staged attachment, while recording, or while a model/reasoning picker is open.
+    ///
+    /// The pickers matter on macOS: `smOptionPicker` is a pill-anchored `.popover`, and the
+    /// pills live only in the expanded chrome. Opening the popover resigns the NSTextView
+    /// (first-responder moves into the popover) → `composing` flips false. Without holding
+    /// expanded open for `modelSheet`/`reasoningSheet`/`expandGrace`, the anchor is removed
+    /// from the tree on the next body pass and the popover dismisses immediately —
+    /// "impossible to switch model" with an empty focused composer. Same hold keeps
+    /// `/model` usable when the composer was collapsed (popover modifier only exists
+    /// while expanded).
     private var composerExpanded: Bool {
         composing || composer.hasContent || composer.isBusy
+            || modelSheet || reasoningSheet || expandGrace
     }
 
     // MARK: - Body
 
     var body: some View {
         // The transcript is a *separate, Equatable* view. Composer keystrokes mutate this view's
-        // composer @State and re-run `body`, but `.equatable()` (keyed on session.id) makes
-        // SwiftUI skip re-evaluating the transcript on those re-runs — so the message list is NOT
-        // rebuilt (no buildChatBlocks, no List re-diff) on each keypress, which is what keeps typing
-        // fast in long chats. New messages still update it directly via @Observable (BrokerSession).
-        SessionTranscript(broker: broker, session: session)
+        // composer @State and re-run `body`, but `.equatable()` (keyed on session.id + detail)
+        // makes SwiftUI skip re-evaluating the transcript on those re-runs — so the message list is
+        // NOT rebuilt (no List re-diff) on each keypress, which is what keeps typing fast in long
+        // chats. New messages still update it directly via @Observable (BrokerSession).
+        // Detail density is an equatable input so Low/Medium/High flips re-render tool rows.
+        SessionTranscript(broker: broker, session: session, chatDetailRaw: chatDetailRaw)
             .equatable()
             // Tap anywhere on the transcript to dismiss the keyboard ("tap outside"). Applied here,
             // not inside SessionTranscript, so the transcript stays free of composer focus state and
@@ -121,6 +142,19 @@ struct ChatPane: View {
             }
             .onChange(of: composer.draft) { _, new in UserDefaults.standard.set(new, forKey: draftKey) }
             .onChange(of: composer.refocusToken) { _, _ in composing = true }
+            .onChange(of: composing) { was, now in
+                // macOS: when the NSTextView resigns (click moved to a toolbar control),
+                // keep expanded chrome alive for one short beat so the pill's Button action
+                // still runs against a mounted anchor. Without this, mouse-down resigns focus,
+                // expanded collapses, the pill is removed, and the model popover never sticks.
+                #if os(macOS)
+                guard was && !now else { return }
+                expandGrace = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    expandGrace = false
+                }
+                #endif
+            }
             .onChange(of: composer.status) { _, s in
                 guard let s else { return }
                 showBanner(s)
@@ -158,13 +192,27 @@ struct ChatPane: View {
     /// Handle a control slash command (lifted from the old inline `applyCommand` switch).
     private func handleControlCommand(_ cmd: SlashCommand) {
         switch cmd.action?.kind {
-        case "model": modelSheet = true
+        case "model": presentOptionPicker { modelSheet = true }
         case "rename": renameText = session.name; showRename = true
         case "mute": broker.toggleMute(session)
         case "stop": broker.interrupt(session.id)
         case "kill": showKillConfirm = true
         default: break   // spawn needs navigation we don't have from chat
         }
+    }
+
+    /// Present a composer option popover (model / reasoning).
+    ///
+    /// On macOS the popover must open *after* the triggering click fully ends: presenting
+    /// synchronously from the Button action lets the same mouse-up count as an outside click
+    /// and dismiss the popover immediately. `composerExpanded` holds the anchor while open
+    /// via `modelSheet` / `reasoningSheet` (and `expandGrace` covers the pre-present beat).
+    private func presentOptionPicker(_ open: @escaping () -> Void) {
+        #if os(macOS)
+        DispatchQueue.main.async(execute: open)
+        #else
+        open()
+        #endif
     }
 
     // MARK: - Bottom cluster
@@ -265,6 +313,7 @@ struct ChatPane: View {
                         return true
                     }
                 )
+                .accessibilityIdentifier(TestIds.composerInput)
                 if !composerExpanded {
                     MicButton(model: composer)
                 }
@@ -277,7 +326,7 @@ struct ChatPane: View {
                                onPaste: { Task { await composer.pasteClipboard() } })
                     MicButton(model: composer)
                     SoftFilterPill(text: modelPillLabel, systemImage: "cpu", active: session.model != nil) {
-                        modelSheet = true
+                        presentOptionPicker { modelSheet = true }
                     }
                     .smOptionPicker(isPresented: $modelSheet) {
                         OptionSwitchSheet(title: "Model", broker: broker, session: session, kind: .model)
@@ -289,13 +338,14 @@ struct ChatPane: View {
                             text: session.reasoningLevel ?? reasoning?.current ?? "reasoning",
                             systemImage: "brain",
                             active: session.reasoningLevel != nil
-                        ) { reasoningSheet = true }
+                        ) { presentOptionPicker { reasoningSheet = true } }
                             .smOptionPicker(isPresented: $reasoningSheet) {
                                 OptionSwitchSheet(title: "Reasoning", broker: broker, session: session, kind: .reasoning)
                             }
                     }
                     Spacer(minLength: 0)
                     SendCircleButton(enabled: composer.canSubmit, size: 34) { sendMessage() }
+                        .accessibilityIdentifier(TestIds.composerSubmit)
                 }
             }
             }
@@ -368,8 +418,15 @@ struct ChatPane: View {
         }
         let ids = composer.pending.compactMap { $0.uploadedFileId }
         let text = composer.draft
-        composer.draft = ""
-        composer.pending = []
+        // Collapse the composer without the expand/collapse animation. That 0.28s height
+        // tween raced the transcript's post-send pin (optimistic row + Sending… trailer) and
+        // read as a jump on macOS; the next keystroke still animates expansion normally.
+        var collapse = Transaction()
+        collapse.disablesAnimations = true
+        withTransaction(collapse) {
+            composer.draft = ""
+            composer.pending = []
+        }
         broker.send(session.id, text, attachments: ids.isEmpty ? nil : ids)
     }
 
@@ -405,19 +462,45 @@ private extension View {
 }
 
 #if os(macOS)
-/// Owns the semantic scroll position for one macOS transcript.
+/// Owns stick-to-bottom for one macOS transcript.
 ///
-/// A bottom `defaultScrollAnchor` is only an initial layout hint. With variable-height rows,
-/// `LazyVStack` can revise its estimates after that hint has been applied and leave the viewport in
-/// an unrealized gap until a wheel event forces another layout. The caller keeps a small eager tail
-/// at the bottom, while `ScrollPosition` keeps that real bottom edge stable as estimates settle.
+/// Live chat updates (send, tools, working trailer, composer height) change content size often.
+/// Three things used to produce visible jumps:
+/// 1. Pinning only on `messageCount` — tool activity and trailer toggles resized the transcript
+///    without re-asserting the bottom edge.
+/// 2. Unconditional `scrollTo(.bottom)` on every count change — even while the user was reading
+///    history, and even mid-layout when LazyVStack estimates were still settling.
+/// 3. Missing `sizeChanges` scroll anchor — content/inset growth (new rows, composer collapse)
+///    did not keep a bottom-following viewport glued to the edge.
+///
+/// Blank-on-open is a separate problem: chronological `LazyVStack` estimates unrealized rows near
+/// zero height, so a pure bottom pin can park in an empty region until a wheel event forces
+/// measurement. Semantic `ScrollPosition` alone does **not** realize that gap on macOS (measured
+/// 2026-07-29). The caller keeps a small non-lazy **eager tail** of newest blocks so the bottom
+/// edge has real height; this scroller only keeps that edge stable while following.
+///
+/// `ScrollPosition` + `.sizeChanges` keep the bottom stable while following; `onScrollGeometryChange`
+/// drops follow when the user wheels up. `pinGeneration` re-asserts only while following, and only
+/// for real timeline changes (messages, tools, trailers) — never with animation.
+///
+/// During the first ~400 ms after open, follow mode is **locked** so LazyVStack estimate thrash
+/// cannot trip the unstick hysteresis and cancel settle re-pins (that race re-introduced blank
+/// screens after the eager tail was briefly removed).
 struct MacTranscriptScrollView<Content: View>: View {
-    let messageCount: Int
+    /// Bumps when the timeline or bottom trailers change in a way that should keep a following
+    /// viewport pinned. Built by the caller from blocks / activity / working state — not raw
+    /// message count alone (tools arrive without a new message).
+    let pinGeneration: Int
     let content: Content
     @State private var position = ScrollPosition(idType: String.self, edge: .bottom)
+    /// True while the user is at/near the bottom. Cleared by scrolling up; restored by scrolling
+    /// back down or by opening the chat (`onAppear`).
+    @State private var followingBottom = true
+    /// While true, geometry thrash cannot clear `followingBottom` (open / session-switch settle).
+    @State private var followLocked = true
 
-    init(messageCount: Int, @ViewBuilder content: () -> Content) {
-        self.messageCount = messageCount
+    init(pinGeneration: Int, @ViewBuilder content: () -> Content) {
+        self.pinGeneration = pinGeneration
         self.content = content()
     }
 
@@ -426,18 +509,46 @@ struct MacTranscriptScrollView<Content: View>: View {
             content
         }
         .scrollPosition($position, anchor: .bottom)
-        // Only use the default anchor to align transcripts shorter than the viewport. Initial
-        // positioning is owned by `position`, so the two mechanisms never race.
+        // Alignment: short transcripts sit on the bottom edge of the viewport.
         .defaultScrollAnchor(.bottom, for: .alignment)
+        // Size-change stickiness ONLY while following. Applied unconditionally it would re-pin
+        // on every tool/message growth even after the user scrolled up to read history — that
+        // is the "always stuck to bottom" trap. When not following, content grows below the
+        // viewport and the place you're reading stays put.
+        .defaultScrollAnchor(followingBottom ? .bottom : .top, for: .sizeChanges)
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            // Distance from the visible bottom to the content bottom. ~0 when pinned; grows as
+            // the user scrolls up into history.
+            let visibleBottom = geo.contentOffset.y + geo.containerSize.height
+            return geo.contentSize.height - visibleBottom + geo.contentInsets.bottom
+        } action: { _, distanceFromBottom in
+            // Hysteresis: easier to engage follow than to drop it, so a single frame of layout
+            // thrash while content grows does not un-stick a following chat mid-stream.
+            // Open-settle lock: never unstick while LazyVStack estimates are still revising.
+            if distanceFromBottom <= 48 {
+                followingBottom = true
+            } else if !followLocked && distanceFromBottom > 96 {
+                followingBottom = false
+            }
+        }
         .onAppear {
+            followingBottom = true
+            followLocked = true
             position.scrollTo(edge: .bottom)
         }
-        // Un-animated on purpose. `withAnimation` here drove the bottom-pin through a 0.2s
-        // animated transaction, which re-lays out the transcript every frame for the duration —
-        // and `messageCount` also changes on a session switch, so opening a chat paid for an
-        // animation nobody asked for. Jumping straight to the bottom is what the user wants and
-        // costs one layout pass.
-        .onChange(of: messageCount) { _, _ in
+        // Re-pin across a few frames while the eager tail + lazy history settle. Follow is locked
+        // for the whole settle window so hysteresis cannot abort early and leave a blank viewport.
+        .task {
+            for _ in 0..<8 {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                position.scrollTo(edge: .bottom)
+            }
+            followLocked = false
+        }
+        // Un-animated on purpose — a 0.2s animated pin re-lays out every frame and feels like a
+        // jump on every tool row. Only re-assert while the user is following the live edge.
+        .onChange(of: pinGeneration) { _, _ in
+            guard followingBottom else { return }
             position.scrollTo(edge: .bottom)
         }
         .softScrollEdges()
@@ -448,14 +559,15 @@ struct MacTranscriptScrollView<Content: View>: View {
 struct SessionTranscript: View, Equatable {
     let broker: BrokerSession
     let session: SessionInfo
-    /// Global chat density (UserDefaults; web `cmux:chat-detail` parity). Observed so Low↔Medium flips re-render.
-    @AppStorage("chatDetailLevel") private var chatDetailRaw: String = "medium"
+    /// Global chat density (web `cmux:chat-detail` parity). Passed in from ChatPane so it is
+    /// part of the Equatable gate — an internal @AppStorage alone does not pierce `.equatable()`.
+    let chatDetailRaw: String
 
-    // Only the session identity gates parent-driven re-evaluation: the content is keyed by
-    // `session.id` and refreshed via @Observable, so nothing else here needs comparing.
-    // chatDetailRaw is self-invalidating via @AppStorage (not compared here).
+    // Session identity + detail density gate parent-driven re-evaluation. Transcript content is
+    // refreshed via @Observable (BrokerSession / SessionChatBuffer), so messages/activity do not
+    // need comparing here. Composer-driven ChatPane re-runs still skip when both are unchanged.
     static func == (lhs: SessionTranscript, rhs: SessionTranscript) -> Bool {
-        lhs.session.id == rhs.session.id
+        lhs.session.id == rhs.session.id && lhs.chatDetailRaw == rhs.chatDetailRaw
     }
 
     /// Per-session buffer (not the flat `messages`/`activity` maps) so other sessions' traffic
@@ -483,9 +595,23 @@ struct SessionTranscript: View, Equatable {
         return chat.blocks.filter { if case .message = $0 { return true } else { return false } }
     }
 
-    /// Roughly one viewport. Unlike the reverted 24-row experiment, this does not render more
-    /// message rows than the fast pure-LazyVStack path normally realizes (~7), but it gives the
-    /// bottom edge a real height so macOS cannot initially park in an unrealized estimate gap.
+    /// Token that changes when a *new* bottom-edge item appears (block append, trailer toggle).
+    /// In-place height growth inside an existing block (tool_result filling a running row) is
+    /// handled by `defaultScrollAnchor(.bottom, for: .sizeChanges)` — do not bump this on every
+    /// activity event or each tool status flip re-runs `scrollTo` and feels like a jump.
+    private var macPinGeneration: Int {
+        var h = blocks.count &* 73856093
+        h &+= (blocks.last?.id.hashValue ?? 0)
+        if working { h &+= 1 }
+        if sending { h &+= 2 }
+        if waiting { h &+= 4 }
+        h &+= visibleBgTasks.count &* 83492791
+        return h
+    }
+
+    /// Newest blocks kept non-lazy on macOS so the bottom edge has real height on first layout.
+    /// Matches the pure-lazy path's measured ~7 realized rows; larger (24) repaid too much
+    /// markdown cost. Required for blank-on-open — ScrollPosition re-pins alone are insufficient.
     private static let macEagerTailCount = 8
 
     var body: some View {
@@ -530,21 +656,29 @@ struct SessionTranscript: View, Equatable {
     /// - `List` realizes a fixed batch of rows far beyond the viewport. Measured on a 1440x900
     ///   window with a fresh 200-message session: **23 rows / 11,684 pt realized for a 900 pt
     ///   viewport** — 13x more than is visible — costing ~257 ms of blocked main thread per session
-    ///   switch. Lazy history realizes strictly by viewport (7 rows / 1,554 pt); the 8-block
-    ///   eager tail prevents bottom-anchor estimate gaps while keeping work in that same range.
+    ///   switch. Lazy history realizes strictly by viewport; the 8-block eager tail prevents
+    ///   bottom-anchor estimate gaps while keeping open work near that same range.
+    /// - A pure chronological `LazyVStack` is fast but opens **blank until scroll**: unrealized
+    ///   rows estimate ~0 height, so the bottom pin parks in an empty region. An inverted
+    ///   LazyVStack (newest-first + `scaleEffect`) was tried; it risks NSTextView hit-testing
+    ///   bugs in the markdown twin and was reverted. Eager tail is the reliable fix.
+    /// - Sliding the eager window reparents one row Lazy↔VStack per new block. That hop is
+    ///   acceptable when stickiness is un-animated and follow-gated (`MacTranscriptScrollView`);
+    ///   re-removing the tail re-broke blank-on-open for long sessions (e.g. testing-strategy).
     /// - iOS must keep `List`: this code moved FROM `ScrollView`+`LazyVStack` TO `List` precisely
     ///   because LazyVStack blanked on the **keyboard-avoidance relayout** (blank-on-keyboard,
     ///   blank-on-open). macOS has no keyboard avoidance, so it doesn't inherit that bug — but iOS
     ///   still does. Do not "unify" these without re-testing the iOS keyboard case.
     @ViewBuilder private func scroller(blocks: [ChatBlock]) -> some View {
         #if os(macOS)
-        MacTranscriptScrollView(messageCount: log.count) {
+        MacTranscriptScrollView(pinGeneration: macPinGeneration) {
             if blocks.isEmpty {
                 starterPrompts
                     .frame(maxWidth: .infinity)
                     .smContentWidthCap()
             } else {
                 let eagerStart = max(0, blocks.count - Self.macEagerTailCount)
+                // Older history: lazy (only measured when scrolled into view).
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(blocks.prefix(eagerStart)) { block in
                         blockRow(block)
@@ -554,8 +688,10 @@ struct SessionTranscript: View, Equatable {
                     }
                 }
                 .frame(maxWidth: .infinity)
+                // Newest tail + trailers: always realized so bottom height is real on open/switch.
+                // Without this, LazyVStack zero-estimates leave ScrollPosition in a blank gap.
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(blocks.suffix(from: eagerStart)) { block in
+                    ForEach(blocks.suffix(blocks.count - eagerStart)) { block in
                         blockRow(block)
                             .smContentWidthCap()
                             .padding(.horizontal, 16)
@@ -565,6 +701,8 @@ struct SessionTranscript: View, Equatable {
                     Color.clear.frame(height: 1).id("__bottom__")
                 }
                 .frame(maxWidth: .infinity)
+                // Suppress the one-frame hop animation when the oldest eager row ages into history.
+                .transaction { $0.animation = nil }
             }
         }
         #else

@@ -125,6 +125,10 @@ export interface AppConfig {
   /** platform (OS TTS) | codex (ChatGPT pronunciation via broker) */
   voiceTtsEngine?: string
   whisperLang?: string
+  /** Personal-assistant display name (settings → identity). */
+  paName?: string
+  // Declare the fields you read: the index signature below types everything else
+  // as `unknown`, so `config.someField ?? ""` widens to `{}` rather than string.
   [key: string]: unknown
 }
 
@@ -259,9 +263,36 @@ export const api = {
     request("DELETE", `/sessions/${encodeURIComponent(id)}/review/comments/${encodeURIComponent(commentId)}`),
   reviewSubmit: (id: string) =>
     request("POST", `/sessions/${encodeURIComponent(id)}/review/submit`, {}) as Promise<{ ok: boolean; delivered: number; reason?: string }>,
-  getCuratorSettings: () => request("GET", "/settings/curator"),
-  saveCuratorSettings: (cfg: { enabled: boolean; hour: number; minute: number }) =>
-    request("PUT", "/settings/curator", cfg),
+  getCuratorSettings: () => request("GET", "/settings/curator") as Promise<{
+    config: {
+      enabled: boolean
+      hour: number
+      minute: number
+      agent?: string
+      model?: string
+      reasoningLevel?: string
+    }
+    nextRun: string | null
+    chats?: string[]
+  }>,
+  saveCuratorSettings: (cfg: {
+    enabled: boolean
+    hour: number
+    minute: number
+    agent?: string
+    model?: string
+    reasoningLevel?: string
+  }) => request("PUT", "/settings/curator", cfg) as Promise<{
+    config: {
+      enabled: boolean
+      hour: number
+      minute: number
+      agent?: string
+      model?: string
+      reasoningLevel?: string
+    }
+    nextRun: string | null
+  }>,
   runCuratorNow: () => request("POST", "/settings/curator/run-now"),
   // Onboarding wizard
   getAgentStatuses: () => request("GET", "/agents/status"),

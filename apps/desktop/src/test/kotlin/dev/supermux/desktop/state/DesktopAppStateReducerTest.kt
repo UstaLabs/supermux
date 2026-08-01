@@ -103,6 +103,25 @@ class DesktopAppStateReducerTest {
         assertEquals("name-s2", s.sessions.value.first { it.id == "s2" }.name)
     }
 
+    @Test fun sessions_reordered_renumbers_sort_order_live() {
+        val s = state()
+        s.reduce(
+            ServerFrame.Snapshot(
+                sessions = listOf(
+                    session("s1").copy(sortOrder = 0),
+                    session("s2").copy(sortOrder = 1),
+                    session("s3").copy(sortOrder = 2),
+                ),
+            ),
+        )
+
+        s.reduce(ServerFrame.SessionsReordered(orderedIds = listOf("s3", "s1", "s2")))
+
+        assertEquals(0, s.sessions.value.first { it.id == "s3" }.sortOrder)
+        assertEquals(1, s.sessions.value.first { it.id == "s1" }.sortOrder)
+        assertEquals(2, s.sessions.value.first { it.id == "s2" }.sortOrder)
+    }
+
     @Test fun snapshot_resets_viewing_dedup() {
         val s = state()
         s.updateViewing("s1", true)

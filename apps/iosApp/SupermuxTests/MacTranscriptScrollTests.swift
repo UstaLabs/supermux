@@ -27,17 +27,24 @@ final class MacTranscriptScrollTests: XCTestCase {
 
     private struct Harness: View {
         let store: ProbeStore
+        var pinGeneration: Int = 240
+        /// Matches `SessionTranscript.macEagerTailCount` — newest rows stay non-lazy.
+        private let eagerTail = 8
 
         var body: some View {
-            MacTranscriptScrollView(messageCount: 240) {
+            // Mirrors SessionTranscript's mac layout: lazy history + small eager tail + sentinel.
+            // Pure LazyVStack alone blanks on real markdown heights; this landing zone is required.
+            MacTranscriptScrollView(pinGeneration: pinGeneration) {
+                let total = 240
+                let eagerStart = max(0, total - eagerTail)
                 LazyVStack(spacing: 0) {
-                    ForEach(0..<232, id: \.self) { id in
+                    ForEach(0..<eagerStart, id: \.self) { id in
                         ProbeRow(id: id, store: store)
                             .frame(height: CGFloat(28 + (id % 7) * 19))
                     }
                 }
                 VStack(spacing: 0) {
-                    ForEach(232..<240, id: \.self) { id in
+                    ForEach(eagerStart..<total, id: \.self) { id in
                         ProbeRow(id: id, store: store)
                             .frame(height: CGFloat(28 + (id % 7) * 19))
                     }
@@ -83,6 +90,45 @@ final class MacTranscriptScrollTests: XCTestCase {
             store.made.count,
             60,
             "initial positioning eagerly realized too much transcript history"
+        )
+    }
+
+    func testPinGenerationChangeKeepsNewestVisibleWhileFollowing() {
+        let store = ProbeStore()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 500),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let host = NSHostingView(rootView: Harness(store: store, pinGeneration: 1))
+        host.frame = NSRect(x: 0, y: 0, width: 700, height: 500)
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+
+        // Simulate a live append (new tool/message generation) while still following bottom.
+        host.rootView = Harness(store: store, pinGeneration: 2)
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+
+        guard let newest = store.newestView else {
+            return XCTFail("newest row missing after pinGeneration change")
+        }
+        guard let scroll = firstScrollView(in: host) else {
+            return XCTFail("missing transcript scroll view")
+        }
+        let newestRect = newest.convert(newest.bounds, to: scroll.contentView)
+        XCTAssertTrue(
+            newestRect.intersects(scroll.contentView.bounds),
+            "following pinGeneration change left the newest row off-screen"
         )
     }
 

@@ -119,8 +119,13 @@ import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RepoInfo
 import dev.supermux.net.resolveReasoningLevel
 import dev.supermux.net.showReasoningPicker
+import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
+import dev.supermux.session.chooseDefaultProject
 import dev.supermux.session.formatWorkdir
+import dev.supermux.session.orderProjectsByRecency
+import dev.supermux.session.recentWorkdirs
+import dev.supermux.session.sessionsByRecency
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.awt.FileDialog
@@ -222,6 +227,8 @@ fun SessionLauncherScreen(
     sessions: List<SessionInfo>,
     home: String,
     onBack: () -> Unit,
+    /** Last message per session — drives most-recent-project default (web chooseDefaultProject). */
+    lastBySession: Map<String, LogEntry?> = emptyMap(),
     loadProjects: suspend () -> List<String>,
     validatePath: suspend (String) -> PathValidation?,
     loadModels: suspend (agent: String) -> List<ModelInfo>,
@@ -269,7 +276,8 @@ fun SessionLauncherScreen(
     var agent by remember { mutableStateOf("claude") }
     var model by remember { mutableStateOf<String?>(null) } // null == "Default"
     var message by remember { mutableStateOf(TextFieldValue("")) }
-    var projects by remember { mutableStateOf(emptyList<String>()) }
+    // Broker-known project paths (unordered); UI order is derived below via recency.
+    var knownProjects by remember { mutableStateOf(emptyList<String>()) }
     var submitting by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var agents by remember { mutableStateOf(listOf("claude", "codex", "cursor", "opencode", "grok")) }
@@ -434,6 +442,8 @@ fun SessionLauncherScreen(
         }
     }
 
+    // Fetch known projects per host (network). Ordering is pure/derived below so session
+    // recency updates don't re-hit GET /projects.
     LaunchedEffect(selectedHost, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
         val switchedHost = lastSeenHost != null && lastSeenHost != selectedHost
@@ -441,25 +451,48 @@ fun SessionLauncherScreen(
         if (switchedHost) {
             model = null
         }
-        projects = emptyList()
-        val loaded = loadProjects()
-        projects = loaded
-        if (workdir.isBlank() || (workdir != "~" && workdir !in loaded)) {
-            workdir = loaded.firstOrNull() ?: "~"
-            workdirTouched = loaded.isNotEmpty()
-        }
+        knownProjects = emptyList()
+        knownProjects = loadProjects()
     }
 
-    // Default workdir from the most recent session (web chooseDefaultProject parity).
-    LaunchedEffect(sessions) {
-        if (!workdirTouched && sessions.isNotEmpty()) {
-            workdir = sessions.first().workdir.ifBlank { "~" }
+    val lastTs: (SessionInfo) -> String = { lastBySession[it.id]?.ts ?: "" }
+    val recentProjectPaths = remember(sessions, lastBySession) {
+        recentWorkdirs(sessionsByRecency(sessions, lastTs))
+    }
+    // Picker list: recently-active projects first (web orderProjectsByRecency parity).
+    val projects = remember(knownProjects, recentProjectPaths) {
+        orderProjectsByRecency(recentProjectPaths, knownProjects)
+    }
+
+    // Invalid host-local paths (e.g. draft workdir from another host) are corrected without
+    // freezing the selection — only an explicit picker choice sets workdirTouched.
+    // An EMPTY project list means "we could not enumerate projects" (slow host, failed fetch,
+    // offline) — not "your workdir is gone". Don't reset a restored draft's workdir on that.
+    LaunchedEffect(knownProjects, recentProjectPaths, launcherRestoring) {
+        if (launcherRestoring) return@LaunchedEffect
+        if (knownProjects.isEmpty()) return@LaunchedEffect
+        val known = projects.toHashSet()
+        if (workdir.isBlank() || (workdir != "~" && workdir !in known && recentProjectPaths.none { it == workdir })) {
+            workdir = recentProjectPaths.firstOrNull() ?: knownProjects.firstOrNull() ?: "~"
         }
     }
 
     // ── Staged attachments (no session yet — uploaded post-spawn by onSubmit) ────────────────────
     val staged = remember { mutableStateListOf<StagedChip>() }
     val stagedIdGen = remember { AtomicLong(0L) }
+
+    // Follow the most-recently-used project as session/message data hydrates, but freeze once
+    // the user engages (picked a path or started composing) — web chooseDefaultProject parity.
+    val composing = message.text.isNotBlank() || staged.isNotEmpty()
+    LaunchedEffect(recentProjectPaths, workdirTouched, composing, launcherRestoring) {
+        if (launcherRestoring) return@LaunchedEffect
+        workdir = chooseDefaultProject(
+            current = workdir,
+            recent = recentProjectPaths,
+            picked = workdirTouched,
+            composing = composing,
+        )
+    }
 
     // ── Composer focus/send affordances ──────────────────────────────────────────────────────────
     val composerInteraction = remember { MutableInteractionSource() }

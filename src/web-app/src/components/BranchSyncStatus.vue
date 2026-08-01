@@ -23,6 +23,16 @@ const status = computed(() => git.statusBySession[props.sessionId])
 const busy = computed(() => git.busyBySession[props.sessionId] ?? null)
 const result = computed(() => git.resultBySession[props.sessionId] ?? null)
 
+// The catch-all branch of the result card wants `.message` off a union member that
+// doesn't declare it. Narrow it HERE, not in the template: a `foo as { bar?: T }`
+// cast inside a mustache is only parsed as TypeScript when the template compiler
+// has the TS expression plugin on, which is not guaranteed across vue-tsc setups —
+// it compiled locally and failed the PWA build in CI with "Expression expected".
+const fallbackMessage = computed(() => {
+  const r: unknown = result.value
+  return r && typeof r === "object" && "message" in r ? String((r as { message?: unknown }).message ?? "") : ""
+})
+
 const eligible = computed(() => !!status.value?.isRepo)
 const published = computed(() => !!status.value?.upstream)
 const ahead = computed(() => status.value?.ahead ?? 0)
@@ -216,7 +226,7 @@ const itemClass =
         Couldn't authenticate to origin. Set up a credential helper, an SSH key, or run <code>gh auth login</code>.
         <span class="block mt-1 whitespace-pre-wrap break-all font-mono text-foreground/60">{{ result.message }}</span>
       </p>
-      <p v-else class="text-foreground/80 whitespace-pre-wrap break-all font-mono">{{ (result as { message?: string }).message }}</p>
+      <p v-else class="text-foreground/80 whitespace-pre-wrap break-all font-mono">{{ fallbackMessage }}</p>
     </div>
     <div class="flex items-center justify-end gap-2 px-4 py-2.5 border-t border-border">
       <button type="button" class="text-[12px] px-2.5 py-1 rounded-md border border-border hover:bg-accent text-muted-foreground" @click="git.dismiss(props.sessionId)">Dismiss</button>

@@ -1,0 +1,352 @@
+# .github/workflows/ci.yml — the gate that runs on ordinary work.
+#
+# release.yml only fires on v* tags, so until this file existed nothing ran on a
+# push or a PR. Ten tests were failing across the repo at the time it was added,
+# every one of them a test that had been correct when written and had silently
+# drifted since (a renamed attachment kind, a provider card added to a screen, a
+# withTimeout that broke under a virtual test clock). None were product bugs.
+# That is the failure mode this workflow exists to stop: not bugs — rot.
+#
+# Shape:
+#   push  → change-scoped. Only the lanes the diff can plausibly break, and only
+#           lanes that are cheap (no emulator, no simulator, no packaging).
+#   PR    → everything, unconditionally. Filters optimize the inner loop; the
+#           merge gate stays complete.
+#
+# Two rules keep the filtering honest:
+#   1. A `wire` change (the protocol seam shared by broker + Kotlin + Swift)
+#      bypasses every filter. A TS-side protocol edit silently breaks the native
+#      clients otherwise, which is exactly what teaches people to distrust path
+#      filters.
+#   2. A `shared` (KMP) change fans out to every client that consumes it.
+#
+# Deliberately NOT here — they belong in a PR-only / nightly workflow:
+#   Android emulator, iOS simulator, packaged-app install smoke, and the heavier
+#   Playwright journeys. The core PWA journey is cheap and hermetic, so it runs
+#   below against scripts/test-broker.sh.
+name: ci
+
+on:
+  push:
+    paths-ignore: ["**.md", "docs/**", "assets/**", "LICENSE"]
+  pull_request:
+    branches: [main, dev]
+
+# A push storm should leave one run standing, not six.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ── which lanes does this diff need? ────────────────────────────────────────
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      ts: ${{ steps.f.outputs.ts }}
+      shared: ${{ steps.f.outputs.shared }}
+      android: ${{ steps.f.outputs.android }}
+      desktop: ${{ steps.f.outputs.desktop }}
+      ios: ${{ steps.f.outputs.ios }}
+      wire: ${{ steps.f.outputs.wire }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: f
+        with:
+          filters: |
+            ts:
+              - 'src/**'
+              - 'tests/**'
+              - 'scripts/**'
+              - 'package.json'
+              - 'bunfig.toml'
+              - 'tsconfig.json'
+            shared:
+              - 'apps/shared/**'
+              - 'apps/build.gradle.kts'
+              - 'apps/settings.gradle.kts'
+              - 'apps/gradle/**'
+            android:
+              - 'apps/android/**'
+            desktop:
+              - 'apps/desktop/**'
+            ios:
+              - 'apps/iosApp/**'
+            # The protocol seam. Any touch here runs every lane — see rule 1.
+            wire:
+              - 'src/shared/**'
+              - 'apps/shared/src/commonMain/kotlin/dev/supermux/proto/**'
+              - '.github/workflows/ci.yml'
+
+  # ── TypeScript: broker, channels, shim, relay, CLI, and the PWA's logic ─────
+  ts:
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request' ||
+      needs.changes.outputs.ts == 'true' ||
+      needs.changes.outputs.wire == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      # Both manifests: 441 test files span the broker AND src/web-app, and a
+      # missing node_modules turns ~100 of them into "Cannot find package"
+      # failures rather than an honest red.
+      # --frozen-lockfile on both: a floating root install made CI non-reproducible
+      # (a different vue-tsc/typescript resolution failed the PWA build on a file
+      # that compiles clean locally), so bun.lock is committed at the root now too.
+      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile
+        working-directory: src/web-app
+
+      # --isolate gives each test file a fresh global. Without it, the
+      # process-global `mock.module` in tests/spawn-opencode.test.ts leaks into
+      # every file loaded after it and two unrelated tests fail. Do NOT swap this
+      # for --parallel: it is ~3x faster but timing-sensitive tests flake under
+      # the load, and a gate you learn to ignore is worse than no gate.
+      - name: Test
+        run: bun test --isolate
+
+      # Blocking. This lane started out continue-on-error against 14 pre-existing
+      # errors; those are fixed, so it gates now. Keep it that way — the errors it
+      # was carrying (WebCrypto BufferSource variance, a const-tuple cast, a
+      # generator element type widened across a closure) are all the kind that
+      # compile fine and fail at runtime.
+      - name: Typecheck
+        run: bun run typecheck
+
+      # Separate from the broker typecheck above, and separate from the ui lane's
+      # build: vue-tsc shells out to `node`, so on a machine without node it exits
+      # 127 and `bun run build` reports success having checked nothing. That is how
+      # 11 real PWA type errors reached dev. Node is guaranteed on a runner, so this
+      # step is the one place the PWA is actually type-checked.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Typecheck PWA
+        run: ./node_modules/.bin/vue-tsc --noEmit
+        working-directory: src/web-app
+
+  # ── PWA journey: real browser + broker + shim, all on throwaway state ──────
+  ui:
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request' ||
+      needs.changes.outputs.ts == 'true' ||
+      needs.changes.outputs.wire == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile
+        working-directory: src/web-app
+      - name: Ensure a Playwright browser is available
+        run: command -v google-chrome >/dev/null 2>&1 || bunx playwright install --with-deps chromium
+      - name: Core browser journey
+        run: bun run test:ui
+        env:
+          MUX_TEST_KEEP_FIXTURE: "1"
+      - name: Upload fixture logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-fixture-logs
+          path: /tmp/supermux-test-broker.*/**/*.log
+          retention-days: 7
+
+  # ── Kotlin, host-side only: no emulator, no display server ─────────────────
+  # apps/desktop already declares compose.desktop.uiTestJUnit4, so this lane runs
+  # real Compose UI assertions (TestTag, node counts, assertDoesNotExist)
+  # in-process on the JVM. UI coverage does not require a device.
+  kotlin:
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request' ||
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.android == 'true' ||
+      needs.changes.outputs.desktop == 'true' ||
+      needs.changes.outputs.wire == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      # Caching is load-bearing, not an optimization: a cold run of these tasks
+      # measured 4m23s locally, which is too slow for a push lane.
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Skiko (Compose Desktop's renderer) needs an X display even for the
+      # "headless" in-process UI tests — without one, SessionDetailTest dies with
+      # IllegalStateException at InteropContainer.skiko.kt. Passes on a developer
+      # machine, fails on a bare runner.
+      - name: Install xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      # :shared and :desktop always run together — :desktop depends on :shared,
+      # so splitting them buys nothing and pays the Gradle startup cost twice.
+      - name: Shared + desktop (JVM, incl. Compose Desktop UI tests)
+        working-directory: apps
+        run: xvfb-run -a ./gradlew :shared:jvmTest :desktop:test --build-cache --console=plain
+
+      # apps/android/google-services.json is gitignored (the real one carries the
+      # app's API key), and without it :android:processDebugGoogleServices fails
+      # before a single test runs. The committed .example is a valid stand-in for
+      # unit tests, which never reach Firebase.
+      - name: Stage Firebase config for unit tests
+        run: cp apps/android/google-services.json.example apps/android/google-services.json
+
+      - name: Android unit tests (host-side)
+        working-directory: apps
+        run: ./gradlew :android:testDebugUnitTest --build-cache --console=plain
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kotlin-test-reports
+          path: |
+            apps/*/build/reports/tests/**
+            apps/*/build/test-results/**
+          retention-days: 7
+
+  # ── Android device journey: the app driven on a real emulator ───────────────
+  # PR only. An emulator boot plus an APK build is 8–12 minutes: a reasonable
+  # merge gate, far too slow for the push loop. The host-side Android unit tests
+  # in `kotlin` already cover pushes.
+  #
+  # This is the lane that proves what no host-side test can — that pairing works,
+  # that the WebSocket reaches a real broker, and that the reply renders. It runs
+  # the same journey the browser lane runs, against the same hermetic fixture.
+  #
+  # Verified locally end to end (5m28s) before being wired in. Every earlier
+  # failure traced to emulator health, not the flow, so the emulator options
+  # below are load-bearing rather than cargo-culted.
+  android-journey:
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request' ||
+      needs.changes.outputs.android == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.wire == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: bun install --frozen-lockfile
+
+      # The runner user is not in the kvm group by default. Without hardware
+      # acceleration the AVD falls back to software rendering, and a software
+      # emulator is exactly what made every local run ANR on system UI.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install Maestro
+        run: |
+          curl -fsSL https://get.maestro.mobile.dev | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+      - name: Stage Firebase config
+        run: cp apps/android/google-services.json.example apps/android/google-services.json
+
+      - name: Build debug APK
+        working-directory: apps
+        run: ./gradlew :android:assembleDebug --build-cache --console=plain
+
+      - name: Run the journey on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          # A fresh runner emulator has no prior install, so the reinstall path
+          # this opts into never actually triggers there.
+          script: MUX_TEST_FORCE_REINSTALL=1 scripts/test-android.sh
+
+      - name: Upload Maestro output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maestro-android
+          path: |
+            ~/.maestro/tests/**
+            /tmp/maestro-failure/**
+            /tmp/supermux-test-broker.*/**/*.log
+          retention-days: 7
+
+  # ── iOS: unit tests on a simulator ──────────────────────────────────────────
+  # PR only and path-filtered. macOS runners are free on a public repo but the
+  # scarce resource is capacity, not money: this job builds the Kotlin
+  # Shared.framework for iOS before Xcode can compile anything, so it is the most
+  # expensive lane by a distance.
+  #
+  # iOS had 29 XCTest files and NOTHING ran them — release.yml only compile-checks
+  # the app, and a compile check cannot tell you a parser broke. This runs them.
+  #
+  # Not here yet: the Maestro journey on a simulator. The flow is already written
+  # against shared test ids so it will point at a simulator unchanged, and a
+  # simulator can reach the fixture on 127.0.0.1 directly (no 10.0.2.2 hop). It
+  # goes in once this lane is proven, rather than debugging both at once on the
+  # slowest runner we have.
+  ios-tests:
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request' ||
+      needs.changes.outputs.ios == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.wire == 'true'
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        working-directory: apps/iosApp
+        run: xcodegen generate
+
+      # The Supermux scheme's test action runs SupermuxTests. Signing is off: a
+      # simulator build needs no identity, and requiring one would make this lane
+      # depend on secrets a fork does not have.
+      - name: Run SupermuxTests on a simulator
+        working-directory: apps/iosApp
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -scheme Supermux \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
+            -derivedDataPath build/dd-ios-test \
+            -resultBundlePath build/ios-tests.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            test
+
+      - name: Upload xcresult
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-xcresult
+          path: apps/iosApp/build/ios-tests.xcresult
+          retention-days: 7

@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue"
+import { ref, computed, onMounted, watch } from "vue"
 import { useRouter } from "vue-router"
 import { ArrowLeft, Sparkle, Play } from "lucide-vue-next"
 import Switch from "@/components/ui/switch/Switch.vue"
+import LauncherAgentPicker from "@/components/LauncherAgentPicker.vue"
+import LauncherModelPicker from "@/components/LauncherModelPicker.vue"
+import LauncherEffortPicker from "@/components/LauncherEffortPicker.vue"
 import { api } from "@/api/client"
 import { toast } from "vue-sonner"
 
@@ -14,7 +17,12 @@ const running = ref(false)
 const enabled = ref(false)
 const hour = ref(1)
 const minute = ref(0)
+const agent = ref<"claude" | "codex" | "cursor" | "opencode" | "grok">("claude")
+const model = ref("")
+const reasoningLevel = ref("")
 const nextRun = ref<string | null>(null)
+/** Skip agent→model clear while applying a loaded config. */
+let applyingLoad = false
 
 // <input type="time"> binds an "HH:MM" string.
 const timeStr = computed({
@@ -36,6 +44,13 @@ const nextRunLabel = computed(() => {
   }
 })
 
+// User agent switch invalidates a model picked for the previous agent.
+watch(agent, () => {
+  if (applyingLoad) return
+  model.value = ""
+  reasoningLevel.value = ""
+})
+
 function goBack() {
   if (window.history.length > 1) router.back()
   else router.push("/settings")
@@ -43,15 +58,27 @@ function goBack() {
 
 async function load() {
   loading.value = true
+  applyingLoad = true
   try {
     const r = await api.getCuratorSettings()
     enabled.value = r.config.enabled
     hour.value = r.config.hour
     minute.value = r.config.minute
+    const a = r.config.agent
+    if (a === "claude" || a === "codex" || a === "cursor" || a === "opencode" || a === "grok") {
+      agent.value = a
+    } else {
+      agent.value = "claude"
+    }
+    model.value = r.config.model ?? ""
+    reasoningLevel.value = r.config.reasoningLevel ?? ""
     nextRun.value = r.nextRun
   } catch (e: any) {
     toast.error(e?.message ?? "Failed to load curator settings")
   } finally {
+    // Defer until after Vue flushes the agent watcher queued by the assignment above.
+    await Promise.resolve()
+    applyingLoad = false
     loading.value = false
   }
 }
@@ -59,7 +86,16 @@ async function load() {
 async function save() {
   saving.value = true
   try {
-    const r = await api.saveCuratorSettings({ enabled: enabled.value, hour: hour.value, minute: minute.value })
+    // Always send model/reasoningLevel (even "") so the broker can clear a prior pick.
+    // Omitting the keys would leave the previous stored values in place.
+    const r = await api.saveCuratorSettings({
+      enabled: enabled.value,
+      hour: hour.value,
+      minute: minute.value,
+      agent: agent.value,
+      model: model.value || "",
+      reasoningLevel: reasoningLevel.value || "",
+    })
     nextRun.value = r.nextRun
     toast.success("Saved")
   } catch (e: any) {
@@ -122,6 +158,18 @@ onMounted(load)
           type="time"
           class="rounded-md bg-card border border-border px-3 py-1.5 text-sm tabular-nums focus:outline-none focus:ring-1 focus:ring-primary"
         />
+      </li>
+
+      <li class="flex items-center justify-between gap-3 px-4 py-3.5">
+        <div class="min-w-0">
+          <div class="font-medium">Agent</div>
+          <div class="text-[11px] text-muted-foreground">Which agent runs the nightly curation.</div>
+        </div>
+        <div class="flex flex-wrap items-center justify-end gap-1">
+          <LauncherAgentPicker v-model:agent="agent" />
+          <LauncherModelPicker v-model:model="model" :agent="agent" />
+          <LauncherEffortPicker v-model:level="reasoningLevel" :agent="agent" :model="model" />
+        </div>
       </li>
 
       <li class="flex items-center justify-between gap-3 px-4 py-3.5">

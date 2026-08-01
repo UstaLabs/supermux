@@ -22,7 +22,9 @@ test("tmux + one agent CLI: no fatals, warns about the missing optional ones", (
 })
 
 test("all present: no fatals, no warnings", () => {
-  const r = checkPreflight(present("tmux", "claude", "codex", "cursor-agent"))
+  // Must list every label in AGENT_CLIS (src/shared/preflight.ts) — a new agent
+  // added there without being added here shows up as an unexpected warning.
+  const r = checkPreflight(present("tmux", "claude", "codex", "cursor-agent", "opencode", "grok"))
   expect(r.fatal).toHaveLength(0)
   expect(r.warnings).toHaveLength(0)
 })

@@ -423,6 +423,8 @@ fun SessionListPanel(
     // The `All · <host…> · +` chip row + per-row host badges appear ONLY with a real fleet
     // (>1 host). Single-host desktop users (and every existing test) see the list unchanged.
     val multiHost = hosts.size > 1
+    // When a specific host pill is selected, every row is already that host — hide the redundant badge.
+    val showRowHostBadge = multiHost && hostFilter == null
     val hostByRecord = remember(hosts) { hosts.associateBy { it.recordId } }
     // Apply the host filter before grouping so the groups + counts reflect the current chip.
     val visibleSessions = if (multiHost) filterSessions(sessions, sessionHost, hostFilter) else sessions
@@ -545,7 +547,7 @@ fun SessionListPanel(
                             s, active = s.id == activeId, preview = lastBySession[s.id],
                             working = agentState[s.id]?.working == true,
                             bgOpen = agentState[s.id]?.bgOpen ?: 0,
-                            host = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
+                            host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
                             onClick = { openSession(s) },
                             onRename = { renameTarget = s; renameText = s.name },
                             onKill = { killTarget = s },
@@ -569,7 +571,7 @@ fun SessionListPanel(
                             items(section.sessions, key = { "f:${it.id}" }) { s ->
                                 SessionRow(
                                     s, active = s.id == activeId, preview = lastBySession[s.id],
-                                    host = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
+                                    host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
                                     projectTag = projectLabel(s, effectiveHome),
                                     onClick = { openSession(s) },
                                     onResume = { onResume(s.id) },
@@ -592,7 +594,7 @@ fun SessionListPanel(
                                 s, active = s.id == activeId, preview = lastBySession[s.id],
                                 working = agentState[s.id]?.working == true,
                                 bgOpen = agentState[s.id]?.bgOpen ?: 0,
-                                host = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
+                                host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
                                 projectTag = projectLabel(s, effectiveHome),
                                 modifier = dragMod(section, true)(s.id),
                                 onClick = { openSession(s) },
@@ -622,7 +624,7 @@ fun SessionListPanel(
                                 preview = lastBySession[s.id],
                                 working = agentState[s.id]?.working == true,
                                 bgOpen = agentState[s.id]?.bgOpen ?: 0,
-                                host = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
+                                host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
                                 modifier = dragMod(section, true)(s.id),
                                 onClick = { openSession(s) },
                                 onRename = { renameTarget = s; renameText = s.name },
@@ -652,7 +654,7 @@ fun SessionListPanel(
                             items(settled.sessions, key = { "s:${it.id}" }) { s ->
                                 SessionRow(
                                     s, active = false, preview = lastBySession[s.id],
-                                    host = if (multiHost) hostByRecord[sessionHost[s.id]] else null,
+                                    host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
                                     onClick = { openSession(s) },
                                     onResume = { onResume(s.id) },
                                 )

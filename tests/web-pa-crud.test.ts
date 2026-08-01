@@ -6,7 +6,7 @@ import { WebChannel, __resetAuthFailures } from "../src/channels/web"
 import { DeviceStore } from "../src/channels/web/device-store"
 
 const DEV_PATH = `/tmp/devices-pa-crud-${process.pid}.json`
-const PORT = 18900 + Math.floor(Math.random() * 100)
+let PORT = 0
 let ch: WebChannel
 let token: string
 let spawnPACalls: any[] = []
@@ -25,9 +25,9 @@ beforeEach(async () => {
   const store = new DeviceStore(DEV_PATH)
   token = store.mint("test-device").token
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [
       { id: "pa-1", name: "pa-1", workdir: join(tmpRoot, "workspace", "pa-1"), mute: false, connected: true, agent: "claude" as const, role: "personal_assistant", isDefault: true },
       { id: "worker-1", name: "worker-1", workdir: join(tmpRoot, "project-a"), mute: false, connected: true, agent: "claude" as const, role: "worker" },
@@ -47,7 +47,12 @@ beforeEach(async () => {
       return { ok: true }
     },
   } as any)
+  // port 0 = OS-assigned, read back off the channel. A random pick from a
+  // fixed range collides under a full `bun test` run (two of these files even
+  // shared the 18900+ range) and fails with EADDRINUSE for reasons unrelated to
+  // the code under test.
   await ch.start()
+  PORT = ch.boundPort
 })
 
 afterEach(async () => {

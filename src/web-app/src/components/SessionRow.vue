@@ -103,6 +103,8 @@ defineExpose({ startRename })
   <!-- Draft: compact row — saved plan plus a Start action. -->
   <div
     v-if="isDraft"
+    data-testid="session-row"
+    :data-session-id="props.id"
     role="button"
     tabindex="0"
     class="group/row block border border-transparent transition-colors cursor-pointer select-none [-webkit-touch-callout:none]"
@@ -152,6 +154,8 @@ defineExpose({ startRename })
   <!-- In-progress / settled: full row, agent working-state only (no git). -->
   <div
     v-else
+    data-testid="session-row"
+    :data-session-id="props.id"
     role="button"
     tabindex="0"
     class="block border transition-colors cursor-pointer select-none [-webkit-touch-callout:none]"

@@ -30,6 +30,8 @@ struct ChatView: View {
     @State private var chrome: SessionChrome?
     @State private var finishSheet = false
     @State private var loadedSessionId: String?
+    /// Global chat density — same key ChatPane / WorkspaceDetail observe.
+    @AppStorage("chatDetailLevel") private var chatDetailRaw: String = "medium"
 
     enum PaneTab: Hashable { case chat, native, terminal, editor, display }
     @State private var tab: PaneTab = .chat
@@ -222,6 +224,7 @@ struct ChatView: View {
         ChatPane(broker: broker, session: session,
                  showRename: $showRename, renameText: $renameText,
                  showKillConfirm: $showKillConfirm, banner: $banner)
+            .accessibilityIdentifier(TestIds.chatView)
     }
 
     // The raw agent terminal — the "Native" view of a (claude) session, its own tab.
@@ -294,18 +297,18 @@ struct ChatView: View {
             Menu {
                 ForEach(ChatDetailLevel.allCases, id: \.self) { level in
                     Button {
-                        UserDefaults.standard.set(level.rawValue, forKey: "chatDetailLevel")
+                        chatDetailRaw = level.rawValue
                     } label: {
                         HStack {
                             Text(level.label)
-                            if ChatDetailLevel.parse(UserDefaults.standard.string(forKey: "chatDetailLevel")) == level {
+                            if ChatDetailLevel.parse(chatDetailRaw) == level {
                                 Image(systemName: "checkmark")
                             }
                         }
                     }
                 }
             } label: {
-                let cur = ChatDetailLevel.parse(UserDefaults.standard.string(forKey: "chatDetailLevel"))
+                let cur = ChatDetailLevel.parse(chatDetailRaw)
                 Label("Detail · \(cur.label)", systemImage: "text.alignleft")
             }
             if let g = git, g.isRepo {

@@ -69,6 +69,24 @@ class FleetListUiTest {
         onNodeWithTag("host_badge_h1").assertDoesNotExist()
     }
 
+    @Test fun rowBadgeHidden_whenHostPillSelected() = runComposeUiTest {
+        setContent {
+            SessionListPanel(
+                sessions = listOf(session("s1"), session("s2")),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                hosts = twoHosts,
+                sessionHost = mapOf("s1" to "h1", "s2" to "h2"),
+                hostFilter = "h1",
+            )
+        }
+        // Filter pills stay; per-row badge is redundant once a specific host is selected.
+        onNodeWithTag("host_filter_chips").assertIsDisplayed()
+        onNodeWithTag("host_chip_h1").assertIsDisplayed()
+        onNodeWithTag("host_badge_h1", useUnmergedTree = true).assertDoesNotExist()
+    }
+
     @Test fun clickingAHostChip_reportsTheSelection() = runComposeUiTest {
         var selected: String? = "sentinel"
         setContent {

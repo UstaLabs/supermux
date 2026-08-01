@@ -573,6 +573,7 @@ function goBack() {
               v-else
               placeholder="What should the agent do?"
               class="min-h-[7rem] md:min-h-[8.5rem] text-[15px]"
+              :enter-sends="isDesktop"
             />
           </PromptInputBody>
           <PromptInputFooter>

@@ -367,6 +367,26 @@ class AppViewModel(
             }
             is ServerFrame.SessionRenamed ->
                 patchSessionIn(recordId, f.id) { it.copy(name = f.newName) }
+            is ServerFrame.SessionsReordered -> {
+                // Live fan-out of PATCH /sessions/reorder — renumber sortOrder by
+                // array index so peer clients re-sort without a reconnect.
+                val order = f.orderedIds.withIndex().associate { (i, id) -> id to i }
+                if (order.isNotEmpty()) {
+                    val bucket = sessionsByHost[recordId].orEmpty()
+                    var hostChanged = false
+                    val next = bucket.map { s ->
+                        val so = order[s.id] ?: return@map s
+                        if (s.sortOrder == so) s else {
+                            hostChanged = true
+                            s.copy(sortOrder = so)
+                        }
+                    }
+                    if (hostChanged) {
+                        sessionsByHost[recordId] = next
+                        rebuildSessions()
+                    }
+                }
+            }
             is ServerFrame.SessionState ->
                 patchSessionIn(recordId, f.session) {
                     it.copy(
@@ -1131,8 +1151,26 @@ class AppViewModel(
     suspend fun usage(): String? = runCatching { activeApi()?.usageRaw() }.getOrNull()
     suspend fun redeemCodexReset(): CodexResetResult? = runCatching { activeApi()?.redeemCodexReset() }.getOrNull()
     suspend fun curatorSettings(): CuratorSettingsResponse? = runCatching { activeApi()?.getCuratorSettings() }.getOrNull()
-    suspend fun saveCurator(enabled: Boolean, hour: Int, minute: Int): CuratorSettingsResponse? =
-        runCatching { activeApi()?.saveCuratorSettings(enabled, hour, minute) }.getOrNull()
+    suspend fun saveCurator(
+        enabled: Boolean,
+        hour: Int,
+        minute: Int,
+        agent: String = "claude",
+        model: String? = null,
+        reasoningLevel: String? = null,
+    ): CuratorSettingsResponse? =
+        runCatching {
+            activeApi()?.saveCuratorSettings(
+                dev.supermux.net.CuratorConfig(
+                    enabled = enabled,
+                    hour = hour,
+                    minute = minute,
+                    agent = agent,
+                    model = model,
+                    reasoningLevel = reasoningLevel,
+                ),
+            )
+        }.getOrNull()
     suspend fun runCuratorNow() { runCatching { activeApi()?.runCuratorNow() } }
     suspend fun devices(): List<DeviceDto> = runCatching { activeApi()?.devices() }.getOrNull() ?: emptyList()
     suspend fun addDevice(name: String): AddDeviceResponse? = runCatching { activeApi()?.addDevice(name) }.getOrNull()

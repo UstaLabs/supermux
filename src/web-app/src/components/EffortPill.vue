@@ -15,7 +15,11 @@ const fetchedLevel = ref<string | undefined>()
 
 const agent = computed(() => sessions.byId(props.sessionId)?.agent)
 
-const currentLevel = computed(() => sessions.byId(props.sessionId)?.reasoningLevel ?? fetchedLevel.value)
+// byId() may return an ArchivedSession, which carries no reasoningLevel — read it
+// off the live list instead of narrowing the union at every use.
+const currentLevel = computed(() =>
+  sessions.list.find((s) => s.id === props.sessionId)?.reasoningLevel ?? fetchedLevel.value,
+)
 
 watch(() => [props.sessionId, agent.value] as const, async () => {
   visible.value = false

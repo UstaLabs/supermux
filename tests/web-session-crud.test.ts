@@ -6,7 +6,7 @@ import { WebChannel, __resetAuthFailures } from "../src/channels/web"
 import { DeviceStore } from "../src/channels/web/device-store"
 
 const DEV_PATH = `/tmp/devices-crud-${process.pid}.json`
-const PORT = 18800 + Math.floor(Math.random() * 100)
+let PORT = 0
 let ch: WebChannel
 let token: string
 let spawnCalls: any[] = []
@@ -33,9 +33,9 @@ beforeEach(async () => {
   mkdirSync(join(tmpRoot, "project-a"))
   mkdirSync(join(tmpRoot, "project-b"))
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [{ id: "sess-a", name: "sess-a", workdir: join(tmpRoot, "project-a") + "/", mute: false, connected: true, agent: "claude" as const }],
     getSessionLog: () => [],
     setMute: () => {},
@@ -53,7 +53,12 @@ beforeEach(async () => {
     reorderSessions: (orderedIds: string[]) => { reorderCalls.push(orderedIds) },
     listArchivedSessions: () => [{ id: "archived-a", name: "archived-a", workdir: join(tmpRoot, "project-a"), agent: "claude" as const }],
   } as any)
+  // port 0 = OS-assigned, read back off the channel. A random pick from a
+  // fixed range collides under a full `bun test` run (two of these files even
+  // shared the 18900+ range) and fails with EADDRINUSE for reasons unrelated to
+  // the code under test.
   await ch.start()
+  PORT = ch.boundPort
 })
 
 afterEach(async () => {
@@ -215,4 +220,38 @@ test("PATCH /sessions/reorder → renumbers the section", async () => {
   const body = await res.json() as any
   expect(body.ok).toBe(true)
   expect(reorderCalls).toEqual([["x", "y"]])
+})
+
+test("PATCH /sessions/reorder → main-style callback can broadcast sessions_reordered", async () => {
+  // Mirrors src/main.ts reorderSessions: store reorder + WS fan-out.
+  const orig = ch["opts"].reorderSessions
+  ch["opts"].reorderSessions = (orderedIds: string[]) => {
+    reorderCalls.push(orderedIds)
+    ch.broadcastToAll({ type: "sessions_reordered", orderedIds })
+  }
+  const ws = await new Promise<WebSocket>((resolve, reject) => {
+    const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws`, {
+      headers: { Cookie: `cmux_token=${token}` },
+    })
+    sock.onopen = () => resolve(sock)
+    sock.onerror = (e) => reject(e)
+    setTimeout(() => reject(new Error("ws connect timeout")), 2000)
+  })
+  const next = () => new Promise<any>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error("ws message timeout")), 2000)
+    ws.onmessage = (e) => { clearTimeout(t); resolve(JSON.parse(String(e.data))) }
+  })
+  ws.send(JSON.stringify({ type: "subscribe" }))
+  await next() // snapshot
+  const pending = next()
+  const res = await fetch(`http://127.0.0.1:${PORT}/sessions/reorder`, {
+    method: "PATCH",
+    headers: authed(),
+    body: JSON.stringify({ orderedIds: ["c", "a", "b"] }),
+  })
+  expect(res.status).toBe(200)
+  expect(await pending).toEqual({ type: "sessions_reordered", orderedIds: ["c", "a", "b"] })
+  expect(reorderCalls).toEqual([["c", "a", "b"]])
+  ws.close()
+  ch["opts"].reorderSessions = orig
 })

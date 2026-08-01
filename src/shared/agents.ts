@@ -20,7 +20,7 @@ export function isAgentKind(value: unknown): value is AgentKind {
   return typeof value === "string" && (AGENT_KINDS as readonly string[]).includes(value)
 }
 
-export function parseAgentKind(value: unknown, fallback = AgentKind.Claude): AgentKind {
+export function parseAgentKind(value: unknown, fallback: AgentKind = AgentKind.Claude): AgentKind {
   if (value == null || value === "") return fallback
   if (isAgentKind(value)) return value
   throw new Error(`unsupported agent kind: ${String(value)}`)

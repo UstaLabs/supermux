@@ -348,6 +348,9 @@ private struct WorkspaceDetail: View {
     var onContinued: (String) -> Void = { _ in }
     @State private var finishSheet = false
     @State private var showContinue = false
+    /// Global chat density (UserDefaults; ChatPane / web `cmux:chat-detail` parity).
+    /// Observed here so the overflow Detail label + checkmarks re-render on change.
+    @AppStorage("chatDetailLevel") private var chatDetailRaw: String = "medium"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -452,12 +455,32 @@ private struct WorkspaceDetail: View {
         }
     }
 
-    /// The overflow ⋯ menu: Continue (always) + session-scoped git ops when the workdir is a repo.
-    /// Always rendered so non-repo sessions still get "Continue in new conversation" (web parity).
+    /// The overflow ⋯ menu: Continue + Detail density + session-scoped git ops when the workdir is a repo.
+    /// Always rendered so non-repo sessions still get Continue / Detail (web + compact ChatView parity).
+    /// macOS always hosts this workspace (never compact ChatView), so Detail must live here.
     @ViewBuilder private var overflowMenu: some View {
         Menu {
             Button { showContinue = true } label: {
                 Label("Continue in new conversation", systemImage: "bubble.left.and.text.bubble.right")
+            }
+            Divider()
+            // Global chat density — ChatPane filters tool rows via the same key.
+            Menu {
+                ForEach(ChatDetailLevel.allCases, id: \.self) { level in
+                    Button {
+                        chatDetailRaw = level.rawValue
+                    } label: {
+                        HStack {
+                            Text(level.label)
+                            if ChatDetailLevel.parse(chatDetailRaw) == level {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                let cur = ChatDetailLevel.parse(chatDetailRaw)
+                Label("Detail · \(cur.label)", systemImage: "text.alignleft")
             }
             if let g = chrome.git, g.isRepo {
                 Section("Git") {

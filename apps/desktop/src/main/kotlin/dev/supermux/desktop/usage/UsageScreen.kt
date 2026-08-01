@@ -78,6 +78,7 @@ import dev.supermux.net.CodexResetResult
 import dev.supermux.net.CodexUsage
 import dev.supermux.net.CursorUsage
 import dev.supermux.net.GrokUsage
+import dev.supermux.net.OpenCodeUsage
 import dev.supermux.net.UsageResponse
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -126,6 +127,13 @@ private fun clampPct(v: Double): Double = v.coerceIn(0.0, 100.0)
 
 private fun money(cents: Double): String = "$" + String.format(Locale.US, "%.2f", cents / 100.0)
 private fun dollars(v: Double): String = "$" + String.format(Locale.US, "%.2f", v)
+
+/** 1.2M / 34.5K / 912 — mirrors the web UsageView's formatTokens. */
+private fun tokens(n: Long): String = when {
+    n >= 1_000_000 -> String.format(Locale.US, "%.1fM", n / 1_000_000.0)
+    n >= 1_000 -> String.format(Locale.US, "%.1fK", n / 1_000.0)
+    else -> n.toString()
+}
 
 /** Bar colour by percentage: >=85 red, >=60 amber, else primary — ports Android's `barColor`. */
 @Composable
@@ -376,6 +384,30 @@ fun CursorUsageCard(cursor: CursorUsage?, error: String?) {
     }
 }
 
+/** opencode has no subscription quota, so this shows cumulative local token/cost
+ *  stats — same shape as the web UsageView card. */
+@Composable
+fun OpenCodeUsageCard(opencode: OpenCodeUsage?, error: String?) {
+    val cs = MaterialTheme.colorScheme
+    UsageCard(
+        title = "opencode",
+        subtitle = "Local usage · all time",
+        enabled = opencode != null,
+        modifier = Modifier.testTag("usage_card_opencode"),
+        badge = opencode?.let { u -> { Text(dollars(u.totalCostUsd), color = cs.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp) } },
+    ) {
+        if (opencode == null) {
+            Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
+        } else {
+            UsageFooterRow("Input", tokens(opencode.inputTokens))
+            UsageFooterRow("Output", tokens(opencode.outputTokens))
+            UsageFooterRow("Cache read", tokens(opencode.cacheReadTokens))
+            UsageFooterRow("Cache write", tokens(opencode.cacheWriteTokens))
+            UsageFooterRow("Activity", "${opencode.sessions} sessions · ${opencode.messages} messages")
+        }
+    }
+}
+
 @Composable
 fun GrokUsageCard(grok: GrokUsage?, error: String?) {
     val cs = MaterialTheme.colorScheme
@@ -467,6 +499,7 @@ fun UsageScreen(
                         ClaudeUsageCard(usage?.claude, usage?.errors?.get("claude"))
                         CodexUsageCard(usage?.codex, usage?.errors?.get("codex"), onRedeem = onRedeem)
                         CursorUsageCard(usage?.cursor, usage?.errors?.get("cursor"))
+                        OpenCodeUsageCard(usage?.opencode, usage?.errors?.get("opencode"))
                         GrokUsageCard(usage?.grok, usage?.errors?.get("grok"))
                     }
                 }

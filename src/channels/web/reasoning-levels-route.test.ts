@@ -99,7 +99,7 @@ test("GET /reasoning-levels reaches the route even with a staticDir (not swallow
   })
   expect(res.status).toBe(200)
   // Would be text/html (the SPA shell) if the static gate swallowed the route.
-  const body = await res.json()
+  const body = (await res.json()) as { levels: Array<{ id: string }>; visible: boolean }
   expect(body.levels).toEqual([{ id: "low" }, { id: "high" }])
   expect(body.visible).toBe(true)
 })

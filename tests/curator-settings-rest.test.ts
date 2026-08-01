@@ -30,7 +30,7 @@ beforeEach(async () => {
   const store = new DeviceStore(DEV_PATH)
   token = store.mint("d").token
   runs = 0
-  cfg = { enabled: false, hour: 1, minute: 0 }
+  cfg = { enabled: false, hour: 1, minute: 0, agent: "claude" }
   ch = new WebChannel(
     base({
       getCuratorSettings: () => ({ config: cfg, nextRun: cfg.enabled ? "2026-06-01T00:00:00.000Z" : null }),
@@ -67,8 +67,23 @@ test("PUT /settings/curator persists + clamps", async () => {
     method: "PUT", headers: auth(), body: JSON.stringify({ enabled: true, hour: 99, minute: 30 }),
   })
   const body = await res.json() as any
-  expect(body.config).toEqual({ enabled: true, hour: 23, minute: 30 })
+  expect(body.config).toEqual({ enabled: true, hour: 23, minute: 30, agent: "claude" })
   expect(body.nextRun).not.toBeNull()
+})
+
+test("PUT /settings/curator persists agent/model/reasoningLevel", async () => {
+  const res = await fetch(`http://127.0.0.1:${PORT}/settings/curator`, {
+    method: "PUT", headers: auth(),
+    body: JSON.stringify({
+      enabled: true, hour: 2, minute: 0,
+      agent: "codex", model: "gpt-5.4", reasoningLevel: "high",
+    }),
+  })
+  const body = await res.json() as any
+  expect(body.config).toEqual({
+    enabled: true, hour: 2, minute: 0,
+    agent: "codex", model: "gpt-5.4", reasoningLevel: "high",
+  })
 })
 
 test("PUT cross-origin → 403", async () => {

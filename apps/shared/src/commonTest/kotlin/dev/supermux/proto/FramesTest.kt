@@ -82,6 +82,14 @@ class FramesTest {
         assertEquals("Fix Session Renaming 🎉", f.newName)
     }
 
+    @Test fun parses_sessions_reordered() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"sessions_reordered","orderedIds":["b","a","c"]}""",
+        )
+        assertTrue(f is ServerFrame.SessionsReordered)
+        assertEquals(listOf("b", "a", "c"), (f as ServerFrame.SessionsReordered).orderedIds)
+    }
+
     // Display lifecycle frames — broker emits {type:"display_added",display:{...}}
     // and {type:"display_removed",id}.
     @Test fun parses_display_added() {

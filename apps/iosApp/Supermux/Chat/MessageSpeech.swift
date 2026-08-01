@@ -172,6 +172,8 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         s = s.replacingOccurrences(of: #"`([^`]+)`"#, with: "$1", options: .regularExpression)
         s = s.replacingOccurrences(of: #"!\[([^\]]*)\]\([^)]*\)"#, with: "$1", options: .regularExpression)
         s = s.replacingOccurrences(of: #"\[([^\]]+)\]\([^)]*\)"#, with: "$1", options: .regularExpression)
+        // (?m) = multiline so ^ matches each line start. String.CompareOptions has no
+        // anchorsMatchLines (that's NSRegularExpression.Options only).
         s = s.replacingOccurrences(of: #"(?m)^#{1,6}\s+"#, with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: #"(?m)^\s*[-*+]\s+"#, with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: #"(?m)^\s*\d+\.\s+"#, with: "", options: .regularExpression)

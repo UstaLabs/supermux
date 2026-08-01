@@ -22,7 +22,7 @@ const isEmpty = computed(() => sortedSessions.value.length === 0)
 
 <template>
   <!-- Sidebar mode (desktop) -->
-  <div v-if="props.compact" class="h-dvh flex flex-col bg-[var(--cmux-session-list)] text-foreground border-r border-border">
+  <div v-if="props.compact" data-testid="session-list" class="h-dvh flex flex-col bg-[var(--cmux-session-list)] text-foreground border-r border-border">
     <header
       class="flex items-center justify-between px-3 py-3 min-h-[3.5rem] border-b border-border bg-[var(--cmux-header)] shrink-0"
       style="padding-top: calc(env(safe-area-inset-top, 0px) + 0.5rem)"
@@ -51,7 +51,7 @@ const isEmpty = computed(() => sortedSessions.value.length === 0)
   </div>
 
   <!-- Full-page mode (mobile) -->
-  <div v-else class="min-h-screen bg-[var(--cmux-session-list)] text-foreground">
+  <div v-else data-testid="session-list" class="min-h-screen bg-[var(--cmux-session-list)] text-foreground">
     <header
       class="flex items-center justify-between px-4 py-3 border-b border-border sticky top-0 bg-[var(--cmux-header)]/95 backdrop-blur z-10"
       style="padding-top: calc(env(safe-area-inset-top, 0px) + 0.75rem)"
