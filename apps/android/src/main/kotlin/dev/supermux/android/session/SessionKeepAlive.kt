@@ -16,7 +16,10 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -30,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.zIndex
 import dev.supermux.android.AppViewModel
 import dev.supermux.android.DevConfig
@@ -285,7 +289,7 @@ fun SessionKeepAliveTabletHost(
     }
 }
 
-@OptIn(ExperimentalSharedTransitionApi::class)
+@OptIn(ExperimentalSharedTransitionApi::class, ExperimentalLayoutApi::class)
 @Composable
 private fun SessionChatLayer(
     session: SessionInfo,
@@ -328,11 +332,23 @@ private fun SessionChatLayer(
     LaunchedEffect(session.id) { sessionLinks = vm.proxies().filter { it.sessionName == session.name } }
 
     if (visible) {
+        // Soft keyboard up: Back must dismiss the IME only — not leave the session. An always-on
+        // session BackHandler was consuming the event before the platform/IME could hide the
+        // keyboard. Explicit hide+clearFocus covers chat/editor Compose focus and termlib's
+        // showSoftKeyboard path (TerminalPanel watches isImeVisible → clears wantKeyboard).
+        // Predictive exit gesture stays disabled while the IME is up so Back never animates out.
+        val imeVisible = WindowInsets.isImeVisible
+        val focusManager = LocalFocusManager.current
+        val keyboardController = LocalSoftwareKeyboardController.current
+        BackHandler(enabled = !editorConsumesBack && !wide && imeVisible) {
+            focusManager.clearFocus(force = true)
+            keyboardController?.hide()
+        }
         // Phone: Back returns to the session list (onBack). On the wide/tablet path onBack is a
         // no-op (the list is always on-screen), so DON'T consume Back there — let it background the
         // app. The editor pane keeps its own Back-consume via its own BackHandler + editorConsumesBack.
-        BackHandler(enabled = !editorConsumesBack && !wide) { onBack() }
-        PredictiveBackHandler(enabled = !editorConsumesBack && !wide) { backEvents ->
+        BackHandler(enabled = !editorConsumesBack && !wide && !imeVisible) { onBack() }
+        PredictiveBackHandler(enabled = !editorConsumesBack && !wide && !imeVisible) { backEvents ->
             try {
                 backEvents.collect { event -> gestureProgress = event.progress }
                 onBack()
