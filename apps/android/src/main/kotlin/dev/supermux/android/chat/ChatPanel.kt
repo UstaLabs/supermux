@@ -52,7 +52,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
@@ -95,7 +94,6 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -943,18 +941,17 @@ fun ChatPanel(
                                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                                 interactionSource = composerInteractionSource,
                                 maxLines = if (composerExpanded) 6 else 1,
+                                // Soft IME: Default → Return inserts a newline (never send). Physical
+                                // Enter-to-send is handled in onPreviewKeyEvent via isComposerSendEnter().
                                 keyboardOptions = KeyboardOptions(
                                     capitalization = KeyboardCapitalization.Sentences,
-                                    imeAction = ImeAction.Send,
                                 ),
-                                keyboardActions = KeyboardActions(onSend = { doSend() }),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .testTag("chat_composer")
-                                    // Physical keyboard: Enter sends, Shift+Enter inserts a newline. Handled
-                                    // in the PREVIEW phase and consumed, so the multiline field never also
-                                    // inserts a newline and no duplicate IME "Send" fires — fixes hardware
-                                    // Enter not sending, and the newline double-send, on DeX/desktop keyboards.
+                                    // Physical keyboard: Enter sends, Shift+Enter inserts a newline.
+                                    // Soft-IME Enter must fall through (not consumed) so the field inserts
+                                    // a newline — never treat the virtual keyboard's Return/Send as submit.
                                     .onPreviewKeyEvent { e ->
                                         if (e.type != KeyEventType.KeyDown) {
                                             false
@@ -968,7 +965,8 @@ fun ChatPanel(
                                                 selectedSlashIndex = (safeSlashIndex - 1).coerceAtLeast(0)
                                                 true
                                             }
-                                            slashMenuOpen && (e.key == Key.Enter || e.key == Key.NumPadEnter) && !e.isShiftPressed -> {
+                                            // Enter picks a slash command (soft or hardware — not a message send).
+                                            slashMenuOpen && e.isComposerEnterKey() && !e.isShiftPressed -> {
                                                 slashMatches.getOrNull(safeSlashIndex)?.let { selectSlashCommand(it) }
                                                 true
                                             }
@@ -976,8 +974,8 @@ fun ChatPanel(
                                                 slashMenuDismissed = true
                                                 true
                                             }
-                                            // Otherwise: Enter sends, Shift+Enter inserts a newline.
-                                            (e.key == Key.Enter || e.key == Key.NumPadEnter) && !e.isShiftPressed -> {
+                                            // Hardware Enter only; soft IME falls through → newline.
+                                            e.isComposerSendEnter() -> {
                                                 doSend()
                                                 true
                                             }

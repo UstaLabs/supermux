@@ -58,6 +58,8 @@ import dev.supermux.android.chat.MicButton
 import dev.supermux.android.chat.MicDeniedDialog
 import dev.supermux.android.chat.EffortPill
 import dev.supermux.android.chat.ModelPill
+import dev.supermux.android.chat.isComposerEnterKey
+import dev.supermux.android.chat.isComposerSendEnter
 import dev.supermux.android.chat.PickerSheet
 import dev.supermux.android.chat.RecordingBar
 import dev.supermux.android.chat.TranscribingIndicator
@@ -731,8 +733,8 @@ fun SessionLauncherScreen(
                                 .fillMaxWidth()
                                 .testTag("launcher_message")
                                 // Hardware keyboard: with the "/" menu open, ↑/↓ move the highlight,
-                                // Enter picks, Esc closes; otherwise Enter submits and Shift+Enter (or
-                                // the soft keyboard's return) inserts a newline (DeX / attached kbd).
+                                // Enter picks, Esc closes; otherwise hardware Enter submits and
+                                // Shift+Enter / soft-IME Return insert a newline (never send on soft IME).
                                 .onPreviewKeyEvent { e ->
                                     if (e.type != KeyEventType.KeyDown) false
                                     else when {
@@ -744,7 +746,7 @@ fun SessionLauncherScreen(
                                             slashSelectedIndex = (safeSlashIndex - 1).coerceAtLeast(0)
                                             true
                                         }
-                                        slashMenuOpen && (e.key == Key.Enter || e.key == Key.NumPadEnter) && !e.isShiftPressed -> {
+                                        slashMenuOpen && e.isComposerEnterKey() && !e.isShiftPressed -> {
                                             slashMatches.getOrNull(safeSlashIndex)?.let { selectSlashCommand(it) }
                                             true
                                         }
@@ -752,7 +754,7 @@ fun SessionLauncherScreen(
                                             slashDismissed = true
                                             true
                                         }
-                                        (e.key == Key.Enter || e.key == Key.NumPadEnter) && !e.isShiftPressed -> {
+                                        e.isComposerSendEnter() -> {
                                             doSubmit()
                                             true
                                         }
