@@ -180,6 +180,8 @@ class AppViewModel(
     private val cmdResByKey = LinkedHashMap<String, Boolean>()
     private val agentErrByKey = LinkedHashMap<String, ServerFrame.AgentError>()
     private val finishByKey = LinkedHashMap<String, FinishJobDto>()
+    /** Host-qualified last_read_at pointers (server + optimistic local advances). */
+    private val readsByKey = LinkedHashMap<String, String>()
     private val pendingByKey = LinkedHashSet<String>()
 
     private val _sessions = MutableStateFlow<List<SessionInfo>>(emptyList())
@@ -220,6 +222,13 @@ class AppViewModel(
     /** Per-session resolution state of the slash-command set (true = fully resolved). */
     private val _commandsResolved = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     val commandsResolved: StateFlow<Map<String, Boolean>> = _commandsResolved
+    /**
+     * Bare sessionId → ISO last_read_at. Seeded from snapshot `reads`, updated by
+     * `session_read` frames and optimistic [markRead] when the user opens a chat.
+     * Session list compares this to the last message ts (web unread parity).
+     */
+    private val _lastRead = MutableStateFlow<Map<String, String>>(emptyMap())
+    val lastRead: StateFlow<Map<String, String>> = _lastRead
 
     // ── ServerFrame reducer state (Phase 2 §C: read-side only; UI is Phase 3) ──
 
@@ -318,6 +327,12 @@ class AppViewModel(
                 replaceHostSlice(agentByKey, recordId, f.agentState)
                 replaceHostSlice(cmdByKey, recordId, f.commands)
                 replaceHostSlice(cmdResByKey, recordId, f.commandsResolved)
+                // Monotonic merge (web unread.seed parity): never rewind an optimistic
+                // local mark with a slightly-older server pointer from the snapshot.
+                for ((id, ts) in f.reads) {
+                    val key = keyFor(recordId, id)
+                    readsByKey[key] = dev.supermux.session.advanceLastRead(readsByKey[key], ts)
+                }
                 replaceHostSlice(
                     finishByKey, recordId,
                     f.sessions.mapNotNull { s -> s.finish_job?.let { s.id to it } }.toMap(),
@@ -407,6 +422,14 @@ class AppViewModel(
                 msgByKey[key] = pruned + f.entry
                 dirty = true
             }
+            is ServerFrame.SessionRead -> {
+                val key = keyFor(recordId, f.session)
+                val next = dev.supermux.session.advanceLastRead(readsByKey[key], f.lastReadAt)
+                if (readsByKey[key] != next) {
+                    readsByKey[key] = next
+                    dirty = true
+                }
+            }
             is ServerFrame.ActivityAppend -> {
                 val key = keyFor(recordId, f.session)
                 actByKey[key] = (actByKey[key] ?: emptyList()) + f.event
@@ -487,6 +510,7 @@ class AppViewModel(
         _commandsResolved.value = SessionKey.flatten(cmdResByKey, owner)
         _agentErrors.value = SessionKey.flatten(agentErrByKey, owner)
         _finishJobs.value = SessionKey.flatten(finishByKey, owner)
+        _lastRead.value = SessionKey.flatten(readsByKey, owner)
         _pendingSend.value = SessionKey.flattenSet(pendingByKey)
     }
 
@@ -502,6 +526,7 @@ class AppViewModel(
         cmdResByKey.keys.removeAll(mine)
         agentErrByKey.keys.removeAll(mine)
         finishByKey.keys.removeAll(mine)
+        readsByKey.keys.removeAll(mine)
         pendingByKey.removeAll(mine)
     }
 
@@ -782,9 +807,27 @@ class AppViewModel(
     fun updateViewing(session: String?, visible: Boolean) {
         viewingSession = session
         viewingVisible = visible
-        if (session != null) ownerOf(session)?.let { _activeHost.value = it }
+        if (session != null) {
+            ownerOf(session)?.let { _activeHost.value = it }
+            // Optimistic clear (web useUnread.markRead parity). The broker confirms via
+            // session_read after the viewing frame advances the server pointer.
+            if (visible) markRead(session)
+        }
         sendViewingIfChanged()
         ensureViewingHeartbeat()
+    }
+
+    /**
+     * Optimistically advance this session's read pointer to now so the list row
+     * un-bolds immediately when the user opens the chat.
+     */
+    fun markRead(sessionId: String) {
+        val key = ownerKey(sessionId)
+        val now = java.time.Instant.now().toString()
+        val next = dev.supermux.session.advanceLastRead(readsByKey[key], now)
+        if (readsByKey[key] == next) return
+        readsByKey[key] = next
+        publishSessionState()
     }
 
     private fun sendViewingIfChanged() {

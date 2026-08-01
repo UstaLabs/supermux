@@ -133,6 +133,25 @@ struct RecordingBar: View {
     }
 }
 
+/// Compact status pill while the composer is busy with STT — broker whisper upload
+/// ("Transcribing…") or first-run on-device model prep ("Preparing speech…"). Shared by
+/// chat and the new-session launcher so both surfaces show the same progress chrome.
+struct ComposerBusyBar: View {
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView().controlSize(.small)
+            Text(label).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Color.smTertiaryFill, in: Capsule())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(label)
+    }
+}
+
 func formatRecordTime(_ t: TimeInterval) -> String {
     let s = Int(t)
     return String(format: "%d:%02d", s / 60, s % 60)

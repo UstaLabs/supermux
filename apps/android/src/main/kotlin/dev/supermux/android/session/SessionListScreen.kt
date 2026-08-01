@@ -237,6 +237,8 @@ fun SessionRow(
     s: SessionInfo,
     active: Boolean,
     preview: LogEntry? = null,
+    /** ISO last_read_at for this session (null/absent = never read). */
+    lastReadAt: String? = null,
     working: Boolean = false,
     bgOpen: Int = 0,
     hostBadge: dev.supermux.android.host.HostView? = null,
@@ -267,7 +269,9 @@ fun SessionRow(
     val c = LocalPanes.current
     val cs = MaterialTheme.colorScheme
     val haptic = rememberHaptics()
-    val hasUnread = !active && preview?.direction == "inbound"
+    // Server-authoritative: last message newer than last_read_at (web/watch parity).
+    // Do not use direction — inbound is the user, outbound is the agent.
+    val hasUnread = !active && dev.supermux.session.isSessionUnread(preview?.ts, lastReadAt)
     val rowInteraction = interactionSource ?: remember { MutableInteractionSource() }
     val actions = sessionSwipeActions(s)
     val surfaceColor = rowColor
@@ -377,6 +381,10 @@ fun SessionRow(
                             git = null,
                             working = working,
                             bgOpen = bgOpen,
+                            // Unread lives in the leading rail (green dot when idle); spinner
+                            // wins while the agent is working so we don't double-signal.
+                            unread = hasUnread,
+                            unreadTestTag = "session_unread_${s.id}",
                             modifier = Modifier.align(Alignment.CenterVertically),
                         )
                     }
@@ -467,6 +475,8 @@ fun SessionListScreen(
     activeId: String?,
     onOpen: (String) -> Unit,
     lastBySession: Map<String, LogEntry?> = emptyMap(),
+    /** Bare sessionId → ISO last_read_at (server + optimistic local marks). */
+    lastRead: Map<String, String> = emptyMap(),
     agentState: Map<String, dev.supermux.proto.AgentStatus?> = emptyMap(),
     onNewSession: () -> Unit = {},
     loadProjects: suspend () -> List<String> = { emptyList() },
@@ -882,6 +892,7 @@ fun SessionListScreen(
                             s = s,
                             active = s.id == activeId,
                             preview = lastBySession[s.id],
+                            lastReadAt = lastRead[s.id],
                             working = agentState[s.id]?.working == true,
                             bgOpen = agentState[s.id]?.bgOpen ?: 0,
                             hostBadge = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -912,6 +923,7 @@ fun SessionListScreen(
                                     s = s,
                                     active = s.id == activeId,
                                     preview = lastBySession[s.id],
+                                    lastReadAt = lastRead[s.id],
                                     working = agentState[s.id]?.working == true,
                                     bgOpen = agentState[s.id]?.bgOpen ?: 0,
                                     hostBadge = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -949,6 +961,7 @@ fun SessionListScreen(
                                     s = s,
                                     active = s.id == activeId,
                                     preview = lastBySession[s.id],
+                                    lastReadAt = lastRead[s.id],
                                     working = agentState[s.id]?.working == true,
                                     bgOpen = agentState[s.id]?.bgOpen ?: 0,
                                     hostBadge = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -1023,6 +1036,7 @@ fun SessionListScreen(
                                     s = s,
                                     active = isActive,
                                     preview = lastBySession[s.id],
+                                    lastReadAt = lastRead[s.id],
                                     working = agentState[s.id]?.working == true,
                                     bgOpen = agentState[s.id]?.bgOpen ?: 0,
                                     hostBadge = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -1052,6 +1066,7 @@ fun SessionListScreen(
                                         s = s,
                                         active = isActive,
                                         preview = lastBySession[s.id],
+                                        lastReadAt = lastRead[s.id],
                                         working = agentState[s.id]?.working == true,
                                         bgOpen = agentState[s.id]?.bgOpen ?: 0,
                                         hostBadge = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -1119,6 +1134,7 @@ fun SessionListScreen(
                                         s = s,
                                         active = isActive,
                                         preview = lastBySession[s.id],
+                                        lastReadAt = lastRead[s.id],
                                         working = false,
                                         hostBadge = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
                                         openSwipeRowId = openSwipeRowId,
@@ -1152,6 +1168,7 @@ fun SessionListScreen(
                             s,
                             active = false,
                             preview = lastBySession[s.id],
+                            lastReadAt = lastRead[s.id],
                             hostBadge = if (showRowHostBadge) hostByRecord[host.recordId] else null,
                             openSwipeRowId = openSwipeRowId,
                             onOpenSwipeRowChange = { openSwipeRowId = it },

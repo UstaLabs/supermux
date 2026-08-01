@@ -196,6 +196,7 @@ class MainActivity : ComponentActivity() {
                 val pendingSend by vm.pendingSend.collectAsStateWithLifecycle()
                 val commands by vm.commands.collectAsStateWithLifecycle()
                 val commandsResolved by vm.commandsResolved.collectAsStateWithLifecycle()
+                val lastRead by vm.lastRead.collectAsStateWithLifecycle()
                 // Merged-fleet state: the paired hosts (identity + reachability), the sessionId→host
                 // owner index (per-row badges), and the persisted host-filter chip selection.
                 val hostViews by vm.hostViews.collectAsStateWithLifecycle()
@@ -353,6 +354,7 @@ class MainActivity : ComponentActivity() {
                                                 activeId = selected,
                                                 onOpen = { selected = it },
                                                 lastBySession = lastBySession,
+                                                lastRead = lastRead,
                                                 agentState = agentState,
                                                 onNewSession = { navController.navigate(NewSession()) },
                                                 loadProjects = { vm.listProjects() },
@@ -446,6 +448,7 @@ class MainActivity : ComponentActivity() {
                                 commands = commands,
                                 commandsResolved = commandsResolved,
                                 lastBySession = lastBySession,
+                                lastRead = lastRead,
                                 archived = archivedSessions,
                                 vm = vm,
                                 onNavigate = navTo,
@@ -473,6 +476,7 @@ class MainActivity : ComponentActivity() {
                                         activeId = selected,
                                         onOpen = { selected = it; navController.popBackStack() },
                                         lastBySession = lastBySession,
+                                        lastRead = lastRead,
                                         agentState = agentState,
                                         onNewSession = { },
                                         loadProjects = { vm.listProjects() },
@@ -756,6 +760,7 @@ private fun PhoneNavHost(
     commands: Map<String, List<SlashCommand>>,
     commandsResolved: Map<String, Boolean>,
     lastBySession: Map<String, LogEntry?>,
+    lastRead: Map<String, String> = emptyMap(),
     archived: List<ArchivedDto> = emptyList(),
     vm: AppViewModel,
     onNavigate: (String) -> Unit,
@@ -781,6 +786,7 @@ private fun PhoneNavHost(
         commands = commands,
         commandsResolved = commandsResolved,
         lastBySession = lastBySession,
+        lastRead = lastRead,
         archived = archived,
         vm = vm,
         onNavigate = onNavigate,

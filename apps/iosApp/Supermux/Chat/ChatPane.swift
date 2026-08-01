@@ -287,10 +287,10 @@ struct ChatPane: View {
                                    onRetry: { _ in Task { await uploadThenSend() } })
                 }
                 if composer.transcribing {
-                    transcribingBar
+                    ComposerBusyBar(label: "Transcribing…")
                 }
                 if composer.micStarting {
-                    preparingBar
+                    ComposerBusyBar(label: "Preparing speech…")
                 }
             }
             HStack(alignment: .center, spacing: 10) {
@@ -362,28 +362,6 @@ struct ChatPane: View {
             return String(id[id.index(after: slash)...])
         }
         return id
-    }
-
-    private var transcribingBar: some View {
-        HStack(spacing: 10) {
-            ProgressView().controlSize(.small)
-            Text("Transcribing…").font(.caption.weight(.medium)).foregroundStyle(.secondary)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(Color.smTertiaryFill, in: Capsule())
-    }
-
-    /// Shown while the first-run on-device speech model is downloading/preparing — so the
-    /// composer never looks frozen and the user doesn't re-tap into a crash.
-    private var preparingBar: some View {
-        HStack(spacing: 10) {
-            ProgressView().controlSize(.small)
-            Text("Preparing speech…").font(.caption.weight(.medium)).foregroundStyle(.secondary)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(Color.smTertiaryFill, in: Capsule())
     }
 
     // MARK: - Send

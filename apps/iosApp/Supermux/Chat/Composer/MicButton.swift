@@ -1,9 +1,9 @@
 // apps/iosApp/Supermux/Chat/Composer/MicButton.swift
 import SwiftUI
 
-/// Mic / dictation entry button, shared by both composers. Shows the `micStarting`
-/// spinner (first-run on-device model download when that path is enabled) and disables during
-/// transcription.
+/// Mic / dictation entry button, shared by both composers. Shows a spinner while the
+/// first-run speech model is preparing *or* while a recorded clip is being transcribed
+/// (broker STT can take tens of seconds), and disables re-entry during both.
 struct MicButton: View {
     let model: ComposerModel
 
@@ -12,7 +12,7 @@ struct MicButton: View {
             Task { await model.toggleMic() }
         } label: {
             Group {
-                if model.micStarting {
+                if model.micStarting || model.transcribing {
                     ProgressView().controlSize(.small)
                 } else {
                     Image(systemName: "mic").font(.body.weight(.medium)).foregroundStyle(.secondary)
@@ -23,5 +23,6 @@ struct MicButton: View {
         }
         .smMacPlainButton()
         .disabled(model.transcribing || model.micStarting)
+        .accessibilityLabel(model.transcribing ? "Transcribing" : (model.micStarting ? "Preparing speech" : "Dictate"))
     }
 }

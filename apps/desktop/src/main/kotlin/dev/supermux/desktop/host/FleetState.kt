@@ -78,6 +78,7 @@ class FleetState(
     private val sessionsByHost = LinkedHashMap<String, List<SessionInfo>>()
     private val messagesByHost = HashMap<String, Map<String, List<LogEntry>>>()
     private val agentByHost = HashMap<String, Map<String, AgentStatus>>()
+    private val lastReadByHost = HashMap<String, Map<String, String>>()
     private val onlineHosts = HashMap<String, Boolean>()
     private var lastViewingHost: String? = null
 
@@ -93,6 +94,10 @@ class FleetState(
 
     private val _agentState = MutableStateFlow<Map<String, AgentStatus>>(emptyMap())
     val agentState: StateFlow<Map<String, AgentStatus>> = _agentState.asStateFlow()
+
+    /** Merged sessionId → ISO last_read_at across hosts (ids are globally unique). */
+    private val _lastRead = MutableStateFlow<Map<String, String>>(emptyMap())
+    val lastRead: StateFlow<Map<String, String>> = _lastRead.asStateFlow()
 
     /** The paired fleet as the list/chips render it (identity + reachability + badge slot). */
     private val _hostViews = MutableStateFlow<List<HostView>>(emptyList())
@@ -145,6 +150,7 @@ class FleetState(
         conn.jobs += fleetScope.launch { app.sessions.collect { onHostSessions(recordId, it) } }
         conn.jobs += fleetScope.launch { app.messages.collect { onHostMessages(recordId, it) } }
         conn.jobs += fleetScope.launch { app.agentState.collect { onHostAgent(recordId, it) } }
+        conn.jobs += fleetScope.launch { app.lastRead.collect { onHostLastRead(recordId, it) } }
         conn.jobs += fleetScope.launch { app.agentReplies.collect { _agentReplies.tryEmit(it) } }
         conns[recordId] = conn
     }
@@ -171,6 +177,11 @@ class FleetState(
     private fun onHostAgent(recordId: String, agent: Map<String, AgentStatus>) = synchronized(lock) {
         agentByHost[recordId] = agent
         recomputeAgent()
+    }
+
+    private fun onHostLastRead(recordId: String, reads: Map<String, String>) = synchronized(lock) {
+        lastReadByHost[recordId] = reads
+        recomputeLastRead()
     }
 
     /** Socket connect/disconnect for a host — drives the offline/greyed chip (spec §5) and stamps
@@ -205,7 +216,7 @@ class FleetState(
                 (before - store.list().map { it.recordId }.toSet()).also { removed ->
                     removed.forEach {
                         sessionsByHost.remove(it); messagesByHost.remove(it)
-                        agentByHost.remove(it); onlineHosts.remove(it)
+                        agentByHost.remove(it); lastReadByHost.remove(it); onlineHosts.remove(it)
                     }
                 }
             }
@@ -222,7 +233,7 @@ class FleetState(
     }
 
     private fun recomputeAll() {
-        recomputeSessions(); recomputeMessages(); recomputeAgent(); rebuildHostViews()
+        recomputeSessions(); recomputeMessages(); recomputeAgent(); recomputeLastRead(); rebuildHostViews()
     }
 
     private fun recomputeSessions() {
@@ -244,6 +255,13 @@ class FleetState(
         store.list().forEach { h -> agentByHost[h.recordId]?.let { out.putAll(it) } }
         agentByHost.forEach { (rid, a) -> if (store.list().none { it.recordId == rid }) out.putAll(a) }
         _agentState.value = out
+    }
+
+    private fun recomputeLastRead() {
+        val out = LinkedHashMap<String, String>()
+        store.list().forEach { h -> lastReadByHost[h.recordId]?.let { out.putAll(it) } }
+        lastReadByHost.forEach { (rid, m) -> if (store.list().none { it.recordId == rid }) out.putAll(m) }
+        _lastRead.value = out
     }
 
     private fun rebuildHostViews() {
@@ -355,6 +373,7 @@ class FleetState(
             sessionsByHost.remove(recordId)
             messagesByHost.remove(recordId)
             agentByHost.remove(recordId)
+            lastReadByHost.remove(recordId)
             onlineHosts.remove(recordId)
             if (_activeHost.value == recordId) _activeHost.value = store.list().firstOrNull()?.recordId
         }

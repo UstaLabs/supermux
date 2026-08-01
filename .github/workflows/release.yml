@@ -537,12 +537,18 @@ jobs:
     # Absent secrets on a tag WARN (they do not fail the release) so binary/docker releases
     # keep shipping until the iOS signing material is configured.
     #
+    # Uploading is only half the job — the assign-testflight job below attaches the build to the
+    # tester group, without which it never shows up in anyone's TestFlight app.
+    #
     # Build number: TestFlight requires CFBundleVersion to strictly increase across uploads,
     # so we override CURRENT_PROJECT_VERSION (hardcoded "52" in project.yml) with a value
     # derived from GITHUB_RUN_NUMBER plus TESTFLIGHT_BUILD_OFFSET. The offset guarantees the
     # first CI upload lands above the highest build uploaded from the old headless-Mac flow —
     # raise it if App Store Connect rejects a build as "already used / not higher".
     runs-on: macos-26
+    outputs:
+      upload: ${{ steps.signing.outputs.upload }}
+      build: ${{ steps.ver.outputs.build }}
     env:
       TESTFLIGHT_BUILD_OFFSET: "1000"
       # Apple Distribution signing certificate (App Store), exported as a password-protected
@@ -683,6 +689,28 @@ jobs:
       - name: Remove temporary keychain
         if: always() && steps.signing.outputs.upload == '1'
         run: security delete-keychain "$IOS_RELEASE_KEYCHAIN" || true
+
+  assign-testflight:
+    # `altool --upload-app` only hands the .ipa to App Store Connect. A build that belongs to no
+    # beta group is NOT installable however VALID it looks — that gap silently stranded every CI
+    # build between 1040 and 1061 on ASC while TestFlight kept showing the last manually attached
+    # one. This job waits out PROCESSING and attaches the exact build number this run uploaded.
+    # It runs on Linux (plain ASC REST, no Xcode) so the multi-minute wait costs 1x runner
+    # minutes rather than macOS's 10x.
+    needs: build-ios-testflight
+    if: needs.build-ios-testflight.outputs.upload == '1'
+    runs-on: ubuntu-latest
+    env:
+      ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
+      ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+      ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+      # Internal group the build is attached to; testers on it get the build with no beta review.
+      TESTFLIGHT_GROUP: "Smoke Test"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Attach build to TestFlight group
+        run: bun scripts/testflight-assign.ts "${{ needs.build-ios-testflight.outputs.build }}"
 
   release:
     if: github.ref_type == 'tag'
