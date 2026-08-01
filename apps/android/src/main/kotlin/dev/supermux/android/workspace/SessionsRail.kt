@@ -34,7 +34,9 @@ import dev.supermux.android.session.SessionAvatar
 import dev.supermux.android.session.SessionStatusRail
 import dev.supermux.android.theme.Space
 import dev.supermux.proto.AgentStatus
+import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
+import dev.supermux.session.isSessionUnread
 import dev.supermux.session.sessionsByUserOrder
 
 /**
@@ -42,7 +44,8 @@ import dev.supermux.session.sessionsByUserOrder
  * when [WorkspaceLayout.sidebarCollapsed] is true. Top: an expand chevron ([onExpand]) and a "+"
  * new-session button ([onNewSession]); below, a vertical scrollable column of session
  * [SessionAvatar]s. Tapping one calls [onSelect]; the active session is ringed. Each avatar carries
- * its [SessionStatusRail] status dot at the bottom-end corner (working spinner / git status).
+ * its [SessionStatusRail] status dot at the bottom-end corner (working spinner / unread green /
+ * git status).
  */
 @Composable
 fun SessionsRail(
@@ -52,6 +55,8 @@ fun SessionsRail(
     onSelect: (String) -> Unit,
     onExpand: () -> Unit,
     onNewSession: () -> Unit,
+    lastBySession: Map<String, LogEntry?> = emptyMap(),
+    lastRead: Map<String, String> = emptyMap(),
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -92,10 +97,14 @@ fun SessionsRail(
             Spacer(Modifier.height(Space.xs))
             // sortOrder only — match the expanded list; messages must not reshuffle avatars.
             sessionsByUserOrder(sessions).forEach { s ->
+                val working = agentState[s.id]?.working == true
+                val unread = s.id != selectedId &&
+                    isSessionUnread(lastBySession[s.id]?.ts, lastRead[s.id])
                 RailSessionItem(
                     session = s,
                     selected = s.id == selectedId,
-                    working = agentState[s.id]?.working == true,
+                    working = working,
+                    unread = unread,
                     onClick = { onSelect(s.id) },
                 )
             }
@@ -110,6 +119,7 @@ private fun RailSessionItem(
     session: SessionInfo,
     selected: Boolean,
     working: Boolean,
+    unread: Boolean = false,
     onClick: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -130,7 +140,7 @@ private fun RailSessionItem(
             modifier = Modifier.size(36.dp),
             sessionId = session.id,
         )
-        // Status dot (working spinner / git status), badged over the avatar's bottom-end corner.
+        // Status (working spinner / unread green / git), badged over the avatar's bottom-end.
         Box(
             Modifier
                 .align(Alignment.BottomEnd)
@@ -138,7 +148,7 @@ private fun RailSessionItem(
                 .background(cs.surfaceContainerHigh)
                 .padding(1.dp),
         ) {
-            SessionStatusRail(git = session.git, working = working)
+            SessionStatusRail(git = session.git, working = working, unread = unread)
         }
     }
 }

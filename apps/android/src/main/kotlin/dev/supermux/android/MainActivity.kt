@@ -343,6 +343,8 @@ class MainActivity : ComponentActivity() {
                                             onSelect = { selected = it },
                                             onExpand = { workspaceLayout.sidebarCollapsed = false },
                                             onNewSession = { navController.navigate(NewSession()) },
+                                            lastBySession = lastBySession,
+                                            lastRead = lastRead,
                                         )
                                     } else {
                                         // requiredWidth keeps the list at its full width while the

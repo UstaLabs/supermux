@@ -515,7 +515,9 @@ struct SessionsListView: View {
         let b = fleet.broker(for: s.id)
         let muted = s.mute?.boolValue ?? false
         let previewEntry = b?.messages[s.id]?.last
-        let unread = selected != s.id && isSessionUnread(
+        let working = b?.agentWorking[s.id] == true
+        // Spinner wins while working; green rail only when idle + unread (native rail parity).
+        let unread = selected != s.id && !working && isSessionUnread(
             lastMessageTs: previewEntry?.ts,
             lastReadAt: b?.lastRead[s.id]
         )
@@ -524,7 +526,7 @@ struct SessionsListView: View {
             preview: previewEntry?.text,
             previewTs: previewEntry?.ts,
             phase: b?.agentPhase[s.id],
-            working: b?.agentWorking[s.id] == true,
+            working: working,
             bgOpen: b?.agentBgOpen[s.id] ?? 0,
             muted: muted,
             host: host,

@@ -47,6 +47,9 @@ const bgOpen = computed(() => agentState.get(props.id).bgOpen ?? 0)
 const isDraft = computed(() => props.variant === "draft")
 const isSettled = computed(() => props.variant === "settled")
 
+// Idle + unread only (native SessionStatusRail parity): spinner wins while working.
+const showUnread = computed(() => !!props.unread && !working.value && !props.active)
+
 const renameValue = ref(props.name)
 const renameInput = ref<HTMLInputElement | null>(null)
 
@@ -176,7 +179,9 @@ defineExpose({ startRename })
     @keydown="handleKeydown"
   >
     <div class="flex items-start gap-2.5 min-w-0">
-      <div class="flex w-5 shrink-0 items-center justify-center self-stretch pt-0.5">
+      <!-- Leading rail (native SessionStatusRail parity): working spinner wins;
+           idle + unread → larger green dot; else settled check / quiet gray. -->
+      <div class="flex w-5 shrink-0 items-center justify-center self-stretch pt-0.5 gap-0.5">
         <span
           v-if="bgOpen > 0"
           class="inline-flex items-center font-mono text-[11px] text-amber-500"
@@ -184,6 +189,13 @@ defineExpose({ startRename })
           aria-label="background tasks"
         >⧗{{ bgOpen }}</span>
         <Loader2Icon v-if="working" class="size-4 animate-spin text-primary" aria-label="working" />
+        <span
+          v-else-if="showUnread"
+          class="relative grid size-2.5 place-items-center rounded-full ring-[1.5px] ring-emerald-400/40"
+          aria-label="unread"
+        >
+          <span class="size-1.5 rounded-full bg-emerald-400" />
+        </span>
         <Check v-else-if="isSettled" class="size-4 text-emerald-400/80" aria-label="settled" />
         <span v-else class="size-1.5 rounded-full bg-muted-foreground/30" aria-hidden="true" />
       </div>
@@ -202,7 +214,13 @@ defineExpose({ startRename })
             />
           </template>
           <div v-else class="min-w-0 flex-1 flex items-baseline gap-1.5">
-            <span class="font-medium truncate min-w-0" :class="{ 'text-muted-foreground': isSettled }">{{ props.name }}</span>
+            <span
+              class="truncate min-w-0"
+              :class="[
+                isSettled ? 'text-muted-foreground' : '',
+                showUnread || props.active ? 'font-semibold' : 'font-medium',
+              ]"
+            >{{ props.name }}</span>
             <span
               v-if="props.projectLabel"
               class="shrink-0 max-w-[36%] truncate rounded border border-border/60 px-1.5 py-px font-mono text-[10px] text-muted-foreground/70"
@@ -210,18 +228,13 @@ defineExpose({ startRename })
           </div>
           <span v-if="lastTs" class="text-[11px] text-muted-foreground shrink-0">{{ rel(lastTs) }}</span>
         </div>
-        <div class="flex items-center gap-2 mt-0.5 min-w-0">
+        <div class="mt-0.5 min-w-0">
           <div
-            class="text-[11px] truncate min-w-0 flex-1"
+            class="text-[11px] truncate min-w-0"
             :class="lastText ? 'text-muted-foreground/65' : 'text-muted-foreground/50 italic'"
           >
             {{ lastText || "no messages yet" }}
           </div>
-          <span
-            v-if="props.unread"
-            class="h-5 w-1 rounded-full bg-primary/70 shrink-0"
-            aria-label="unread"
-          />
         </div>
       </div>
     </div>

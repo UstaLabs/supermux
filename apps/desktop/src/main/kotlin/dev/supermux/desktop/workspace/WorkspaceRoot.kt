@@ -495,6 +495,8 @@ fun WorkspaceRoot(
                         onSelect = { ui.selectedId = it },
                         onExpand = { layout.sidebarCollapsed = false },
                         onNewSession = onNewSession,
+                        lastBySession = lastBySession,
+                        lastRead = lastRead,
                     )
                 } else {
                     SessionListPanel(
