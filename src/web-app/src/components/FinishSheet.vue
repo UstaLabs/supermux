@@ -37,7 +37,9 @@ const busy = ref(false)
 const view = computed<"menu" | "running" | "outcome">(() => {
   const j = job.value
   if (j?.status === "running") return "running"
-  if (j && j.status !== "running") return "outcome"
+  // Anything else with a job is terminal — status is already narrowed to
+  // "done" | "failed" here, so re-testing against "running" is dead code.
+  if (j) return "outcome"
   return "menu"
 })
 const outcome = computed<any>(() => job.value?.outcome ?? null)

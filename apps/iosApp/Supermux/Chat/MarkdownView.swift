@@ -346,7 +346,12 @@ enum MarkdownInline {
         /// Find closing delimiter `mark` after `i`, not counting escapes. Returns the index of the
         /// closer's first character, or nil.
         func findClose(_ mark: String) -> String.Index? {
-            var j = i
+            // Start AFTER the opening marker, as the doc above says. Starting at `i`
+            // meant the opener matched itself and this returned `i` every time, so
+            // every `code` span and *italic* caller failed its `close > i` guard and
+            // fell through to literal text — backticks and asterisks rendered raw in
+            // chat. Bold and strike never hit it because they scan from i+2 by hand.
+            var j = s.index(i, offsetBy: mark.count, limitedBy: s.endIndex) ?? s.endIndex
             let m0 = mark[mark.startIndex]
             while j < s.endIndex {
                 if s[j] == "\\" {

@@ -55,7 +55,7 @@ const zoomBadge = ref("")
 const zoomBadgeVisible = ref(false)
 let zoomBadgeTimer: ReturnType<typeof setTimeout> | undefined
 let pinchBaseDist = 0
-let pinchBaseFont = FONT_SIZE.default
+let pinchBaseFont: number = FONT_SIZE.default
 let wheelZoomAccum = 0
 const WHEEL_ZOOM_STEP = 30
 

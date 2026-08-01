@@ -99,6 +99,19 @@ export function isDocumentNavigation(req: Request): boolean {
   return accept.includes("text/html")
 }
 
+// A few GETs must be answered by the server even when the browser asks for a
+// document, because their whole job is a redirect + Set-Cookie that the SPA
+// cannot perform. `/pair?t=…` is the pairing link a QR scan opens: the handler
+// verifies the token, sets the HttpOnly auth cookie and 302s to "/". Serving the
+// SPA shell there instead silently downgrades every pairing link to the manual
+// paste screen — the device never gets a cookie.
+//
+// Bare `/pair` (no token) IS a real SPA route (the paste-a-URL screen), so only
+// the token-carrying form is excluded.
+export function isServerHandledDocumentGet(path: string, url: URL): boolean {
+  return path === "/pair" && !!url.searchParams.get("t")
+}
+
 function isApiPath(path: string): boolean {
   return API_PREFIXES.some((p) => path === p || path.startsWith(p + "/"))
 }
@@ -1253,7 +1266,7 @@ export class WebChannel implements Channel {
     // is an entry point and must revalidate every request. Resolution
     // (disk-first, then embedded PWA for compiled binaries, then SPA fallback)
     // lives in serveStatic.
-    if (method === "GET" && (!isApiPath(path) || isDocumentNavigation(req))) {
+    if (method === "GET" && !isServerHandledDocumentGet(path, url) && (!isApiPath(path) || isDocumentNavigation(req))) {
       const res = serveStatic({ staticDir: this.opts.staticDir, embedded: this.opts.staticEmbedded ?? {}, path, acceptEncoding: req.headers.get("accept-encoding") ?? undefined })
       if (res) return res
     }

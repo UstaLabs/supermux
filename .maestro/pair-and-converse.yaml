@@ -1,0 +1,89 @@
+# Journey 1+2 on a real Android device/emulator: pair, open the seeded session,
+# send a prompt through the real WebSocket, and see the fake agent's reply
+# rendered.
+#
+# Deliberately written against the SHARED test ids (src/shared/test-ids.ts), not
+# Android-specific tags, so the same selectors describe the same elements on iOS.
+# MainActivity sets testTagsAsResourceId = true, which is what publishes Compose
+# testTags to Maestro as resource ids.
+#
+# Run: scripts/test-android.sh   (boots the hermetic broker and passes the env below)
+# BASE_URL / PAIR_TOKEN / SESSION_ID / PROMPT are substituted by
+# scripts/test-android.sh before maestro sees this file. They are NOT declared as
+# `env:` defaults on purpose: maestro preferred the defaults over -e overrides,
+# which produced a run that typed "…/pair?t=unset" and looked like a UI bug.
+appId: dev.supermux.android
+---
+# App data is cleared by scripts/test-android.sh BEFORE maestro starts, not here:
+# `pm clear` drops the adb transport for a moment, and maestro's own clearState
+# hit that window and died with "device offline" four seconds into every run.
+#
+# Permissions still have to be granted at launch — the clear revokes whatever
+# `adb install -g` granted, and the POST_NOTIFICATIONS dialog would otherwise
+# open over the app and swallow every later assertion.
+- launchApp:
+    permissions:
+      all: allow
+
+# A cold start right after `pm clear` needs a beat before the first frame is up;
+# without this the intro CTA is looked for while the window is still blank.
+- extendedWaitUntil:
+    visible: "See what it does"
+    timeout: 60000
+
+# Pair through the on-screen "paste a pairing link" field — the app's own manual
+# path, and the one a user takes when they cannot scan a QR code. Deliberately
+# NOT the supermux://pair deep link: that link is only read by ConnectPage, the
+# last of four intro pages, so on a fresh install it is delivered while page 0 is
+# showing and is gone by the time ConnectPage composes. See the note below.
+# Advance with the intro's own CTA rather than swiping: `swipe: direction: LEFT`
+# does not reliably move a HorizontalPager on a CI emulator with animations
+# disabled, and it silently left the flow on page 0. The button's label changes
+# per page, so naming each one also documents the path.
+- tapOn: "See what it does"
+- tapOn: "It never sleeps"
+- tapOn: "Connect your computer"
+
+- extendedWaitUntil:
+    visible: "https://host/pair?t=…"
+    timeout: 30000
+- tapOn: "https://host/pair?t=…"
+- inputText: "${BASE_URL}/pair?t=${PAIR_TOKEN}"
+# The soft keyboard covers the Pair button, so the tap misses without this.
+- hideKeyboard
+- tapOn: "Pair"
+
+# Trust-on-first-connect: the broker is unknown, so confirm it.
+- extendedWaitUntil:
+    visible: "Connect to this broker?"
+    timeout: 30000
+- tapOn: "Connect"
+
+# Paired and synced: the session list is on screen with the seeded session.
+- extendedWaitUntil:
+    visible:
+      id: "session-list"
+    timeout: 60000
+- extendedWaitUntil:
+    visible:
+      id: "session-row:${SESSION_ID}"
+    timeout: 30000
+
+- tapOn:
+    id: "session-row:${SESSION_ID}"
+- extendedWaitUntil:
+    visible:
+      id: "chat-view"
+    timeout: 30000
+
+- tapOn:
+    id: "composer-input"
+- inputText: "${PROMPT}"
+- tapOn:
+    id: "composer-submit"
+
+# The prompt round-trips through broker → shim → fake agent and comes back.
+# Asserting the REPLY (not just the echo) is what proves the whole path works.
+- extendedWaitUntil:
+    visible: "Fixture reply: ${PROMPT}"
+    timeout: 60000

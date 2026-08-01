@@ -17,9 +17,9 @@ import io.ktor.http.content.TextContent
 import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -111,7 +111,7 @@ class DesktopLauncherTest {
         return DesktopAppState(
             baseUrl = "ws://test:9898",
             token = "t",
-            scope = TestScope(UnconfinedTestDispatcher()),
+            scope = CoroutineScope(Dispatchers.Default), // real clock: BrokerApi.spawn uses withTimeout
             connectOnInit = false,
             apiOverride = api,
         )
@@ -120,7 +120,7 @@ class DesktopLauncherTest {
     private fun staged(name: String, bytes: Int) =
         StagedUpload(ByteArrayChunkSource(ByteArray(bytes) { 1 }), name, "text/plain")
 
-    @Test fun create_session_spawns_with_the_launcher_field_shape() = runTest {
+    @Test fun create_session_spawns_with_the_launcher_field_shape() = runBlocking {
         val recorded = mutableListOf<Rec>()
         val app = appRecording(recorded)
 
@@ -149,7 +149,7 @@ class DesktopLauncherTest {
         assertEquals("high", req.reasoningLevel)
     }
 
-    @Test fun create_session_uploads_staged_files_after_spawn_and_stashes_ids() = runTest {
+    @Test fun create_session_uploads_staged_files_after_spawn_and_stashes_ids() = runBlocking {
         val recorded = mutableListOf<Rec>()
         val app = appRecording(recorded)
 
@@ -167,7 +167,7 @@ class DesktopLauncherTest {
         assertTrue(app.consumeFirstUploads("sess-1").isEmpty()) // single-shot: cleared after consume
     }
 
-    @Test fun create_session_null_worktree_and_model_are_omitted_from_the_spawn_body() = runTest {
+    @Test fun create_session_null_worktree_and_model_are_omitted_from_the_spawn_body() = runBlocking {
         val recorded = mutableListOf<Rec>()
         val app = appRecording(recorded)
 
@@ -185,7 +185,7 @@ class DesktopLauncherTest {
         assertTrue("reasoningLevel" !in body, "blank reasoning must be omitted, got: $body")
     }
 
-    @Test fun create_session_returns_null_when_the_path_is_invalid() = runTest {
+    @Test fun create_session_returns_null_when_the_path_is_invalid() = runBlocking {
         val recorded = mutableListOf<Rec>()
         val app = appRecording(recorded, validateOk = false)
 
@@ -199,7 +199,7 @@ class DesktopLauncherTest {
         assertEquals(listOf("/paths/validate"), recorded.map { it.path })
     }
 
-    @Test fun create_session_resolves_a_blank_spawn_id_by_name() = runTest {
+    @Test fun create_session_resolves_a_blank_spawn_id_by_name() = runBlocking {
         val recorded = mutableListOf<Rec>()
         val app = appRecording(recorded, spawnId = "", spawnName = "feat-x")
         // The blank-id fallback matches resp.name against the live session list — seed it.

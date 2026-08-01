@@ -133,3 +133,45 @@ test("Accept: text/html alone (no Sec-Fetch) still serves SPA on /settings", asy
   expect(res.status).toBe(200)
   expect(await res.text()).toContain("SPA-SHELL")
 })
+
+// Regression: the SPA-shell fallback above is checked BEFORE the route handlers,
+// so it also swallowed `/pair?t=…` — the link a QR scan opens. That handler's
+// entire job is to verify the token, set the HttpOnly auth cookie and 302 to "/",
+// none of which the SPA can do, so every pairing link silently degraded to the
+// manual paste screen and the device never got a cookie. Caught by the browser
+// journey, not by any unit test, because the shell response is a valid 200.
+test("document navigation to /pair?t= pairs server-side instead of getting the shell", async () => {
+  const made = makeChannel()
+  channel = made.channel
+  await channel.start()
+  const token = mintToken(made.devicesFile)
+
+  const res = await fetch(`${base()}/pair?t=${encodeURIComponent(token)}`, {
+    redirect: "manual",
+    headers: {
+      "sec-fetch-dest": "document",
+      "sec-fetch-mode": "navigate",
+      accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    },
+  })
+
+  expect(res.status).toBe(302)
+  expect(res.headers.get("location")).toBe("/")
+  expect(res.headers.get("set-cookie") ?? "").toContain("HttpOnly")
+})
+
+test("bare /pair (no token) is still a real SPA route", async () => {
+  const made = makeChannel()
+  channel = made.channel
+  await channel.start()
+
+  const res = await fetch(`${base()}/pair`, {
+    headers: {
+      "sec-fetch-dest": "document",
+      "sec-fetch-mode": "navigate",
+      accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    },
+  })
+  expect(res.status).toBe(200)
+  expect(await res.text()).toContain("SPA-SHELL")
+})

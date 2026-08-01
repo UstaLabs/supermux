@@ -5,15 +5,15 @@
  * permission dialog. Verifies the banner appears, tapping Enable hits the
  * broker `/push/subscribe` endpoint, and the row lands in sqlite.
  *
- * Run: bun tests/ui/push-banner.spec.ts
+ * Run: scripts/test-broker.sh bun tests/ui/push-banner.spec.ts
  */
 
 import { chromium, type BrowserContext } from "playwright"
-import { existsSync, mkdtempSync, rmSync } from "fs"
+import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { DeviceStore } from "../../src/channels/web/device-store"
 import { Database } from "bun:sqlite"
+import { browserLaunchOptions, uiFixture } from "./fixture-env"
 
 declare const window: object
 declare const Notification: { permission: string } | undefined
@@ -23,23 +23,15 @@ declare const navigator: {
   }
 }
 
-const STATE_DIR = process.env.MUX_STATE_DIR ?? join(process.env.HOME ?? "", ".mux/state")
-const MUX_WEB_PORT = parseInt(process.env.MUX_WEB_PORT ?? "9898", 10)
-const APP_URL = `http://127.0.0.1:${MUX_WEB_PORT}`
-const CHROME_BIN = "/usr/bin/google-chrome"
-
 async function main(): Promise<void> {
   if (process.env.MUX_RUN_UI_SMOKE !== "1") {
-    console.log("skipping UI smoke; set MUX_RUN_UI_SMOKE=1 to run")
+    console.log("skipping UI smoke; run through scripts/test-broker.sh")
     return
   }
 
-  const probe = await fetch(`${APP_URL}/sessions`).catch(() => null)
-  if (!probe) throw new Error(`broker not reachable at ${APP_URL}`)
-
-  const ds = new DeviceStore(join(STATE_DIR, "devices.json"))
-  const minted = ds.mint("push-banner-test-temp")
-  const token = minted.token
+  const fixture = uiFixture()
+  const stateDir = process.env.MUX_STATE_DIR
+  if (!stateDir) throw new Error("MUX_STATE_DIR missing from test-broker fixture")
 
   // Chrome refuses Push API in incognito (https://crbug.com/41124656). Playwright's
   // default `chromium.launch()` + `newContext()` runs in incognito-equivalent mode,
@@ -48,14 +40,11 @@ async function main(): Promise<void> {
   const profileDir = mkdtempSync(join(tmpdir(), "cmux-push-test-profile-"))
   let ctx: BrowserContext | null = null
   try {
-    if (!existsSync(CHROME_BIN)) throw new Error(`chrome not found at ${CHROME_BIN}`)
     ctx = await chromium.launchPersistentContext(profileDir, {
-      executablePath: CHROME_BIN,
-      headless: true,
-      args: ["--no-sandbox", "--disable-dev-shm-usage"],
+      ...browserLaunchOptions(),
       permissions: ["notifications"],
     })
-    await ctx.grantPermissions(["notifications"], { origin: APP_URL })
+    await ctx.grantPermissions(["notifications"], { origin: fixture.baseUrl })
     const page = await ctx.newPage()
     page.on("console", (m) => console.log(`[console.${m.type()}] ${m.text()}`))
     page.on("pageerror", (e) => console.log(`[pageerror] ${e.message}`))
@@ -77,8 +66,8 @@ async function main(): Promise<void> {
       }
     })
 
-    await page.goto(`${APP_URL}/pair?t=${encodeURIComponent(token)}`, { waitUntil: "networkidle" })
-    await page.waitForSelector("text=ana", { timeout: 10_000 })
+    await page.goto(`${fixture.baseUrl}/pair?t=${encodeURIComponent(fixture.token)}`, { waitUntil: "networkidle" })
+    await page.locator('[data-testid="session-list"]').waitFor({ state: "visible", timeout: 10_000 })
 
     // Probe Push API surface so DONE_WITH_CONCERNS reporting has detail.
     const apiSurface = await page.evaluate(async () => {
@@ -110,11 +99,11 @@ async function main(): Promise<void> {
     console.log("Enable clicked; waiting for subscription POST...")
 
     // Wait up to 8s for the row to land in sqlite
-    const dbPath = join(STATE_DIR, "db.sqlite3")
+    const dbPath = join(stateDir, "db.sqlite3")
     const db = new Database(dbPath, { readonly: true })
     let found = false
     for (let i = 0; i < 16; i++) {
-      const row = db.prepare("SELECT device FROM push_subscriptions WHERE device = ?").get("push-banner-test-temp")
+      const row = db.prepare("SELECT device FROM push_subscriptions WHERE device = ?").get(fixture.deviceName)
       if (row) { found = true; break }
       await new Promise((r) => setTimeout(r, 500))
     }
@@ -130,7 +119,6 @@ async function main(): Promise<void> {
   } finally {
     if (ctx) await ctx.close()
     rmSync(profileDir, { recursive: true, force: true })
-    new DeviceStore(join(STATE_DIR, "devices.json")).revoke("push-banner-test-temp")
   }
 
   console.log("\n=== TEST PASSED ===")

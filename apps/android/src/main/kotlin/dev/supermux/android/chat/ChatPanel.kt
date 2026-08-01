@@ -1,5 +1,6 @@
 package dev.supermux.android.chat
 
+import dev.supermux.ui.TestIds
 import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
@@ -397,9 +398,11 @@ fun ChatPanel(
     val density = LocalDensity.current
     var composerHeightPx by remember { mutableIntStateOf(0) }
     Box(
-        modifier.pointerInput(Unit) {
-            detectTapGestures(onTap = { focusManager.clearFocus() })
-        },
+        modifier
+            .testTag(TestIds.CHAT_VIEW)
+            .pointerInput(Unit) {
+                detectTapGestures(onTap = { focusManager.clearFocus() })
+            },
     ) {
         // ----------------------------------------------------------------
         // 2. Timeline
@@ -873,7 +876,7 @@ fun ChatPanel(
                     onClick = { doSend() },
                     enabled = canSend,
                     interactionSource = sendInteractionSource,
-                    modifier = Modifier.testTag("chat_send"),
+                    modifier = Modifier.testTag(TestIds.COMPOSER_SUBMIT),
                 ) {
                     Box(
                         modifier = Modifier
@@ -950,7 +953,7 @@ fun ChatPanel(
                                 keyboardActions = KeyboardActions(onSend = { doSend() }),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .testTag("chat_composer")
+                                    .testTag(TestIds.COMPOSER_INPUT)
                                     // Physical keyboard: Enter sends, Shift+Enter inserts a newline. Handled
                                     // in the PREVIEW phase and consumed, so the multiline field never also
                                     // inserts a newline and no duplicate IME "Send" fires — fixes hardware

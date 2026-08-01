@@ -497,7 +497,7 @@ test("workdir strip: undefined workdir -> no-op", () => {
 test("grok tool_call started -> title with file_path summary", () => {
   const ev = { tool: "write", phase: "started" as const, call_id: "c0",
     detail: { title: "write", rawInput: { file_path: "/w/poem.txt", content: "x" } } }
-  const [a] = toActivityEvents("grok", ev, Date.parse("2026-07-13T00:00:00Z"), WD)
+  const a = toActivityEvents("grok", ev, Date.parse("2026-07-13T00:00:00Z"), WD)[0]!
   expect(a.kind).toBe("tool")
   expect(a.tool).toBe("Write")
   // workdir-relativized in the card title
@@ -508,7 +508,7 @@ test("grok tool_call_update completed -> tool_result done", () => {
   const ev = { tool: "edit", phase: "completed" as const, call_id: "c0",
     detail: { title: "Write `/w/poem.txt`", status: "completed",
       content: [{ type: "content", content: { type: "text", text: "wrote 2 lines" } }] } }
-  const [a] = toActivityEvents("grok", ev, Date.parse("2026-07-13T00:00:00Z"), WD)
+  const a = toActivityEvents("grok", ev, Date.parse("2026-07-13T00:00:00Z"), WD)[0]!
   expect(a.kind).toBe("tool_result")
   expect(a.title).toBe("done")
   expect(a.detail).toContain("wrote 2 lines")
@@ -517,7 +517,7 @@ test("grok tool_call_update completed -> tool_result done", () => {
 test("grok tool_call_update failed -> tool_result error", () => {
   const ev = { tool: "write", phase: "failed" as const, call_id: "c0",
     detail: { status: "failed", content: [{ type: "content", content: { type: "text", text: "permission denied" } }] } }
-  const [a] = toActivityEvents("grok", ev, Date.parse("2026-07-13T00:00:00Z"), WD)
+  const a = toActivityEvents("grok", ev, Date.parse("2026-07-13T00:00:00Z"), WD)[0]!
   expect(a.title).toBe("error")
   expect(a.detail).toContain("permission denied")
 })

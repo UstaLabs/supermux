@@ -12,6 +12,15 @@ import UniformTypeIdentifiers
 /// Unit tests for `ComposerModel`'s pure logic (draft, slash parsing, consume). The mic /
 /// dictation pipeline touches hardware (AVAudioEngine / SFSpeechRecognizer) and is covered by
 /// manual smoke, not here. `ComposerModel` is `@MainActor`, so these run on the main actor.
+///
+/// What belongs here: slash-command parsing, paste/attachment MIME mapping, filename
+/// numbering, consume-and-clear — behaviour with rules that can actually be got wrong.
+///
+/// What does NOT: restatements of one-line computed properties. `canSubmit` and
+/// `hasContent` had four tests between them asserting exactly what their bodies say,
+/// which cannot fail for any reason a user would notice; "typing enables send" is proven
+/// by the journeys instead (tests/journeys/02-spawn-and-converse.md). A test earns its
+/// place by catching a user-visible break that nothing else catches.
 @MainActor
 final class ComposerModelTests: XCTestCase {
 
@@ -26,19 +35,6 @@ final class ComposerModelTests: XCTestCase {
                      description: nil, insertText: insertText, action: action)
     }
 
-    func testCanSubmitFalseWhenEmpty() {
-        XCTAssertFalse(model().canSubmit)
-    }
-    func testCanSubmitFalseWhenWhitespaceOnly() {
-        XCTAssertFalse(model(draft: "   \n").canSubmit)
-    }
-    func testCanSubmitTrueWithDraft() {
-        XCTAssertTrue(model(draft: "hello").canSubmit)
-    }
-    func testHasContent() {
-        XCTAssertFalse(model().hasContent)
-        XCTAssertTrue(model(draft: "x").hasContent)
-    }
     func testConsumeReturnsAndClears() {
         let m = model(draft: "build the thing")
         let out = m.consume()

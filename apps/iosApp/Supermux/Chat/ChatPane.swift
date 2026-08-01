@@ -265,6 +265,7 @@ struct ChatPane: View {
                         return true
                     }
                 )
+                .accessibilityIdentifier(TestIds.composerInput)
                 if !composerExpanded {
                     MicButton(model: composer)
                 }
@@ -296,6 +297,7 @@ struct ChatPane: View {
                     }
                     Spacer(minLength: 0)
                     SendCircleButton(enabled: composer.canSubmit, size: 34) { sendMessage() }
+                        .accessibilityIdentifier(TestIds.composerSubmit)
                 }
             }
             }

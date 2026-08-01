@@ -1,5 +1,6 @@
 package dev.supermux.android.session
 
+import dev.supermux.ui.TestIds
 import android.content.Context
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
@@ -360,7 +361,7 @@ fun SessionRow(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .testTag("session_row_${s.id}")
+                        .testTag(TestIds.sessionRow(s.id))
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.Top,
                 ) {
@@ -786,7 +787,7 @@ fun SessionListScreen(
         LazyColumn(
             state = listState,
                         modifier = Modifier
-                .testTag("sessions_list")
+                .testTag(TestIds.SESSION_LIST)
                 .fillMaxSize()
                 .background(cs.surfaceContainerHigh),
         ) {
