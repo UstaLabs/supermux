@@ -80,7 +80,7 @@ final class AgentDeadStateTests: XCTestCase {
         let snapshot = ServerFrameSnapshot(
             sessions: [], logs: [:], activity: [:], bgTasks: [:],
             agentState: ["s1": agentStatus(state: "dead"), "s2": agentStatus(state: "idle")],
-            commands: [:], commandsResolved: [:]
+            commands: [:], commandsResolved: [:], reads: [:]
         )
         broker.reduce(snapshot)
 
