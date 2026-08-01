@@ -150,6 +150,12 @@ class DesktopAppState(
     /** Per-session resolution state of the slash-command set (true = fully resolved). */
     private val _commandsResolved = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     val commandsResolved: StateFlow<Map<String, Boolean>> = _commandsResolved
+    /**
+     * Session id → ISO last_read_at. Seeded from snapshot `reads`, updated by `session_read`
+     * frames and optimistic [markRead] when the user opens a chat (web/Android parity).
+     */
+    private val _lastRead = MutableStateFlow<Map<String, String>>(emptyMap())
+    val lastRead: StateFlow<Map<String, String>> = _lastRead
 
     // ── Finish flow (M4b) ──────────────────────────────────────────────────────────
     // The last/in-flight finish job per session, keyed by session id (Android AppViewModel
@@ -286,6 +292,17 @@ class DesktopAppState(
                 _agentState.value = frame.agentState
                 _commands.value = frame.commands
                 _commandsResolved.value = frame.commandsResolved
+                // Monotonic merge of read pointers (web unread.seed / Android parity): never
+                // rewind an optimistic local mark with a slightly-older server timestamp.
+                if (frame.reads.isNotEmpty()) {
+                    _lastRead.update { cur ->
+                        val next = cur.toMutableMap()
+                        for ((id, ts) in frame.reads) {
+                            next[id] = dev.supermux.session.advanceLastRead(next[id], ts)
+                        }
+                        next
+                    }
+                }
                 // Seed finish jobs from each session's snapshot record (keyed by session id).
                 _finishJobs.value = frame.sessions
                     .mapNotNull { s -> s.finish_job?.let { s.id to it } }
@@ -359,6 +376,12 @@ class DesktopAppState(
                 // (op="react"/"edit_message") never reach this flow.
                 if (frame.entry.direction == "outbound" && frame.entry.op == "reply") {
                     _agentReplies.tryEmit(AgentReplyEvent(frame.session, frame.entry))
+                }
+            }
+            is ServerFrame.SessionRead -> {
+                _lastRead.update { cur ->
+                    val next = dev.supermux.session.advanceLastRead(cur[frame.session], frame.lastReadAt)
+                    if (cur[frame.session] == next) cur else cur + (frame.session to next)
                 }
             }
             is ServerFrame.ActivityAppend -> {
@@ -454,8 +477,20 @@ class DesktopAppState(
     fun updateViewing(session: String?, visible: Boolean) {
         viewingSession = session
         viewingVisible = visible
+        // Optimistic clear (web useUnread.markRead / Android parity). Server confirms via
+        // session_read after the viewing frame advances the read pointer.
+        if (visible && session != null) markRead(session)
         sendViewingIfChanged()
         ensureViewingHeartbeat()
+    }
+
+    /** Optimistically advance this session's read pointer to now so the list un-bolds immediately. */
+    fun markRead(sessionId: String) {
+        val now = Instant.now().toString()
+        _lastRead.update { cur ->
+            val next = dev.supermux.session.advanceLastRead(cur[sessionId], now)
+            if (cur[sessionId] == next) cur else cur + (sessionId to next)
+        }
     }
 
     private fun sendViewingIfChanged() {

@@ -328,6 +328,7 @@ fun WorkspaceRoot(
     }
     val messages by (fleet?.messages ?: app.messages).collectAsState()
     val agentState by (fleet?.agentState ?: app.agentState).collectAsState()
+    val lastRead by (fleet?.lastRead ?: app.lastRead).collectAsState()
     val lastBySession = remember(messages) { messages.mapValues { it.value.lastOrNull() } }
 
     // Stable empty fallbacks so collectAsState never re-subscribes when fleet == null.
@@ -502,6 +503,7 @@ fun WorkspaceRoot(
                         activeId = ui.selectedId,
                         onOpen = { ui.selectedId = it },
                         lastBySession = lastBySession,
+                        lastRead = lastRead,
                         agentState = agentState,
                         // Per-session ops route to the OWNING host (multi-host); single-host → [app].
                         onRename = { id, name -> appFor(id).rename(id, name) },

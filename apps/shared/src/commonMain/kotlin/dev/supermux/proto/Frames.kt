@@ -174,6 +174,12 @@ sealed interface ServerFrame {
         val agentState: Map<String, AgentStatus> = emptyMap(),
         val commands: Map<String, List<SlashCommand>> = emptyMap(),
         val commandsResolved: Map<String, Boolean> = emptyMap(),
+        /**
+         * Server-authoritative read pointers: session id → ISO `last_read_at`.
+         * Seeded on connect; live updates arrive as [SessionRead]. Same map the web
+         * unread store seeds from (`stores/unread.ts`).
+         */
+        val reads: Map<String, String> = emptyMap(),
     ) : ServerFrame
 
     @Serializable @SerialName("session_added")
@@ -236,6 +242,17 @@ sealed interface ServerFrame {
 
     @Serializable @SerialName("message_append")
     data class MessageAppend(val session: String, val entry: LogEntry) : ServerFrame
+
+    /**
+     * Read-status advance for one session. Broadcast when any device views a chat
+     * (or POST /sessions/:id/read). Clients compare [last_read_at] to the last
+     * message timestamp to decide unread (web/watch parity).
+     */
+    @Serializable @SerialName("session_read")
+    data class SessionRead(
+        val session: String,
+        @SerialName("last_read_at") val lastReadAt: String,
+    ) : ServerFrame
 
     @Serializable @SerialName("activity_append")
     data class ActivityAppend(val session: String, val event: ActivityEvent) : ServerFrame

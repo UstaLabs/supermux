@@ -196,6 +196,7 @@ class MainActivity : ComponentActivity() {
                 val pendingSend by vm.pendingSend.collectAsStateWithLifecycle()
                 val commands by vm.commands.collectAsStateWithLifecycle()
                 val commandsResolved by vm.commandsResolved.collectAsStateWithLifecycle()
+                val lastRead by vm.lastRead.collectAsStateWithLifecycle()
                 // Merged-fleet state: the paired hosts (identity + reachability), the sessionId→host
                 // owner index (per-row badges), and the persisted host-filter chip selection.
                 val hostViews by vm.hostViews.collectAsStateWithLifecycle()
@@ -353,6 +354,7 @@ class MainActivity : ComponentActivity() {
                                                 activeId = selected,
                                                 onOpen = { selected = it },
                                                 lastBySession = lastBySession,
+                                                lastRead = lastRead,
                                                 agentState = agentState,
                                                 onNewSession = { navController.navigate(NewSession()) },
                                                 loadProjects = { vm.listProjects() },
@@ -372,7 +374,7 @@ class MainActivity : ComponentActivity() {
                                                 onAddHost = { navController.navigate(AddHost) },
                                                 onRenameHost = { id, name -> vm.renameHost(id, name) },
                                                 onForgetHost = { id -> vm.forgetHost(id) },
-                                            )
+                                            }
                                         }
                                     }
                                 }
@@ -473,6 +475,7 @@ class MainActivity : ComponentActivity() {
                                         activeId = selected,
                                         onOpen = { selected = it; navController.popBackStack() },
                                         lastBySession = lastBySession,
+                                        lastRead = lastRead,
                                         agentState = agentState,
                                         onNewSession = { },
                                         loadProjects = { vm.listProjects() },

@@ -515,6 +515,10 @@ struct SessionsListView: View {
         let b = fleet.broker(for: s.id)
         let muted = s.mute?.boolValue ?? false
         let previewEntry = b?.messages[s.id]?.last
+        let unread = selected != s.id && isSessionUnread(
+            lastMessageTs: previewEntry?.ts,
+            lastReadAt: b?.lastRead[s.id]
+        )
         SessionRow(
             session: s,
             preview: previewEntry?.text,
@@ -526,6 +530,7 @@ struct SessionsListView: View {
             host: host,
             projectTag: projectTag,
             selected: selected == s.id,
+            unread: unread,
             showsDragHint: reorderable,
             isDragging: reorderState.draggingId == s.id
         )
@@ -687,6 +692,14 @@ private struct SidebarArchiveRevealBar: View {
     }
 }
 
+/// Server-authoritative unread: last message newer than last_read_at (or no pointer).
+/// Mirrors shared KMP `isSessionUnread` / web `stores/unread.ts` (ISO string compare).
+func isSessionUnread(lastMessageTs: String?, lastReadAt: String?) -> Bool {
+    guard let lastMessageTs, !lastMessageTs.isEmpty else { return false }
+    guard let lastReadAt, !lastReadAt.isEmpty else { return true }
+    return lastMessageTs > lastReadAt
+}
+
 struct SessionRow: View {
     let session: SessionInfo
     var preview: String?
@@ -708,6 +721,8 @@ struct SessionRow: View {
     /// Flat-mode project leaf tag (web projectLabel).
     var projectTag: String? = nil
     var selected: Bool = false
+    /// Server-authoritative unread (last message newer than last_read_at); bold title when true.
+    var unread: Bool = false
     /// Subtle grab affordance for reorderable rows (macOS hover).
     var showsDragHint: Bool = false
     /// Dimmed list slot while this row's free-drag ghost is active.
@@ -735,7 +750,7 @@ struct SessionRow: View {
                 HStack(spacing: 6) {
                     Text(session.name)
                         .font(titleFont)
-                        .fontWeight(selected ? .semibold : .medium)
+                        .fontWeight(selected || unread ? .semibold : .medium)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     if muted {

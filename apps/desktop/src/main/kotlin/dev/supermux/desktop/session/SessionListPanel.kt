@@ -233,6 +233,8 @@ fun SessionRow(
     s: SessionInfo,
     active: Boolean,
     preview: LogEntry? = null,
+    /** ISO last_read_at for this session (null/absent = never read). */
+    lastReadAt: String? = null,
     working: Boolean = false,
     bgOpen: Int = 0,
     host: HostView? = null,
@@ -249,8 +251,9 @@ fun SessionRow(
     val c = LocalPanes.current
     val cs = MaterialTheme.colorScheme
 
-    // Unread indicator: inbound message that is the latest entry.
-    val hasUnread = !active && preview?.direction == "inbound"
+    // Server-authoritative: last message newer than last_read_at (web/watch/Android parity).
+    // Do not use direction — inbound is the user, outbound is the agent.
+    val hasUnread = !active && dev.supermux.session.isSessionUnread(preview?.ts, lastReadAt)
 
     val rowModifier = if (active) {
         Modifier
@@ -402,6 +405,8 @@ fun SessionListPanel(
     activeId: String?,
     onOpen: (String) -> Unit,
     lastBySession: Map<String, LogEntry?> = emptyMap(),
+    /** Bare sessionId → ISO last_read_at (server + optimistic local marks). */
+    lastRead: Map<String, String> = emptyMap(),
     agentState: Map<String, AgentStatus> = emptyMap(),
     onRename: (String, String) -> Unit = { _, _ -> },
     onKill: (String) -> Unit = {},
@@ -545,6 +550,7 @@ fun SessionListPanel(
                     items(pas, key = { "flat:pa:${it.id}" }) { s ->
                         SessionRow(
                             s, active = s.id == activeId, preview = lastBySession[s.id],
+                            lastReadAt = lastRead[s.id],
                             working = agentState[s.id]?.working == true,
                             bgOpen = agentState[s.id]?.bgOpen ?: 0,
                             host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -571,6 +577,7 @@ fun SessionListPanel(
                             items(section.sessions, key = { "f:${it.id}" }) { s ->
                                 SessionRow(
                                     s, active = s.id == activeId, preview = lastBySession[s.id],
+                            lastReadAt = lastRead[s.id],
                                     host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
                                     projectTag = projectLabel(s, effectiveHome),
                                     onClick = { openSession(s) },
@@ -592,6 +599,7 @@ fun SessionListPanel(
                         items(sectionOrder(section), key = { "f:${it.id}" }) { s ->
                             SessionRow(
                                 s, active = s.id == activeId, preview = lastBySession[s.id],
+                            lastReadAt = lastRead[s.id],
                                 working = agentState[s.id]?.working == true,
                                 bgOpen = agentState[s.id]?.bgOpen ?: 0,
                                 host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -622,6 +630,7 @@ fun SessionListPanel(
                                 s,
                                 active = s.id == activeId,
                                 preview = lastBySession[s.id],
+                            lastReadAt = lastRead[s.id],
                                 working = agentState[s.id]?.working == true,
                                 bgOpen = agentState[s.id]?.bgOpen ?: 0,
                                 host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -654,6 +663,7 @@ fun SessionListPanel(
                             items(settled.sessions, key = { "s:${it.id}" }) { s ->
                                 SessionRow(
                                     s, active = false, preview = lastBySession[s.id],
+                            lastReadAt = lastRead[s.id],
                                     host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
                                     onClick = { openSession(s) },
                                     onResume = { onResume(s.id) },
