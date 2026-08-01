@@ -224,6 +224,7 @@ struct ChatView: View {
         ChatPane(broker: broker, session: session,
                  showRename: $showRename, renameText: $renameText,
                  showKillConfirm: $showKillConfirm, banner: $banner)
+            .accessibilityIdentifier(TestIds.chatView)
     }
 
     // The raw agent terminal — the "Native" view of a (claude) session, its own tab.

@@ -125,7 +125,7 @@ struct SessionsListView: View {
                     .smSessionRowSurface(selected: false, accented: true)
                 }
                 .buttonStyle(.plain)
-                .accessibilityIdentifier("new-session")
+                .accessibilityIdentifier(TestIds.newSession)
                 .moveDisabled(true)
                 .deleteDisabled(true)
                 .smSessionListRowChrome(spacing: EdgeInsets(top: 6, leading: 0, bottom: 4, trailing: 0))
@@ -172,6 +172,7 @@ struct SessionsListView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(Color.smGroupedBackground)
+        .accessibilityIdentifier(TestIds.sessionList)
         #if os(macOS)
         .contentMargins(.horizontal, 10, for: .scrollContent)
         // The reveal must not participate in scroll layout on AppKit. The overlay also keeps a
@@ -598,6 +599,7 @@ struct SessionsListView: View {
             ))
             .tag(s.id)
             .moveDisabled(true)
+            .accessibilityIdentifier(TestIds.sessionRow(s.id))
             .smSessionListRowChrome()
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 swipeButtons(for: s)

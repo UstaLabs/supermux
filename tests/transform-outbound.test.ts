@@ -70,7 +70,9 @@ test("bare 'web' chat_id (single-channel collapse) still rewrites files[] to att
   expect(out.op).toBe("reply")
   if (out.op !== "reply") throw new Error()
   expect(out.attachments?.length).toBe(1)
-  expect(out.attachments?.[0]?.kind).toBe("video_note")
+  // `video/*` classifies as "video" since edab47e added the dedicated video kind;
+  // before that it fell through to "video_note".
+  expect(out.attachments?.[0]?.kind).toBe("video")
   expect(out.attachments?.[0]?.mime).toBe("video/mp4")
   expect(out.attachments?.[0]?.name).toBe("clip.mp4")
   expect(out.files).toBeUndefined()

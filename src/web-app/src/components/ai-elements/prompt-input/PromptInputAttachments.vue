@@ -36,6 +36,8 @@ const items = computed(() => files.value)
 
       <div
         v-else
+        data-testid="attachment-chip"
+        :data-filename="f.filename"
         class="relative group flex items-center gap-2 pr-7 rounded-md border border-border bg-card/60 overflow-hidden"
         :class="[
           uploads.byId[f.id]?.status === 'failed' ? 'border-destructive' : '',

@@ -17,7 +17,7 @@ defineProps<{ triggerClass?: HTMLAttributes["class"] }>()
 
 <template>
   <PromptInputActionMenu>
-    <PromptInputActionMenuTrigger :class="triggerClass" />
+    <PromptInputActionMenuTrigger data-testid="attachment-menu" :class="triggerClass" />
     <PromptInputActionMenuContent>
       <PromptInputActionAddAttachments label="Files" />
       <PromptInputActionAddCamera />

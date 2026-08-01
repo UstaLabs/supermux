@@ -466,8 +466,11 @@ fun SessionLauncherScreen(
 
     // Invalid host-local paths (e.g. draft workdir from another host) are corrected without
     // freezing the selection — only an explicit picker choice sets workdirTouched.
+    // An EMPTY project list means "we could not enumerate projects" (slow host, failed fetch,
+    // offline) — not "your workdir is gone". Don't reset a restored draft's workdir on that.
     LaunchedEffect(knownProjects, recentProjectPaths, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
+        if (knownProjects.isEmpty()) return@LaunchedEffect
         val known = projects.toHashSet()
         if (workdir.isBlank() || (workdir != "~" && workdir !in known && recentProjectPaths.none { it == workdir })) {
             workdir = recentProjectPaths.firstOrNull() ?: knownProjects.firstOrNull() ?: "~"

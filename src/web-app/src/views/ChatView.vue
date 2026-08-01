@@ -196,6 +196,10 @@ watch(() => panels.value.displayOpen, (v) => { if (v) displayEverOpened.value = 
 const activeSession = computed(() => sessions.list.find((s) => s.id === props.id))
 const archivedSession = computed(() => sessions.archivedSessions.find((s) => s.id === props.id))
 const session = computed(() => activeSession.value ?? archivedSession.value)
+// session_branch lives on the live Session only; ArchivedSession has no such field
+// and the template's `!isArchived` guard doesn't narrow the union. Read it off the
+// active session, which is undefined exactly when the session is archived.
+const sessionBranch = computed(() => activeSession.value?.session_branch)
 
 const sessionStream = computed(() => {
   const name = session.value?.name
@@ -503,7 +507,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
   <!-- Height tracks the VISUAL viewport (--vvh), not 100dvh, so the shell shrinks
        above the on-screen keyboard instead of letting the terminal / composer slide
        under it. Falls back to 100dvh before --vvh is set / on old browsers. -->
-  <div class="flex flex-col bg-[var(--cmux-chat)] text-foreground" style="height: var(--vvh, 100dvh)">
+  <div data-testid="chat-view" class="flex flex-col bg-[var(--cmux-chat)] text-foreground" style="height: var(--vvh, 100dvh)">
     <header
       class="flex items-center gap-3 px-3 py-1.5 min-h-[3.5rem] border-b border-border sticky top-0 bg-[var(--cmux-header)]/95 backdrop-blur z-10"
       style="padding-top: calc(env(safe-area-inset-top, 0px) + 0.5rem)"
@@ -545,7 +549,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
         mode="header-cluster"
       />
       <button
-        v-if="!isArchived && session?.session_branch"
+        v-if="!isArchived && sessionBranch"
         type="button"
         aria-label="Finish: sync, verify, and merge into the base branch"
         class="relative inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] font-medium bg-emerald-600 text-white hover:bg-emerald-500 transition-colors"
@@ -623,6 +627,8 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
                 <Message
                   v-if="block.kind === 'message'"
                   :from="block.entry.direction === 'outbound' ? 'user' : 'assistant'"
+                  data-testid="chat-message"
+                  :data-message-direction="block.entry.direction"
                 >
                   <MessageContent>
                     <MessageText v-if="block.entry.text" :content="block.entry.text" @open-file="handleOpenFile" />
@@ -907,7 +913,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
     />
     <ModelSwitcher :session-id="props.id" v-model:open="modelSwitcherOpen" />
     <EffortSwitcher :session-id="props.id" v-model:open="effortSwitcherOpen" />
-    <FinishSheet v-model:open="finishSheetOpen" :session-id="props.id" :branch="session?.session_branch" />
+    <FinishSheet v-model:open="finishSheetOpen" :session-id="props.id" :branch="sessionBranch" />
     <KillConfirmDialog
       :open="killConfirmOpen"
       :session-name="displayName"

@@ -3,20 +3,6 @@ import { ref, watch } from "vue"
 import { ChevronRight, ChevronDown, File, Folder } from "@lucide/vue"
 import { api } from "@/api/client"
 
-interface FsEntry {
-  name: string
-  type: "file" | "dir"
-  size: number
-  modified: string
-  ignored: boolean
-}
-
-interface TreeNode extends FsEntry {
-  path: string
-  children?: TreeNode[]
-  loaded?: boolean
-}
-
 const props = defineProps<{
   sessionName: string
 }>()
@@ -85,6 +71,23 @@ watch(() => props.sessionName, async () => {
 
 <script lang="ts">
 import { defineComponent, h, type PropType } from "vue"
+
+// Declared here, not in <script setup>: TreeItem below needs them, and
+// <script setup> bindings are NOT visible to the plain <script> block.
+interface FsEntry {
+  name: string
+  type: "file" | "dir"
+  size: number
+  modified: string
+  ignored: boolean
+}
+
+interface TreeNode extends FsEntry {
+  path: string
+  children?: TreeNode[]
+  loaded?: boolean
+}
+
 
 const TreeItem = defineComponent({
   name: "TreeItem",

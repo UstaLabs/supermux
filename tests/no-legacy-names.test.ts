@@ -24,6 +24,12 @@ test("no legacy claudemux/agentmux identifiers survive in src/ or scripts/", () 
   const roots = ["src", "scripts"]
   const files = roots
     .flatMap((r) => walk(r))
+    // Test files are exempt: the legitimate way to pin the rename is an
+    // assertion that the old name is ABSENT (`expect(x).not.toContain(
+    // "agentmux-shim")`), and a substring grep cannot tell that apart from a
+    // real leak. Wiring that a test merely *references* still lives in a
+    // non-test file, which this guard does scan.
+    .filter((f) => !/\.(test|spec)\.ts$/.test(f))
     .filter((f) => /\.(ts|vue|json|html)$/.test(f) && !ALLOW.some((a) => f.endsWith(a)))
   const offenders: string[] = []
   for (const f of files) {

@@ -198,9 +198,9 @@ export function sanitizeAppConfigPatch(input: unknown): Partial<AppConfig> {
     const t = parseTunnelRecord(o.tunnel)
     if (t) out.tunnel = t
   }
-  if (typeof o.voiceSttEngine === "string" && (STT_ENGINES as string[]).includes(o.voiceSttEngine)) out.voiceSttEngine = o.voiceSttEngine
+  if (typeof o.voiceSttEngine === "string" && (STT_ENGINES as readonly string[]).includes(o.voiceSttEngine)) out.voiceSttEngine = o.voiceSttEngine
   if (typeof o.voiceCleanupEngine === "string" && (ENGINES as string[]).includes(o.voiceCleanupEngine)) out.voiceCleanupEngine = o.voiceCleanupEngine
-  if (typeof o.voiceTtsEngine === "string" && (TTS_ENGINES as string[]).includes(o.voiceTtsEngine)) out.voiceTtsEngine = o.voiceTtsEngine
+  if (typeof o.voiceTtsEngine === "string" && (TTS_ENGINES as readonly string[]).includes(o.voiceTtsEngine)) out.voiceTtsEngine = o.voiceTtsEngine
   // "" is a reset sentinel: it maps to undefined so the sparse merge in
   // SettingsStore.setAppConfig CLEARS a previously-stored model (reverting to the
   // engine's own default) instead of persisting an empty, broken model id. This is

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, onActivated, onDeactivated, computed, watch, inject, toRef, type Ref } from "vue"
+import { ref, shallowRef, onMounted, onUnmounted, onActivated, onDeactivated, computed, watch, inject, toRef, type Ref } from "vue"
 import type { Extension } from "@codemirror/state"
 import { useRouter } from "vue-router"
 import { Search, GitCompareArrows, PanelLeftClose, PanelLeftOpen, RefreshCw, Settings2, Download, Loader2, Eye, Pencil } from "@lucide/vue"
@@ -138,7 +138,7 @@ const sessions = useSessions()
 const wsStore = useWS()
 const lsp = useLsp()
 const workdir = computed(() => sessions.byId(props.sessionName)?.workdir ?? "")
-const lspExtension = ref<Extension[]>([])
+const lspExtension = shallowRef<Extension[]>([])
 const lspActive = computed(() => lspExtension.value.length > 0)
 /** Wait for refreshLsp to finish before mounting CodeMirror (avoids plain-then-lsp double mount). */
 const lspSettled = ref(true)

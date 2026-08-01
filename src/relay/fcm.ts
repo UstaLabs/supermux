@@ -65,7 +65,7 @@ function base64urlJson(obj: unknown): string {
 
 // Decode a PKCS#8 PEM (the `private_key` field of a Google service-account JSON,
 // which carries literal `\n`-escaped newlines when read from env) to raw DER.
-function pemToDer(pem: string): Uint8Array {
+function pemToDer(pem: string): Uint8Array<ArrayBuffer> {
   const b64 = pem
     .replace(/\\n/g, "\n")
     .replace(/-----BEGIN [^-]+-----/, "")

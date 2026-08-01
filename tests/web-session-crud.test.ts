@@ -6,7 +6,7 @@ import { WebChannel, __resetAuthFailures } from "../src/channels/web"
 import { DeviceStore } from "../src/channels/web/device-store"
 
 const DEV_PATH = `/tmp/devices-crud-${process.pid}.json`
-const PORT = 18800 + Math.floor(Math.random() * 100)
+let PORT = 0
 let ch: WebChannel
 let token: string
 let spawnCalls: any[] = []
@@ -33,9 +33,9 @@ beforeEach(async () => {
   mkdirSync(join(tmpRoot, "project-a"))
   mkdirSync(join(tmpRoot, "project-b"))
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [{ id: "sess-a", name: "sess-a", workdir: join(tmpRoot, "project-a") + "/", mute: false, connected: true, agent: "claude" as const }],
     getSessionLog: () => [],
     setMute: () => {},
@@ -53,7 +53,12 @@ beforeEach(async () => {
     reorderSessions: (orderedIds: string[]) => { reorderCalls.push(orderedIds) },
     listArchivedSessions: () => [{ id: "archived-a", name: "archived-a", workdir: join(tmpRoot, "project-a"), agent: "claude" as const }],
   } as any)
+  // port 0 = OS-assigned, read back off the channel. A random pick from a
+  // fixed range collides under a full `bun test` run (two of these files even
+  // shared the 18900+ range) and fails with EADDRINUSE for reasons unrelated to
+  // the code under test.
   await ch.start()
+  PORT = ch.boundPort
 })
 
 afterEach(async () => {

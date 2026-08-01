@@ -135,7 +135,13 @@ fun OnboardingFlow(
     val ink = if (dark) NightInk else Ink
     val inkSoft = if (dark) NightSoft else InkSoft
 
-    val pagerState = rememberPagerState { 4 }
+    // A pair link opens straight on the connect page. The link is only read by
+    // ConnectPage, so starting at page 0 meant a scanned QR code did nothing at
+    // all on a fresh install — the intent was consumed and gone before anything
+    // that cares about it composed. Someone arriving via a pair link has already
+    // decided; the marketing carousel is not what they asked for.
+    val connectPage = 3
+    val pagerState = rememberPagerState(initialPage = if (initialDeepLink != null) connectPage else 0) { 4 }
     val scope = rememberCoroutineScope()
     val page = pagerState.currentPage
 

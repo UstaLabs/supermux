@@ -98,7 +98,7 @@ import { createInstallManager } from "./core/agents/install"
 import { withAgentBinDirs } from "./core/agents/bin-dirs"
 import { homedir, hostname } from "os"
 import { home } from "./shared/home"
-import { join, dirname, resolve, isAbsolute } from "path"
+import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
 import { ClaudeCodeAdapter } from "./core/agents/claude/index"
 import { wireClaudeStateEvents } from "./core/agents/claude/state-projection"
@@ -177,6 +177,29 @@ const relayLog = makeLogger("core/relay/frp-provider")
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const STATIC_DIR = join(__dirname, "channels/web/static")
 const SOUL_PATH = join(MUX_HOME, "soul.md")
+const IS_TEST_BROKER = process.env.MUX_TEST_BROKER === "1"
+
+// The browser-journey fixture boots this real entrypoint, but it must never
+// mutate a developer's ~/.agents / agent runtimes or bind the live broker port.
+// Require explicit, nested throwaway state before honoring the side-effect-free
+// boot path so a stray MUX_TEST_BROKER=1 fails closed.
+if (IS_TEST_BROKER) {
+  const configuredHome = process.env.MUX_HOME
+  const configuredState = process.env.MUX_STATE_DIR
+  const configuredPort = Number(process.env.MUX_WEB_PORT)
+  const nestedState = configuredHome && configuredState
+    ? resolve(configuredState).startsWith(resolve(configuredHome) + sep)
+    : false
+  if (!configuredHome || !configuredState || !nestedState || !Number.isInteger(configuredPort) || configuredPort <= 0 || configuredPort === 9898) {
+    log.error("test_broker_isolation_invalid", {
+      has_home: !!configuredHome,
+      has_state: !!configuredState,
+      state_nested_under_home: nestedState,
+      port: process.env.MUX_WEB_PORT,
+    })
+    process.exit(1)
+  }
+}
 
 // A freshly-installed agent CLI (via the settings install button) lands in a
 // per-user bin dir the installer added to shell rc — which this long-running
@@ -1790,15 +1813,19 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         const iter = stream[Symbol.asyncIterator]()
         const first = await iter.next()
         if (first.done) throw new Error("tts: empty stream")
+        // Bind the narrowed chunk to a const: inside rest() the `first.done` check
+        // above no longer narrows (closure boundary), so `first.value` would widen
+        // back to `void | TtsStreamChunk` and the generator's element type with it.
+        const firstChunk = first.value
         log.info("voice_speak_stream_start", {
-          engine: first.value.engine,
+          engine: firstChunk.engine,
           chars: input.text.length,
-          total: first.value.total,
-          firstBytes: first.value.audio.byteLength,
+          total: firstChunk.total,
+          firstBytes: firstChunk.audio.byteLength,
           ms: Date.now() - t0,
         })
-        async function* rest() {
-          yield first.value
+        async function* rest(): AsyncGenerator<typeof firstChunk, void, unknown> {
+          yield firstChunk
           let n = 1
           try {
             while (true) {
@@ -1808,7 +1835,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
               yield nres.value
             }
             log.info("voice_speak_stream_done", {
-              engine: first.value.engine,
+              engine: firstChunk.engine,
               chunks: n,
               ms: Date.now() - t0,
             })
@@ -1818,7 +1845,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           }
         }
         return {
-          engine: first.value.engine,
+          engine: firstChunk.engine,
           chunks: rest(),
         }
       } catch (e) {
@@ -3703,23 +3730,25 @@ async function resumeNonClaudeAdapters(): Promise<void> {
 // which reads this marketplace; a stale/missing one (e.g. right after a rename)
 // makes those adds fail until the next boot. Awaited so the file is current
 // first. Never throws — logs and continues so plugin config can't block boot.
-try {
-  if (ensureMuxCoreSkills()) {
-    log.info("mux_core_skills_synced")
+if (!IS_TEST_BROKER) {
+  try {
+    if (ensureMuxCoreSkills()) {
+      log.info("mux_core_skills_synced")
+    }
+    // Register + enable mux-core in plugins.json if absent — without this a fresh
+    // install spawns sessions with zero plugins (no /mux:soul, no mux skills).
+    if (ensureMuxCoreRegistered()) {
+      log.info("mux_core_plugin_registered")
+    }
+    if (ensureOpenCodePluginScopes()) {
+      log.info("opencode_plugin_scopes_synced")
+    }
+  } catch (err: any) {
+    log.warn("mux_core_soul_skill_sync_failed", { err: err?.message ?? String(err) })
   }
-  // Register + enable mux-core in plugins.json if absent — without this a fresh
-  // install spawns sessions with zero plugins (no /mux:soul, no mux skills).
-  if (ensureMuxCoreRegistered()) {
-    log.info("mux_core_plugin_registered")
-  }
-  if (ensureOpenCodePluginScopes()) {
-    log.info("opencode_plugin_scopes_synced")
-  }
-} catch (err: any) {
-  log.warn("mux_core_soul_skill_sync_failed", { err: err?.message ?? String(err) })
+  await codexPrepareGlobal({ onError: (err) => log.warn("codex_prepare_global_failed", { err }) })
+    .catch((err) => log.warn("codex_prepare_global_failed", { err: String(err) }))
 }
-await codexPrepareGlobal({ onError: (err) => log.warn("codex_prepare_global_failed", { err }) })
-  .catch((err) => log.warn("codex_prepare_global_failed", { err: String(err) }))
 
 await resumeNonClaudeAdapters()
 // Housekeeping at boot is intentionally NON-DESTRUCTIVE: collapse every cursor
@@ -3728,7 +3757,7 @@ await resumeNonClaudeAdapters()
 // scripts/reclaim-agent-homes.ts, which reads every session row from the DB.
 // `knownHomes` MUST union active+archived — archived sessions are resumable
 // (resumeFromArchive) but absent from registry.list()'s in-memory cache.
-{
+if (!IS_TEST_BROKER) {
   const knownHomes = new Set(
     [...registry.list(), ...registry.listArchived()]
       .filter((s) => s.agent_home)
@@ -3755,8 +3784,10 @@ if (webChannel) await webChannel.start()
 // meaningful with a web channel, but harmless otherwise; onChange no-ops when
 // webChannel is undefined.
 proxyLivenessMonitor.start()
-refreshModels().catch((err) => log.warn("model_cache_init_failed", { err: String(err) }))
-const modelRefreshInterval = setInterval(() => {
+if (!IS_TEST_BROKER) {
+  refreshModels().catch((err) => log.warn("model_cache_init_failed", { err: String(err) }))
+}
+const modelRefreshInterval = IS_TEST_BROKER ? undefined : setInterval(() => {
   refreshModels()
     .catch((err) => log.warn("model_refresh_failed", { err: String(err) }))
 }, MODEL_REFRESH_INTERVAL_MS)
@@ -3879,7 +3910,7 @@ async function gracefulShutdown(signal: string) {
   } catch (err: any) { log.warn("curator_scheduler_stop_failed", { err: err?.message }) }
   try {
     clearInterval(gcInterval)
-    clearInterval(modelRefreshInterval)
+    if (modelRefreshInterval) clearInterval(modelRefreshInterval)
   } catch (err: any) { log.warn("gc_interval_clear_failed", { err: err?.message ?? String(err) }) }
   try {
     db.close()

@@ -35,7 +35,11 @@ const SALT_BYTES = 16
 const IV_BYTES = 12
 
 const b64url = (bytes: ArrayBuffer | Uint8Array): string => Buffer.from(bytes as any).toString("base64url")
-const fromB64url = (s: string): Uint8Array => Uint8Array.from(Buffer.from(s, "base64url"))
+// Uint8Array<ArrayBuffer>, not the default Uint8Array<ArrayBufferLike>: WebCrypto's
+// BufferSource excludes SharedArrayBuffer-backed views, and `Uint8Array.from` always
+// allocates a plain ArrayBuffer, so the narrower type is both accurate and required
+// for crypto.subtle.importKey to typecheck.
+const fromB64url = (s: string): Uint8Array<ArrayBuffer> => Uint8Array.from(Buffer.from(s, "base64url"))
 
 /**
  * Seal `plaintext` to a device's P-256 public key.

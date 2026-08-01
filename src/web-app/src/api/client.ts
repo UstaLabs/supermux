@@ -125,6 +125,10 @@ export interface AppConfig {
   /** platform (OS TTS) | codex (ChatGPT pronunciation via broker) */
   voiceTtsEngine?: string
   whisperLang?: string
+  /** Personal-assistant display name (settings → identity). */
+  paName?: string
+  // Declare the fields you read: the index signature below types everything else
+  // as `unknown`, so `config.someField ?? ""` widens to `{}` rather than string.
   [key: string]: unknown
 }
 
