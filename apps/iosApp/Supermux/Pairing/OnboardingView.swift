@@ -19,10 +19,13 @@ private enum Sky {
 
 // MARK: - Onboarding root
 
+// The whole onboarding is one fixed illustration — a light "day sky" with ink text,
+// white agent chips and a dark terminal card. Those colors are hand-picked against
+// each other, so the screen is pinned to the light scheme (like ManifestoIntroView
+// pins itself to dark) instead of following the system/app appearance.
 struct OnboardingView: View {
     var onPaired: (PairToken) -> Void
     @State private var page = 0
-    @Environment(\.colorScheme) private var colorScheme
 
     private let pageCount = 4
 
@@ -55,6 +58,8 @@ struct OnboardingView: View {
                     .padding(.bottom, 36)
             }
         }
+        .environment(\.colorScheme, .light)
+        .preferredColorScheme(.light)
     }
 
     private var primaryButton: some View {
@@ -77,7 +82,7 @@ struct OnboardingView: View {
             .foregroundStyle(.white)
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Sky.ink.opacity(colorScheme == .dark ? 0.85 : 1))
+                    .fill(Sky.ink)
                     .shadow(color: Sky.ink.opacity(0.25), radius: 14, y: 6)
             )
         }
@@ -109,7 +114,6 @@ private struct PressableButton: ButtonStyle {
 private struct SkyBackground: View {
     let page: Int
     let pageCount: Int
-    @Environment(\.colorScheme) private var colorScheme
 
     private struct Phase {
         let top: Color, mid: Color, low: Color
@@ -121,15 +125,7 @@ private struct SkyBackground: View {
     }
 
     private var phases: [Phase] {
-        if colorScheme == .dark {
-            return [
-                Phase(top: Color(red: 0.09, green: 0.11, blue: 0.17), mid: Color(red: 0.10, green: 0.14, blue: 0.20), low: Color(red: 0.07, green: 0.09, blue: 0.14), orb: Color(red: 0.95, green: 0.95, blue: 0.88), orbX: 0.78, orbY: 0.16, orbScale: 0.6, orbGlow: 0.25),
-                Phase(top: Color(red: 0.08, green: 0.10, blue: 0.16), mid: Color(red: 0.09, green: 0.13, blue: 0.18), low: Color(red: 0.06, green: 0.08, blue: 0.13), orb: Color(red: 0.95, green: 0.95, blue: 0.88), orbX: 0.6, orbY: 0.12, orbScale: 0.55, orbGlow: 0.2),
-                Phase(top: Color(red: 0.06, green: 0.07, blue: 0.12), mid: Color(red: 0.08, green: 0.10, blue: 0.15), low: Color(red: 0.05, green: 0.06, blue: 0.10), orb: Color(red: 0.9, green: 0.92, blue: 0.98), orbX: 0.85, orbY: 0.1, orbScale: 0.45, orbGlow: 0.15),
-                Phase(top: Color(red: 0.07, green: 0.09, blue: 0.14), mid: Color(red: 0.08, green: 0.11, blue: 0.16), low: Color(red: 0.06, green: 0.07, blue: 0.12), orb: Color(red: 0.9, green: 0.92, blue: 0.98), orbX: 0.85, orbY: 0.1, orbScale: 0.45, orbGlow: 0.15),
-            ]
-        }
-        return [
+        [
             Phase(top: Color(red: 1.0, green: 0.89, blue: 0.72), mid: Color(red: 0.81, green: 0.91, blue: 0.96), low: Sky.paper, orb: Color(red: 1.0, green: 0.83, blue: 0.41), orbX: 0.16, orbY: 0.20, orbScale: 1.0, orbGlow: 0.55),
             Phase(top: Color(red: 0.81, green: 0.91, blue: 0.96), mid: Color(red: 0.88, green: 0.95, blue: 0.96), low: Sky.paper, orb: Color(red: 1.0, green: 0.87, blue: 0.52), orbX: 0.5, orbY: 0.10, orbScale: 0.85, orbGlow: 0.45),
             Phase(top: Color(red: 1.0, green: 0.83, blue: 0.71), mid: Color(red: 0.96, green: 0.87, blue: 0.82), low: Sky.paper, orb: Color(red: 1.0, green: 0.70, blue: 0.42), orbX: 0.82, orbY: 0.24, orbScale: 0.9, orbGlow: 0.5),
@@ -650,6 +646,9 @@ private struct ConnectPage: View {
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .tracking(0.6)
                     .foregroundStyle(Sky.inkSoft.opacity(0.7))
+                    // Keep the label on one line — otherwise it wraps and the two rules
+                    // slice straight through it.
+                    .fixedSize(horizontal: true, vertical: false)
                 Rectangle().fill(Sky.ink.opacity(0.12)).frame(height: 1)
             }
 
