@@ -33,11 +33,6 @@ final class SessionListRailTests: XCTestCase {
         XCTAssertFalse(isSessionUnread(lastMessageTs: nil, lastReadAt: nil))
     }
 
-    // MARK: - Watch attention still prefers needs-you when idle+unread
-
-    func testWatchAttentionBucketWorkingWinsOverUnread() {
-        XCTAssertEqual(attentionBucket(phase: "running", unread: true), 1)
-        XCTAssertEqual(attentionBucket(phase: "idle", unread: true), 0)
-        XCTAssertEqual(attentionBucket(phase: "idle", unread: false), 2)
-    }
+    // Watch attentionBucket (working > needs-you) lives in WatchSessionStatusTests —
+    // those symbols are Watch/iOS-only and not linked into SupermuxMac.
 }
