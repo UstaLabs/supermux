@@ -704,13 +704,29 @@ jobs:
       ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
       ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
       ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
-      # Internal group the build is attached to; testers on it get the build with no beta review.
-      TESTFLIGHT_GROUP: "Smoke Test"
+      # Both tester lanes, in the order they reach people:
+      #   "Smoke Test"    internal — no Apple review, installable minutes after processing.
+      #   "Developer Beta" external — public join link, gated by Beta App Review. Only the first
+      #                    build of a MARKETING_VERSION train is really reviewed; the rest of the
+      #                    train normally clears straight through, which is what keeps this fast.
+      # The external group and the review details it needs are created by
+      # `bun scripts/testflight-external-setup.ts` (idempotent, run once per app).
+      TESTFLIGHT_GROUP: "Smoke Test,Developer Beta"
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      - name: Attach build to TestFlight group
-        run: bun scripts/testflight-assign.ts "${{ needs.build-ios-testflight.outputs.build }}"
+      - name: Attach build to TestFlight groups
+        env:
+          BUILD: ${{ needs.build-ios-testflight.outputs.build }}
+        run: |
+          # External testers see this as "What to Test", and Apple refuses the submission without
+          # it. A tag names itself; a dry-run upload is best described by what it just built.
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            note="Supermux ${GITHUB_REF_NAME} (build ${BUILD})"
+          else
+            note="$(git log -1 --pretty=%s)"
+          fi
+          TESTFLIGHT_WHATS_NEW="$note" bun scripts/testflight-assign.ts "$BUILD"
 
   release:
     if: github.ref_type == 'tag'
