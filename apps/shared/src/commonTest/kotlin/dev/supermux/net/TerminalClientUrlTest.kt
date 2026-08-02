@@ -45,4 +45,15 @@ class TerminalClientUrlTest {
             termWsUrl("https://h", "s", "agent", null),
         )
     }
+
+    @Test fun terminal_focus_frame_carries_the_authoritative_grid_size() {
+        assertEquals(
+            "{\"type\":\"focus\",\"focused\":true,\"cols\":61,\"rows\":27}",
+            terminalFocusFrame(true, 61, 27),
+        )
+        assertEquals(
+            "{\"type\":\"focus\",\"focused\":false}",
+            terminalFocusFrame(false, 61, 27),
+        )
+    }
 }

@@ -46,8 +46,10 @@ function makeFakeProc(): FakeProc {
 function fakeTmuxWorld() {
   const sessions = new Map<string, number>()
   const procs: FakeProc[] = []
+  const calls: string[][] = []
   let clock = 100
   const run: TmuxRunner = async (args) => {
+    calls.push(args)
     const cmd = args[0]
     const targetOf = () => args[args.indexOf("-t") + 1] ?? ""
     if (cmd === "list-sessions") {
@@ -67,7 +69,7 @@ function fakeTmuxWorld() {
     procs.push(p)
     return p
   }
-  return { sessions, procs, run, spawn }
+  return { sessions, procs, calls, run, spawn }
 }
 
 function makeMgr(world = fakeTmuxWorld()) {
@@ -178,6 +180,41 @@ describe("TerminalManager (hermetic)", () => {
     expect(all).toContain("R120:40")
     expect(mgr.write("d", "s", "nope", new TextEncoder().encode("x"))).toBe(false)
     expect(mgr.resize("d", "s", "nope", 80, 24)).toBe(false)
+  })
+
+  it("hands shared size ownership to the newest focused client and restores the prior client", async () => {
+    const { mgr, world } = makeMgr()
+    mgr.attach({ deviceName: "phone", sessionName: "s", terminalId: "t", ...baseAttach })
+    mgr.attach({ deviceName: "desktop", sessionName: "s", terminalId: "t", ...baseAttach })
+
+    expect(mgr.focus("phone", "s", "t", true, 52, 24)).toBe(true)
+    expect(mgr.focus("desktop", "s", "t", true, 118, 42)).toBe(true)
+    await flush()
+    await flush()
+
+    const forced = world.calls.filter(call => call[0] === "resize-window")
+    expect(forced.slice(-2).map(call => [call[4], call[6]])).toEqual([["52", "24"], ["118", "42"]])
+
+    // A still-connected phone may reflow in the background, but it cannot steal
+    // the target from the newer desktop focus claim.
+    const callsBeforeBackgroundResize = world.calls.length
+    expect(mgr.resize("phone", "s", "t", 60, 26)).toBe(true)
+    await flush()
+    expect(world.calls.length).toBe(callsBeforeBackgroundResize)
+
+    // Once desktop disappears, the phone's remembered latest geometry resumes.
+    mgr.detach("desktop", "s", "t")
+    await flush()
+    await flush()
+    const fallback = world.calls.filter(call => call[0] === "resize-window").at(-1)!
+    expect([fallback[4], fallback[6]]).toEqual(["60", "26"])
+
+    mgr.detach("phone", "s", "t")
+    await flush()
+    await flush()
+    expect(world.calls.at(-1)).toEqual([
+      "set-window-option", "-t", expect.any(String), "window-size", "latest",
+    ])
   })
 
   it("shutdown detaches all viewers without destroying tmux sessions", async () => {

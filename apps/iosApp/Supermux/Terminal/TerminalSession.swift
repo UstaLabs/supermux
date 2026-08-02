@@ -63,6 +63,10 @@ final class TerminalSession {
         Task { [client] in try? await client.resize(cols: Int32(cols), rows: Int32(rows)) }
     }
 
+    func focus(_ focused: Bool) {
+        Task { [client] in try? await client.focus(isFocused: focused) }
+    }
+
     func stop() {
         client.stop()
         tasks.forEach { $0.cancel() }

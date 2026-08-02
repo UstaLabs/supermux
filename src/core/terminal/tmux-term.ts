@@ -120,9 +120,30 @@ export function createTermTmux(opts: { socket?: string; confPath: string; run?: 
     return r.code === 0
   }
 
+  async function resizeTerminal(agentSession: string, terminalId: string, cols: number, rows: number): Promise<void> {
+    await run([
+      "resize-window", "-t", tmuxSessionName(agentSession, terminalId),
+      "-x", String(cols), "-y", String(rows),
+    ])
+  }
+
+  async function restoreAutomaticSize(agentSession: string, terminalId: string): Promise<void> {
+    await run(["set-window-option", "-t", tmuxSessionName(agentSession, terminalId), "window-size", "latest"])
+  }
+
   function buildAttachArgv(o: { agentSession: string; terminalId: string; workdir: string; cols: number; rows: number }): string[] {
     return attachArgv({ ...o, socket, confPath: opts.confPath })
   }
 
-  return { socket, confPath: opts.confPath, listTerminals, killTerminal, killAllTerminals, hasTerminal, attachArgv: buildAttachArgv }
+  return {
+    socket,
+    confPath: opts.confPath,
+    listTerminals,
+    killTerminal,
+    killAllTerminals,
+    hasTerminal,
+    resizeTerminal,
+    restoreAutomaticSize,
+    attachArgv: buildAttachArgv,
+  }
 }

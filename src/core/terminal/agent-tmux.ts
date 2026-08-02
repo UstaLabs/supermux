@@ -114,5 +114,13 @@ export function createAgentTmux(opts: { run?: TmuxRunner } = {}) {
     await run(["kill-session", "-t", viewerSessionName(device, agentTarget)])
   }
 
-  return { attachArgv, killViewer }
+  async function resizeWindow(agentTarget: string, cols: number, rows: number): Promise<void> {
+    await run(["resize-window", "-t", agentTarget, "-x", String(cols), "-y", String(rows)])
+  }
+
+  async function restoreAutomaticSize(agentTarget: string): Promise<void> {
+    await run(["set-window-option", "-t", agentTarget, "window-size", "latest"])
+  }
+
+  return { attachArgv, killViewer, resizeWindow, restoreAutomaticSize }
 }

@@ -52,6 +52,9 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.supermux.android.theme.LocalPanes
 import dev.supermux.android.theme.Radii
 import dev.supermux.android.theme.Space
@@ -252,6 +255,23 @@ fun TerminalPanel(
     val c = LocalPanes.current
     val scope = rememberCoroutineScope()
     val client = remember { connect() }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var resumed by remember(lifecycleOwner) {
+        mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) resumed = true
+            else if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) resumed = false
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // Warm terminal connections remain attached while their pane/app is hidden. Explicitly
+    // hand size ownership to this client only while it is actually foreground.
+    LaunchedEffect(client, active, resumed) { client.focus(active && resumed) }
 
     // Predictive local echo: the shared Kotlin engine + termlib op-renderer + keystroke->echo
     // RTT stamp, bundled so the emulator's onKeyboardInput closure (baked in at create time) can

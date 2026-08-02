@@ -36,6 +36,16 @@ internal fun termWsUrl(baseUrl: String, sessionId: String, kind: String, termina
     }
 }
 
+internal fun terminalResizeFrame(cols: Int, rows: Int): String =
+    "{\"type\":\"resize\",\"cols\":$cols,\"rows\":$rows}"
+
+internal fun terminalFocusFrame(focused: Boolean, cols: Int = 0, rows: Int = 0): String =
+    if (focused && cols > 0 && rows > 0) {
+        "{\"type\":\"focus\",\"focused\":true,\"cols\":$cols,\"rows\":$rows}"
+    } else {
+        "{\"type\":\"focus\",\"focused\":false}"
+    }
+
 /**
  * Websocket client for a session's pty (/ws/term). Binary frames carry raw pty
  * bytes both directions; a JSON text frame carries resize and exit/error. Mirrors
@@ -66,6 +76,7 @@ class TerminalClient(
     // before the socket is open, so that first resize would otherwise be dropped.
     @Volatile private var lastCols = 0
     @Volatile private var lastRows = 0
+    @Volatile private var focused = false
 
     suspend fun run() {
         var attempt = 0
@@ -82,7 +93,10 @@ class TerminalClient(
                     // Flush the last known size (the initial resize is usually reported
                     // before the socket opens and would otherwise be lost).
                     if (lastCols > 0 && lastRows > 0) {
-                        send(Frame.Text("{\"type\":\"resize\",\"cols\":$lastCols,\"rows\":$lastRows}"))
+                        send(Frame.Text(terminalResizeFrame(lastCols, lastRows)))
+                    }
+                    if (focused && lastCols > 0 && lastRows > 0) {
+                        send(Frame.Text(terminalFocusFrame(true, lastCols, lastRows)))
                     }
                     // Single FIFO sender for pty input → preserves keystroke order.
                     val ws = this
@@ -130,7 +144,15 @@ class TerminalClient(
     suspend fun resize(cols: Int, rows: Int) {
         lastCols = cols
         lastRows = rows
-        liveSession?.send(Frame.Text("{\"type\":\"resize\",\"cols\":$cols,\"rows\":$rows}"))
+        val frame = if (focused) terminalFocusFrame(true, cols, rows) else terminalResizeFrame(cols, rows)
+        liveSession?.send(Frame.Text(frame))
+    }
+
+    suspend fun focus(isFocused: Boolean) {
+        focused = isFocused
+        if (!isFocused || (lastCols > 0 && lastRows > 0)) {
+            liveSession?.send(Frame.Text(terminalFocusFrame(isFocused, lastCols, lastRows)))
+        }
     }
 
     fun stop() { stopped = true; inputQueue.close() }

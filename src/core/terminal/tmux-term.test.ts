@@ -94,4 +94,18 @@ describe("tmux-term control ops (mock runner)", () => {
     expect(await present.hasTerminal("mine", "t1")).toBe(true)
     expect(await absent.hasTerminal("mine", "t1")).toBe(false)
   })
+
+  test("resizeTerminal forces the shared window to the focused viewer size", async () => {
+    const calls: string[][] = []
+    const t = createTermTmux({ confPath: "/c", run: async (args) => { calls.push(args); return { code: 0, stdout: "", stderr: "" } } })
+    await t.resizeTerminal("mine", "t1", 92, 31)
+    expect(calls[0]).toEqual(["resize-window", "-t", tmuxSessionName("mine", "t1"), "-x", "92", "-y", "31"])
+  })
+
+  test("restoreAutomaticSize returns the window to tmux latest-client sizing", async () => {
+    const calls: string[][] = []
+    const t = createTermTmux({ confPath: "/c", run: async (args) => { calls.push(args); return { code: 0, stdout: "", stderr: "" } } })
+    await t.restoreAutomaticSize("mine", "t1")
+    expect(calls[0]).toEqual(["set-window-option", "-t", tmuxSessionName("mine", "t1"), "window-size", "latest"])
+  })
 })

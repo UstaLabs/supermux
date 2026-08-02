@@ -64,6 +64,38 @@ test("re-sends the pending resize once the socket opens", () => {
   term.disconnect()
 })
 
+test("reasserts the focused viewer and its size after connect", () => {
+  class RecordingWS {
+    static OPEN = 1
+    static instance: RecordingWS | undefined
+    readyState = 0
+    binaryType = ""
+    onopen: any; onclose: any; onmessage: any; onerror: any
+    sent: string[] = []
+    constructor(_url: string) { RecordingWS.instance = this }
+    send(data: any) { this.sent.push(String(data)) }
+    close() { this.readyState = 3 }
+  }
+  ;(globalThis as any).WebSocket = RecordingWS as any
+  ;(globalThis as any).window = { location: { protocol: "http:", host: "h" } }
+
+  const focused = useTerminal(() => "sess", () => "agent", () => "agent")
+  focused.resize(61, 27)
+  focused.focus(true)
+  focused.connect()
+  const socket = RecordingWS.instance!
+  socket.readyState = RecordingWS.OPEN
+  socket.onopen?.()
+  expect(socket.sent).toEqual([
+    JSON.stringify({ type: "resize", cols: 61, rows: 27 }),
+    JSON.stringify({ type: "focus", focused: true, cols: 61, rows: 27 }),
+  ])
+
+  focused.focus(false)
+  expect(socket.sent.at(-1)).toBe(JSON.stringify({ type: "focus", focused: false }))
+  focused.disconnect()
+})
+
 test("distinguishes reset, attach error, and a transport close", () => {
   FakeWS.urls = []
   FakeWS.instances = []
