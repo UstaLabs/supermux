@@ -48,7 +48,20 @@ struct SessionsListView: View {
 
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
+    #else
+    @Environment(\.horizontalSizeClass) private var hSize
     #endif
+
+    /// iPhone (and any compact-width iPad multitasking slot) gets the native full-width inset
+    /// list — no per-row card, hairline separators, Mail/Messages density. Regular width (the
+    /// iPad sidebar) and macOS keep the sidebar pill treatment, which is correct there.
+    private var phoneList: Bool {
+        #if os(macOS)
+        false
+        #else
+        hSize == .compact
+        #endif
+    }
 
     @State private var collapsed: Set<String> = SessionsListView.loadCollapsed()
     // Keep high-frequency overscroll state out of this view's own observation graph. On macOS,
@@ -59,7 +72,11 @@ struct SessionsListView: View {
     @State private var killTarget: SessionInfo?
     /// Source session for "Continue in new conversation" (web SessionContextMenu parity).
     @State private var continueTarget: SessionInfo?
-    @State private var groupByProject = UserDefaults.standard.object(forKey: "cmux:group-by-project") as? Bool ?? false
+    /// Shared with the compact shell's overflow menu (`RootView`), which is where iPhone puts this
+    /// instead of spending a list row on it — @AppStorage keeps both in sync off the same key.
+    @AppStorage("cmux:group-by-project") private var groupByProject = false
+    /// iPhone large-title search (`.searchable`). Empty on the sidebar platforms.
+    @State private var search = ""
     @State private var settledExpanded: Set<String> = []
     @State private var flatSettledExpanded = false
     /// Live whole-row drag reorder (section-scoped). See `SessionSectionReorderState`.
@@ -100,61 +117,7 @@ struct SessionsListView: View {
 
     private func list(owner: [String: String], hostByRecord: [String: HostView], multiHost: Bool, showRowHostBadge: Bool) -> some View {
         List(selection: $selected) {
-            Section {
-                Button(action: onNewSession) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(Theme.teal)
-                            .frame(width: 28, height: 28)
-                            .background(Theme.teal.opacity(0.14), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("New session")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.primary)
-                            Text("Pick a project and start chatting")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        Spacer(minLength: 0)
-                        Image(systemName: "chevron.right")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.tertiary)
-                    }
-                    .smSessionRowSurface(selected: false, accented: true)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier(TestIds.newSession)
-                .moveDisabled(true)
-                .deleteDisabled(true)
-                .smSessionListRowChrome(spacing: EdgeInsets(top: 6, leading: 0, bottom: 4, trailing: 0))
-            }
-
-            Section {
-                HStack(spacing: 10) {
-                    Label("Group by project", systemImage: "folder")
-                        .font(.subheadline.weight(.medium))
-                        .labelStyle(.titleAndIcon)
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                    Toggle("", isOn: Binding(
-                        get: { groupByProject },
-                        set: {
-                            groupByProject = $0
-                            UserDefaults.standard.set($0, forKey: "cmux:group-by-project")
-                        }
-                    ))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .accessibilityLabel("Group by project")
-                    .accessibilityIdentifier("group-by-project")
-                }
-                .moveDisabled(true)
-                .deleteDisabled(true)
-                .smSessionListRowChrome(spacing: EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
-            }
+            if !phoneList { sidebarChromeSections }
 
             if groupByProject {
                 ForEach(fleet.onlineGroups(), id: \.workdir) { group in
@@ -182,7 +145,9 @@ struct SessionsListView: View {
             SidebarArchiveRevealBar(state: archiveReveal, onArchived: onArchived)
         }
         #else
-        .contentMargins(.horizontal, 12, for: .scrollContent)
+        // iPhone rows run edge-to-edge and carry their own 16pt leading inset (see
+        // `smSessionListRowChrome`), so the scroll content must NOT be inset again.
+        .contentMargins(.horizontal, phoneList ? 0 : 12, for: .scrollContent)
         .safeAreaInset(edge: .top, spacing: 0) {
             SidebarArchiveRevealBar(state: archiveReveal, onArchived: onArchived)
         }
@@ -211,8 +176,7 @@ struct SessionsListView: View {
             selected = nil
             onOpenDraft(id)
         }
-        .navigationTitle("supermux")
-        .smInlineNavigationTitle()
+        .modifier(PhoneSessionListChrome(enabled: phoneList, search: $search, onNewSession: onNewSession))
         .overlay {
             if !fleet.synced && fleet.sessions.isEmpty {
                 ProgressView("Connecting…").tint(Theme.teal)
@@ -256,6 +220,61 @@ struct SessionsListView: View {
         }
     }
 
+    /// The two chrome rows the sidebar keeps in-list. On iPhone they'd cost a third of the first
+    /// screen before a single session appears, so there they move to the nav bar instead: New
+    /// Session becomes the compose button, Group by project joins the shell's ⋯ menu.
+    @ViewBuilder private var sidebarChromeSections: some View {
+        Section {
+            Button(action: onNewSession) {
+                HStack(spacing: 12) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Theme.teal)
+                        .frame(width: 28, height: 28)
+                        .background(Theme.teal.opacity(0.14), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("New session")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text("Pick a project and start chatting")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .smSessionRowSurface(selected: false, accented: true)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier(TestIds.newSession)
+            .moveDisabled(true)
+            .deleteDisabled(true)
+            .smSessionListRowChrome(spacing: EdgeInsets(top: 6, leading: 0, bottom: 4, trailing: 0))
+        }
+
+        Section {
+            HStack(spacing: 10) {
+                Label("Group by project", systemImage: "folder")
+                    .font(.subheadline.weight(.medium))
+                    .labelStyle(.titleAndIcon)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Toggle("", isOn: $groupByProject)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .accessibilityLabel("Group by project")
+                    .accessibilityIdentifier("group-by-project")
+            }
+            .moveDisabled(true)
+            .deleteDisabled(true)
+            .smSessionListRowChrome(spacing: EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
+        }
+    }
+
     private func commitReorder(_ orderedIds: [String]) {
         guard !orderedIds.isEmpty else { return }
         onReorder(orderedIds)
@@ -284,6 +303,12 @@ struct SessionsListView: View {
             list: combinedTaskSessions(live: online, archived: fleet.archivedForList),
             lastTs: lastTs
         )
+        // The project tag only tells you anything when the list actually spans projects — with a
+        // single project it repeats the same word on every row.
+        let showProjectTag = Set(online.map { projectLabel(session: $0, home: inferHomeDir(workdir: $0.workdir)) }).count > 1
+        let tag: (SessionInfo) -> String? = { s in
+            showProjectTag ? projectLabel(session: s, home: inferHomeDir(workdir: s.workdir)) : nil
+        }
         // PA pin (web SessionTaskList paSection) — not in task sections.
         // Stable sortOrder only; new messages must not reshuffle rows.
         let pas = sessionsByUserOrder(sessions: online.filter { $0.role == "personal_assistant" })
@@ -302,13 +327,17 @@ struct SessionsListView: View {
         }
         ForEach(sections, id: \.key) { section in
             if section.key == .settled {
+                // Settled folds in archived sessions, which don't come through
+                // `flatOnlineSessions` — so the search narrowing has to be applied here too.
+                let settled = searchFiltered(section.sessions)
+                if !(settled.isEmpty && !search.isEmpty) {
                 Section {
                     Button {
                         withAnimation(.snappy(duration: 0.2)) { flatSettledExpanded.toggle() }
                     } label: {
                         Text(flatSettledExpanded
-                             ? "Hide \(section.sessions.count) settled"
-                             : "Show \(section.sessions.count) settled")
+                             ? "Hide \(settled.count) settled"
+                             : "Show \(settled.count) settled")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -318,15 +347,16 @@ struct SessionsListView: View {
                     .moveDisabled(true)
                     .deleteDisabled(true)
                     if flatSettledExpanded {
-                        ForEach(section.sessions, id: \.id) { session in
+                        ForEach(settled, id: \.id) { session in
                             let recordId = owner[session.id] ?? ""
                             let rowHost: HostView? = showRowHostBadge ? hostByRecord[recordId] : nil
                             selectableRow(session, host: rowHost, reorderable: false,
-                                          projectTag: projectLabel(session: session, home: inferHomeDir(workdir: session.workdir)))
+                                          projectTag: tag(session))
                         }
                         .moveDisabled(true)
                         .deleteDisabled(true)
                     }
+                }
                 }
             } else {
                 // Section key string is stable for live-order scope (flat: task status).
@@ -342,7 +372,7 @@ struct SessionsListView: View {
                             session,
                             host: rowHost,
                             reorderable: true,
-                            projectTag: projectLabel(session: session, home: inferHomeDir(workdir: session.workdir)),
+                            projectTag: tag(session),
                             sectionKey: sectionKey,
                             sectionIds: ids
                         )
@@ -358,11 +388,23 @@ struct SessionsListView: View {
 
     private func flatOnlineSessions(owner: [String: String], multiHost: Bool) -> [SessionInfo] {
         let offline = Set(fleet.hostViews.filter { !$0.online }.map { $0.recordId })
-        let shown = fleet.filteredSessions
+        let shown = searchFiltered(fleet.filteredSessions)
         if multiHost {
             return shown.filter { !offline.contains(owner[$0.id] ?? "") }
         }
         return shown
+    }
+
+    /// iPhone `.searchable` narrowing — name, project path and agent. A no-op (identity) whenever
+    /// the field is empty, so the sidebar platforms never pay for it.
+    private func searchFiltered(_ list: [SessionInfo]) -> [SessionInfo] {
+        let q = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return list }
+        return list.filter {
+            $0.name.lowercased().contains(q)
+                || $0.workdir.lowercased().contains(q)
+                || $0.agent.lowercased().contains(q)
+        }
     }
 
     @ViewBuilder private func onlineSection(
@@ -371,14 +413,14 @@ struct SessionsListView: View {
         hostByRecord: [String: HostView],
         showRowHostBadge: Bool
     ) -> some View {
-        let openSessions: [SessionInfo] = {
+        let openSessions: [SessionInfo] = searchFiltered({
             if group.workdir == PA_GROUP_KEY { return group.sessions }
             let secs = group.sections
             if secs.isEmpty { return group.sessions }
             return secs.filter { $0.key != .settled }.flatMap { $0.sessions }
-        }()
-        let settled = group.sections.first(where: { $0.key == .settled })?.sessions ?? []
-        let activeCount = group.workdir == PA_GROUP_KEY ? group.sessions.count : openSessions.count
+        }())
+        let settled = searchFiltered(group.sections.first(where: { $0.key == .settled })?.sessions ?? [])
+        let activeCount = openSessions.count
         let canReorderGroup = group.workdir != PA_GROUP_KEY
         let sectionKey = "group:\(group.workdir)"
         let baseOpen = openSessions
@@ -386,6 +428,8 @@ struct SessionsListView: View {
             ? reorderState.displaySessions(sectionKey: sectionKey, fallback: baseOpen)
             : baseOpen
         let ids = baseOpen.map(\.id)
+        // A search that matches nothing in this project shouldn't leave a bare header behind.
+        if !(openSessions.isEmpty && settled.isEmpty && !search.isEmpty) {
         Section {
             if !collapsed.contains(group.workdir) {
                 ForEach(rows, id: \.id) { session in
@@ -433,14 +477,17 @@ struct SessionsListView: View {
         } header: {
             header(group, count: activeCount)
         }
+        }
     }
 
     @ViewBuilder private func offlineSection(
         host: HostView,
-        sessions: [SessionInfo],
+        sessions rawSessions: [SessionInfo],
         hostByRecord: [String: HostView],
         showRowHostBadge: Bool
     ) -> some View {
+        let sessions = searchFiltered(rawSessions)
+        if !sessions.isEmpty {
         Section {
             ForEach(sessions, id: \.id) { session in
                 let rowHost: HostView? = showRowHostBadge ? hostByRecord[host.recordId] : nil
@@ -452,14 +499,18 @@ struct SessionsListView: View {
         } header: {
             offlineHeader(host)
         }
+        }
     }
 
     private func sessionSectionHeader(_ title: String) -> some View {
         Text(title)
-            .font(.system(size: 11, weight: .semibold))
+            // iPhone: a real Dynamic Type style so headers scale with the rest of the list.
+            // Sidebar: the tight 11pt tracked caps that read correctly at sidebar density.
+            .font(phoneList ? .footnote.weight(.semibold) : .system(size: 11, weight: .semibold))
             .foregroundStyle(.secondary)
-            .tracking(0.4)
+            .tracking(phoneList ? 0 : 0.4)
             .textCase(nil)
+            .smSessionSectionHeaderChrome(phone: phoneList)
     }
 
     private func header(_ group: SessionGroup, count: Int? = nil) -> some View {
@@ -470,13 +521,13 @@ struct SessionsListView: View {
                     .foregroundStyle(.tertiary)
                     .frame(width: 10)
                 Text(group.label)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(phoneList ? .footnote.weight(.semibold) : .system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
-                    .tracking(0.3)
+                    .tracking(phoneList ? 0 : 0.3)
                     .textCase(nil)
                 Spacer(minLength: 0)
                 Text("\(count ?? group.sessions.count)")
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .font(phoneList ? .footnote.weight(.medium) : .system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
@@ -486,6 +537,7 @@ struct SessionsListView: View {
             .padding(.vertical, 2)
         }
         .buttonStyle(.plain)
+        .smSessionSectionHeaderChrome(phone: phoneList)
     }
 
     /// Greyed header for an offline host group: dot + name + a relative "last seen" (spec §5).
@@ -504,6 +556,7 @@ struct SessionsListView: View {
             Spacer(minLength: 0)
         }
         .opacity(0.9)
+        .smSessionSectionHeaderChrome(phone: phoneList)
     }
 
     @ViewBuilder private func row(
@@ -536,7 +589,8 @@ struct SessionsListView: View {
             selected: selected == s.id,
             unread: unread,
             showsDragHint: reorderable,
-            isDragging: reorderState.draggingId == s.id
+            isDragging: reorderState.draggingId == s.id,
+            phone: phoneList
         )
         .contextMenu {
             #if os(macOS)
@@ -609,7 +663,7 @@ struct SessionsListView: View {
             .tag(s.id)
             .moveDisabled(true)
             .accessibilityIdentifier(TestIds.sessionRow(s.id))
-            .smSessionListRowChrome()
+            .smSessionListRowChrome(phone: phoneList)
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 swipeButtons(for: s)
             }
@@ -715,6 +769,34 @@ func sessionListShowsUnreadMark(
     return isSessionUnread(lastMessageTs: lastMessageTs, lastReadAt: lastReadAt)
 }
 
+/// Agents write markdown; a list row shows plain text. Mail and Messages both strip formatting
+/// from the preview line, and without this the rows read as `**Committed** on \`main\`` noise.
+///
+/// Deliberately conservative and cheap — it runs for every visible row on every body pass: the
+/// input is capped to a preview's worth of text and each pattern is gated on a substring probe.
+func sessionPreviewPlainText(_ raw: String) -> String {
+    // A two-line preview never needs more than this, and it bounds the regex work per row.
+    var s = raw.count > 300 ? String(raw.prefix(300)) : raw
+    func sub(_ pattern: String, _ template: String) {
+        s = s.replacingOccurrences(of: pattern, with: template, options: .regularExpression)
+    }
+    if s.contains("```") { sub("```[a-zA-Z0-9_+-]*", " ") }        // fences, keep the code
+    if s.contains("](") { sub("\\[([^\\]]*)\\]\\([^)]*\\)", "$1") } // [label](url) -> label
+    // Block markers only ever sit at a line start, so a single-line message that merely
+    // *contains* a `-` or a `.` must not pay for this pass.
+    if s.contains("\n") || s.first.map({ "#>-*+0123456789".contains($0) }) == true {
+        sub("(?m)^[ \\t]*(#{1,6}[ \\t]+|>[ \\t]?|[-*+][ \\t]+|\\d+\\.[ \\t]+)", "")
+    }
+    if s.contains("*") {
+        sub("\\*\\*([^*]+)\\*\\*", "$1")
+        // Single `*emphasis*` only — never a bare `*` used as a bullet or a literal.
+        sub("(?<![*\\w])\\*([^*\\n]+)\\*(?!\\*)", "$1")
+    }
+    if s.contains("`") { sub("`+([^`\\n]+)`+", "$1") }
+    sub("\\s+", " ")
+    return s.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
 /// Leading rail kind after working/unread priority (KMP `sessionListRailIndicator`).
 enum SessionListRailKind {
     case working, unread, other
@@ -753,6 +835,8 @@ struct SessionRow: View {
     var showsDragHint: Bool = false
     /// Dimmed list slot while this row's free-drag ghost is active.
     var isDragging: Bool = false
+    /// iPhone/compact: the native inset-list row (no card, separators, Mail/Messages density).
+    var phone: Bool = false
 
     #if os(macOS)
     @State private var hovered = false
@@ -770,6 +854,77 @@ struct SessionRow: View {
     }
 
     var body: some View {
+        if phone { phoneBody } else { sidebarBody }
+    }
+
+    /// iPhone: Mail/Messages register — a bare status dot in a narrow leading gutter, a `.body`
+    /// title, a two-line preview, the time top-trailing, and project/host demoted to a quiet
+    /// third line so they only draw the eye when they actually differ. No card, no fill: the
+    /// List's own separators carry the structure.
+    private var phoneBody: some View {
+        HStack(alignment: .top, spacing: 12) {
+            phoneIndicator
+                // Match the title's line box so the dot sits on the first line, as Mail does,
+                // rather than floating in the middle of a three-line row. 18pt clears the
+                // `.mini` spinner, which is the widest thing the rail renders here.
+                .frame(width: 18, height: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(session.name)
+                        .font(.body)
+                        .fontWeight(unread ? .semibold : .regular)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if muted {
+                        Image(systemName: "bell.slash.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    Spacer(minLength: 6)
+                    if !timeLabel.isEmpty {
+                        Text(timeLabel)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                    }
+                }
+                Text(previewLine)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                if projectTag != nil || host != nil || bgOpen > 0 {
+                    HStack(spacing: 6) {
+                        if let projectTag {
+                            Text(projectTag)
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
+                        if let host { HostBadge(host: host) }
+                        if bgOpen > 0 {
+                            // The gutter is one glyph wide on iPhone, so the background-task
+                            // count rides the metadata line instead of the rail.
+                            Text("\u{29D7}\(bgOpen)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    .padding(.top, 1)
+                }
+            }
+        }
+        .padding(.vertical, 9)
+        .padding(.trailing, 16)
+        // Separators start at the text column, not the screen edge (List adds the row's own
+        // 16pt leading inset on top of this).
+        .alignmentGuide(.listRowSeparatorLeading) { _ in 30 }   // gutter (18) + spacing (12)
+        .contentShape(Rectangle())
+        .scaleEffect(isDragging ? 0.98 : 1)
+        .animation(.easeOut(duration: 0.12), value: isDragging)
+    }
+
+    private var sidebarBody: some View {
         HStack(alignment: .center, spacing: 10) {
             leadingIndicator
             VStack(alignment: .leading, spacing: 3) {
@@ -835,7 +990,7 @@ struct SessionRow: View {
 
     private var previewLine: String {
         if let preview, !preview.isEmpty {
-            return preview.replacingOccurrences(of: "\n", with: " ")
+            return sessionPreviewPlainText(preview)
         }
         if isDraft { return "draft" }
         return session.agent
@@ -856,6 +1011,19 @@ struct SessionRow: View {
             }
         }
         .frame(width: 28, height: 28)
+    }
+
+    /// The same state, uncontained. The 28pt rounded-square chip is sidebar furniture — at phone
+    /// scale it reads as a broken placeholder around a 7pt dot, so iPhone shows the dot itself.
+    @ViewBuilder private var phoneIndicator: some View {
+        if isDraft {
+            Image(systemName: "pencil")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Theme.teal)
+        } else {
+            // bgOpen: 0 — the count moves to the metadata line (see `phoneBody`).
+            SessionStatusRail(git: nil, working: working, bgOpen: 0, unread: unread)
+        }
     }
 
     private var titleFont: Font {
@@ -911,13 +1079,64 @@ private extension View {
             .animation(.easeOut(duration: 0.1), value: hovered)
     }
 
-    /// List row chrome: clear backgrounds, hidden separators, tight vertical rhythm.
+    /// List row chrome. Sidebar: clear backgrounds, hidden separators, tight vertical rhythm —
+    /// the card carries the structure. iPhone: the List's own hairline separators do, so they
+    /// come back on and the row takes the standard 16pt leading/trailing inset.
     @ViewBuilder func smSessionListRowChrome(
-        spacing: EdgeInsets = EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0)
+        spacing: EdgeInsets = EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0),
+        phone: Bool = false
     ) -> some View {
         self
             .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
-            .listRowInsets(spacing)
+            .listRowSeparator(phone ? .visible : .hidden)
+            // Trailing inset is 0 and the row pads itself instead: a `listRowInsets` trailing
+            // value also shortens the separator, and an iOS separator runs to the screen edge.
+            .listRowInsets(phone ? EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 0) : spacing)
+    }
+
+    /// Plain-list section headers default to carrying a separator of their own, which reads as a
+    /// rule under the title. iPhone hides it and tightens the header's vertical rhythm.
+    @ViewBuilder func smSessionSectionHeaderChrome(phone: Bool) -> some View {
+        if phone {
+            self
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 14, leading: 16, bottom: 4, trailing: 16))
+        } else {
+            self
+        }
+    }
+}
+
+/// The iPhone list's navigation chrome: a large collapsing title with search in it, and the
+/// compose button that replaces the in-list "New session" card. Inert on iPad/macOS, which keep
+/// the inline title and the card.
+private struct PhoneSessionListChrome: ViewModifier {
+    let enabled: Bool
+    @Binding var search: String
+    let onNewSession: () -> Void
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .navigationTitle("Sessions")
+                .smLargeNavigationTitle()
+                // `.automatic`, not a pinned drawer: the list draws its own background with
+                // `scrollContentBackground(.hidden)`, so a pinned field has no material behind
+                // it and rows scroll through it. Automatic parks it under the large title and
+                // scrolls it away — Mail/Messages behaviour.
+                .searchable(text: $search, prompt: "Search sessions")
+                .toolbar {
+                    ToolbarItem(placement: .smTopTrailing) {
+                        Button(action: onNewSession) {
+                            Label("New session", systemImage: "square.and.pencil")
+                        }
+                        .accessibilityIdentifier(TestIds.newSession)
+                    }
+                }
+        } else {
+            content
+                .navigationTitle("supermux")
+                .smInlineNavigationTitle()
+        }
     }
 }

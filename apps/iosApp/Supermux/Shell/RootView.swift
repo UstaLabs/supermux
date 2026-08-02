@@ -17,6 +17,9 @@ struct RootView: View {
     @State private var showAddHost = false
     @State private var debugArchived: ArchivedItem?    // SM_OPEN_ARCHIVED headless repro
     @State private var layout = WorkspaceLayoutModel()
+    /// Mirrors `SessionsListView`'s own binding (same key) so the compact shell's ⋯ menu can
+    /// own the control on iPhone, where it isn't worth a list row.
+    @AppStorage("cmux:group-by-project") private var groupByProject = false
     #if os(macOS)
     private let isRegularWidth = true   // the Mac is always the wide multi-pane workspace
     @Environment(\.openSettings) private var openSettings
@@ -181,6 +184,13 @@ struct RootView: View {
                 .toolbar {
                     ToolbarItem(placement: .smTopTrailing) {
                         Menu {
+                            // iPhone spends no list row on this — the sidebar platforms keep
+                            // their in-list toggle, both bound to the same @AppStorage key.
+                            Toggle(isOn: $groupByProject) {
+                                Label("Group by project", systemImage: "folder")
+                            }
+                            .accessibilityIdentifier("group-by-project")
+                            Divider()
                             Button { showAddHost = true } label: { Label("Add host", systemImage: "plus.rectangle.on.rectangle") }
                             Divider()
                             Button { route = .usage } label: { Label("Usage", systemImage: "chart.bar") }
