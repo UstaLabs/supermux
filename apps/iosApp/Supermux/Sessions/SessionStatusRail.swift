@@ -28,7 +28,10 @@ struct SessionStatusRail: View {
 
     @ViewBuilder private var mainIndicator: some View {
         if working {
-            ProgressView().controlSize(.mini)
+            ProgressView()
+                .controlSize(.mini)
+                .accessibilityIdentifier("session-rail-working")
+                .accessibilityLabel("working")
         } else if unread {
             // Larger + solid green with soft ring — distinct from the quiet gray neutral.
             ZStack {
@@ -39,6 +42,7 @@ struct SessionStatusRail: View {
                     .fill(Color.green)
                     .frame(width: 7, height: 7)
             }
+            .accessibilityIdentifier("session-rail-unread")
             .accessibilityLabel("unread")
         } else if let st = GitBadgeKt.sessionStatus(git: git) {
             switch (st.kind, st.level) {
@@ -58,6 +62,10 @@ struct SessionStatusRail: View {
         Image(systemName: name).font(.system(size: 11, weight: .semibold)).foregroundStyle(color)
     }
     private var neutralDot: some View {
-        Circle().fill(Color.secondary.opacity(0.3)).frame(width: 6, height: 6)
+        Circle()
+            .fill(Color.secondary.opacity(0.3))
+            .frame(width: 6, height: 6)
+            .accessibilityIdentifier("session-rail-idle")
+            .accessibilityLabel("idle")
     }
 }

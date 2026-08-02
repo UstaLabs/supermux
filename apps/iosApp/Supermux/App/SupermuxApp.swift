@@ -77,7 +77,11 @@ struct SupermuxApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if paired, let base = BrokerConfig.baseURL {
+                // XCUITest / feel-test: real SessionStatusRail UI without pairing or broker.
+                // Launch with SM_UITEST_RAIL_FIXTURE=1 (see SupermuxMacUITests/SessionListRailUITests).
+                if ProcessInfo.processInfo.environment["SM_UITEST_RAIL_FIXTURE"] == "1" {
+                    SessionListRailUIFixtureView()
+                } else if paired, let base = BrokerConfig.baseURL {
                     #if os(macOS)
                     if !macSetupChecked {
                         ProgressView("Checking setup…")
