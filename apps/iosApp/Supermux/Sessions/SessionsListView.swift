@@ -532,6 +532,15 @@ struct SessionsListView: View {
             .smSessionSectionHeaderChrome(phone: phoneList)
     }
 
+    /// The shared group label is a shortened workdir (`…/local/bisiklet-arastirma`) — right for a
+    /// narrow sidebar, but a path fragment reads as engineering internals on a phone. iPhone shows
+    /// the project leaf, matching the tag the flat list already puts on its rows.
+    private func groupHeaderLabel(_ group: SessionGroup) -> String {
+        guard phoneList, group.workdir != PA_GROUP_KEY else { return group.label }
+        let leaf = group.workdir.split(separator: "/").last.map(String.init) ?? ""
+        return leaf.isEmpty ? group.label : leaf
+    }
+
     private func header(_ group: SessionGroup, count: Int? = nil) -> some View {
         Button { toggle(group.workdir) } label: {
             HStack(spacing: 8) {
@@ -539,7 +548,7 @@ struct SessionsListView: View {
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.tertiary)
                     .frame(width: 10)
-                Text(group.label)
+                Text(groupHeaderLabel(group))
                     .font(phoneList ? .footnote.weight(.semibold) : .system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .tracking(phoneList ? 0 : 0.3)
@@ -1130,11 +1139,21 @@ private extension View {
 
     /// Plain-list section headers default to carrying a separator of their own, which reads as a
     /// rule under the title. iPhone hides it and tightens the header's vertical rhythm.
+    ///
+    /// The header is also OPAQUE and full-bleed on iPhone. A plain List pins it while its section
+    /// scrolls, and a transparent header parks inside the nav bar's scroll-edge blur with rows
+    /// ghosting straight through the title — so it has to bring its own canvas, the way Mail and
+    /// Contacts do. Insets go to zero and the padding moves inside so the fill reaches both edges.
     @ViewBuilder func smSessionSectionHeaderChrome(phone: Bool) -> some View {
         if phone {
             self
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 5)
+                .background(Color.smGroupedBackground)
                 .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 14, leading: 16, bottom: 4, trailing: 16))
+                .listRowInsets(EdgeInsets())
         } else {
             self
         }
