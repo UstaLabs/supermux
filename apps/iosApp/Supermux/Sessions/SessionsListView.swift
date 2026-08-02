@@ -77,6 +77,16 @@ struct SessionsListView: View {
     @AppStorage("cmux:group-by-project") private var groupByProject = false
     /// iPhone large-title search (`.searchable`). Empty on the sidebar platforms.
     @State private var search = ""
+    #if os(iOS)
+    /// iPhone reordering. The free-drag path can never fire here: `.onDrag` and `.contextMenu`
+    /// both bind to long-press and the menu wins, so a press on a row opens Mute/Rename/Settle
+    /// and the drag never begins. iOS reorders in edit mode with grabbers (Mail, Reminders), so
+    /// that is what the phone gets; macOS/iPad keep the free drag, where press+drag works.
+    @State private var editMode: EditMode = .inactive
+    private var isEditing: Bool { editMode == .active }
+    #else
+    private var isEditing: Bool { false }
+    #endif
     @State private var settledExpanded: Set<String> = []
     @State private var flatSettledExpanded = false
     /// Live whole-row drag reorder (section-scoped). See `SessionSectionReorderState`.
@@ -148,6 +158,7 @@ struct SessionsListView: View {
         // iPhone rows run edge-to-edge and carry their own 16pt leading inset (see
         // `smSessionListRowChrome`), so the scroll content must NOT be inset again.
         .contentMargins(.horizontal, phoneList ? 0 : 12, for: .scrollContent)
+        .environment(\.editMode, $editMode)
         // No pull-to-reveal on iPhone: an overscroll-only affordance is undiscoverable, and it
         // competed with the search field for the same gesture. Archived is a menu item there.
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -181,7 +192,13 @@ struct SessionsListView: View {
             selected = nil
             onOpenDraft(id)
         }
-        .modifier(PhoneSessionListChrome(enabled: phoneList, search: $search, onNewSession: onNewSession))
+        .modifier(PhoneSessionListChrome(
+            enabled: phoneList,
+            search: $search,
+            onNewSession: onNewSession,
+            isEditing: isEditing,
+            onToggleEditing: toggleEditing
+        ))
         .overlay {
             if !fleet.synced && fleet.sessions.isEmpty {
                 ProgressView("Connecting…").tint(Theme.teal)
@@ -283,6 +300,20 @@ struct SessionsListView: View {
     private func commitReorder(_ orderedIds: [String]) {
         guard !orderedIds.isEmpty else { return }
         onReorder(orderedIds)
+    }
+
+    private func toggleEditing() {
+        #if os(iOS)
+        withAnimation(.snappy(duration: 0.22)) {
+            editMode = editMode == .active ? .inactive : .active
+        }
+        #endif
+    }
+
+    /// A section's `.onMove` in edit mode. `ids` is that section's order as rendered, so the moved
+    /// result is exactly what the free-drag path commits on macOS — same `onReorder` contract.
+    private func moveRows(ids: [String], from: IndexSet, to: Int) {
+        commitReorder(reorderedSessionIds(ids, from: from, to: to))
     }
 
     /// Identifiable wrapper so `.sheet(item:)` can present continue for a session row.
@@ -387,8 +418,10 @@ struct SessionsListView: View {
                             isLast: session.id == rows.last?.id
                         )
                     }
+                    // `.onMove` must sit on the ForEach itself — `deleteDisabled` erases
+                    // DynamicViewContent to a plain View, and the member disappears.
+                    .onMove { from, to in moveRows(ids: rows.map(\.id), from: from, to: to) }
                     .deleteDisabled(true)
-                    .moveDisabled(true)
                 } header: {
                     sessionSectionHeader(section.label)
                 }
@@ -457,8 +490,11 @@ struct SessionsListView: View {
                         isLast: openRowIsLast && session.id == rows.last?.id
                     )
                 }
+                .onMove { from, to in
+                    guard canReorderGroup else { return }
+                    moveRows(ids: rows.map(\.id), from: from, to: to)
+                }
                 .deleteDisabled(true)
-                .moveDisabled(true)
                 if !settled.isEmpty {
                     Button {
                         withAnimation(.snappy(duration: 0.2)) {
@@ -673,7 +709,8 @@ struct SessionsListView: View {
             .contentShape(Rectangle())
             .opacity(reorderState.draggingId == s.id ? 0.35 : 1)
             .simultaneousGesture(TapGesture().onEnded {
-                guard !reorderState.isDragging else { return }
+                // In edit mode a tap belongs to the reorder UI, not navigation.
+                guard !reorderState.isDragging, !isEditing else { return }
                 if (s.userStatus ?? "") == "draft" {
                     onOpenDraft(s.id)
                 } else {
@@ -682,7 +719,11 @@ struct SessionsListView: View {
                 }
             })
             .modifier(SessionRowDragReorderModifier(
-                enabled: reorderable && !sectionKey.isEmpty,
+                // Never on the phone. `.onDrag` can't win a long-press against `.contextMenu`
+                // there, and leaving it attached hijacks the edit-mode grabber: the row lifts
+                // into the free-drag ghost (opacity 0.35), no drop delegate ever fires, and it
+                // stays stuck faded. Reordering on iPhone is `.onMove` only.
+                enabled: reorderable && !sectionKey.isEmpty && !phoneList,
                 sessionId: s.id,
                 sessionName: s.name,
                 sectionKey: sectionKey,
@@ -691,7 +732,9 @@ struct SessionsListView: View {
                 onCommit: commitReorder
             ))
             .tag(s.id)
-            .moveDisabled(true)
+            // Grabbers appear only on rows the section can actually reorder — PA, settled and
+            // offline rows stay pinned, exactly as they are under the desktop free drag.
+            .moveDisabled(!(phoneList && reorderable))
             .accessibilityIdentifier(TestIds.sessionRow(s.id))
             .smSessionListRowChrome(phone: phoneList, isLast: isLast)
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -1167,12 +1210,23 @@ private struct PhoneSessionListChrome: ViewModifier {
     let enabled: Bool
     @Binding var search: String
     let onNewSession: () -> Void
+    /// Reorder affordance. A plain Bool + closure rather than `EditButton`, because the toolbar is
+    /// applied outside the `.environment(\.editMode:)` that drives the List — an `EditButton` here
+    /// would not see it. `EditMode` is also UIKit-only, so it never crosses into this shared type.
+    let isEditing: Bool
+    let onToggleEditing: () -> Void
 
     func body(content: Content) -> some View {
         if enabled {
             content
                 .navigationTitle("Sessions")
                 .smLargeNavigationTitle()
+                .toolbar {
+                    ToolbarItem(placement: .smTopLeading) {
+                        Button(isEditing ? "Done" : "Edit", action: onToggleEditing)
+                            .accessibilityIdentifier("session-list-edit")
+                    }
+                }
                 // `.automatic`, not a pinned drawer: the list draws its own background with
                 // `scrollContentBackground(.hidden)`, so a pinned field has no material behind
                 // it and rows scroll through it. Automatic parks it under the large title and
