@@ -17,6 +17,7 @@ struct TerminalPane: View {
     var onExit: () -> Void = {}
 
     @State private var ended = false
+    @Environment(\.scenePhase) private var scenePhase
     #if os(iOS)
     @State private var keyboardHeight: CGFloat = 0
     #endif
@@ -56,8 +57,16 @@ struct TerminalPane: View {
                 onExit()
                 broker.dropTerminalHost(sessionId: session.id, kind: kind, terminalId: terminalId)
             }
+            host.session.focus(scenePhase == .active)
         }
-        // No onDisappear stop(): toggling the pane off must NOT tear down the live terminal.
+        .onChange(of: scenePhase) { _, phase in
+            host.session.focus(phase == .active)
+        }
+        .onDisappear {
+            // No stop(): toggling the pane off keeps the warm terminal and scrollback, but
+            // it must release shared-size ownership to the next foreground client.
+            host.session.focus(false)
+        }
     }
 
     // Floating ⌄ button to dismiss the terminal keyboard. SwiftTerm owns a UIKit keyboard, so

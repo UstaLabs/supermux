@@ -134,6 +134,12 @@ function scheduleFit() {
   })
 }
 
+function syncFocus() {
+  const focused = props.active && document.visibilityState === "visible" && document.hasFocus()
+  if (focused) fit()
+  terminal.focus(focused)
+}
+
 async function pasteFromClipboard() {
   try {
     const text = await navigator.clipboard.readText()
@@ -317,6 +323,11 @@ onMounted(() => {
   ro = new ResizeObserver(() => { fit() })
   ro.observe(containerRef.value)
 
+  window.addEventListener("focus", syncFocus)
+  window.addEventListener("blur", syncFocus)
+  document.addEventListener("visibilitychange", syncFocus)
+  syncFocus()
+
   // Touch-drag scrolling (see notes by the touch state above). touchmove must be
   // non-passive so preventDefault() can stop the page from scrolling instead.
   touchSurface = containerRef.value
@@ -330,6 +341,10 @@ onMounted(() => {
 
 onUnmounted(() => {
   ro?.disconnect()
+  window.removeEventListener("focus", syncFocus)
+  window.removeEventListener("blur", syncFocus)
+  document.removeEventListener("visibilitychange", syncFocus)
+  terminal.focus(false)
   if (touchSurface) {
     touchSurface.removeEventListener("touchstart", onTouchStart)
     touchSurface.removeEventListener("touchmove", onTouchMove)
@@ -350,11 +365,13 @@ watch(
   () => props.active,
   (active) => {
     if (active) scheduleFit()
+    nextTick(syncFocus)
   },
 )
 
 onActivated(() => {
   scheduleFit()
+  nextTick(syncFocus)
 })
 </script>
 

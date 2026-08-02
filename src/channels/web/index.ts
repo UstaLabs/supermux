@@ -740,6 +740,15 @@ export class WebChannel implements Channel {
         const frame = JSON.parse(msg)
         if (frame.type === "resize" && typeof frame.cols === "number" && typeof frame.rows === "number") {
           tm.resize(ws.data.deviceName, sessionName, terminalId, frame.cols, frame.rows)
+        } else if (frame.type === "focus" && typeof frame.focused === "boolean") {
+          tm.focus(
+            ws.data.deviceName,
+            sessionName,
+            terminalId,
+            frame.focused,
+            typeof frame.cols === "number" ? frame.cols : undefined,
+            typeof frame.rows === "number" ? frame.rows : undefined,
+          )
         } else if (frame.type === "close") {
           // Explicit close: destroy the tmux session, then drop the socket.
           void tm.close(sessionName, terminalId)

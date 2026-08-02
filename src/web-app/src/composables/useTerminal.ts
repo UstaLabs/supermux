@@ -10,6 +10,7 @@ export interface UseTerminal {
   disconnect: () => void
   sendInput: (data: Uint8Array) => void
   resize: (cols: number, rows: number) => void
+  focus: (focused: boolean) => void
   onData: (cb: (data: Uint8Array) => void) => void
   onReset: (cb: () => void) => void
   onExit: (cb: (code: number) => void) => void
@@ -24,6 +25,7 @@ export function useTerminal(sessionName: MaybeRefOrGetter<string>, terminalId: M
   let ws: WebSocket | null = null
   let attempt = 0
   let stopped = false
+  let focused = false
 
   let dataCallback: ((data: Uint8Array) => void) | null = null
   let resetCallback: (() => void) | null = null
@@ -37,6 +39,15 @@ export function useTerminal(sessionName: MaybeRefOrGetter<string>, terminalId: M
   function sendResize(cols: number, rows: number) {
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "resize", cols, rows }))
+    }
+  }
+
+  function sendFocus() {
+    if (ws?.readyState !== WebSocket.OPEN) return
+    if (focused && lastSize) {
+      ws.send(JSON.stringify({ type: "focus", focused: true, cols: lastSize.cols, rows: lastSize.rows }))
+    } else {
+      ws.send(JSON.stringify({ type: "focus", focused: false }))
     }
   }
 
@@ -54,6 +65,7 @@ export function useTerminal(sessionName: MaybeRefOrGetter<string>, terminalId: M
       attempt = 0
       status.value = "connected"
       if (lastSize) sendResize(lastSize.cols, lastSize.rows)
+      if (focused) sendFocus()
     }
 
     ws.onmessage = (e) => {
@@ -106,7 +118,13 @@ export function useTerminal(sessionName: MaybeRefOrGetter<string>, terminalId: M
 
   function resize(cols: number, rows: number) {
     lastSize = { cols, rows }
-    sendResize(cols, rows)
+    if (focused) sendFocus()
+    else sendResize(cols, rows)
+  }
+
+  function focus(next: boolean) {
+    focused = next
+    sendFocus()
   }
 
   function onData(cb: (data: Uint8Array) => void) {
@@ -121,5 +139,5 @@ export function useTerminal(sessionName: MaybeRefOrGetter<string>, terminalId: M
     resetCallback = cb
   }
 
-  return { status, connect, disconnect, sendInput, resize, onData, onReset, onExit }
+  return { status, connect, disconnect, sendInput, resize, focus, onData, onReset, onExit }
 }

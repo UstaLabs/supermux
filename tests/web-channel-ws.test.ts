@@ -85,6 +85,7 @@ test("broadcastToAll fans out sessions_reordered to subscribers", async () => {
 
 test("agent terminal: rejects non-claude, accepts claude and attaches with target", async () => {
   const attachCalls: any[] = []
+  const focusCalls: any[] = []
   await ch.stop()
   ch = new WebChannel({
     port: PORT,
@@ -99,6 +100,7 @@ test("agent terminal: rejects non-claude, accepts claude and attaches with targe
     terminalManager: {
       attach: (o: any) => { attachCalls.push(o); return { ok: true } },
       detach: () => {},
+      focus: (...args: any[]) => { focusCalls.push(args); return true },
     } as any,
   })
   await ch.start()
@@ -113,6 +115,9 @@ test("agent terminal: rejects non-claude, accepts claude and attaches with targe
   expect(attachCalls.length).toBe(1)
   expect(attachCalls[0].kind).toBe("agent")
   expect(attachCalls[0].agentTarget).toBe("mux:claudeSess")
+  ws.send(JSON.stringify({ type: "focus", focused: true, cols: 57, rows: 29 }))
+  await new Promise((r) => setTimeout(r, 25))
+  expect(focusCalls).toEqual([["test", "claudeSess", "agent", true, 57, 29]])
   ws.close()
 })
 

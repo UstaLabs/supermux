@@ -29,6 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jediterm.terminal.ui.JediTermWidget
@@ -68,6 +69,11 @@ fun DesktopTerminalPanel(
     val c = LocalPanes.current
     val scope = rememberCoroutineScope()
     val client = remember { connect() }
+    val windowFocused = LocalWindowInfo.current.isWindowFocused
+
+    // Kept-alive terminal panels stay connected when hidden. The foreground window/pane
+    // explicitly owns the shared pty geometry so another warm client cannot pin its size.
+    LaunchedEffect(client, active, windowFocused) { client.focus(active && windowFocused) }
 
     // Predictive local echo: the shared Kotlin engine + JediTerm op-renderer + keystroke->echo RTT
     // stamp, bundled so the connector's pre-send input tap and the output collector can reach an

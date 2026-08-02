@@ -75,6 +75,13 @@ export interface TerminalInstance {
   onFailure: (reason: string) => void
 }
 
+interface TerminalFocusClaim {
+  instance: TerminalInstance
+  cols: number
+  rows: number
+  order: number
+}
+
 /**
  * Manages persistent web terminals. POSIX hosts use the dedicated tmux server;
  * Windows hosts use sessiond/ConPTY. The in-memory map tracks viewers, while
@@ -82,6 +89,10 @@ export interface TerminalInstance {
  */
 export class TerminalManager {
   private terminals = new Map<string, TerminalInstance>()
+  /** Foreground viewers keyed by backing target. The newest claim owns the pty size. */
+  private focusClaims = new Map<string, Map<string, TerminalFocusClaim>>()
+  private focusOrder = 0
+  private targetResizeTails = new Map<string, Promise<void>>()
   private pendingWindowsAttaches = new Map<string, {
     token: symbol
     deviceName: string
@@ -127,6 +138,98 @@ export class TerminalManager {
     return `${device}:${session}:${terminal}`
   }
 
+  private static targetKey(session: string, terminal: string): string {
+    return JSON.stringify([session, terminal])
+  }
+
+  private targetKeyFor(inst: TerminalInstance): string {
+    return TerminalManager.targetKey(inst.sessionName, inst.terminalId)
+  }
+
+  private latestFocusClaim(targetKey: string): TerminalFocusClaim | undefined {
+    let latest: TerminalFocusClaim | undefined
+    for (const claim of this.focusClaims.get(targetKey)?.values() ?? []) {
+      if (!latest || claim.order > latest.order) latest = claim
+    }
+    return latest
+  }
+
+  private resizeViewer(inst: TerminalInstance, cols: number, rows: number): boolean {
+    inst.lastInputAt = Date.now()
+    if (inst.proc.resize) {
+      try { return inst.proc.resize(cols, rows) } catch { return false }
+    }
+    const cmd = `\x00R${cols}:${rows}\n`
+    try {
+      inst.proc.stdin.write(new TextEncoder().encode(cmd))
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * A tmux window may be linked into several warm viewer sessions. Its normal
+   * `window-size latest` policy only follows terminal activity, not application
+   * focus, so explicitly size the shared window when focus changes.
+   */
+  private forceTargetSize(claim: TerminalFocusClaim): boolean {
+    const { instance: inst, cols, rows } = claim
+    const ok = this.resizeViewer(inst, cols, rows)
+    if (this.platform === "win32") return ok
+
+    const targetKey = this.targetKeyFor(inst)
+    const previous = this.targetResizeTails.get(targetKey) ?? Promise.resolve()
+    const next = previous.catch(() => undefined).then(async () => {
+      if (inst.kind === "agent" && inst.agentTarget) {
+        await this.agentTerm!.resizeWindow(inst.agentTarget, cols, rows)
+      } else {
+        await this.term!.resizeTerminal(inst.sessionName, inst.terminalId, cols, rows)
+      }
+    }).catch((err: any) => {
+      log.debug("terminal_focus_resize_failed", { key: inst.key, cols, rows, err: err?.message })
+    })
+    this.targetResizeTails.set(targetKey, next)
+    void next.finally(() => {
+      if (this.targetResizeTails.get(targetKey) === next) this.targetResizeTails.delete(targetKey)
+    })
+    return ok
+  }
+
+  private restoreAutomaticTargetSize(inst: TerminalInstance): void {
+    if (this.platform === "win32") return
+    const targetKey = this.targetKeyFor(inst)
+    const previous = this.targetResizeTails.get(targetKey) ?? Promise.resolve()
+    const next = previous.catch(() => undefined).then(async () => {
+      if (inst.kind === "agent" && inst.agentTarget) {
+        await this.agentTerm!.restoreAutomaticSize(inst.agentTarget)
+      } else {
+        await this.term!.restoreAutomaticSize(inst.sessionName, inst.terminalId)
+      }
+    }).catch((err: any) => {
+      log.debug("terminal_focus_restore_failed", { key: inst.key, err: err?.message })
+    })
+    this.targetResizeTails.set(targetKey, next)
+    void next.finally(() => {
+      if (this.targetResizeTails.get(targetKey) === next) this.targetResizeTails.delete(targetKey)
+    })
+  }
+
+  private removeFocusClaim(inst: TerminalInstance, applyFallback = true): void {
+    const targetKey = this.targetKeyFor(inst)
+    const claims = this.focusClaims.get(targetKey)
+    const claim = claims?.get(inst.key)
+    if (!claims || claim?.instance !== inst) return
+    const wasLatest = this.latestFocusClaim(targetKey) === claim
+    claims.delete(inst.key)
+    if (claims.size === 0) this.focusClaims.delete(targetKey)
+    if (applyFallback && wasLatest) {
+      const fallback = this.latestFocusClaim(targetKey)
+      if (fallback) this.forceTargetSize(fallback)
+      else this.restoreAutomaticTargetSize(inst)
+    }
+  }
+
   /**
    * Attach a viewer to the persistent target, creating scratch targets when
    * needed. Any existing viewer for the same key is replaced (re-attach).
@@ -150,6 +253,7 @@ export class TerminalManager {
     // Replace a stale viewer for this exact key (e.g. a lingering connection).
     const existing = this.terminals.get(key)
     if (existing) {
+      this.removeFocusClaim(existing)
       existing.intentional = true
       this.terminals.delete(key)
       try { existing.proc.kill() } catch {}
@@ -202,7 +306,10 @@ export class TerminalManager {
     proc.exited.then((code) => {
       // Only clear if WE are still the registered viewer (a replacement may have
       // taken our key already — don't delete the newcomer).
-      if (this.terminals.get(key) === inst) this.terminals.delete(key)
+      if (this.terminals.get(key) === inst) {
+        this.terminals.delete(key)
+        this.removeFocusClaim(inst)
+      }
       if (inst.intentional) {
         log.info("terminal_detached", { key })
         return
@@ -232,6 +339,7 @@ export class TerminalManager {
     const key = TerminalManager.key(opts.deviceName, opts.sessionName, opts.terminalId)
     const existing = this.terminals.get(key)
     if (existing) {
+      this.removeFocusClaim(existing)
       existing.intentional = true
       this.terminals.delete(key)
       try { existing.proc.kill() } catch {}
@@ -304,7 +412,10 @@ export class TerminalManager {
       log.info("terminal_attached", { key, workdir: opts.workdir, pid: attached.proc.pid })
       this.pumpOutput(inst)
       attached.proc.exited.then(code => {
-        if (this.terminals.get(key) === inst) this.terminals.delete(key)
+        if (this.terminals.get(key) === inst) {
+          this.terminals.delete(key)
+          this.removeFocusClaim(inst)
+        }
         if (inst.intentional) {
           log.info("terminal_detached", { key })
           return
@@ -315,6 +426,7 @@ export class TerminalManager {
       void attached.proc.viewerFailed.then(reason => {
         if (this.terminals.get(key) !== inst) return
         this.terminals.delete(key)
+        this.removeFocusClaim(inst)
         if (inst.intentional) return
         log.warn("terminal_viewer_failed", { key, reason })
         try { inst.onFailure(reason) } catch {}
@@ -374,17 +486,41 @@ export class TerminalManager {
   resize(deviceName: string, sessionName: string, terminalId: string, cols: number, rows: number): boolean {
     const inst = this.terminals.get(TerminalManager.key(deviceName, sessionName, terminalId))
     if (!inst) return false
-    inst.lastInputAt = Date.now()
-    if (inst.proc.resize) {
-      try { return inst.proc.resize(cols, rows) } catch { return false }
-    }
-    const cmd = `\x00R${cols}:${rows}\n`
-    try {
-      inst.proc.stdin.write(new TextEncoder().encode(cmd))
+    const targetKey = this.targetKeyFor(inst)
+    const claims = this.focusClaims.get(targetKey)
+    if (!claims?.size) return this.resizeViewer(inst, cols, rows)
+
+    // Warm/background clients can continue reporting layout changes. Remember a
+    // focused viewer's latest geometry, but only the newest focus claim may apply it.
+    const ownClaim = claims.get(inst.key)
+    if (!ownClaim || ownClaim.instance !== inst) return true
+    ownClaim.cols = cols
+    ownClaim.rows = rows
+    return this.latestFocusClaim(targetKey) === ownClaim ? this.forceTargetSize(ownClaim) : true
+  }
+
+  /** Make this viewer authoritative for the shared terminal size, or release it. */
+  focus(
+    deviceName: string,
+    sessionName: string,
+    terminalId: string,
+    focused: boolean,
+    cols?: number,
+    rows?: number,
+  ): boolean {
+    const inst = this.terminals.get(TerminalManager.key(deviceName, sessionName, terminalId))
+    if (!inst) return false
+    if (!focused) {
+      this.removeFocusClaim(inst)
       return true
-    } catch {
-      return false
     }
+    if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols! < 1 || rows! < 1) return false
+    const targetKey = this.targetKeyFor(inst)
+    const claims = this.focusClaims.get(targetKey) ?? new Map<string, TerminalFocusClaim>()
+    const claim = { instance: inst, cols: cols!, rows: rows!, order: ++this.focusOrder }
+    claims.set(inst.key, claim)
+    this.focusClaims.set(targetKey, claims)
+    return this.forceTargetSize(claim)
   }
 
   /** Disconnect a viewer WITHOUT killing its persistent target (reload / tab switch). */
@@ -396,6 +532,7 @@ export class TerminalManager {
     log.info("terminal_detach", { key })
     inst.intentional = true
     this.terminals.delete(key)
+    this.removeFocusClaim(inst)
     try { inst.proc.kill() } catch {}
     // Agent terminals: also destroy the throwaway grouped viewer session (the
     // agent window itself always survives).
@@ -422,6 +559,7 @@ export class TerminalManager {
       if (inst.sessionName === sessionName && inst.terminalId === terminalId) {
         inst.intentional = true
         this.terminals.delete(key)
+        this.removeFocusClaim(inst, false)
         try { inst.proc.kill() } catch {}
         if (inst.kind === "agent" && inst.agentTarget) {
           agentViewers.push({ device: inst.deviceName, target: inst.agentTarget })
@@ -481,6 +619,7 @@ export class TerminalManager {
         log.info("terminal_killed_session_cleanup", { key })
         inst.intentional = true
         this.terminals.delete(key)
+        this.removeFocusClaim(inst, false)
         try { inst.proc.kill() } catch {}
         if (this.platform !== "win32" && inst.kind === "agent" && inst.agentTarget) {
           void this.agentTerm!.killViewer(inst.deviceName, inst.agentTarget)
@@ -506,6 +645,7 @@ export class TerminalManager {
       if (inst.deviceName === deviceName) {
         inst.intentional = true
         this.terminals.delete(key)
+        this.removeFocusClaim(inst)
         try { inst.proc.kill() } catch {}
         if (this.platform !== "win32" && inst.kind === "agent" && inst.agentTarget) {
           void this.agentTerm!.killViewer(deviceName, inst.agentTarget)
@@ -538,8 +678,10 @@ export class TerminalManager {
     for (const [key, inst] of this.terminals) {
       log.info("terminal_shutdown_detach", { key })
       inst.intentional = true
+      this.removeFocusClaim(inst, false)
       try { inst.proc.kill() } catch {}
     }
     this.terminals.clear()
+    this.focusClaims.clear()
   }
 }
