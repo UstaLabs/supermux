@@ -1216,9 +1216,23 @@ private struct PhoneSessionListChrome: ViewModifier {
     let isEditing: Bool
     let onToggleEditing: () -> Void
 
+    /// The nav bar needs a real background of its own. The List hides its scroll content
+    /// background and paints its own canvas, so the bar has no system material to compose
+    /// against: its Liquid Glass button capsules render opaque white while the strip between
+    /// them shows raw scrolling rows ghosting under the title. Pinning the bar to the same
+    /// canvas the list uses makes the whole header one continuous surface.
+    @ViewBuilder private func barBackground(_ v: some View) -> some View {
+        #if os(iOS)
+        v.toolbarBackgroundVisibility(.visible, for: .navigationBar)
+            .toolbarBackground(Color.smGroupedBackground, for: .navigationBar)
+        #else
+        v
+        #endif
+    }
+
     func body(content: Content) -> some View {
         if enabled {
-            content
+            barBackground(content)
                 .navigationTitle("Sessions")
                 .smLargeNavigationTitle()
                 .toolbar {
