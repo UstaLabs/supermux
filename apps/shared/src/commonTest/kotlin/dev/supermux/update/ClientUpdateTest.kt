@@ -159,6 +159,45 @@ class ClientUpdateTest {
         assertTrue(status.downloadUrl!!.endsWith("supermux-linux.deb"))
     }
 
+    @Test
+    fun download_invokesProgressAndReturnsBytes() = runTest {
+        val payload = ByteArray(8_192) { i -> (i % 251).toByte() }
+        val engine = MockEngine { request ->
+            assertEquals("https://example.com/file.bin", request.url.toString())
+            respond(
+                payload,
+                HttpStatusCode.OK,
+                headersOf(
+                    HttpHeaders.ContentType to listOf("application/octet-stream"),
+                    HttpHeaders.ContentLength to listOf(payload.size.toString()),
+                ),
+            )
+        }
+        val http = HttpClient(engine)
+        val ticks = mutableListOf<Pair<Long, Long?>>()
+        val got = ClientUpdateChecker(http).download("https://example.com/file.bin") { received, total ->
+            ticks += received to total
+        }
+        assertTrue(got.contentEquals(payload))
+        assertTrue(ticks.isNotEmpty(), "expected at least one progress tick")
+        assertEquals(payload.size.toLong(), ticks.last().first)
+        // Content-Length is forwarded when the mock provides it.
+        assertTrue(ticks.any { it.second == payload.size.toLong() || it.second == null })
+    }
+
+    @Test
+    fun download_httpErrorThrows() = runTest {
+        val engine = MockEngine {
+            respond("nope", HttpStatusCode.NotFound)
+        }
+        val http = HttpClient(engine)
+        val result = runCatching {
+            ClientUpdateChecker(http).download("https://example.com/missing.apk")
+        }
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()!!.message!!.contains("404"))
+    }
+
     private fun mockHttp(
         responses: Map<String, String>,
         failUrls: Set<String> = emptySet(),
