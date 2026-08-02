@@ -701,11 +701,10 @@ struct SessionsListView: View {
             .moveDisabled(true)
             .accessibilityIdentifier(TestIds.sessionRow(s.id))
             .smSessionListRowChrome(phone: phoneList, isLast: isLast)
+            // Trailing only. "Continue in new conversation" belongs inside the session, which
+            // already has a button for it — a per-row shortcut on every list row is noise.
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 swipeButtons(for: s)
-            }
-            .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                leadingSwipeButtons(for: s)
             }
     }
 
@@ -713,9 +712,9 @@ struct SessionsListView: View {
     /// label causes SwiftUI to size the reveal controls against the whole button host, producing
     /// the enormous icons seen in the sidebar.
     ///
-    /// These mirror the context menu state-for-state, because on iPhone they ARE the menu: a
-    /// settled row offers Resume (never Settle), a draft offers Discard, and everything else
-    /// offers Settle / Rename / Mute. "Continue in new conversation" rides the leading edge.
+    /// These are the whole action set on iPhone, so they follow row state: a settled row offers
+    /// Resume (never Settle, which made no sense there), a draft offers Discard, and everything
+    /// else offers Settle / Rename / Mute.
     @ViewBuilder private func swipeButtons(for s: SessionInfo) -> some View {
         let b = fleet.broker(for: s.id)
         let muted = s.mute?.boolValue ?? false
@@ -740,17 +739,6 @@ struct SessionsListView: View {
                 Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
             }
             .tint(Theme.teal)
-        }
-    }
-
-    /// Leading-edge swipe: "Continue in new conversation", the one context-menu action with no
-    /// swipe equivalent. Drafts have nothing to continue from, so they don't get it.
-    @ViewBuilder private func leadingSwipeButtons(for s: SessionInfo) -> some View {
-        if (s.userStatus ?? "") != "draft" {
-            Button { continueTarget = s } label: {
-                Label("Continue", systemImage: "bubble.left.and.text.bubble.right")
-            }
-            .tint(.indigo)
         }
     }
 
