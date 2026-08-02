@@ -87,6 +87,7 @@ import dev.supermux.android.settings.DevicesScreen
 import dev.supermux.android.settings.ProxyScreen
 import dev.supermux.android.settings.SettingsScreen
 import dev.supermux.android.update.AppUpdateBanner
+import dev.supermux.android.update.AppUpdateNotifier
 import dev.supermux.android.settings.UsageScreen
 import dev.supermux.android.theme.AppearanceMode
 import dev.supermux.android.theme.SupermuxTheme
@@ -126,6 +127,8 @@ class MainActivity : ComponentActivity() {
         // (API 33+) so decrypted session pushes can be shown. Must run before the activity
         // is STARTED, hence here in onCreate before setContent.
         SupermuxMessagingService.ensureChannel(this)
+        // App self-update progress / failure alerts (status bar during APK download).
+        AppUpdateNotifier.ensureChannels(this)
         PushPermission.request(this)
         intentState.value = intent
         enableEdgeToEdge()

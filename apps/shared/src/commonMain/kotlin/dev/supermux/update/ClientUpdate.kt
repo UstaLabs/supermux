@@ -1,6 +1,7 @@
 package dev.supermux.update
 
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.onDownload
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsBytes
@@ -192,9 +193,23 @@ class ClientUpdateChecker(
         }
     }
 
-    /** Download [url] fully into memory. Installer sizes are modest (APK/deb/msi/dmg). */
-    suspend fun download(url: String): ByteArray {
-        val resp = http.get(url)
+    /**
+     * Download [url] fully into memory. Installer sizes are modest (APK/deb/msi/dmg).
+     *
+     * [onProgress] is invoked as bytes stream in: `(bytesReceived, contentLength?)`.
+     * `contentLength` is null when the server omits Content-Length.
+     */
+    suspend fun download(
+        url: String,
+        onProgress: (suspend (bytesReceived: Long, contentLength: Long?) -> Unit)? = null,
+    ): ByteArray {
+        val resp = http.get(url) {
+            if (onProgress != null) {
+                onDownload { bytesSentTotal, contentLength ->
+                    onProgress(bytesSentTotal, contentLength)
+                }
+            }
+        }
         if (!resp.status.isSuccess()) error("download HTTP ${resp.status.value}")
         return resp.bodyAsBytes()
     }

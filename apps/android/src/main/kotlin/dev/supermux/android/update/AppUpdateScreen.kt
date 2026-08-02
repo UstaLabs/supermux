@@ -62,6 +62,7 @@ fun AppUpdatePage(onBack: () -> Unit) {
     var loading by remember { mutableStateOf(true) }
     var installing by remember { mutableStateOf(false) }
     var actionError by remember { mutableStateOf<String?>(null) }
+    var downloadLabel by remember { mutableStateOf<String?>(null) }
 
     fun refresh() {
         scope.launch {
@@ -161,8 +162,17 @@ fun AppUpdatePage(onBack: () -> Unit) {
                                     scope.launch {
                                         installing = true
                                         actionError = null
-                                        val err = AppUpdate.downloadAndInstall(http, context, s.downloadUrl!!)
+                                        downloadLabel = "Starting download…"
+                                        val err = AppUpdate.downloadAndInstall(
+                                            http,
+                                            context,
+                                            s.downloadUrl!!,
+                                        ) { received, total ->
+                                            downloadLabel =
+                                                AppUpdateNotifier.formatDownloadProgress(received, total)
+                                        }
                                         installing = false
+                                        downloadLabel = null
                                         when (err) {
                                             null -> {}
                                             "need-permission" -> {
@@ -184,12 +194,15 @@ fun AppUpdatePage(onBack: () -> Unit) {
                                         modifier = Modifier.size(16.dp),
                                     )
                                     Spacer(Modifier.width(8.dp))
-                                    Text("Downloading…")
+                                    Text(downloadLabel ?: "Downloading…")
                                 } else {
                                     Text("Download & install")
                                 }
                             }
-                            SettingsCaption("One-tap installs the latest release APK over this build.")
+                            SettingsCaption(
+                                "One-tap installs the latest release APK over this build. " +
+                                    "Progress also appears in the notification bar.",
+                            )
                         } else {
                             Text(
                                 "Update is available but no APK URL was published for this release.",

@@ -46,6 +46,7 @@ fun AppUpdateBanner(
     var status by remember { mutableStateOf<ClientUpdateStatus?>(null) }
     var dismissed by remember { mutableStateOf(false) }
     var installing by remember { mutableStateOf(false) }
+    var downloadLabel by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         val s = AppUpdate.check(http, context)
@@ -86,18 +87,31 @@ fun AppUpdateBanner(
                 onClick = {
                     scope.launch {
                         installing = true
-                        val err = AppUpdate.downloadAndInstall(http, context, s.downloadUrl!!)
+                        downloadLabel = "…"
+                        val err = AppUpdate.downloadAndInstall(
+                            http,
+                            context,
+                            s.downloadUrl!!,
+                        ) { received, total ->
+                            downloadLabel =
+                                AppUpdateNotifier.formatDownloadProgress(received, total)
+                        }
                         installing = false
+                        downloadLabel = null
                         when (err) {
                             null -> {}
                             "need-permission" -> AppUpdate.openInstallPermissionSettings(context)
+                            // Error is also posted to the status bar; open the page for detail.
                             else -> onOpenPage()
                         }
                     }
                 },
                 enabled = !installing,
             ) {
-                Text(if (installing) "…" else "Update", color = cs.onPrimaryContainer)
+                Text(
+                    if (installing) (downloadLabel ?: "…") else "Update",
+                    color = cs.onPrimaryContainer,
+                )
             }
         }
         IconButton(

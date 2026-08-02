@@ -21,6 +21,9 @@ import java.io.File
  * release APK, and hands it to the system package installer.
  *
  * Distinct from broker System-settings updates (POST /api/update/run).
+ *
+ * Download/install posts a status-bar notification with progress (and an alert
+ * on failure) via [AppUpdateNotifier].
  */
 object AppUpdate {
     private const val PREFS = "app_update"
@@ -70,34 +73,74 @@ object AppUpdate {
      * Download the APK and launch the system installer. Returns an error string,
      * or null on success (install UI shown). May return "need-permission" when
      * unknown-sources install is blocked — caller should open [openInstallPermissionSettings].
+     *
+     * [onProgress] receives `(bytesReceived, contentLength?)` on the main dispatcher
+     * (throttled to whole-percent changes when length is known).
      */
     suspend fun downloadAndInstall(
         http: HttpClient,
         context: Context,
         downloadUrl: String,
+        onProgress: ((bytesReceived: Long, contentLength: Long?) -> Unit)? = null,
     ): String? = withContext(Dispatchers.IO) {
+        val appCtx = context.applicationContext
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-            !context.packageManager.canRequestPackageInstalls()
+            !appCtx.packageManager.canRequestPackageInstalls()
         ) {
+            AppUpdateNotifier.showError(
+                appCtx,
+                "Allow installing apps from this source, then try again.",
+            )
             return@withContext "need-permission"
         }
+
+        AppUpdateNotifier.ensureChannels(appCtx)
+        AppUpdateNotifier.showProgress(appCtx, 0L, null)
+        emitProgress(onProgress, 0L, null)
+
+        var lastReportedPct = -1
+        var lastReportedBytes = -1L
         val bytes = try {
-            ClientUpdateChecker(http).download(downloadUrl)
+            ClientUpdateChecker(http).download(downloadUrl) { received, total ->
+                val pct = AppUpdateNotifier.progressPercent(received, total)
+                // Throttle status-bar + UI updates: every whole percent, or every
+                // 256 KiB when Content-Length is unknown.
+                val shouldEmit = when {
+                    pct != null -> pct != lastReportedPct
+                    else -> received - lastReportedBytes >= 256 * 1024 || lastReportedBytes < 0
+                }
+                if (shouldEmit) {
+                    if (pct != null) lastReportedPct = pct
+                    lastReportedBytes = received
+                    AppUpdateNotifier.showProgress(appCtx, received, total)
+                    emitProgress(onProgress, received, total)
+                }
+            }
         } catch (e: Throwable) {
-            return@withContext e.message ?: "Download failed"
+            val msg = e.message ?: "Download failed"
+            AppUpdateNotifier.showError(appCtx, msg)
+            return@withContext msg
         }
-        val dir = File(context.cacheDir, "updates").apply { mkdirs() }
+
+        // Final 100% tick when length was known (or a last size tick when not).
+        AppUpdateNotifier.showProgress(appCtx, bytes.size.toLong(), bytes.size.toLong())
+        emitProgress(onProgress, bytes.size.toLong(), bytes.size.toLong())
+
+        val dir = File(appCtx.cacheDir, "updates").apply { mkdirs() }
         val apk = File(dir, "supermux-update.apk")
         try {
             apk.writeBytes(bytes)
         } catch (e: Throwable) {
-            return@withContext e.message ?: "Could not write APK"
+            val msg = e.message ?: "Could not write APK"
+            AppUpdateNotifier.showError(appCtx, msg)
+            return@withContext msg
         }
+
         withContext(Dispatchers.Main) {
             try {
                 val uri = FileProvider.getUriForFile(
-                    context,
-                    "${context.packageName}.fileprovider",
+                    appCtx,
+                    "${appCtx.packageName}.fileprovider",
                     apk,
                 )
                 val intent = Intent(Intent.ACTION_VIEW).apply {
@@ -105,11 +148,25 @@ object AppUpdate {
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                context.startActivity(intent)
+                appCtx.startActivity(intent)
+                AppUpdateNotifier.showInstalling(appCtx)
                 null
             } catch (e: Throwable) {
-                e.message ?: "Could not open installer"
+                val msg = e.message ?: "Could not open installer"
+                AppUpdateNotifier.showError(appCtx, msg)
+                msg
             }
+        }
+    }
+
+    private suspend fun emitProgress(
+        onProgress: ((bytesReceived: Long, contentLength: Long?) -> Unit)?,
+        bytesReceived: Long,
+        contentLength: Long?,
+    ) {
+        if (onProgress == null) return
+        withContext(Dispatchers.Main.immediate) {
+            onProgress(bytesReceived, contentLength)
         }
     }
 
