@@ -148,13 +148,18 @@ struct SessionsListView: View {
         // iPhone rows run edge-to-edge and carry their own 16pt leading inset (see
         // `smSessionListRowChrome`), so the scroll content must NOT be inset again.
         .contentMargins(.horizontal, phoneList ? 0 : 12, for: .scrollContent)
+        // No pull-to-reveal on iPhone: an overscroll-only affordance is undiscoverable, and it
+        // competed with the search field for the same gesture. Archived is a menu item there.
         .safeAreaInset(edge: .top, spacing: 0) {
-            SidebarArchiveRevealBar(state: archiveReveal, onArchived: onArchived)
+            if !phoneList {
+                SidebarArchiveRevealBar(state: archiveReveal, onArchived: onArchived)
+            }
         }
         #endif
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             geo.contentOffset.y + geo.contentInsets.top
         } action: { _, top in
+            guard !phoneList else { return }
             let pull = max(0, -top)
             if archiveReveal.isLatched {
                 if top > 24 {
@@ -317,7 +322,8 @@ struct SessionsListView: View {
                 ForEach(pas, id: \.id) { session in
                     let recordId = owner[session.id] ?? ""
                     let rowHost: HostView? = showRowHostBadge ? hostByRecord[recordId] : nil
-                    selectableRow(session, host: rowHost, reorderable: false)
+                    selectableRow(session, host: rowHost, reorderable: false,
+                                  isLast: session.id == pas.last?.id)
                 }
                 .moveDisabled(true)
                 .deleteDisabled(true)
@@ -346,12 +352,15 @@ struct SessionsListView: View {
                     .buttonStyle(.plain)
                     .moveDisabled(true)
                     .deleteDisabled(true)
+                    // Collapsed, the toggle IS the section's only row — so it carries no rule.
+                    .smSessionListRowChrome(phone: phoneList, isLast: !flatSettledExpanded)
                     if flatSettledExpanded {
                         ForEach(settled, id: \.id) { session in
                             let recordId = owner[session.id] ?? ""
                             let rowHost: HostView? = showRowHostBadge ? hostByRecord[recordId] : nil
                             selectableRow(session, host: rowHost, reorderable: false,
-                                          projectTag: tag(session))
+                                          projectTag: tag(session),
+                                          isLast: session.id == settled.last?.id)
                         }
                         .moveDisabled(true)
                         .deleteDisabled(true)
@@ -374,7 +383,8 @@ struct SessionsListView: View {
                             reorderable: true,
                             projectTag: tag(session),
                             sectionKey: sectionKey,
-                            sectionIds: ids
+                            sectionIds: ids,
+                            isLast: session.id == rows.last?.id
                         )
                     }
                     .deleteDisabled(true)
@@ -430,6 +440,9 @@ struct SessionsListView: View {
         let ids = baseOpen.map(\.id)
         // A search that matches nothing in this project shouldn't leave a bare header behind.
         if !(openSessions.isEmpty && settled.isEmpty && !search.isEmpty) {
+        // The settled toggle (and its rows) extend this section below the open rows, so the last
+        // open row only ends the section when there is no settled block under it.
+        let openRowIsLast = settled.isEmpty
         Section {
             if !collapsed.contains(group.workdir) {
                 ForEach(rows, id: \.id) { session in
@@ -440,7 +453,8 @@ struct SessionsListView: View {
                         host: rowHost,
                         reorderable: canReorderGroup,
                         sectionKey: sectionKey,
-                        sectionIds: ids
+                        sectionIds: ids,
+                        isLast: openRowIsLast && session.id == rows.last?.id
                     )
                 }
                 .deleteDisabled(true)
@@ -463,11 +477,15 @@ struct SessionsListView: View {
                     .buttonStyle(.plain)
                     .moveDisabled(true)
                     .deleteDisabled(true)
+                    // Collapsed, the toggle ends the section — so it carries no rule.
+                    .smSessionListRowChrome(phone: phoneList,
+                                            isLast: !settledExpanded.contains(group.workdir))
                     if settledExpanded.contains(group.workdir) {
                         ForEach(settled, id: \.id) { session in
                             let recordId = owner[session.id] ?? ""
                             let rowHost: HostView? = showRowHostBadge ? hostByRecord[recordId] : nil
-                            selectableRow(session, host: rowHost, reorderable: false)
+                            selectableRow(session, host: rowHost, reorderable: false,
+                                          isLast: session.id == settled.last?.id)
                         }
                         .moveDisabled(true)
                         .deleteDisabled(true)
@@ -491,7 +509,8 @@ struct SessionsListView: View {
         Section {
             ForEach(sessions, id: \.id) { session in
                 let rowHost: HostView? = showRowHostBadge ? hostByRecord[host.recordId] : nil
-                selectableRow(session, host: rowHost, reorderable: false)
+                selectableRow(session, host: rowHost, reorderable: false,
+                              isLast: session.id == sessions.last?.id)
                     .opacity(0.55)
             }
             .moveDisabled(true)
@@ -636,7 +655,9 @@ struct SessionsListView: View {
         reorderable: Bool,
         projectTag: String? = nil,
         sectionKey: String = "",
-        sectionIds: [String] = []
+        sectionIds: [String] = [],
+        /// Last row of its List section — suppresses its trailing rule (see `smSessionListRowChrome`).
+        isLast: Bool = false
     ) -> some View {
         let ids = sectionIds.isEmpty ? [s.id] : sectionIds
         row(s, host: host, projectTag: projectTag, reorderable: reorderable)
@@ -663,7 +684,7 @@ struct SessionsListView: View {
             .tag(s.id)
             .moveDisabled(true)
             .accessibilityIdentifier(TestIds.sessionRow(s.id))
-            .smSessionListRowChrome(phone: phoneList)
+            .smSessionListRowChrome(phone: phoneList, isLast: isLast)
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 swipeButtons(for: s)
             }
@@ -1084,14 +1105,27 @@ private extension View {
     /// come back on and the row takes the standard 16pt leading/trailing inset.
     @ViewBuilder func smSessionListRowChrome(
         spacing: EdgeInsets = EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0),
-        phone: Bool = false
+        phone: Bool = false,
+        isLast: Bool = false
     ) -> some View {
-        self
-            .listRowBackground(Color.clear)
-            .listRowSeparator(phone ? .visible : .hidden)
-            // Trailing inset is 0 and the row pads itself instead: a `listRowInsets` trailing
-            // value also shortens the separator, and an iOS separator runs to the screen edge.
-            .listRowInsets(phone ? EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 0) : spacing)
+        if phone {
+            self
+                .listRowBackground(Color.clear)
+                // Rules go strictly BETWEEN rows: never above a section's first row, never
+                // below its last. A one-row section therefore draws no border at all, instead
+                // of the boxed-in look a leading + trailing rule gives it.
+                .listRowSeparator(.hidden, edges: .top)
+                .listRowSeparator(isLast ? .hidden : .visible, edges: .bottom)
+                // Trailing inset is 0 and the row pads itself instead: a `listRowInsets`
+                // trailing value also shortens the separator, and an iOS separator runs to
+                // the screen edge.
+                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 0))
+        } else {
+            self
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(spacing)
+        }
     }
 
     /// Plain-list section headers default to carrying a separator of their own, which reads as a
