@@ -38,8 +38,9 @@ struct MessageRow: View, Equatable {
                     .transcriptBody()
                     MessageMetaRow(text: text, broker: broker)
                 } else {
-                    Text(text).font(messageFont.weight(.medium))
-                        .textSelection(.enabled)
+                    // Same bare-URL linkify as agent MarkdownView — plain Text never makes
+                    // https://… tappable, so user bubbles would show dead links otherwise.
+                    SelectableText(attributed: UserMessageText.attributed(text))
                         .userMessageSurface()
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -49,13 +50,25 @@ struct MessageRow: View, Equatable {
             }
         }
     }
+}
 
-    private var messageFont: Font {
+/// Plain user-bubble text with bare http(s) URL linkification (no full markdown parse —
+/// user turns are not agent markdown).
+enum UserMessageText {
+    static func attributed(_ text: String) -> NSAttributedString {
         #if os(macOS)
-        .body
+        let size = PlatformFont.preferredFont(forTextStyle: .body).pointSize
         #else
-        .subheadline
+        let size = PlatformFont.preferredFont(forTextStyle: .subheadline).pointSize
         #endif
+        // Medium weight matches the previous `messageFont.weight(.medium)` look.
+        let font = PlatformFont.systemFont(ofSize: size, weight: .medium)
+        let out = NSMutableAttributedString(string: text, attributes: [
+            .font: font,
+            .foregroundColor: PlatformColor.smLabel,
+        ])
+        BareUrlLinks.decorate(out)
+        return out
     }
 }
 

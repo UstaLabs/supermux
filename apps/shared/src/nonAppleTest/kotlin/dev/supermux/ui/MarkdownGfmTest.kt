@@ -106,4 +106,12 @@ class MarkdownGfmTest {
             parseInlineMarkdown("a **b** [c](u)"),
         )
     }
+
+    /** Bare URLs stay PLAIN so platform renderers can appendLinkify them (Android/desktop). */
+    @Test fun bare_https_url_stays_plain_for_linkify() {
+        val spans = parseInlineMarkdown("see https://example.com for details")
+        assertEquals(1, spans.size)
+        assertEquals(SpanStyleKind.PLAIN, spans[0].kind)
+        assertTrue(spans[0].text.contains("https://example.com"))
+    }
 }

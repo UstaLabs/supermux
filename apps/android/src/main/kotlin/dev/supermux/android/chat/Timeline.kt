@@ -47,6 +47,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.viewinterop.AndroidView
@@ -202,45 +203,52 @@ fun mdAnnotated(
     linkify: Boolean = false,
 ): AnnotatedString {
     val linkColor = MaterialTheme.colorScheme.primary
+    // Explicit open handler (desktop parity). LinkAnnotation.Url with NO listener relies on
+    // LocalUriHandler, which SelectionContainer can swallow on Android — links then look like
+    // plain text (styled or not) and taps do nothing. Always wire the click ourselves.
+    val uriHandler = LocalUriHandler.current
+    val openUrl: (String) -> Unit = { url -> runCatching { uriHandler.openUri(url) } }
+    val linkStyles = TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))
     return buildAnnotatedString {
         text.split("\n").forEachIndexed { i, line ->
             if (i > 0) append("\n")
             for (s in parseInlineMarkdown(line)) {
                 when (s.kind) {
-                    SpanStyleKind.BOLD -> withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(s.text) }
-                    SpanStyleKind.ITALIC -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(s.text) }
+                    SpanStyleKind.BOLD -> withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
+                        appendLinkified(s.text, linkStyles, openUrl)
+                    }
+                    SpanStyleKind.ITALIC -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                        appendLinkified(s.text, linkStyles, openUrl)
+                    }
                     SpanStyleKind.CODE -> withStyle(
                         SpanStyle(
                             fontFamily = MonoFontFamily,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Normal,
                         )
-                    ) { append(s.text) }
-                    SpanStyleKind.STRIKE -> withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) { append(s.text) }
+                    ) { append(s.text) } // never linkify inside inline code
+                    SpanStyleKind.STRIKE -> withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) {
+                        appendLinkified(s.text, linkStyles, openUrl)
+                    }
                     SpanStyleKind.LINK -> {
                         val url = s.url
                         val ref = s.ref
                         when {
                             // Web links from `[label](url)` are always tappable (open the browser).
                             url != null -> withLink(
-                                LinkAnnotation.Url(
-                                    url,
-                                    TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
-                                ),
+                                LinkAnnotation.Url(url, linkStyles) { openUrl(url) },
                             ) { append(s.text) }
                             // File paths only become editor links in agent messages (linkify).
                             ref != null && linkify -> withLink(
                                 LinkAnnotation.Clickable(
                                     tag = "file:${ref.path}",
-                                    styles = TextLinkStyles(
-                                        style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)
-                                    ),
+                                    styles = linkStyles,
                                 ) { onOpenFile(ref) }
                             ) { append(s.text) }
                             else -> append(s.text)
                         }
                     }
-                    SpanStyleKind.PLAIN -> appendLinkified(s.text, linkColor)
+                    SpanStyleKind.PLAIN -> appendLinkified(s.text, linkStyles, openUrl)
                 }
             }
         }
@@ -250,7 +258,11 @@ fun mdAnnotated(
 private val urlRegex = Regex("""https?://[^\s<>"'\])]+""")
 
 /** Append [text], turning bare http(s) URLs into tappable, underlined links (opens the browser). */
-private fun AnnotatedString.Builder.appendLinkified(text: String, linkColor: Color) {
+private fun AnnotatedString.Builder.appendLinkified(
+    text: String,
+    linkStyles: TextLinkStyles,
+    openUrl: (String) -> Unit,
+) {
     var last = 0
     for (m in urlRegex.findAll(text)) {
         var url = m.value
@@ -260,7 +272,7 @@ private fun AnnotatedString.Builder.appendLinkified(text: String, linkColor: Col
         if (url.isEmpty()) continue
         if (m.range.first > last) append(text.substring(last, m.range.first))
         withLink(
-            LinkAnnotation.Url(url, TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))),
+            LinkAnnotation.Url(url, linkStyles) { openUrl(url) },
         ) { append(url) }
         if (trail.isNotEmpty()) append(trail)
         last = m.range.last + 1
@@ -616,14 +628,16 @@ fun MarkdownImage(image: MdBlock.Image) {
         )
     } else {
         val linkColor = cs.primary
+        val uriHandler = LocalUriHandler.current
+        val url = image.url
         Text(
             text = buildAnnotatedString {
                 withLink(
                     LinkAnnotation.Url(
-                        image.url,
+                        url,
                         TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
-                    ),
-                ) { append(image.alt.ifEmpty { image.url }) }
+                    ) { runCatching { uriHandler.openUri(url) } },
+                ) { append(image.alt.ifEmpty { url }) }
             },
             style = MaterialTheme.typography.bodyLarge,
         )
