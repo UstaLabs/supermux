@@ -167,9 +167,66 @@ struct SessionReorderDropDelegate: DropDelegate {
     }
 }
 
-// MARK: - Row drag modifier
+// MARK: - Row drag / drop modifiers
 
-/// Attaches whole-row free drag (macOS press-drag / iOS long-press drag) + drop target.
+/// Where the drag *source* lives. On macOS the whole-row source fights trackpad
+/// scroll (AppKit installs a drag on the NSTableView cell → rubber-band jumps a
+/// few times when scroll and drag race). Grip-only keeps vertical scroll clean.
+enum SessionRowDragSourcePlacement {
+    /// Entire row is the drag source (iPad free-drag).
+    case wholeRow
+    /// Only the trailing grip is the drag source (macOS).
+    case grip
+}
+
+/// Drag preview shared by whole-row and grip sources.
+@ViewBuilder
+func sessionRowDragPreview(name: String) -> some View {
+    HStack(spacing: 8) {
+        Image(systemName: "line.3.horizontal")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.secondary)
+        Text(name)
+            .font(.subheadline.weight(.semibold))
+            .lineLimit(1)
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 10)
+    .background(
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(.regularMaterial)
+            .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+    )
+    .frame(width: 220, alignment: .leading)
+}
+
+/// Begins a section reorder drag and returns the item provider payload.
+@MainActor
+func beginSessionRowDrag(
+    state: SessionSectionReorderState,
+    sectionKey: String,
+    sessionId: String,
+    sectionIds: [String]
+) -> NSItemProvider {
+    state.begin(sectionKey: sectionKey, id: sessionId, ids: sectionIds)
+    #if os(iOS)
+    #if canImport(UIKit)
+    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    #endif
+    #endif
+    return NSItemProvider(object: sessionId as NSString)
+}
+
+/// Config for a drag *source* (whole-row or grip). Drop stays on the row separately.
+struct SessionRowDragSourceConfig {
+    let sessionId: String
+    let sessionName: String
+    let sectionKey: String
+    let sectionIds: [String]
+    var state: SessionSectionReorderState
+}
+
+/// Attaches free-drag source + drop target to a list row (iPad whole-row path).
 /// Live reorders via [SessionSectionReorderState]; persists once on drop.
 struct SessionRowDragReorderModifier: ViewModifier {
     let enabled: Bool
@@ -179,36 +236,59 @@ struct SessionRowDragReorderModifier: ViewModifier {
     let sectionIds: [String]
     var state: SessionSectionReorderState
     var onCommit: ([String]) -> Void
+    /// macOS uses `.grip` + [SessionRowDropTargetModifier]; iPad keeps `.wholeRow`.
+    var sourcePlacement: SessionRowDragSourcePlacement = .wholeRow
+
+    func body(content: Content) -> some View {
+        if !enabled {
+            content
+        } else if sourcePlacement == .wholeRow {
+            content
+                .onDrag {
+                    beginSessionRowDrag(
+                        state: state,
+                        sectionKey: sectionKey,
+                        sessionId: sessionId,
+                        sectionIds: sectionIds
+                    )
+                } preview: {
+                    sessionRowDragPreview(name: sessionName)
+                }
+                .modifier(SessionRowDropTargetModifier(
+                    enabled: true,
+                    sessionId: sessionId,
+                    sectionKey: sectionKey,
+                    sectionIds: sectionIds,
+                    state: state,
+                    onCommit: onCommit
+                ))
+        } else {
+            // Grip is the source (applied inside SessionRow); row is drop-only.
+            content
+                .modifier(SessionRowDropTargetModifier(
+                    enabled: true,
+                    sessionId: sessionId,
+                    sectionKey: sectionKey,
+                    sectionIds: sectionIds,
+                    state: state,
+                    onCommit: onCommit
+                ))
+        }
+    }
+}
+
+/// Drop target only — used for macOS rows when the drag source is the grip.
+struct SessionRowDropTargetModifier: ViewModifier {
+    let enabled: Bool
+    let sessionId: String
+    let sectionKey: String
+    let sectionIds: [String]
+    var state: SessionSectionReorderState
+    var onCommit: ([String]) -> Void
 
     func body(content: Content) -> some View {
         if enabled {
             content
-                .onDrag {
-                    state.begin(sectionKey: sectionKey, id: sessionId, ids: sectionIds)
-                    #if os(iOS)
-                    #if canImport(UIKit)
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    #endif
-                    #endif
-                    return NSItemProvider(object: sessionId as NSString)
-                } preview: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "line.3.horizontal")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                        Text(sessionName)
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(.regularMaterial)
-                            .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-                    )
-                    .frame(width: 220, alignment: .leading)
-                }
                 .onDrop(
                     of: [UTType.text, UTType.plainText],
                     delegate: SessionReorderDropDelegate(
@@ -219,6 +299,29 @@ struct SessionRowDragReorderModifier: ViewModifier {
                         onCommit: onCommit
                     )
                 )
+        } else {
+            content
+        }
+    }
+}
+
+/// Drag source for the macOS grip handle (does not wrap the scrollable row).
+struct SessionRowDragSourceModifier: ViewModifier {
+    let config: SessionRowDragSourceConfig?
+
+    func body(content: Content) -> some View {
+        if let config {
+            content
+                .onDrag {
+                    beginSessionRowDrag(
+                        state: config.state,
+                        sectionKey: config.sectionKey,
+                        sessionId: config.sessionId,
+                        sectionIds: config.sectionIds
+                    )
+                } preview: {
+                    sessionRowDragPreview(name: config.sessionName)
+                }
         } else {
             content
         }

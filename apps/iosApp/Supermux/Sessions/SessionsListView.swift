@@ -7,9 +7,10 @@ import Shared
 /// Per-row reads (preview/agent state) and actions (settle/rename/mute) route to the session's OWNING
 /// `BrokerSession` via `Fleet`. Single-host is the unchanged path: no chips, no badges.
 ///
-/// Interaction: whole-row free drag reorder (Android / desktop / web parity) via onDrag + drop
-/// with a live working order — not List.onMove/edit mode. macOS: press+drag; iOS: long-press
-/// drag. Settled / PA / offline rows stay fixed.
+/// Interaction: free drag reorder (Android / desktop / web parity) via onDrag + drop with a
+/// live working order — not List.onMove/edit mode. macOS: drag from the trailing grip only
+/// (whole-row onDrag races trackpad rubber-band and jumps the AppKit List); iPad: whole-row
+/// press+drag; iPhone: edit-mode grabbers. Settled / PA / offline rows stay fixed.
 struct SessionsListView: View {
     let fleet: Fleet
     @Binding var selected: String?
@@ -118,6 +119,14 @@ struct SessionsListView: View {
         .accessibilityIdentifier(TestIds.sessionList)
         #if os(macOS)
         .contentMargins(.horizontal, 10, for: .scrollContent)
+        // Bounce only when content overflows. Always-on rubber-band on a short list, plus
+        // live @Observable remeasures mid-bounce, is what still read as "jumps a few times"
+        // after the archive pull-to-reveal path was removed.
+        .scrollBounceBehavior(.basedOnSize)
+        // Kill *implicit* list animations (hover wash, selection fill) from thrashing
+        // NSTableView geometry during a trackpad gesture. Explicit withAnimation (settled
+        // expand, drag spring) still applies.
+        .transaction { $0.animation = nil }
         #else
         // iPhone rows run edge-to-edge and carry their own 16pt leading inset (see
         // `smSessionListRowChrome`), so the scroll content must NOT be inset again.
@@ -571,7 +580,8 @@ struct SessionsListView: View {
         _ s: SessionInfo,
         host: HostView?,
         projectTag: String? = nil,
-        reorderable: Bool = false
+        reorderable: Bool = false,
+        dragSource: SessionRowDragSourceConfig? = nil
     ) -> some View {
         // Live owner for preview/agent state; action broker falls back to active host for
         // archived Settled rows (no live owner).
@@ -601,7 +611,8 @@ struct SessionsListView: View {
             unread: unread,
             showsDragHint: reorderable,
             isDragging: reorderState.draggingId == s.id,
-            phone: phoneList
+            phone: phoneList,
+            dragSource: dragSource
         )
         .contextMenu {
             #if os(macOS)
@@ -640,7 +651,7 @@ struct SessionsListView: View {
     }
 
     /// Selection without a full-row Button (that blocked drag). Free drag uses onDrag +
-    /// DropDelegate for Android/desktop/web-style whole-row reorder within a section.
+    /// DropDelegate for Android/desktop/web-style reorder within a section.
     @ViewBuilder private func selectableRow(
         _ s: SessionInfo,
         host: HostView?,
@@ -652,7 +663,28 @@ struct SessionsListView: View {
         isLast: Bool = false
     ) -> some View {
         let ids = sectionIds.isEmpty ? [s.id] : sectionIds
-        row(s, host: host, projectTag: projectTag, reorderable: reorderable)
+        // Never on the phone. `.onDrag` can't win a long-press against `.contextMenu`
+        // there, and leaving it attached hijacks the edit-mode grabber: the row lifts
+        // into the free-drag ghost (opacity 0.35), no drop delegate ever fires, and it
+        // stays stuck faded. Reordering on iPhone is `.onMove` only.
+        let freeDrag = reorderable && !sectionKey.isEmpty && !phoneList
+        #if os(macOS)
+        // Drag source lives on the grip (see SessionRow); whole-row onDrag races scroll.
+        let sourcePlacement = SessionRowDragSourcePlacement.grip
+        let dragSource: SessionRowDragSourceConfig? = freeDrag
+            ? SessionRowDragSourceConfig(
+                sessionId: s.id,
+                sessionName: s.name,
+                sectionKey: sectionKey,
+                sectionIds: ids,
+                state: reorderState
+            )
+            : nil
+        #else
+        let sourcePlacement = SessionRowDragSourcePlacement.wholeRow
+        let dragSource: SessionRowDragSourceConfig? = nil
+        #endif
+        row(s, host: host, projectTag: projectTag, reorderable: reorderable, dragSource: dragSource)
             .contentShape(Rectangle())
             .opacity(reorderState.draggingId == s.id ? 0.35 : 1)
             .simultaneousGesture(TapGesture().onEnded {
@@ -666,17 +698,14 @@ struct SessionsListView: View {
                 }
             })
             .modifier(SessionRowDragReorderModifier(
-                // Never on the phone. `.onDrag` can't win a long-press against `.contextMenu`
-                // there, and leaving it attached hijacks the edit-mode grabber: the row lifts
-                // into the free-drag ghost (opacity 0.35), no drop delegate ever fires, and it
-                // stays stuck faded. Reordering on iPhone is `.onMove` only.
-                enabled: reorderable && !sectionKey.isEmpty && !phoneList,
+                enabled: freeDrag,
                 sessionId: s.id,
                 sessionName: s.name,
                 sectionKey: sectionKey,
                 sectionIds: ids,
                 state: reorderState,
-                onCommit: commitReorder
+                onCommit: commitReorder,
+                sourcePlacement: sourcePlacement
             ))
             .tag(s.id)
             // Grabbers appear only on rows the section can actually reorder — PA, settled and
@@ -808,6 +837,8 @@ struct SessionRow: View {
     var isDragging: Bool = false
     /// iPhone/compact: the native inset-list row (no card, separators, Mail/Messages density).
     var phone: Bool = false
+    /// macOS: drag source config for the trailing grip (nil = not a drag source).
+    var dragSource: SessionRowDragSourceConfig? = nil
 
     #if os(macOS)
     @State private var hovered = false
@@ -935,19 +966,26 @@ struct SessionRow: View {
             }
             #if os(macOS)
             if showsDragHint {
+                // Grip is the ONLY drag source on macOS — whole-row onDrag made the AppKit
+                // List fight trackpad rubber-banding (scroll vs drag → a few visible jumps).
                 Image(systemName: "line.3.horizontal")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.tertiary.opacity(hovered || selected ? 0.9 : 0.35))
-                    .frame(width: 12)
-                    .accessibilityHidden(true)
+                    .frame(width: 16, height: 28)
+                    .contentShape(Rectangle())
+                    .modifier(SessionRowDragSourceModifier(config: dragSource))
+                    .help("Drag to reorder")
+                    .accessibilityLabel("Reorder")
             }
             #endif
         }
         .smSessionRowSurface(selected: selected, accented: false, hovered: isHovered && !isDragging)
         .scaleEffect(isDragging ? 0.98 : 1)
-        .animation(.easeOut(duration: 0.12), value: isDragging)
         #if os(macOS)
+        // No implicit hover/drag animations here: they remeasure NSTableView cells mid-gesture.
         .onHover { hovered = $0 }
+        #else
+        .animation(.easeOut(duration: 0.12), value: isDragging)
         #endif
     }
 
@@ -1046,8 +1084,9 @@ private extension View {
                     shape.strokeBorder(Theme.teal.opacity(0.18), lineWidth: 1)
                 }
             }
+            // Selection wash only — hover is snap-updated on macOS so it never feeds
+            // layout animations into an AppKit List mid-scroll.
             .animation(.easeOut(duration: 0.12), value: selected)
-            .animation(.easeOut(duration: 0.1), value: hovered)
     }
 
     /// List row chrome. Sidebar: clear backgrounds, hidden separators, tight vertical rhythm —
