@@ -396,9 +396,10 @@ struct ChatPane: View {
         }
         let ids = composer.pending.compactMap { $0.uploadedFileId }
         let text = composer.draft
-        // Collapse the composer without the expand/collapse animation. That 0.28s height
-        // tween raced the transcript's post-send pin (optimistic row + Sending… trailer) and
-        // read as a jump on macOS; the next keystroke still animates expansion normally.
+        // Collapse the composer without the expand/collapse animation. That 0.28s height tween
+        // animates the transcript's bottom inset at the same moment the optimistic row and the
+        // Sending… trailer appear, and the two read as a jump on macOS. Send should land flat;
+        // the next keystroke still animates expansion normally.
         var collapse = Transaction()
         collapse.disablesAnimations = true
         withTransaction(collapse) {
@@ -440,55 +441,52 @@ private extension View {
 }
 
 #if os(macOS)
-func macTranscriptFollowingState(
-    current: Bool,
-    userScrollActive: Bool,
-    distanceFromBottom: CGFloat
-) -> Bool {
-    guard userScrollActive else { return current }
+/// Places a control floating over the transcript's bottom edge, clear of the composer dock.
+///
+/// The dock is a `safeAreaInset` on the transcript (see `ChatPane.body`), so the scroll view's
+/// frame runs *underneath* it — a plain bottom-aligned overlay would be hidden behind the
+/// composer. Shared with `MacTranscriptScrollTests` so the placement rule is measured, not
+/// assumed.
+extension View {
+    func macTranscriptFloatingControl() -> some View {
+        safeAreaPadding(.bottom, 10)
+    }
+}
+
+/// Follow-mode hysteresis: engage inside 48 pt of the live edge, release past 96 pt, keep the
+/// current state in between so one frame of layout thrash can't flip it.
+func macTranscriptFollowingState(current: Bool, distanceFromBottom: CGFloat) -> Bool {
     if distanceFromBottom <= 48 { return true }
     if distanceFromBottom > 96 { return false }
     return current
 }
 
-/// Owns stick-to-bottom for one macOS transcript.
+/// Stick-to-bottom for one macOS transcript — **one mechanism, one piece of state**.
 ///
-/// Live chat updates (send, tools, working trailer, composer height) change content size often.
-/// Three things used to produce visible jumps:
-/// 1. Pinning only on `messageCount` — tool activity and trailer toggles resized the transcript
-///    without re-asserting the bottom edge.
-/// 2. Unconditional `scrollTo(.bottom)` on every count change — even while the user was reading
-///    history, and even mid-layout when LazyVStack estimates were still settling.
-/// 3. Missing `sizeChanges` scroll anchor — content/inset growth (new rows, composer collapse)
-///    did not keep a bottom-following viewport glued to the edge.
+/// `defaultScrollAnchor(_:for: .sizeChanges)` *is* the stick-to-bottom primitive. While following
+/// we anchor the bottom, so every content growth — a new block, a tool row filling in, the
+/// composer resizing, lazy rows realizing their real height — keeps the live edge glued without
+/// anyone issuing a scroll. When the user scrolls up we anchor the top instead, so new content
+/// grows below the viewport and the place they're reading stays put. `followingBottom`, derived
+/// from scroll geometry with hysteresis, is the only state; `jumpButton` is the way back.
 ///
-/// Blank-on-open is a separate problem: chronological `LazyVStack` estimates unrealized rows near
-/// zero height, so a pure bottom pin can park in an empty region until a wheel event forces
-/// measurement. Semantic `ScrollPosition` alone does **not** realize that gap on macOS (measured
-/// 2026-07-29). The caller keeps a small non-lazy **eager tail** of newest blocks so the bottom
-/// edge has real height; this scroller only keeps that edge stable while following.
+/// This replaced five overlapping mechanisms (scroll-phase tracking, a timed 8×50 ms re-pin loop,
+/// a `pinGeneration` hash re-asserting the bottom on every timeline change, and both anchors
+/// fighting those imperative pins). Each had been added to patch a jump caused by the previous
+/// one. **If a jump reappears, fix this mechanism — do not add a second one.**
 ///
-/// `ScrollPosition` + `.sizeChanges` keep the bottom stable while following. Scroll geometry only
-/// changes follow mode during a real user scroll phase: a tall reply can grow the content by
-/// thousands of points during layout, and that size change must not look like a wheel-up.
-/// `pinGeneration` re-asserts only while following, and only for real timeline changes (messages,
-/// tools, trailers) — never with animation.
+/// Blank-on-open is a *layout* problem, not a scroll problem: a chronological `LazyVStack`
+/// estimates unrealized rows near zero height, so any bottom placement can park in an empty
+/// region (measured 2026-07-29 — `ScrollPosition` re-pins do not realize that gap). The caller
+/// keeps a small non-lazy **eager tail** of newest blocks so the bottom edge has real height.
 struct MacTranscriptScrollView<Content: View>: View {
-    /// Bumps when the timeline or bottom trailers change in a way that should keep a following
-    /// viewport pinned. Built by the caller from blocks / activity / working state — not raw
-    /// message count alone (tools arrive without a new message).
-    let pinGeneration: Int
     let content: Content
     @State private var position = ScrollPosition(idType: String.self, edge: .bottom)
-    /// True while the user is at/near the bottom. Cleared by scrolling up; restored by scrolling
-    /// back down or by opening the chat (`onAppear`).
+    /// True while the viewport sits at/near the live edge. Cleared by scrolling up; restored by
+    /// scrolling back down, by the jump button, or by opening the chat (`onAppear`).
     @State private var followingBottom = true
-    /// Geometry changes only express user intent while a wheel/trackpad gesture is active.
-    /// Programmatic pins and content layout never set this flag.
-    @State private var userScrollActive = false
 
-    init(pinGeneration: Int, @ViewBuilder content: () -> Content) {
-        self.pinGeneration = pinGeneration
+    init(@ViewBuilder content: () -> Content) {
         self.content = content()
     }
 
@@ -499,55 +497,53 @@ struct MacTranscriptScrollView<Content: View>: View {
         .scrollPosition($position, anchor: .bottom)
         // Alignment: short transcripts sit on the bottom edge of the viewport.
         .defaultScrollAnchor(.bottom, for: .alignment)
-        // Size-change stickiness ONLY while following. Applied unconditionally it would re-pin
-        // on every tool/message growth even after the user scrolled up to read history — that
-        // is the "always stuck to bottom" trap. When not following, content grows below the
-        // viewport and the place you're reading stays put.
+        // The whole stick-to-bottom mechanism. See the type doc before touching it.
         .defaultScrollAnchor(followingBottom ? .bottom : .top, for: .sizeChanges)
-        .onScrollPhaseChange { _, phase in
-            switch phase {
-            case .tracking, .interacting, .decelerating:
-                userScrollActive = true
-            case .idle, .animating:
-                userScrollActive = false
-            }
-        }
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             // Distance from the visible bottom to the content bottom. ~0 when pinned; grows as
             // the user scrolls up into history.
             let visibleBottom = geo.contentOffset.y + geo.containerSize.height
             return geo.contentSize.height - visibleBottom + geo.contentInsets.bottom
         } action: { _, distanceFromBottom in
-            // Layout also changes this distance. Only a user-driven scroll phase is allowed to
-            // change follow mode; otherwise a tall appended reply can unstick itself before the
-            // pin-generation handler gets to keep its bottom edge visible.
-            // Hysteresis avoids toggling follow at the threshold during a wheel/trackpad gesture.
-            followingBottom = macTranscriptFollowingState(
+            let next = macTranscriptFollowingState(
                 current: followingBottom,
-                userScrollActive: userScrollActive,
                 distanceFromBottom: distanceFromBottom
             )
+            if next != followingBottom { followingBottom = next }
         }
+        // One un-animated assertion per session open; the anchors hold it from there.
         .onAppear {
             followingBottom = true
-            userScrollActive = false
             position.scrollTo(edge: .bottom)
         }
-        // Re-pin across a few frames while the eager tail + lazy history settle. Geometry changes
-        // cannot alter follow mode here because no user scroll phase is active.
-        .task {
-            for _ in 0..<8 {
-                try? await Task.sleep(nanoseconds: 50_000_000)
-                position.scrollTo(edge: .bottom)
-            }
-        }
-        // Un-animated on purpose — a 0.2s animated pin re-lays out every frame and feels like a
-        // jump on every tool row. Only re-assert while the user is following the live edge.
-        .onChange(of: pinGeneration) { _, _ in
-            guard followingBottom else { return }
-            position.scrollTo(edge: .bottom)
-        }
+        .overlay(alignment: .bottom) { jumpButton }
         .softScrollEdges()
+    }
+
+    /// Web parity (`ConversationScrollButton`): the manual way back to the live edge, so no
+    /// follow heuristic is ever load-bearing. Always mounted and faded — inserting a view from
+    /// inside the scroll-geometry callback is a layout change we don't need.
+    private var jumpButton: some View {
+        Button {
+            followingBottom = true
+            withAnimation(.easeOut(duration: 0.2)) { position.scrollTo(edge: .bottom) }
+        } label: {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 30, height: 30)
+                .background(.regularMaterial, in: Circle())
+                .overlay(Circle().strokeBorder(Theme.hairline, lineWidth: 1))
+                .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Scroll to bottom")
+        // Local id, not `TestIds`: that vocabulary is the parity-gated journey set shared with
+        // web/Android, and this is a macOS-only affordance.
+        .accessibilityIdentifier("chat-jump-to-bottom")
+        .macTranscriptFloatingControl()
+        .opacity(followingBottom ? 0 : 1)
+        .allowsHitTesting(!followingBottom)
+        .animation(.easeOut(duration: 0.15), value: followingBottom)
     }
 }
 #endif
@@ -591,24 +587,22 @@ struct SessionTranscript: View, Equatable {
         return chat.blocks.filter { if case .message = $0 { return true } else { return false } }
     }
 
-    /// Token that changes when a *new* bottom-edge item appears (block append, trailer toggle).
-    /// In-place height growth inside an existing block (tool_result filling a running row) is
-    /// handled by `defaultScrollAnchor(.bottom, for: .sizeChanges)` — do not bump this on every
-    /// activity event or each tool status flip re-runs `scrollTo` and feels like a jump.
-    private var macPinGeneration: Int {
-        var h = blocks.count &* 73856093
-        h &+= (blocks.last?.id.hashValue ?? 0)
-        if working { h &+= 1 }
-        if sending { h &+= 2 }
-        if waiting { h &+= 4 }
-        h &+= visibleBgTasks.count &* 83492791
-        return h
-    }
-
     /// Newest blocks kept non-lazy on macOS so the bottom edge has real height on first layout.
     /// Matches the pure-lazy path's measured ~7 realized rows; larger (24) repaid too much
     /// markdown cost. Required for blank-on-open — ScrollPosition re-pins alone are insufficient.
     private static let macEagerTailCount = 8
+
+    /// Where the eager tail starts, **quantized** so the boundary holds still while a chat is live.
+    ///
+    /// A boundary of `count - 8` slides on every append, reparenting one row LazyVStack→VStack per
+    /// new block; that re-measure is a content-size change the scroller then has to absorb. Rounding
+    /// down to a multiple of `macEagerTailCount` moves the boundary once per 8 blocks instead of
+    /// every block, keeps the tail bounded (8…15 rows — never the unbounded growth a frozen
+    /// per-session boundary would give a long-running chat), and still guarantees ≥8 realized rows
+    /// at the bottom on open.
+    static func macEagerStart(blockCount: Int) -> Int {
+        max(0, (blockCount / macEagerTailCount) * macEagerTailCount - macEagerTailCount)
+    }
 
     var body: some View {
         // Bound once: `blocks` is read by both the empty-check and the `ForEach`, and in low chat
@@ -658,22 +652,23 @@ struct SessionTranscript: View, Equatable {
     ///   rows estimate ~0 height, so the bottom pin parks in an empty region. An inverted
     ///   LazyVStack (newest-first + `scaleEffect`) was tried; it risks NSTextView hit-testing
     ///   bugs in the markdown twin and was reverted. Eager tail is the reliable fix.
-    /// - Sliding the eager window reparents one row Lazy↔VStack per new block. That hop is
-    ///   acceptable when stickiness is un-animated and follow-gated (`MacTranscriptScrollView`);
-    ///   re-removing the tail re-broke blank-on-open for long sessions (e.g. testing-strategy).
+    /// - The eager window is quantized (`macEagerStart`) so the Lazy↔VStack boundary moves once per
+    ///   8 blocks instead of on every append — the reparent-and-remeasure hop was content-size churn
+    ///   the scroller had to keep absorbing. Removing the tail entirely re-broke blank-on-open for
+    ///   long sessions (e.g. testing-strategy), so it stays.
     /// - iOS must keep `List`: this code moved FROM `ScrollView`+`LazyVStack` TO `List` precisely
     ///   because LazyVStack blanked on the **keyboard-avoidance relayout** (blank-on-keyboard,
     ///   blank-on-open). macOS has no keyboard avoidance, so it doesn't inherit that bug — but iOS
     ///   still does. Do not "unify" these without re-testing the iOS keyboard case.
     @ViewBuilder private func scroller(blocks: [ChatBlock]) -> some View {
         #if os(macOS)
-        MacTranscriptScrollView(pinGeneration: macPinGeneration) {
+        MacTranscriptScrollView {
             if blocks.isEmpty {
                 starterPrompts
                     .frame(maxWidth: .infinity)
                     .smContentWidthCap()
             } else {
-                let eagerStart = max(0, blocks.count - Self.macEagerTailCount)
+                let eagerStart = Self.macEagerStart(blockCount: blocks.count)
                 // Older history: lazy (only measured when scrolled into view).
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(blocks.prefix(eagerStart)) { block in
