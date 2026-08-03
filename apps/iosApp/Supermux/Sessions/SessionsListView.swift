@@ -826,7 +826,8 @@ struct SessionRow: View {
     var muted: Bool = false
     /// The owning host, when ≥2 hosts are paired — renders the per-row badge (nil = single-host).
     var host: HostView? = nil
-    /// Flat-mode project leaf tag (web projectLabel).
+    /// Flat-mode project leaf tag (web projectLabel). macOS: quiet third-line label;
+    /// iPad sidebar: title-row capsule; iPhone: third-line metadata.
     var projectTag: String? = nil
     var selected: Bool = false
     /// Server-authoritative unread (last message newer than last_read_at); bold title when true.
@@ -941,6 +942,9 @@ struct SessionRow: View {
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(.tertiary)
                     }
+                    #if !os(macOS)
+                    // iPad sidebar: compact capsule next to the title (title-row real estate is
+                    // scarce there). macOS uses a quiet third-line label instead — see below.
                     if let projectTag {
                         Text(projectTag)
                             .font(.system(size: 10, weight: .medium, design: .monospaced))
@@ -950,6 +954,7 @@ struct SessionRow: View {
                             .padding(.vertical, 1)
                             .background(Color.primary.opacity(0.05), in: Capsule())
                     }
+                    #endif
                     Spacer(minLength: 4)
                     if let host { HostBadge(host: host) }
                     if !timeLabel.isEmpty {
@@ -963,6 +968,16 @@ struct SessionRow: View {
                     .font(previewFont)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                #if os(macOS)
+                // Flat multi-project list: project leaf as a small third-line label (not a chip).
+                // Mirrors the phone metadata line — quieter than a title-row capsule.
+                if let projectTag {
+                    Text(projectTag)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+                #endif
             }
             #if os(macOS)
             if showsDragHint {
