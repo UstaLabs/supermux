@@ -55,10 +55,21 @@ struct IPadWorkspace<NewSessionContent: View>: View {
     /// commit a cheap sidebar-only frame first, then build the detail in the next frame.
     @State private var detailSessionId: String?
 
-    private var session: SessionInfo? { fleet.sessions.first { $0.id == detailSessionId } }
+    private var session: SessionInfo? {
+        guard let id = detailSessionId else { return nil }
+        // Live only — archived settled opens are handled as `archivedDetail` below.
+        return fleet.sessions.first { $0.id == id }
+    }
+    /// Settled-from-archive selection (in the sidebar Settled section, not in the live list).
+    private var archivedDetail: ArchivedDto? {
+        guard let id = detailSessionId else { return nil }
+        return fleet.archived(for: id)
+    }
     /// The detail session's OWNING host (or the active host when nothing is selected). Everything
     /// in the detail column drives this concrete broker; the sidebar renders the merged fleet.
-    private var broker: BrokerSession? { detailSessionId.flatMap { fleet.broker(for: $0) } ?? fleet.activeBroker }
+    private var broker: BrokerSession? {
+        detailSessionId.flatMap { fleet.broker(forSessionOrArchived: $0) } ?? fleet.activeBroker
+    }
 
     /// The id of the current session's newest running display stream, or nil. Drives the
     /// Display column's auto-open (PWA `SessionDisplayPanel` parity): nil→non-nil = a stream
@@ -283,6 +294,14 @@ struct IPadWorkspace<NewSessionContent: View>: View {
                             showRename: $showRename, renameText: $renameText,
                             showKillConfirm: $showKillConfirm,
                             onContinued: { id in selected = id })
+        } else if let a = archivedDetail, let b = broker {
+            // Settled rows can be archived-only; show the read-only transcript instead of
+            // blanking the detail with "Pick a session" (RootView compact shell parity).
+            // Nested stack: the workspace hides the outer nav bar, so the archived chrome
+            // (title + Resume) needs its own navigation context.
+            NavigationStack {
+                ArchivedChatView(broker: b, archived: a, onResumed: { fleet.refreshArchived() })
+            }
         } else {
             ContentUnavailableView("Pick a session", systemImage: "bubble.left.and.bubble.right")
         }
