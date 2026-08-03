@@ -440,6 +440,17 @@ private extension View {
 }
 
 #if os(macOS)
+func macTranscriptFollowingState(
+    current: Bool,
+    userScrollActive: Bool,
+    distanceFromBottom: CGFloat
+) -> Bool {
+    guard userScrollActive else { return current }
+    if distanceFromBottom <= 48 { return true }
+    if distanceFromBottom > 96 { return false }
+    return current
+}
+
 /// Owns stick-to-bottom for one macOS transcript.
 ///
 /// Live chat updates (send, tools, working trailer, composer height) change content size often.
@@ -457,13 +468,11 @@ private extension View {
 /// 2026-07-29). The caller keeps a small non-lazy **eager tail** of newest blocks so the bottom
 /// edge has real height; this scroller only keeps that edge stable while following.
 ///
-/// `ScrollPosition` + `.sizeChanges` keep the bottom stable while following; `onScrollGeometryChange`
-/// drops follow when the user wheels up. `pinGeneration` re-asserts only while following, and only
-/// for real timeline changes (messages, tools, trailers) — never with animation.
-///
-/// During the first ~400 ms after open, follow mode is **locked** so LazyVStack estimate thrash
-/// cannot trip the unstick hysteresis and cancel settle re-pins (that race re-introduced blank
-/// screens after the eager tail was briefly removed).
+/// `ScrollPosition` + `.sizeChanges` keep the bottom stable while following. Scroll geometry only
+/// changes follow mode during a real user scroll phase: a tall reply can grow the content by
+/// thousands of points during layout, and that size change must not look like a wheel-up.
+/// `pinGeneration` re-asserts only while following, and only for real timeline changes (messages,
+/// tools, trailers) — never with animation.
 struct MacTranscriptScrollView<Content: View>: View {
     /// Bumps when the timeline or bottom trailers change in a way that should keep a following
     /// viewport pinned. Built by the caller from blocks / activity / working state — not raw
@@ -474,8 +483,9 @@ struct MacTranscriptScrollView<Content: View>: View {
     /// True while the user is at/near the bottom. Cleared by scrolling up; restored by scrolling
     /// back down or by opening the chat (`onAppear`).
     @State private var followingBottom = true
-    /// While true, geometry thrash cannot clear `followingBottom` (open / session-switch settle).
-    @State private var followLocked = true
+    /// Geometry changes only express user intent while a wheel/trackpad gesture is active.
+    /// Programmatic pins and content layout never set this flag.
+    @State private var userScrollActive = false
 
     init(pinGeneration: Int, @ViewBuilder content: () -> Content) {
         self.pinGeneration = pinGeneration
@@ -494,34 +504,42 @@ struct MacTranscriptScrollView<Content: View>: View {
         // is the "always stuck to bottom" trap. When not following, content grows below the
         // viewport and the place you're reading stays put.
         .defaultScrollAnchor(followingBottom ? .bottom : .top, for: .sizeChanges)
+        .onScrollPhaseChange { _, phase in
+            switch phase {
+            case .tracking, .interacting, .decelerating:
+                userScrollActive = true
+            case .idle, .animating:
+                userScrollActive = false
+            }
+        }
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             // Distance from the visible bottom to the content bottom. ~0 when pinned; grows as
             // the user scrolls up into history.
             let visibleBottom = geo.contentOffset.y + geo.containerSize.height
             return geo.contentSize.height - visibleBottom + geo.contentInsets.bottom
         } action: { _, distanceFromBottom in
-            // Hysteresis: easier to engage follow than to drop it, so a single frame of layout
-            // thrash while content grows does not un-stick a following chat mid-stream.
-            // Open-settle lock: never unstick while LazyVStack estimates are still revising.
-            if distanceFromBottom <= 48 {
-                followingBottom = true
-            } else if !followLocked && distanceFromBottom > 96 {
-                followingBottom = false
-            }
+            // Layout also changes this distance. Only a user-driven scroll phase is allowed to
+            // change follow mode; otherwise a tall appended reply can unstick itself before the
+            // pin-generation handler gets to keep its bottom edge visible.
+            // Hysteresis avoids toggling follow at the threshold during a wheel/trackpad gesture.
+            followingBottom = macTranscriptFollowingState(
+                current: followingBottom,
+                userScrollActive: userScrollActive,
+                distanceFromBottom: distanceFromBottom
+            )
         }
         .onAppear {
             followingBottom = true
-            followLocked = true
+            userScrollActive = false
             position.scrollTo(edge: .bottom)
         }
-        // Re-pin across a few frames while the eager tail + lazy history settle. Follow is locked
-        // for the whole settle window so hysteresis cannot abort early and leave a blank viewport.
+        // Re-pin across a few frames while the eager tail + lazy history settle. Geometry changes
+        // cannot alter follow mode here because no user scroll phase is active.
         .task {
             for _ in 0..<8 {
                 try? await Task.sleep(nanoseconds: 50_000_000)
                 position.scrollTo(edge: .bottom)
             }
-            followLocked = false
         }
         // Un-animated on purpose — a 0.2s animated pin re-lays out every frame and feels like a
         // jump on every tool row. Only re-assert while the user is following the live edge.
