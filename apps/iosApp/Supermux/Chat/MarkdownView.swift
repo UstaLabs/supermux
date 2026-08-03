@@ -92,6 +92,9 @@ private enum MarkdownAttributed {
             if case .table = b { continue }   // tables render via MarkdownTableView
             if !first { out.append(NSAttributedString(string: "\n")) }
             let piece = NSMutableAttributedString(attributedString: attributed(for: b))
+            // Bare http(s) first so whole-URL ranges are tagged before file-path detection
+            // might otherwise claim a path-looking suffix inside the URL.
+            BareUrlLinks.decorate(piece)
             if linkify { FilePathLinks.decorate(piece) }  // only agent messages get tappable file links
             out.append(piece)
             first = false
@@ -187,6 +190,52 @@ private enum MarkdownAttributed {
     }
 }
 
+// MARK: - Bare http(s) URL links
+
+/// Android/desktop `appendLinkified` parity. The hand markdown parser only turns
+/// `[label](url)` into `.link` runs, and `SelectableText` disables `dataDetectorTypes`
+/// (so the system won't auto-detect bare URLs). Without this pass, plain
+/// `https://example.com` in agent prose renders as inert body text.
+enum BareUrlLinks {
+    /// Same character class as Android/desktop `urlRegex` — stop at whitespace / quotes /
+    /// angle brackets / closers that commonly trail a URL in prose.
+    private static let pattern = try! NSRegularExpression(
+        pattern: #"https?://[^\s<>"'\]\)]+"#
+    )
+    private static let trailChars = CharacterSet(charactersIn: ".,);:!?")
+
+    /// Tag every bare http(s) range that is not already a `.link` with teal + underline.
+    static func decorate(_ s: NSMutableAttributedString) {
+        let ns = s.string as NSString
+        let full = NSRange(location: 0, length: ns.length)
+        guard full.length > 0 else { return }
+        for m in pattern.matches(in: s.string, options: [], range: full) {
+            var range = m.range
+            guard range.length > 0, range.location + range.length <= ns.length else { continue }
+            // Hand trailing sentence punctuation back as plain text (Android parity).
+            while range.length > 0 {
+                let last = ns.character(at: range.location + range.length - 1)
+                guard let scalar = Unicode.Scalar(last), trailChars.contains(scalar) else { break }
+                range.length -= 1
+            }
+            guard range.length > 0 else { continue }
+            // Skip ranges that already carry a link (markdown `[label](url)` or a prior pass).
+            var alreadyLinked = false
+            s.enumerateAttribute(.link, in: range, options: []) { value, _, stop in
+                if value != nil { alreadyLinked = true; stop.pointee = true }
+            }
+            guard !alreadyLinked else { continue }
+            let raw = ns.substring(with: range)
+            guard let url = URL(string: raw) else { continue }
+            s.addAttributes([
+                .link: url,
+                .foregroundColor: PlatformColor(Theme.teal),
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+            ], range: range)
+        }
+    }
+}
+
 // MARK: - File-path links (tap a path → open it in the editor)
 
 /// Detects file paths in an agent message's rendered text (via the shared KMP
@@ -207,6 +256,12 @@ enum FilePathLinks {
         for m in FilePathScanner.matches(in: s.string) {
             let range = m.range
             guard range.length > 0, range.location + range.length <= length else { continue }
+            // Don't steal path-looking suffixes out of an already-tagged http(s) link.
+            var alreadyLinked = false
+            s.enumerateAttribute(.link, in: range, options: []) { value, _, stop in
+                if value != nil { alreadyLinked = true; stop.pointee = true }
+            }
+            guard !alreadyLinked else { continue }
             guard let url = url(for: m.ref) else { continue }
             s.addAttributes([
                 .link: url,
@@ -760,8 +815,14 @@ struct SelectableText: UIViewRepresentable {
         tv.textContainer.lineFragmentPadding = 0
         tv.textContainer.lineBreakMode = .byWordWrapping
         tv.adjustsFontForContentSizeCategory = true
-        tv.dataDetectorTypes = []                 // markdown + file-path links already carry .link
-        tv.tintColor = UIColor(Theme.teal)         // selection handles + link color
+        tv.dataDetectorTypes = []                 // markdown + bare-URL + file-path links already carry .link
+        tv.tintColor = UIColor(Theme.teal)         // selection handles
+        // Explicit link styling (Mac twin already had this). Without it, UITextView can
+        // fall back to system-default link attributes that fail to contrast on our surfaces.
+        tv.linkTextAttributes = [
+            .foregroundColor: PlatformColor(Theme.teal),
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+        ]
         tv.delegate = context.coordinator          // intercept supermux-file:// link taps
         tv.setContentHuggingPriority(.required, for: .vertical)
         tv.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
