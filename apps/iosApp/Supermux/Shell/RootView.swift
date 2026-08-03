@@ -47,7 +47,15 @@ struct RootView: View {
 
     private var selectedSession: SessionInfo? {
         guard let selected else { return nil }
+        // Live only — archived settled opens go through `selectedArchived` → ArchivedChatView.
         return fleet.sessions.first(where: { $0.id == selected })
+    }
+
+    /// Settled-from-archive row selection: present in the sidebar via `archivedForList` but
+    /// absent from the live session list (and thus from `selectedSession` / `broker(for:)`).
+    private var selectedArchived: ArchivedDto? {
+        guard let selected else { return nil }
+        return fleet.archived(for: selected)
     }
 
     var body: some View {
@@ -208,6 +216,13 @@ struct RootView: View {
         } detail: {
             if let s = selectedSession, let b = fleet.broker(for: s.id) {
                 ChatView(broker: b, session: s, onOpenSession: { selected = $0 })
+            } else if let a = selectedArchived, let b = fleet.broker(forSessionOrArchived: a.id) {
+                // Settled list rows fold in archived sessions; open the read-only transcript
+                // (web/Android parity) instead of the empty "Pick a session" placeholder.
+                ArchivedChatView(broker: b, archived: a, onResumed: {
+                    fleet.refreshArchived()
+                    // Keep selection: once resume lands as a live session, this branch flips to ChatView.
+                })
             } else {
                 ContentUnavailableView("Pick a session",
                                        systemImage: "bubble.left.and.bubble.right")

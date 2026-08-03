@@ -120,6 +120,21 @@ final class Fleet {
         return nil
     }
 
+    /// Live owner first; for settled-from-archive rows (not in any live list) fall back to the
+    /// active host — `archivedForList` is loaded from that host only, and Resume / Continue /
+    /// transcript fetch all target it. Mirrors Android `apiFor(sessionId) ?: activeApi()`.
+    func broker(forSessionOrArchived sessionId: String) -> BrokerSession? {
+        broker(for: sessionId) ?? activeBroker
+    }
+
+    /// Archived DTO for a Settled-from-archive selection (nil when the id is live or unknown).
+    /// Without this, tapping a Settled row sets `selected` to an id that is not in `sessions`,
+    /// and the detail pane falls through to "Pick a session".
+    func archived(for sessionId: String) -> ArchivedDto? {
+        guard sessions.first(where: { $0.id == sessionId }) == nil else { return nil }
+        return archivedForList.first(where: { $0.id == sessionId })
+    }
+
     /// Sessions after the host filter (spec §5) — the shared `filterSessions`, so the semantics
     /// match Android. Single-host / All → every session.
     var filteredSessions: [SessionInfo] {

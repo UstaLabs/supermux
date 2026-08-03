@@ -770,6 +770,9 @@ struct ArchivedView: View {
 struct ArchivedChatView: View {
     let broker: BrokerSession
     let archived: ArchivedDto
+    /// Called after Resume is fired (e.g. refresh settled list). Optional: the Archived list
+    /// push uses `dismiss()` alone; the Settled-selection detail keeps selection and refreshes.
+    var onResumed: (() -> Void)? = nil
     @State private var logs: [LogEntry] = []
     @State private var loading = true
     @Environment(\.dismiss) private var dismiss
@@ -800,7 +803,11 @@ struct ArchivedChatView: View {
         .navigationTitle(archived.name).smInlineNavigationTitle()
         .toolbar {
             ToolbarItem(placement: .smTopTrailing) {
-                Button("Resume") { broker.resume(archived.id); dismiss() }.tint(Theme.teal)
+                Button("Resume") {
+                    broker.resume(archived.id)
+                    onResumed?()
+                    dismiss()
+                }.tint(Theme.teal)
             }
         }
         .task { logs = await broker.archivedLogs(archived.id); loading = false }

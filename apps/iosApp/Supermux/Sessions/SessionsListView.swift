@@ -169,7 +169,9 @@ struct SessionsListView: View {
             get: { continueTarget.map { ContinueSheetItem(session: $0) } },
             set: { continueTarget = $0?.session }
         )) { item in
-            if let b = fleet.broker(for: item.session.id) {
+            // Settled-from-archive rows have no live owner; fall back to the active host
+            // (same host that supplied `archivedForList`).
+            if let b = fleet.broker(forSessionOrArchived: item.session.id) {
                 ContinueConversationSheet(
                     broker: b,
                     source: item.session,
@@ -571,24 +573,27 @@ struct SessionsListView: View {
         projectTag: String? = nil,
         reorderable: Bool = false
     ) -> some View {
-        let b = fleet.broker(for: s.id)
+        // Live owner for preview/agent state; action broker falls back to active host for
+        // archived Settled rows (no live owner).
+        let liveBroker = fleet.broker(for: s.id)
+        let actionBroker = fleet.broker(forSessionOrArchived: s.id)
         let muted = s.mute?.boolValue ?? false
-        let previewEntry = b?.messages[s.id]?.last
-        let working = b?.agentWorking[s.id] == true
+        let previewEntry = liveBroker?.messages[s.id]?.last
+        let working = liveBroker?.agentWorking[s.id] == true
         // Spinner wins while working; green rail only when idle + unread (native rail parity).
         let unread = sessionListShowsUnreadMark(
             active: selected == s.id,
             working: working,
             lastMessageTs: previewEntry?.ts,
-            lastReadAt: b?.lastRead[s.id]
+            lastReadAt: liveBroker?.lastRead[s.id]
         )
         SessionRow(
             session: s,
             preview: previewEntry?.text,
             previewTs: previewEntry?.ts,
-            phase: b?.agentPhase[s.id],
+            phase: liveBroker?.agentPhase[s.id],
             working: working,
-            bgOpen: b?.agentBgOpen[s.id] ?? 0,
+            bgOpen: liveBroker?.agentBgOpen[s.id] ?? 0,
             muted: muted,
             host: host,
             projectTag: projectTag,
@@ -608,7 +613,7 @@ struct SessionsListView: View {
             }
             #endif
             if (s.status ?? "") == "archived" || (s.userStatus ?? "") == "settled" {
-                Button { b?.resume(s.id); fleet.refreshArchived() } label: {
+                Button { actionBroker?.resume(s.id); fleet.refreshArchived() } label: {
                     Label("Resume", systemImage: "arrow.uturn.backward")
                 }
                 Button { continueTarget = s } label: {
@@ -622,7 +627,7 @@ struct SessionsListView: View {
                     Label("Discard", systemImage: "trash")
                 }
             } else {
-                Button { b?.toggleMute(s) } label: {
+                Button { liveBroker?.toggleMute(s) } label: {
                     Label(muted ? "Unmute" : "Mute", systemImage: muted ? "bell.slash" : "bell")
                 }
                 Button { renameText = s.name; renameTarget = s } label: { Label("Rename", systemImage: "pencil") }
