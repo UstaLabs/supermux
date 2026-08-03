@@ -262,7 +262,7 @@ fun ChatPanel(
                 items(timelineItems, key = { timelineItemKey(it) }) { item ->
                     TimelineItemRow(
                         item = item,
-                        loadBytes = { null }, // M4: attachment bytes fetch (chip-only for now)
+                        loadBytes = { id -> app.fileBytes(id) },
                         onOpenFile = onOpenFile,
                         highDetail = highDetail,
                     )

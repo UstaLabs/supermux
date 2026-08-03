@@ -8,9 +8,8 @@
 //    bundled icon set, so this uses the equivalent glyphs from compose.materialIconsExtended.
 //  - Links: Android's LinkAnnotation.Url leans on the Android intent launcher; desktop opens the
 //    system browser via java.awt.Desktop.browse (guarded by isDesktopSupported + runCatching).
-//  - Attachments: Android renders inline image/video previews via loadBytes + ExoPlayer/lightbox.
-//    For M1 this renders a compact name + kind-icon chip WITHOUT preview (TODO(M4)); the loadBytes
-//    param is retained in the signatures so M4 preview/upload wiring is purely additive.
+//  - Attachments: chip with kind glyph + name + download; tap fetches via loadBytes, Save-as dialog,
+//    then opens with the OS handler. Inline image/video preview is still Android-only for now.
 //  - Text selection: Android gained long-press copyable messages; desktop's equivalent is mouse
 //    selection via SelectionContainer, mirrored at the same wrap points.
 //  - collectAsStateWithLifecycle → n/a (these are stateless renderers; no lifecycle collection).
@@ -50,6 +49,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -106,11 +108,18 @@ import dev.supermux.ui.MdBlock
 import dev.supermux.ui.SpanStyleKind
 import dev.supermux.ui.parseInlineMarkdown
 import dev.supermux.ui.parseMarkdownBlocks
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.awt.Desktop
+import java.awt.FileDialog
+import java.awt.Frame
+import java.io.File
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 // ---------------------------------------------------------------------------
 // Data model
@@ -1167,10 +1176,9 @@ fun TimelineItemRow(
 // ---------------------------------------------------------------------------
 // Attachments
 // ---------------------------------------------------------------------------
-// TODO(M4): Android renders inline image previews (BitmapFactory + lightbox) and inline video
-// (media3 ExoPlayer) via loadBytes. For M1 desktop every attachment renders as a compact chip
-// (name + kind glyph) with NO preview and NO download action; the loadBytes param is kept on the
-// signatures so M4's upload/preview wiring is purely additive.
+// Desktop keeps a compact chip (name + kind glyph + download) for every attachment kind. Tap
+// fetches bytes via loadBytes, offers a Save dialog, writes the file, then opens it with the OS
+// handler. Inline image/video preview remains a future enhancement (Android has it already).
 
 /** Renders a message's attachments below its text, aligned to the sender side. */
 @Composable
@@ -1189,44 +1197,126 @@ fun AttachmentList(
 }
 
 @Composable
-private fun AttachmentItem(att: Attachment, @Suppress("UNUSED_PARAMETER") loadBytes: suspend (String) -> ByteArray?) {
+private fun AttachmentItem(att: Attachment, loadBytes: suspend (String) -> ByteArray?) {
     val mime = att.mime ?: ""
+    val isImage = att.kind == "photo" || att.kind == "image" || mime.startsWith("image/")
+    val isVideo = att.kind == "video" || att.kind == "video_note" || mime.startsWith("video/")
     val isAudio = att.kind == "voice" || att.kind == "audio" || mime.startsWith("audio/")
     val label = when {
         isAudio -> att.name ?: "voice message"
+        isVideo -> att.name ?: "video"
+        isImage -> att.name ?: "image"
         else -> att.name ?: att.file_id
     }
-    val icon = if (isAudio) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.InsertDriveFile
-    AttachmentChip(icon, label)
+    val icon = when {
+        isAudio -> Icons.AutoMirrored.Filled.VolumeUp
+        isVideo -> Icons.Filled.Movie
+        isImage -> Icons.Filled.Image
+        else -> Icons.AutoMirrored.Filled.InsertDriveFile
+    }
+    AttachmentChip(icon, label, att, loadBytes)
 }
 
-/** M1 chip: name + kind glyph, no preview/download (see TODO(M4) above). */
+/** Compact chip: kind glyph + name + download. Tap downloads and Save-as via AWT FileDialog. */
 @Composable
-private fun AttachmentChip(icon: ImageVector, label: String) {
+private fun AttachmentChip(
+    icon: ImageVector,
+    label: String,
+    att: Attachment,
+    loadBytes: suspend (String) -> ByteArray?,
+) {
     val cs = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(Radii.sm)
+    val scope = rememberCoroutineScope()
+    var busy by remember(att.file_id) { mutableStateOf(false) }
+    var failed by remember(att.file_id) { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .clip(shape)
             .background(cs.surfaceContainer)
             .border(1.dp, cs.outline, shape)
-            .padding(horizontal = Space.sm, vertical = Space.xs),
+            .clickable(enabled = !busy) {
+                busy = true
+                failed = false
+                scope.launch {
+                    val bytes = loadBytes(att.file_id)
+                    if (bytes == null) {
+                        busy = false
+                        failed = true
+                        return@launch
+                    }
+                    val saved = withContext(Dispatchers.IO) {
+                        saveAttachmentBytes(bytes, att.name ?: att.file_id)
+                    }
+                    busy = false
+                    failed = saved == null
+                    if (saved != null) openLocalFile(saved)
+                }
+            }
+            .padding(horizontal = Space.sm, vertical = Space.xs)
+            .testTag("attachment_chip"),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Space.xs),
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = cs.onSurfaceVariant,
-            modifier = Modifier.size(16.dp),
-        )
+        if (busy) {
+            CircularProgressIndicator(
+                Modifier.size(16.dp),
+                color = cs.onSurfaceVariant,
+                strokeWidth = 1.5.dp,
+            )
+        } else {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = cs.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+            )
+        }
         Text(
-            text = label,
-            color = cs.onSurface,
+            text = if (failed) "Download failed — tap to retry" else label,
+            color = if (failed) cs.error else cs.onSurface,
             fontSize = 13.sp,
             fontFamily = MonoFontFamily,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+        Icon(
+            imageVector = Icons.Filled.Download,
+            contentDescription = "Download",
+            tint = cs.onSurfaceVariant.copy(alpha = 0.6f),
+            modifier = Modifier.size(14.dp),
+        )
+    }
+}
+
+/** Save dialog (AWT FileDialog.SAVE). Returns the written file, or null if cancelled/failed.
+ *  Must run off the Compose frame path's hot path; FileDialog itself is modal on the AWT EDT
+ *  (Compose Desktop main == EDT on most hosts). */
+internal fun saveAttachmentBytes(bytes: ByteArray, name: String): File? {
+    val safeName = name.substringAfterLast('/').ifBlank { "file" }
+    val dialog = FileDialog(null as Frame?, "Save attachment", FileDialog.SAVE)
+    dialog.file = safeName
+    dialog.isVisible = true
+    val dir = dialog.directory ?: return null
+    val fileName = dialog.file ?: return null
+    return runCatching {
+        File(dir, fileName).also { it.writeBytes(bytes) }
+    }.getOrNull()
+}
+
+/** Open a local file with the OS default handler (viewer / player / folder). */
+internal fun openLocalFile(file: File) {
+    runCatching {
+        if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) {
+            Desktop.getDesktop().open(file)
+            return
+        }
+        val os = System.getProperty("os.name")?.lowercase(Locale.US).orEmpty()
+        val cmd = when {
+            os.contains("win") -> arrayOf("cmd", "/c", "start", "", file.absolutePath)
+            os.contains("mac") || os.contains("darwin") -> arrayOf("open", file.absolutePath)
+            else -> arrayOf("xdg-open", file.absolutePath)
+        }
+        ProcessBuilder(*cmd).inheritIO().start()
     }
 }

@@ -104,11 +104,24 @@ struct AttachmentView: View {
     /// same `broker.downloadFile` the file row uses) and then played with `AVKit.VideoPlayer`.
     /// The `AVPlayer` is held in `@State` so `videoView` re-renders don't recreate it (which would
     /// restart playback). Until downloaded, a tappable poster shows a play glyph / progress / retry.
+    /// Once playing, a share control lets the user save the clip (Files / Photos / AirDrop).
     @ViewBuilder private var videoView: some View {
         if let player {
-            VideoPlayer(player: player)
-                .frame(maxWidth: .infinity, minHeight: 200, maxHeight: 260)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            ZStack(alignment: .bottomTrailing) {
+                VideoPlayer(player: player)
+                    .frame(maxWidth: .infinity, minHeight: 200, maxHeight: 260)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                if let fileURL {
+                    ShareLink(item: fileURL) {
+                        Image(systemName: "square.and.arrow.up.circle.fill")
+                            .font(.title2)
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(.white, .black.opacity(0.45))
+                            .padding(10)
+                    }
+                    .accessibilityLabel("Download video")
+                }
+            }
         } else {
             Button {
                 if !downloading { startDownload(autoPreview: false) }
@@ -152,6 +165,15 @@ struct AttachmentView: View {
             }
             .buttonStyle(.plain)
             .quickLookPreview($previewURL)
+            // Quick Look's toolbar also shares; this context menu is the explicit save/share path
+            // without opening the preview first (especially useful on macOS).
+            .contextMenu {
+                if let data = imageData {
+                    ShareLink(item: tmpURL(data, name: imageFileName)) {
+                        Label("Save / Share", systemImage: "square.and.arrow.up")
+                    }
+                }
+            }
         } else {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.smSecondaryBackground).frame(height: 140).overlay(ProgressView())
@@ -164,39 +186,51 @@ struct AttachmentView: View {
     }
 
     private var fileRow: some View {
-        Button {
-            if downloading { return }
-            if fileURL != nil { previewURL = fileURL } else { startDownload() }
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: fileIcon).font(.title3).foregroundStyle(.secondary).frame(width: 26)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(att.name ?? "file").font(.caption.weight(.medium))
-                        .lineLimit(2).truncationMode(.middle)
-                    if failed {
-                        Text("Download failed — tap to retry").font(.caption2).foregroundStyle(.red)
-                    } else if let sz = att.size?.int64Value, sz > 0 {
-                        Text(fmtSize(sz)).font(.caption2).foregroundStyle(.secondary)
+        HStack(spacing: 0) {
+            Button {
+                if downloading { return }
+                if fileURL != nil { previewURL = fileURL } else { startDownload() }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: fileIcon).font(.title3).foregroundStyle(.secondary).frame(width: 26)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(att.name ?? "file").font(.caption.weight(.medium))
+                            .lineLimit(2).truncationMode(.middle)
+                        if failed {
+                            Text("Download failed — tap to retry").font(.caption2).foregroundStyle(.red)
+                        } else if let sz = att.size?.int64Value, sz > 0 {
+                            Text(fmtSize(sz)).font(.caption2).foregroundStyle(.secondary)
+                        }
                     }
-                }
-                Spacer(minLength: 4)
-                if downloading {
-                    HStack(spacing: 6) {
-                        ProgressView(value: progress).progressViewStyle(.linear).frame(width: 70)
-                        Text("\(Int(progress * 100))%").font(.caption2.monospaced())
-                            .foregroundStyle(.secondary).monospacedDigit()
+                    Spacer(minLength: 4)
+                    if downloading {
+                        HStack(spacing: 6) {
+                            ProgressView(value: progress).progressViewStyle(.linear).frame(width: 70)
+                            Text("\(Int(progress * 100))%").font(.caption2.monospaced())
+                                .foregroundStyle(.secondary).monospacedDigit()
+                        }
+                    } else if failed {
+                        Image(systemName: "arrow.clockwise.circle").foregroundStyle(.red)
+                    } else {
+                        Image(systemName: fileURL == nil ? "arrow.down.circle" : "eye.circle")
+                            .foregroundStyle(Theme.teal)
                     }
-                } else if failed {
-                    Image(systemName: "arrow.clockwise.circle").foregroundStyle(.red)
-                } else {
-                    Image(systemName: fileURL == nil ? "arrow.down.circle" : "eye.circle")
-                        .foregroundStyle(Theme.teal)
                 }
             }
-            .padding(10)
-            .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 10))
+            .buttonStyle(.plain)
+            // Explicit save/share (Files / AirDrop / …) once the bytes are on disk.
+            // Kept outside the preview Button so the two controls don't nest.
+            if let fileURL {
+                ShareLink(item: fileURL) {
+                    Image(systemName: "square.and.arrow.up.circle")
+                        .foregroundStyle(Theme.teal)
+                        .padding(.leading, 8)
+                }
+                .accessibilityLabel("Save or share file")
+            }
         }
-        .buttonStyle(.plain)
+        .padding(10)
+        .background(Color.smSecondaryBackground, in: RoundedRectangle(cornerRadius: 10))
         .quickLookPreview($previewURL)
     }
 

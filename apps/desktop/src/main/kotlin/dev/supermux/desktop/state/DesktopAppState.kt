@@ -1079,6 +1079,14 @@ class DesktopAppState(
     ): TranscribeResponse? =
         runApi("transcribeAudio") { apiDictate.transcribeAudio(sessionId, bytes, filename, mime) }
 
+    /** GET /files/<id> — raw attachment bytes for chat media download / open. Null on any failure. */
+    suspend fun fileBytes(fileId: String): ByteArray? =
+        runApi("fileBytes") {
+            // api.fileBytes already returns null on non-2xx; promote to a throw so runApi's T is
+            // non-null ByteArray (avoids a nested ByteArray?? return type).
+            api.fileBytes(fileId) ?: error("file not found")
+        }
+
     /**
      * Resumable/chunked upload from a [ChunkSource] (bounded RAM), reporting absolute progress
      * `(bytesAcked, total)`. Returns the finalized file_id, or null on any failure.

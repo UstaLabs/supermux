@@ -1195,9 +1195,11 @@ private fun AttachmentItem(att: Attachment, loadBytes: suspend (String) -> ByteA
     when {
         isImage -> {
             var bmp by remember(att.file_id) { mutableStateOf<ImageBitmap?>(null) }
+            var imageBytes by remember(att.file_id) { mutableStateOf<ByteArray?>(null) }
             var failed by remember(att.file_id) { mutableStateOf(false) }
             LaunchedEffect(att.file_id) {
                 val bytes = loadBytes(att.file_id)
+                imageBytes = bytes
                 val decoded = if (bytes != null) {
                     withContext(Dispatchers.Default) {
                         runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull()
@@ -1217,7 +1219,15 @@ private fun AttachmentItem(att: Attachment, loadBytes: suspend (String) -> ByteA
                         .clip(RoundedCornerShape(Radii.md))
                         .clickable { showLightbox = true },
                 )
-                if (showLightbox) ImageLightbox(b, onDismiss = { showLightbox = false })
+                if (showLightbox) {
+                    ImageLightbox(
+                        image = b,
+                        name = att.name ?: att.file_id,
+                        mime = att.mime,
+                        bytes = imageBytes,
+                        onDismiss = { showLightbox = false },
+                    )
+                }
             } else {
                 Box(
                     modifier = Modifier
@@ -1325,34 +1335,70 @@ private fun InlineVideo(att: Attachment, loadBytes: suspend (String) -> ByteArra
             DisposableEffect(exo) {
                 onDispose { exo.release() }
             }
-            AndroidView(
-                factory = { ctx ->
-                    PlayerView(ctx).apply {
-                        player = exo
-                        useController = true
-                        layoutParams = ViewGroup.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                        )
-                    }
-                },
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(220.dp)
-                    .clip(RoundedCornerShape(Radii.md))
-                    .testTag("attachment_video_player"),
-            )
+                    .clip(RoundedCornerShape(Radii.md)),
+            ) {
+                AndroidView(
+                    factory = { ctx ->
+                        PlayerView(ctx).apply {
+                            player = exo
+                            useController = true
+                            layoutParams = ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                            )
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("attachment_video_player"),
+                )
+                // Share/open the cached clip so the user can save it outside the app.
+                val scope = rememberCoroutineScope()
+                IconButton(
+                    onClick = {
+                        scope.launch {
+                            val bytes = withContext(Dispatchers.IO) {
+                                runCatching { f.readBytes() }.getOrNull()
+                            }
+                            if (bytes != null) openAttachment(context, att.name ?: "video", att.mime, bytes)
+                            else Toast.makeText(context, "Couldn't download video", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(Space.sm)
+                        .testTag("attachment_video_download"),
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_download),
+                        contentDescription = "Download video",
+                        tint = Color.White,
+                    )
+                }
+            }
         }
     }
 }
 
 /**
  * Fullscreen image lightbox (iOS Lightbox parity): black backdrop, fit-scaled image with
- * pinch-to-zoom + pan (clamped ≥1×), a close button. A Dialog with usePlatformDefaultWidth=false
- * is the idiomatic Android-native fullscreen overlay; predictive-back dismisses it for free.
+ * pinch-to-zoom + pan (clamped ≥1×), close + download (share/open) buttons. A Dialog with
+ * usePlatformDefaultWidth=false is the idiomatic Android-native fullscreen overlay;
+ * predictive-back dismisses it for free.
  */
 @Composable
-private fun ImageLightbox(image: ImageBitmap, onDismiss: () -> Unit) {
+private fun ImageLightbox(
+    image: ImageBitmap,
+    name: String,
+    mime: String?,
+    bytes: ByteArray?,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -1385,18 +1431,32 @@ private fun ImageLightbox(image: ImageBitmap, onDismiss: () -> Unit) {
                         translationY = offset.y
                     },
             )
-            IconButton(
-                onClick = onDismiss,
+            Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .statusBarsPadding()
                     .padding(Space.md),
+                horizontalArrangement = Arrangement.spacedBy(Space.xs),
             ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_x),
-                    contentDescription = "Close",
-                    tint = Color.White,
-                )
+                if (bytes != null) {
+                    IconButton(
+                        onClick = { openAttachment(context, name, mime, bytes) },
+                        modifier = Modifier.testTag("image_lightbox_download"),
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_download),
+                            contentDescription = "Download",
+                            tint = Color.White,
+                        )
+                    }
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_x),
+                        contentDescription = "Close",
+                        tint = Color.White,
+                    )
+                }
             }
         }
     }
