@@ -3,9 +3,39 @@ import Shared
 import CoreImage
 
 // Relative "last seen" + ISO parsing shared by the device/usage pages.
+
+/// `parseISODate` is hot: `relTime` renders the trailing timestamp of every visible session row,
+/// on every list body pass. An `ISO8601DateFormatter` wraps a CFDateFormatter and is expensive to
+/// build (measured at ~0.6 ms per call, so ~24 ms of blocked main thread for a 40-row sidebar —
+/// two dropped frames, landing in the middle of whatever scroll was in flight). The format never
+/// changes, so the two parsers are built once. Same reasoning — and the same shape — as
+/// `ChatActivity.tsMs`. Broker timestamps are `new Date().toISOString()`, so the fractional-seconds
+/// parser is the hit path and the plain one is the fallback.
+private let isoFractionalDateParser: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return f
+}()
+private let isoPlainDateParser = ISO8601DateFormatter()
+
+/// Parsing the SAME timestamp again is the common case, not the exception: a session's last
+/// message stays put while the sidebar re-renders on every frame from every other session, and
+/// only the *elapsed* part of `relTime` actually moves. So the parse is memoized (bounded, and
+/// thread-safe — `NSCache` needs no lock) while the arithmetic stays live.
+private let isoDateCache: NSCache<NSString, NSDate> = {
+    let c = NSCache<NSString, NSDate>()
+    c.countLimit = 512
+    return c
+}()
+
 func parseISODate(_ s: String) -> Date? {
-    let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return f.date(from: s) ?? ISO8601DateFormatter().date(from: s)
+    let key = s as NSString
+    if let hit = isoDateCache.object(forKey: key) { return hit as Date }
+    guard let d = isoFractionalDateParser.date(from: s) ?? isoPlainDateParser.date(from: s) else {
+        return nil
+    }
+    isoDateCache.setObject(d as NSDate, forKey: key)
+    return d
 }
 func relTime(_ ts: String?) -> String {
     guard let ts, let d = parseISODate(ts) else { return "never" }
