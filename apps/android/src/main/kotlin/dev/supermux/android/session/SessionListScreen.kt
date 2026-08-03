@@ -14,6 +14,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -504,6 +505,12 @@ fun SessionListScreen(
     onForgetHost: (recordId: String) -> Unit = {},
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
+    /**
+     * Optional scroll state. Phone list↔chat navigation disposes this screen while a chat is
+     * open; the phone host hoists [LazyListState] so scroll position is restored on back.
+     * Callers that keep the list composed (tablet sidebar) can omit this.
+     */
+    listState: LazyListState = rememberLazyListState(),
 ) {
     val cs = MaterialTheme.colorScheme
     // Chips + badges appear only with 2+ paired hosts — the common single-host case stays uncluttered.
@@ -566,7 +573,6 @@ fun SessionListScreen(
     var settledExpanded by remember { mutableStateOf(setOf<String>()) }
     var flatSettledExpanded by remember { mutableStateOf(false) }
 
-    val listState = rememberLazyListState()
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
             if (scrolling) openSwipeRowId = null

@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -28,6 +29,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
@@ -131,6 +133,11 @@ fun SessionKeepAlivePhoneHost(
     onHostFilter: (String?) -> Unit = {},
     onAddHost: () -> Unit = {},
 ) {
+    // Phone AnimatedContent disposes SessionListScreen while a chat is open. Keep scroll
+    // state here (survives that dispose + process death) so back returns to the same offset.
+    val sessionListState = rememberSaveable(saver = LazyListState.Saver) {
+        LazyListState(0, 0)
+    }
     SharedTransitionLayout {
         Box(Modifier.fillMaxSize()) {
             visited.forEach { sessionId ->
@@ -222,6 +229,7 @@ fun SessionKeepAlivePhoneHost(
                         onForgetHost = { id -> vm.forgetHost(id) },
                         sharedScope = this@SharedTransitionLayout,
                         animScope = this,
+                        listState = sessionListState,
                     )
                 }
             }
