@@ -12,6 +12,33 @@ enum AddHostResult {
     case error(String)
 }
 
+/// One render's worth of resolved fleet state (see `Fleet.index()`).
+///
+/// Built once per session-list body evaluation and threaded down to the rows, so a row answers
+/// "which broker owns me / when did I last speak / which host badge" with a dictionary hit
+/// instead of a fresh scan of every host's session array.
+@MainActor
+struct FleetIndex {
+    /// Every live session across every paired host, in store host order (`Fleet.sessions`).
+    let sessions: [SessionInfo]
+    /// sessionId → owning host recordId (per-row badges + per-session routing).
+    let ownerBySession: [String: String]
+    /// sessionId → newest message timestamp; the `lastTs` source for Settled ordering.
+    /// Archived rows are absent by construction and fall back to "" as before.
+    let lastTsBySession: [String: String]
+    fileprivate let brokerBySession: [String: BrokerSession]
+    fileprivate let fallbackBroker: BrokerSession?
+
+    /// The connection that owns this session (nil for archived-only rows).
+    func broker(_ sessionId: String) -> BrokerSession? { brokerBySession[sessionId] }
+
+    /// Live owner first; settled-from-archive rows (owned by no host) fall back to the active
+    /// host — mirrors `Fleet.broker(forSessionOrArchived:)`.
+    func brokerOrActive(_ sessionId: String) -> BrokerSession? {
+        brokerBySession[sessionId] ?? fallbackBroker
+    }
+}
+
 /// Multi-host coordinator (spec §5) — the iOS mirror of Android's `HostConnections` + the multi-host
 /// `AppViewModel`. Owns ONE `BrokerSession` (a `BrokerApi` + control WS + per-session state) per
 /// paired host from the shared `PairedHostStore`, and folds them into a merged, recordId-tagged
@@ -94,22 +121,35 @@ final class Fleet {
         return brokers[recordId]
     }
 
-    /// sessionId → newest message timestamp, for every LIVE session, built in ONE pass.
+    /// Everything one session-list render needs, resolved in a SINGLE walk of the fleet.
     ///
-    /// This is the `lastTs` source for `buildTaskSections` / `groupSessions` (Settled ordering).
-    /// Resolving it per session through `broker(for:)` re-scanned every host's session array on
-    /// each lookup — and always missed for archived rows, which no host owns — so the sidebar
-    /// paid a full fleet scan per lookup to produce an empty string. One pass, then dictionary
-    /// hits. Archived sessions are absent by construction and fall back to "" as before.
-    func lastMessageTsBySession() -> [String: String] {
-        var m: [String: String] = [:]
+    /// The list used to ask these questions per row: `broker(for:)` and
+    /// `broker(forSessionOrArchived:)` each re-scanned every host's session array, and every
+    /// comparison bridges a Kotlin `String` into Swift — so a render cost O(rows × sessions)
+    /// bridge crossings, twice, on top of a separate pass for the owner map and another for the
+    /// Settled timestamps. The sidebar re-renders on every `message_append` / `agent_state` frame
+    /// from ANY session on ANY host, so all of that lands mid-scroll. One pass, then dictionary
+    /// hits. See `SessionListRenderCostTests`.
+    func index() -> FleetIndex {
+        var all: [SessionInfo] = []
+        var owner: [String: String] = [:]
+        var brokerBy: [String: BrokerSession] = [:]
+        var lastTs: [String: String] = [:]
         for h in hosts {
             guard let b = brokers[h.recordId] else { continue }
-            for s in b.sessions {
-                if let ts = b.messages[s.id]?.last?.ts { m[s.id] = ts }
+            let hostSessions = b.sessions
+            all.reserveCapacity(all.count + hostSessions.count)
+            let log = b.messages
+            for s in hostSessions {
+                let id = s.id       // the one Kotlin→Swift bridge this session pays per render
+                all.append(s)
+                owner[id] = h.recordId
+                brokerBy[id] = b
+                if let ts = log[id]?.last?.ts { lastTs[id] = ts }
             }
         }
-        return m
+        return FleetIndex(sessions: all, ownerBySession: owner, lastTsBySession: lastTs,
+                          brokerBySession: brokerBy, fallbackBroker: activeBroker)
     }
 
     /// The host that owns a session (the one whose live list contains it).
@@ -136,32 +176,32 @@ final class Fleet {
     }
 
     /// Sessions after the host filter (spec §5) — the shared `filterSessions`, so the semantics
-    /// match Android. Single-host / All → every session.
-    var filteredSessions: [SessionInfo] {
-        guard multiHost else { return sessions }
-        return FleetModelKt.filterSessions(sessions: sessions, sessionHost: sessionHost, filter: filter)
+    /// match Android. Single-host / All → every session. Takes the caller's `FleetIndex` so a
+    /// render walks the fleet once, not once per derived list.
+    func filteredSessions(_ index: FleetIndex) -> [SessionInfo] {
+        guard multiHost else { return index.sessions }
+        return FleetModelKt.filterSessions(sessions: index.sessions,
+                                           sessionHost: index.ownerBySession, filter: filter)
     }
 
     /// PWA-identical workdir grouping of the ONLINE hosts' filtered sessions (offline hosts render
     /// in their own greyed groups — see `offlineHostGroups`). Single-host: the usual grouping.
-    func onlineGroups() -> [SessionGroup] {
-        let owner = sessionHost
+    func onlineGroups(_ index: FleetIndex) -> [SessionGroup] {
         let offline = Set(hostViews.filter { !$0.online }.map { $0.recordId })
-        let shown = filteredSessions
-        let online = multiHost ? shown.filter { !offline.contains(owner[$0.id] ?? "") } : shown
-        return group(online)
+        let shown = filteredSessions(index)
+        let online = multiHost ? shown.filter { !offline.contains(index.ownerBySession[$0.id] ?? "") } : shown
+        return group(online, lastTs: index.lastTsBySession)
     }
 
     /// (host, its cached filtered sessions) for each OFFLINE host passing the current filter — the
     /// greyed "last seen" groups (spec §5). The host's `BrokerSession` retains its last snapshot
     /// across a dropped socket, so its sessions still show (dimmed) until it reconnects.
-    func offlineHostGroups() -> [(host: HostView, sessions: [SessionInfo])] {
+    func offlineHostGroups(_ index: FleetIndex) -> [(host: HostView, sessions: [SessionInfo])] {
         guard multiHost else { return [] }
-        let owner = sessionHost
-        let shown = filteredSessions
+        let shown = filteredSessions(index)
         return hostViews
             .filter { !$0.online && (filter == nil || filter == $0.recordId) }
-            .map { hv in (hv, shown.filter { owner[$0.id] == hv.recordId }) }
+            .map { hv in (hv, shown.filter { index.ownerBySession[$0.id] == hv.recordId }) }
     }
 
     /// Archived sessions for the active host, folded into Settled on the task list.
@@ -175,12 +215,11 @@ final class Fleet {
         }
     }
 
-    private func group(_ ss: [SessionInfo]) -> [SessionGroup] {
+    /// `lastTs` comes from the caller's `FleetIndex`: `groupSessions` calls `buildTaskSections`
+    /// once PER project group, so a fleet-scanning closure here would be paid over and over.
+    private func group(_ ss: [SessionInfo], lastTs: [String: String]) -> [SessionGroup] {
         let home = inferHomeDir(workdir: ss.first?.workdir) ?? ""
-        // One pass up front: `groupSessions` calls `buildTaskSections` once PER project group,
-        // so a fleet-scanning closure here is paid over and over. See `lastMessageTsBySession`.
-        let ts = lastMessageTsBySession()
-        return groupSessions(sessions: ss, home: home, lastTs: { ts[$0.id] ?? "" },
+        return groupSessions(sessions: ss, home: home, lastTs: { lastTs[$0.id] ?? "" },
                              archived: archivedForList)
     }
 

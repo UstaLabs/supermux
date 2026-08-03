@@ -227,9 +227,16 @@ fun formatWorkdir(workdir: String, home: String?): String {
     return if (segments.size > 2) "…/$base" else base
 }
 
+/**
+ * Compiled once. [inferHomeDir] runs per session row per sidebar render (via [projectLabel] and
+ * [formatWorkdir]); compiling the pattern inside the function made every one of those pay for a
+ * fresh regex.
+ */
+private val HOME_DIR_RE = Regex("^(/(?:home|Users)/[^/]+)")
+
 /** Best-effort home dir (/home/<user> or /Users/<user>) when none was supplied. */
 fun inferHomeDir(workdir: String?): String? {
     val probe = workdir ?: ""
-    val m = Regex("^(/(?:home|Users)/[^/]+)").find(probe)
+    val m = HOME_DIR_RE.find(probe)
     return m?.groupValues?.getOrNull(1)
 }

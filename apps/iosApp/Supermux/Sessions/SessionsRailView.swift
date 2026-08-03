@@ -35,9 +35,14 @@ struct SessionsRailView: View {
             .accessibilityIdentifier(TestIds.newSession)
 
             ScrollView {
+                // One fleet walk per render, shared by every avatar (see `Fleet.index()`);
+                // resolving each avatar's broker on its own re-scanned every host's sessions.
+                let index = fleet.index()
                 VStack(spacing: 10) {
                     // sortOrder only — match the expanded list; messages must not reshuffle avatars.
-                    ForEach(sessionsByUserOrder(sessions: fleet.filteredSessions), id: \.id) { s in avatar(s) }
+                    ForEach(sessionsByUserOrder(sessions: fleet.filteredSessions(index)), id: \.id) { s in
+                        avatar(s, index: index)
+                    }
                 }
                 .padding(.vertical, 2)
             }
@@ -71,8 +76,8 @@ struct SessionsRailView: View {
         var id: String { session.id }
     }
 
-    @ViewBuilder private func avatar(_ s: SessionInfo) -> some View {
-        let b = fleet.broker(for: s.id)
+    @ViewBuilder private func avatar(_ s: SessionInfo, index: FleetIndex) -> some View {
+        let b = index.broker(s.id)
         let muted = s.mute?.boolValue ?? false
         let selectedNow = s.id == selected
         Button {
@@ -81,7 +86,7 @@ struct SessionsRailView: View {
         } label: {
             AgentLogo(agent: s.agent, size: 40)
                 .overlay(alignment: .topTrailing) {
-                    if working(s) {
+                    if b?.agentWorking[s.id] == true {
                         Circle().fill(Theme.teal).frame(width: 9, height: 9)
                             .overlay(Circle().strokeBorder(Color.smBackground, lineWidth: 1.5))
                             .offset(x: 3, y: -3)
@@ -112,6 +117,4 @@ struct SessionsRailView: View {
             Button(role: .destructive) { b?.kill(s.id) } label: { Label("Settle", systemImage: "checkmark.circle") }
         }
     }
-
-    private func working(_ s: SessionInfo) -> Bool { fleet.broker(for: s.id)?.agentWorking[s.id] == true }
 }

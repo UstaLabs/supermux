@@ -11,6 +11,12 @@ import Shared
 /// live working order — not List.onMove/edit mode. macOS: drag from the trailing grip only
 /// (whole-row onDrag races trackpad rubber-band and jumps the AppKit List); iPad: whole-row
 /// press+drag; iPhone: edit-mode grabbers. Settled / PA / offline rows stay fixed.
+///
+/// Cost: this body re-runs on EVERY fleet-wide observable change — a `message_append` or an
+/// `agent_state` tick for any session on any host — so it runs many times a second while agents
+/// work, and lands in the middle of trackpad scrolls. Everything it derives is therefore derived
+/// ONCE per pass and read per row: `Fleet.index()` for owner/broker/last-message, and
+/// `projectTagsBySession` for the labels. `SessionListRenderCostTests` holds the line.
 struct SessionsListView: View {
     let fleet: Fleet
     @Binding var selected: String?
@@ -64,7 +70,10 @@ struct SessionsListView: View {
     @State private var reorderState = SessionSectionReorderState()
 
     var body: some View {
-        let owner = fleet.sessionHost
+        // ONE walk of the fleet per render — owner map, per-row broker, Settled timestamps.
+        // Everything below reads it; nothing re-scans. See `Fleet.index()`.
+        let index = fleet.index()
+        let owner = index.ownerBySession
         let hostViews = fleet.hostViews
         let hostByRecord = Dictionary(hostViews.map { ($0.recordId, $0) }, uniquingKeysWith: { a, _ in a })
         let multiHost = fleet.multiHost
@@ -92,25 +101,26 @@ struct SessionsListView: View {
                 .background(.bar)
                 Divider()
             }
-            list(owner: owner, hostByRecord: hostByRecord, multiHost: multiHost, showRowHostBadge: showRowHostBadge)
+            list(index: index, hostByRecord: hostByRecord, multiHost: multiHost, showRowHostBadge: showRowHostBadge)
         }
     }
 
-    private func list(owner: [String: String], hostByRecord: [String: HostView], multiHost: Bool, showRowHostBadge: Bool) -> some View {
+    private func list(index: FleetIndex, hostByRecord: [String: HostView], multiHost: Bool, showRowHostBadge: Bool) -> some View {
         List(selection: $selected) {
             if !phoneList { sidebarChromeSections }
 
             if groupByProject {
-                ForEach(fleet.onlineGroups(), id: \.workdir) { group in
-                    onlineSection(group, owner: owner, hostByRecord: hostByRecord, showRowHostBadge: showRowHostBadge)
+                ForEach(fleet.onlineGroups(index), id: \.workdir) { group in
+                    onlineSection(group, index: index, hostByRecord: hostByRecord, showRowHostBadge: showRowHostBadge)
                 }
             } else {
-                flatSectionsView(owner: owner, hostByRecord: hostByRecord, multiHost: multiHost, showRowHostBadge: showRowHostBadge)
+                flatSectionsView(index: index, hostByRecord: hostByRecord, multiHost: multiHost, showRowHostBadge: showRowHostBadge)
             }
 
             // Offline hosts: greyed group per host with a "last seen" header (multi-host only).
-            ForEach(fleet.offlineHostGroups(), id: \.host.recordId) { entry in
-                offlineSection(host: entry.host, sessions: entry.sessions, hostByRecord: hostByRecord, showRowHostBadge: showRowHostBadge)
+            ForEach(fleet.offlineHostGroups(index), id: \.host.recordId) { entry in
+                offlineSection(host: entry.host, sessions: entry.sessions, index: index,
+                               hostByRecord: hostByRecord, showRowHostBadge: showRowHostBadge)
             }
         }
         .listStyle(.plain)
@@ -119,13 +129,13 @@ struct SessionsListView: View {
         .accessibilityIdentifier(TestIds.sessionList)
         #if os(macOS)
         .contentMargins(.horizontal, 10, for: .scrollContent)
-        // Bounce only when content overflows. Always-on rubber-band on a short list, plus
-        // live @Observable remeasures mid-bounce, is what still read as "jumps a few times"
-        // after the archive pull-to-reveal path was removed.
+        // Bounce only when content overflows — a short list that rubber-bands against nothing
+        // has no travel to give back, so the release reads as a snap.
         .scrollBounceBehavior(.basedOnSize)
-        // Kill *implicit* list animations (hover wash, selection fill) from thrashing
-        // NSTableView geometry during a trackpad gesture. Explicit withAnimation (settled
-        // expand, drag spring) still applies.
+        // No animated geometry under an AppKit-backed List: an animating row height re-measures
+        // NSTableView mid-gesture. This clears the transaction for the WHOLE subtree, so the
+        // settled expand/collapse and the drag spring snap here too — deliberate, and the reason
+        // those `withAnimation` calls look inert on macOS.
         .transaction { $0.animation = nil }
         #else
         // iPhone rows run edge-to-edge and carry their own 16pt leading inset (see
@@ -277,27 +287,28 @@ struct SessionsListView: View {
 
     /// Flat task list (web !groupByProject): In Progress / Drafts / Settled across all projects.
     @ViewBuilder private func flatSectionsView(
-        owner: [String: String],
+        index: FleetIndex,
         hostByRecord: [String: HostView],
         multiHost: Bool,
         showRowHostBadge: Bool
     ) -> some View {
-        let online = flatOnlineSessions(owner: owner, multiHost: multiHost)
-        // Built once per body evaluation, not once per lookup: `buildTaskSections` asks for the
-        // Settled recency key of every row (hundreds, once archived sessions are folded in), and
-        // the old closure ran a full fleet scan each time. See `Fleet.lastMessageTsBySession`.
-        let ts = fleet.lastMessageTsBySession()
-        let lastTs: (SessionInfo) -> String = { ts[$0.id] ?? "" }
+        let owner = index.ownerBySession
+        let online = flatOnlineSessions(index: index, multiHost: multiHost)
+        // The Settled recency key of every row (hundreds, once archived sessions are folded in)
+        // comes from the render's one fleet walk. See `Fleet.index()`.
+        let ts = index.lastTsBySession
         let sections = buildTaskSections(
             list: combinedTaskSessions(live: online, archived: fleet.archivedForList),
-            lastTs: lastTs
+            lastTs: { ts[$0.id] ?? "" }
         )
-        // The project tag only tells you anything when the list actually spans projects — with a
-        // single project it repeats the same word on every row.
-        let showProjectTag = Set(online.map { projectLabel(session: $0, home: inferHomeDir(workdir: $0.workdir)) }).count > 1
-        let tag: (SessionInfo) -> String? = { s in
-            showProjectTag ? projectLabel(session: s, home: inferHomeDir(workdir: s.workdir)) : nil
-        }
+        // Labelled ONCE per render, then read per row. Deciding whether to show the tag at all
+        // needs every session's label anyway, and asking Kotlin again per row (formatWorkdir +
+        // a home-dir probe, both bridged) doubled the cost of the most expensive view in the app.
+        // The tag only tells you anything when the list actually spans projects — with a single
+        // project it repeats the same word on every row.
+        let tags = projectTagsBySession(online)
+        let showProjectTag = Set(tags.values).count > 1
+        let tag: (SessionInfo) -> String? = { s in showProjectTag ? tags[s.id] : nil }
         // PA pin (web SessionTaskList paSection) — not in task sections.
         // Stable sortOrder only; new messages must not reshuffle rows.
         let pas = sessionsByUserOrder(sessions: online.filter { $0.role == "personal_assistant" })
@@ -306,7 +317,7 @@ struct SessionsListView: View {
                 ForEach(pas, id: \.id) { session in
                     let recordId = owner[session.id] ?? ""
                     let rowHost: HostView? = showRowHostBadge ? hostByRecord[recordId] : nil
-                    selectableRow(session, host: rowHost, reorderable: false,
+                    selectableRow(session, host: rowHost, index: index, reorderable: false,
                                   isLast: session.id == pas.last?.id)
                 }
                 .moveDisabled(true)
@@ -342,7 +353,7 @@ struct SessionsListView: View {
                         ForEach(settled, id: \.id) { session in
                             let recordId = owner[session.id] ?? ""
                             let rowHost: HostView? = showRowHostBadge ? hostByRecord[recordId] : nil
-                            selectableRow(session, host: rowHost, reorderable: false,
+                            selectableRow(session, host: rowHost, index: index, reorderable: false,
                                           projectTag: tag(session),
                                           isLast: session.id == settled.last?.id)
                         }
@@ -364,6 +375,7 @@ struct SessionsListView: View {
                         selectableRow(
                             session,
                             host: rowHost,
+                            index: index,
                             reorderable: true,
                             projectTag: tag(session),
                             sectionKey: sectionKey,
@@ -382,13 +394,11 @@ struct SessionsListView: View {
         }
     }
 
-    private func flatOnlineSessions(owner: [String: String], multiHost: Bool) -> [SessionInfo] {
+    private func flatOnlineSessions(index: FleetIndex, multiHost: Bool) -> [SessionInfo] {
+        let shown = searchFiltered(fleet.filteredSessions(index))
+        guard multiHost else { return shown }
         let offline = Set(fleet.hostViews.filter { !$0.online }.map { $0.recordId })
-        let shown = searchFiltered(fleet.filteredSessions)
-        if multiHost {
-            return shown.filter { !offline.contains(owner[$0.id] ?? "") }
-        }
-        return shown
+        return shown.filter { !offline.contains(index.ownerBySession[$0.id] ?? "") }
     }
 
     /// iPhone `.searchable` narrowing — name, project path and agent. A no-op (identity) whenever
@@ -405,10 +415,11 @@ struct SessionsListView: View {
 
     @ViewBuilder private func onlineSection(
         _ group: SessionGroup,
-        owner: [String: String],
+        index: FleetIndex,
         hostByRecord: [String: HostView],
         showRowHostBadge: Bool
     ) -> some View {
+        let owner = index.ownerBySession
         let openSessions: [SessionInfo] = searchFiltered({
             if group.workdir == PA_GROUP_KEY { return group.sessions }
             let secs = group.sections
@@ -437,6 +448,7 @@ struct SessionsListView: View {
                     selectableRow(
                         session,
                         host: rowHost,
+                        index: index,
                         reorderable: canReorderGroup,
                         sectionKey: sectionKey,
                         sectionIds: ids,
@@ -473,7 +485,7 @@ struct SessionsListView: View {
                         ForEach(settled, id: \.id) { session in
                             let recordId = owner[session.id] ?? ""
                             let rowHost: HostView? = showRowHostBadge ? hostByRecord[recordId] : nil
-                            selectableRow(session, host: rowHost, reorderable: false,
+                            selectableRow(session, host: rowHost, index: index, reorderable: false,
                                           isLast: session.id == settled.last?.id)
                         }
                         .moveDisabled(true)
@@ -490,6 +502,7 @@ struct SessionsListView: View {
     @ViewBuilder private func offlineSection(
         host: HostView,
         sessions rawSessions: [SessionInfo],
+        index: FleetIndex,
         hostByRecord: [String: HostView],
         showRowHostBadge: Bool
     ) -> some View {
@@ -498,7 +511,7 @@ struct SessionsListView: View {
         Section {
             ForEach(sessions, id: \.id) { session in
                 let rowHost: HostView? = showRowHostBadge ? hostByRecord[host.recordId] : nil
-                selectableRow(session, host: rowHost, reorderable: false,
+                selectableRow(session, host: rowHost, index: index, reorderable: false,
                               isLast: session.id == sessions.last?.id)
                     .opacity(0.55)
             }
@@ -579,14 +592,16 @@ struct SessionsListView: View {
     @ViewBuilder private func row(
         _ s: SessionInfo,
         host: HostView?,
+        index: FleetIndex,
         projectTag: String? = nil,
         reorderable: Bool = false,
         dragSource: SessionRowDragSourceConfig? = nil
     ) -> some View {
         // Live owner for preview/agent state; action broker falls back to active host for
-        // archived Settled rows (no live owner).
-        let liveBroker = fleet.broker(for: s.id)
-        let actionBroker = fleet.broker(forSessionOrArchived: s.id)
+        // archived Settled rows (no live owner). Both are dictionary hits into the render's
+        // one fleet walk — resolving them per row used to re-scan every host's session array.
+        let liveBroker = index.broker(s.id)
+        let actionBroker = index.brokerOrActive(s.id)
         let muted = s.mute?.boolValue ?? false
         let previewEntry = liveBroker?.messages[s.id]?.last
         let working = liveBroker?.agentWorking[s.id] == true
@@ -655,6 +670,7 @@ struct SessionsListView: View {
     @ViewBuilder private func selectableRow(
         _ s: SessionInfo,
         host: HostView?,
+        index: FleetIndex,
         reorderable: Bool,
         projectTag: String? = nil,
         sectionKey: String = "",
@@ -684,7 +700,8 @@ struct SessionsListView: View {
         let sourcePlacement = SessionRowDragSourcePlacement.wholeRow
         let dragSource: SessionRowDragSourceConfig? = nil
         #endif
-        row(s, host: host, projectTag: projectTag, reorderable: reorderable, dragSource: dragSource)
+        row(s, host: host, index: index, projectTag: projectTag, reorderable: reorderable,
+            dragSource: dragSource)
             .contentShape(Rectangle())
             .opacity(reorderState.draggingId == s.id ? 0.35 : 1)
             .simultaneousGesture(TapGesture().onEnded {
@@ -714,15 +731,14 @@ struct SessionsListView: View {
             .accessibilityIdentifier(TestIds.sessionRow(s.id))
             .smSessionListRowChrome(phone: phoneList, isLast: isLast)
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                swipeButtons(for: s)
+                swipeButtons(for: s, broker: index.broker(s.id))
             }
     }
 
     /// Keep swipe actions on the actual List row. Putting them inside the macOS row Button's
     /// label causes SwiftUI to size the reveal controls against the whole button host, producing
     /// the enormous icons seen in the sidebar.
-    @ViewBuilder private func swipeButtons(for s: SessionInfo) -> some View {
-        let b = fleet.broker(for: s.id)
+    @ViewBuilder private func swipeButtons(for s: SessionInfo, broker b: BrokerSession?) -> some View {
         let muted = s.mute?.boolValue ?? false
         Button(role: .destructive) { killTarget = s } label: {
             Label("Settle", systemImage: "checkmark.circle")
@@ -769,31 +785,106 @@ func sessionListShowsUnreadMark(
     return isSessionUnread(lastMessageTs: lastMessageTs, lastReadAt: lastReadAt)
 }
 
+/// Project leaf label (web `projectLabel`) for every session, derived in ONE pass.
+///
+/// Each label crosses into Kotlin twice — a home-dir probe plus `formatWorkdir` — with a Swift
+/// `String` bridged back. The flat list needs every label anyway just to decide whether the tag
+/// says anything at all (a single-project list would repeat one word down the column), so asking
+/// again per row doubled the cost of the most expensive view in the app. Sessions in the same
+/// project share a label, so the work is per PROJECT, not per row.
+func projectTagsBySession(_ sessions: [SessionInfo]) -> [String: String] {
+    var tags: [String: String] = [:]
+    tags.reserveCapacity(sessions.count)
+    var labelByPath: [String: String] = [:]
+    for s in sessions {
+        let path = s.repo_root ?? s.workdir
+        if let cached = labelByPath[path] {
+            tags[s.id] = cached
+            continue
+        }
+        let label = projectLabel(session: s, home: inferHomeDir(workdir: s.workdir))
+        labelByPath[path] = label
+        tags[s.id] = label
+    }
+    return tags
+}
+
+/// The markdown-stripping rules for a preview line, each compiled ONCE.
+///
+/// `String.replacingOccurrences(options: .regularExpression)` compiles its pattern on every call,
+/// so the seven rules below were re-compiled for every visible row on every body pass — measured
+/// at ~0.2 ms per row, which is most of a frame across a full sidebar. The patterns are literals;
+/// compiling them at first use costs one pass and nothing after.
+private struct PreviewRule {
+    private let regex: NSRegularExpression?
+    private let template: String
+
+    init(_ pattern: String, _ template: String) {
+        // A literal pattern either compiles or is a typo caught by the tests; on the impossible
+        // path the rule is skipped rather than trapping in a list row.
+        regex = try? NSRegularExpression(pattern: pattern)
+        self.template = template
+    }
+
+    func apply(_ s: String) -> String {
+        guard let regex else { return s }
+        return regex.stringByReplacingMatches(
+            in: s, range: NSRange(s.startIndex..., in: s), withTemplate: template
+        )
+    }
+}
+
+private enum PreviewRules {
+    static let fence = PreviewRule("```[a-zA-Z0-9_+-]*", " ")            // fences, keep the code
+    static let link = PreviewRule("\\[([^\\]]*)\\]\\([^)]*\\)", "$1")     // [label](url) -> label
+    static let blockMarker = PreviewRule("(?m)^[ \\t]*(#{1,6}[ \\t]+|>[ \\t]?|[-*+][ \\t]+|\\d+\\.[ \\t]+)", "")
+    static let strong = PreviewRule("\\*\\*([^*]+)\\*\\*", "$1")
+    /// Single `*emphasis*` only — never a bare `*` used as a bullet or a literal.
+    static let emphasis = PreviewRule("(?<![*\\w])\\*([^*\\n]+)\\*(?!\\*)", "$1")
+    static let code = PreviewRule("`+([^`\\n]+)`+", "$1")
+    static let whitespace = PreviewRule("\\s+", " ")
+}
+
+/// Stripped previews, keyed by the raw message text. A row's last message changes far more
+/// rarely than the sidebar re-renders (every fleet-wide frame re-runs this for every visible
+/// row), and the transform is pure, so the second pass over the same text is a lookup.
+/// Bounded, and thread-safe without a lock.
+private let previewTextCache: NSCache<NSString, NSString> = {
+    let c = NSCache<NSString, NSString>()
+    c.countLimit = 512
+    return c
+}()
+
 /// Agents write markdown; a list row shows plain text. Mail and Messages both strip formatting
 /// from the preview line, and without this the rows read as `**Committed** on \`main\`` noise.
 ///
 /// Deliberately conservative and cheap — it runs for every visible row on every body pass: the
-/// input is capped to a preview's worth of text and each pattern is gated on a substring probe.
+/// input is capped to a preview's worth of text, each rule is gated on a substring probe and
+/// compiled once, and the result is memoized.
 func sessionPreviewPlainText(_ raw: String) -> String {
+    let key = raw as NSString
+    if let hit = previewTextCache.object(forKey: key) { return hit as String }
+    let out = sessionPreviewPlainTextUncached(raw)
+    previewTextCache.setObject(out as NSString, forKey: key)
+    return out
+}
+
+private func sessionPreviewPlainTextUncached(_ raw: String) -> String {
     // A two-line preview never needs more than this, and it bounds the regex work per row.
     var s = raw.count > 300 ? String(raw.prefix(300)) : raw
-    func sub(_ pattern: String, _ template: String) {
-        s = s.replacingOccurrences(of: pattern, with: template, options: .regularExpression)
-    }
-    if s.contains("```") { sub("```[a-zA-Z0-9_+-]*", " ") }        // fences, keep the code
-    if s.contains("](") { sub("\\[([^\\]]*)\\]\\([^)]*\\)", "$1") } // [label](url) -> label
+    if s.contains("```") { s = PreviewRules.fence.apply(s) }
+    if s.contains("](") { s = PreviewRules.link.apply(s) }
     // Block markers only ever sit at a line start, so a single-line message that merely
     // *contains* a `-` or a `.` must not pay for this pass.
     if s.contains("\n") || s.first.map({ "#>-*+0123456789".contains($0) }) == true {
-        sub("(?m)^[ \\t]*(#{1,6}[ \\t]+|>[ \\t]?|[-*+][ \\t]+|\\d+\\.[ \\t]+)", "")
+        s = PreviewRules.blockMarker.apply(s)
     }
     if s.contains("*") {
-        sub("\\*\\*([^*]+)\\*\\*", "$1")
-        // Single `*emphasis*` only — never a bare `*` used as a bullet or a literal.
-        sub("(?<![*\\w])\\*([^*\\n]+)\\*(?!\\*)", "$1")
+        s = PreviewRules.strong.apply(s)
+        s = PreviewRules.emphasis.apply(s)
     }
-    if s.contains("`") { sub("`+([^`\\n]+)`+", "$1") }
-    sub("\\s+", " ")
+    if s.contains("`") { s = PreviewRules.code.apply(s) }
+    s = PreviewRules.whitespace.apply(s)
     return s.trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
