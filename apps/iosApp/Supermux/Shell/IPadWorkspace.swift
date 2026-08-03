@@ -9,9 +9,8 @@ import Shared
 /// The session header (name · branch/sync · links · pane toggles · Finish · ⋯) is a custom
 /// bar at the top of the **detail** column only (`WorkspaceDetail`) — mirroring the PWA,
 /// where the header spans the detail, not the sidebar. The `NavigationStack`'s own nav bar is
-/// hidden for the workspace (the sidebar keeps its in-list "Archived" pull-bar, which is a
-/// `safeAreaInset`, not the nav bar). Navigation to management pages is driven by the `route`
-/// binding via `RootView`'s `.navigationDestination`, so it keeps working with the bar hidden.
+/// hidden for the workspace. Navigation to management pages is driven by the `route` binding
+/// via `RootView`'s `.navigationDestination`, so it keeps working with the bar hidden.
 struct IPadWorkspace<NewSessionContent: View>: View {
     let fleet: Fleet
     @Binding var selected: String?
@@ -212,7 +211,6 @@ struct IPadWorkspace<NewSessionContent: View>: View {
             .overlay(alignment: .bottom) { Divider() }
             SessionsListView(fleet: fleet, selected: $selected,
                              onNewSession: { launcherDraftId = nil; route = .newSession },
-                             onArchived: { route = .archived },
                              onAddHost: onAddHost,
                              onSessionSelected: { _ in
                                  // See the rail's callback above: the caller already set
@@ -225,9 +223,10 @@ struct IPadWorkspace<NewSessionContent: View>: View {
     }
 
     /// App-global pages: not session-scoped, so they live at the app level in the sidebar rather
-    /// than in the session header. (Archived stays inside `SessionsListView`'s in-list pull-bar.)
+    /// than in the session header.
     @ViewBuilder private var globalMenu: some View {
         Menu {
+            Button { route = .archived } label: { Label("Archived", systemImage: "archivebox") }
             Button { onAddHost() } label: { Label("Add host", systemImage: "plus.rectangle.on.rectangle") }
             Button { route = .usage } label: { Label("Usage", systemImage: "chart.bar") }
             Button { route = .devices } label: { Label("Devices", systemImage: "ipad.and.iphone") }

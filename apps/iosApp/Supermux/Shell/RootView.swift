@@ -176,7 +176,6 @@ struct RootView: View {
         NavigationSplitView {
             SessionsListView(fleet: fleet, selected: $selected,
                              onNewSession: { launcherDraftId = nil; route = .newSession },
-                             onArchived: { route = .archived },
                              onAddHost: { showAddHost = true },
                              onOpenDraft: { id in launcherDraftId = id; route = .newSession },
                              onReorder: { ids in fleet.activeBroker?.reorderSessions(ids) })
@@ -190,8 +189,6 @@ struct RootView: View {
                                 Label("Group by project", systemImage: "folder")
                             }
                             .accessibilityIdentifier("group-by-project")
-                            // The list's pull-to-reveal Archived bar is sidebar-only now, so
-                            // iPhone reaches Archived from here instead.
                             Button { route = .archived } label: { Label("Archived", systemImage: "archivebox") }
                             Divider()
                             Button { showAddHost = true } label: { Label("Add host", systemImage: "plus.rectangle.on.rectangle") }
