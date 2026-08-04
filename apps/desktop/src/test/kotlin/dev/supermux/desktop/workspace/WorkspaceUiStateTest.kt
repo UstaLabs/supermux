@@ -106,10 +106,33 @@ class WorkspaceUiStateTest {
         }
         ui.openPersonalAssistants()
         assertTrue(ui.personalAssistantsOpen)
+        assertTrue(ui.settingsOpen)
+        assertEquals(SettingsSection.PersonalAssistants, ui.settingsSection)
         assertFalse(ui.launcherOpen)
         assertFalse(ui.archivedOpen)
         assertFalse(ui.usageOpen)
         assertFalse(ui.lspSettingsOpen)
         assertTrue(ui.overlayOpen)
+    }
+
+    @Test fun openSettingsClosesEveryOtherOverlayAndSelectsAgents() {
+        val ui = WorkspaceUiState().apply {
+            usageOpen = true
+            openLspSettings()
+        }
+        ui.openSettings(SettingsSection.Agents)
+        assertTrue(ui.settingsOpen)
+        assertEquals(SettingsSection.Agents, ui.settingsSection)
+        assertFalse(ui.usageOpen)
+        assertFalse(ui.lspSettingsOpen)
+        assertTrue(ui.overlayOpen)
+    }
+
+    @Test fun openLspSettingsRoutesThroughTheSettingsHub() {
+        val ui = WorkspaceUiState()
+        ui.openLspSettings()
+        assertTrue(ui.settingsOpen)
+        assertTrue(ui.lspSettingsOpen)
+        assertEquals(SettingsSection.EditorLsp, ui.settingsSection)
     }
 }
