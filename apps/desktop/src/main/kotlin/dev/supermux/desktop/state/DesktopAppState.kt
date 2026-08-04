@@ -45,12 +45,14 @@ import dev.supermux.net.RepoInfo
 import dev.supermux.net.CodexResetResult
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.ReviewSubmitResult
+import dev.supermux.net.RunUpdateResult
 import dev.supermux.net.SpawnRequest
 import dev.supermux.net.SpawnResponse
 import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalSummary
 import dev.supermux.net.TranscribeResponse
 import dev.supermux.net.UpdateCommentBody
+import dev.supermux.net.UpdateStatus
 import dev.supermux.net.UsageResponse
 import dev.supermux.net.VerifySaveResult
 import dev.supermux.net.VerifySuggestResult
@@ -1045,6 +1047,34 @@ class DesktopAppState(
     /** DELETE /devices/<name> — revoke a paired device. False on failure. */
     suspend fun revokeDevice(name: String): Boolean =
         runApi("revokeDevice") { api.revokeDevice(name); true } ?: false
+
+    // ── System / maintenance (desktop-parity Task 3) ───────────────────────────────────
+    // Backs the System section of the Settings hub. Mirrors AppViewModel updateStatus /
+    // checkUpdate / runUpdate / restartBroker. Broker self-update is distinct from the
+    // desktop app's own AppUpdate (File ▸ "Check for Updates…").
+
+    /** GET /api/update/status — cached broker updater state. Null on transport/decode failure. */
+    suspend fun updateStatus(): UpdateStatus? =
+        runApi("updateStatus") { api.updateStatus() }
+
+    /**
+     * POST /api/update/check — force the broker to poll versions.json and return post-check
+     * status. Null on failure. Used by System "Recheck" so the UI does not only re-read cache.
+     */
+    suspend fun checkUpdate(): UpdateStatus? =
+        runApi("checkUpdate") { api.checkUpdate() }
+
+    /** POST /api/update/run — start broker self-update (binary mode). Null on transport failure. */
+    suspend fun runUpdate(): RunUpdateResult? =
+        runApi("runUpdate") { api.runUpdate() }
+
+    /**
+     * POST /system/restart — fire-and-forget broker restart. Kills this client's connection;
+     * [BrokerClient] reconnects when the broker is back. Failures are logged, not thrown.
+     */
+    fun restartBroker() {
+        stateScope.launch { runApi("restartBroker") { api.restartBroker() } }
+    }
 
     // ── LSP settings (M4g-4 Task 1) ────────────────────────────────────────────────────
     // Backs the LspSettingsScreen overlay (M4g-4 Task 2/3): enable/disable + install + add/remove

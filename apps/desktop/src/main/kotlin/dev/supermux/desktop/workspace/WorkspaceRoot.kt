@@ -74,11 +74,12 @@ import dev.supermux.net.UsageResponse
 import dev.supermux.session.inferHomeDir
 import kotlinx.coroutines.flow.MutableStateFlow
 
-/** Sections of the Settings hub (left rail). Task 1 ships Agents; Task 2 ships Devices;
- *  Editor/LSP and Personal Assistants are the pre-existing screens folded into the hub. */
+/** Sections of the Settings hub (left rail). Task 1 ships Agents; Task 2 Devices;
+ *  Task 3 System; Editor/LSP and Personal Assistants are pre-existing folded screens. */
 enum class SettingsSection(val label: String) {
     Agents("Agents"),
     Devices("Devices"),
+    System("System"),
     EditorLsp("Editor / LSP"),
     PersonalAssistants("Personal assistants"),
 }
@@ -811,7 +812,7 @@ fun WorkspaceRoot(
                 val overlayTag = when (ui.settingsSection) {
                     SettingsSection.EditorLsp -> "lsp_settings_overlay"
                     SettingsSection.PersonalAssistants -> "personal_assistants_overlay"
-                    SettingsSection.Agents, SettingsSection.Devices -> "settings_overlay"
+                    SettingsSection.Agents, SettingsSection.Devices, SettingsSection.System -> "settings_overlay"
                 }
                 Box(
                     Modifier
@@ -851,6 +852,10 @@ fun WorkspaceRoot(
                                     devicesLoad = { hostApp.devices() },
                                     deviceAdd = { name -> hostApp.addDevice(name) },
                                     deviceRevoke = { name -> hostApp.revokeDevice(name) },
+                                    updateStatus = { hostApp.updateStatus() },
+                                    checkUpdate = { hostApp.checkUpdate() },
+                                    runUpdate = { hostApp.runUpdate() },
+                                    restartBroker = { hostApp.restartBroker() },
                                     lspLoad = { hostApp.lspLoad() },
                                     lspToggle = { id, enabled -> hostApp.lspToggle(id, enabled) },
                                     lspInstall = { id -> hostApp.lspInstall(id) },

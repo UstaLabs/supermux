@@ -54,6 +54,8 @@ import dev.supermux.net.LspServer
 import dev.supermux.net.OpenCodeOAuthStart
 import dev.supermux.net.OpenCodeProvider
 import dev.supermux.net.PADto
+import dev.supermux.net.RunUpdateResult
+import dev.supermux.net.UpdateStatus
 import dev.supermux.proto.ServerFrame
 import kotlinx.coroutines.flow.StateFlow
 
@@ -83,6 +85,11 @@ fun SettingsHub(
     devicesLoad: suspend () -> List<DeviceDto>?,
     deviceAdd: suspend (name: String) -> AddDeviceResponse?,
     deviceRevoke: suspend (name: String) -> Boolean,
+    // System / maintenance — broker update + restart (not the desktop app's AppUpdate).
+    updateStatus: suspend () -> UpdateStatus?,
+    checkUpdate: suspend () -> UpdateStatus?,
+    runUpdate: suspend () -> RunUpdateResult?,
+    restartBroker: () -> Unit,
     // Editor / LSP
     lspLoad: suspend () -> List<LspServer>,
     lspToggle: suspend (id: String, enabled: Boolean) -> List<LspServer>?,
@@ -156,6 +163,12 @@ fun SettingsHub(
                         devicesLoad = devicesLoad,
                         deviceAdd = deviceAdd,
                         deviceRevoke = deviceRevoke,
+                    )
+                    SettingsSection.System -> SystemSettingsScreen(
+                        updateStatus = updateStatus,
+                        checkUpdate = checkUpdate,
+                        runUpdate = runUpdate,
+                        restartBroker = restartBroker,
                     )
                     SettingsSection.EditorLsp -> LspSettingsScreen(
                         lspLoad = lspLoad,
