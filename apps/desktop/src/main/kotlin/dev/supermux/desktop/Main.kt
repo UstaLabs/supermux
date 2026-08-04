@@ -26,6 +26,7 @@ import androidx.compose.ui.window.isTraySupported
 import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.rememberWindowState
 import dev.supermux.desktop.auth.DesktopTokenStore
+import dev.supermux.desktop.chat.prunePasteCache
 import dev.supermux.desktop.host.DesktopHostBootstrap
 import dev.supermux.desktop.host.DesktopHostStores
 import dev.supermux.desktop.host.FleetState
@@ -138,6 +139,10 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //                                  for deterministic phase screenshots              [FirstRunIntro]
 fun main() {
     val store = DesktopTokenStore()
+    // Reclaim aged clipboard-paste PNGs under <config>/paste-cache/ (app-owned; never /tmp).
+    // Individual files are never deleted by path during composer lifecycle — only this age prune.
+    runCatching { prunePasteCache() }
+        .onFailure { println("[Main] paste-cache prune failed (continuing): $it") }
     // Dev override, mirrors the mac app's SM_PAIR_TOKEN/SM_PAIR_BASE guard (SupermuxApp.swift
     // requires BOTH to be present and non-empty) — lets a dev/CI run seed a pairing without the
     // onboarding UI. Requiring both prevents a stray SM_PAIR_TOKEN from silently clobbering a

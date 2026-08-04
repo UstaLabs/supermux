@@ -19,8 +19,10 @@
 // DataFlavor.javaFileListFlavor under the hood); each entry is a `file:` URI string, converted back to
 // a File and funneled through the SAME `stageFiles` path the Attach dialog uses, so a dropped file
 // gets an identical ComposerAttachment + upload + progress. Clipboard paste-image (Ctrl/Cmd+V) also
-// routes through that funnel: a raster image on the system clipboard is written to a temp PNG, and
-// any copied image files (javaFileListFlavor) are filtered and staged the same way.
+// routes through that funnel: a raster image on the system clipboard is written into the app's
+// exclusive paste-cache directory (beside desktop config), and any copied image files
+// (javaFileListFlavor) are filtered and staged the same way. Cache entries are pruned by age —
+// never deleted by individual path during chip/send lifecycle (see paste-cache section below).
 package dev.supermux.desktop.chat
 
 import androidx.compose.foundation.ContextMenuArea
@@ -55,7 +57,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -86,6 +87,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.desktop.auth.DesktopTokenStore
 import dev.supermux.desktop.session.DEFAULT_MODEL_ID
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.upload.FileChunkSource
@@ -107,15 +109,13 @@ import java.awt.datatransfer.Transferable
 import java.awt.image.BufferedImage
 import java.io.File
 import java.net.URI
-import java.nio.file.DirectoryStream
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
-import java.nio.file.SecureDirectoryStream
-import java.nio.file.attribute.BasicFileAttributeView
 import java.nio.file.attribute.BasicFileAttributes
-import java.nio.file.attribute.FileTime
-import java.util.Collections
+import java.time.Duration
+import java.time.Instant
+import java.util.UUID
 import javax.imageio.ImageIO
 import kotlin.math.roundToInt
 
@@ -157,10 +157,10 @@ data class ComposerAttachment(
     val kind: String? = null,
     val runSeq: Long = 0L,
     /**
-     * Absolute path of the staged local file when known (paste temp / picked path). Used to scrub
-     * **registry-tracked** paste temps (see [registerComposerPasteTemp]) once the chip is removed
-     * or send clears the list. Never deletes by path-name pattern — only paths this process created.
-     * Null when the source is not path-backed (shouldn't happen for [FileChunkSource] stages).
+     * Absolute path of the staged local file when known (paste-cache entry / picked path).
+     * Paste images live under the app-owned paste-cache; they are **not** deleted when the chip
+     * is removed — age-based [prunePasteCache] reclaims them. Null when the source is not
+     * path-backed (shouldn't happen for [FileChunkSource] stages).
      */
     val localPath: String? = null,
 )
@@ -263,17 +263,13 @@ private val IMAGE_FILE_EXTENSIONS = setOf(
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif", "tif", "tiff",
 )
 
-/** Temp-dir name prefix for raster clipboard pastes ([clipboardImageToTempFile]). Directory naming
- *  only — **never** used to decide deletability (see [composerPasteGeneratedTemps]). */
-internal const val COMPOSER_PASTE_TEMP_PREFIX = "composer-paste"
-
 /**
  * Dimension / size caps for clipboard raster paste. Applied **before** allocating a pixel buffer
  * or encoding PNG so a huge paste cannot freeze or OOM the desktop process.
  * - [PASTE_IMAGE_MAX_EDGE]: max width or height in pixels (hard reject)
  * - [PASTE_IMAGE_MAX_PIXELS]: max `width * height` (bounds the ARGB buffer for non-[BufferedImage]s)
  * - [PASTE_IMAGE_ENCODE_MAX_EDGE]: soft downscale target before PNG encode (keeps large pastes fast)
- * - [PASTE_IMAGE_MAX_ENCODED_BYTES]: max written PNG size; oversize files are deleted and dropped
+ * - [PASTE_IMAGE_MAX_ENCODED_BYTES]: max written PNG size; oversize files are dropped (left for pruner)
  */
 internal const val PASTE_IMAGE_MAX_EDGE: Int = 8192
 internal const val PASTE_IMAGE_MAX_PIXELS: Long = 16L * 1024L * 1024L // 16 MP
@@ -281,186 +277,130 @@ internal const val PASTE_IMAGE_MAX_PIXELS: Long = 16L * 1024L * 1024L // 16 MP
 internal const val PASTE_IMAGE_ENCODE_MAX_EDGE: Int = 2048
 internal const val PASTE_IMAGE_MAX_ENCODED_BYTES: Long = 8L * 1024L * 1024L // 8 MiB
 
-/**
- * Filesystem identity of a paste temp **this process created**. Paths are reusable strings;
- * ownership is the (parent fileKey, file fileKey, creationTime) triple recorded with
- * [LinkOption.NOFOLLOW_LINKS] at registration. Cleanup re-reads those attributes the same way and
- * refuses to delete when identity does not match — leaking a temp beats deleting a user file.
- */
-internal data class ComposerPasteTempIdentity(
-    /** Absolute path string used only as a registry lookup key (never as sole delete authority). */
-    val absolutePath: String,
-    /** Parent directory absolute path at registration. */
-    val parentAbsolutePath: String,
-    /** File name (relative to parent) at registration. */
-    val fileName: String,
-    /** [BasicFileAttributes.fileKey] of the parent directory (NOFOLLOW). */
-    val parentFileKey: Any?,
-    /** [BasicFileAttributes.fileKey] of the paste file itself (NOFOLLOW). */
-    val fileKey: Any?,
-    /** [BasicFileAttributes.creationTime] of the paste file at registration (NOFOLLOW). */
-    val creationTime: FileTime,
-)
+// ── paste-cache: app-owned directory, random names, age-based prune only ─────────
+//
+// Pasted raster images are written under `<desktop-config>/paste-cache/` (next to auth.json /
+// ui-state.json / kcef-bundle), NOT under shared /tmp. Each write uses a fresh UUID name; names
+// are never reused. Individual files are never deleted by path during chip remove / send /
+// session dispose — that class of bug is removed by design. [prunePasteCache] reclaims entries
+// older than [PASTE_CACHE_TTL] on startup and opportunistically on write. The pruner never
+// follows symlinks out of the cache and refuses to run if the cache path resolves outside the
+// app config directory.
+
+/** Directory name under the desktop config root for clipboard paste PNGs. */
+internal const val PASTE_CACHE_DIR_NAME = "paste-cache"
+
+/** Age after which paste-cache entries are reclaimed. Short: pastes only need to survive upload. */
+internal val PASTE_CACHE_TTL: Duration = Duration.ofHours(1)
 
 /**
- * Registry of paste temps this process created, keyed by absolute path for O(1) lookup.
- * Deletion is gated on **identity match** ([ComposerPasteTempIdentity]), never path-name patterns
- * alone — so a user file under `composer-paste-*`, a same-path recreation, or a parent swapped for
- * a symlink cannot be deleted by path spoofing.
+ * Test override for the desktop config directory ([DesktopTokenStore.defaultPath] parent).
+ * When set, paste-cache is `<override>/paste-cache/`. Cleared by tests in teardown.
  */
-private val composerPasteGeneratedTemps: MutableMap<String, ComposerPasteTempIdentity> =
-    Collections.synchronizedMap(mutableMapOf())
+@Volatile
+internal var desktopConfigDirOverride: Path? = null
+
+/** Resolved desktop config directory (production or test override). */
+internal fun desktopConfigDir(): Path =
+    (desktopConfigDirOverride ?: DesktopTokenStore.defaultPath().parent)
+        .toAbsolutePath().normalize()
+
+/** Paste-cache directory: always a direct child of [desktopConfigDir] named [PASTE_CACHE_DIR_NAME]. */
+internal fun pasteCacheDir(): Path = desktopConfigDir().resolve(PASTE_CACHE_DIR_NAME)
 
 /**
- * Snapshot [file] + its parent with [LinkOption.NOFOLLOW_LINKS]. Null when the file/parent cannot
- * be read (missing, or IO error) — callers must not delete without a proven identity.
+ * Ensure the paste-cache directory exists and its real path still lies under the app config dir.
+ * Returns null when the path would escape the config root (e.g. paste-cache is a symlink out) —
+ * callers must not write then.
  */
-internal fun readComposerPasteTempIdentity(file: File): ComposerPasteTempIdentity? = runCatching {
-    val path = file.toPath().toAbsolutePath().normalize()
-    val parent = path.parent ?: return@runCatching null
-    val fileAttrs = Files.readAttributes(
-        path,
-        BasicFileAttributes::class.java,
-        LinkOption.NOFOLLOW_LINKS,
-    )
-    // Never own a symlink: we create real files/dirs only.
-    if (fileAttrs.isSymbolicLink) return@runCatching null
-    val parentAttrs = Files.readAttributes(
-        parent,
-        BasicFileAttributes::class.java,
-        LinkOption.NOFOLLOW_LINKS,
-    )
-    if (parentAttrs.isSymbolicLink || !parentAttrs.isDirectory) return@runCatching null
-    ComposerPasteTempIdentity(
-        absolutePath = path.toString(),
-        parentAbsolutePath = parent.toString(),
-        fileName = path.fileName.toString(),
-        parentFileKey = parentAttrs.fileKey(),
-        fileKey = fileAttrs.fileKey(),
-        creationTime = fileAttrs.creationTime(),
-    )
+internal fun ensurePasteCacheDir(): Path? = runCatching {
+    val config = desktopConfigDir()
+    Files.createDirectories(config)
+    val cache = pasteCacheDir()
+    Files.createDirectories(cache)
+    val configReal = config.toRealPath()
+    val cacheReal = cache.toRealPath()
+    if (!cacheReal.startsWith(configReal)) return@runCatching null
+    // Must remain the direct paste-cache child of config (no intervening symlink rename games).
+    if (cacheReal.fileName.toString() != PASTE_CACHE_DIR_NAME) return@runCatching null
+    cacheReal
 }.getOrNull()
 
 /**
- * Register [file] as a process-owned paste temp **after** it exists on disk. Reads identity with
- * NOFOLLOW_LINKS. No-op (returns false) when the file cannot be proven — never register a bare path.
+ * Whether [path] is a regular file living directly under the app paste-cache (NOFOLLOW).
+ * Used by tests; production never deletes by individual path membership.
  */
-internal fun registerComposerPasteTemp(file: File): Boolean {
-    val identity = readComposerPasteTempIdentity(file) ?: return false
-    composerPasteGeneratedTemps[identity.absolutePath] = identity
-    return true
-}
-
-/** Test helper: drop [file] from the registry without deleting it (fixture teardown). */
-internal fun unregisterComposerPasteTemp(file: File) {
-    composerPasteGeneratedTemps.remove(file.absolutePath)
-}
-
-/** True only when [file]'s absolute path is currently registered as a generated paste temp. */
-internal fun isComposerPasteTempFile(file: File): Boolean =
-    file.absolutePath in composerPasteGeneratedTemps
+internal fun isPasteCacheFile(file: File): Boolean = runCatching {
+    val cache = ensurePasteCacheDir() ?: return@runCatching false
+    val path = file.toPath().toAbsolutePath().normalize()
+    if (path.parent != cache && path.parent?.toRealPath() != cache) return@runCatching false
+    val attrs = Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+    attrs.isRegularFile && !attrs.isSymbolicLink
+}.getOrDefault(false)
 
 /**
- * Whether the live filesystem object at [identity]'s path still matches what we registered.
- * Uses NOFOLLOW_LINKS on both parent and file so a parent→symlink swap or same-path recreation
- * fails the check (different fileKey / isSymbolicLink / creationTime).
- */
-internal fun composerPasteTempIdentityMatches(identity: ComposerPasteTempIdentity): Boolean =
-    runCatching {
-        val parent = Path.of(identity.parentAbsolutePath)
-        val parentAttrs = Files.readAttributes(
-            parent,
-            BasicFileAttributes::class.java,
-            LinkOption.NOFOLLOW_LINKS,
-        )
-        if (parentAttrs.isSymbolicLink || !parentAttrs.isDirectory) return@runCatching false
-        if (identity.parentFileKey != null && parentAttrs.fileKey() != identity.parentFileKey) {
-            return@runCatching false
-        }
-        val file = parent.resolve(identity.fileName)
-        val fileAttrs = Files.readAttributes(
-            file,
-            BasicFileAttributes::class.java,
-            LinkOption.NOFOLLOW_LINKS,
-        )
-        if (fileAttrs.isSymbolicLink) return@runCatching false
-        if (identity.fileKey != null && fileAttrs.fileKey() != identity.fileKey) {
-            return@runCatching false
-        }
-        // creationTime is part of the recorded identity; mismatch ⇒ not the object we created.
-        fileAttrs.creationTime() == identity.creationTime
-    }.getOrDefault(false)
-
-/**
- * Delete the registered paste file **only if** it is still the exact filesystem object we created.
- * Prefers [SecureDirectoryStream] (directory-fd-relative delete) so a path swap between verify and
- * delete cannot redirect the unlink. If identity cannot be proven, leaves the file alone (leak OK).
+ * Reclaim aged regular-file entries inside the paste-cache.
  *
- * @return true when the file was deleted (or already gone after a matching identity check).
+ * Safety rules (by design — no identity registry):
+ * - Refuses to run if the cache path's real location is outside the app config directory.
+ * - Lists the cache directory only; never recurses.
+ * - Reads each entry with [LinkOption.NOFOLLOW_LINKS]; skips symlinks and non-regular files.
+ * - Deletes only regular files whose last-modified time is older than [maxAge].
+ *
+ * @return number of files deleted, or `-1` when the pruner refused to run (unsafe path).
  */
-private fun deleteComposerPasteTempIfOwned(identity: ComposerPasteTempIdentity): Boolean {
-    if (!composerPasteTempIdentityMatches(identity)) return false
-    val parent = Path.of(identity.parentAbsolutePath)
-    val name = Path.of(identity.fileName)
-    // Prefer SecureDirectoryStream: open the parent directory, re-check child attrs relative to
-    // that handle, then delete by name — no second path walk that could follow a new symlink.
-    val deletedViaSecure = runCatching {
-        Files.newDirectoryStream(parent).use { stream: DirectoryStream<Path> ->
-            if (stream !is SecureDirectoryStream<*>) return@runCatching false
-            @Suppress("UNCHECKED_CAST")
-            val sds = stream as SecureDirectoryStream<Path>
-            // Parent identity via the open directory (fd), not a re-resolved path.
-            val parentView = sds.getFileAttributeView(BasicFileAttributeView::class.java)
-                ?: return@runCatching false
-            val parentAttrs = parentView.readAttributes()
-            if (identity.parentFileKey != null && parentAttrs.fileKey() != identity.parentFileKey) {
-                return@runCatching false
-            }
-            val childView = sds.getFileAttributeView(
-                name,
-                BasicFileAttributeView::class.java,
-                LinkOption.NOFOLLOW_LINKS,
-            ) ?: return@runCatching false
-            val childAttrs = childView.readAttributes()
-            if (childAttrs.isSymbolicLink) return@runCatching false
-            if (identity.fileKey != null && childAttrs.fileKey() != identity.fileKey) {
-                return@runCatching false
-            }
-            if (childAttrs.creationTime() != identity.creationTime) return@runCatching false
-            sds.deleteFile(name)
-            true
-        }
-    }.getOrDefault(false)
-    if (deletedViaSecure) return true
-    // Fallback when SecureDirectoryStream is unavailable: re-verify then path delete. Still
-    // refuses when identity mismatches; residual TOCTOU window is only vs same-key replacement.
-    if (!composerPasteTempIdentityMatches(identity)) return false
-    return runCatching {
-        Files.deleteIfExists(parent.resolve(identity.fileName))
-        true
-    }.getOrDefault(false)
-}
+internal fun prunePasteCache(
+    maxAge: Duration = PASTE_CACHE_TTL,
+    now: Instant = Instant.now(),
+): Int {
+    val config = desktopConfigDir()
+    val cache = pasteCacheDir()
+    if (!Files.exists(cache)) return 0
 
-/**
- * Best-effort remove of an empty parent dir **only if** it is still the directory we created
- * (parent fileKey match, not a symlink). Never follows a parent that became a symlink.
- */
-private fun deleteEmptyOwnedParent(identity: ComposerPasteTempIdentity) {
+    val configReal = runCatching {
+        if (Files.exists(config)) config.toRealPath() else config.toAbsolutePath().normalize()
+    }.getOrElse { return -1 }
+    val cacheReal = runCatching { cache.toRealPath() }.getOrElse { return -1 }
+    if (!cacheReal.startsWith(configReal)) return -1
+    if (cacheReal.fileName.toString() != PASTE_CACHE_DIR_NAME) return -1
+
+    // When paste-cache itself is a symlink, toRealPath already followed it; we require the
+    // resolved location to sit under config (checked above). Listing uses the real path so we
+    // never walk through a symlink entry *out* of the cache via a child link.
+    if (!Files.isDirectory(cacheReal)) return -1
+
+    val cutoff = now.minus(maxAge)
+    var deleted = 0
     runCatching {
-        val parent = Path.of(identity.parentAbsolutePath)
-        val parentAttrs = Files.readAttributes(
-            parent,
-            BasicFileAttributes::class.java,
-            LinkOption.NOFOLLOW_LINKS,
-        )
-        if (parentAttrs.isSymbolicLink || !parentAttrs.isDirectory) return@runCatching
-        if (identity.parentFileKey != null && parentAttrs.fileKey() != identity.parentFileKey) {
-            return@runCatching
+        Files.newDirectoryStream(cacheReal).use { stream ->
+            for (entry in stream) {
+                val attrs = runCatching {
+                    Files.readAttributes(
+                        entry,
+                        BasicFileAttributes::class.java,
+                        LinkOption.NOFOLLOW_LINKS,
+                    )
+                }.getOrNull() ?: continue
+                // Never follow or delete through a symlink (target may lie outside the cache).
+                if (attrs.isSymbolicLink) continue
+                if (!attrs.isRegularFile) continue
+                if (attrs.lastModifiedTime().toInstant().isAfter(cutoff)) continue
+                // Re-check immediately before unlink: skip if entry became a symlink.
+                val still = runCatching {
+                    Files.readAttributes(
+                        entry,
+                        BasicFileAttributes::class.java,
+                        LinkOption.NOFOLLOW_LINKS,
+                    )
+                }.getOrNull() ?: continue
+                if (still.isSymbolicLink || !still.isRegularFile) continue
+                if (runCatching { Files.deleteIfExists(entry) }.getOrDefault(false)) {
+                    deleted++
+                }
+            }
         }
-        // Empty check without following links into the directory tree of a swapped target.
-        val empty = Files.newDirectoryStream(parent).use { it.iterator().hasNext().not() }
-        if (empty) Files.deleteIfExists(parent)
     }
+    return deleted
 }
 
 /**
@@ -472,25 +412,6 @@ internal fun isComposerImageFile(file: File): Boolean {
     val mime = composerMime(file.toPath())
     if (mime.startsWith("image/")) return true
     return file.extension.lowercase() in IMAGE_FILE_EXTENSIONS
-}
-
-/**
- * Delete a **registry-tracked** paste-origin temp PNG and its empty parent dir, but **only** when
- * the live filesystem object still matches the identity recorded at creation (fileKey +
- * creationTime, NOFOLLOW). Safe no-op for any file we did not create, for path-string spoofs
- * (parent replaced by symlink, same-path recreation), and when identity cannot be proven — leaking
- * a temp is preferred over deleting a user's file. Called once the file is no longer needed (chip
- * removed/cleared, session dispose, encode fail).
- */
-internal fun cleanupComposerPasteTemp(file: File?) {
-    if (file == null) return
-    // Remove from registry first so a concurrent cleanup cannot double-delete; only proceed if we
-    // had a registered identity for this path key.
-    val identity = composerPasteGeneratedTemps.remove(file.absolutePath) ?: return
-    if (deleteComposerPasteTempIfOwned(identity)) {
-        deleteEmptyOwnedParent(identity)
-    }
-    // Identity mismatch: leave whatever is on disk alone (may be a user file at a reused path).
 }
 
 /**
@@ -529,14 +450,12 @@ internal fun scaleBufferedImageToMaxEdge(source: BufferedImage, maxEdge: Int): B
 }
 
 /**
- * Write an AWT [Image] (screenshot / copy-from-viewer paste) to a temp PNG and return the file.
- * Applies dimension + encoded-byte caps before / after encode. Large images are downscaled to
- * [PASTE_IMAGE_ENCODE_MAX_EDGE] before PNG encode so a 4k² paste stays responsive. Marks
- * delete-on-exit as a safety net; callers must still [cleanupComposerPasteTemp] after staging
- * lifecycle ends. Null when dimensions are invalid/oversize or encode fails (any partial file is
- * deleted). Successfully created files are registered with filesystem **identity** (fileKey +
- * creationTime, NOFOLLOW) in [composerPasteGeneratedTemps] — path string alone never authorises
- * delete.
+ * Write an AWT [Image] (screenshot / copy-from-viewer paste) into the app-owned [pasteCacheDir]
+ * as a freshly named PNG and return the file. Applies dimension + encoded-byte caps before /
+ * after encode. Large images are downscaled to [PASTE_IMAGE_ENCODE_MAX_EDGE] before PNG encode.
+ *
+ * **No per-file deletion** — failed encodes may leave a partial/oversize entry for [prunePasteCache];
+ * chip remove / send never unlink by path. Names are UUID-based and never reused.
  *
  * **Must not run on the UI thread** for large rasters — PNG encode of a multi-megapixel image is
  * multi-second without downscale. Call from [Dispatchers.IO].
@@ -547,68 +466,38 @@ internal fun clipboardImageToTempFile(
     image: Image,
     maxEncodedBytes: Long = PASTE_IMAGE_MAX_ENCODED_BYTES,
     encodeMaxEdge: Int = PASTE_IMAGE_ENCODE_MAX_EDGE,
-): File? {
-    var outFile: File? = null
-    var outDir: File? = null
-    return runCatching {
-        val w = image.getWidth(null)
-        val h = image.getHeight(null)
-        if (!clipboardImageWithinCaps(w, h)) return null
-        // Cap already bounds the w*h*4 allocation for non-BufferedImage copies.
-        val raw = when (image) {
-            is BufferedImage -> image
-            else -> BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB).also { bi ->
-                val g = bi.createGraphics()
-                try {
-                    g.drawImage(image, 0, 0, null)
-                } finally {
-                    g.dispose()
-                }
+): File? = runCatching {
+    val w = image.getWidth(null)
+    val h = image.getHeight(null)
+    if (!clipboardImageWithinCaps(w, h)) return null
+    // Cap already bounds the w*h*4 allocation for non-BufferedImage copies.
+    val raw = when (image) {
+        is BufferedImage -> image
+        else -> BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB).also { bi ->
+            val g = bi.createGraphics()
+            try {
+                g.drawImage(image, 0, 0, null)
+            } finally {
+                g.dispose()
             }
         }
-        // Downscale large pastes before PNG encode (quality/speed trade-off for chat attach).
-        val buffered = scaleBufferedImageToMaxEdge(raw, encodeMaxEdge)
-        val dir = Files.createTempDirectory(COMPOSER_PASTE_TEMP_PREFIX).toFile().apply {
-            deleteOnExit()
-            outDir = this
-        }
-        val out = File(dir, "paste-${System.currentTimeMillis()}.png").also {
-            outFile = it
-            it.deleteOnExit()
-        }
-        if (!ImageIO.write(buffered, "png", out)) {
-            // Not yet registered — scrub by direct path (we just created these).
-            scrubUnregisteredPasteTemp(out, dir)
-            return null
-        }
-        if (out.length() > maxEncodedBytes) {
-            scrubUnregisteredPasteTemp(out, dir)
-            return null
-        }
-        // Register AFTER a successful write so identity (fileKey/creationTime) reflects the real
-        // object. Failure to register must not hand out an untracked path for later path-only delete.
-        if (!registerComposerPasteTemp(out)) {
-            scrubUnregisteredPasteTemp(out, dir)
-            return null
-        }
-        out
-    }.getOrElse {
-        // Encode / IO failure: scrub any partial temp (not yet identity-registered).
-        scrubUnregisteredPasteTemp(outFile, outDir)
-        null
     }
-}
-
-/**
- * Best-effort delete of a paste temp that was **never** identity-registered (encode failed mid-way).
- * Safe only for files this function just created in-process — not for registry-gated cleanup.
- */
-private fun scrubUnregisteredPasteTemp(file: File?, dir: File?) {
-    runCatching { file?.delete() }
-    runCatching {
-        if (dir != null && dir.isDirectory && (dir.list()?.isEmpty() != false)) dir.delete()
+    // Downscale large pastes before PNG encode (quality/speed trade-off for chat attach).
+    val buffered = scaleBufferedImageToMaxEdge(raw, encodeMaxEdge)
+    val dir = ensurePasteCacheDir() ?: return null
+    // Opportunistic reclaim of aged entries (also runs at app startup).
+    prunePasteCache()
+    val out = dir.resolve("paste-${UUID.randomUUID()}.png").toFile()
+    if (!ImageIO.write(buffered, "png", out)) {
+        // Leave any partial for the age pruner — never delete-by-path.
+        return null
     }
-}
+    if (out.length() > maxEncodedBytes) {
+        // Oversize: leave for pruner; do not hand out the path.
+        return null
+    }
+    out
+}.getOrNull()
 
 /**
  * Cheap flavor-only probe: does this transferable *likely* hold a pasteable image? Used on the UI
@@ -811,15 +700,8 @@ fun DesktopComposer(
     // Plain-var counters (single Main-thread dispatcher — no atomics needed); one holder per session.
     val ids = remember(sessionKey) { object { var nextId = 0L; var nextSeq = 0L } }
     val scope = rememberCoroutineScope()
-    // Session switch / leave composition discards [attachments] via remember(sessionKey). Scrub any
-    // registry-tracked paste temps those chips still owned so a switch cannot leak files for the
-    // app lifetime (and never deletes non-registered user paths).
-    DisposableEffect(sessionKey) {
-        val sessionAttachments = attachments
-        onDispose {
-            sessionAttachments.mapNotNull { it.localPath }.forEach { cleanupComposerPasteTemp(File(it)) }
-        }
-    }
+    // Session switch discards [attachments] via remember(sessionKey). Paste-cache files are left
+    // for [prunePasteCache] (age TTL) — never unlinked by path on dispose.
 
     // Guarded update: apply only when the chip STILL exists AND belongs to the run identified by
     // [seq]. A late callback from a removed chip (idx < 0) or a superseded run (runSeq mismatch, e.g.
@@ -872,7 +754,7 @@ fun DesktopComposer(
                 source = FileChunkSource(file),
                 state = UploadState.Uploading(0f),
                 kind = composerKind(mime),
-                // Remember the path so paste-origin temps can be deleted once the chip is gone.
+                // Remember the path for diagnostics; paste-cache entries are reclaimed by age prune.
                 localPath = file.absolutePath,
             ),
         )
@@ -886,20 +768,16 @@ fun DesktopComposer(
         filterExistingFiles(files).forEach { stage(it) }
     }
 
-    /** Drop a chip and scrub any paste-origin temp file it owned. */
+    /** Drop a chip. Paste-cache files are left for [prunePasteCache] (never unlinked by path). */
     fun removeAttachment(id: String) {
         val idx = attachments.indexOfFirst { it.id == id }
         if (idx < 0) return
-        val path = attachments[idx].localPath
         attachments.removeAt(idx)
-        path?.let { cleanupComposerPasteTemp(File(it)) }
     }
 
-    /** Clear all chips (after a successful send) and scrub paste-origin temps. */
+    /** Clear all chips (after a successful send). Paste-cache reclaim is age-based only. */
     fun clearAttachments() {
-        val paths = attachments.mapNotNull { it.localPath }
         attachments.clear()
-        paths.forEach { cleanupComposerPasteTemp(File(it)) }
     }
 
     /**
@@ -912,11 +790,8 @@ fun DesktopComposer(
             val files = withContext(Dispatchers.IO) { pasteImageFiles() }
             if (shouldStageClipboardPaste(uploadBound = true, files = files)) {
                 stageFiles(files)
-            } else {
-                // Encode failed / empty: no chip to own cleanup — scrub any temps the seam may have
-                // written before a partial failure (defensive; clipboardImageToTempFile already cleans).
-                files.forEach { cleanupComposerPasteTemp(it) }
             }
+            // Encode failed / empty: any partial paste-cache write is left for [prunePasteCache].
         }
     }
 

@@ -24,24 +24,48 @@ import java.awt.image.BufferedImage
 import java.awt.image.ImageObserver
 import java.io.File
 import java.nio.file.Files
+import java.nio.file.Path
+import java.time.Duration
+import java.time.Instant
 import javax.imageio.ImageIO
+import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
  * Paste-image contract for [DesktopComposer]: pure key/MIME helpers, clipboard Transferable
- * extraction, caps/cleanup, real Ctrl/Meta key injection, and the Attach-menu "Paste image" path
- * that drives the SAME [stageFiles] funnel (via [launchPasteImages] / the `pasteImageFiles` seam).
- * Never touches the real system clipboard for image paste — tests inject [DesktopComposer]'s
- * `pasteImageFiles` / `clipboardLikelyHasImage` seams (except the text-only paste test, which puts
- * a string on the AWT clipboard so the field's native paste can prove fallthrough).
+ * extraction, paste-cache layout + age pruner, real Ctrl/Meta key injection, and the Attach-menu
+ * "Paste image" path that drives the SAME [stageFiles] funnel (via [launchPasteImages] / the
+ * `pasteImageFiles` seam). Never touches the real system clipboard for image paste — tests inject
+ * [DesktopComposer]'s `pasteImageFiles` / `clipboardLikelyHasImage` seams.
  */
 @OptIn(ExperimentalTestApi::class)
 class DesktopComposerPasteTest {
+
+    private lateinit var testConfigDir: Path
+
+    @BeforeTest
+    fun installPasteCacheOverride() {
+        testConfigDir = Files.createTempDirectory("smx-paste-config-")
+        desktopConfigDirOverride = testConfigDir
+    }
+
+    @AfterTest
+    fun clearPasteCacheOverride() {
+        desktopConfigDirOverride = null
+        // Best-effort fixture cleanup (not production delete-by-path).
+        runCatching {
+            Files.walk(testConfigDir).use { stream ->
+                stream.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+            }
+        }
+    }
 
     // ── pure key predicate — Ctrl and Meta are DISTINCT flags ───────────────────
     @Test fun pasteKey_ctrlV_down_isPaste() {
@@ -177,13 +201,10 @@ class DesktopComposerPasteTest {
         assertEquals(1, got.size)
         assertTrue(got[0].isFile)
         assertTrue(got[0].name.endsWith(".png"))
-        assertTrue(isComposerPasteTempFile(got[0]), "generated paste temp must be registry-tracked")
-        // Round-trip: the temp file is a real PNG ImageIO can re-read.
+        assertTrue(isPasteCacheFile(got[0]), "raster paste must land in the app paste-cache")
+        // Round-trip: the cache file is a real PNG ImageIO can re-read.
         val reloaded = ImageIO.read(got[0])
         assertTrue(reloaded != null && reloaded.width == 4 && reloaded.height == 4)
-        cleanupComposerPasteTemp(got[0])
-        assertFalse(got[0].exists())
-        assertFalse(isComposerPasteTempFile(got[0]), "cleanup must unregister")
     }
 
     @Test fun clipboardTransferable_empty_when_textOnly() {
@@ -205,8 +226,7 @@ class DesktopComposerPasteTest {
         val file = clipboardImageToTempFile(img)
         assertTrue(file != null && file.isFile)
         assertTrue(file!!.length() > 0)
-        assertTrue(isComposerPasteTempFile(file))
-        cleanupComposerPasteTemp(file)
+        assertTrue(isPasteCacheFile(file))
     }
 
     // ── caps: dimension + pixel + encoded-byte + reject without huge alloc ──────
@@ -241,8 +261,7 @@ class DesktopComposerPasteTest {
         val img = BufferedImage(32, 32, BufferedImage.TYPE_INT_RGB)
         val file = clipboardImageToTempFile(img, maxEncodedBytes = 1L)
         assertNull(file, "encoded-byte cap must drop the paste after write")
-        // No leaked registry entry / temp dir from the failed encode.
-        // (cleanupComposerPasteTemp already ran inside clipboardImageToTempFile)
+        // Oversize bytes may remain in paste-cache for the age pruner — never deleted by path here.
     }
 
     @Test fun scaleBufferedImageToMaxEdge_downscalesLargeImages() {
@@ -250,147 +269,156 @@ class DesktopComposerPasteTest {
         val scaled = scaleBufferedImageToMaxEdge(big, maxEdge = 2048)
         assertTrue(scaled.width <= 2048 && scaled.height <= 2048)
         assertTrue(scaled.width == 2048 || scaled.height == 2048)
-        // Already small — identity.
+        // Already small — same instance.
         val small = BufferedImage(100, 80, BufferedImage.TYPE_INT_RGB)
         assertTrue(scaleBufferedImageToMaxEdge(small, 2048) === small)
     }
 
-    // ── temp-file cleanup: registry only, never path-name inference ─────────────
-    @Test fun cleanupComposerPasteTemp_deletesFileAndEmptyParent() {
+    // ── paste-cache: app-owned dir, fresh names, age prune only ─────────────────
+
+    /** (a) Pasted image lands in the app cache dir with a fresh random name. */
+    @Test fun pasteImage_landsInAppCacheDir_withFreshName() {
         val img = BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB)
-        val file = clipboardImageToTempFile(img)
-        assertNotNull(file)
-        val parent = file!!.parentFile
-        assertTrue(file.exists())
-        assertTrue(parent != null && parent.exists())
-        assertTrue(isComposerPasteTempFile(file))
-        cleanupComposerPasteTemp(file)
-        assertFalse(file.exists())
-        assertFalse(parent!!.exists())
+        val a = clipboardImageToTempFile(img)
+        val b = clipboardImageToTempFile(img)
+        assertNotNull(a)
+        assertNotNull(b)
+        val cache = pasteCacheDir().toRealPath()
+        assertEquals(testConfigDir.resolve(PASTE_CACHE_DIR_NAME).toRealPath(), cache)
+        assertEquals(cache, a!!.toPath().parent.toRealPath())
+        assertEquals(cache, b!!.toPath().parent.toRealPath())
+        assertTrue(a.name.startsWith("paste-") && a.name.endsWith(".png"))
+        assertTrue(b.name.startsWith("paste-") && b.name.endsWith(".png"))
+        assertNotEquals(a.name, b.name, "each paste must get a fresh random name")
+        assertTrue(isPasteCacheFile(a))
+        assertTrue(isPasteCacheFile(b))
     }
 
-    @Test fun cleanupComposerPasteTemp_ignoresNonPasteFiles() {
-        val regular = tempNamed("not-paste.png") { writeBytes(tinyPng()) }
-        assertFalse(isComposerPasteTempFile(regular))
-        cleanupComposerPasteTemp(regular)
-        assertTrue(regular.exists(), "non-paste files must not be deleted")
+    /** (b) Pruner removes only aged entries inside the paste-cache directory. */
+    @Test fun prunePasteCache_removesOnlyAgedEntriesInsideCache() {
+        val cache = ensurePasteCacheDir()!!
+        val fresh = cache.resolve("paste-fresh.png").toFile().apply { writeBytes(tinyPng()) }
+        val aged = cache.resolve("paste-aged.png").toFile().apply { writeBytes(tinyPng()) }
+        // Backdate the aged entry (mtime older than TTL).
+        val oldMtime = Instant.now().minus(PASTE_CACHE_TTL).minus(Duration.ofMinutes(5))
+        Files.setLastModifiedTime(aged.toPath(), java.nio.file.attribute.FileTime.from(oldMtime))
+
+        val deleted = prunePasteCache(maxAge = PASTE_CACHE_TTL, now = Instant.now())
+        assertTrue(deleted >= 1, "expected at least the aged entry deleted, got $deleted")
+        assertTrue(fresh.exists(), "fresh cache entry must survive prune")
+        assertFalse(aged.exists(), "aged cache entry must be reclaimed")
     }
 
     /**
-     * REGRESSION: a user-owned file under a directory whose name starts with `composer-paste`
-     * must NEVER be treated as deletable. The old path-prefix heuristic deleted the original.
+     * (c) Pruner does not traverse a symlink pointing outside the cache — victim outside
+     * stays intact; the symlink entry itself is skipped (not followed).
      */
-    @Test fun cleanupComposerPasteTemp_doesNotDeleteUserFileUnderComposerPasteNamedDir() {
-        val userDir = Files.createTempDirectory("composer-paste-user-owned-").toFile().apply {
-            deleteOnExit()
+    @Test fun prunePasteCache_doesNotTraverseSymlinkOutsideCache() {
+        val cache = ensurePasteCacheDir()!!
+        val outside = Files.createTempDirectory("user-docs-outside-")
+        val victim = outside.resolve("precious.png").toFile().apply {
+            writeText("USER-OWNED-${System.nanoTime()}")
         }
-        val userFile = File(userDir, "my-photo.png").apply {
+        val victimMarker = victim.readText()
+        // Symlink inside paste-cache → outside victim. Even if "aged", must not delete target.
+        val link = cache.resolve("paste-link-out.png")
+        Files.createSymbolicLink(link, victim.toPath())
+        val old = Instant.now().minus(PASTE_CACHE_TTL).minus(Duration.ofHours(2))
+        // mtime on the symlink itself (NOFOLLOW); pruner must skip isSymbolicLink.
+        runCatching {
+            Files.setLastModifiedTime(link, java.nio.file.attribute.FileTime.from(old))
+        }
+
+        val deleted = prunePasteCache(maxAge = PASTE_CACHE_TTL, now = Instant.now())
+        assertTrue(victim.exists(), "user file outside cache must survive")
+        assertEquals(victimMarker, victim.readText(), "user file contents must be intact")
+        // Symlink may remain (skipped) — that is fine; we must not have unlinked the target.
+        assertTrue(deleted >= 0, "pruner must not refuse solely because of a child symlink")
+        // Cleanup fixtures.
+        Files.deleteIfExists(link)
+        victim.delete()
+        Files.deleteIfExists(outside)
+    }
+
+    /**
+     * (d) A user file in an unrelated directory is never touched by any code path
+     * (pruner only lists paste-cache; no path-based delete API remains).
+     */
+    @Test fun prunePasteCache_neverTouchesUserFileInUnrelatedDirectory() {
+        val userDir = Files.createTempDirectory("user-unrelated-")
+        val userFile = userDir.resolve("my-photo.png").toFile().apply {
             writeBytes(tinyPng())
-            deleteOnExit()
         }
-        assertTrue(userFile.exists())
-        assertTrue(userDir.name.startsWith(COMPOSER_PASTE_TEMP_PREFIX))
-        assertFalse(
-            isComposerPasteTempFile(userFile),
-            "user file must not be registry-tracked just because the parent name matches",
-        )
-        cleanupComposerPasteTemp(userFile)
-        assertTrue(userFile.exists(), "user's original file must survive cleanup")
-        assertTrue(userDir.exists(), "user's directory must survive cleanup")
+        val marker = "UNRELATED-${System.nanoTime()}"
+        userFile.writeText(marker)
+        // Age it so a buggy recursive/global prune would pick it up.
+        val old = Instant.now().minus(PASTE_CACHE_TTL).minus(Duration.ofDays(1))
+        Files.setLastModifiedTime(userFile.toPath(), java.nio.file.attribute.FileTime.from(old))
+
+        assertFalse(isPasteCacheFile(userFile))
+        prunePasteCache(maxAge = Duration.ZERO, now = Instant.now()) // aggressive TTL
+        // Also exercise write path — must not delete outside files.
+        clipboardImageToTempFile(BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB))
+
+        assertTrue(userFile.exists(), "unrelated user file must never be touched")
+        assertEquals(marker, userFile.readText())
+        userFile.delete()
+        Files.deleteIfExists(userDir)
     }
 
-    /**
-     * REGRESSION (TOCTOU / parent-symlink): ownership is identity (fileKey + creationTime), not
-     * path string. Between create and cleanup an attacker replaces the parent directory with a
-     * symlink to a user directory that holds a file of the same name — cleanup must refuse.
-     */
-    @Test fun cleanupComposerPasteTemp_refusesWhenParentReplacedBySymlink() {
-        val img = BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB)
-        val paste = clipboardImageToTempFile(img)
-        assertNotNull(paste)
-        val pasteFile = paste!!
-        val pastePath = pasteFile.absolutePath
-        val parentPath = pasteFile.parentFile!!.toPath()
-        val fileName = pasteFile.name
-        assertTrue(isComposerPasteTempFile(pasteFile))
-
-        // Victim user file at the path the symlink will expose under the old parent name.
-        val victimDir = Files.createTempDirectory("user-docs-").toFile().apply { deleteOnExit() }
-        val victimFile = File(victimDir, fileName).apply {
-            writeBytes(tinyPng())
-            deleteOnExit()
+    /** Pruner refuses when paste-cache path resolves outside the app config dir. */
+    @Test fun prunePasteCache_refusesWhenCacheResolvesOutsideConfig() {
+        val config = testConfigDir
+        val outside = Files.createTempDirectory("paste-cache-escaped-")
+        val cacheLink = config.resolve(PASTE_CACHE_DIR_NAME)
+        // Ensure no real paste-cache dir; point the name at an outside directory.
+        Files.deleteIfExists(cacheLink)
+        if (Files.isDirectory(cacheLink)) {
+            Files.walk(cacheLink).use { s ->
+                s.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+            }
         }
-        val victimMarker = "USER-OWNED-BYTES-${System.nanoTime()}"
-        victimFile.writeText(victimMarker)
-        assertTrue(victimFile.exists())
+        Files.createSymbolicLink(cacheLink, outside)
+        // Drop a decoy file outside (via the symlink name).
+        val decoy = outside.resolve("decoy.png").toFile().apply { writeBytes(tinyPng()) }
+        val old = Instant.now().minus(PASTE_CACHE_TTL).minus(Duration.ofHours(1))
+        Files.setLastModifiedTime(decoy.toPath(), java.nio.file.attribute.FileTime.from(old))
 
-        // Attack: remove our temp tree, put a symlink at the same parent path → victimDir.
-        assertTrue(pasteFile.delete())
-        assertTrue(pasteFile.parentFile!!.delete())
-        Files.createSymbolicLink(parentPath, victimDir.toPath())
+        val result = prunePasteCache(maxAge = Duration.ZERO, now = Instant.now())
+        assertEquals(-1, result, "pruner must refuse when cache realpath escapes config")
+        assertTrue(decoy.exists(), "file outside config must survive refused prune")
 
-        // Path string still matches the registry key; live object is the victim via the symlink.
-        val spoofed = File(pastePath)
-        assertTrue(spoofed.exists(), "spoofed path must resolve through the parent symlink")
-        assertEquals(victimMarker, spoofed.readText(), "spoofed path must be the victim file")
-
-        cleanupComposerPasteTemp(spoofed)
-
-        assertTrue(victimFile.exists(), "user file behind parent symlink must survive cleanup")
-        assertEquals(victimMarker, victimFile.readText(), "user file contents must be intact")
-        // Parent symlink may remain; that is a leak of a symlink, not of user data.
-        runCatching { Files.deleteIfExists(parentPath) }
-        victimFile.delete()
-        victimDir.delete()
+        Files.deleteIfExists(cacheLink)
+        decoy.delete()
+        Files.deleteIfExists(outside)
     }
 
-    /**
-     * REGRESSION (TOCTOU / same-path recreation): delete the generated file and create a different
-     * file at the exact same path. Cleanup must not delete the replacement (different fileKey).
-     */
-    @Test fun cleanupComposerPasteTemp_refusesWhenFileRecreatedAtSamePath() {
-        val img = BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB)
-        val paste = clipboardImageToTempFile(img)
-        assertNotNull(paste)
-        val pasteFile = paste!!
-        val absolutePath = pasteFile.absolutePath
-        val parent = pasteFile.parentFile!!
-        val name = pasteFile.name
-        assertTrue(isComposerPasteTempFile(pasteFile))
-
-        // Capture identity of the object we created (must differ after recreation).
-        val originalIdentity = readComposerPasteTempIdentity(pasteFile)
-        assertNotNull(originalIdentity)
-
-        // Attack: delete our file and put a different file at the same path (new inode).
-        assertTrue(pasteFile.delete())
-        val replacement = File(parent, name).apply {
-            writeText("REPLACEMENT-USER-DATA-${System.nanoTime()}")
-            deleteOnExit()
+    /** Chip remove / send do not delete paste-cache files (age pruner owns reclaim). */
+    @Test fun pasteTemp_leftForPrunerAfterChipRemoved() = runComposeUiTest {
+        val img = BufferedImage(3, 3, BufferedImage.TYPE_INT_RGB)
+        val temp = clipboardImageToTempFile(img)!!
+        assertTrue(temp.exists())
+        setContent {
+            DesktopComposer(
+                draft = "",
+                onDraftChange = {},
+                sending = false,
+                agentWorking = false,
+                onSend = { _, _ -> },
+                onInterrupt = {},
+                onUpload = { _, _, _, _, _ -> "file-1" },
+                pickFiles = { emptyList() },
+                pasteImageFiles = { listOf(temp) },
+            )
         }
-        assertTrue(replacement.exists())
-        assertEquals(absolutePath, replacement.absolutePath)
-        val replacementIdentity = readComposerPasteTempIdentity(replacement)
-        assertNotNull(replacementIdentity)
-        // Different filesystem object → different fileKey (inode).
-        assertTrue(
-            originalIdentity!!.fileKey != replacementIdentity!!.fileKey,
-            "recreation must yield a new fileKey; got same ${originalIdentity.fileKey}",
-        )
-        // Registry still keys the path string — cleanup must still refuse.
-        assertTrue(isComposerPasteTempFile(replacement))
-
-        cleanupComposerPasteTemp(replacement)
-
-        assertTrue(replacement.exists(), "recreated file at the registered path must survive")
-        assertTrue(
-            replacement.readText().startsWith("REPLACEMENT-USER-DATA-"),
-            "replacement contents must be intact",
-        )
-        // Registry entry consumed; second cleanup is a no-op.
-        assertFalse(isComposerPasteTempFile(replacement))
-        replacement.delete()
-        parent.delete()
+        onNodeWithTag("composer-attach").performClick()
+        onNodeWithTag("composer-paste-image").performClick()
+        waitUntil(timeoutMillis = 5_000L) {
+            onAllNodesWithTag("composer-chip-remove").fetchSemanticsNodes().isNotEmpty()
+        }
+        onNodeWithTag("composer-chip-remove").performClick()
+        waitForIdle()
+        assertTrue(temp.exists(), "chip remove must not delete paste-cache entries by path")
     }
 
     // ── stage-or-fallthrough decision (drives the Ctrl/Cmd+V handler) ───────────
@@ -553,102 +581,6 @@ class DesktopComposerPasteTest {
     }
 
     /**
-     * Temp cleanup after the chip is removed: paste-origin PNG must not linger for the app lifetime.
-     */
-    @Test fun pasteTemp_cleanedAfterChipRemoved() = runComposeUiTest {
-        val img = BufferedImage(3, 3, BufferedImage.TYPE_INT_RGB)
-        val temp = clipboardImageToTempFile(img)!!
-        assertTrue(temp.exists())
-        setContent {
-            DesktopComposer(
-                draft = "",
-                onDraftChange = {},
-                sending = false,
-                agentWorking = false,
-                onSend = { _, _ -> },
-                onInterrupt = {},
-                onUpload = { _, _, _, _, _ -> "file-1" },
-                pickFiles = { emptyList() },
-                pasteImageFiles = { listOf(temp) },
-            )
-        }
-        onNodeWithTag("composer-attach").performClick()
-        onNodeWithTag("composer-paste-image").performClick()
-        waitUntil(timeoutMillis = 5_000L) {
-            onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isNotEmpty()
-        }
-        // Wait until upload settles so the × remove is visible.
-        waitUntil(timeoutMillis = 5_000L) {
-            onAllNodesWithTag("composer-chip-remove").fetchSemanticsNodes().isNotEmpty()
-        }
-        onNodeWithTag("composer-chip-remove").performClick()
-        waitUntil(timeoutMillis = 2_000L) { !temp.exists() }
-        assertFalse(temp.exists(), "paste temp must be deleted when the chip is removed")
-    }
-
-    /** Send clears chips and scrubs registry-tracked paste temps. */
-    @Test fun pasteTemp_cleanedAfterSend() = runComposeUiTest {
-        val img = BufferedImage(3, 3, BufferedImage.TYPE_INT_RGB)
-        val temp = clipboardImageToTempFile(img)!!
-        var draft by mutableStateOf("go")
-        setContent {
-            DesktopComposer(
-                draft = draft,
-                onDraftChange = { draft = it },
-                sending = false,
-                agentWorking = false,
-                onSend = { _, _ -> draft = "" },
-                onInterrupt = {},
-                onUpload = { _, _, _, _, _ -> "file-1" },
-                pickFiles = { emptyList() },
-                pasteImageFiles = { listOf(temp) },
-            )
-        }
-        onNodeWithTag("composer-attach").performClick()
-        onNodeWithTag("composer-paste-image").performClick()
-        waitUntil(timeoutMillis = 5_000L) {
-            onAllNodesWithTag("composer-chip-remove").fetchSemanticsNodes().isNotEmpty()
-        }
-        onNodeWithTag("composer-send").assertIsEnabled()
-        onNodeWithTag("composer-send").performClick()
-        waitUntil(timeoutMillis = 2_000L) { !temp.exists() }
-        assertFalse(temp.exists(), "paste temp must be deleted after send clears chips")
-    }
-
-    /** Session switch disposes the previous session's attachments and scrubs paste temps. */
-    @Test fun pasteTemp_cleanedOnSessionSwitch() = runComposeUiTest {
-        val img = BufferedImage(3, 3, BufferedImage.TYPE_INT_RGB)
-        val temp = clipboardImageToTempFile(img)!!
-        var key by mutableStateOf("session-A")
-        setContent {
-            DesktopComposer(
-                draft = "",
-                onDraftChange = {},
-                sending = false,
-                agentWorking = false,
-                onSend = { _, _ -> },
-                onInterrupt = {},
-                sessionKey = key,
-                onUpload = { _, _, _, _, _ -> "file-1" },
-                pickFiles = { emptyList() },
-                pasteImageFiles = { listOf(temp) },
-            )
-        }
-        onNodeWithTag("composer-attach").performClick()
-        onNodeWithTag("composer-paste-image").performClick()
-        waitUntil(timeoutMillis = 5_000L) {
-            onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isNotEmpty()
-        }
-        assertTrue(temp.exists())
-        key = "session-B"
-        waitUntil(timeoutMillis = 5_000L) {
-            onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isEmpty()
-        }
-        waitUntil(timeoutMillis = 2_000L) { !temp.exists() }
-        assertFalse(temp.exists(), "paste temp must be deleted when session disposes attachments")
-    }
-
-    /**
      * Production paste encode path: drive the real [DesktopComposer] entry point (Attach →
      * "Paste image" → [launchPasteImages] → `withContext(IO)` → `pasteImageFiles`), not a
      * hand-rolled `withContext(IO) { clipboardImageToTempFile(...) }` that bypasses the entry point.
@@ -688,7 +620,7 @@ class DesktopComposerPasteTest {
         val file = encoded.get()
         assertNotNull(file, "launchPasteImages → pasteImageFiles must encode the raster")
         assertTrue(file!!.isFile && file.length() > 0)
-        assertTrue(isComposerPasteTempFile(file))
+        assertTrue(isPasteCacheFile(file), "encode must land in app paste-cache")
         val thread = encodeThread.get()
         assertNotNull(thread, "pasteImageFiles must run on a worker thread")
         assertTrue(
@@ -701,17 +633,11 @@ class DesktopComposerPasteTest {
         )
         val elapsedMs = (System.nanoTime() - startNs.get()) / 1_000_000
         assertTrue(elapsedMs < 15_000, "encode via launchPasteImages took ${elapsedMs}ms")
-        // Chip owns the temp — remove so we don't leak into later tests.
-        waitUntil(timeoutMillis = 5_000L) {
-            onAllNodesWithTag("composer-chip-remove").fetchSemanticsNodes().isNotEmpty()
-        }
-        onNodeWithTag("composer-chip-remove").performClick()
-        waitUntil(timeoutMillis = 2_000L) { !file.exists() }
     }
 
     // ── fixtures ────────────────────────────────────────────────────────────────
     private fun tempNamed(name: String, write: File.() -> Unit): File {
-        // Use a fixture prefix that is NOT registered — registry membership alone decides cleanup.
+        // Fixture under /tmp — unrelated to paste-cache; never touched by prune.
         val dir = Files.createTempDirectory("cmp-paste-fixture").toFile().apply { deleteOnExit() }
         return File(dir, name).apply {
             write()
