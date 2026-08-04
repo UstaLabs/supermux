@@ -27,6 +27,28 @@ object Radii {
 }
 
 /**
+ * Stroke widths — borders and progress indicators (not layout spacing).
+ * Prefer these over raw `1.dp` / `2.dp` so surfaces stay consistent.
+ */
+object Stroke {
+    val hairline = 1.dp
+    val thin = 2.dp
+}
+
+/**
+ * Component-size tokens that sit outside the spacing grid (status dots, menu widths).
+ * Named so call sites never hardcode magic dimensions.
+ */
+object Size {
+    /** Online-status badge on forge connection rows. */
+    val statusDot = 8.dp
+    /** Project-picker / forge omnibox dropdown width. */
+    val omniboxWidth = 384.dp
+    /** Max height of the scrollable omnibox option list. */
+    val omniboxListMax = 360.dp
+}
+
+/**
  * Subtle shadow for "calm depth" surfaces (cards, sheets).
  * Elevation is intentionally low and both ambient/spot are dimmed so
  * the shadow is present but never heavy.

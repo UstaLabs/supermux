@@ -25,6 +25,7 @@ import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeConnectionsResponse
+import dev.supermux.net.ForgeSearchResponse
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
 import dev.supermux.net.FsRefsResult
@@ -1130,18 +1131,29 @@ class DesktopAppState(
     suspend fun forgeImport(kind: String, transport: String): Boolean =
         runApi("forgeImport") { api.importForge(kind, transport); true } ?: false
 
-    /** DELETE /forge/connections/<id> — disconnect. Fire-and-forget (Android forgeRemove parity). */
-    fun forgeRemove(id: String) {
-        stateScope.launch { runApi("forgeRemove") { api.removeForge(id); true } }
-    }
+    /**
+     * DELETE /forge/connections/<id> — disconnect. True only when the account is gone afterwards.
+     * [BrokerApi.removeForge] does not check HTTP status, so we re-list to distinguish a 5xx no-op
+     * from a real removal (and surface failures in the settings UI).
+     */
+    suspend fun forgeRemove(id: String): Boolean =
+        runApi("forgeRemove") {
+            api.removeForge(id)
+            val stillThere = api.listForges().connections.any { it.id == id }
+            if (stillThere) error("forge $id still present after remove")
+            true
+        } ?: false
 
     /** GET /forge/connections → connection list only (launcher omnibox). Empty on failure. */
     suspend fun listForges(): List<ForgeConnection> =
         runApi("listForges") { api.listForges().connections } ?: emptyList()
 
-    /** POST /forge/search → remote repos across connected forges. Empty on failure. */
-    suspend fun searchForge(query: String): List<RemoteRepo> =
-        runApi("searchForge") { api.searchForge(query).repos } ?: emptyList()
+    /**
+     * POST /forge/search → remote repos (+ per-connection errors) across connected forges.
+     * Null on transport/5xx so the UI can distinguish failure from an empty success.
+     */
+    suspend fun searchForge(query: String): ForgeSearchResponse? =
+        runApi("searchForge") { api.searchForge(query) }
 
     /** POST /forge/clone → local path of the new checkout. Null on failure / blank path. */
     suspend fun cloneForge(connectionId: String, owner: String, name: String): String? =

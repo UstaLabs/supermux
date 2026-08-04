@@ -871,7 +871,7 @@ fun WorkspaceRoot(
                                         hostApp.forgeAdd(kind, token, host, transport)
                                     },
                                     forgeImport = { kind, transport -> hostApp.forgeImport(kind, transport) },
-                                    forgeRemove = { hostApp.forgeRemove(it) },
+                                    forgeRemove = { id -> hostApp.forgeRemove(id) },
                                 )
                             }
                         }

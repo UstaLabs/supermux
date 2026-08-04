@@ -91,7 +91,7 @@ fun SettingsHub(
     forgesLoad: suspend () -> ForgeConnectionsResponse?,
     forgeAdd: suspend (kind: String, token: String, host: String?, transport: String) -> Boolean,
     forgeImport: suspend (kind: String, transport: String) -> Boolean,
-    forgeRemove: (id: String) -> Unit,
+    forgeRemove: suspend (id: String) -> Boolean,
 ) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxSize().background(cs.background).testTag("settings_hub")) {

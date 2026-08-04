@@ -2,6 +2,7 @@ package dev.supermux.desktop.settings
 
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -41,6 +42,8 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -59,6 +62,25 @@ class GitHostingScreenTest {
         assertEquals("Contents + Administration (read & write)", scopesHint("github", "github.com"))
         assertEquals("repo, read:org", scopesHint("github", "github.acme.com/api/v3"))
         assertEquals("api", scopesHint("gitlab", ""))
+    }
+
+    @Test fun forge_host_url_validation_accepts_hosts_and_https() {
+        assertNull(forgeHostUrlError(""))
+        assertNull(forgeHostUrlError("  "))
+        assertNull(forgeHostUrlError("github.acme.com"))
+        assertNull(forgeHostUrlError("github.acme.com/api/v3"))
+        assertNull(forgeHostUrlError("https://git.example.com/api/v3"))
+        assertNull(forgeHostUrlError("http://localhost:3000"))
+        assertTrue(isValidForgeHostUrl("gitlab.corp.internal"))
+    }
+
+    @Test fun forge_host_url_validation_rejects_garbage() {
+        assertEquals("URL can't contain spaces", forgeHostUrlError("not a url"))
+        assertEquals("URL must start with http:// or https://", forgeHostUrlError("ftp://evil.example"))
+        assertFalse(isValidForgeHostUrl(":::"))
+        assertFalse(isValidForgeHostUrl("just-a-word"))
+        assertFalse(isValidForgeHostUrl("http://"))
+        assertNotNull(forgeHostUrlError("just-a-word"))
     }
 
     @Test fun importable_kinds_skips_unavailable_and_already_connected() {
@@ -114,7 +136,7 @@ class GitHostingScreenTest {
                     forgesLoad = { response() },
                     forgeAdd = { _, _, _, _ -> false },
                     forgeImport = { _, _ -> false },
-                    forgeRemove = {},
+                    forgeRemove = { true },
                 )
             }
         }
@@ -147,7 +169,7 @@ class GitHostingScreenTest {
                     },
                     forgeAdd = { _, _, _, _ -> false },
                     forgeImport = { _, _ -> false },
-                    forgeRemove = {},
+                    forgeRemove = { true },
                 )
             }
         }
@@ -177,7 +199,7 @@ class GitHostingScreenTest {
                     },
                     forgeAdd = { _, _, _, _ -> false },
                     forgeImport = { _, _ -> false },
-                    forgeRemove = {},
+                    forgeRemove = { true },
                 )
             }
         }
@@ -204,7 +226,7 @@ class GitHostingScreenTest {
                     forgesLoad = { response() },
                     forgeAdd = { _, _, _, _ -> false },
                     forgeImport = { _, _ -> false },
-                    forgeRemove = {},
+                    forgeRemove = { true },
                 )
             }
         }
@@ -232,7 +254,7 @@ class GitHostingScreenTest {
                     forgesLoad = { response() },
                     forgeAdd = { _, _, _, _ -> false },
                     forgeImport = { _, _ -> false },
-                    forgeRemove = {},
+                    forgeRemove = { true },
                 )
             }
         }
@@ -275,7 +297,7 @@ class GitHostingScreenTest {
                         kind == "github" && token == "good-pat"
                     },
                     forgeImport = { _, _ -> false },
-                    forgeRemove = {},
+                    forgeRemove = { true },
                 )
             }
         }
@@ -313,7 +335,7 @@ class GitHostingScreenTest {
                     forgesLoad = { response(listOf(conn(id = "c-rm", login = "gone"))) },
                     forgeAdd = { _, _, _, _ -> false },
                     forgeImport = { _, _ -> false },
-                    forgeRemove = { removed.set(it) },
+                    forgeRemove = { id -> removed.set(id); true },
                 )
             }
         }
@@ -332,7 +354,60 @@ class GitHostingScreenTest {
         onNodeWithText("Disconnect @gone?").assertIsDisplayed()
         onNodeWithTag("git_hosting_disconnect_confirm").performClick()
         waitForIdle()
+        waitUntil(timeoutMillis = 5_000) { removed.get() == "c-rm" }
         assertEquals("c-rm", removed.get())
+        // Successful remove drops the row.
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("forge_row_c-rm").assertDoesNotExist()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+    }
+
+    @Test fun disconnect_failure_keeps_row_and_surfaces_error() = runComposeUiTest {
+        val removed = AtomicReference<String?>(null)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreen(
+                    forgesLoad = { response(listOf(conn(id = "c-keep", login = "sticky"))) },
+                    forgeAdd = { _, _, _, _ -> false },
+                    forgeImport = { _, _ -> false },
+                    forgeRemove = { id ->
+                        removed.set(id)
+                        false // broker rejected delete
+                    },
+                )
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("forge_disconnect_c-keep").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("forge_disconnect_c-keep").performClick()
+        waitForIdle()
+        onNodeWithTag("git_hosting_disconnect_confirm").performClick()
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("git_hosting_error").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        assertEquals("c-keep", removed.get())
+        onNodeWithText("Couldn't disconnect — try again.").assertIsDisplayed()
+        // Row must still be present after a failed delete.
+        onNodeWithTag("forge_row_c-keep").assertIsDisplayed()
+        onNodeWithText("@sticky").assertIsDisplayed()
     }
 
     @Test fun cli_import_button_shown_when_cli_available() = runComposeUiTest {
@@ -352,7 +427,7 @@ class GitHostingScreenTest {
                         if (kind == "github") imported.set(true)
                         true
                     },
-                    forgeRemove = {},
+                    forgeRemove = { true },
                 )
             }
         }
@@ -372,6 +447,89 @@ class GitHostingScreenTest {
         assertTrue(imported.get())
     }
 
+    @Test fun cli_import_failure_keeps_dialog_open_with_error() = runComposeUiTest {
+        // Opens the add dialog (which has the CLI import path) and forces import to fail —
+        // the old bug closed the dialog with no error on a 500.
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreen(
+                    forgesLoad = {
+                        response(
+                            cli = ForgeCliStatus(
+                                github = ForgeCliPresence(available = true, login = "cliuser"),
+                            ),
+                        )
+                    },
+                    forgeAdd = { _, _, _, _ -> false },
+                    forgeImport = { _, _ -> false },
+                    forgeRemove = { true },
+                )
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("git_hosting_manual_github").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        // Open add dialog so the in-dialog CLI import button is present.
+        onNodeWithTag("git_hosting_manual_github").performClick()
+        waitForIdle()
+        onNodeWithTag("git_hosting_add_dialog").assertIsDisplayed()
+        onNodeWithTag("git_hosting_cli_import").assertIsDisplayed()
+        onNodeWithTag("git_hosting_cli_import").performClick()
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("git_hosting_add_error").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        // Dialog stays open; error is visible; token field still there.
+        onNodeWithTag("git_hosting_add_dialog").assertIsDisplayed()
+        onNodeWithText("Couldn't import from gh — is it logged in?").assertIsDisplayed()
+        onNodeWithTag("git_hosting_token").assertIsDisplayed()
+    }
+
+    @Test fun invalid_self_host_url_blocks_connect_and_shows_feedback() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreen(
+                    forgesLoad = { response() },
+                    forgeAdd = { _, _, _, _ -> true },
+                    forgeImport = { _, _ -> false },
+                    forgeRemove = { true },
+                )
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("git_hosting_manual_github").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("git_hosting_manual_github").performClick()
+        waitForIdle()
+        onNodeWithTag("git_hosting_advanced_toggle").performClick()
+        waitForIdle()
+        onNodeWithTag("git_hosting_host_url").performTextInput("not a url")
+        onNodeWithTag("git_hosting_token").performTextInput("pat-xxx")
+        waitForIdle()
+        // supportingText lives in the unmerged tree under OutlinedTextField.
+        onNodeWithTag("git_hosting_host_url_error", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithText("URL can't contain spaces", useUnmergedTree = true).assertIsDisplayed()
+        // Connect stays disabled while the host URL is invalid.
+        onNodeWithTag("git_hosting_connect").assertIsNotEnabled()
+    }
+
     @Test fun needs_reconnect_shows_badge_and_reconnect() = runComposeUiTest {
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
@@ -381,7 +539,7 @@ class GitHostingScreenTest {
                     },
                     forgeAdd = { _, _, _, _ -> false },
                     forgeImport = { _, _ -> false },
-                    forgeRemove = {},
+                    forgeRemove = { true },
                 )
             }
         }

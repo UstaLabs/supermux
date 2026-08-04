@@ -81,10 +81,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.focusable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
@@ -110,10 +113,13 @@ import dev.supermux.desktop.chat.rememberDesktopDictation
 import dev.supermux.desktop.host.HostDot
 import dev.supermux.desktop.host.HostView
 import dev.supermux.desktop.theme.Radii
+import dev.supermux.desktop.theme.Size
 import dev.supermux.desktop.theme.Space
+import dev.supermux.desktop.theme.Stroke
 import dev.supermux.desktop.upload.FileChunkSource
 import dev.supermux.net.ChunkSource
 import dev.supermux.net.ForgeConnection
+import dev.supermux.net.ForgeSearchResponse
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ReasoningLevel
@@ -132,6 +138,8 @@ import dev.supermux.session.formatWorkdir
 import dev.supermux.session.orderProjectsByRecency
 import dev.supermux.session.recentWorkdirs
 import dev.supermux.session.sessionsByRecency
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.awt.FileDialog
@@ -276,7 +284,8 @@ fun SessionLauncherScreen(
     loadAgents: suspend () -> List<String> = { emptyList() },
     // Forge omnibox for the project picker (connections + clone/create). Defaults = "no forges".
     loadForges: suspend () -> List<ForgeConnection> = { emptyList() },
-    searchForge: suspend (query: String) -> List<RemoteRepo> = { emptyList() },
+    /** Null response = search failed (distinguishable from empty success). */
+    searchForge: suspend (query: String) -> ForgeSearchResponse? = { ForgeSearchResponse() },
     cloneForge: suspend (connectionId: String, owner: String, name: String) -> String? = { _, _, _ -> null },
     createLocalRepo: suspend (name: String) -> String? = { null },
     createForge: suspend (connectionId: String, name: String) -> String? = { _, _ -> null },
@@ -1060,13 +1069,47 @@ private fun WorktreePill(label: String, active: Boolean, onClick: () -> Unit, mo
     }
 }
 
+/** How many cloud repos to reveal per "Load more" page in the forge omnibox. */
+internal const val FORGE_OMNIBOX_PAGE_SIZE = 10
+
+/** Result of mapping an omnibox key to a UI action (pure; unit-tested). */
+internal sealed class OmniboxKeyAction {
+    data object Dismiss : OmniboxKeyAction()
+    data object CancelResolve : OmniboxKeyAction()
+    data class MoveHighlight(val index: Int) : OmniboxKeyAction()
+    data class Activate(val index: Int) : OmniboxKeyAction()
+}
+
+/**
+ * Map a key press to an omnibox action. Null = leave the event for the text field.
+ * Pure so keyboard behaviour is testable without skiko key-injection flakiness.
+ */
+internal fun omniboxKeyAction(
+    key: Key,
+    highlight: Int,
+    count: Int,
+    resolving: Boolean,
+): OmniboxKeyAction? {
+    if (resolving) {
+        return if (key == Key.Escape) OmniboxKeyAction.CancelResolve else null
+    }
+    return when (key) {
+        Key.DirectionDown -> if (count > 0) OmniboxKeyAction.MoveHighlight((highlight + 1) % count) else null
+        Key.DirectionUp -> if (count > 0) OmniboxKeyAction.MoveHighlight((highlight - 1 + count) % count) else null
+        Key.Enter, Key.NumPadEnter -> if (count > 0) OmniboxKeyAction.Activate(highlight.coerceIn(0, count - 1)) else null
+        Key.Escape -> OmniboxKeyAction.Dismiss
+        else -> null
+    }
+}
+
 /**
  * Project picker with forge omnibox (Android [ProjectPickerSheet] parity): search known projects,
  * type an arbitrary path, clone a remote repo, or create a new one (local / on a forge).
  * Rendered as a [DropdownMenu] (desktop convention for the project heading-dropdown).
  *
- * Clone/create is long-running: [resolving] blocks dismiss, shows a progress overlay, and
- * surfaces failures inline. On success the new local path is handed to [onPick] (launcher workdir).
+ * Clone/create is long-running: [resolving] blocks dismiss, shows a progress overlay with Cancel,
+ * and surfaces failures inline. On success the new local path is handed to [onPick] (launcher workdir).
+ * Search failures are distinct from empty results. Keyboard: autofocus search, ↑/↓, Enter, Escape.
  */
 @Composable
 internal fun ProjectPicker(
@@ -1078,13 +1121,15 @@ internal fun ProjectPicker(
     onPick: (String) -> Unit,
     onDismiss: () -> Unit,
     loadForges: suspend () -> List<ForgeConnection> = { emptyList() },
-    searchForge: suspend (String) -> List<RemoteRepo> = { emptyList() },
+    /** Null = transport/5xx failure (must not look like "no repos found"). */
+    searchForge: suspend (String) -> ForgeSearchResponse? = { ForgeSearchResponse() },
     cloneForge: suspend (connectionId: String, owner: String, name: String) -> String? = { _, _, _ -> null },
     createLocalRepo: suspend (name: String) -> String? = { null },
     createForge: suspend (connectionId: String, name: String) -> String? = { _, _ -> null },
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
+    val searchFocus = remember { FocusRequester() }
     var search by remember(expanded) { mutableStateOf("") }
     var manualPath by remember(expanded) { mutableStateOf("") }
     var validating by remember(expanded) { mutableStateOf(false) }
@@ -1092,8 +1137,14 @@ internal fun ProjectPicker(
     var connections by remember(expanded) { mutableStateOf(emptyList<ForgeConnection>()) }
     var cloudRepos by remember(expanded) { mutableStateOf(emptyList<RemoteRepo>()) }
     var searching by remember(expanded) { mutableStateOf(false) }
+    var searchError by remember(expanded) { mutableStateOf<String?>(null) }
+    var searchEmpty by remember(expanded) { mutableStateOf(false) }
+    var cloudVisible by remember(expanded) { mutableStateOf(FORGE_OMNIBOX_PAGE_SIZE) }
     var resolving by remember(expanded) { mutableStateOf(false) }
+    var resolveLabel by remember(expanded) { mutableStateOf("") }
     var resolveError by remember(expanded) { mutableStateOf<String?>(null) }
+    var resolveJob by remember(expanded) { mutableStateOf<Job?>(null) }
+    var highlight by remember(expanded) { mutableStateOf(0) }
 
     val query = search.trim()
     val projectOptions = remember(projects, home) {
@@ -1101,24 +1152,56 @@ internal fun ProjectPicker(
     }
 
     LaunchedEffect(expanded) {
-        if (expanded) connections = loadForges()
+        if (expanded) {
+            connections = loadForges()
+            runCatching { searchFocus.requestFocus() }
+        }
     }
 
     // Debounced forge search (≥2 chars, only with connections) — Android/web parity.
+    // Null response → error state; empty repos → empty message (not silent Create-only).
     LaunchedEffect(query, connections, expanded) {
         if (!expanded || connections.isEmpty() || query.length < 2) {
             cloudRepos = emptyList()
             searching = false
+            searchError = null
+            searchEmpty = false
+            cloudVisible = FORGE_OMNIBOX_PAGE_SIZE
             return@LaunchedEffect
         }
         delay(250)
         searching = true
-        cloudRepos = searchForge(query)
+        searchError = null
+        searchEmpty = false
+        val result = searchForge(query)
         searching = false
+        if (result == null) {
+            cloudRepos = emptyList()
+            searchError = "Couldn't search repositories — check the connection and try again."
+            searchEmpty = false
+        } else {
+            cloudRepos = result.repos
+            cloudVisible = FORGE_OMNIBOX_PAGE_SIZE
+            val partial = result.errors
+                .mapNotNull { it.message.takeIf { m -> m.isNotBlank() } }
+                .distinct()
+                .take(2)
+            searchError = when {
+                partial.isNotEmpty() && result.repos.isEmpty() ->
+                    partial.joinToString(" · ")
+                partial.isNotEmpty() ->
+                    "Some forges failed: ${partial.joinToString(" · ")}"
+                else -> null
+            }
+            searchEmpty = result.repos.isEmpty() && partial.isEmpty()
+        }
     }
 
-    val options = remember(query, projectOptions, cloudRepos, connections) {
-        buildOmniboxOptions(query, projectOptions, cloudRepos, connections)
+    val pagedCloud = remember(cloudRepos, cloudVisible) {
+        cloudRepos.take(cloudVisible)
+    }
+    val options = remember(query, projectOptions, pagedCloud, connections) {
+        buildOmniboxOptions(query, projectOptions, pagedCloud, connections)
     }
     val locals = options.filterIsInstance<OmniOption.Local>()
     val clouds = options.filterIsInstance<OmniOption.Cloud>()
@@ -1129,23 +1212,68 @@ internal fun ProjectPicker(
             if (repos.isEmpty()) null else c to repos
         }
     }
+    val hasMoreCloud = cloudRepos.size > cloudVisible
+
+    // Flat actionable rows for keyboard navigation (local pick / clone / create).
+    val navTargets = remember(locals, clouds, creates) {
+        buildList {
+            locals.forEach { add(OmniNav.Local(it.path)) }
+            clouds.forEach { add(OmniNav.Clone(it.repo)) }
+            creates.forEach { add(OmniNav.Create(it.createTarget, it.label)) }
+        }
+    }
+    LaunchedEffect(navTargets.size) {
+        if (highlight >= navTargets.size) highlight = (navTargets.size - 1).coerceAtLeast(0)
+    }
 
     fun pick(path: String) {
         onPick(path)
         onDismiss()
     }
 
+    fun cancelResolve() {
+        resolveJob?.cancel()
+        resolveJob = null
+        resolving = false
+        resolveLabel = ""
+        // Keep search query; surface cancel as a soft notice (not a hard error).
+        resolveError = null
+    }
+
     fun resolve(label: String, block: suspend () -> String?) {
         if (resolving) return
         resolving = true
+        resolveLabel = label
         resolveError = null
-        scope.launch {
-            val path = runCatching { block() }.getOrNull()
-            resolving = false
-            if (!path.isNullOrBlank()) {
-                pick(path)
-            } else {
+        resolveJob = scope.launch {
+            try {
+                val path = block()
+                if (!path.isNullOrBlank()) {
+                    pick(path)
+                } else {
+                    resolveError = "Couldn't $label — check the connection and try again."
+                }
+            } catch (_: CancellationException) {
+                // Cancel button / dismiss — leave picker open, keep query.
+            } catch (_: Throwable) {
                 resolveError = "Couldn't $label — check the connection and try again."
+            } finally {
+                resolving = false
+                resolveLabel = ""
+                resolveJob = null
+            }
+        }
+    }
+
+    fun activateNav(target: OmniNav) {
+        when (target) {
+            is OmniNav.Local -> pick(target.path)
+            is OmniNav.Clone -> resolve("clone ${target.repo.fullName}") {
+                cloneForge(target.repo.connectionId, target.repo.owner, target.repo.name)
+            }
+            is OmniNav.Create -> resolve("create $query") {
+                if (target.target == "local") createLocalRepo(query)
+                else createForge(target.target, query)
             }
         }
     }
@@ -1167,16 +1295,52 @@ internal fun ProjectPicker(
         }
     }
 
+    fun onOmniboxKey(e: androidx.compose.ui.input.key.KeyEvent): Boolean {
+        if (e.type != KeyEventType.KeyDown) return false
+        return when (val action = omniboxKeyAction(e.key, highlight, navTargets.size, resolving)) {
+            is OmniboxKeyAction.Dismiss -> {
+                onDismiss()
+                true
+            }
+            is OmniboxKeyAction.CancelResolve -> {
+                cancelResolve()
+                true
+            }
+            is OmniboxKeyAction.MoveHighlight -> {
+                highlight = action.index
+                true
+            }
+            is OmniboxKeyAction.Activate -> {
+                navTargets.getOrNull(action.index)?.let { activateNav(it) }
+                true
+            }
+            null -> false
+        }
+    }
+
     DropdownMenu(
         expanded = expanded,
-        onDismissRequest = { if (!resolving) onDismiss() },
+        onDismissRequest = {
+            if (resolving) cancelResolve()
+            else onDismiss()
+        },
         modifier = Modifier.testTag("launcher_project_menu"),
     ) {
-        Box(Modifier.width(380.dp)) {
+        Box(
+            Modifier
+                .width(Size.omniboxWidth)
+                .focusable()
+                .onPreviewKeyEvent { onOmniboxKey(it) }
+                .testTag("launcher_omnibox_root"),
+        ) {
             Column(Modifier.padding(horizontal = Space.md, vertical = Space.xs)) {
                 OutlinedTextField(
                     value = search,
-                    onValueChange = { search = it; resolveError = null },
+                    onValueChange = {
+                        search = it
+                        resolveError = null
+                        highlight = 0
+                    },
                     placeholder = {
                         Text(
                             if (connections.isEmpty()) "Search projects…"
@@ -1188,9 +1352,11 @@ internal fun ProjectPicker(
                     enabled = !resolving,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag("launcher_project_search"),
+                        .focusRequester(searchFocus)
+                        .testTag("launcher_project_search")
+                        .onPreviewKeyEvent { onOmniboxKey(it) },
                 )
-                Spacer(Modifier.height(Space.sm - 2.dp))
+                Spacer(Modifier.height(Space.xs))
                 OutlinedTextField(
                     value = manualPath,
                     onValueChange = { manualPath = it; validationError = null },
@@ -1206,7 +1372,7 @@ internal fun ProjectPicker(
                             if (validating) {
                                 CircularProgressIndicator(
                                     Modifier.size(Space.lg),
-                                    strokeWidth = 2.dp,
+                                    strokeWidth = Stroke.thin,
                                     color = cs.primary,
                                 )
                             } else {
@@ -1226,6 +1392,9 @@ internal fun ProjectPicker(
                                 (e.key == Key.Enter || e.key == Key.NumPadEnter)
                             ) {
                                 confirmPath()
+                                true
+                            } else if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                                if (resolving) cancelResolve() else onDismiss()
                                 true
                             } else {
                                 false
@@ -1250,29 +1419,51 @@ internal fun ProjectPicker(
                         modifier = Modifier.testTag("launcher_forge_error"),
                     )
                 }
+                searchError?.let {
+                    Spacer(Modifier.height(Space.xs))
+                    Text(
+                        it,
+                        color = cs.error,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.testTag("launcher_forge_search_error"),
+                    )
+                }
             }
 
-            val nothing = locals.isEmpty() && cloudGroups.isEmpty() &&
+            val nothingLocal = locals.isEmpty() && cloudGroups.isEmpty() &&
                 creates.isEmpty() && !searching && projects.isNotEmpty() && query.isNotEmpty()
-            if (nothing && connections.isEmpty()) {
+            if (nothingLocal && connections.isEmpty()) {
                 Text(
                     "No projects match \"${query}\".",
                     color = cs.onSurfaceVariant,
                     style = MaterialTheme.typography.labelMedium,
                     modifier = Modifier
-                        .padding(horizontal = Space.xl - Space.xs, vertical = Space.sm + 2.dp)
+                        .padding(horizontal = Space.xl - Space.xs, vertical = Space.sm)
                         .testTag("launcher_project_empty"),
                 )
             }
+            if (searchEmpty && !searching && query.length >= 2 && connections.isNotEmpty() &&
+                cloudGroups.isEmpty()
+            ) {
+                Text(
+                    "No repos match \"${query}\".",
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier
+                        .padding(horizontal = Space.xl - Space.xs, vertical = Space.sm)
+                        .testTag("launcher_forge_empty"),
+                )
+            }
 
-            if (locals.isNotEmpty() || cloudGroups.isNotEmpty() || creates.isNotEmpty() || searching) {
+            if (locals.isNotEmpty() || cloudGroups.isNotEmpty() || creates.isNotEmpty() ||
+                searching || hasMoreCloud
+            ) {
                 HorizontalDivider()
             }
 
-            // Cap the scrollable list height so the dropdown stays usable.
             Column(
                 Modifier
-                    .heightIn(max = 360.dp)
+                    .heightIn(max = Size.omniboxListMax)
                     .verticalScroll(rememberScrollState())
                     .testTag("launcher_omnibox_list"),
             ) {
@@ -1282,16 +1473,27 @@ internal fun ProjectPicker(
                         color = cs.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(horizontal = Space.xl - Space.xs, vertical = Space.sm - 2.dp),
+                        modifier = Modifier.padding(
+                            horizontal = Space.xl - Space.xs,
+                            vertical = Space.xs,
+                        ),
                     )
-                    locals.forEach { o ->
+                    locals.forEachIndexed { i, o ->
                         val selected = o.path == current
+                        val navIndex = navTargets.indexOfFirst {
+                            it is OmniNav.Local && it.path == o.path
+                        }
+                        val hi = navIndex == highlight
                         DropdownMenuItem(
                             text = {
                                 Column {
                                     Text(
                                         o.path.trimEnd('/').substringAfterLast('/').ifEmpty { o.path },
-                                        color = if (selected) cs.primary else cs.onSurface,
+                                        color = when {
+                                            hi -> cs.primary
+                                            selected -> cs.primary
+                                            else -> cs.onSurface
+                                        },
                                         style = MaterialTheme.typography.bodyMedium,
                                         maxLines = 1,
                                     )
@@ -1318,18 +1520,24 @@ internal fun ProjectPicker(
                                 }
                             },
                             enabled = !resolving,
-                            modifier = Modifier.testTag("project_row_${o.path}"),
+                            modifier = Modifier
+                                .testTag("project_row_${o.path}")
+                                .then(
+                                    if (hi) Modifier.background(cs.primary.copy(alpha = 0.08f))
+                                    else Modifier,
+                                ),
                             onClick = { pick(o.path) },
                         )
                     }
-                } else if (query.isEmpty() && projects.isNotEmpty()) {
-                    // Blank query still shows all locals via buildOmniboxOptions; this is a fallback.
                 } else if (query.isEmpty() && projects.isEmpty() && connections.isEmpty()) {
                     Text(
                         "Type a path or search your projects.",
                         color = cs.onSurfaceVariant,
                         style = MaterialTheme.typography.labelLarge,
-                        modifier = Modifier.padding(horizontal = Space.xl - Space.xs, vertical = Space.lg + Space.xs),
+                        modifier = Modifier.padding(
+                            horizontal = Space.xl - Space.xs,
+                            vertical = Space.lg + Space.xs,
+                        ),
                     )
                 }
 
@@ -1340,16 +1548,21 @@ internal fun ProjectPicker(
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Medium,
                         modifier = Modifier
-                            .padding(horizontal = Space.xl - Space.xs, vertical = Space.sm - 2.dp)
+                            .padding(horizontal = Space.xl - Space.xs, vertical = Space.xs)
                             .testTag("forge_group_${conn.id}"),
                     )
                     repos.forEach { repo ->
+                        val navIndex = navTargets.indexOfFirst {
+                            it is OmniNav.Clone && it.repo.fullName == repo.fullName &&
+                                it.repo.connectionId == repo.connectionId
+                        }
+                        val hi = navIndex == highlight
                         DropdownMenuItem(
                             text = {
                                 Column {
                                     Text(
                                         repo.name,
-                                        color = cs.onSurface,
+                                        color = if (hi) cs.primary else cs.onSurface,
                                         style = MaterialTheme.typography.bodyMedium,
                                         maxLines = 1,
                                     )
@@ -1389,12 +1602,35 @@ internal fun ProjectPicker(
                                 }
                             },
                             enabled = !resolving,
-                            modifier = Modifier.testTag("forge_clone_${repo.fullName}"),
+                            modifier = Modifier
+                                .testTag("forge_clone_${repo.fullName}")
+                                .then(
+                                    if (hi) Modifier.background(cs.primary.copy(alpha = 0.08f))
+                                    else Modifier,
+                                ),
                             onClick = {
                                 resolve("clone ${repo.fullName}") {
                                     cloneForge(repo.connectionId, repo.owner, repo.name)
                                 }
                             },
+                        )
+                    }
+                }
+
+                if (hasMoreCloud && !searching) {
+                    TextButton(
+                        onClick = {
+                            cloudVisible += FORGE_OMNIBOX_PAGE_SIZE
+                        },
+                        enabled = !resolving,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("launcher_forge_load_more"),
+                    ) {
+                        Text(
+                            "Load more (${cloudRepos.size - cloudVisible} remaining)",
+                            color = cs.primary,
+                            style = MaterialTheme.typography.labelLarge,
                         )
                     }
                 }
@@ -1406,11 +1642,11 @@ internal fun ProjectPicker(
                             .padding(horizontal = Space.xl - Space.xs, vertical = Space.md + Space.xs)
                             .testTag("launcher_forge_searching"),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(Space.sm + 2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(Space.sm),
                     ) {
                         CircularProgressIndicator(
                             Modifier.size(Space.lg),
-                            strokeWidth = 2.dp,
+                            strokeWidth = Stroke.thin,
                             color = cs.primary,
                         )
                         Text(
@@ -1427,14 +1663,21 @@ internal fun ProjectPicker(
                         color = cs.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(horizontal = Space.xl - Space.xs, vertical = Space.sm - 2.dp),
+                        modifier = Modifier.padding(
+                            horizontal = Space.xl - Space.xs,
+                            vertical = Space.xs,
+                        ),
                     )
                     creates.forEach { c ->
+                        val navIndex = navTargets.indexOfFirst {
+                            it is OmniNav.Create && it.target == c.createTarget
+                        }
+                        val hi = navIndex == highlight
                         DropdownMenuItem(
                             text = {
                                 Text(
                                     c.label,
-                                    color = cs.onSurface,
+                                    color = if (hi) cs.primary else cs.onSurface,
                                     style = MaterialTheme.typography.bodyMedium,
                                     maxLines = 1,
                                 )
@@ -1448,7 +1691,12 @@ internal fun ProjectPicker(
                                 )
                             },
                             enabled = !resolving,
-                            modifier = Modifier.testTag("forge_create_${c.createTarget}"),
+                            modifier = Modifier
+                                .testTag("forge_create_${c.createTarget}")
+                                .then(
+                                    if (hi) Modifier.background(cs.primary.copy(alpha = 0.08f))
+                                    else Modifier,
+                                ),
                             onClick = {
                                 resolve("create $query") {
                                     if (c.createTarget == "local") createLocalRepo(query)
@@ -1470,7 +1718,7 @@ internal fun ProjectPicker(
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(Space.sm + 2.dp),
+                        verticalArrangement = Arrangement.spacedBy(Space.sm),
                         modifier = Modifier
                             .clip(RoundedCornerShape(Radii.lg))
                             .background(cs.surfaceContainerHigh)
@@ -1478,15 +1726,35 @@ internal fun ProjectPicker(
                     ) {
                         CircularProgressIndicator(color = cs.primary)
                         Text(
-                            "Cloning / creating…",
+                            when {
+                                resolveLabel.startsWith("clone ") ->
+                                    "Cloning ${resolveLabel.removePrefix("clone ")}…"
+                                resolveLabel.startsWith("create ") ->
+                                    "Creating ${resolveLabel.removePrefix("create ")}…"
+                                else -> "Working…"
+                            },
                             color = cs.onSurfaceVariant,
                             style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.testTag("launcher_forge_resolving_label"),
                         )
+                        TextButton(
+                            onClick = { cancelResolve() },
+                            modifier = Modifier.testTag("launcher_forge_cancel"),
+                        ) {
+                            Text("Cancel", color = cs.primary)
+                        }
                     }
                 }
             }
         }
     }
+}
+
+/** Keyboard-navigable row in the forge omnibox. */
+private sealed class OmniNav {
+    data class Local(val path: String) : OmniNav()
+    data class Clone(val repo: RemoteRepo) : OmniNav()
+    data class Create(val target: String, val label: String) : OmniNav()
 }
 
 /**

@@ -59,12 +59,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import dev.supermux.desktop.theme.LocalSemantics
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Radii
+import dev.supermux.desktop.theme.Size
 import dev.supermux.desktop.theme.Space
+import dev.supermux.desktop.theme.Stroke
 import dev.supermux.net.ForgeCliStatus
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeConnectionsResponse
@@ -83,7 +89,7 @@ fun GitHostingScreen(
     forgesLoad: suspend () -> ForgeConnectionsResponse?,
     forgeAdd: suspend (kind: String, token: String, host: String?, transport: String) -> Boolean,
     forgeImport: suspend (kind: String, transport: String) -> Boolean,
-    forgeRemove: (id: String) -> Unit,
+    forgeRemove: suspend (id: String) -> Boolean,
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -96,14 +102,15 @@ fun GitHostingScreen(
     var dialogOpen by remember { mutableStateOf(false) }
     var presetKind by remember { mutableStateOf<String?>(null) }
     var disconnectTarget by remember { mutableStateOf<ForgeConnection?>(null) }
+    var disconnecting by remember { mutableStateOf(false) }
 
-    suspend fun reload() {
+    suspend fun reload(clearError: Boolean = true) {
         loading = true
         val r = forgesLoad()
         if (r != null) {
             connections = r.connections
             cliStatus = r.cli
-            error = null
+            if (clearError) error = null
         } else {
             error = "Couldn't load connections"
         }
@@ -139,7 +146,14 @@ fun GitHostingScreen(
                     cliStatus = cliStatus,
                     connections = connections,
                     onImport = { kind ->
-                        scope.launch { forgeImport(kind, "https"); reload() }
+                        scope.launch {
+                            val ok = forgeImport(kind, "https")
+                            if (ok) {
+                                reload()
+                            } else {
+                                error = "Couldn't import from ${cliName(kind)} — is it logged in?"
+                            }
+                        }
                     },
                     onManual = { kind ->
                         presetKind = kind
@@ -211,7 +225,7 @@ fun GitHostingScreen(
 
     disconnectTarget?.let { target ->
         AlertDialog(
-            onDismissRequest = { disconnectTarget = null },
+            onDismissRequest = { if (!disconnecting) disconnectTarget = null },
             title = { Text("Disconnect @${target.account.login}?") },
             text = {
                 Text("The account will be removed from this broker. You can reconnect at any time.")
@@ -219,14 +233,24 @@ fun GitHostingScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        forgeRemove(target.id)
-                        connections = connections.filterNot { it.id == target.id }
-                        disconnectTarget = null
+                        if (disconnecting) return@TextButton
+                        disconnecting = true
                         scope.launch {
-                            delay(250)
-                            reload()
+                            val ok = forgeRemove(target.id)
+                            disconnecting = false
+                            disconnectTarget = null
+                            if (ok) {
+                                connections = connections.filterNot { it.id == target.id }
+                                error = null
+                                delay(250)
+                                reload()
+                            } else {
+                                error = "Couldn't disconnect — try again."
+                                reload(clearError = false)
+                            }
                         }
                     },
+                    enabled = !disconnecting,
                     modifier = Modifier.testTag("git_hosting_disconnect_confirm"),
                 ) {
                     Text("Disconnect", color = cs.error)
@@ -235,6 +259,7 @@ fun GitHostingScreen(
             dismissButton = {
                 TextButton(
                     onClick = { disconnectTarget = null },
+                    enabled = !disconnecting,
                     modifier = Modifier.testTag("git_hosting_disconnect_cancel"),
                 ) { Text("Cancel") }
             },
@@ -265,7 +290,7 @@ private fun ForgeConnectionRow(
                 .size(Space.xxl)
                 .clip(RoundedCornerShape(Radii.sm))
                 .background(cs.surfaceContainer)
-                .border(1.dp, cs.outline, RoundedCornerShape(Radii.sm)),
+                .border(Stroke.hairline, cs.outline, RoundedCornerShape(Radii.sm)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -291,8 +316,8 @@ private fun ForgeConnectionRow(
                     Box(
                         Modifier
                             .clip(RoundedCornerShape(Radii.pill))
-                            .border(1.dp, semantics.warning.copy(alpha = 0.5f), RoundedCornerShape(Radii.pill))
-                            .padding(horizontal = Space.xs + 1.dp, vertical = 2.dp),
+                            .border(Stroke.hairline, semantics.warning.copy(alpha = 0.5f), RoundedCornerShape(Radii.pill))
+                            .padding(horizontal = Space.sm, vertical = Space.xs),
                     ) {
                         Text(
                             "reconnect",
@@ -304,7 +329,7 @@ private fun ForgeConnectionRow(
                 } else {
                     Box(
                         Modifier
-                            .size(7.dp)
+                            .size(Size.statusDot)
                             .clip(CircleShape)
                             .background(semantics.success)
                             .testTag("forge_ok_${c.id}"),
@@ -371,7 +396,7 @@ private fun ForgeEmptyState(
                 .size(Space.xxl + Space.xxl - Space.xs)
                 .clip(RoundedCornerShape(Radii.lg))
                 .background(cs.surfaceContainer)
-                .border(1.dp, cs.outline, RoundedCornerShape(Radii.lg)),
+                .border(Stroke.hairline, cs.outline, RoundedCornerShape(Radii.lg)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -479,7 +504,21 @@ private fun AddForgeDialog(
     val cliLoginLabel = cliStatus?.let {
         (if (kind == "github") it.github else it.gitlab).login
     }?.let { " (@$it)" } ?: ""
-    val canConnect = token.trim().isNotEmpty()
+    val hostUrlError = forgeHostUrlError(hostUrl)
+    val canConnect = token.trim().isNotEmpty() && hostUrlError == null
+
+    fun submitConnect() {
+        val t = token.trim()
+        if (t.isEmpty() || hostUrlError != null || submitting) return
+        submitting = true
+        error = null
+        scope.launch {
+            val ok = onAdd(kind, t, hostUrl.trim().ifBlank { null }, transport)
+            submitting = false
+            if (ok) onDone()
+            else error = "Couldn't connect — check your token and try again."
+        }
+    }
 
     Dialog(onDismissRequest = { if (!submitting) onDismiss() }) {
         Column(
@@ -519,10 +558,14 @@ private fun AddForgeDialog(
                 Button(
                     onClick = {
                         submitting = true
+                        error = null
                         scope.launch {
-                            onImport(kind, transport)
+                            val ok = onImport(kind, transport)
                             submitting = false
-                            onDone()
+                            if (ok) onDone()
+                            else {
+                                error = "Couldn't import from ${cliName(kind)} — is it logged in?"
+                            }
                         }
                     },
                     enabled = !submitting,
@@ -554,18 +597,7 @@ private fun AddForgeDialog(
                 onValueChange = { token = it },
                 placeholder = if (kind == "github") "github_pat_…" else "glpat-…",
                 modifier = Modifier.fillMaxWidth().testTag("git_hosting_token"),
-                onSubmit = {
-                    if (canConnect && !submitting) {
-                        submitting = true
-                        error = null
-                        scope.launch {
-                            val ok = onAdd(kind, token.trim(), hostUrl.trim().ifBlank { null }, transport)
-                            submitting = false
-                            if (ok) onDone()
-                            else error = "Couldn't connect — check your token and try again."
-                        }
-                    }
-                },
+                onSubmit = { if (canConnect) submitConnect() },
             )
             if (error != null) {
                 Text(
@@ -586,6 +618,16 @@ private fun AddForgeDialog(
                 Modifier
                     .fillMaxWidth()
                     .clickable { showAdvanced = !showAdvanced }
+                    .onPreviewKeyEvent { e ->
+                        if (e.type == KeyEventType.KeyDown &&
+                            (e.key == Key.Enter || e.key == Key.Spacebar)
+                        ) {
+                            showAdvanced = !showAdvanced
+                            true
+                        } else {
+                            false
+                        }
+                    }
                     .testTag("git_hosting_advanced_toggle"),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -605,12 +647,23 @@ private fun AddForgeDialog(
             if (showAdvanced) {
                 OutlinedTextField(
                     value = hostUrl,
-                    onValueChange = { hostUrl = it },
+                    onValueChange = { hostUrl = it; error = null },
                     placeholder = {
                         Text(
                             "API base URL — e.g. github.acme.com/api/v3",
                             style = MaterialTheme.typography.labelMedium,
                         )
+                    },
+                    isError = hostUrlError != null,
+                    supportingText = hostUrlError?.let { msg ->
+                        {
+                            Text(
+                                msg,
+                                color = cs.error,
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.testTag("git_hosting_host_url_error"),
+                            )
+                        }
                     },
                     modifier = Modifier.fillMaxWidth().testTag("git_hosting_host_url"),
                     singleLine = true,
@@ -640,18 +693,7 @@ private fun AddForgeDialog(
             }
 
             Button(
-                onClick = {
-                    val t = token.trim()
-                    if (t.isEmpty()) return@Button
-                    submitting = true
-                    error = null
-                    scope.launch {
-                        val ok = onAdd(kind, t, hostUrl.trim().ifBlank { null }, transport)
-                        submitting = false
-                        if (ok) onDone()
-                        else error = "Couldn't connect — check your token and try again."
-                    }
-                },
+                onClick = { submitConnect() },
                 enabled = canConnect && !submitting,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -661,7 +703,7 @@ private fun AddForgeDialog(
                 if (submitting) {
                     CircularProgressIndicator(
                         color = cs.onPrimary,
-                        strokeWidth = 2.dp,
+                        strokeWidth = Stroke.thin,
                         modifier = Modifier.size(Space.lg),
                     )
                 } else {
@@ -720,4 +762,44 @@ internal fun scopesHint(kind: String, hostUrl: String): String {
         }
     }
     return "api"
+}
+
+/**
+ * Validate an optional self-hosted API base URL.
+ * Blank is allowed (public github.com / gitlab.com). Non-blank must look like a host or http(s) URL.
+ * Returns an error message, or null when valid.
+ */
+internal fun forgeHostUrlError(raw: String): String? {
+    val t = raw.trim()
+    if (t.isEmpty()) return null
+    if (t.any { it.isWhitespace() }) return "URL can't contain spaces"
+    val lower = t.lowercase()
+    if ("://" in lower && !lower.startsWith("http://") && !lower.startsWith("https://")) {
+        return "URL must start with http:// or https://"
+    }
+    return if (isValidForgeHostUrl(t)) null
+    else "Enter a host like github.acme.com or https://git.example.com/api/v3"
+}
+
+/** True when [raw] is blank or a plausible host / http(s) API base URL. */
+internal fun isValidForgeHostUrl(raw: String): Boolean {
+    val t = raw.trim()
+    if (t.isEmpty()) return true
+    if (t.any { it.isWhitespace() }) return false
+    val lower = t.lowercase()
+    if ("://" in lower && !lower.startsWith("http://") && !lower.startsWith("https://")) return false
+    val withoutScheme = t.replace(Regex("^https?://", RegexOption.IGNORE_CASE), "")
+    if (withoutScheme.isEmpty() || withoutScheme.startsWith("/")) return false
+    val hostPort = withoutScheme.substringBefore("/")
+    if (hostPort.isEmpty()) return false
+    val host = hostPort.substringBefore(":")
+    val port = hostPort.substringAfter(":", missingDelimiterValue = "")
+    if (port.isNotEmpty() && (port.toIntOrNull() == null || port.toInt() !in 1..65535)) return false
+    if (host.equals("localhost", ignoreCase = true)) return true
+    // Require at least one dot (e.g. github.com, git.acme.internal) and DNS-ish labels.
+    if (!host.contains('.')) return false
+    val labels = host.split('.')
+    if (labels.any { it.isEmpty() }) return false
+    val labelOk = Regex("^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$")
+    return labels.all { labelOk.matches(it) }
 }

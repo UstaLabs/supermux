@@ -122,9 +122,9 @@ class DesktopGitHostingTest {
         val app = appRecording(recorded) {
             HttpStatusCode.OK to """{"repos":[{"connectionId":"c1","owner":"a","name":"repo","fullName":"a/repo"}]}"""
         }
-        val repos = app.searchForge("repo")
-        assertEquals(1, repos.size)
-        assertEquals("a/repo", repos.first().fullName)
+        val result = app.searchForge("repo")
+        assertEquals(1, result?.repos?.size)
+        assertEquals("a/repo", result?.repos?.first()?.fullName)
         assertEquals(HttpMethod.Post, recorded.single().method)
         assertEquals("/forge/search", recorded.single().path)
         assertTrue(recorded.single().body.contains("repo"))
@@ -162,13 +162,39 @@ class DesktopGitHostingTest {
         assertTrue(recorded.any { it.path == "/forge/create" })
     }
 
-    @Test fun search_and_clone_empty_on_5xx() = runTest {
+    @Test fun search_forge_null_on_5xx_distinguishes_from_empty_success() = runTest {
         val recorded = mutableListOf<Rec>()
         val app = appRecording(recorded) { HttpStatusCode.InternalServerError to "err" }
-        assertTrue(app.searchForge("x").isEmpty())
+        // 5xx must be null — not an empty list that the UI would paint as "no repos found".
+        assertNull(app.searchForge("x"))
         assertNull(app.cloneForge("c", "o", "n"))
         assertNull(app.createLocalRepo("n"))
         assertNull(app.createForge("c", "n"))
         assertTrue(app.listForges().isEmpty())
+    }
+
+    @Test fun search_forge_empty_repos_on_2xx_is_success_not_null() = runTest {
+        val recorded = mutableListOf<Rec>()
+        val app = appRecording(recorded) {
+            HttpStatusCode.OK to """{"repos":[],"errors":[]}"""
+        }
+        val result = app.searchForge("nothing")
+        assertTrue(result != null)
+        assertTrue(result!!.repos.isEmpty())
+        assertTrue(result.errors.isEmpty())
+    }
+
+    @Test fun forge_remove_false_on_5xx() = runTest {
+        val recorded = mutableListOf<Rec>()
+        val app = appRecording(recorded) { HttpStatusCode.InternalServerError to "err" }
+        assertFalse(app.forgeRemove("c1"))
+        // remove + confirm-list may both fire; at least one DELETE is required.
+        assertTrue(recorded.any { it.method == HttpMethod.Delete && it.path == "/forge/connections/c1" })
+    }
+
+    @Test fun forge_remove_true_on_2xx() = runTest {
+        val recorded = mutableListOf<Rec>()
+        val app = appRecording(recorded) { HttpStatusCode.OK to "{}" }
+        assertTrue(app.forgeRemove("c1"))
     }
 }

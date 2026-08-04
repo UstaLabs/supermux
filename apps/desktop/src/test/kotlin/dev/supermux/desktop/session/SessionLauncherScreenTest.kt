@@ -1,19 +1,32 @@
 package dev.supermux.desktop.session
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.net.ForgeAccount
 import dev.supermux.net.ForgeConnection
+import dev.supermux.net.ForgeSearchResponse
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ReasoningResponse
@@ -21,9 +34,11 @@ import dev.supermux.net.RemoteRepo
 import dev.supermux.net.RepoBranches
 import dev.supermux.net.RepoInfo
 import dev.supermux.proto.SessionInfo
+import dev.supermux.session.formatWorkdir
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CompletableDeferred
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -369,24 +384,53 @@ class SessionLauncherScreenTest {
         fullName = "$owner/$name",
     )
 
-    @Test fun project_picker_create_local_lands_path_in_onPick() = runComposeUiTest {
-        val picked = AtomicReference<String?>(null)
-        setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+    private fun searchOk(vararg repos: RemoteRepo) = ForgeSearchResponse(repos = repos.toList())
+
+    /**
+     * Mirrors SessionLauncherScreen's workdir field + ProjectPicker wiring:
+     * onPick updates the displayed workdir label (formatWorkdir), not a bare capture.
+     */
+    @Composable
+    private fun WorkdirPickerHarness(
+        loadForges: suspend () -> List<ForgeConnection> = { emptyList() },
+        searchForge: suspend (String) -> ForgeSearchResponse? = { ForgeSearchResponse() },
+        cloneForge: suspend (String, String, String) -> String? = { _, _, _ -> null },
+        createLocalRepo: suspend (String) -> String? = { null },
+        createForge: suspend (String, String) -> String? = { _, _ -> null },
+        projects: List<String> = emptyList(),
+    ) {
+        val home = "/home/u"
+        var workdir by remember { mutableStateOf("~") }
+        var menu by remember { mutableStateOf(true) }
+        SupermuxTheme(appearance = AppearanceMode.DARK) {
+            Column {
+                Text(
+                    formatWorkdir(workdir, home),
+                    modifier = Modifier.testTag("launcher_workdir_label"),
+                )
                 Box {
                     ProjectPicker(
-                        expanded = true,
-                        current = "~",
-                        projects = emptyList(),
-                        home = "/home/u",
+                        expanded = menu,
+                        current = workdir,
+                        projects = projects,
+                        home = home,
                         validatePath = { null },
-                        loadForges = { emptyList() },
-                        createLocalRepo = { name -> "/home/u/$name" },
-                        onPick = { picked.set(it) },
-                        onDismiss = {},
+                        loadForges = loadForges,
+                        searchForge = searchForge,
+                        cloneForge = cloneForge,
+                        createLocalRepo = createLocalRepo,
+                        createForge = createForge,
+                        onPick = { workdir = it },
+                        onDismiss = { menu = false },
                     )
                 }
             }
+        }
+    }
+
+    @Test fun project_picker_create_local_lands_path_in_launcher_workdir() = runComposeUiTest {
+        setContent {
+            WorkdirPickerHarness(createLocalRepo = { name -> "/home/u/$name" })
         }
         waitForIdle()
         onNodeWithTag("launcher_project_search").performTextInput("brand-new")
@@ -401,36 +445,30 @@ class SessionLauncherScreenTest {
         }
         onNodeWithTag("forge_create_local").performClick()
         waitForIdle()
-        waitUntil(timeoutMillis = 5_000) { picked.get() != null }
-        assertEquals("/home/u/brand-new", picked.get())
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("launcher_workdir_label").assertTextEquals("~/brand-new")
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
     }
 
-    @Test fun project_picker_clone_success_picks_local_path() = runComposeUiTest {
-        val picked = AtomicReference<String?>(null)
+    @Test fun project_picker_clone_success_lands_path_in_launcher_workdir() = runComposeUiTest {
         val cloned = AtomicBoolean(false)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                Box {
-                    ProjectPicker(
-                        expanded = true,
-                        current = "~",
-                        projects = emptyList(),
-                        home = "/home/u",
-                        validatePath = { null },
-                        loadForges = { listOf(forgeConn()) },
-                        searchForge = { listOf(remote()) },
-                        cloneForge = { cid, owner, name ->
-                            cloned.set(true)
-                            assertEquals("c1", cid)
-                            assertEquals("alice", owner)
-                            assertEquals("widget", name)
-                            "/home/u/widget"
-                        },
-                        onPick = { picked.set(it) },
-                        onDismiss = {},
-                    )
-                }
-            }
+            WorkdirPickerHarness(
+                loadForges = { listOf(forgeConn()) },
+                searchForge = { searchOk(remote()) },
+                cloneForge = { cid, owner, name ->
+                    cloned.set(true)
+                    assertEquals("c1", cid)
+                    assertEquals("alice", owner)
+                    assertEquals("widget", name)
+                    "/home/u/widget"
+                },
+            )
         }
         waitForIdle()
         onNodeWithTag("launcher_project_search").performTextInput("widget")
@@ -445,13 +483,20 @@ class SessionLauncherScreenTest {
         }
         onNodeWithTag("forge_clone_alice/widget").performClick()
         waitForIdle()
-        waitUntil(timeoutMillis = 5_000) { picked.get() != null }
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("launcher_workdir_label").assertTextEquals("~/widget")
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
         assertTrue(cloned.get())
-        assertEquals("/home/u/widget", picked.get())
     }
 
-    @Test fun project_picker_clone_failure_surfaces_error_keeps_picker() = runComposeUiTest {
+    @Test fun project_picker_clone_failure_surfaces_error_keeps_query_and_progress_label() = runComposeUiTest {
         var dismissed = false
+        val gate = CompletableDeferred<Unit>()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 Box {
@@ -462,8 +507,11 @@ class SessionLauncherScreenTest {
                         home = "/home/u",
                         validatePath = { null },
                         loadForges = { listOf(forgeConn()) },
-                        searchForge = { listOf(remote(name = "failme")) },
-                        cloneForge = { _, _, _ -> null },
+                        searchForge = { searchOk(remote(name = "failme")) },
+                        cloneForge = { _, _, _ ->
+                            gate.await()
+                            null
+                        },
                         onPick = {},
                         onDismiss = { dismissed = true },
                     )
@@ -483,6 +531,23 @@ class SessionLauncherScreenTest {
         }
         onNodeWithTag("forge_clone_alice/failme").performClick()
         waitForIdle()
+        // Progress overlay + specific wording while clone is in flight.
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("launcher_forge_resolving").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("launcher_forge_resolving_label").assertIsDisplayed()
+        onNodeWithText("Cloning alice/failme…").assertIsDisplayed()
+        onNodeWithTag("launcher_forge_cancel").assertIsDisplayed()
+        // Query retained during resolve.
+        onNodeWithTag("launcher_project_search").assertIsDisplayed()
+
+        gate.complete(Unit)
+        waitForIdle()
         waitUntil(timeoutMillis = 5_000) {
             try {
                 onNodeWithTag("launcher_forge_error").assertIsDisplayed()
@@ -493,6 +558,280 @@ class SessionLauncherScreenTest {
         }
         assertFalse(dismissed)
         onNodeWithTag("launcher_project_menu").assertIsDisplayed()
+        // Search query retained after failure (tag is unique; text nodes also contain "failme").
+        onNodeWithTag("launcher_project_search").assertTextEquals("failme")
+    }
+
+    @Test fun project_picker_clone_cancel_aborts_keeps_picker_and_query() = runComposeUiTest {
+        val finished = AtomicBoolean(false)
+        val started = CompletableDeferred<Unit>()
+        val hold = CompletableDeferred<Unit>()
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                Box {
+                    ProjectPicker(
+                        expanded = true,
+                        current = "~",
+                        projects = emptyList(),
+                        home = "/home/u",
+                        validatePath = { null },
+                        loadForges = { listOf(forgeConn()) },
+                        searchForge = { searchOk(remote(name = "slow")) },
+                        cloneForge = { _, _, _ ->
+                            started.complete(Unit)
+                            hold.await()
+                            finished.set(true)
+                            "/home/u/slow"
+                        },
+                        onPick = {},
+                        onDismiss = {},
+                    )
+                }
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_project_search").performTextInput("slow")
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("forge_clone_alice/slow").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("forge_clone_alice/slow").performClick()
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) { started.isCompleted }
+        onNodeWithTag("launcher_forge_resolving").assertIsDisplayed()
+        onNodeWithTag("launcher_forge_cancel").performClick()
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("launcher_forge_resolving").assertDoesNotExist()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        // Cancel must not land a path and must keep the menu + query.
+        onNodeWithTag("launcher_project_menu").assertIsDisplayed()
+        assertFalse(finished.get())
+        hold.complete(Unit) // release any leftover coroutine
+    }
+
+    @Test fun project_picker_search_5xx_shows_error_not_empty() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                Box {
+                    ProjectPicker(
+                        expanded = true,
+                        current = "~",
+                        projects = emptyList(),
+                        home = "/home/u",
+                        validatePath = { null },
+                        loadForges = { listOf(forgeConn()) },
+                        searchForge = { null }, // transport/5xx
+                        onPick = {},
+                        onDismiss = {},
+                    )
+                }
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_project_search").performTextInput("widget")
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("launcher_forge_search_error").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithText("Couldn't search repositories — check the connection and try again.")
+            .assertIsDisplayed()
+        // Must NOT look like a successful empty search.
+        onNodeWithTag("launcher_forge_empty").assertDoesNotExist()
+    }
+
+    @Test fun project_picker_empty_search_shows_no_repos_message() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                Box {
+                    ProjectPicker(
+                        expanded = true,
+                        current = "~",
+                        projects = emptyList(),
+                        home = "/home/u",
+                        validatePath = { null },
+                        loadForges = { listOf(forgeConn()) },
+                        searchForge = { searchOk() },
+                        onPick = {},
+                        onDismiss = {},
+                    )
+                }
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_project_search").performTextInput("zzzz")
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("launcher_forge_empty").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithText("No repos match \"zzzz\".").assertIsDisplayed()
+        onNodeWithTag("launcher_forge_search_error").assertDoesNotExist()
+    }
+
+    @Test fun project_picker_slow_search_shows_searching_indicator() = runComposeUiTest {
+        val gate = CompletableDeferred<Unit>()
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                Box {
+                    ProjectPicker(
+                        expanded = true,
+                        current = "~",
+                        projects = emptyList(),
+                        home = "/home/u",
+                        validatePath = { null },
+                        loadForges = { listOf(forgeConn()) },
+                        searchForge = {
+                            gate.await()
+                            searchOk(remote())
+                        },
+                        onPick = {},
+                        onDismiss = {},
+                    )
+                }
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_project_search").performTextInput("widget")
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("launcher_forge_searching").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithText("Searching repos…").assertIsDisplayed()
+        gate.complete(Unit)
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("forge_clone_alice/widget").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+    }
+
+    @Test fun project_picker_paging_load_more_reveals_remaining_repos() = runComposeUiTest {
+        val many = (1..FORGE_OMNIBOX_PAGE_SIZE + 3).map { i ->
+            remote(name = "repo$i")
+        }
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                Box {
+                    ProjectPicker(
+                        expanded = true,
+                        current = "~",
+                        projects = emptyList(),
+                        home = "/home/u",
+                        validatePath = { null },
+                        loadForges = { listOf(forgeConn()) },
+                        searchForge = { searchOk(*many.toTypedArray()) },
+                        onPick = {},
+                        onDismiss = {},
+                    )
+                }
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_project_search").performTextInput("repo")
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("forge_clone_alice/repo1").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        // Page 1 only — last items hidden until Load more.
+        onNodeWithTag("forge_clone_alice/repo${FORGE_OMNIBOX_PAGE_SIZE + 1}").assertDoesNotExist()
+        onNodeWithTag("launcher_forge_load_more").performScrollTo().assertIsDisplayed()
+        onNodeWithTag("launcher_forge_load_more").performClick()
+        waitForIdle()
+        onNodeWithTag("forge_clone_alice/repo${FORGE_OMNIBOX_PAGE_SIZE + 1}").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun project_picker_omnibox_key_actions_escape_enter_arrows() {
+        // Pure decision table for the omnibox key handler — UI injection of arrow keys into a
+        // focused OutlinedTextField is unreliable under skiko; the handler itself is unit-tested.
+        assertEquals(
+            OmniboxKeyAction.Dismiss,
+            omniboxKeyAction(Key.Escape, highlight = 0, count = 2, resolving = false),
+        )
+        assertEquals(
+            OmniboxKeyAction.CancelResolve,
+            omniboxKeyAction(Key.Escape, highlight = 0, count = 2, resolving = true),
+        )
+        assertEquals(
+            OmniboxKeyAction.Activate(0),
+            omniboxKeyAction(Key.Enter, highlight = 0, count = 2, resolving = false),
+        )
+        assertEquals(
+            OmniboxKeyAction.Activate(1),
+            omniboxKeyAction(Key.Enter, highlight = 1, count = 2, resolving = false),
+        )
+        assertEquals(
+            OmniboxKeyAction.MoveHighlight(1),
+            omniboxKeyAction(Key.DirectionDown, highlight = 0, count = 2, resolving = false),
+        )
+        assertEquals(
+            OmniboxKeyAction.MoveHighlight(0),
+            omniboxKeyAction(Key.DirectionUp, highlight = 1, count = 2, resolving = false),
+        )
+        assertEquals(
+            OmniboxKeyAction.MoveHighlight(0),
+            omniboxKeyAction(Key.DirectionDown, highlight = 1, count = 2, resolving = false),
+        ) // wraps
+        assertNull(omniboxKeyAction(Key.A, highlight = 0, count = 2, resolving = false))
+        assertNull(omniboxKeyAction(Key.Enter, highlight = 0, count = 0, resolving = false))
+    }
+
+    @Test fun project_picker_search_is_entry_point_when_opened() = runComposeUiTest {
+        // FocusRequester.requestFocus() runs on open; under DropdownMenu + headless skiko the
+        // popup often won't report IsFocused, so we assert the search field is the interactive
+        // entry (present + enabled) rather than assertIsFocused.
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                Box {
+                    ProjectPicker(
+                        expanded = true,
+                        current = "~",
+                        projects = listOf("/home/u/alpha"),
+                        home = "/home/u",
+                        validatePath = { null },
+                        onPick = {},
+                        onDismiss = {},
+                    )
+                }
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_project_search").assertIsDisplayed()
+        onNodeWithTag("launcher_project_search").assertIsEnabled()
+        onNodeWithTag("launcher_omnibox_root").assertIsDisplayed()
     }
 
     @Test fun project_picker_create_on_forge_uses_connection_id() = runComposeUiTest {
@@ -508,7 +847,7 @@ class SessionLauncherScreenTest {
                         home = "/home/u",
                         validatePath = { null },
                         loadForges = { listOf(forgeConn(id = "conn-9", login = "bob")) },
-                        searchForge = { emptyList() },
+                        searchForge = { searchOk() },
                         createForge = { cid, name ->
                             target.set(cid)
                             "/home/u/$name"
