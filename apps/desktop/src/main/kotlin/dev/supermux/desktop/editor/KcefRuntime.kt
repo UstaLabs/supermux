@@ -10,6 +10,7 @@
 // thread (Dispatchers.IO — the download + native load are blocking).
 package dev.supermux.desktop.editor
 
+import com.jetbrains.cef.JCefAppConfig
 import dev.datlag.kcef.KCEF
 import dev.datlag.kcef.KCEFBrowser
 import dev.datlag.kcef.KCEFClient
@@ -102,10 +103,24 @@ object KcefRuntime {
         }
         val install = installDir()
         val cache = cacheDir()
+        val mac = isMacOs()
         scope.launch(Dispatchers.IO) {
             try {
                 Files.createDirectories(install)
                 Files.createDirectories(cache)
+                // macOS DEFENSE IN DEPTH: a bundle KCEF considers installed (install.lock present)
+                // but whose CEF framework binary is missing would take the native path straight into
+                // a failed dlopen + a null-pointer jump that SIGSEGVs the WHOLE JVM — and because the
+                // editor pane is restored from ui-state.json, that turns into a crash LOOP the user
+                // can't click their way out of. Fail into the terminal Error state (native fallback
+                // editor) instead. A fresh dir is fine — init is what downloads the bundle.
+                if (mac && macBundleIncomplete(install)) {
+                    _state.value = KcefState.Error(
+                        "CEF bundle at $install is incomplete (no ${macFrameworkBinary(install).fileName}) — " +
+                            "delete that directory to re-download",
+                    )
+                    return@launch
+                }
                 _state.value = KcefState.Downloading(0f)
                 KCEF.init(
                     builder = {
@@ -124,9 +139,20 @@ object KcefRuntime {
                             // them explicitly to the install dir fixes both the subprocess exec and
                             // the "Could not load resources.pak" errors. (Observed on this JDK-17
                             // host during the M3-T1 probe.)
-                            browserSubProcessPath = install.resolve("jcef_helper").absolutePathString()
-                            resourcesDirPath = install.absolutePathString()
-                            localesDirPath = install.resolve("locales").absolutePathString()
+                            //
+                            // On macOS the shapes are different: the helper is an .app bundle inside
+                            // `Frameworks/` (not a bare `jcef_helper`) — leave browser_subprocess_path
+                            // blank and CefInitializer's `getBrowserPath` override fills it correctly —
+                            // and the resources live inside the framework, with the locale .pak files
+                            // under `Resources/<locale>.lproj` rather than a `locales/` dir (so
+                            // locales_dir_path stays unset; CEF derives it).
+                            if (mac) {
+                                resourcesDirPath = macResourcesDir(install).absolutePathString()
+                            } else {
+                                browserSubProcessPath = install.resolve("jcef_helper").absolutePathString()
+                                resourcesDirPath = install.absolutePathString()
+                                localesDirPath = install.resolve("locales").absolutePathString()
+                            }
                         }
                         // Pin the JBR/CEF bundle release (JetBrainsRuntime GitHub releases is the
                         // default owner/repo) so init is reproducible across hosts.
@@ -143,7 +169,31 @@ object KcefRuntime {
                         // WITHOUT baking headless-only flags into the shipped app, which runs on a
                         // real GPU. See KcefRuntime KDoc / the M3-T1 report.
                         val extra = parseExtraArgs(System.getenv("SMX_KCEF_EXTRA_ARGS"))
-                        addArgs("--no-sandbox", "--disable-gpu", "--disable-gpu-compositing", *extra.toTypedArray())
+                        val ours = listOf("--no-sandbox", "--disable-gpu", "--disable-gpu-compositing") + extra
+                        if (mac) {
+                            // ⭐ macOS: CEF's own command line is a SECOND channel that must carry
+                            // the bundle paths — see [macCefLaunchArgs]. KCEF's default AppHandler
+                            // carries an empty arg array, so CefApp starts up with no framework
+                            // location and dies on ICU; handing it these args fixes that. Subclassing
+                            // KCEF's own AppHandler keeps its file-scheme registration intact.
+                            val macArgs = macCefLaunchArgs(install, jcefAppArgs(), ours)
+                            appHandler(KCEF.AppHandler(macArgs.toTypedArray()))
+                            // ⭐ macOS: REPLACE the builder args instead of appending to them.
+                            // KCEFBuilder seeds `args` from `JCefAppConfig.getInstance().appArgsAsList`,
+                            // which on mac carries `--framework-dir-path=` / `--main-bundle-path=` /
+                            // `--browser-subprocess-path=` computed from **java.home** — the
+                            // JetBrainsRuntime layout. Under jpackage's runtime (Corretto) that is
+                            // `<app>/Contents/runtime/Contents/Frameworks`, which holds no CEF. KCEF
+                            // *prepends* the correct paths (Platform.OS.MACOSX.getFixedArgs), but
+                            // `CefApp.startup` scans the whole array and keeps the **last**
+                            // `--framework-dir-path=` it sees, so the stale one wins → the framework
+                            // dlopen fails → CEF calls through a null pointer → SIGSEGV kills the JVM.
+                            // Dropping just those three switches (keeping --use-mock-keychain,
+                            // --force-device-scale-factor, …) leaves KCEF's prepended paths unopposed.
+                            args(*macArgs.toTypedArray())
+                        } else {
+                            addArgs(*ours.toTypedArray())
+                        }
                     },
                     onError = { t -> _state.value = KcefState.Error(t?.message ?: t.toString()) },
                     onRestartRequired = { _state.value = KcefState.RestartRequired },
@@ -213,3 +263,88 @@ object KcefRuntime {
  */
 internal fun parseExtraArgs(raw: String?): List<String> =
     raw?.split(Regex("\\s+"))?.filter { it.isNotBlank() } ?: emptyList()
+
+// ── macOS CEF bring-up ────────────────────────────────────────────────────────────────────────
+// See the `if (mac)` branches in [KcefRuntime.ensureInit] for WHY each of these exists. Kept as
+// pure/file-level functions so they unit-test on any host (KcefMacInitTest) — the mac behaviour
+// itself can only be verified by running the packaged .app on a Mac.
+
+/** CEF path switches JCefAppConfig derives from `java.home`; stale under a non-JBR runtime. */
+private val JBR_PATH_SWITCHES = listOf(
+    "--framework-dir-path=",
+    "--main-bundle-path=",
+    "--browser-subprocess-path=",
+)
+
+internal fun isMacOs(osName: String? = System.getProperty("os.name")): Boolean =
+    osName?.lowercase()?.let { it.contains("mac") || it.contains("darwin") } ?: false
+
+/**
+ * The CEF arg list to hand KCEF on macOS: [jbrArgs] (JCefAppConfig's defaults) minus the three
+ * java.home-derived path switches, then [ours]. Order is preserved — CEF's own parser takes the
+ * last occurrence of a repeated switch, so relative order is load-bearing.
+ */
+internal fun macCefArgs(jbrArgs: List<String>, ours: List<String>): List<String> =
+    jbrArgs.filterNot { arg -> JBR_PATH_SWITCHES.any { arg.trim().startsWith(it) } } + ours
+
+/** JCefAppConfig's default CEF args, or empty if this JVM has no JCEF config (never throws). */
+internal fun jcefAppArgs(): List<String> = runCatching {
+    JCefAppConfig.getInstance().appArgsAsList.filterNotNull()
+}.getOrDefault(emptyList())
+
+/** The CEF framework directory inside a KCEF install dir (macOS bundle layout). */
+internal fun macFrameworkDir(install: Path): Path = install
+    .resolve("Frameworks")
+    .resolve("Chromium Embedded Framework.framework")
+
+/** The CEF framework's Mach-O binary — what the framework dlopen actually resolves to. */
+internal fun macFrameworkBinary(install: Path): Path =
+    macFrameworkDir(install).resolve("Chromium Embedded Framework")
+
+/**
+ * Where `icudtl.dat` and the `*.pak` resources live on macOS: INSIDE the framework. KCEF computes
+ * this (Platform.OS.MACOSX.getResourcesPath) but never applies it — its CefInitializer skips
+ * `resources_dir_path` on mac, assuming CEF will find the resources bundle-relative. That only holds
+ * when the framework sits inside the running app bundle; with the framework in a downloaded install
+ * dir, CEF instead resolves against `--main-bundle-path` (which KCEF points at `jcef Helper.app`,
+ * a bundle with no Resources) and aborts with "icudtl.dat not found in bundle".
+ */
+internal fun macResourcesDir(install: Path): Path = macFrameworkDir(install).resolve("Resources")
+
+/** The `jcef Helper.app` bundle CEF launches its GPU/renderer subprocesses from (macOS). */
+internal fun macHelperApp(install: Path): Path =
+    install.resolve("Frameworks").resolve("jcef Helper.app")
+
+/** The helper bundle's executable — CEF's `browser-subprocess-path` on macOS. */
+internal fun macHelperBinary(install: Path): Path =
+    macHelperApp(install).resolve("Contents").resolve("MacOS").resolve("jcef Helper")
+
+/**
+ * The full CEF arg list for macOS: the three bundle paths (pointing into [install]) followed by
+ * [macCefArgs]'s sanitized `jbrArgs` + [ours].
+ *
+ * ⭐ These have to reach **CEF's own command line**, which is a different channel from the path KCEF
+ * uses. KCEF only feeds args to `CefApp.startup(...)` — enough for the java-side framework dlopen —
+ * and then calls `CefApp.getInstance(settings)` with NO args. CefApp's args are what
+ * `CefAppHandlerAdapter.onBeforeCommandLineProcessing` replays onto the browser process's Chromium
+ * command line, where CEF's `PreSandboxStartup` reads `framework-dir-path` / `main-bundle-path` to
+ * override the framework bundle *before* ICU initializes. With KCEF's default empty-arg AppHandler,
+ * CEF instead resolves relative to the host .app bundle, finds no framework, and aborts with
+ * "icudtl.dat not found in bundle". Passing them through a [dev.datlag.kcef.KCEF.AppHandler] (that
+ * subclass, NOT a bare adapter — it also registers KCEF's file-scheme handler, which the editor
+ * page load depends on) is what closes the gap.
+ */
+internal fun macCefLaunchArgs(install: Path, jbrArgs: List<String>, ours: List<String>): List<String> =
+    listOf(
+        "--framework-dir-path=${macFrameworkDir(install)}",
+        "--main-bundle-path=${macHelperApp(install)}",
+        "--browser-subprocess-path=${macHelperBinary(install)}",
+    ) + macCefArgs(jbrArgs, ours)
+
+/**
+ * True when KCEF considers [install] installed (`install.lock`) but the CEF framework binary is
+ * missing — the shape that SIGSEGVs the JVM instead of failing cleanly. A dir with no `install.lock`
+ * is NOT incomplete: that's a fresh install KCEF is about to download.
+ */
+internal fun macBundleIncomplete(install: Path): Boolean =
+    Files.exists(install.resolve("install.lock")) && !Files.exists(macFrameworkBinary(install))
