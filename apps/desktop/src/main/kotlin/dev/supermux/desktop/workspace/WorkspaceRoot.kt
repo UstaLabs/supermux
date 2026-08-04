@@ -10,6 +10,7 @@ package dev.supermux.desktop.workspace
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -932,33 +933,39 @@ private fun HostScopeBar(
     val selected = hosts.firstOrNull { it.recordId == selectedHostId } ?: hosts.first()
     val cs = MaterialTheme.colorScheme
     var expanded by remember { mutableStateOf(false) }
+    // Compact control (not full-width) so DropdownMenu anchors to a chip-sized box
+    // instead of stretching across the settings pane.
     Column(Modifier.fillMaxWidth().background(cs.surfaceContainer)) {
-        Box {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { expanded = true }
-                    .padding(horizontal = 16.dp, vertical = 10.dp)
-                    .testTag("host_scope_picker"),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Host", color = cs.onSurfaceVariant)
-                Spacer(Modifier.weight(1f))
-                HostDot(selected.colorIndex, size = 9.dp)
-                Text(
-                    selected.displayLabel + if (!selected.online) " · Offline" else "",
-                    modifier = Modifier.padding(start = 7.dp, end = 5.dp),
-                    color = cs.onSurface,
-                )
-                Text("⌄", color = cs.onSurfaceVariant)
-            }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                hosts.forEach { host ->
-                    DropdownMenuItem(
-                        text = { Text(host.displayLabel + if (!host.online) " (offline)" else "") },
-                        leadingIcon = { HostDot(host.colorIndex, size = 10.dp) },
-                        onClick = { expanded = false; onSelect(host.recordId) },
+        Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Host", color = cs.onSurfaceVariant)
+            Box {
+                Row(
+                    Modifier
+                        .clickable { expanded = true }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                        .testTag("host_scope_picker"),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    HostDot(selected.colorIndex, size = 9.dp)
+                    Text(
+                        selected.displayLabel + if (!selected.online) " · Offline" else "",
+                        modifier = Modifier.padding(start = 7.dp, end = 5.dp),
+                        color = cs.onSurface,
                     )
+                    Text("⌄", color = cs.onSurfaceVariant)
+                }
+                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    hosts.forEach { host ->
+                        DropdownMenuItem(
+                            text = { Text(host.displayLabel + if (!host.online) " (offline)" else "") },
+                            leadingIcon = { HostDot(host.colorIndex, size = 10.dp) },
+                            onClick = { expanded = false; onSelect(host.recordId) },
+                        )
+                    }
                 }
             }
         }

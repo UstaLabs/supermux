@@ -123,6 +123,8 @@ fun LspSettingsScreen(
     lspAddCustom: suspend (AddCustomLspArgs) -> LspMutationResult?,
     lspRemoveCustom: suspend (id: String) -> LspMutationResult?,
     onBack: () -> Unit,
+    /** When false (Settings hub), omit the nested Back/title chrome — the hub owns navigation. */
+    showTopBar: Boolean = true,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -152,20 +154,27 @@ fun LspSettingsScreen(
             .background(cs.surfaceContainerHigh)
             .testTag("lsp_settings_screen"),
     ) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = Space.lg, vertical = Space.md),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack, modifier = Modifier.testTag("lsp_settings_back")) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
-                    tint = cs.onSurface,
-                    modifier = Modifier.size(18.dp),
+        if (showTopBar) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = Space.lg, vertical = Space.md),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onBack, modifier = Modifier.testTag("lsp_settings_back")) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = cs.onSurface,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                Spacer(Modifier.width(Space.sm))
+                Text(
+                    "Language servers",
+                    color = cs.onSurface,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
                 )
             }
-            Spacer(Modifier.width(Space.sm))
-            Text("Language servers", color = cs.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         }
         Box(Modifier.fillMaxSize()) {
             if (loading) {

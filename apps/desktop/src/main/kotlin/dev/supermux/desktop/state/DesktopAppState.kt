@@ -959,9 +959,13 @@ class DesktopAppState(
     // openCode* (Android) and BrokerSession agent install/login (iOS). All go through [runApi]
     // and degrade to empty/null — never throw into the UI.
 
-    /** GET /agents/status — install + auth state per agent CLI. Empty on any failure. */
-    suspend fun agentStatuses(): List<AgentInstallStatus> =
-        runApi("agentStatuses") { api.agentStatuses() } ?: emptyList()
+    /**
+     * GET /agents/status — install + auth state per agent CLI.
+     * Returns `null` on transport/decode failure so the UI can distinguish Error from a
+     * legitimate empty list (both used to collapse to `emptyList()`, leaving Settings stale).
+     */
+    suspend fun agentStatuses(): List<AgentInstallStatus>? =
+        runApi("agentStatuses") { api.agentStatuses() }
 
     /** POST /agents/<kind>/install — start (or resume) the broker-owned install job. */
     suspend fun startAgentInstall(kind: String): AgentInstallJob? =
