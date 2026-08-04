@@ -20,6 +20,7 @@ import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.desktop.ui.openInBrowserOverride
 import dev.supermux.desktop.workspace.SettingsSection
 import dev.supermux.desktop.workspace.WorkspaceRoot
 import dev.supermux.desktop.workspace.WorkspaceStateStore
@@ -66,6 +67,21 @@ import kotlinx.coroutines.runBlocking
  */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
 class AgentSettingsScreenTest {
+
+    // OAuth / "Open sign-in" paths call openInBrowser; never spawn a real browser from tests.
+    private val openedUrls = mutableListOf<String>()
+
+    @kotlin.test.BeforeTest
+    fun installBrowserSeam() {
+        openedUrls.clear()
+        openInBrowserOverride = { openedUrls.add(it) }
+    }
+
+    @AfterTest
+    fun restoreBrowserSeam() {
+        openInBrowserOverride = null
+        openedUrls.clear()
+    }
 
     // ── pure helpers (keep the non-trivial ones) ────────────────────────────────────────────────
 

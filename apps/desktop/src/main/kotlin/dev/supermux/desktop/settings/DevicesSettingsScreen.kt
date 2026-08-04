@@ -3,7 +3,7 @@
 //   - FAB → header "Add device" button (desktop pointer chrome; matches Personal Assistants)
 //   - Android BarcodeEncoder QR → host/QrCode.kt qrBitmap (zxing already on desktop classpath)
 //   - LocalContext copy → LocalClipboardManager
-//   - sp/dp hardcodes → theme Space / Radii / MaterialTheme.typography
+//   - sp/dp hardcodes → theme Space / Radii / IconSize / Stroke / MaterialTheme.typography
 //   - null load = Error (Agents pattern); empty list = "No devices registered."
 //   - testTags for compose UI tests + SM_DEVICES headless verification
 package dev.supermux.desktop.settings
@@ -44,17 +44,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
 import dev.supermux.desktop.host.qrBitmap
 import dev.supermux.desktop.session.relTime
+import dev.supermux.desktop.theme.IconSize
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Radii
 import dev.supermux.desktop.theme.Space
+import dev.supermux.desktop.theme.Stroke
 import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.DeviceDto
 import kotlinx.coroutines.delay
@@ -86,6 +89,8 @@ fun DevicesSettingsScreen(
     var loadState by remember { mutableStateOf<DevicesLoadState>(DevicesLoadState.Loading) }
     var reloadKey by remember { mutableStateOf(0) }
     var revokeTarget by remember { mutableStateOf<String?>(null) }
+    var revokeBusy by remember { mutableStateOf(false) }
+    var revokeError by remember { mutableStateOf<String?>(null) }
     var showAdd by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
@@ -105,6 +110,7 @@ fun DevicesSettingsScreen(
     LaunchedEffect(reloadKey) { loadOnce() }
 
     // Auto-retry while in Error so a broker reconnect recovers without close/reopen.
+    // Cancelled when leaving the section (composition disposed) — no coroutine leak.
     LaunchedEffect(loadState, reloadKey) {
         if (loadState !is DevicesLoadState.Error) return@LaunchedEffect
         while (isActive) {
@@ -123,18 +129,23 @@ fun DevicesSettingsScreen(
             .background(cs.background)
             .testTag("devices_settings_screen"),
     ) {
-        // Hub chrome: action row only — no nested Back/title (hub owns navigation).
-        Row(
+        // Hub chrome: action row aligned to the same max width as the list (not the full pane).
+        Box(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = Space.lg, vertical = Space.md),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.End,
+            contentAlignment = Alignment.Center,
         ) {
-            Button(
-                onClick = { showAdd = true },
-                modifier = Modifier.testTag("devices_add_button"),
-            ) { Text("Add device") }
+            Row(
+                Modifier.widthIn(max = SettingsDetailMaxWidth).fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.End,
+            ) {
+                Button(
+                    onClick = { showAdd = true },
+                    modifier = Modifier.testTag("devices_add_button"),
+                ) { Text("Add device") }
+            }
         }
         HorizontalDivider(color = cs.outlineVariant)
 
@@ -200,7 +211,11 @@ fun DevicesSettingsScreen(
                         items(state.devices, key = { it.name }) { device ->
                             DeviceRow(
                                 device = device,
-                                onRevoke = { revokeTarget = device.name },
+                                onRevoke = {
+                                    revokeError = null
+                                    revokeBusy = false
+                                    revokeTarget = device.name
+                                },
                             )
                             HorizontalDivider(color = cs.outlineVariant)
                         }
@@ -213,25 +228,44 @@ fun DevicesSettingsScreen(
     // Confirm revoke dialog (Android: "Revoke device?" / "Remove \"…\" from authorized devices?")
     revokeTarget?.let { name ->
         AlertDialog(
-            onDismissRequest = { revokeTarget = null },
+            onDismissRequest = {
+                if (!revokeBusy) {
+                    revokeTarget = null
+                    revokeError = null
+                }
+            },
             title = { Text("Revoke device?") },
-            text = { Text("Remove \"$name\" from authorized devices?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+                    Text("Remove \"$name\" from authorized devices?")
+                    revokeError?.let { err ->
+                        Text(
+                            err,
+                            color = cs.error,
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.testTag("devices_revoke_error"),
+                        )
+                    }
+                }
+            },
             confirmButton = {
                 TextButton(
+                    enabled = !revokeBusy,
                     onClick = {
+                        if (revokeBusy) return@TextButton
+                        revokeBusy = true
+                        revokeError = null
                         scope.launch {
                             val ok = deviceRevoke(name)
+                            revokeBusy = false
                             if (ok) {
-                                val current = (loadState as? DevicesLoadState.Ready)?.devices
-                                    ?: emptyList()
-                                val next = current.filterNot { it.name == name }
-                                loadState = if (next.isEmpty()) {
-                                    DevicesLoadState.Empty
-                                } else {
-                                    DevicesLoadState.Ready(next)
-                                }
+                                revokeTarget = null
+                                // Refresh from the broker (do not trust a local-only filter).
+                                reloadKey++
+                            } else {
+                                // Keep the dialog open and surface the failure visibly.
+                                revokeError = "Couldn't revoke the device. Try again."
                             }
-                            revokeTarget = null
                         }
                     },
                     modifier = Modifier.testTag("devices_revoke_confirm"),
@@ -239,7 +273,11 @@ fun DevicesSettingsScreen(
             },
             dismissButton = {
                 TextButton(
-                    onClick = { revokeTarget = null },
+                    enabled = !revokeBusy,
+                    onClick = {
+                        revokeTarget = null
+                        revokeError = null
+                    },
                     modifier = Modifier.testTag("devices_revoke_cancel"),
                 ) { Text("Cancel") }
             },
@@ -273,6 +311,17 @@ private fun AddDeviceDialog(
     var result by remember { mutableStateOf<AddDeviceResponse?>(null) }
     var copied by remember { mutableStateOf(false) }
     val minted = result != null
+    val nameFocus = remember { FocusRequester() }
+
+    // Autofocus the name field so typing immediately after opening the dialog works.
+    // Retry across a couple of frames: AlertDialog content is not focusable on the first
+    // composition tick under desktop skiko.
+    LaunchedEffect(Unit) {
+        repeat(5) {
+            if (runCatching { nameFocus.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+            delay(16)
+        }
+    }
 
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss(minted) },
@@ -295,6 +344,7 @@ private fun AddDeviceDialog(
                         enabled = !busy,
                         modifier = Modifier
                             .fillMaxWidth()
+                            .focusRequester(nameFocus)
                             .submitOnEnter(!busy && name.isNotBlank()) {
                                 val trimmed = name.trim()
                                 if (trimmed.isEmpty() || busy) return@submitOnEnter
@@ -340,7 +390,7 @@ private fun AddDeviceDialog(
                             bitmap = qr,
                             contentDescription = "Pairing QR code",
                             modifier = Modifier
-                                .size(200.dp)
+                                .size(Space.qr)
                                 .clip(RoundedCornerShape(Radii.sm))
                                 .background(Color.White)
                                 .padding(Space.sm)
@@ -389,9 +439,9 @@ private fun AddDeviceDialog(
                 ) {
                     if (busy) {
                         CircularProgressIndicator(
-                            Modifier.size(18.dp),
+                            Modifier.size(IconSize.md),
                             color = cs.primary,
-                            strokeWidth = 2.dp,
+                            strokeWidth = Stroke.md,
                         )
                     } else {
                         Text("Create")

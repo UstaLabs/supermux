@@ -1547,11 +1547,11 @@ class BrokerApi(
             setBody(json.encodeToString(AddDeviceBody(name)))
         })
 
-    /** DELETE /devices/<urlencoded name> */
+    /** DELETE /devices/<urlencoded name> — non-2xx throws (same contract as postJson/putJson). */
     suspend fun revokeDevice(name: String) {
-        http.delete("$httpBase/devices/${urlEncode(name)}") {
+        ensureMutationSuccess(http.delete("$httpBase/devices/${urlEncode(name)}") {
             header("Authorization", bearerHeader())
-        }
+        })
     }
 
     /** GET /archived-sessions */
