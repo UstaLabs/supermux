@@ -1,6 +1,6 @@
 // Settings hub shell: left rail of sections + detail pane.
 // Folds the existing Editor/LSP and Personal Assistants screens into one entry point
-// alongside the new Agents section (desktop-parity Task 1).
+// alongside Agents (Task 1), Devices (Task 2), and Proxies/Assistant/Voice (Task 5).
 package dev.supermux.desktop.settings
 
 import androidx.compose.foundation.LocalIndication
@@ -47,13 +47,19 @@ import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.AgentInstallJob
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
+import dev.supermux.net.AppConfigDto
+import dev.supermux.net.CreateProxyResponse
+import dev.supermux.net.CuratorSettingsResponse
 import dev.supermux.net.DeviceDto
 import dev.supermux.net.LspInstallResult
 import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
+import dev.supermux.net.ModelInfo
 import dev.supermux.net.OpenCodeOAuthStart
 import dev.supermux.net.OpenCodeProvider
 import dev.supermux.net.PADto
+import dev.supermux.net.ProxyDto
+import dev.supermux.net.ReasoningResponse
 import dev.supermux.proto.ServerFrame
 import kotlinx.coroutines.flow.StateFlow
 
@@ -83,6 +89,35 @@ fun SettingsHub(
     devicesLoad: suspend () -> List<DeviceDto>?,
     deviceAdd: suspend (name: String) -> AddDeviceResponse?,
     deviceRevoke: suspend (name: String) -> Boolean,
+    // Proxies (Task 5)
+    proxiesLoad: suspend () -> List<ProxyDto>?,
+    proxySessionNames: () -> List<String>,
+    proxyCreate: suspend (sessionName: String, port: Int, domain: String?) -> CreateProxyResponse?,
+    proxySetPublic: suspend (domain: String, isPublic: Boolean) -> Boolean,
+    proxyRemove: suspend (domain: String) -> Boolean,
+    // Assistant identity + curator (Task 5)
+    assistantLoad: suspend () -> Pair<String, String>?,
+    assistantSave: suspend (paName: String, soul: String) -> Boolean,
+    curatorLoad: suspend () -> CuratorSettingsResponse?,
+    curatorSave: suspend (
+        enabled: Boolean,
+        hour: Int,
+        minute: Int,
+        agent: String,
+        model: String?,
+        reasoningLevel: String?,
+    ) -> CuratorSettingsResponse?,
+    curatorRunNow: suspend () -> Boolean,
+    curatorLoadModels: suspend (agent: String) -> List<ModelInfo>,
+    curatorLoadReasoning: suspend (agent: String, model: String?) -> ReasoningResponse?,
+    // Voice (Task 5)
+    voiceLoadConfig: suspend () -> AppConfigDto?,
+    voiceLoadModels: suspend (family: String) -> List<ModelInfo>,
+    voiceSaveStt: suspend (engine: String?) -> Boolean,
+    voiceSaveTts: suspend (engine: String?) -> Boolean,
+    voiceSaveCleanup: suspend (engine: String?, model: String?) -> Boolean,
+    glossaryLoad: suspend () -> List<String>,
+    glossarySave: suspend (List<String>) -> List<String>?,
     // Editor / LSP
     lspLoad: suspend () -> List<LspServer>,
     lspToggle: suspend (id: String, enabled: Boolean) -> List<LspServer>?,
@@ -156,6 +191,31 @@ fun SettingsHub(
                         devicesLoad = devicesLoad,
                         deviceAdd = deviceAdd,
                         deviceRevoke = deviceRevoke,
+                    )
+                    SettingsSection.Proxies -> ProxiesSettingsScreen(
+                        proxiesLoad = proxiesLoad,
+                        sessionNames = proxySessionNames,
+                        proxyCreate = proxyCreate,
+                        proxySetPublic = proxySetPublic,
+                        proxyRemove = proxyRemove,
+                    )
+                    SettingsSection.Assistant -> AssistantSettingsScreen(
+                        assistantLoad = assistantLoad,
+                        assistantSave = assistantSave,
+                        curatorLoad = curatorLoad,
+                        curatorSave = curatorSave,
+                        curatorRunNow = curatorRunNow,
+                        loadModels = curatorLoadModels,
+                        loadReasoning = curatorLoadReasoning,
+                    )
+                    SettingsSection.Voice -> VoiceSettingsScreen(
+                        loadConfig = voiceLoadConfig,
+                        loadModels = voiceLoadModels,
+                        saveVoiceStt = voiceSaveStt,
+                        saveVoiceTts = voiceSaveTts,
+                        saveVoiceCleanup = voiceSaveCleanup,
+                        glossaryLoad = glossaryLoad,
+                        glossarySave = glossarySave,
                     )
                     SettingsSection.EditorLsp -> LspSettingsScreen(
                         lspLoad = lspLoad,

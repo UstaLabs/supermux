@@ -75,10 +75,14 @@ import dev.supermux.session.inferHomeDir
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /** Sections of the Settings hub (left rail). Task 1 ships Agents; Task 2 ships Devices;
- *  Editor/LSP and Personal Assistants are the pre-existing screens folded into the hub. */
+ *  Task 5 ships Proxies / Assistant / Voice; Editor/LSP and Personal Assistants are the
+ *  pre-existing screens folded into the hub. */
 enum class SettingsSection(val label: String) {
     Agents("Agents"),
     Devices("Devices"),
+    Proxies("Proxies"),
+    Assistant("Assistant"),
+    Voice("Voice"),
     EditorLsp("Editor / LSP"),
     PersonalAssistants("Personal assistants"),
 }
@@ -811,7 +815,12 @@ fun WorkspaceRoot(
                 val overlayTag = when (ui.settingsSection) {
                     SettingsSection.EditorLsp -> "lsp_settings_overlay"
                     SettingsSection.PersonalAssistants -> "personal_assistants_overlay"
-                    SettingsSection.Agents, SettingsSection.Devices -> "settings_overlay"
+                    SettingsSection.Agents,
+                    SettingsSection.Devices,
+                    SettingsSection.Proxies,
+                    SettingsSection.Assistant,
+                    SettingsSection.Voice,
+                    -> "settings_overlay"
                 }
                 Box(
                     Modifier
@@ -851,6 +860,35 @@ fun WorkspaceRoot(
                                     devicesLoad = { hostApp.devices() },
                                     deviceAdd = { name -> hostApp.addDevice(name) },
                                     deviceRevoke = { name -> hostApp.revokeDevice(name) },
+                                    proxiesLoad = { hostApp.proxiesForSettings() },
+                                    proxySessionNames = { hostApp.sessions.value.map { it.name } },
+                                    proxyCreate = { session, port, domain ->
+                                        hostApp.createProxy(session, port, domain)
+                                    },
+                                    proxySetPublic = { domain, isPublic ->
+                                        hostApp.setProxyPublic(domain, isPublic)
+                                    },
+                                    proxyRemove = { domain -> hostApp.removeProxy(domain) },
+                                    assistantLoad = { hostApp.assistantLoad() },
+                                    assistantSave = { paName, soul -> hostApp.assistantSave(paName, soul) },
+                                    curatorLoad = { hostApp.curatorSettings() },
+                                    curatorSave = { enabled, hour, minute, agent, model, reasoning ->
+                                        hostApp.saveCurator(enabled, hour, minute, agent, model, reasoning)
+                                    },
+                                    curatorRunNow = { hostApp.runCuratorNow() },
+                                    curatorLoadModels = { agent -> hostApp.launcherModels(agent) },
+                                    curatorLoadReasoning = { agent, model ->
+                                        hostApp.launcherReasoning(agent, model)
+                                    },
+                                    voiceLoadConfig = { hostApp.appConfig() },
+                                    voiceLoadModels = { family -> hostApp.launcherModels(family) },
+                                    voiceSaveStt = { engine -> hostApp.saveVoiceStt(engine) },
+                                    voiceSaveTts = { engine -> hostApp.saveVoiceTts(engine) },
+                                    voiceSaveCleanup = { engine, model ->
+                                        hostApp.saveVoiceCleanup(engine, model)
+                                    },
+                                    glossaryLoad = { hostApp.fetchGlossary() },
+                                    glossarySave = { terms -> hostApp.updateGlossary(terms) },
                                     lspLoad = { hostApp.lspLoad() },
                                     lspToggle = { id, enabled -> hostApp.lspToggle(id, enabled) },
                                     lspInstall = { id -> hostApp.lspInstall(id) },

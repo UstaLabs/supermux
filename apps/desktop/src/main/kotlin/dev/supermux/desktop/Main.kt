@@ -91,6 +91,17 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //   SM_DEVICES=1                  — open the Settings hub on Devices via ui.openSettings(Devices)
 //                                  on start, loading real app.devices() (GET /devices, read-only)
 //                                  from the active host. Off by default; never mints/revokes.    [main]
+//   SM_PROXIES=1                  — open the Settings hub on Proxies via ui.openSettings(Proxies)
+//                                  on start, loading real app.proxiesForSettings() (GET /proxies,
+//                                  read-only). Never creates/removes/toggles. Off by default.    [main]
+//   SM_ASSISTANT=1                — open the Settings hub on Assistant via ui.openSettings(Assistant)
+//                                  on start, loading real app.assistantLoad() + curatorSettings()
+//                                  (GET /settings/config, /settings/soul, /settings/curator,
+//                                  read-only). Never saves or runs curator. Off by default.      [main]
+//   SM_VOICE=1                    — open the Settings hub on Voice via ui.openSettings(Voice) on
+//                                  start, loading real app.appConfig() + fetchGlossary() (GET
+//                                  /settings/config, /config/voice-glossary, read-only). Never
+//                                  mutates engines or glossary. Off by default.                  [main]
 //   SM_USAGE=1                    — open the Usage overlay (File ▸ "Usage…"'s SAME ui.openUsage())
 //                                  on start, loading the real app.usage() (GET /usage, read-only)
 //                                  (M4f). Read-only — never calls redeemCodexReset() (that burns a
@@ -1012,6 +1023,62 @@ fun main() {
                             println(
                                 "[devices] devices count=${devices?.size ?: "null"} " +
                                     "names=${devices?.joinToString { it.name } ?: "(load failed)"}",
+                            )
+                        }
+                    }
+
+                    // Headless Proxies verification hook (desktop-parity Task 5): SM_PROXIES=1 opens
+                    // the Settings hub on Proxies via the SAME ui.openSettings(Proxies) path the
+                    // rail uses. Read-only — never createProxy/setProxyPublic/removeProxy.
+                    val proxiesHook = System.getenv("SM_PROXIES") == "1"
+                    if (proxiesHook) {
+                        LaunchedEffect(app) {
+                            delay(3_000)
+                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.Proxies)
+                            println("[proxies] opened the Settings hub (Proxies)")
+                            val proxies = app.proxiesForSettings()
+                            println(
+                                "[proxies] proxies count=${proxies?.size ?: "null"} " +
+                                    "domains=${proxies?.joinToString { it.domain } ?: "(load failed)"}",
+                            )
+                        }
+                    }
+
+                    // Headless Assistant verification hook (desktop-parity Task 5): SM_ASSISTANT=1
+                    // opens Assistant (soul + curator). Read-only — never saves or runCuratorNow.
+                    val assistantHook = System.getenv("SM_ASSISTANT") == "1"
+                    if (assistantHook) {
+                        LaunchedEffect(app) {
+                            delay(3_000)
+                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.Assistant)
+                            println("[assistant] opened the Settings hub (Assistant)")
+                            val pair = app.assistantLoad()
+                            val curator = app.curatorSettings()
+                            println(
+                                "[assistant] paName=${pair?.first ?: "(load failed)"} " +
+                                    "soulChars=${pair?.second?.length ?: "null"} " +
+                                    "curatorEnabled=${curator?.config?.enabled ?: "(load failed)"} " +
+                                    "nextRun=${curator?.nextRun ?: "—"}",
+                            )
+                        }
+                    }
+
+                    // Headless Voice verification hook (desktop-parity Task 5): SM_VOICE=1 opens
+                    // Voice settings. Read-only — never mutates STT/TTS/cleanup/glossary.
+                    val voiceHook = System.getenv("SM_VOICE") == "1"
+                    if (voiceHook) {
+                        LaunchedEffect(app) {
+                            delay(3_000)
+                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.Voice)
+                            println("[voice] opened the Settings hub (Voice)")
+                            val cfg = app.appConfig()
+                            val glossary = app.fetchGlossary()
+                            println(
+                                "[voice] stt=${cfg?.voiceSttEngine ?: "(default)"} " +
+                                    "tts=${cfg?.voiceTtsEngine ?: "(default)"} " +
+                                    "cleanup=${cfg?.voiceCleanupEngine ?: "(default)"} " +
+                                    "model=${cfg?.voiceCleanupModel ?: "(default)"} " +
+                                    "glossaryTerms=${glossary.size}",
                             )
                         }
                     }
