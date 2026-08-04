@@ -14,6 +14,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
@@ -842,9 +843,7 @@ class SessionLauncherScreenTest {
     }
 
     @Test fun project_picker_search_is_entry_point_when_opened() = runComposeUiTest {
-        // FocusRequester.requestFocus() runs on open; under DropdownMenu + headless skiko the
-        // popup often won't report IsFocused, so we assert the search field is the interactive
-        // entry (present + enabled) rather than assertIsFocused.
+        // Plain host (no DropdownMenu) so headless skiko reports IsFocused after requestFocus.
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 Box {
@@ -856,6 +855,7 @@ class SessionLauncherScreenTest {
                         validatePath = { null },
                         onPick = {},
                         onDismiss = {},
+                        useDropdownMenu = false,
                     )
                 }
             }
@@ -864,12 +864,24 @@ class SessionLauncherScreenTest {
         onNodeWithTag("launcher_project_search").assertIsDisplayed()
         onNodeWithTag("launcher_project_search").assertIsEnabled()
         onNodeWithTag("launcher_omnibox_root").assertIsDisplayed()
+        waitUntil(timeoutMillis = 3_000) {
+            try {
+                onNodeWithTag("launcher_project_search").assertIsFocused()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
         onNodeWithTag("launcher_project_autofocus_ready").assertIsDisplayed()
     }
 
     /**
      * Regression: autofocus used to await loadForges(), so a slow/stalled broker delayed the
-     * keyboard. Focus request must complete while forges are still loading.
+     * keyboard. Hold forge load forever and require the search field to be *actually focused*
+     * (IsFocused + ready tag driven by onFocusChanged) before forges resolve — a version that
+     * only flips a side-effect flag, or still sequences requestFocus after loadForges, fails.
+     *
+     * Hosted without [DropdownMenu] so focus semantics are observable under headless skiko.
      */
     @Test fun project_picker_autofocuses_without_waiting_for_forges() = runComposeUiTest {
         val gate = CompletableDeferred<Unit>()
@@ -888,14 +900,16 @@ class SessionLauncherScreenTest {
                         },
                         onPick = {},
                         onDismiss = {},
+                        useDropdownMenu = false,
                     )
                 }
             }
         }
         waitForIdle()
-        // Would hang / fail if requestFocus were sequenced after loadForges().
+        // Real focus while loadForges is still suspended — not a pre-set marker.
         waitUntil(timeoutMillis = 3_000) {
             try {
+                onNodeWithTag("launcher_project_search").assertIsFocused()
                 onNodeWithTag("launcher_project_autofocus_ready").assertIsDisplayed()
                 true
             } catch (_: Throwable) {
@@ -903,10 +917,12 @@ class SessionLauncherScreenTest {
             }
         }
         assertFalse(gate.isCompleted, "autofocus must not wait for loadForges")
-        onNodeWithTag("launcher_project_search").assertIsDisplayed()
+        onNodeWithTag("launcher_project_search").assertIsFocused()
         onNodeWithTag("launcher_project_search").assertIsEnabled()
         onNodeWithTag("launcher_project_search").performTextInput("typed-before-forges")
         onNodeWithTag("launcher_project_search").assertTextEquals("typed-before-forges")
+        // Still unresolved after focus + typing — proves we never awaited the forge load.
+        assertFalse(gate.isCompleted, "forge load must remain pending after focused typing")
         gate.complete(Unit)
         waitForIdle()
     }

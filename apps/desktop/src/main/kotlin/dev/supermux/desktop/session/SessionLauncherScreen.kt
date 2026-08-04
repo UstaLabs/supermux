@@ -88,6 +88,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
@@ -1129,6 +1130,11 @@ internal fun ProjectPicker(
     cloneForge: suspend (connectionId: String, owner: String, name: String) -> String? = { _, _, _ -> null },
     createLocalRepo: suspend (name: String) -> String? = { null },
     createForge: suspend (connectionId: String, name: String) -> String? = { _, _ -> null },
+    /**
+     * Production leaves this true (heading dropdown). UI tests that need real [FocusRequester]
+     * semantics set false — headless skiko often does not report IsFocused inside [DropdownMenu].
+     */
+    useDropdownMenu: Boolean = true,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -1160,10 +1166,11 @@ internal fun ProjectPicker(
     }
 
     // Autofocus immediately when the menu opens — never wait on broker forge loading.
+    // searchAutofocused is set only from onFocusChanged (real focus), not after requestFocus(),
+    // so tests that see the ready tag have proof the field is focused — not a side-effect flag.
     LaunchedEffect(expanded) {
         if (expanded) {
             runCatching { searchFocus.requestFocus() }
-            searchAutofocused = true
         }
     }
     LaunchedEffect(expanded) {
@@ -1356,15 +1363,8 @@ internal fun ProjectPicker(
         .removePrefix("create ")
         .ifBlank { null }
 
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = {
-            // Escape/outside click while overlay is up only hides progress — host keeps going.
-            if (resolving) hideResolveProgress()
-            else onDismiss()
-        },
-        modifier = Modifier.testTag("launcher_project_menu"),
-    ) {
+    @Composable
+    fun MenuBody() {
         Box(
             Modifier
                 .width(Size.omniboxWidth)
@@ -1393,11 +1393,12 @@ internal fun ProjectPicker(
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(searchFocus)
+                        .onFocusChanged { if (it.isFocused) searchAutofocused = true }
                         .testTag("launcher_project_search")
                         .onPreviewKeyEvent { onOmniboxKey(it) },
                 )
-                // Sibling tag so tests can assert autofocus without relying on IsFocused (flaky under
-                // DropdownMenu + headless skiko) and without gating on loadForges.
+                // Ready only after the search field actually receives focus (onFocusChanged).
+                // Holds while loadForges is still pending when autofocus is independent of forges.
                 if (searchAutofocused) {
                     Text(
                         "",
@@ -1845,6 +1846,25 @@ internal fun ProjectPicker(
                     }
                 }
             }
+        }
+    }
+
+    if (useDropdownMenu) {
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = {
+                // Escape/outside click while overlay is up only hides progress — host keeps going.
+                if (resolving) hideResolveProgress()
+                else onDismiss()
+            },
+            modifier = Modifier.testTag("launcher_project_menu"),
+        ) {
+            MenuBody()
+        }
+    } else if (expanded) {
+        // Plain host for UI tests that assert real focus (DropdownMenu popup breaks IsFocused).
+        Box(Modifier.testTag("launcher_project_menu")) {
+            MenuBody()
         }
     }
 }
