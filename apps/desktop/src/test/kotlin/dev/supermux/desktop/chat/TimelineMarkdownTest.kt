@@ -116,7 +116,14 @@ class TimelineMarkdownTest {
 
     @Test fun non_https_image_renders_link_line_opening_the_url() = runComposeUiTest {
         // http (not https) must never fetch — tracking/IP-leak guard matches Android's Coil path.
-        setContent { MarkdownBody(text = "![a diagram](http://example.com/pic.png)") }
+        // onOpenUrl seam is threaded through MarkdownBody so a click never launches a real browser.
+        val opened = AtomicReference<String?>(null)
+        setContent {
+            MarkdownBody(
+                text = "![a diagram](http://example.com/pic.png)",
+                onOpenUrl = { opened.set(it) },
+            )
+        }
 
         onNodeWithTag("md_image").assertIsDisplayed()
         val node = onNodeWithTag("md_image").fetchSemanticsNode()
@@ -126,6 +133,13 @@ class TimelineMarkdownTest {
         val urls = annotated.getLinkAnnotations(0, annotated.length)
             .mapNotNull { (it.item as? LinkAnnotation.Url)?.url }
         assertTrue("http://example.com/pic.png" in urls, "expected the image url as a Url link annotation, got $urls")
+        // Click through the annotation / node — seam must receive the URL (not the OS browser).
+        onNodeWithTag("md_image").performClick()
+        assertEquals(
+            "http://example.com/pic.png",
+            opened.get(),
+            "click on non-https link line must invoke onOpenUrl seam",
+        )
     }
 
     @Test fun https_image_renders_inline_bitmap_when_loader_succeeds() = runComposeUiTest {
@@ -346,9 +360,9 @@ class TimelineMarkdownTest {
     }
 
     /**
-     * After load, a short (2×2) image may be shorter than the loading box — that is the known
-     * downward-reflow trade-off. Assert heightIn(max=MaxHeight) is enforced in **px** against the
-     * same MaxHeight token the placeholder uses (not a loose <800 band).
+     * After load, a short (2×2) image paints at **natural size** (no upscale). At the real chat
+     * column width (860.dp) a regression that fillMaxWidth-upscales would paint ~280×280; we assert
+     * the node stays near intrinsic px (2×2 at density), far below MaxHeight.
      */
     @Test fun mdImage_loaded_hasPositiveLayoutBounds() = runComposeUiTest {
         val png = decodeImageBytes(TINY_PNG_BYTES)
@@ -356,7 +370,8 @@ class TimelineMarkdownTest {
         var density: Density? = null
         setContent {
             density = LocalDensity.current
-            Box(Modifier.width(320.dp).fillMaxWidth()) {
+            // Real chat reading width — upscale bugs only show when the column is wide.
+            Box(Modifier.width(860.dp).fillMaxWidth()) {
                 MarkdownImage(
                     image = MdBlock.Image(url = "https://example.com/pic.png", alt = "x"),
                     loadImage = { png },
@@ -369,12 +384,31 @@ class TimelineMarkdownTest {
         val node = onNodeWithTag("md_image").fetchSemanticsNode()
         assertTrue(node.layoutInfo.width > 0, "loaded image width must be > 0")
         assertTrue(node.layoutInfo.height > 0, "loaded image height must be > 0")
-        val maxPx = with(density!!) { MdImageDimens.MaxHeight.roundToPx() }
-        // heightIn(max=MaxHeight) — painted height must not exceed MaxHeight in px.
+        val d = density!!
+        val maxPx = with(d) { MdImageDimens.MaxHeight.roundToPx() }
         assertTrue(
             node.layoutInfo.height <= maxPx,
             "loaded image height ${node.layoutInfo.height} px exceeds MaxHeight=$maxPx px",
         )
+        // 2×2 PNG at natural size: both edges must be far below MaxHeight (no fillMaxWidth upscale).
+        val naturalCapPx = with(d) { 16.dp.roundToPx() } // generous for density rounding
+        assertTrue(
+            node.layoutInfo.width <= naturalCapPx && node.layoutInfo.height <= naturalCapPx,
+            "2×2 image must paint near natural size, not upscale to column; " +
+                "got ${node.layoutInfo.width}x${node.layoutInfo.height} px (cap $naturalCapPx)",
+        )
+    }
+
+    @Test fun mdImagePaintSize_neverUpscales_onlyShrinks() {
+        val density = Density(1f)
+        val (w1, h1) = mdImagePaintSize(32, 32, maxWidth = 860.dp, maxHeight = 280.dp, density)
+        assertEquals(32.dp, w1)
+        assertEquals(32.dp, h1)
+        val (w2, h2) = mdImagePaintSize(4000, 2000, maxWidth = 860.dp, maxHeight = 280.dp, density)
+        assertTrue(w2 <= 860.dp && h2 <= 280.dp)
+        // Aspect preserved, height-bound: 4000/2000 = 2 → width = 560 at height 280.
+        assertEquals(560.dp, w2)
+        assertEquals(280.dp, h2)
     }
 
     @Test fun fetchHttpsImageBytes_rejects_non_https() {

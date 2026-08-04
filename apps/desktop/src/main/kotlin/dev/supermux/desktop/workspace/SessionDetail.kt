@@ -210,6 +210,9 @@ fun SessionDetail(
     // its `externalDictate` KDoc for the funnel. Null in normal operation.
     externalDictate: ComposerExternalDictate? = null,
     onExternalDictateConsumed: () -> Unit = {},
+    // Edit ▸ Paste image (MenuBar) — one-shot nonce for the selected composer's paste-image path.
+    pasteImageRequestNonce: Long = 0L,
+    onPasteImageRequestConsumed: () -> Unit = {},
     // Injectable seam for the Native (agent-PTY) panel — defaults to the real [DesktopTerminalPanel].
     // Its SwingPanel cannot be hosted under `runComposeUiTest` (no real AWT window), so the UI tests
     // inject a lightweight pure-Compose fake to exercise the toggle + keep-alive + onExit wiring.
@@ -337,6 +340,8 @@ fun SessionDetail(
                 onExternalAttachConsumed = onExternalAttachConsumed,
                 externalDictate = externalDictate,
                 onExternalDictateConsumed = onExternalDictateConsumed,
+                pasteImageRequestNonce = pasteImageRequestNonce,
+                onPasteImageRequestConsumed = onPasteImageRequestConsumed,
             )
             if (nativeOpened) {
                 key(session.id) {

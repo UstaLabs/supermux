@@ -104,6 +104,9 @@ fun ChatPanel(
     // see its KDoc for the funnel. Null in normal operation.
     externalDictate: ComposerExternalDictate? = null,
     onExternalDictateConsumed: () -> Unit = {},
+    // Edit ▸ Paste image (MenuBar) → DesktopComposer.pasteImageRequestNonce.
+    pasteImageRequestNonce: Long = 0L,
+    onPasteImageRequestConsumed: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val sem = LocalSemantics.current
@@ -296,6 +299,8 @@ fun ChatPanel(
                 onExternalAttachConsumed = onExternalAttachConsumed,
                 externalDictate = externalDictate,
                 onExternalDictateConsumed = onExternalDictateConsumed,
+                pasteImageRequestNonce = pasteImageRequestNonce,
+                onPasteImageRequestConsumed = onPasteImageRequestConsumed,
                 // Model + reasoning pills live IN the composer (above the input). The current model
                 // falls back to session.model until the catalog loads. Picking optimistically updates
                 // the shown `current`; a model change also refetches reasoning since effort

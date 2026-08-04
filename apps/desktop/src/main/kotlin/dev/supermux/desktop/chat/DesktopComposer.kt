@@ -246,11 +246,12 @@ internal fun handleComposerPasteKey(
     metaPressed: Boolean,
     shiftPressed: Boolean,
     uploadBound: Boolean,
-    likelyHasImage: Boolean,
+    /** Lazily evaluated so the clipboard is only probed after the paste-key chord matches. */
+    likelyHasImage: () -> Boolean,
     onPasteImage: () -> Unit,
 ): Boolean {
     if (!isComposerPasteKey(key, type, ctrlPressed, metaPressed, shiftPressed)) return false
-    if (uploadBound && likelyHasImage) {
+    if (uploadBound && likelyHasImage()) {
         onPasteImage()
         return true
     }
@@ -327,25 +328,23 @@ internal fun ensurePasteCacheDir(): Path? = runCatching {
 }.getOrNull()
 
 /**
- * Whether [path] is a regular file living directly under the app paste-cache (NOFOLLOW).
- * Used by tests; production never deletes by individual path membership.
+ * Whether [name] matches the paste-cache files this app writes (`paste-<uuid>.png`).
+ * The age pruner only unlinks names that pass this check — foreign files in the cache dir
+ * (even aged ones) are left alone.
  */
-internal fun isPasteCacheFile(file: File): Boolean = runCatching {
-    val cache = ensurePasteCacheDir() ?: return@runCatching false
-    val path = file.toPath().toAbsolutePath().normalize()
-    if (path.parent != cache && path.parent?.toRealPath() != cache) return@runCatching false
-    val attrs = Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
-    attrs.isRegularFile && !attrs.isSymbolicLink
-}.getOrDefault(false)
+internal fun isComposerPasteCacheEntryName(name: String): Boolean =
+    name.startsWith("paste-") && name.endsWith(".png")
 
 /**
- * Reclaim aged regular-file entries inside the paste-cache.
+ * Reclaim aged **app-owned** regular-file entries inside the paste-cache.
  *
  * Safety rules (by design — no identity registry):
  * - Refuses to run if the cache path's real location is outside the app config directory.
  * - Lists the cache directory only; never recurses.
  * - Reads each entry with [LinkOption.NOFOLLOW_LINKS]; skips symlinks and non-regular files.
- * - Deletes only regular files whose last-modified time is older than [maxAge].
+ * - Deletes only regular files whose **name** matches [isComposerPasteCacheEntryName]
+ *   (`paste-*.png` — the only names [clipboardImageToTempFile] writes) **and** whose
+ *   last-modified time is older than [maxAge]. Anything else in the directory is not ours.
  *
  * @return number of files deleted, or `-1` when the pruner refused to run (unsafe path).
  */
@@ -374,6 +373,8 @@ internal fun prunePasteCache(
     runCatching {
         Files.newDirectoryStream(cacheReal).use { stream ->
             for (entry in stream) {
+                // Provenance: only ever unlink names we generate (paste-<uuid>.png).
+                if (!isComposerPasteCacheEntryName(entry.fileName.toString())) continue
                 val attrs = runCatching {
                     Files.readAttributes(
                         entry,
@@ -385,7 +386,7 @@ internal fun prunePasteCache(
                 if (attrs.isSymbolicLink) continue
                 if (!attrs.isRegularFile) continue
                 if (attrs.lastModifiedTime().toInstant().isAfter(cutoff)) continue
-                // Re-check immediately before unlink: skip if entry became a symlink.
+                // Re-check immediately before unlink: skip if entry became a symlink or renamed.
                 val still = runCatching {
                     Files.readAttributes(
                         entry,
@@ -394,6 +395,7 @@ internal fun prunePasteCache(
                     )
                 }.getOrNull() ?: continue
                 if (still.isSymbolicLink || !still.isRegularFile) continue
+                if (!isComposerPasteCacheEntryName(entry.fileName.toString())) continue
                 if (runCatching { Files.deleteIfExists(entry) }.getOrDefault(false)) {
                     deleted++
                 }
@@ -691,6 +693,13 @@ fun DesktopComposer(
     sessionModel: String? = null,
     onPickModel: (String) -> Unit = {},
     onPickReasoning: (String) -> Unit = {},
+    /**
+     * One-shot paste-image request from the native Edit ▸ Paste image menu (or tests). When the
+     * nonce changes to a non-zero value, runs the same [launchPasteImages] path as Ctrl/Cmd+V /
+     * Attach ▸ Paste image, then calls [onPasteImageRequestConsumed].
+     */
+    pasteImageRequestNonce: Long = 0L,
+    onPasteImageRequestConsumed: () -> Unit = {},
 ) {
     // Attachment state is SCOPED to [sessionKey]: ChatPanel deliberately stays composed across
     // session switches (no key(session.id) wrapper), so a bare remember{} would leak session A's
@@ -780,18 +789,37 @@ fun DesktopComposer(
         attachments.clear()
     }
 
+    // True while pasteImageFiles() is running on IO — shows a pending chip so the ~1s encode is not
+    // silent (chip for the real file appears only after encode+stage returns).
+    var pastePending by remember(sessionKey) { mutableStateOf(false) }
+
     /**
      * Run [pasteImageFiles] off the UI thread, then stage any results. Used by Ctrl/Cmd+V and the
-     * Paste-image menu/context actions so PNG encode never freezes the composer.
+     * Paste-image menu/context actions so PNG encode never freezes the composer. Shows a pending
+     * chip immediately so the user gets feedback during encode.
      */
     fun launchPasteImages() {
         if (onUpload == null) return
+        if (pastePending) return
+        pastePending = true
         scope.launch {
-            val files = withContext(Dispatchers.IO) { pasteImageFiles() }
-            if (shouldStageClipboardPaste(uploadBound = true, files = files)) {
-                stageFiles(files)
+            try {
+                val files = withContext(Dispatchers.IO) { pasteImageFiles() }
+                if (shouldStageClipboardPaste(uploadBound = true, files = files)) {
+                    stageFiles(files)
+                }
+                // Encode failed / empty: any partial paste-cache write is left for [prunePasteCache].
+            } finally {
+                pastePending = false
             }
-            // Encode failed / empty: any partial paste-cache write is left for [prunePasteCache].
+        }
+    }
+
+    // Edit ▸ Paste image / WorkspaceUiState.pasteImageRequestNonce — same funnel as the Attach menu.
+    LaunchedEffect(pasteImageRequestNonce) {
+        if (pasteImageRequestNonce > 0L) {
+            launchPasteImages()
+            onPasteImageRequestConsumed()
         }
     }
 
@@ -948,7 +976,7 @@ fun DesktopComposer(
                 },
             ),
     ) {
-        if (attachments.isNotEmpty()) {
+        if (attachments.isNotEmpty() || pastePending) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -956,6 +984,9 @@ fun DesktopComposer(
                     .padding(bottom = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                if (pastePending) {
+                    PastePendingChip()
+                }
                 attachments.forEach { att ->
                     key(att.id) {
                         ComposerChip(
@@ -1074,7 +1105,9 @@ fun DesktopComposer(
                                 metaPressed = e.isMetaPressed,
                                 shiftPressed = e.isShiftPressed,
                                 uploadBound = onUpload != null,
-                                likelyHasImage = clipboardLikelyHasImage(),
+                                // Probe clipboard ONLY after the paste chord matches — not on every
+                                // keystroke (cross-process X11/Wayland selection can stall).
+                                likelyHasImage = clipboardLikelyHasImage,
                                 onPasteImage = { launchPasteImages() },
                             )
                         ) {
@@ -1165,6 +1198,33 @@ fun DesktopComposer(
                 modifier = Modifier.padding(top = 4.dp).testTag("composer-mic-error"),
             )
         }
+    }
+}
+
+/** Indeterminate chip shown while clipboard raster encode runs (before a real upload chip exists). */
+@Composable
+private fun PastePendingChip() {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(cs.surfaceContainerHigh)
+            .padding(horizontal = 10.dp, vertical = 5.dp)
+            .testTag("composer-paste-pending"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(12.dp),
+            color = cs.primary,
+            strokeWidth = 1.5.dp,
+        )
+        Text(
+            text = "Pasting image…",
+            color = cs.onSurface,
+            fontSize = 12.sp,
+            maxLines = 1,
+        )
     }
 }
 

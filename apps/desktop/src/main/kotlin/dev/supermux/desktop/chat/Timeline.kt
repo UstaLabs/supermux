@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -81,6 +82,7 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
@@ -363,7 +365,13 @@ fun FencedCodeBlock(code: String) {
  * Footer: copy + native read-aloud (Android/web parity).
  */
 @Composable
-fun AssistantMessage(text: String, onOpenFile: (FilePathRef) -> Unit = {}, ts: String? = null) {
+fun AssistantMessage(
+    text: String,
+    onOpenFile: (FilePathRef) -> Unit = {},
+    ts: String? = null,
+    onOpenUrl: (String) -> Unit = ::openInBrowser,
+    loadImage: suspend (String) -> ImageBitmap? = { loadMarkdownImageBitmap(it) },
+) {
     Column(Modifier.fillMaxWidth()) {
         // SelectionContainer makes the prose mouse-selectable/copyable; links inside stay clickable.
         SelectionContainer {
@@ -372,6 +380,8 @@ fun AssistantMessage(text: String, onOpenFile: (FilePathRef) -> Unit = {}, ts: S
                 modifier = Modifier.fillMaxWidth(),
                 onOpenFile = onOpenFile,
                 linkify = true,
+                onOpenUrl = onOpenUrl,
+                loadImage = loadImage,
             )
         }
         MessageMetaRow(text = text, ts = ts)
@@ -458,7 +468,20 @@ private fun MessageMetaRow(text: String, ts: String?) {
  * this so they never drift.
  */
 @Composable
-fun MarkdownBody(text: String, modifier: Modifier = Modifier, onOpenFile: (FilePathRef) -> Unit = {}, linkify: Boolean = false) {
+fun MarkdownBody(
+    text: String,
+    modifier: Modifier = Modifier,
+    onOpenFile: (FilePathRef) -> Unit = {},
+    linkify: Boolean = false,
+    /**
+     * Open-URL seam for inline images and (via callers) click tests. Defaults to the system browser;
+     * tests inject a recorder so clicks never launch Chrome (which would hang the Gradle worker).
+     * Threaded into [MarkdownImage] so a future click test at the [MarkdownBody] level stays safe.
+     */
+    onOpenUrl: (String) -> Unit = ::openInBrowser,
+    /** Load seam for https images — default production fetch; tests/SM_MD_IMAGE inject fakes. */
+    loadImage: suspend (String) -> ImageBitmap? = { loadMarkdownImageBitmap(it) },
+) {
     val cs = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
     val blocks = parseMarkdownBlocks(text)
@@ -538,7 +561,7 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier, onOpenFile: (FileP
                     )
                 }
                 is MdBlock.Table -> MarkdownTable(block, onOpenFile, linkify)
-                is MdBlock.Image -> MarkdownImage(block)
+                is MdBlock.Image -> MarkdownImage(block, loadImage = loadImage, onOpenUrl = onOpenUrl)
             }
         }
     }
@@ -738,15 +761,33 @@ internal fun fetchHttpsImageBytes(url: String, maxBytes: Long = MD_IMAGE_MAX_BYT
  * stay readable without reintroducing magic `N.dp` values.
  */
 internal object MdImageDimens {
-    /** Max painted height for a successfully loaded image. */
+    /** Max painted height for a successfully loaded image (shrink-only bound). */
     val MaxHeight = Media.inlineImageMaxHeight
     /**
-     * Loading placeholder height — equals [MaxHeight] so the timeline never grows when the
-     * bitmap arrives (avoids up-to-160dp reflow from a shorter spinner box).
+     * Loading placeholder height when aspect ratio is not yet known — equals [MaxHeight] so the
+     * timeline never grows upward when a tall bitmap arrives.
      */
     val LoadingHeight = MaxHeight
     val SpinnerSize = Sizes.iconSm
     val SpinnerStroke = Sizes.hairline
+}
+
+/**
+ * Paint size for an inline image: natural pixel size in [density], only **shrunk** to fit within
+ * [maxWidth] × [maxHeight] — never upscaled (desktop/browser convention).
+ */
+internal fun mdImagePaintSize(
+    pixelWidth: Int,
+    pixelHeight: Int,
+    maxWidth: Dp,
+    maxHeight: Dp,
+    density: androidx.compose.ui.unit.Density,
+): Pair<Dp, Dp> {
+    if (pixelWidth <= 0 || pixelHeight <= 0) return maxWidth to maxHeight
+    val iw = with(density) { pixelWidth.toDp() }
+    val ih = with(density) { pixelHeight.toDp() }
+    val scale = minOf(1f, maxWidth / iw, maxHeight / ih)
+    return (iw * scale) to (ih * scale)
 }
 
 /**
@@ -826,34 +867,50 @@ fun MarkdownImage(
     when {
         bitmap != null -> {
             val bmp = bitmap!!
-            Image(
-                bitmap = bmp,
-                contentDescription = image.alt.ifEmpty { "Image" },
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = MdImageDimens.MaxHeight)
-                    .clip(RoundedCornerShape(Radii.sm))
-                    .pointerHoverIcon(PointerIcon.Hand)
-                    .clickable { onOpenUrl(image.url) }
-                    .testTag("md_image"),
-            )
+            // Natural size, shrink-only past max width/height — never upscale a small icon to the
+            // column width (fillMaxWidth + ContentScale.Fit would paint 32×32 as a 280×280 blob).
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val density = LocalDensity.current
+                val (w, h) = mdImagePaintSize(
+                    pixelWidth = bmp.width,
+                    pixelHeight = bmp.height,
+                    maxWidth = maxWidth,
+                    maxHeight = MdImageDimens.MaxHeight,
+                    density = density,
+                )
+                Image(
+                    bitmap = bmp,
+                    contentDescription = image.alt.ifEmpty { "Image" },
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .width(w)
+                        .height(h)
+                        .clip(RoundedCornerShape(Radii.sm))
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable { onOpenUrl(image.url) }
+                        .testTag("md_image"),
+                )
+            }
         }
         failed -> MarkdownImageLinkLine(image, loadFailed = true, onOpenUrl = onOpenUrl)
-        else -> Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(MdImageDimens.LoadingHeight)
-                .clip(RoundedCornerShape(Radii.sm))
-                .background(cs.surfaceContainer)
-                .testTag("md_image_loading"),
-            contentAlignment = Alignment.Center,
-        ) {
-            CircularProgressIndicator(
-                Modifier.size(MdImageDimens.SpinnerSize),
-                color = cs.onSurfaceVariant,
-                strokeWidth = MdImageDimens.SpinnerStroke,
-            )
+        else -> {
+            // Reserve MaxHeight until dimensions are known (bounds upward reflow). Once the bitmap
+            // arrives, paint size uses its aspect ratio via [mdImagePaintSize].
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(MdImageDimens.LoadingHeight)
+                    .clip(RoundedCornerShape(Radii.sm))
+                    .background(cs.surfaceContainer)
+                    .testTag("md_image_loading"),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(
+                    Modifier.size(MdImageDimens.SpinnerSize),
+                    color = cs.onSurfaceVariant,
+                    strokeWidth = MdImageDimens.SpinnerStroke,
+                )
+            }
         }
     }
 }

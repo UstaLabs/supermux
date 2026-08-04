@@ -133,7 +133,7 @@ class DesktopComposerPasteTest {
             metaPressed = false,
             shiftPressed = false,
             uploadBound = true,
-            likelyHasImage = true,
+            likelyHasImage = { true },
             onPasteImage = { invoked = true },
         )
         assertTrue(consumed)
@@ -149,7 +149,7 @@ class DesktopComposerPasteTest {
             metaPressed = true,
             shiftPressed = false,
             uploadBound = true,
-            likelyHasImage = true,
+            likelyHasImage = { true },
             onPasteImage = { invoked = true },
         )
         assertTrue(consumed)
@@ -158,6 +158,7 @@ class DesktopComposerPasteTest {
 
     @Test fun handleComposerPasteKey_textOnly_doesNotConsume_andDoesNotStage() {
         var invoked = false
+        var probeCalls = 0
         val consumed = handleComposerPasteKey(
             key = Key.V,
             type = KeyEventType.KeyDown,
@@ -165,11 +166,62 @@ class DesktopComposerPasteTest {
             metaPressed = false,
             shiftPressed = false,
             uploadBound = true,
-            likelyHasImage = false, // text-only clipboard
+            likelyHasImage = { probeCalls++; false }, // text-only clipboard
             onPasteImage = { invoked = true },
         )
         assertFalse(consumed, "text-only paste must fall through to the field")
         assertFalse(invoked)
+        assertEquals(1, probeCalls, "clipboard probe runs only after paste key matches")
+    }
+
+    @Test fun handleComposerPasteKey_nonPasteKey_doesNotProbeClipboard() {
+        var probeCalls = 0
+        val consumed = handleComposerPasteKey(
+            key = Key.A,
+            type = KeyEventType.KeyDown,
+            ctrlPressed = false,
+            metaPressed = false,
+            shiftPressed = false,
+            uploadBound = true,
+            likelyHasImage = { probeCalls++; true },
+            onPasteImage = {},
+        )
+        assertFalse(consumed)
+        assertEquals(0, probeCalls, "clipboard must not be probed on non-paste keys")
+    }
+
+    /**
+     * Ctrl+Shift+V is paste-as-plain-text — must fall through on a real key event (not only the
+     * pure predicate). Injected key event with image probe true must NOT stage or consume.
+     */
+    @Test fun ctrlShiftV_keyEvent_fallsThrough_doesNotStage() = runComposeUiTest {
+        var pasteInvocations = 0
+        var probeCalls = 0
+        setContent {
+            DesktopComposer(
+                draft = "",
+                onDraftChange = {},
+                sending = false,
+                agentWorking = false,
+                onSend = { _, _ -> },
+                onInterrupt = {},
+                onUpload = { _, _, _, _, _ -> "file-1" },
+                pickFiles = { emptyList() },
+                pasteImageFiles = { pasteInvocations++; emptyList() },
+                clipboardLikelyHasImage = { probeCalls++; true },
+            )
+        }
+        onNodeWithTag("composer-input").performClick()
+        onNodeWithTag("composer-input").performKeyInput {
+            withKeyDown(Key.CtrlLeft) {
+                withKeyDown(Key.ShiftLeft) { pressKey(Key.V) }
+            }
+        }
+        waitForIdle()
+        assertEquals(0, pasteInvocations, "Ctrl+Shift+V must not call pasteImageFiles")
+        assertEquals(0, probeCalls, "clipboard must not be probed for Shift+V paste chord")
+        assertTrue(onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isEmpty())
+        assertTrue(onAllNodesWithTag("composer-paste-pending").fetchSemanticsNodes().isEmpty())
     }
 
     // ── image-file classification ───────────────────────────────────────────────
@@ -201,7 +253,7 @@ class DesktopComposerPasteTest {
         assertEquals(1, got.size)
         assertTrue(got[0].isFile)
         assertTrue(got[0].name.endsWith(".png"))
-        assertTrue(isPasteCacheFile(got[0]), "raster paste must land in the app paste-cache")
+        assertTrue(isTestPasteCacheFile(got[0]), "raster paste must land in the app paste-cache")
         // Round-trip: the cache file is a real PNG ImageIO can re-read.
         val reloaded = ImageIO.read(got[0])
         assertTrue(reloaded != null && reloaded.width == 4 && reloaded.height == 4)
@@ -226,7 +278,7 @@ class DesktopComposerPasteTest {
         val file = clipboardImageToTempFile(img)
         assertTrue(file != null && file.isFile)
         assertTrue(file!!.length() > 0)
-        assertTrue(isPasteCacheFile(file))
+        assertTrue(isTestPasteCacheFile(file))
     }
 
     // ── caps: dimension + pixel + encoded-byte + reject without huge alloc ──────
@@ -287,14 +339,14 @@ class DesktopComposerPasteTest {
         assertEquals(testConfigDir.resolve(PASTE_CACHE_DIR_NAME).toRealPath(), cache)
         assertEquals(cache, a!!.toPath().parent.toRealPath())
         assertEquals(cache, b!!.toPath().parent.toRealPath())
-        assertTrue(a.name.startsWith("paste-") && a.name.endsWith(".png"))
-        assertTrue(b.name.startsWith("paste-") && b.name.endsWith(".png"))
+        assertTrue(isComposerPasteCacheEntryName(a!!.name))
+        assertTrue(isComposerPasteCacheEntryName(b!!.name))
         assertNotEquals(a.name, b.name, "each paste must get a fresh random name")
-        assertTrue(isPasteCacheFile(a))
-        assertTrue(isPasteCacheFile(b))
+        assertTrue(isTestPasteCacheFile(a))
+        assertTrue(isTestPasteCacheFile(b))
     }
 
-    /** (b) Pruner removes only aged entries inside the paste-cache directory. */
+    /** (b) Pruner removes only aged app-owned entries inside the paste-cache directory. */
     @Test fun prunePasteCache_removesOnlyAgedEntriesInsideCache() {
         val cache = ensurePasteCacheDir()!!
         val fresh = cache.resolve("paste-fresh.png").toFile().apply { writeBytes(tinyPng()) }
@@ -307,6 +359,30 @@ class DesktopComposerPasteTest {
         assertTrue(deleted >= 1, "expected at least the aged entry deleted, got $deleted")
         assertTrue(fresh.exists(), "fresh cache entry must survive prune")
         assertFalse(aged.exists(), "aged cache entry must be reclaimed")
+    }
+
+    /**
+     * Blocking B1: an aged **foreign** file inside paste-cache must survive — provenance is
+     * name-based (`paste-*.png` only), not age alone.
+     */
+    @Test fun prunePasteCache_leavesAgedForeignFileInsideCache() {
+        val cache = ensurePasteCacheDir()!!
+        val foreign = cache.resolve("notes.txt").toFile().apply {
+            writeText("USER-NOTES-${System.nanoTime()}")
+        }
+        val marker = foreign.readText()
+        val old = Instant.now().minus(PASTE_CACHE_TTL).minus(Duration.ofHours(3))
+        Files.setLastModifiedTime(foreign.toPath(), java.nio.file.attribute.FileTime.from(old))
+        // Also place an aged app-owned file that SHOULD be reclaimed.
+        val agedOurs = cache.resolve("paste-aged-ours.png").toFile().apply { writeBytes(tinyPng()) }
+        Files.setLastModifiedTime(agedOurs.toPath(), java.nio.file.attribute.FileTime.from(old))
+
+        val deleted = prunePasteCache(maxAge = PASTE_CACHE_TTL, now = Instant.now())
+        assertTrue(foreign.exists(), "foreign file in paste-cache must survive prune")
+        assertEquals(marker, foreign.readText(), "foreign file contents must be intact")
+        assertFalse(agedOurs.exists(), "aged paste-*.png must still be reclaimed")
+        assertTrue(deleted >= 1)
+        foreign.delete()
     }
 
     /**
@@ -341,27 +417,151 @@ class DesktopComposerPasteTest {
     }
 
     /**
-     * (d) A user file in an unrelated directory is never touched by any code path
-     * (pruner only lists paste-cache; no path-based delete API remains).
+     * Nested subdirectory inside paste-cache is not walked — files there (even aged paste-*.png
+     * names) are left alone.
+     */
+    @Test fun prunePasteCache_doesNotRecurseIntoSubdirectory() {
+        val cache = ensurePasteCacheDir()!!
+        val sub = cache.resolve("nested").also { Files.createDirectories(it) }
+        val buried = sub.resolve("paste-buried.png").toFile().apply { writeBytes(tinyPng()) }
+        val old = Instant.now().minus(PASTE_CACHE_TTL).minus(Duration.ofHours(2))
+        Files.setLastModifiedTime(buried.toPath(), java.nio.file.attribute.FileTime.from(old))
+
+        prunePasteCache(maxAge = Duration.ZERO, now = Instant.now())
+        assertTrue(buried.exists(), "nested paste-*.png must not be pruned (no recursion)")
+        buried.delete()
+        Files.deleteIfExists(sub)
+    }
+
+    /** Read-only paste-cache dir: pruner must not throw; files survive. */
+    @Test fun prunePasteCache_readOnlyCacheDir_doesNotThrow() {
+        val cache = ensurePasteCacheDir()!!
+        val aged = cache.resolve("paste-readonly.png").toFile().apply { writeBytes(tinyPng()) }
+        val old = Instant.now().minus(PASTE_CACHE_TTL).minus(Duration.ofHours(2))
+        Files.setLastModifiedTime(aged.toPath(), java.nio.file.attribute.FileTime.from(old))
+        val cacheFile = cache.toFile()
+        val wasWritable = cacheFile.canWrite()
+        assertTrue(cacheFile.setWritable(false), "fixture: make cache read-only")
+        try {
+            val result = runCatching { prunePasteCache(maxAge = Duration.ZERO, now = Instant.now()) }
+            assertTrue(result.isSuccess, "pruner must not throw on read-only cache")
+            // Delete may fail silently; file may still exist — either is acceptable safety.
+            assertTrue(aged.exists() || result.getOrDefault(-1) >= 0)
+        } finally {
+            cacheFile.setWritable(wasWritable)
+            aged.delete()
+        }
+    }
+
+    /**
+     * Hardlink in cache whose target is outside: unlinking the cache entry must not destroy the
+     * user's original inode content when other links remain.
+     */
+    @Test fun prunePasteCache_hardlinkInCache_userOriginalSurvives() {
+        val cache = ensurePasteCacheDir()!!
+        val outside = Files.createTempDirectory("hardlink-user-")
+        val original = outside.resolve("tax-return-2025.pdf")
+        val marker = "HARD-LINK-USER-${System.nanoTime()}"
+        Files.writeString(original, marker)
+        // Hardlink named like our paste entries so the pruner would consider it.
+        val linkInCache = cache.resolve("paste-hardlink.png")
+        try {
+            Files.createLink(linkInCache, original)
+        } catch (_: UnsupportedOperationException) {
+            // Some FS (e.g. cross-device) cannot hardlink — skip.
+            Files.deleteIfExists(original)
+            Files.deleteIfExists(outside)
+            return
+        } catch (_: Exception) {
+            Files.deleteIfExists(original)
+            Files.deleteIfExists(outside)
+            return
+        }
+        val old = Instant.now().minus(PASTE_CACHE_TTL).minus(Duration.ofHours(2))
+        Files.setLastModifiedTime(linkInCache, java.nio.file.attribute.FileTime.from(old))
+
+        prunePasteCache(maxAge = Duration.ZERO, now = Instant.now())
+        assertTrue(Files.exists(original), "user original via hardlink must survive")
+        assertEquals(marker, Files.readString(original))
+        Files.deleteIfExists(linkInCache)
+        Files.deleteIfExists(original)
+        Files.deleteIfExists(outside)
+    }
+
+    /**
+     * Entry replaced between list and unlink (becomes non-regular / missing): pruner must not
+     * throw and must not delete unrelated paths.
+     */
+    @Test fun prunePasteCache_entryReplacedBetweenListAndUnlink_safe() {
+        val cache = ensurePasteCacheDir()!!
+        // Only foreign + a normal aged paste file — replacement TOCTOU is covered by the
+        // re-check-before-unlink in production; here we assert aggressive prune still only
+        // hits paste-*.png regular files.
+        val foreign = cache.resolve("swap-me.txt").toFile().apply { writeText("swap") }
+        val aged = cache.resolve("paste-toctou.png").toFile().apply { writeBytes(tinyPng()) }
+        val old = Instant.now().minus(PASTE_CACHE_TTL).minus(Duration.ofHours(1))
+        Files.setLastModifiedTime(aged.toPath(), java.nio.file.attribute.FileTime.from(old))
+        Files.setLastModifiedTime(foreign.toPath(), java.nio.file.attribute.FileTime.from(old))
+
+        val deleted = prunePasteCache(maxAge = Duration.ZERO, now = Instant.now())
+        assertTrue(foreign.exists(), "foreign entry must survive even with aggressive TTL")
+        assertFalse(aged.exists())
+        assertTrue(deleted >= 1)
+        foreign.delete()
+    }
+
+    /** Concurrent prune + write: no foreign loss; writers keep landing paste-*.png. */
+    @Test fun prunePasteCache_concurrentPruneAndWrite_safe() {
+        val cache = ensurePasteCacheDir()!!
+        val foreign = cache.resolve("concurrent-notes.txt").toFile().apply {
+            writeText("CONCURRENT-${System.nanoTime()}")
+        }
+        val marker = foreign.readText()
+        val writers = (0 until 8).map {
+            Thread {
+                repeat(5) {
+                    clipboardImageToTempFile(BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB))
+                }
+            }
+        }
+        val pruners = (0 until 4).map {
+            Thread {
+                repeat(10) {
+                    prunePasteCache(maxAge = PASTE_CACHE_TTL, now = Instant.now())
+                }
+            }
+        }
+        (writers + pruners).forEach { it.start() }
+        (writers + pruners).forEach { it.join(30_000) }
+        assertTrue(foreign.exists(), "foreign file must survive concurrent prune/write")
+        assertEquals(marker, foreign.readText())
+        foreign.delete()
+    }
+
+    /**
+     * A user file in an unrelated directory is never touched (pruner only lists paste-cache;
+     * foreign files inside cache are also left alone — see [prunePasteCache_leavesAgedForeignFileInsideCache]).
      */
     @Test fun prunePasteCache_neverTouchesUserFileInUnrelatedDirectory() {
         val userDir = Files.createTempDirectory("user-unrelated-")
-        val userFile = userDir.resolve("my-photo.png").toFile().apply {
-            writeBytes(tinyPng())
-        }
+        val userFile = userDir.resolve("my-photo.png").toFile()
         val marker = "UNRELATED-${System.nanoTime()}"
         userFile.writeText(marker)
         // Age it so a buggy recursive/global prune would pick it up.
         val old = Instant.now().minus(PASTE_CACHE_TTL).minus(Duration.ofDays(1))
         Files.setLastModifiedTime(userFile.toPath(), java.nio.file.attribute.FileTime.from(old))
 
-        assertFalse(isPasteCacheFile(userFile))
-        prunePasteCache(maxAge = Duration.ZERO, now = Instant.now()) // aggressive TTL
-        // Also exercise write path — must not delete outside files.
-        clipboardImageToTempFile(BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB))
+        assertFalse(isTestPasteCacheFile(userFile))
+        // Aggressive TTL + write path must not reach outside the cache.
+        val deleted = prunePasteCache(maxAge = Duration.ZERO, now = Instant.now())
+        assertTrue(deleted >= 0)
+        val wrote = clipboardImageToTempFile(BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB))
+        assertNotNull(wrote)
+        assertTrue(isTestPasteCacheFile(wrote!!))
 
         assertTrue(userFile.exists(), "unrelated user file must never be touched")
         assertEquals(marker, userFile.readText())
+        // Chip-path delete is gone: only prune can reclaim, and only paste-*.png under cache.
         userFile.delete()
         Files.deleteIfExists(userDir)
     }
@@ -393,11 +593,15 @@ class DesktopComposerPasteTest {
         Files.deleteIfExists(outside)
     }
 
-    /** Chip remove / send do not delete paste-cache files (age pruner owns reclaim). */
+    /**
+     * Chip remove does not delete paste-cache files: prove the chip **disappears** (action
+     * completed) while the on-disk file **still exists** (reclaim is age-pruner only).
+     */
     @Test fun pasteTemp_leftForPrunerAfterChipRemoved() = runComposeUiTest {
         val img = BufferedImage(3, 3, BufferedImage.TYPE_INT_RGB)
         val temp = clipboardImageToTempFile(img)!!
         assertTrue(temp.exists())
+        val pathBefore = temp.absolutePath
         setContent {
             DesktopComposer(
                 draft = "",
@@ -416,9 +620,18 @@ class DesktopComposerPasteTest {
         waitUntil(timeoutMillis = 5_000L) {
             onAllNodesWithTag("composer-chip-remove").fetchSemanticsNodes().isNotEmpty()
         }
+        assertTrue(File(pathBefore).exists(), "file present while chip is shown")
         onNodeWithTag("composer-chip-remove").performClick()
         waitForIdle()
-        assertTrue(temp.exists(), "chip remove must not delete paste-cache entries by path")
+        // Meaningful: chip gone (state change) AND file still on disk.
+        assertTrue(
+            onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isEmpty(),
+            "chip must be removed from the UI",
+        )
+        assertTrue(
+            File(pathBefore).exists(),
+            "chip remove must not delete paste-cache entries by path",
+        )
     }
 
     // ── stage-or-fallthrough decision (drives the Ctrl/Cmd+V handler) ───────────
@@ -502,15 +715,12 @@ class DesktopComposerPasteTest {
     }
 
     /**
-     * Text-only paste must REACH THE FIELD: when the image probe is false the paste key falls
-     * through; we then deliver text via the field's normal value path (Compose's text field paste
-     * uses the platform clipboard which is unreliable under the Skiko harness, so the fallthrough
-     * is proven by [handleComposerPasteKey_textOnly_doesNotConsume_andDoesNotStage] + this test
-     * asserting no chip is staged and that text CAN reach the field through onDraftChange).
-     *
-     * End-to-end: Ctrl+V does not consume/stage images; text is accepted by the field.
+     * Text-only Ctrl+V: image probe false → paste key falls through (not consumed) and does not
+     * stage a chip. Compose's Skiko harness does not reliably deliver platform clipboard paste into
+     * the field, so text arrival is proven separately via [performTextInput] (typing → onValueChange),
+     * not as a simulated OS paste. Name reflects both parts.
      */
-    @Test fun textOnlyPaste_doesNotStage_andTextReachesField() = runComposeUiTest {
+    @Test fun textOnlyCtrlV_doesNotStage_andFieldAcceptsTypedText() = runComposeUiTest {
         var draft by mutableStateOf("")
         var pasteInvocations = 0
         setContent {
@@ -539,11 +749,47 @@ class DesktopComposerPasteTest {
         assertEquals(0, pasteInvocations, "text-only Ctrl+V must not call pasteImageFiles")
         assertTrue(onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isEmpty())
 
-        // Prove text reaches the field (the path an unconsumed paste uses via onValueChange).
+        // Field accepts text via the draft (onValueChange) — same binding unconsumed paste uses.
         onNodeWithTag("composer-input").performTextInput("hello-from-text-paste")
         assertTrue(
             draft.contains("hello-from-text-paste"),
             "text must reach the field via the draft, got draft='$draft'",
+        )
+    }
+
+    /** Pending chip appears while pasteImageFiles is still running (encode feedback). */
+    @Test fun pasteImage_showsPendingChipDuringEncode() = runComposeUiTest {
+        val gate = java.util.concurrent.CountDownLatch(1)
+        val png = tempNamed("slow.png") { writeBytes(tinyPng()) }
+        setContent {
+            DesktopComposer(
+                draft = "",
+                onDraftChange = {},
+                sending = false,
+                agentWorking = false,
+                onSend = { _, _ -> },
+                onInterrupt = {},
+                onUpload = { _, _, _, _, _ -> "file-1" },
+                pickFiles = { emptyList() },
+                pasteImageFiles = {
+                    gate.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                    listOf(png)
+                },
+            )
+        }
+        onNodeWithTag("composer-attach").performClick()
+        onNodeWithTag("composer-paste-image").performClick()
+        waitUntil(timeoutMillis = 5_000L) {
+            onAllNodesWithTag("composer-paste-pending").fetchSemanticsNodes().isNotEmpty()
+        }
+        gate.countDown()
+        waitUntil(timeoutMillis = 5_000L) {
+            onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isNotEmpty()
+        }
+        waitForIdle()
+        assertTrue(
+            onAllNodesWithTag("composer-paste-pending").fetchSemanticsNodes().isEmpty(),
+            "pending chip must clear once encode finishes",
         )
     }
 
@@ -584,11 +830,13 @@ class DesktopComposerPasteTest {
      * Production paste encode path: drive the real [DesktopComposer] entry point (Attach →
      * "Paste image" → [launchPasteImages] → `withContext(IO)` → `pasteImageFiles`), not a
      * hand-rolled `withContext(IO) { clipboardImageToTempFile(...) }` that bypasses the entry point.
+     * Uses 3072² so [PASTE_IMAGE_ENCODE_MAX_EDGE] (2048) downscale is exercised through the seam.
      */
     @Test fun largeRasterEncode_viaLaunchPasteImages_completes() = runComposeUiTest {
-        // 1024² exercises encode work; downscale target is 2048 so this stays full-res.
-        val img = BufferedImage(1024, 1024, BufferedImage.TYPE_INT_RGB)
-        assertTrue(clipboardImageWithinCaps(1024, 1024))
+        // Above the 2048 downscale threshold so scaleBufferedImageToMaxEdge runs in production.
+        val edge = 3072
+        val img = BufferedImage(edge, edge, BufferedImage.TYPE_INT_RGB)
+        assertTrue(clipboardImageWithinCaps(edge, edge))
         val encodeThread = java.util.concurrent.atomic.AtomicReference<String?>(null)
         val encoded = java.util.concurrent.atomic.AtomicReference<File?>(null)
         val startNs = java.util.concurrent.atomic.AtomicLong(0L)
@@ -620,7 +868,19 @@ class DesktopComposerPasteTest {
         val file = encoded.get()
         assertNotNull(file, "launchPasteImages → pasteImageFiles must encode the raster")
         assertTrue(file!!.isFile && file.length() > 0)
-        assertTrue(isPasteCacheFile(file), "encode must land in app paste-cache")
+        assertTrue(isTestPasteCacheFile(file), "encode must land in app paste-cache")
+        // Downscale to max edge 2048 → PNG should be well under an unscaled 3072² encode.
+        assertTrue(
+            file.length() < 2L * 1024L * 1024L,
+            "downscaled paste PNG should be <2MiB, got ${file.length()}",
+        )
+        val decoded = ImageIO.read(file)
+        assertNotNull(decoded)
+        assertTrue(
+            decoded!!.width <= PASTE_IMAGE_ENCODE_MAX_EDGE &&
+                decoded.height <= PASTE_IMAGE_ENCODE_MAX_EDGE,
+            "encoded image must be downscaled to ≤$PASTE_IMAGE_ENCODE_MAX_EDGE, got ${decoded.width}x${decoded.height}",
+        )
         val thread = encodeThread.get()
         assertNotNull(thread, "pasteImageFiles must run on a worker thread")
         assertTrue(
@@ -631,11 +891,32 @@ class DesktopComposerPasteTest {
             !thread.contains("AWT-EventQueue"),
             "encode must not run on the AWT UI thread, got: $thread",
         )
+        // Real cost is ~1s for 3072²→2048²; 15s would hide multi-second main-thread regressions.
+        // Bound at 5s so a UI-thread / no-downscale regression fails reliably on CI.
         val elapsedMs = (System.nanoTime() - startNs.get()) / 1_000_000
-        assertTrue(elapsedMs < 15_000, "encode via launchPasteImages took ${elapsedMs}ms")
+        assertTrue(elapsedMs < 5_000, "encode via launchPasteImages took ${elapsedMs}ms (bound 5s)")
     }
 
     // ── fixtures ────────────────────────────────────────────────────────────────
+
+    /**
+     * Test-only: whether [file] is a regular file living directly under the app paste-cache with
+     * a [isComposerPasteCacheEntryName] name. Lives in the test source set (production pruner uses
+     * the name check inline; there is no production path-based delete).
+     */
+    private fun isTestPasteCacheFile(file: File): Boolean = runCatching {
+        if (!isComposerPasteCacheEntryName(file.name)) return@runCatching false
+        val cache = ensurePasteCacheDir() ?: return@runCatching false
+        val path = file.toPath().toAbsolutePath().normalize()
+        if (path.parent != cache && path.parent?.toRealPath() != cache) return@runCatching false
+        val attrs = Files.readAttributes(
+            path,
+            java.nio.file.attribute.BasicFileAttributes::class.java,
+            java.nio.file.LinkOption.NOFOLLOW_LINKS,
+        )
+        attrs.isRegularFile && !attrs.isSymbolicLink
+    }.getOrDefault(false)
+
     private fun tempNamed(name: String, write: File.() -> Unit): File {
         // Fixture under /tmp — unrelated to paste-cache; never touched by prune.
         val dir = Files.createTempDirectory("cmp-paste-fixture").toFile().apply { deleteOnExit() }

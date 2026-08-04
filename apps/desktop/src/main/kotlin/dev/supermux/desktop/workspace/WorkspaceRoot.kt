@@ -268,6 +268,19 @@ class WorkspaceUiState {
     var externalDictate by mutableStateOf<Pair<String, dev.supermux.desktop.chat.ComposerExternalDictate>?>(null)
 
     /**
+     * One-shot "paste image from clipboard into the selected session's composer" request. Bumped by
+     * Edit ▸ Paste image in the native MenuBar; the selected session's [DesktopComposer] runs the
+     * same [launchPasteImages] path as Ctrl/Cmd+V / Attach ▸ Paste image, then clears the nonce.
+     * Zero in normal operation.
+     */
+    var pasteImageRequestNonce by mutableStateOf(0L)
+
+    /** Bump [pasteImageRequestNonce] so the selected composer's paste-image path runs once. */
+    fun requestPasteImage() {
+        pasteImageRequestNonce = pasteImageRequestNonce + 1
+    }
+
+    /**
      * One-shot "open this archived session's read-only transcript" request (an ARCHIVED session
      * id, not a live one), consumed by [dev.supermux.desktop.session.ArchivedScreen] — it seeds the
      * internal list⇄chat nav (`openedId`) so the matching row's read-only `ArchivedChatView` renders
@@ -576,6 +589,9 @@ fun WorkspaceRoot(
                         // the SessionDetail whose id matches.
                         externalDictate = ui.externalDictate?.takeIf { it.first == session.id }?.second,
                         onExternalDictateConsumed = { ui.externalDictate = null },
+                        // Edit ▸ Paste image — only the selected session's composer responds.
+                        pasteImageRequestNonce = ui.pasteImageRequestNonce,
+                        onPasteImageRequestConsumed = { ui.pasteImageRequestNonce = 0L },
                         // Overflow ⋮ "Usage" row (M4f): the SAME ui.openUsage() the File ▸
                         // "Usage…" menu item calls.
                         onUsage = { ui.openUsage() },
