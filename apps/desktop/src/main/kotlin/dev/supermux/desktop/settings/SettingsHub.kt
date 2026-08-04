@@ -43,9 +43,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.workspace.SettingsSection
+import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.AgentInstallJob
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
+import dev.supermux.net.DeviceDto
 import dev.supermux.net.LspInstallResult
 import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
@@ -77,6 +79,10 @@ fun SettingsHub(
     openCodeSetKey: suspend (providerId: String, key: String) -> Boolean,
     openCodeStartOAuth: suspend (providerId: String, method: Int) -> OpenCodeOAuthStart?,
     openCodeFinishOAuth: suspend (providerId: String, method: Int, code: String) -> Boolean,
+    // Devices — null list means load failure (distinct from empty).
+    devicesLoad: suspend () -> List<DeviceDto>?,
+    deviceAdd: suspend (name: String) -> AddDeviceResponse?,
+    deviceRevoke: suspend (name: String) -> Boolean,
     // Editor / LSP
     lspLoad: suspend () -> List<LspServer>,
     lspToggle: suspend (id: String, enabled: Boolean) -> List<LspServer>?,
@@ -145,6 +151,11 @@ fun SettingsHub(
                         openCodeSetKey = openCodeSetKey,
                         openCodeStartOAuth = openCodeStartOAuth,
                         openCodeFinishOAuth = openCodeFinishOAuth,
+                    )
+                    SettingsSection.Devices -> DevicesSettingsScreen(
+                        devicesLoad = devicesLoad,
+                        deviceAdd = deviceAdd,
+                        deviceRevoke = deviceRevoke,
                     )
                     SettingsSection.EditorLsp -> LspSettingsScreen(
                         lspLoad = lspLoad,

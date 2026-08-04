@@ -88,6 +88,9 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //   SM_SETTINGS=1                 — open the Settings hub on Agents (File ▸ "Settings…"'s SAME
 //                                  ui.openSettings()) on start, loading real app.agentStatuses()
 //                                  (GET /agents/status, read-only) from the active host          [main]
+//   SM_DEVICES=1                  — open the Settings hub on Devices via ui.openSettings(Devices)
+//                                  on start, loading real app.devices() (GET /devices, read-only)
+//                                  from the active host. Off by default; never mints/revokes.    [main]
 //   SM_USAGE=1                    — open the Usage overlay (File ▸ "Usage…"'s SAME ui.openUsage())
 //                                  on start, loading the real app.usage() (GET /usage, read-only)
 //                                  (M4f). Read-only — never calls redeemCodexReset() (that burns a
@@ -991,6 +994,25 @@ fun main() {
                             // Prove the screen loads REAL data from the live broker, not just the shell.
                             val statuses = app.agentStatuses()
                             println("[settings] agentStatuses count=${statuses?.size ?: "null"} kinds=${statuses?.joinToString { "${it.kind}:${if (it.installed) "inst" else "miss"}:${if (it.authed) "auth" else "noauth"}" } ?: "(load failed)"}")
+                        }
+                    }
+
+                    // Headless Devices verification hook (desktop-parity Task 2): SM_DEVICES=1 opens
+                    // the Settings hub on Devices via the SAME `ui.openSettings(Devices)` path the
+                    // rail uses, so DevicesSettingsScreen loads real `app.devices()` (GET /devices)
+                    // under Xvfb. Read-only by construction — never calls addDevice/revokeDevice.
+                    // Off by default; harmless in prod.
+                    val devicesHook = System.getenv("SM_DEVICES") == "1"
+                    if (devicesHook) {
+                        LaunchedEffect(app) {
+                            delay(3_000)
+                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.Devices)
+                            println("[devices] opened the Settings hub (Devices)")
+                            val devices = app.devices()
+                            println(
+                                "[devices] devices count=${devices?.size ?: "null"} " +
+                                    "names=${devices?.joinToString { it.name } ?: "(load failed)"}",
+                            )
                         }
                     }
 

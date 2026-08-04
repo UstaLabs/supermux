@@ -14,6 +14,7 @@ package dev.supermux.desktop.state
 import dev.supermux.desktop.notify.AgentReplyEvent
 import dev.supermux.desktop.session.StagedUpload
 import dev.supermux.net.AddCommentBody
+import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.AgentInstallJob
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
@@ -21,6 +22,7 @@ import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.BrokerClient
 import dev.supermux.net.ChunkSource
+import dev.supermux.net.DeviceDto
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.FsDiffResult
@@ -1024,6 +1026,25 @@ class DesktopAppState(
     /** POST /opencode/auth/oauth/finish — complete OAuth with a pasted code. */
     suspend fun finishOpenCodeOAuth(providerId: String, method: Int, code: String): Boolean =
         runApi("finishOpenCodeOAuth") { api.finishOpenCodeOAuth(providerId, method, code); true } ?: false
+
+    // ── Devices settings (desktop-parity Task 2) ───────────────────────────────────────────
+    // Backs the Devices section of the Settings hub. Mirrors AppViewModel devices / addDevice /
+    // revokeDevice (Android MoreScreens). All go through [runApi] and degrade to null/false.
+
+    /**
+     * GET /devices — paired devices with last_seen.
+     * Returns `null` on transport/decode failure so the UI can distinguish Error from empty.
+     */
+    suspend fun devices(): List<DeviceDto>? =
+        runApi("devices") { api.devices() }
+
+    /** POST /devices {name} → one-time pairing URL. Null on failure. */
+    suspend fun addDevice(name: String): AddDeviceResponse? =
+        runApi("addDevice") { api.addDevice(name) }
+
+    /** DELETE /devices/<name> — revoke a paired device. False on failure. */
+    suspend fun revokeDevice(name: String): Boolean =
+        runApi("revokeDevice") { api.revokeDevice(name); true } ?: false
 
     // ── LSP settings (M4g-4 Task 1) ────────────────────────────────────────────────────
     // Backs the LspSettingsScreen overlay (M4g-4 Task 2/3): enable/disable + install + add/remove
