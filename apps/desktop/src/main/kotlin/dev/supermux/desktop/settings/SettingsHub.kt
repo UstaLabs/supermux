@@ -3,12 +3,15 @@
 // alongside the new Agents section (desktop-parity Task 1).
 package dev.supermux.desktop.settings
 
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -177,9 +180,12 @@ private fun RailRow(
     val cs = MaterialTheme.colorScheme
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
+    val hovered by interaction.collectIsHoveredAsState()
+    // Hover + keyboard focus are both first-class: hover lifts surface; focus draws a border
+    // (including when the row is already selected). Click keeps LocalIndication for press/ripple.
     val bg = when {
         selected -> cs.surfaceContainerHighest
-        focused -> cs.surfaceContainerHigh
+        focused || hovered -> cs.surfaceContainerHigh
         else -> cs.surfaceContainerLow
     }
     Text(
@@ -189,6 +195,7 @@ private fun RailRow(
         style = MaterialTheme.typography.bodyMedium,
         modifier = Modifier
             .fillMaxWidth()
+            .hoverable(interactionSource = interaction)
             .focusable(interactionSource = interaction)
             .onPreviewKeyEvent { e ->
                 if (e.type == KeyEventType.KeyDown &&
@@ -200,10 +207,14 @@ private fun RailRow(
                     false
                 }
             }
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .clickable(
+                interactionSource = interaction,
+                indication = LocalIndication.current,
+                onClick = onClick,
+            )
             .background(bg)
             .then(
-                if (focused && !selected) {
+                if (focused) {
                     Modifier.border(width = 1.dp, color = cs.primary)
                 } else {
                     Modifier

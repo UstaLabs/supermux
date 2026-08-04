@@ -1066,28 +1066,46 @@ class BrokerApi(
     private suspend inline fun <reified T> getJson(url: String): T =
         decode(http.get(url) { header("Authorization", bearerHeader()) })
 
+    /**
+     * Fire-and-forget JSON mutations (POST/PUT/PATCH with no decoded body). Non-2xx MUST throw
+     * so callers that do `mutation(); true` (or runCatching.isSuccess) do not treat HTTP 4xx/5xx
+     * as success. Matches [decode]'s SKIE-safe CancellationException contract.
+     */
+    private suspend fun ensureMutationSuccess(resp: HttpResponse) {
+        if (resp.status.isSuccess()) return
+        val text = try {
+            resp.bodyAsText()
+        } catch (c: CancellationException) {
+            throw c
+        } catch (_: Throwable) {
+            ""
+        }
+        println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
+        throw CancellationException("BrokerApi request unavailable")
+    }
+
     private suspend inline fun <reified B> postJson(url: String, body: B) {
-        http.post(url) {
+        ensureMutationSuccess(http.post(url) {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
-        }
+        })
     }
 
     private suspend inline fun <reified B> putJson(url: String, body: B) {
-        http.put(url) {
+        ensureMutationSuccess(http.put(url) {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
-        }
+        })
     }
 
     private suspend inline fun <reified B> patchJson(url: String, body: B) {
-        http.patch(url) {
+        ensureMutationSuccess(http.patch(url) {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
-        }
+        })
     }
 
     /** POST a JSON body and decode the JSON response (for endpoints that return data). */

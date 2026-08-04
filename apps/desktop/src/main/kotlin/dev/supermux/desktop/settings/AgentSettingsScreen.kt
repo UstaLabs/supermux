@@ -300,6 +300,8 @@ private fun AgentRow(
     // When true, the login poll should NOT call startAgentLogin (resumed from broker).
     var loginResumed by remember(status.kind) { mutableStateOf(false) }
     var installResumed by remember(status.kind) { mutableStateOf(false) }
+    // Local-only: user stopped watching an install that may still run on the broker.
+    var installStoppedWatching by remember(status.kind) { mutableStateOf(false) }
 
     val isLoginKind = status.kind in LOGIN_KINDS
 
@@ -329,6 +331,8 @@ private fun AgentRow(
     // Login poll loop. Keyed on loginActive: launches on start, cancelled when flipped false.
     // Resume path: if we already hold an active phase (from the broker poll above), do NOT
     // re-issue start — that would mint a new session.
+    // Timeout/failure MUST clear [login] so a later "Start authorization" does not treat the
+    // stale awaiting_user/starting phase as alreadyInProgress and skip the new POST.
     LaunchedEffect(loginActive, status.kind) {
         if (!loginActive) return@LaunchedEffect
         loginStartFailed = false
@@ -340,6 +344,7 @@ private fun AgentRow(
             val started = agentStartLogin(status.kind)
             if (started == null) {
                 loginStartFailed = true
+                login = null
                 loginActive = false
                 return@LaunchedEffect
             }
@@ -355,6 +360,7 @@ private fun AgentRow(
                 nullStreak++
                 if (nullStreak >= POLL_NULL_STREAK_LIMIT || ticks >= POLL_MAX_TICKS) {
                     loginTimedOut = true
+                    login = null
                     loginActive = false
                     break
                 }
@@ -371,6 +377,7 @@ private fun AgentRow(
                 else -> {
                     if (ticks >= POLL_MAX_TICKS) {
                         loginTimedOut = true
+                        login = null
                         loginActive = false
                         break
                     }
@@ -380,10 +387,15 @@ private fun AgentRow(
     }
 
     // Install poll loop.
+    // Resume path mirrors login: if we already hold a running snapshot (or [installResumed]),
+    // do NOT re-POST start — that would be redundant and races with the composition resume effect.
     LaunchedEffect(installActive, status.kind) {
         if (!installActive) return@LaunchedEffect
         installTimedOut = false
-        if (!installResumed) {
+        val alreadyInProgress =
+            installResumed || normalizeInstallState(install?.state) == "running"
+        installResumed = false
+        if (!alreadyInProgress) {
             val initial = agentStartInstall(status.kind)
             if (initial == null) {
                 installRequestFailed = true
@@ -392,7 +404,6 @@ private fun AgentRow(
             }
             install = initial
         }
-        installResumed = false
         var ticks = 0
         var nullStreak = 0
         while (isActive) {
@@ -438,10 +449,11 @@ private fun AgentRow(
     }
 
     val cancelInstall: () -> Unit = {
-        // Local cancel only — no broker install-cancel endpoint. Stops UI polling;
-        // reopening Settings resumes a still-running broker job via the resume path.
+        // Local-only: broker has no install-cancel API. Stop UI polling; the remote job
+        // keeps running and can be re-watched via resume / "Watch progress".
         installActive = false
         installTimedOut = false
+        installStoppedWatching = true
     }
 
     Column(
@@ -522,11 +534,21 @@ private fun AgentRow(
                         installActive = installActive,
                         installRequestFailed = installRequestFailed,
                         installTimedOut = installTimedOut,
+                        installStoppedWatching = installStoppedWatching,
                         onStart = {
                             installRequestFailed = false
                             installTimedOut = false
-                            install = null
-                            installResumed = false
+                            // Re-watch a still-running broker job without minting a new POST when
+                            // we already hold a running snapshot from before "Stop watching".
+                            if (installStoppedWatching &&
+                                normalizeInstallState(install?.state) == "running"
+                            ) {
+                                installResumed = true
+                            } else {
+                                install = null
+                                installResumed = false
+                            }
+                            installStoppedWatching = false
                             installActive = true
                         },
                         onCancel = cancelInstall,
@@ -579,6 +601,9 @@ private fun AgentRow(
                             LinkLoginButton(
                                 kind = status.kind,
                                 onStart = {
+                                    // Clear any stale phase so alreadyInProgress cannot skip POST
+                                    // after a prior timeout/failure left login non-null.
+                                    login = null
                                     loginResumed = false
                                     loginStartFailed = false
                                     loginTimedOut = false
@@ -600,6 +625,7 @@ private fun InstallSection(
     installActive: Boolean,
     installRequestFailed: Boolean,
     installTimedOut: Boolean,
+    installStoppedWatching: Boolean,
     onStart: () -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -615,34 +641,43 @@ private fun InstallSection(
             style = MaterialTheme.typography.labelMedium,
         )
         when {
-            // Only installActive drives the running UI — after Cancel we drop to the start
-            // button even if the last polled job state is still "running" on the broker.
+            // Only installActive drives the running UI — after Stop watching we drop to the
+            // start/watch button even if the last polled job state is still "running".
             installActive -> {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
-                    modifier = Modifier.testTag("agent_install_running_$kind"),
-                ) {
-                    CircularProgressIndicator(
-                        color = cs.primary,
-                        strokeWidth = 2.dp,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Text(
-                        "Installing $kind…",
-                        color = cs.onSurface,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(
-                        onClick = onCancel,
-                        modifier = Modifier.testTag("agent_install_cancel_$kind"),
+                Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                        modifier = Modifier.testTag("agent_install_running_$kind"),
                     ) {
-                        Text("Cancel", color = cs.error)
+                        CircularProgressIndicator(
+                            color = cs.primary,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Text(
+                            "Installing $kind…",
+                            color = cs.onSurface,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            onClick = onCancel,
+                            modifier = Modifier.testTag("agent_install_cancel_$kind"),
+                        ) {
+                            // Honest label: local poll only — no broker cancel API.
+                            Text("Stop watching", color = cs.error)
+                        }
                     }
+                    Text(
+                        "Stops updating this screen only. The install job keeps running on the host.",
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.testTag("agent_install_stop_hint_$kind"),
+                    )
                 }
             }
-            state == "done" && !installTimedOut -> {
+            state == "done" && !installTimedOut && !installStoppedWatching -> {
                 Text(
                     "Installed.",
                     color = cs.primary,
@@ -651,13 +686,26 @@ private fun InstallSection(
                 )
             }
             else -> {
+                if (installStoppedWatching) {
+                    Text(
+                        "Stopped watching. The install may still be running on the host — " +
+                            "use Watch progress to check, or reopen Agents later.",
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.testTag("agent_install_stopped_watching_$kind"),
+                    )
+                }
                 Button(
                     onClick = onStart,
                     colors = ButtonDefaults.buttonColors(containerColor = cs.primary),
                     modifier = Modifier.testTag("agent_install_start_$kind"),
                 ) {
                     Text(
-                        if (state == "failed" || installTimedOut) "Retry installation" else "Install",
+                        when {
+                            installStoppedWatching -> "Watch progress"
+                            state == "failed" || installTimedOut -> "Retry installation"
+                            else -> "Install"
+                        },
                         color = cs.onPrimary,
                     )
                 }
