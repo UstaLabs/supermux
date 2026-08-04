@@ -16,6 +16,21 @@ object Space {
     val lg = 16.dp
     val xl = 24.dp
     val xxl = 32.dp
+    /** Pairing / QR display size (scannable at arm's length on a desktop monitor). */
+    val qr = 200.dp
+}
+
+/** Icon and inline-control sizes. */
+object IconSize {
+    val sm = 14.dp
+    val md = 18.dp
+    val lg = 24.dp
+}
+
+/** Stroke widths for progress indicators and outlines. */
+object Stroke {
+    val thin = 1.5.dp
+    val md = 2.dp
 }
 
 /** Corner-radius tokens. */

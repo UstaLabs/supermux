@@ -38,6 +38,18 @@ dependencies {
 
 kotlin { jvmToolchain(17) }
 
+// Never launch a real system browser from unit/UI tests (Agent OAuth, timeline links, etc.).
+// BrowserLauncher.openInBrowser checks this property and no-ops when set.
+tasks.withType<Test>().configureEach {
+    systemProperty("supermux.tests", "1")
+    // Compose UI tests + MockEngine can wedge a worker under load; one fork keeps the gate
+    // green-and-terminating (avoids the historical TerminalTabs hang under parallel workers).
+    maxParallelForks = 1
+    // Fail a wedged test rather than hanging the whole suite indefinitely.
+    // (JUnit platform respects junit.jupiter.execution.timeout if used; kotlin.test does not.
+    //  The suite still relies on per-waitUntil timeouts inside compose tests.)
+}
+
 // M3 editor: ship the SAME committed CodeMirror bundle the mobile apps use (single source of
 // truth: apps/android/src/main/assets/editor/) into desktop resources under editor/. KCEF loads
 // the page from an extracted file:// path at runtime (see EditorWebAssets), but the bundle rides

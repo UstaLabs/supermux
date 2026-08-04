@@ -14,10 +14,15 @@ package dev.supermux.desktop.state
 import dev.supermux.desktop.notify.AgentReplyEvent
 import dev.supermux.desktop.session.StagedUpload
 import dev.supermux.net.AddCommentBody
+import dev.supermux.net.AddDeviceResponse
+import dev.supermux.net.AgentInstallJob
+import dev.supermux.net.AgentInstallStatus
+import dev.supermux.net.AgentLoginState
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.BrokerClient
 import dev.supermux.net.ChunkSource
+import dev.supermux.net.DeviceDto
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.FsDiffResult
@@ -30,6 +35,8 @@ import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ModelsResponse
+import dev.supermux.net.OpenCodeOAuthStart
+import dev.supermux.net.OpenCodeProvider
 import dev.supermux.net.PADto
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ProxyDto
@@ -948,6 +955,96 @@ class DesktopAppState(
     suspend fun killPersonalAssistant(id: String) {
         runApi("killPersonalAssistant") { api.kill(id); true }
     }
+
+    // ── Agents settings (desktop-parity Task 1) ───────────────────────────────────────────
+    // Backs the Agents section of the Settings hub. Mirrors AppViewModel.agent* +
+    // openCode* (Android) and BrokerSession agent install/login (iOS). All go through [runApi]
+    // and degrade to empty/null — never throw into the UI.
+
+    /**
+     * GET /agents/status — install + auth state per agent CLI.
+     * Returns `null` on transport/decode failure so the UI can distinguish Error from a
+     * legitimate empty list (both used to collapse to `emptyList()`, leaving Settings stale).
+     */
+    suspend fun agentStatuses(): List<AgentInstallStatus>? =
+        runApi("agentStatuses") { api.agentStatuses() }
+
+    /** POST /agents/<kind>/install — start (or resume) the broker-owned install job. */
+    suspend fun startAgentInstall(kind: String): AgentInstallJob? =
+        runApi("startAgentInstall") { api.startAgentInstall(kind) }
+
+    /** GET /agents/<kind>/install — poll the latest install job. */
+    suspend fun agentInstallState(kind: String): AgentInstallJob? =
+        runApi("agentInstallState") { api.agentInstallState(kind) }
+
+    /** POST /agents/<kind>/login — start a CLI device-code / link login. */
+    suspend fun startAgentLogin(kind: String): AgentLoginState? =
+        runApi("startAgentLogin") { api.startAgentLogin(kind) }
+
+    /** GET /agents/<kind>/login — poll the current login state. */
+    suspend fun agentLoginState(kind: String): AgentLoginState? =
+        runApi("agentLoginState") { api.agentLoginState(kind) }
+
+    /** POST /agents/<kind>/login/code — hand the CLI a pasted device code. */
+    suspend fun sendAgentLoginCode(kind: String, code: String) {
+        runApi("sendAgentLoginCode") { api.sendAgentLoginCode(kind, code); true }
+    }
+
+    /** POST /agents/<kind>/login/cancel — abort an in-progress login. */
+    suspend fun cancelAgentLogin(kind: String) {
+        runApi("cancelAgentLogin") { api.cancelAgentLogin(kind); true }
+    }
+
+    /**
+     * Save an API key / OAuth token for a CLI-login agent via PUT /settings/config.
+     * Mirrors AppViewModel.agentSaveSecret: claude → claudeOauthToken, codex → codexApiKey,
+     * cursor → cursorApiKey. Returns false for unknown kinds or transport failure.
+     */
+    suspend fun saveAgentSecret(kind: String, value: String): Boolean =
+        runApi("saveAgentSecret") {
+            when (kind) {
+                "claude" -> api.saveConfig(claudeOauthToken = value)
+                "codex" -> api.saveConfig(codexApiKey = value)
+                "cursor" -> api.saveConfig(cursorApiKey = value)
+                else -> return@runApi false
+            }
+            true
+        } ?: false
+
+    /** GET /opencode/providers — providers with auth methods. Empty on failure. */
+    suspend fun openCodeProviders(): List<OpenCodeProvider> =
+        runApi("openCodeProviders") { api.openCodeProviders() } ?: emptyList()
+
+    /** POST /opencode/auth/key — save an API key for a provider. */
+    suspend fun setOpenCodeKey(providerId: String, key: String): Boolean =
+        runApi("setOpenCodeKey") { api.setOpenCodeKey(providerId, key); true } ?: false
+
+    /** POST /opencode/auth/oauth/start — begin browser OAuth for a provider method. */
+    suspend fun startOpenCodeOAuth(providerId: String, method: Int): OpenCodeOAuthStart? =
+        runApi("startOpenCodeOAuth") { api.startOpenCodeOAuth(providerId, method) }
+
+    /** POST /opencode/auth/oauth/finish — complete OAuth with a pasted code. */
+    suspend fun finishOpenCodeOAuth(providerId: String, method: Int, code: String): Boolean =
+        runApi("finishOpenCodeOAuth") { api.finishOpenCodeOAuth(providerId, method, code); true } ?: false
+
+    // ── Devices settings (desktop-parity Task 2) ───────────────────────────────────────────
+    // Backs the Devices section of the Settings hub. Mirrors AppViewModel devices / addDevice /
+    // revokeDevice (Android MoreScreens). All go through [runApi] and degrade to null/false.
+
+    /**
+     * GET /devices — paired devices with last_seen.
+     * Returns `null` on transport/decode failure so the UI can distinguish Error from empty.
+     */
+    suspend fun devices(): List<DeviceDto>? =
+        runApi("devices") { api.devices() }
+
+    /** POST /devices {name} → one-time pairing URL. Null on failure. */
+    suspend fun addDevice(name: String): AddDeviceResponse? =
+        runApi("addDevice") { api.addDevice(name) }
+
+    /** DELETE /devices/<name> — revoke a paired device. False on failure. */
+    suspend fun revokeDevice(name: String): Boolean =
+        runApi("revokeDevice") { api.revokeDevice(name); true } ?: false
 
     // ── LSP settings (M4g-4 Task 1) ────────────────────────────────────────────────────
     // Backs the LspSettingsScreen overlay (M4g-4 Task 2/3): enable/disable + install + add/remove

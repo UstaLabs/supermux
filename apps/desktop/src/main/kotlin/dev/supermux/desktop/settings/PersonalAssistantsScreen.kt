@@ -46,6 +46,8 @@ fun PersonalAssistantsScreen(
     create: suspend (name: String, agent: String, focus: String?) -> Boolean,
     kill: suspend (id: String) -> Unit,
     onBack: () -> Unit,
+    /** When false (Settings hub), omit nested Back/title — hub owns navigation. */
+    showTopBar: Boolean = true,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -62,17 +64,29 @@ fun PersonalAssistantsScreen(
     LaunchedEffect(Unit) { refresh() }
 
     Column(Modifier.fillMaxSize().background(cs.background)) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            TextButton(onClick = onBack) { Text("Back") }
-            Text("Personal assistants", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-            Box(Modifier.weight(1f))
-            Button(onClick = { showCreate = true }) { Text("Create") }
+        if (showTopBar) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                TextButton(onClick = onBack) { Text("Back") }
+                Text("Personal assistants", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Box(Modifier.weight(1f))
+                Button(onClick = { showCreate = true }) { Text("Create") }
+            }
+            HorizontalDivider(color = cs.outlineVariant)
+        } else {
+            // Hub chrome: action row only — no nested Back/title.
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.End,
+            ) {
+                Button(onClick = { showCreate = true }) { Text("Create") }
+            }
+            HorizontalDivider(color = cs.outlineVariant)
         }
-        HorizontalDivider(color = cs.outlineVariant)
 
         when {
             loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }

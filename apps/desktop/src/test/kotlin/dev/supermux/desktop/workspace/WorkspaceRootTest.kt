@@ -130,7 +130,8 @@ class WorkspaceRootTest {
         onNodeWithTag("launcher_submit").performClick()
         // The spawn runs on a real dispatcher (see the scope in appFor), so waitForIdle()
         // returns before it lands — wait for the effect, not for composition to settle.
-        waitUntil { ui.selectedId != null }
+        // Bound generously: under full-suite load the default 1s waitUntil flakes (order/timing).
+        waitUntil(timeoutMillis = 10_000) { ui.selectedId != null }
         waitForIdle()
 
         assertEquals("sess-new", ui.selectedId)
