@@ -1075,7 +1075,8 @@ internal const val FORGE_OMNIBOX_PAGE_SIZE = 10
 /** Result of mapping an omnibox key to a UI action (pure; unit-tested). */
 internal sealed class OmniboxKeyAction {
     data object Dismiss : OmniboxKeyAction()
-    data object CancelResolve : OmniboxKeyAction()
+    /** Hide the in-progress overlay only — host clone/create is not abortable. */
+    data object HideResolve : OmniboxKeyAction()
     data class MoveHighlight(val index: Int) : OmniboxKeyAction()
     data class Activate(val index: Int) : OmniboxKeyAction()
 }
@@ -1091,7 +1092,7 @@ internal fun omniboxKeyAction(
     resolving: Boolean,
 ): OmniboxKeyAction? {
     if (resolving) {
-        return if (key == Key.Escape) OmniboxKeyAction.CancelResolve else null
+        return if (key == Key.Escape) OmniboxKeyAction.HideResolve else null
     }
     return when (key) {
         Key.DirectionDown -> if (count > 0) OmniboxKeyAction.MoveHighlight((highlight + 1) % count) else null
@@ -1107,9 +1108,11 @@ internal fun omniboxKeyAction(
  * type an arbitrary path, clone a remote repo, or create a new one (local / on a forge).
  * Rendered as a [DropdownMenu] (desktop convention for the project heading-dropdown).
  *
- * Clone/create is long-running: [resolving] blocks dismiss, shows a progress overlay with Cancel,
- * and surfaces failures inline. On success the new local path is handed to [onPick] (launcher workdir).
- * Search failures are distinct from empty results. Keyboard: autofocus search, ↑/↓, Enter, Escape.
+ * Clone/create is long-running and **not abortable** on the broker (`git clone` via
+ * `execFileSync`). The progress overlay offers **Hide** (not Cancel): the host keeps working;
+ * if the user hides, a notice stays visible and a successful finish surfaces a ready path to pick.
+ * Search failures are distinct from empty results. Keyboard: autofocus search immediately
+ * (never gated on forge loading), ↑/↓, Enter, Escape.
  */
 @Composable
 internal fun ProjectPicker(
@@ -1144,6 +1147,11 @@ internal fun ProjectPicker(
     var resolveLabel by remember(expanded) { mutableStateOf("") }
     var resolveError by remember(expanded) { mutableStateOf<String?>(null) }
     var resolveJob by remember(expanded) { mutableStateOf<Job?>(null) }
+    /** User hid the progress overlay while the host op is still in flight. */
+    var resolveHid by remember(expanded) { mutableStateOf(false) }
+    /** Path completed after Hide — discoverable one-click use (not silent disk materialisation). */
+    var readyPath by remember(expanded) { mutableStateOf<String?>(null) }
+    var searchAutofocused by remember(expanded) { mutableStateOf(false) }
     var highlight by remember(expanded) { mutableStateOf(0) }
 
     val query = search.trim()
@@ -1151,10 +1159,16 @@ internal fun ProjectPicker(
         projects.map { ProjectOption(it, formatWorkdir(it, home)) }
     }
 
+    // Autofocus immediately when the menu opens — never wait on broker forge loading.
+    LaunchedEffect(expanded) {
+        if (expanded) {
+            runCatching { searchFocus.requestFocus() }
+            searchAutofocused = true
+        }
+    }
     LaunchedEffect(expanded) {
         if (expanded) {
             connections = loadForges()
-            runCatching { searchFocus.requestFocus() }
         }
     }
 
@@ -1231,35 +1245,47 @@ internal fun ProjectPicker(
         onDismiss()
     }
 
-    fun cancelResolve() {
-        resolveJob?.cancel()
-        resolveJob = null
+    /**
+     * Hide the progress overlay only. Does **not** abort the broker clone/create
+     * (host `git clone` is synchronous and uncancellable from the client).
+     */
+    fun hideResolveProgress() {
+        if (!resolving) return
         resolving = false
-        resolveLabel = ""
-        // Keep search query; surface cancel as a soft notice (not a hard error).
+        resolveHid = true
         resolveError = null
+        // Keep resolveLabel so the "continues on the host" banner can name the op.
     }
 
     fun resolve(label: String, block: suspend () -> String?) {
-        if (resolving) return
+        // Block while overlay is up OR a hidden host op is still in flight.
+        if (resolving || resolveJob?.isActive == true) return
         resolving = true
+        resolveHid = false
         resolveLabel = label
         resolveError = null
+        readyPath = null
         resolveJob = scope.launch {
             try {
                 val path = block()
                 if (!path.isNullOrBlank()) {
-                    pick(path)
+                    if (resolveHid) {
+                        // User already returned to the picker — surface the path for one-click use.
+                        readyPath = path
+                    } else {
+                        pick(path)
+                    }
                 } else {
                     resolveError = "Couldn't $label — check the connection and try again."
                 }
             } catch (_: CancellationException) {
-                // Cancel button / dismiss — leave picker open, keep query.
+                // Scope disposed (menu closed / composition left) — not user Hide.
             } catch (_: Throwable) {
                 resolveError = "Couldn't $label — check the connection and try again."
             } finally {
                 resolving = false
                 resolveLabel = ""
+                resolveHid = false
                 resolveJob = null
             }
         }
@@ -1302,8 +1328,8 @@ internal fun ProjectPicker(
                 onDismiss()
                 true
             }
-            is OmniboxKeyAction.CancelResolve -> {
-                cancelResolve()
+            is OmniboxKeyAction.HideResolve -> {
+                hideResolveProgress()
                 true
             }
             is OmniboxKeyAction.MoveHighlight -> {
@@ -1318,10 +1344,23 @@ internal fun ProjectPicker(
         }
     }
 
+    // resolveHid + non-blank label: user hid while host op still in flight (label cleared in finally).
+    val hostOpContinues = resolveHid && resolveLabel.isNotEmpty()
+    val hostOpVerb = when {
+        resolveLabel.startsWith("clone ") -> "Clone"
+        resolveLabel.startsWith("create ") -> "Create"
+        else -> "Operation"
+    }
+    val hostOpTarget = resolveLabel
+        .removePrefix("clone ")
+        .removePrefix("create ")
+        .ifBlank { null }
+
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = {
-            if (resolving) cancelResolve()
+            // Escape/outside click while overlay is up only hides progress — host keeps going.
+            if (resolving) hideResolveProgress()
             else onDismiss()
         },
         modifier = Modifier.testTag("launcher_project_menu"),
@@ -1339,6 +1378,7 @@ internal fun ProjectPicker(
                     onValueChange = {
                         search = it
                         resolveError = null
+                        readyPath = null
                         highlight = 0
                     },
                     placeholder = {
@@ -1356,6 +1396,16 @@ internal fun ProjectPicker(
                         .testTag("launcher_project_search")
                         .onPreviewKeyEvent { onOmniboxKey(it) },
                 )
+                // Sibling tag so tests can assert autofocus without relying on IsFocused (flaky under
+                // DropdownMenu + headless skiko) and without gating on loadForges.
+                if (searchAutofocused) {
+                    Text(
+                        "",
+                        modifier = Modifier
+                            .size(1.dp)
+                            .testTag("launcher_project_autofocus_ready"),
+                    )
+                }
                 Spacer(Modifier.height(Space.xs))
                 OutlinedTextField(
                     value = manualPath,
@@ -1394,7 +1444,7 @@ internal fun ProjectPicker(
                                 confirmPath()
                                 true
                             } else if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                                if (resolving) cancelResolve() else onDismiss()
+                                if (resolving) hideResolveProgress() else onDismiss()
                                 true
                             } else {
                                 false
@@ -1409,6 +1459,43 @@ internal fun ProjectPicker(
                         style = MaterialTheme.typography.labelMedium,
                         modifier = Modifier.testTag("launcher_path_error"),
                     )
+                }
+                if (hostOpContinues) {
+                    Spacer(Modifier.height(Space.xs))
+                    Text(
+                        buildString {
+                            append(hostOpVerb)
+                            if (hostOpTarget != null) {
+                                append(' ')
+                                append(hostOpTarget)
+                            }
+                            append(" continues on the host…")
+                        },
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.testTag("launcher_forge_host_continues"),
+                    )
+                }
+                readyPath?.let { path ->
+                    Spacer(Modifier.height(Space.xs))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                        modifier = Modifier.testTag("launcher_forge_ready"),
+                    ) {
+                        Text(
+                            "Ready — ${formatWorkdir(path, home)}",
+                            color = cs.primary,
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            onClick = { pick(path) },
+                            modifier = Modifier.testTag("launcher_forge_use_ready"),
+                        ) {
+                            Text("Use", color = cs.primary)
+                        }
+                    }
                 }
                 resolveError?.let {
                     Spacer(Modifier.height(Space.xs))
@@ -1718,13 +1805,17 @@ internal fun ProjectPicker(
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(Space.sm),
+                        verticalArrangement = Arrangement.spacedBy(Space.xs),
                         modifier = Modifier
                             .clip(RoundedCornerShape(Radii.lg))
                             .background(cs.surfaceContainerHigh)
-                            .padding(Space.xl - Space.xs),
+                            .padding(horizontal = Space.lg, vertical = Space.md),
                     ) {
-                        CircularProgressIndicator(color = cs.primary)
+                        CircularProgressIndicator(
+                            color = cs.primary,
+                            strokeWidth = Stroke.thin,
+                            modifier = Modifier.size(Space.xl),
+                        )
                         Text(
                             when {
                                 resolveLabel.startsWith("clone ") ->
@@ -1737,11 +1828,19 @@ internal fun ProjectPicker(
                             style = MaterialTheme.typography.labelMedium,
                             modifier = Modifier.testTag("launcher_forge_resolving_label"),
                         )
+                        // Honest: broker clone/create is not abortable — Hide only drops the
+                        // overlay; the host keeps working (Agents install cancel parity).
+                        Text(
+                            "Continues on the host if you hide.",
+                            color = cs.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.testTag("launcher_forge_hide_hint"),
+                        )
                         TextButton(
-                            onClick = { cancelResolve() },
-                            modifier = Modifier.testTag("launcher_forge_cancel"),
+                            onClick = { hideResolveProgress() },
+                            modifier = Modifier.testTag("launcher_forge_hide"),
                         ) {
-                            Text("Cancel", color = cs.primary)
+                            Text("Hide", color = cs.primary)
                         }
                     }
                 }

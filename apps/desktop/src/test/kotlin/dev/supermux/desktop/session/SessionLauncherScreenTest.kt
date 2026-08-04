@@ -542,7 +542,10 @@ class SessionLauncherScreenTest {
         }
         onNodeWithTag("launcher_forge_resolving_label").assertIsDisplayed()
         onNodeWithText("Cloning alice/failme…").assertIsDisplayed()
-        onNodeWithTag("launcher_forge_cancel").assertIsDisplayed()
+        // Honest Hide (not Cancel) — host clone is not abortable.
+        onNodeWithTag("launcher_forge_hide").assertIsDisplayed()
+        onNodeWithText("Hide").assertIsDisplayed()
+        onNodeWithTag("launcher_forge_hide_hint").assertIsDisplayed()
         // Query retained during resolve.
         onNodeWithTag("launcher_project_search").assertIsDisplayed()
 
@@ -562,10 +565,16 @@ class SessionLauncherScreenTest {
         onNodeWithTag("launcher_project_search").assertTextEquals("failme")
     }
 
-    @Test fun project_picker_clone_cancel_aborts_keeps_picker_and_query() = runComposeUiTest {
+    /**
+     * Models real broker behaviour: clone is NOT cooperatively cancellable (host runs
+     * `git clone` via execFileSync). Hide only drops the UI overlay; the fake must keep
+     * running and surface a discoverable ready path — not pretend Cancel aborted the work.
+     */
+    @Test fun project_picker_hide_clone_keeps_host_op_and_surfaces_ready_path() = runComposeUiTest {
         val finished = AtomicBoolean(false)
         val started = CompletableDeferred<Unit>()
         val hold = CompletableDeferred<Unit>()
+        val picked = AtomicReference<String?>(null)
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 Box {
@@ -579,11 +588,13 @@ class SessionLauncherScreenTest {
                         searchForge = { searchOk(remote(name = "slow")) },
                         cloneForge = { _, _, _ ->
                             started.complete(Unit)
+                            // Suspends until the test releases — production does NOT cancel this
+                            // job on Hide, so finished becomes true even after the overlay is gone.
                             hold.await()
                             finished.set(true)
                             "/home/u/slow"
                         },
-                        onPick = {},
+                        onPick = { picked.set(it) },
                         onDismiss = {},
                     )
                 }
@@ -604,7 +615,7 @@ class SessionLauncherScreenTest {
         waitForIdle()
         waitUntil(timeoutMillis = 5_000) { started.isCompleted }
         onNodeWithTag("launcher_forge_resolving").assertIsDisplayed()
-        onNodeWithTag("launcher_forge_cancel").performClick()
+        onNodeWithTag("launcher_forge_hide").performClick()
         waitForIdle()
         waitUntil(timeoutMillis = 5_000) {
             try {
@@ -614,10 +625,31 @@ class SessionLauncherScreenTest {
                 false
             }
         }
-        // Cancel must not land a path and must keep the menu + query.
+        // Hide returns to the picker with the query; host op still in flight.
         onNodeWithTag("launcher_project_menu").assertIsDisplayed()
+        onNodeWithTag("launcher_project_search").assertTextEquals("slow")
+        onNodeWithTag("launcher_forge_host_continues").assertIsDisplayed()
+        onNodeWithText("Clone alice/slow continues on the host…").assertIsDisplayed()
         assertFalse(finished.get())
-        hold.complete(Unit) // release any leftover coroutine
+        assertNull(picked.get())
+
+        // Host finishes after Hide — path must be discoverable, not silent.
+        hold.complete(Unit)
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("launcher_forge_ready").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        assertTrue(finished.get())
+        onNodeWithTag("launcher_forge_host_continues").assertDoesNotExist()
+        onNodeWithText("Ready — ~/slow").assertIsDisplayed()
+        onNodeWithTag("launcher_forge_use_ready").performClick()
+        waitForIdle()
+        assertEquals("/home/u/slow", picked.get())
     }
 
     @Test fun project_picker_search_5xx_shows_error_not_empty() = runComposeUiTest {
@@ -782,7 +814,7 @@ class SessionLauncherScreenTest {
             omniboxKeyAction(Key.Escape, highlight = 0, count = 2, resolving = false),
         )
         assertEquals(
-            OmniboxKeyAction.CancelResolve,
+            OmniboxKeyAction.HideResolve,
             omniboxKeyAction(Key.Escape, highlight = 0, count = 2, resolving = true),
         )
         assertEquals(
@@ -832,6 +864,51 @@ class SessionLauncherScreenTest {
         onNodeWithTag("launcher_project_search").assertIsDisplayed()
         onNodeWithTag("launcher_project_search").assertIsEnabled()
         onNodeWithTag("launcher_omnibox_root").assertIsDisplayed()
+        onNodeWithTag("launcher_project_autofocus_ready").assertIsDisplayed()
+    }
+
+    /**
+     * Regression: autofocus used to await loadForges(), so a slow/stalled broker delayed the
+     * keyboard. Focus request must complete while forges are still loading.
+     */
+    @Test fun project_picker_autofocuses_without_waiting_for_forges() = runComposeUiTest {
+        val gate = CompletableDeferred<Unit>()
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                Box {
+                    ProjectPicker(
+                        expanded = true,
+                        current = "~",
+                        projects = listOf("/home/u/alpha"),
+                        home = "/home/u",
+                        validatePath = { null },
+                        loadForges = {
+                            gate.await()
+                            listOf(forgeConn())
+                        },
+                        onPick = {},
+                        onDismiss = {},
+                    )
+                }
+            }
+        }
+        waitForIdle()
+        // Would hang / fail if requestFocus were sequenced after loadForges().
+        waitUntil(timeoutMillis = 3_000) {
+            try {
+                onNodeWithTag("launcher_project_autofocus_ready").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        assertFalse(gate.isCompleted, "autofocus must not wait for loadForges")
+        onNodeWithTag("launcher_project_search").assertIsDisplayed()
+        onNodeWithTag("launcher_project_search").assertIsEnabled()
+        onNodeWithTag("launcher_project_search").performTextInput("typed-before-forges")
+        onNodeWithTag("launcher_project_search").assertTextEquals("typed-before-forges")
+        gate.complete(Unit)
+        waitForIdle()
     }
 
     @Test fun project_picker_create_on_forge_uses_connection_id() = runComposeUiTest {
