@@ -55,6 +55,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -99,6 +100,7 @@ import kotlinx.coroutines.withContext
 import java.awt.FileDialog
 import java.awt.Frame
 import java.awt.Image
+import java.awt.RenderingHints
 import java.awt.Toolkit
 import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.Transferable
@@ -106,6 +108,7 @@ import java.awt.image.BufferedImage
 import java.io.File
 import java.net.URI
 import java.nio.file.Files
+import java.util.Collections
 import javax.imageio.ImageIO
 import kotlin.math.roundToInt
 
@@ -148,8 +151,9 @@ data class ComposerAttachment(
     val runSeq: Long = 0L,
     /**
      * Absolute path of the staged local file when known (paste temp / picked path). Used to scrub
-     * [isComposerPasteTempFile] temps once the chip is removed or send clears the list. Null when
-     * the source is not path-backed (shouldn't happen for [FileChunkSource] stages).
+     * **registry-tracked** paste temps (see [registerComposerPasteTemp]) once the chip is removed
+     * or send clears the list. Never deletes by path-name pattern — only paths this process created.
+     * Null when the source is not path-backed (shouldn't happen for [FileChunkSource] stages).
      */
     val localPath: String? = null,
 )
@@ -197,17 +201,22 @@ internal fun composerFilesFromDragData(uris: List<String>): List<File> =
 
 /**
  * Pure Ctrl/Cmd+V paste-key predicate for the composer: `true` only for a KeyDown V with Ctrl OR
- * Meta held (Windows/Linux vs macOS) and Shift **not** held. Ctrl/Cmd+Shift+V is the conventional
- * "paste as plain text / match style" chord and must fall through to the text field. Extracted so
- * the paste-image chord is unit-testable without the UI harness.
+ * Meta held (Windows/Linux vs macOS) and Shift **not** held. Ctrl and Meta are **separate** flags
+ * so tests can prove each modifier path distinctly (not a single `ctrlOrMeta=true` called twice).
+ * Ctrl/Cmd+Shift+V is the conventional "paste as plain text / match style" chord and must fall
+ * through to the text field.
  */
 internal fun isComposerPasteKey(
     key: Key,
     type: KeyEventType,
-    ctrlOrMeta: Boolean,
+    ctrlPressed: Boolean,
+    metaPressed: Boolean,
     shiftPressed: Boolean = false,
 ): Boolean =
-    type == KeyEventType.KeyDown && key == Key.V && ctrlOrMeta && !shiftPressed
+    type == KeyEventType.KeyDown &&
+        key == Key.V &&
+        (ctrlPressed || metaPressed) &&
+        !shiftPressed
 
 /**
  * Whether a paste-image gesture should consume the key and call [stageFiles]: the upload seam must
@@ -217,25 +226,75 @@ internal fun isComposerPasteKey(
 internal fun shouldStageClipboardPaste(uploadBound: Boolean, files: List<File>): Boolean =
     uploadBound && files.isNotEmpty()
 
+/**
+ * Production paste-key handler decision used by [DesktopComposer]'s `onPreviewKeyEvent`.
+ * Returns true when the event should be **consumed** for paste-image (and [onPasteImage] is
+ * invoked); false when the key must fall through to the text field (text paste / non-paste keys).
+ * Distinct [ctrlPressed]/[metaPressed] so Ctrl vs Meta are real separate inputs.
+ */
+internal fun handleComposerPasteKey(
+    key: Key,
+    type: KeyEventType,
+    ctrlPressed: Boolean,
+    metaPressed: Boolean,
+    shiftPressed: Boolean,
+    uploadBound: Boolean,
+    likelyHasImage: Boolean,
+    onPasteImage: () -> Unit,
+): Boolean {
+    if (!isComposerPasteKey(key, type, ctrlPressed, metaPressed, shiftPressed)) return false
+    if (uploadBound && likelyHasImage) {
+        onPasteImage()
+        return true
+    }
+    return false
+}
+
 /** Image file extensions accepted for clipboard file-list paste (probe MIME may be octet-stream
  *  for a just-copied path with no content-type association). */
 private val IMAGE_FILE_EXTENSIONS = setOf(
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif", "tif", "tiff",
 )
 
-/** Temp-dir name prefix for raster clipboard pastes ([clipboardImageToTempFile]). */
+/** Temp-dir name prefix for raster clipboard pastes ([clipboardImageToTempFile]). Directory naming
+ *  only — **never** used to decide deletability (see [composerPasteGeneratedTemps]). */
 internal const val COMPOSER_PASTE_TEMP_PREFIX = "composer-paste"
 
 /**
  * Dimension / size caps for clipboard raster paste. Applied **before** allocating a pixel buffer
  * or encoding PNG so a huge paste cannot freeze or OOM the desktop process.
- * - [PASTE_IMAGE_MAX_EDGE]: max width or height in pixels
+ * - [PASTE_IMAGE_MAX_EDGE]: max width or height in pixels (hard reject)
  * - [PASTE_IMAGE_MAX_PIXELS]: max `width * height` (bounds the ARGB buffer for non-[BufferedImage]s)
+ * - [PASTE_IMAGE_ENCODE_MAX_EDGE]: soft downscale target before PNG encode (keeps large pastes fast)
  * - [PASTE_IMAGE_MAX_ENCODED_BYTES]: max written PNG size; oversize files are deleted and dropped
  */
 internal const val PASTE_IMAGE_MAX_EDGE: Int = 8192
 internal const val PASTE_IMAGE_MAX_PIXELS: Long = 16L * 1024L * 1024L // 16 MP
+/** Max edge after optional downscale for encode — 4096² PNG encode is multi-second; 2048² is cheap. */
+internal const val PASTE_IMAGE_ENCODE_MAX_EDGE: Int = 2048
 internal const val PASTE_IMAGE_MAX_ENCODED_BYTES: Long = 8L * 1024L * 1024L // 8 MiB
+
+/**
+ * Absolute paths of temp files **this process created** via [clipboardImageToTempFile] /
+ * [registerComposerPasteTemp]. Deletion is gated exclusively on membership here — never on a
+ * path-name pattern — so a user-owned file under a directory named like `composer-paste-*` is safe.
+ */
+private val composerPasteGeneratedTemps: MutableSet<String> =
+    Collections.synchronizedSet(mutableSetOf())
+
+/** Test/helper: register [file] as a process-owned paste temp (absolute path). */
+internal fun registerComposerPasteTemp(file: File) {
+    composerPasteGeneratedTemps.add(file.absolutePath)
+}
+
+/** Test helper: drop [file] from the registry without deleting it (fixture teardown). */
+internal fun unregisterComposerPasteTemp(file: File) {
+    composerPasteGeneratedTemps.remove(file.absolutePath)
+}
+
+/** True only when [file]'s absolute path was registered as a generated paste temp. */
+internal fun isComposerPasteTempFile(file: File): Boolean =
+    file.absolutePath in composerPasteGeneratedTemps
 
 /**
  * Whether [file] looks like an image suitable for paste-to-attach: an `image/` MIME from
@@ -248,18 +307,16 @@ internal fun isComposerImageFile(file: File): Boolean {
     return file.extension.lowercase() in IMAGE_FILE_EXTENSIONS
 }
 
-/** True when [file] lives under a [COMPOSER_PASTE_TEMP_PREFIX] temp directory we created. */
-internal fun isComposerPasteTempFile(file: File): Boolean {
-    val parent = file.parentFile ?: return false
-    return parent.name.startsWith(COMPOSER_PASTE_TEMP_PREFIX)
-}
-
 /**
- * Delete a paste-origin temp PNG and its empty parent dir. Safe no-op for non-paste files.
- * Called once the file is no longer needed (upload terminal + chip removed/cleared, or encode fail).
+ * Delete a **registry-tracked** paste-origin temp PNG and its empty parent dir. Safe no-op for any
+ * file we did not create (including user files under similarly-named directories). Called once the
+ * file is no longer needed (chip removed/cleared, session dispose, encode fail).
  */
 internal fun cleanupComposerPasteTemp(file: File?) {
-    if (file == null || !isComposerPasteTempFile(file)) return
+    if (file == null) return
+    // Remove from registry first so a concurrent cleanup cannot double-delete; only proceed if we
+    // owned this path.
+    if (!composerPasteGeneratedTemps.remove(file.absolutePath)) return
     runCatching { if (file.exists()) file.delete() }
     val dir = file.parentFile ?: return
     runCatching {
@@ -280,15 +337,46 @@ internal fun clipboardImageWithinCaps(width: Int, height: Int): Boolean {
 }
 
 /**
- * Write an AWT [Image] (screenshot / copy-from-viewer paste) to a temp PNG and return the file.
- * Applies dimension + encoded-byte caps before / after encode. Marks delete-on-exit as a safety
- * net; callers must still [cleanupComposerPasteTemp] after staging lifecycle ends. Null when
- * dimensions are invalid/oversize or encode fails (any partial file is deleted).
- *
- * **Must not run on the UI thread** for large rasters — PNG encode of a 4k² image is multi-second.
- * Call from [Dispatchers.IO] (see [composerClipboardImageFiles] / the paste key handler).
+ * Scale [source] so neither edge exceeds [maxEdge], preserving aspect ratio. Returns [source]
+ * unchanged when already within the bound. Pure relative to the bitmap.
  */
-internal fun clipboardImageToTempFile(image: Image): File? {
+internal fun scaleBufferedImageToMaxEdge(source: BufferedImage, maxEdge: Int): BufferedImage {
+    val w = source.width
+    val h = source.height
+    if (w <= maxEdge && h <= maxEdge) return source
+    val scale = minOf(maxEdge.toDouble() / w, maxEdge.toDouble() / h)
+    val nw = (w * scale).roundToInt().coerceAtLeast(1)
+    val nh = (h * scale).roundToInt().coerceAtLeast(1)
+    val out = BufferedImage(nw, nh, BufferedImage.TYPE_INT_ARGB)
+    val g = out.createGraphics()
+    try {
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+        g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+        g.drawImage(source, 0, 0, nw, nh, null)
+    } finally {
+        g.dispose()
+    }
+    return out
+}
+
+/**
+ * Write an AWT [Image] (screenshot / copy-from-viewer paste) to a temp PNG and return the file.
+ * Applies dimension + encoded-byte caps before / after encode. Large images are downscaled to
+ * [PASTE_IMAGE_ENCODE_MAX_EDGE] before PNG encode so a 4k² paste stays responsive. Marks
+ * delete-on-exit as a safety net; callers must still [cleanupComposerPasteTemp] after staging
+ * lifecycle ends. Null when dimensions are invalid/oversize or encode fails (any partial file is
+ * deleted). Successfully created files are registered in [composerPasteGeneratedTemps].
+ *
+ * **Must not run on the UI thread** for large rasters — PNG encode of a multi-megapixel image is
+ * multi-second without downscale. Call from [Dispatchers.IO].
+ *
+ * @param maxEncodedBytes injectable for tests of the encoded-byte reject path without writing 8 MiB.
+ */
+internal fun clipboardImageToTempFile(
+    image: Image,
+    maxEncodedBytes: Long = PASTE_IMAGE_MAX_ENCODED_BYTES,
+    encodeMaxEdge: Int = PASTE_IMAGE_ENCODE_MAX_EDGE,
+): File? {
     var outFile: File? = null
     var outDir: File? = null
     return runCatching {
@@ -296,7 +384,7 @@ internal fun clipboardImageToTempFile(image: Image): File? {
         val h = image.getHeight(null)
         if (!clipboardImageWithinCaps(w, h)) return null
         // Cap already bounds the w*h*4 allocation for non-BufferedImage copies.
-        val buffered = when (image) {
+        val raw = when (image) {
             is BufferedImage -> image
             else -> BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB).also { bi ->
                 val g = bi.createGraphics()
@@ -307,6 +395,8 @@ internal fun clipboardImageToTempFile(image: Image): File? {
                 }
             }
         }
+        // Downscale large pastes before PNG encode (quality/speed trade-off for chat attach).
+        val buffered = scaleBufferedImageToMaxEdge(raw, encodeMaxEdge)
         val dir = Files.createTempDirectory(COMPOSER_PASTE_TEMP_PREFIX).toFile().apply {
             deleteOnExit()
             outDir = this
@@ -315,11 +405,14 @@ internal fun clipboardImageToTempFile(image: Image): File? {
             outFile = it
             it.deleteOnExit()
         }
+        // Register BEFORE write so a crash mid-encode still lets cleanup own the path; failed
+        // encodes remove via cleanupComposerPasteTemp.
+        registerComposerPasteTemp(out)
         if (!ImageIO.write(buffered, "png", out)) {
             cleanupComposerPasteTemp(out)
             return null
         }
-        if (out.length() > PASTE_IMAGE_MAX_ENCODED_BYTES) {
+        if (out.length() > maxEncodedBytes) {
             cleanupComposerPasteTemp(out)
             return null
         }
@@ -457,6 +550,9 @@ internal fun composerPickFiles(): List<File> {
  *   image files currently on the system clipboard. Ctrl/Cmd+V routes a non-empty result through the
  *   SAME [stageFiles] funnel drag-drop / Attach use. Tests inject a fake so they never touch AWT
  *   clipboard state.
+ * @param clipboardLikelyHasImage cheap UI-thread probe (default = [composerClipboardLikelyHasImage])
+ *   used to decide whether Ctrl/Cmd+V should be consumed for paste-image. Tests inject so key-event
+ *   tests do not depend on the real system clipboard.
  * @param externalAttach a one-shot "stage this file then send" request (M4d-T3), delivered from
  *   outside the composer's own click-driven state (see [ComposerExternalAttach] KDoc — the
  *   off-by-default `SM_CHAT_ATTACH` headless hook). Routed through the SAME `stageFiles`/`sendWith`
@@ -509,6 +605,7 @@ fun DesktopComposer(
     ) -> String?)? = null,
     pickFiles: () -> List<File> = ::composerPickFiles,
     pasteImageFiles: () -> List<File> = ::composerClipboardImageFiles,
+    clipboardLikelyHasImage: () -> Boolean = ::composerClipboardLikelyHasImage,
     externalAttach: ComposerExternalAttach? = null,
     onExternalAttachConsumed: () -> Unit = {},
     onTranscribeAudio: (suspend (bytes: ByteArray, filename: String) -> String?)? = null,
@@ -529,6 +626,15 @@ fun DesktopComposer(
     // Plain-var counters (single Main-thread dispatcher — no atomics needed); one holder per session.
     val ids = remember(sessionKey) { object { var nextId = 0L; var nextSeq = 0L } }
     val scope = rememberCoroutineScope()
+    // Session switch / leave composition discards [attachments] via remember(sessionKey). Scrub any
+    // registry-tracked paste temps those chips still owned so a switch cannot leak files for the
+    // app lifetime (and never deletes non-registered user paths).
+    DisposableEffect(sessionKey) {
+        val sessionAttachments = attachments
+        onDispose {
+            sessionAttachments.mapNotNull { it.localPath }.forEach { cleanupComposerPasteTemp(File(it)) }
+        }
+    }
 
     // Guarded update: apply only when the chip STILL exists AND belongs to the run identified by
     // [seq]. A late callback from a removed chip (idx < 0) or a superseded run (runSeq mismatch, e.g.
@@ -900,23 +1006,20 @@ fun DesktopComposer(
                             // falls through so the multiline field handles Enter itself (no stray
                             // newline, no double-send).
                             if (canSend) { doSend(); true } else false
-                        } else if (isComposerPasteKey(
-                                e.key,
-                                e.type,
-                                ctrlOrMeta = e.isCtrlPressed || e.isMetaPressed,
+                        } else if (
+                            handleComposerPasteKey(
+                                key = e.key,
+                                type = e.type,
+                                ctrlPressed = e.isCtrlPressed,
+                                metaPressed = e.isMetaPressed,
                                 shiftPressed = e.isShiftPressed,
+                                uploadBound = onUpload != null,
+                                likelyHasImage = clipboardLikelyHasImage(),
+                                onPasteImage = { launchPasteImages() },
                             )
                         ) {
-                            // Paste-image: consume only when upload is bound AND a cheap flavor probe
-                            // says the clipboard has an image. Encoding runs on Dispatchers.IO so a
-                            // 4k² raster cannot freeze the UI. Text-only (and Ctrl/Cmd+Shift+V) fall
-                            // through so the field keeps plain-text paste.
-                            if (onUpload != null && composerClipboardLikelyHasImage()) {
-                                launchPasteImages()
-                                true
-                            } else {
-                                false
-                            }
+                            // Consumed: paste-image launched on IO (see [launchPasteImages]).
+                            true
                         } else {
                             false
                         }

@@ -640,25 +640,54 @@ internal fun readBytesCapped(stream: InputStream, maxBytes: Long = MD_IMAGE_MAX_
     return out.toByteArray()
 }
 
+/** Default redirect hop budget for [fetchHttpsImageBytes] — loops must not hang the loader. */
+internal const val MD_IMAGE_MAX_REDIRECTS: Int = 5
+
 /**
- * GET [url] and return the response body when it is https, 2xx, and within [maxBytes]. Follows
- * redirects only while the next hop stays https. Null on any failure — callers fall back to the
- * link line. Blocking; call from [Dispatchers.IO], never the UI thread.
+ * Resolve a redirect [Location] against [currentUrl]. Absolute http(s) locations are used as-is;
+ * relative locations are resolved with [URI.resolve]. Pure — unit-testable without the network.
  */
-internal fun fetchHttpsImageBytes(url: String, maxBytes: Long = MD_IMAGE_MAX_BYTES): ByteArray? {
-    if (!isHttpsImageUrl(url)) return null
+internal fun resolveImageRedirectUrl(currentUrl: String, location: String): String {
+    val next = location.trim()
+    if (next.startsWith("https://", ignoreCase = true) ||
+        next.startsWith("http://", ignoreCase = true)
+    ) {
+        return next
+    }
+    return URI(currentUrl).resolve(next).toString()
+}
+
+/** Open a GET connection for image fetch. Extracted so tests can inject a local server opener. */
+internal fun openImageHttpConnection(url: String): HttpURLConnection =
+    (URI(url).toURL().openConnection() as HttpURLConnection).apply {
+        instanceFollowRedirects = false
+        connectTimeout = 10_000
+        readTimeout = 15_000
+        requestMethod = "GET"
+        setRequestProperty("Accept", "image/*,*/*;q=0.8")
+    }
+
+/**
+ * GET [url] and return the response body when every hop is allowed by [isAllowedUrl], the status is
+ * 2xx, and the body is within [maxBytes]. Follows up to [maxRedirects] hops. Null on any failure —
+ * callers fall back to the link line. Blocking; call from [Dispatchers.IO], never the UI thread.
+ *
+ * [isAllowedUrl] / [openConnection] are seams for the production network-matrix tests (local
+ * HttpServer, redirect/downgrade/hop/oversize/404). Production uses [fetchHttpsImageBytes].
+ */
+internal fun fetchImageBytesWithPolicy(
+    url: String,
+    maxBytes: Long = MD_IMAGE_MAX_BYTES,
+    maxRedirects: Int = MD_IMAGE_MAX_REDIRECTS,
+    isAllowedUrl: (String) -> Boolean = ::isHttpsImageUrl,
+    openConnection: (String) -> HttpURLConnection = ::openImageHttpConnection,
+): ByteArray? {
+    if (!isAllowedUrl(url)) return null
     return runCatching {
         var current = url
-        // Cap redirect hops so a loop cannot hang the fetch.
-        repeat(5) {
-            if (!isHttpsImageUrl(current)) return null
-            val conn = (URI(current).toURL().openConnection() as HttpURLConnection).apply {
-                instanceFollowRedirects = false
-                connectTimeout = 10_000
-                readTimeout = 15_000
-                requestMethod = "GET"
-                setRequestProperty("Accept", "image/*,*/*;q=0.8")
-            }
+        repeat(maxRedirects) {
+            if (!isAllowedUrl(current)) return null
+            val conn = openConnection(current)
             conn.connect()
             val code = conn.responseCode
             when (code) {
@@ -674,14 +703,9 @@ internal fun fetchHttpsImageBytes(url: String, maxBytes: Long = MD_IMAGE_MAX_BYT
                     val next = conn.getHeaderField("Location")
                     conn.disconnect()
                     if (next.isNullOrBlank()) return null
-                    current = if (next.startsWith("https://", ignoreCase = true) ||
-                        next.startsWith("http://", ignoreCase = true)
-                    ) {
-                        next
-                    } else {
-                        // Relative redirect — resolve against the current URL.
-                        URI(current).resolve(next).toString()
-                    }
+                    current = resolveImageRedirectUrl(current, next)
+                    // Reject immediately on scheme downgrade / disallowed hop so we never open it.
+                    if (!isAllowedUrl(current)) return null
                 }
                 else -> {
                     conn.disconnect()
@@ -692,6 +716,20 @@ internal fun fetchHttpsImageBytes(url: String, maxBytes: Long = MD_IMAGE_MAX_BYT
         null
     }.getOrNull()
 }
+
+/**
+ * GET [url] and return the response body when it is https, 2xx, and within [maxBytes]. Follows
+ * redirects only while the next hop stays https. Null on any failure — callers fall back to the
+ * link line. Blocking; call from [Dispatchers.IO], never the UI thread.
+ */
+internal fun fetchHttpsImageBytes(url: String, maxBytes: Long = MD_IMAGE_MAX_BYTES): ByteArray? =
+    fetchImageBytesWithPolicy(
+        url = url,
+        maxBytes = maxBytes,
+        maxRedirects = MD_IMAGE_MAX_REDIRECTS,
+        isAllowedUrl = ::isHttpsImageUrl,
+        openConnection = ::openImageHttpConnection,
+    )
 
 /**
  * Layout tokens for inline markdown images. Named constants (no magic numbers at call sites).
@@ -736,12 +774,17 @@ internal fun decodeImageBytes(bytes: ByteArray): ImageBitmap? =
  * Load + fully decode an https image on [Dispatchers.IO]. Returns null for non-https, oversize,
  * network, or decode failures. The returned [ImageBitmap] is already rasterised — safe to paint
  * on the UI thread without further decode work.
+ *
+ * This is the **production** load path used by [MarkdownImage]'s default [loadImage] seam —
+ * tests that care about the dispatcher hop must call this (or the default seam), not reimplement
+ * `withContext(IO)` themselves.
  */
 internal suspend fun loadMarkdownImageBitmap(
     url: String,
     maxBytes: Long = MD_IMAGE_MAX_BYTES,
+    fetchBytes: (String, Long) -> ByteArray? = { u, max -> fetchHttpsImageBytes(u, max) },
 ): ImageBitmap? = withContext(Dispatchers.IO) {
-    val bytes = fetchHttpsImageBytes(url, maxBytes) ?: return@withContext null
+    val bytes = fetchBytes(url, maxBytes) ?: return@withContext null
     decodeImageBytes(bytes)
 }
 
@@ -753,8 +796,9 @@ internal suspend fun loadMarkdownImageBitmap(
  *   browser — Android's Coil path is also https-only for the same tracking/IP-leak reason.
  * - Load/decode failure falls back to a **distinct** failure link line (never a blank hole, never
  *   identical to the deliberate non-https fallback).
- * - Successful images are clickable (open URL in the system browser) so desktop users can inspect
- *   the full-resolution original.
+ * - Successful images are clickable (open URL via [onOpenUrl]) so desktop users can inspect the
+ *   full-resolution original. [onOpenUrl] defaults to the system browser; tests inject a recorder
+ *   so a click never launches Chrome (which would hang the Gradle test worker).
  *
  * [loadImage] is the load seam (default = real network fetch); tests inject a fake so the UI path
  * is covered without the network.
@@ -763,10 +807,11 @@ internal suspend fun loadMarkdownImageBitmap(
 fun MarkdownImage(
     image: MdBlock.Image,
     loadImage: suspend (String) -> ImageBitmap? = { loadMarkdownImageBitmap(it) },
+    onOpenUrl: (String) -> Unit = ::openInBrowser,
 ) {
     val cs = MaterialTheme.colorScheme
     if (!isHttpsImageUrl(image.url)) {
-        MarkdownImageLinkLine(image, loadFailed = false)
+        MarkdownImageLinkLine(image, loadFailed = false, onOpenUrl = onOpenUrl)
         return
     }
     var bitmap by remember(image.url) { mutableStateOf<ImageBitmap?>(null) }
@@ -789,11 +834,11 @@ fun MarkdownImage(
                     .heightIn(max = MdImageDimens.MaxHeight)
                     .clip(RoundedCornerShape(Radii.sm))
                     .pointerHoverIcon(PointerIcon.Hand)
-                    .clickable { openInBrowser(image.url) }
+                    .clickable { onOpenUrl(image.url) }
                     .testTag("md_image"),
             )
         }
-        failed -> MarkdownImageLinkLine(image, loadFailed = true)
+        failed -> MarkdownImageLinkLine(image, loadFailed = true, onOpenUrl = onOpenUrl)
         else -> Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -817,7 +862,11 @@ fun MarkdownImage(
  * real fetch/decode failure so the user can tell them apart.
  */
 @Composable
-private fun MarkdownImageLinkLine(image: MdBlock.Image, loadFailed: Boolean) {
+private fun MarkdownImageLinkLine(
+    image: MdBlock.Image,
+    loadFailed: Boolean,
+    onOpenUrl: (String) -> Unit = ::openInBrowser,
+) {
     val cs = MaterialTheme.colorScheme
     val linkColor = cs.primary
     val label = when {
@@ -832,7 +881,7 @@ private fun MarkdownImageLinkLine(image: MdBlock.Image, loadFailed: Boolean) {
                 LinkAnnotation.Url(
                     image.url,
                     TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
-                ) { openInBrowser(image.url) },
+                ) { onOpenUrl(image.url) },
             ) { append(label) }
         },
         style = MaterialTheme.typography.bodyLarge,

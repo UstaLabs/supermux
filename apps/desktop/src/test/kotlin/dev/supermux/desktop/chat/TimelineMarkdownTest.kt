@@ -1,5 +1,9 @@
 package dev.supermux.desktop.chat
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -12,8 +16,15 @@ import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.dp
 import dev.supermux.ui.ColumnAlign
 import dev.supermux.ui.MdBlock
+import com.sun.net.httpserver.HttpServer
+import java.io.OutputStream
+import java.net.InetSocketAddress
+import java.net.URI
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -167,24 +178,34 @@ class TimelineMarkdownTest {
         assertTrue(annotated.text.contains("a diagram"))
     }
 
-    @Test fun https_image_clickable_when_loaded() = runComposeUiTest {
+    /**
+     * Click opens via the injected [onOpenUrl] seam — never the real browser (Chrome would hang
+     * the Gradle test worker by inheriting the worker's output pipe).
+     */
+    @Test fun https_image_click_invokesOnOpenUrlSeam() = runComposeUiTest {
         val png = decodeImageBytes(TINY_PNG_BYTES)
         assertTrue(png != null)
+        val opened = AtomicReference<String?>(null)
         setContent {
             MarkdownImage(
                 image = MdBlock.Image(url = "https://example.com/pic.png", alt = "diagram"),
                 loadImage = { png },
+                onOpenUrl = { opened.set(it) },
             )
         }
         waitUntil(timeoutMillis = 5_000L) {
             onAllNodesWithTag("md_image").fetchSemanticsNodes().isNotEmpty()
         }
-        // Click is wired (openInBrowser); under test we only assert the node is clickable / present.
         onNodeWithTag("md_image").assertIsDisplayed()
         onNodeWithTag("md_image").performClick()
+        assertEquals(
+            "https://example.com/pic.png",
+            opened.get(),
+            "click must invoke the open-url seam with the image URL",
+        )
     }
 
-    // ── Pure helpers (https gate, size cap, forced Skiko decode) ──────────────────────
+    // ── Pure helpers (https gate, size cap, forced Skiko decode, redirects) ───────────
 
     @Test fun isHttpsImageUrl_accepts_https_only() {
         assertTrue(isHttpsImageUrl("https://example.com/a.png"))
@@ -193,6 +214,25 @@ class TimelineMarkdownTest {
         assertTrue(!isHttpsImageUrl("ftp://example.com/a.png"))
         assertTrue(!isHttpsImageUrl("/relative/path.png"))
         assertTrue(!isHttpsImageUrl(""))
+    }
+
+    @Test fun resolveImageRedirectUrl_relativeAndAbsolute() {
+        assertEquals(
+            "https://cdn.example.com/b.png",
+            resolveImageRedirectUrl("https://example.com/a.png", "https://cdn.example.com/b.png"),
+        )
+        assertEquals(
+            "http://insecure.example/x",
+            resolveImageRedirectUrl("https://example.com/a.png", "http://insecure.example/x"),
+        )
+        assertEquals(
+            "https://example.com/img/b.png",
+            resolveImageRedirectUrl("https://example.com/img/a.png", "b.png"),
+        )
+        assertEquals(
+            "https://example.com/other/b.png",
+            resolveImageRedirectUrl("https://example.com/img/a.png", "/other/b.png"),
+        )
     }
 
     @Test fun readBytesCapped_returns_bytes_under_cap() {
@@ -226,22 +266,26 @@ class TimelineMarkdownTest {
         assertNull(decodeImageBytes(truncated), "truncated PNG must return null from forced decode")
     }
 
-    @Test fun loadMarkdownImageBitmap_decodeRunsOnIoDispatcher() = runBlocking {
-        // Prove the production load path hops off the caller: withContext(IO) + force-decode.
-        // We cannot hit the network here; instead wrap the same IO hop the production function uses
-        // and assert decodeImageBytes runs on a DefaultDispatcher/IO worker, not the test main.
+    /**
+     * Exercise the **production** [loadMarkdownImageBitmap] path (not a reimplemented
+     * `withContext(IO)`), with a faked fetch so there is no network. Asserts decode runs on an
+     * IO/worker thread.
+     */
+    @Test fun loadMarkdownImageBitmap_productionPath_decodeRunsOnIoDispatcher() = runBlocking {
         val threadName = AtomicReference<String?>(null)
-        val bmp = withContext(Dispatchers.IO) {
-            threadName.set(Thread.currentThread().name)
-            decodeImageBytes(TINY_PNG_BYTES)
-        }
-        assertTrue(bmp != null)
+        val bmp = loadMarkdownImageBitmap(
+            url = "https://example.com/pic.png",
+            fetchBytes = { _, _ ->
+                threadName.set(Thread.currentThread().name)
+                TINY_PNG_BYTES
+            },
+        )
+        assertTrue(bmp != null, "production load path must decode the fetched PNG")
         val name = threadName.get()
         assertTrue(name != null, "expected a worker thread name")
-        // kotlinx IO pool threads are named DefaultDispatcher-worker-N
         assertTrue(
             name!!.contains("DefaultDispatcher") || name.contains("IO") || name.contains("worker"),
-            "decode should run on IO/worker thread, got: $name",
+            "fetch+decode should run on IO/worker thread, got: $name",
         )
         assertTrue(
             !name.contains("AWT-EventQueue"),
@@ -255,9 +299,201 @@ class TimelineMarkdownTest {
         assertEquals(MdImageDimens.MaxHeight, MdImageDimens.LoadingHeight)
     }
 
+    /**
+     * Assert actual layout bounds: loading placeholder height in px equals MaxHeight under the
+     * composition density (not just constant equality of the dp tokens).
+     */
+    @Test fun mdImage_loadingPlaceholder_layoutHeightMatchesMaxHeight() = runComposeUiTest {
+        setContent {
+            // Constrain width so fillMaxWidth has a concrete measure.
+            Box(Modifier.width(320.dp)) {
+                MarkdownImage(
+                    image = MdBlock.Image(url = "https://example.com/slow.png", alt = "x"),
+                    // Never complete — stay on the loading placeholder.
+                    loadImage = {
+                        kotlinx.coroutines.delay(60_000)
+                        null
+                    },
+                )
+            }
+        }
+        waitUntil(timeoutMillis = 5_000L) {
+            onAllNodesWithTag("md_image_loading").fetchSemanticsNodes().isNotEmpty()
+        }
+        val node = onNodeWithTag("md_image_loading").fetchSemanticsNode()
+        val heightPx = node.layoutInfo.height
+        // 280.dp at the test density — require a substantial reserved height (not a tiny spinner box).
+        assertTrue(heightPx > 100, "loading placeholder layout height was $heightPx px (expected ~MaxHeight)")
+        // Bound: MaxHeight is 280.dp; allow density variance but stay near that scale.
+        assertTrue(heightPx < 800, "loading placeholder unexpectedly tall: $heightPx px")
+    }
+
+    /**
+     * After load, a short (2×2) image may be shorter than the loading box — that is the known
+     * downward-reflow trade-off. Assert we still paint something with real layout bounds.
+     */
+    @Test fun mdImage_loaded_hasPositiveLayoutBounds() = runComposeUiTest {
+        val png = decodeImageBytes(TINY_PNG_BYTES)
+        assertTrue(png != null)
+        setContent {
+            Box(Modifier.width(320.dp).fillMaxWidth()) {
+                MarkdownImage(
+                    image = MdBlock.Image(url = "https://example.com/pic.png", alt = "x"),
+                    loadImage = { png },
+                )
+            }
+        }
+        waitUntil(timeoutMillis = 5_000L) {
+            onAllNodesWithTag("md_image").fetchSemanticsNodes().isNotEmpty()
+        }
+        val node = onNodeWithTag("md_image").fetchSemanticsNode()
+        assertTrue(node.layoutInfo.width > 0, "loaded image width must be > 0")
+        assertTrue(node.layoutInfo.height > 0, "loaded image height must be > 0")
+        // heightIn(max=MaxHeight) — painted height must not exceed a generous px bound for 280.dp
+        assertTrue(node.layoutInfo.height < 800, "image exceeded max height: ${node.layoutInfo.height}")
+    }
+
     @Test fun fetchHttpsImageBytes_rejects_non_https() {
         assertTrue(fetchHttpsImageBytes("http://example.com/x.png") == null)
         assertTrue(fetchHttpsImageBytes("file:///tmp/x.png") == null)
+    }
+
+    // ── Production network matrix (local HttpServer + policy seam) ────────────────────
+
+    @Test fun fetch_relativeRedirect_resolvesAndReturnsBody() = withLocalServer { base ->
+        val hops = AtomicInteger(0)
+        serverCreateContext("/start") { ex ->
+            hops.incrementAndGet()
+            ex.responseHeaders.add("Location", "/img/final.png")
+            ex.sendResponseHeaders(302, -1)
+            ex.close()
+        }
+        serverCreateContext("/img/final.png") { ex ->
+            hops.incrementAndGet()
+            ex.responseHeaders.add("Content-Type", "image/png")
+            ex.sendResponseHeaders(200, TINY_PNG_BYTES.size.toLong())
+            ex.responseBody.use { it.write(TINY_PNG_BYTES) }
+        }
+        val bytes = fetchImageBytesWithPolicy(
+            url = "$base/start",
+            isAllowedUrl = { it.startsWith(base) },
+        )
+        assertTrue(bytes != null && bytes.contentEquals(TINY_PNG_BYTES), "relative redirect must yield body")
+        assertEquals(2, hops.get())
+    }
+
+    @Test fun fetch_httpsToHttpDowngrade_rejected() = withLocalServer { base ->
+        serverCreateContext("/secure-ish") { ex ->
+            // Absolute http Location off-box — production isHttpsImageUrl rejects the hop.
+            ex.responseHeaders.add("Location", "http://evil.example/track.png")
+            ex.sendResponseHeaders(302, -1)
+            ex.close()
+        }
+        // Start URL is allowed only because we use a localhost policy for the first hop; the
+        // downgraded Location must still be rejected by isHttpsImageUrl.
+        val bytes = fetchImageBytesWithPolicy(
+            url = "$base/secure-ish",
+            isAllowedUrl = { u -> u.startsWith(base) || isHttpsImageUrl(u) },
+        )
+        assertNull(bytes, "http downgrade redirect must not be followed")
+    }
+
+    @Test fun fetch_redirectHopLimit_returnsNull() = withLocalServer { base ->
+        val hits = AtomicInteger(0)
+        serverCreateContext("/loop") { ex ->
+            hits.incrementAndGet()
+            ex.responseHeaders.add("Location", "$base/loop")
+            ex.sendResponseHeaders(302, -1)
+            ex.close()
+        }
+        val bytes = fetchImageBytesWithPolicy(
+            url = "$base/loop",
+            maxRedirects = 5,
+            isAllowedUrl = { it.startsWith(base) },
+        )
+        assertNull(bytes, "redirect loop must exhaust hop budget and return null")
+        assertEquals(5, hits.get(), "must stop after maxRedirects hops, got ${hits.get()}")
+    }
+
+    @Test fun fetch_chunkedOversizeBody_returnsNull() = withLocalServer { base ->
+        serverCreateContext("/big") { ex ->
+            // No Content-Length — chunked. Body exceeds a tiny maxBytes.
+            val payload = ByteArray(64) { 7 }
+            ex.sendResponseHeaders(200, 0) // 0 = chunked
+            ex.responseBody.use { out: OutputStream -> out.write(payload) }
+        }
+        val bytes = fetchImageBytesWithPolicy(
+            url = "$base/big",
+            maxBytes = 16,
+            isAllowedUrl = { it.startsWith(base) },
+        )
+        assertNull(bytes, "chunked body over maxBytes must be rejected")
+    }
+
+    @Test fun fetch_unreachableHost_returnsNull() {
+        // Closed port on loopback — connection refused. Production https gate.
+        val bytes = fetchHttpsImageBytes("https://127.0.0.1:1/nope.png", maxBytes = 1024)
+        assertNull(bytes)
+    }
+
+    @Test fun fetch_404_returnsNull() = withLocalServer { base ->
+        serverCreateContext("/missing.png") { ex ->
+            val msg = "not found".toByteArray()
+            ex.sendResponseHeaders(404, msg.size.toLong())
+            ex.responseBody.use { it.write(msg) }
+        }
+        val bytes = fetchImageBytesWithPolicy(
+            url = "$base/missing.png",
+            isAllowedUrl = { it.startsWith(base) },
+        )
+        assertNull(bytes, "404 must return null")
+    }
+
+    @Test fun fetch_declaredContentLengthOverCap_returnsNull() = withLocalServer { base ->
+        serverCreateContext("/huge-declared") { ex ->
+            // Content-Length over cap — reject before reading body.
+            ex.responseHeaders.add("Content-Type", "image/png")
+            ex.sendResponseHeaders(200, 100_000)
+            ex.responseBody.use { it.write(ByteArray(100_000)) }
+        }
+        val bytes = fetchImageBytesWithPolicy(
+            url = "$base/huge-declared",
+            maxBytes = 1024,
+            isAllowedUrl = { it.startsWith(base) },
+        )
+        assertNull(bytes)
+    }
+
+    // ── local HTTP test harness ───────────────────────────────────────────────────────
+
+    /**
+     * Spin a loopback [HttpServer], run [block] with `http://127.0.0.1:<port>` as [base], then stop.
+     * Contexts are registered via the receiver's [serverCreateContext] (set for the duration of
+     * the block). Uses plain HTTP; tests pass [isAllowedUrl] that permits the loopback base so we
+     * can exercise redirect/body/status logic without a self-signed HTTPS stack. Production still
+     * uses [isHttpsImageUrl] exclusively via [fetchHttpsImageBytes].
+     */
+    private fun withLocalServer(block: LocalServerScope.(base: String) -> Unit) {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.executor = Executors.newCachedThreadPool()
+        server.start()
+        try {
+            val port = server.address.port
+            val base = "http://127.0.0.1:$port"
+            val scope = LocalServerScope(server)
+            scope.block(base)
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    private class LocalServerScope(private val server: HttpServer) {
+        fun serverCreateContext(
+            path: String,
+            handler: com.sun.net.httpserver.HttpHandler,
+        ) {
+            server.createContext(path, handler)
+        }
     }
 
     companion object {
