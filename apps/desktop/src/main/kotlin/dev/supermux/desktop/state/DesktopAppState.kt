@@ -23,6 +23,8 @@ import dev.supermux.net.BrokerClient
 import dev.supermux.net.ChunkSource
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
+import dev.supermux.net.ForgeConnection
+import dev.supermux.net.ForgeConnectionsResponse
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
 import dev.supermux.net.FsRefsResult
@@ -39,6 +41,7 @@ import dev.supermux.net.PADto
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
+import dev.supermux.net.RemoteRepo
 import dev.supermux.net.RepoInfo
 import dev.supermux.net.CodexResetResult
 import dev.supermux.net.ReviewComment
@@ -1110,6 +1113,48 @@ class DesktopAppState(
     suspend fun launcherCommands(agent: String, workdir: String): List<SlashCommand> =
         if (workdir.isBlank()) emptyList()
         else runApi("launcherCommands") { api.previewCommands(agent, workdir).commands } ?: emptyList()
+
+    // ── Git hosting / forges (desktop-parity Task 4; mirrors AppViewModel.forges* + listForges) ──
+    // Settings hub manages accounts; the New-Session launcher project picker uses the search /
+    // clone / create half. All go through [runApi] and getOrNull-degrade like Android.
+
+    /** GET /forge/connections → configured accounts + CLI availability. Null on transport failure. */
+    suspend fun forgesLoad(): ForgeConnectionsResponse? =
+        runApi("forgesLoad") { api.listForges() }
+
+    /** POST /forge/connections — connect with a PAT. True on success. */
+    suspend fun forgeAdd(kind: String, token: String, host: String?, transport: String): Boolean =
+        runApi("forgeAdd") { api.addForge(kind, token, host, transport); true } ?: false
+
+    /** POST /forge/connections/import — import from `gh`/`glab` CLI auth. True on success. */
+    suspend fun forgeImport(kind: String, transport: String): Boolean =
+        runApi("forgeImport") { api.importForge(kind, transport); true } ?: false
+
+    /** DELETE /forge/connections/<id> — disconnect. Fire-and-forget (Android forgeRemove parity). */
+    fun forgeRemove(id: String) {
+        stateScope.launch { runApi("forgeRemove") { api.removeForge(id); true } }
+    }
+
+    /** GET /forge/connections → connection list only (launcher omnibox). Empty on failure. */
+    suspend fun listForges(): List<ForgeConnection> =
+        runApi("listForges") { api.listForges().connections } ?: emptyList()
+
+    /** POST /forge/search → remote repos across connected forges. Empty on failure. */
+    suspend fun searchForge(query: String): List<RemoteRepo> =
+        runApi("searchForge") { api.searchForge(query).repos } ?: emptyList()
+
+    /** POST /forge/clone → local path of the new checkout. Null on failure / blank path. */
+    suspend fun cloneForge(connectionId: String, owner: String, name: String): String? =
+        runApi("cloneForge") { api.cloneForge(connectionId, owner, name).localPath }
+            ?.ifBlank { null }
+
+    /** POST /forge/create-local → local path of a fresh `git init`. Null on failure / blank path. */
+    suspend fun createLocalRepo(name: String): String? =
+        runApi("createLocalRepo") { api.createLocalRepo(name).localPath }?.ifBlank { null }
+
+    /** POST /forge/create → create remote + clone; returns local path. Null on failure / blank. */
+    suspend fun createForge(connectionId: String, name: String): String? =
+        runApi("createForge") { api.createForge(connectionId, name).localPath }?.ifBlank { null }
 
     // ── In-session model + reasoning selection (mirrors AppViewModel's per-session model/reasoning
     //    helpers) ─────────────────────────────────────────────────────────────────────────────────

@@ -75,9 +75,10 @@ import dev.supermux.session.inferHomeDir
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /** Sections of the Settings hub (left rail). Task 1 ships Agents; Editor/LSP and Personal
- *  Assistants are the pre-existing screens folded into the hub. Later tasks add more entries. */
+ *  Assistants are the pre-existing screens folded into the hub. Task 4 adds Git hosting. */
 enum class SettingsSection(val label: String) {
     Agents("Agents"),
+    GitHosting("Git hosting"),
     EditorLsp("Editor / LSP"),
     PersonalAssistants("Personal assistants"),
 }
@@ -687,6 +688,12 @@ fun WorkspaceRoot(
                         selectedHost = activeHostId,
                         onSelectHost = { fleet?.setActiveHost(it) },
                         loadAgents = { hostApp.launcherAgents() },
+                        // Forge omnibox (Task 4): clone/create lands the new path in workdir.
+                        loadForges = { hostApp.listForges() },
+                        searchForge = { hostApp.searchForge(it) },
+                        cloneForge = { cid, owner, name -> hostApp.cloneForge(cid, owner, name) },
+                        createLocalRepo = { hostApp.createLocalRepo(it) },
+                        createForge = { cid, name -> hostApp.createForge(cid, name) },
                     )
                 }
             }
@@ -810,7 +817,7 @@ fun WorkspaceRoot(
                 val overlayTag = when (ui.settingsSection) {
                     SettingsSection.EditorLsp -> "lsp_settings_overlay"
                     SettingsSection.PersonalAssistants -> "personal_assistants_overlay"
-                    SettingsSection.Agents -> "settings_overlay"
+                    SettingsSection.Agents, SettingsSection.GitHosting -> "settings_overlay"
                 }
                 Box(
                     Modifier
@@ -859,6 +866,12 @@ fun WorkspaceRoot(
                                     paLoad = { hostApp.personalAssistants() },
                                     paCreate = { name, agent, focus -> hostApp.createPersonalAssistant(name, agent, focus) },
                                     paKill = { hostApp.killPersonalAssistant(it) },
+                                    forgesLoad = { hostApp.forgesLoad() },
+                                    forgeAdd = { kind, token, host, transport ->
+                                        hostApp.forgeAdd(kind, token, host, transport)
+                                    },
+                                    forgeImport = { kind, transport -> hostApp.forgeImport(kind, transport) },
+                                    forgeRemove = { hostApp.forgeRemove(it) },
                                 )
                             }
                         }

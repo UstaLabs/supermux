@@ -10,9 +10,8 @@
 //     per-agent brand assets.
 //   - Voice dictation (M5-1): the SAME MicButton/DesktopDictationController the chat composer uses
 //     (dev.supermux.desktop.chat.Dictation.kt), wired to the id-less /transcribe path (no session
-//     yet). The slash-command "/" menu (no loadCommands seam on this screen) and the Forge omnibox
-//     clone/create UI (TODO(M4-forge)) are still omitted. Drag-and-drop staging is a TODO too (the
-//     Attach button covers the must-ship path).
+//     yet). The Forge omnibox (clone/create via ProjectPicker, desktop-parity Task 4) is wired.
+//     Drag-and-drop staging is a TODO too (the Attach button covers the must-ship path).
 //
 // THE SUBTLE PART (ported 1:1 from Android): the [launcherRestoring] gate plus lastSeenAgent /
 // lastSeenWorkdir (NOT one-shot "armed" booleans) distinguish a draft-restore SETTLING from a
@@ -59,6 +58,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.CircularProgressIndicator
@@ -109,18 +109,24 @@ import dev.supermux.desktop.chat.MicRecorder
 import dev.supermux.desktop.chat.rememberDesktopDictation
 import dev.supermux.desktop.host.HostDot
 import dev.supermux.desktop.host.HostView
+import dev.supermux.desktop.theme.Radii
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.upload.FileChunkSource
 import dev.supermux.net.ChunkSource
+import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ReasoningLevel
 import dev.supermux.net.ReasoningResponse
+import dev.supermux.net.RemoteRepo
 import dev.supermux.net.RepoInfo
 import dev.supermux.net.resolveReasoningLevel
 import dev.supermux.net.showReasoningPicker
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
+import dev.supermux.session.OmniOption
+import dev.supermux.session.ProjectOption
+import dev.supermux.session.buildOmniboxOptions
 import dev.supermux.session.chooseDefaultProject
 import dev.supermux.session.formatWorkdir
 import dev.supermux.session.orderProjectsByRecency
@@ -268,6 +274,12 @@ fun SessionLauncherScreen(
     selectedHost: String? = null,
     onSelectHost: (String) -> Unit = {},
     loadAgents: suspend () -> List<String> = { emptyList() },
+    // Forge omnibox for the project picker (connections + clone/create). Defaults = "no forges".
+    loadForges: suspend () -> List<ForgeConnection> = { emptyList() },
+    searchForge: suspend (query: String) -> List<RemoteRepo> = { emptyList() },
+    cloneForge: suspend (connectionId: String, owner: String, name: String) -> String? = { _, _, _ -> null },
+    createLocalRepo: suspend (name: String) -> String? = { null },
+    createForge: suspend (connectionId: String, name: String) -> String? = { _, _ -> null },
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -634,6 +646,11 @@ fun SessionLauncherScreen(
                     projects = projects,
                     home = home,
                     validatePath = validatePath,
+                    loadForges = loadForges,
+                    searchForge = searchForge,
+                    cloneForge = cloneForge,
+                    createLocalRepo = createLocalRepo,
+                    createForge = createForge,
                     onPick = { workdir = it; workdirTouched = true; error = null },
                     onDismiss = { projectMenu = false },
                 )
@@ -1044,13 +1061,12 @@ private fun WorktreePill(label: String, active: Boolean, onClick: () -> Unit, mo
 }
 
 /**
- * Forge-free project picker: a search field that filters the known-projects list, plus a typed
- * path entry that validates against the broker. Rendered in a [DropdownMenu] (Android's
- * ModalBottomSheet ProjectPickerSheet, minus the forge omnibox — TODO(M4-forge)). Picking a
- * project or a validated path calls [onPick] and dismisses; an invalid typed path shows the
- * broker's validation error inline (and does NOT pick). The search field is the primary way
- * to narrow the list on desktop (mirrors iOS `.searchable` + Android's `project_search` field);
- * the path input is the escape hatch for an unlisted folder.
+ * Project picker with forge omnibox (Android [ProjectPickerSheet] parity): search known projects,
+ * type an arbitrary path, clone a remote repo, or create a new one (local / on a forge).
+ * Rendered as a [DropdownMenu] (desktop convention for the project heading-dropdown).
+ *
+ * Clone/create is long-running: [resolving] blocks dismiss, shows a progress overlay, and
+ * surfaces failures inline. On success the new local path is handed to [onPick] (launcher workdir).
  */
 @Composable
 internal fun ProjectPicker(
@@ -1061,6 +1077,11 @@ internal fun ProjectPicker(
     validatePath: suspend (String) -> PathValidation?,
     onPick: (String) -> Unit,
     onDismiss: () -> Unit,
+    loadForges: suspend () -> List<ForgeConnection> = { emptyList() },
+    searchForge: suspend (String) -> List<RemoteRepo> = { emptyList() },
+    cloneForge: suspend (connectionId: String, owner: String, name: String) -> String? = { _, _, _ -> null },
+    createLocalRepo: suspend (name: String) -> String? = { null },
+    createForge: suspend (connectionId: String, name: String) -> String? = { _, _ -> null },
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -1068,12 +1089,70 @@ internal fun ProjectPicker(
     var manualPath by remember(expanded) { mutableStateOf("") }
     var validating by remember(expanded) { mutableStateOf(false) }
     var validationError by remember(expanded) { mutableStateOf<String?>(null) }
+    var connections by remember(expanded) { mutableStateOf(emptyList<ForgeConnection>()) }
+    var cloudRepos by remember(expanded) { mutableStateOf(emptyList<RemoteRepo>()) }
+    var searching by remember(expanded) { mutableStateOf(false) }
+    var resolving by remember(expanded) { mutableStateOf(false) }
+    var resolveError by remember(expanded) { mutableStateOf<String?>(null) }
 
-    val filtered = remember(projects, home, search) { filterProjects(projects, home, search) }
+    val query = search.trim()
+    val projectOptions = remember(projects, home) {
+        projects.map { ProjectOption(it, formatWorkdir(it, home)) }
+    }
+
+    LaunchedEffect(expanded) {
+        if (expanded) connections = loadForges()
+    }
+
+    // Debounced forge search (≥2 chars, only with connections) — Android/web parity.
+    LaunchedEffect(query, connections, expanded) {
+        if (!expanded || connections.isEmpty() || query.length < 2) {
+            cloudRepos = emptyList()
+            searching = false
+            return@LaunchedEffect
+        }
+        delay(250)
+        searching = true
+        cloudRepos = searchForge(query)
+        searching = false
+    }
+
+    val options = remember(query, projectOptions, cloudRepos, connections) {
+        buildOmniboxOptions(query, projectOptions, cloudRepos, connections)
+    }
+    val locals = options.filterIsInstance<OmniOption.Local>()
+    val clouds = options.filterIsInstance<OmniOption.Cloud>()
+    val creates = options.filterIsInstance<OmniOption.Create>()
+    val cloudGroups = remember(clouds, connections) {
+        connections.mapNotNull { c ->
+            val repos = clouds.filter { it.connectionId == c.id }.map { it.repo }
+            if (repos.isEmpty()) null else c to repos
+        }
+    }
+
+    fun pick(path: String) {
+        onPick(path)
+        onDismiss()
+    }
+
+    fun resolve(label: String, block: suspend () -> String?) {
+        if (resolving) return
+        resolving = true
+        resolveError = null
+        scope.launch {
+            val path = runCatching { block() }.getOrNull()
+            resolving = false
+            if (!path.isNullOrBlank()) {
+                pick(path)
+            } else {
+                resolveError = "Couldn't $label — check the connection and try again."
+            }
+        }
+    }
 
     fun confirmPath() {
         val p = manualPath.trim()
-        if (p.isEmpty() || validating) return
+        if (p.isEmpty() || validating || resolving) return
         validating = true
         validationError = null
         scope.launch {
@@ -1081,70 +1160,331 @@ internal fun ProjectPicker(
             validating = false
             val resolved = res?.path
             if (res != null && res.ok && !resolved.isNullOrBlank()) {
-                onPick(resolved)
-                onDismiss()
+                pick(resolved)
             } else {
                 validationError = res?.error ?: "Invalid path"
             }
         }
     }
 
-    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, modifier = Modifier.testTag("launcher_project_menu")) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp).width(360.dp)) {
-            OutlinedTextField(
-                value = search,
-                onValueChange = { search = it },
-                placeholder = { Text("Search projects…", color = cs.onSurfaceVariant) },
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("launcher_project_search"),
-            )
-            Spacer(Modifier.height(6.dp))
-            OutlinedTextField(
-                value = manualPath,
-                onValueChange = { manualPath = it; validationError = null },
-                placeholder = { Text("Type a path…", color = cs.onSurfaceVariant) },
-                singleLine = true,
-                trailingIcon = {
-                    IconButton(onClick = { confirmPath() }, enabled = manualPath.isNotBlank() && !validating, modifier = Modifier.testTag("launcher_path_confirm")) {
-                        if (validating) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = cs.primary)
-                        else Icon(Icons.Filled.Check, contentDescription = "Use this path", tint = cs.onSurfaceVariant)
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("launcher_path_input")
-                    .onPreviewKeyEvent { e ->
-                        if (e.type == KeyEventType.KeyDown && (e.key == Key.Enter || e.key == Key.NumPadEnter)) {
-                            confirmPath(); true
-                        } else {
-                            false
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = { if (!resolving) onDismiss() },
+        modifier = Modifier.testTag("launcher_project_menu"),
+    ) {
+        Box(Modifier.width(380.dp)) {
+            Column(Modifier.padding(horizontal = Space.md, vertical = Space.xs)) {
+                OutlinedTextField(
+                    value = search,
+                    onValueChange = { search = it; resolveError = null },
+                    placeholder = {
+                        Text(
+                            if (connections.isEmpty()) "Search projects…"
+                            else "Search projects, repos, or type a path",
+                            color = cs.onSurfaceVariant,
+                        )
+                    },
+                    singleLine = true,
+                    enabled = !resolving,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("launcher_project_search"),
+                )
+                Spacer(Modifier.height(Space.sm - 2.dp))
+                OutlinedTextField(
+                    value = manualPath,
+                    onValueChange = { manualPath = it; validationError = null },
+                    placeholder = { Text("Type a path…", color = cs.onSurfaceVariant) },
+                    singleLine = true,
+                    enabled = !resolving,
+                    trailingIcon = {
+                        IconButton(
+                            onClick = { confirmPath() },
+                            enabled = manualPath.isNotBlank() && !validating && !resolving,
+                            modifier = Modifier.testTag("launcher_path_confirm"),
+                        ) {
+                            if (validating) {
+                                CircularProgressIndicator(
+                                    Modifier.size(Space.lg),
+                                    strokeWidth = 2.dp,
+                                    color = cs.primary,
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Filled.Check,
+                                    contentDescription = "Use this path",
+                                    tint = cs.onSurfaceVariant,
+                                )
+                            }
                         }
                     },
-            )
-            validationError?.let {
-                Spacer(Modifier.height(4.dp))
-                Text(it, color = cs.error, fontSize = 12.sp, modifier = Modifier.testTag("launcher_path_error"))
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("launcher_path_input")
+                        .onPreviewKeyEvent { e ->
+                            if (e.type == KeyEventType.KeyDown &&
+                                (e.key == Key.Enter || e.key == Key.NumPadEnter)
+                            ) {
+                                confirmPath()
+                                true
+                            } else {
+                                false
+                            }
+                        },
+                )
+                validationError?.let {
+                    Spacer(Modifier.height(Space.xs))
+                    Text(
+                        it,
+                        color = cs.error,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.testTag("launcher_path_error"),
+                    )
+                }
+                resolveError?.let {
+                    Spacer(Modifier.height(Space.xs))
+                    Text(
+                        it,
+                        color = cs.error,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.testTag("launcher_forge_error"),
+                    )
+                }
             }
-        }
-        if (filtered.isNotEmpty()) HorizontalDivider()
-        if (filtered.isEmpty() && projects.isNotEmpty()) {
-            Text(
-                "No projects match \"${search.trim()}\".",
-                color = cs.onSurfaceVariant,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp).testTag("launcher_project_empty"),
-            )
-        }
-        filtered.forEach { path ->
-            val selected = path == current
-            DropdownMenuItem(
-                text = { Text(formatWorkdir(path, home), color = if (selected) cs.primary else cs.onSurface, fontSize = 14.sp, maxLines = 1) },
-                trailingIcon = { if (selected) Icon(Icons.Filled.Check, null, Modifier.size(16.dp), tint = cs.primary) },
-                modifier = Modifier.testTag("project_row_$path"),
-                onClick = { onPick(path); onDismiss() },
-            )
+
+            val nothing = locals.isEmpty() && cloudGroups.isEmpty() &&
+                creates.isEmpty() && !searching && projects.isNotEmpty() && query.isNotEmpty()
+            if (nothing && connections.isEmpty()) {
+                Text(
+                    "No projects match \"${query}\".",
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier
+                        .padding(horizontal = Space.xl - Space.xs, vertical = Space.sm + 2.dp)
+                        .testTag("launcher_project_empty"),
+                )
+            }
+
+            if (locals.isNotEmpty() || cloudGroups.isNotEmpty() || creates.isNotEmpty() || searching) {
+                HorizontalDivider()
+            }
+
+            // Cap the scrollable list height so the dropdown stays usable.
+            Column(
+                Modifier
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState())
+                    .testTag("launcher_omnibox_list"),
+            ) {
+                if (locals.isNotEmpty()) {
+                    Text(
+                        "Projects",
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = Space.xl - Space.xs, vertical = Space.sm - 2.dp),
+                    )
+                    locals.forEach { o ->
+                        val selected = o.path == current
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(
+                                        o.path.trimEnd('/').substringAfterLast('/').ifEmpty { o.path },
+                                        color = if (selected) cs.primary else cs.onSurface,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                    )
+                                    Text(
+                                        o.label,
+                                        color = cs.onSurfaceVariant,
+                                        fontFamily = FontFamily.Monospace,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1,
+                                    )
+                                }
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Filled.FolderOpen,
+                                    contentDescription = null,
+                                    tint = cs.onSurfaceVariant,
+                                    modifier = Modifier.size(Space.lg + Space.xs),
+                                )
+                            },
+                            trailingIcon = {
+                                if (selected) {
+                                    Icon(Icons.Filled.Check, null, Modifier.size(Space.lg), tint = cs.primary)
+                                }
+                            },
+                            enabled = !resolving,
+                            modifier = Modifier.testTag("project_row_${o.path}"),
+                            onClick = { pick(o.path) },
+                        )
+                    }
+                } else if (query.isEmpty() && projects.isNotEmpty()) {
+                    // Blank query still shows all locals via buildOmniboxOptions; this is a fallback.
+                } else if (query.isEmpty() && projects.isEmpty() && connections.isEmpty()) {
+                    Text(
+                        "Type a path or search your projects.",
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(horizontal = Space.xl - Space.xs, vertical = Space.lg + Space.xs),
+                    )
+                }
+
+                cloudGroups.forEach { (conn, repos) ->
+                    Text(
+                        "${conn.host} · @${conn.account.login}",
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .padding(horizontal = Space.xl - Space.xs, vertical = Space.sm - 2.dp)
+                            .testTag("forge_group_${conn.id}"),
+                    )
+                    repos.forEach { repo ->
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(
+                                        repo.name,
+                                        color = cs.onSurface,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                    )
+                                    Text(
+                                        repo.fullName,
+                                        color = cs.onSurfaceVariant,
+                                        fontFamily = FontFamily.Monospace,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1,
+                                    )
+                                }
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Filled.FolderOpen,
+                                    contentDescription = null,
+                                    tint = cs.onSurfaceVariant,
+                                    modifier = Modifier.size(Space.lg + Space.xs),
+                                )
+                            },
+                            trailingIcon = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(Space.xs),
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Download,
+                                        contentDescription = "Clone",
+                                        tint = cs.onSurfaceVariant,
+                                        modifier = Modifier.size(Space.md + Space.xs),
+                                    )
+                                    Text(
+                                        "Clone",
+                                        color = cs.onSurfaceVariant,
+                                        style = MaterialTheme.typography.labelMedium,
+                                    )
+                                }
+                            },
+                            enabled = !resolving,
+                            modifier = Modifier.testTag("forge_clone_${repo.fullName}"),
+                            onClick = {
+                                resolve("clone ${repo.fullName}") {
+                                    cloneForge(repo.connectionId, repo.owner, repo.name)
+                                }
+                            },
+                        )
+                    }
+                }
+
+                if (searching && cloudGroups.isEmpty()) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Space.xl - Space.xs, vertical = Space.md + Space.xs)
+                            .testTag("launcher_forge_searching"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Space.sm + 2.dp),
+                    ) {
+                        CircularProgressIndicator(
+                            Modifier.size(Space.lg),
+                            strokeWidth = 2.dp,
+                            color = cs.primary,
+                        )
+                        Text(
+                            "Searching repos…",
+                            color = cs.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                    }
+                }
+
+                if (creates.isNotEmpty()) {
+                    Text(
+                        "Create",
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = Space.xl - Space.xs, vertical = Space.sm - 2.dp),
+                    )
+                    creates.forEach { c ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    c.label,
+                                    color = cs.onSurface,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Filled.Add,
+                                    contentDescription = null,
+                                    tint = cs.onSurfaceVariant,
+                                    modifier = Modifier.size(Space.lg + Space.xs),
+                                )
+                            },
+                            enabled = !resolving,
+                            modifier = Modifier.testTag("forge_create_${c.createTarget}"),
+                            onClick = {
+                                resolve("create $query") {
+                                    if (c.createTarget == "local") createLocalRepo(query)
+                                    else createForge(c.createTarget, query)
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+
+            if (resolving) {
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .background(cs.scrim.copy(alpha = 0.35f))
+                        .testTag("launcher_forge_resolving"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(Space.sm + 2.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(Radii.lg))
+                            .background(cs.surfaceContainerHigh)
+                            .padding(Space.xl - Space.xs),
+                    ) {
+                        CircularProgressIndicator(color = cs.primary)
+                        Text(
+                            "Cloning / creating…",
+                            color = cs.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                }
+            }
         }
     }
 }

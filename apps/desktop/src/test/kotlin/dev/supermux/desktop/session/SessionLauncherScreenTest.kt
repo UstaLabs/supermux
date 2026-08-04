@@ -12,13 +12,18 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.net.ForgeAccount
+import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ReasoningResponse
+import dev.supermux.net.RemoteRepo
 import dev.supermux.net.RepoBranches
 import dev.supermux.net.RepoInfo
 import dev.supermux.proto.SessionInfo
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -343,5 +348,192 @@ class SessionLauncherScreenTest {
         waitForIdle()
         assertEquals("/home/u/proj", picked) // the RESOLVED path, not the typed one
         assertTrue(dismissed)
+    }
+
+    // ── Forge omnibox (desktop-parity Task 4) ───────────────────────────────────────────────────
+
+    private fun forgeConn(
+        id: String = "c1",
+        host: String = "github.com",
+        login: String = "alice",
+    ) = ForgeConnection(id = id, host = host, account = ForgeAccount(login = login))
+
+    private fun remote(
+        connectionId: String = "c1",
+        owner: String = "alice",
+        name: String = "widget",
+    ) = RemoteRepo(
+        connectionId = connectionId,
+        owner = owner,
+        name = name,
+        fullName = "$owner/$name",
+    )
+
+    @Test fun project_picker_create_local_lands_path_in_onPick() = runComposeUiTest {
+        val picked = AtomicReference<String?>(null)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                Box {
+                    ProjectPicker(
+                        expanded = true,
+                        current = "~",
+                        projects = emptyList(),
+                        home = "/home/u",
+                        validatePath = { null },
+                        loadForges = { emptyList() },
+                        createLocalRepo = { name -> "/home/u/$name" },
+                        onPick = { picked.set(it) },
+                        onDismiss = {},
+                    )
+                }
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_project_search").performTextInput("brand-new")
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("forge_create_local").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("forge_create_local").performClick()
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) { picked.get() != null }
+        assertEquals("/home/u/brand-new", picked.get())
+    }
+
+    @Test fun project_picker_clone_success_picks_local_path() = runComposeUiTest {
+        val picked = AtomicReference<String?>(null)
+        val cloned = AtomicBoolean(false)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                Box {
+                    ProjectPicker(
+                        expanded = true,
+                        current = "~",
+                        projects = emptyList(),
+                        home = "/home/u",
+                        validatePath = { null },
+                        loadForges = { listOf(forgeConn()) },
+                        searchForge = { listOf(remote()) },
+                        cloneForge = { cid, owner, name ->
+                            cloned.set(true)
+                            assertEquals("c1", cid)
+                            assertEquals("alice", owner)
+                            assertEquals("widget", name)
+                            "/home/u/widget"
+                        },
+                        onPick = { picked.set(it) },
+                        onDismiss = {},
+                    )
+                }
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_project_search").performTextInput("widget")
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("forge_clone_alice/widget").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("forge_clone_alice/widget").performClick()
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) { picked.get() != null }
+        assertTrue(cloned.get())
+        assertEquals("/home/u/widget", picked.get())
+    }
+
+    @Test fun project_picker_clone_failure_surfaces_error_keeps_picker() = runComposeUiTest {
+        var dismissed = false
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                Box {
+                    ProjectPicker(
+                        expanded = true,
+                        current = "~",
+                        projects = emptyList(),
+                        home = "/home/u",
+                        validatePath = { null },
+                        loadForges = { listOf(forgeConn()) },
+                        searchForge = { listOf(remote(name = "failme")) },
+                        cloneForge = { _, _, _ -> null },
+                        onPick = {},
+                        onDismiss = { dismissed = true },
+                    )
+                }
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_project_search").performTextInput("failme")
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("forge_clone_alice/failme").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("forge_clone_alice/failme").performClick()
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("launcher_forge_error").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        assertFalse(dismissed)
+        onNodeWithTag("launcher_project_menu").assertIsDisplayed()
+    }
+
+    @Test fun project_picker_create_on_forge_uses_connection_id() = runComposeUiTest {
+        val picked = AtomicReference<String?>(null)
+        val target = AtomicReference<String?>(null)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                Box {
+                    ProjectPicker(
+                        expanded = true,
+                        current = "~",
+                        projects = emptyList(),
+                        home = "/home/u",
+                        validatePath = { null },
+                        loadForges = { listOf(forgeConn(id = "conn-9", login = "bob")) },
+                        searchForge = { emptyList() },
+                        createForge = { cid, name ->
+                            target.set(cid)
+                            "/home/u/$name"
+                        },
+                        onPick = { picked.set(it) },
+                        onDismiss = {},
+                    )
+                }
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_project_search").performTextInput("solo-proj")
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("forge_create_conn-9").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("forge_create_conn-9").performClick()
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) { picked.get() != null }
+        assertEquals("conn-9", target.get())
+        assertEquals("/home/u/solo-proj", picked.get())
     }
 }

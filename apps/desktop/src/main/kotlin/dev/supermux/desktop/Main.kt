@@ -88,6 +88,9 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //   SM_SETTINGS=1                 — open the Settings hub on Agents (File ▸ "Settings…"'s SAME
 //                                  ui.openSettings()) on start, loading real app.agentStatuses()
 //                                  (GET /agents/status, read-only) from the active host          [main]
+//   SM_GIT_HOSTING=1              — open the Settings hub on Git hosting (Task 4) via the SAME
+//                                  ui.openSettings(GitHosting), loading real app.forgesLoad()
+//                                  (GET /forge/connections, read-only). Off by default.       [main]
 //   SM_USAGE=1                    — open the Usage overlay (File ▸ "Usage…"'s SAME ui.openUsage())
 //                                  on start, loading the real app.usage() (GET /usage, read-only)
 //                                  (M4f). Read-only — never calls redeemCodexReset() (that burns a
@@ -991,6 +994,28 @@ fun main() {
                             // Prove the screen loads REAL data from the live broker, not just the shell.
                             val statuses = app.agentStatuses()
                             println("[settings] agentStatuses count=${statuses?.size ?: "null"} kinds=${statuses?.joinToString { "${it.kind}:${if (it.installed) "inst" else "miss"}:${if (it.authed) "auth" else "noauth"}" } ?: "(load failed)"}")
+                        }
+                    }
+
+                    // Headless Git-hosting verification hook (desktop-parity Task 4):
+                    // SM_GIT_HOSTING=1 opens the Settings hub on the Git hosting section via the
+                    // SAME ui.openSettings(GitHosting) path, then loads real app.forgesLoad()
+                    // (GET /forge/connections) under Xvfb. Read-only by construction — never
+                    // add/import/remove. Off by default; harmless in production.
+                    val gitHostingHook = System.getenv("SM_GIT_HOSTING") == "1"
+                    if (gitHostingHook) {
+                        LaunchedEffect(app) {
+                            delay(3_000)
+                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.GitHosting)
+                            println("[git-hosting] opened the Settings hub (Git hosting)")
+                            val forges = app.forgesLoad()
+                            val conns = forges?.connections.orEmpty()
+                            val cli = forges?.cli
+                            println(
+                                "[git-hosting] forgesLoad connections=${conns.size} " +
+                                    "accounts=${conns.joinToString { "${it.kind}:@${it.account.login}" }.ifEmpty { "(none)" }} " +
+                                    "cli.gh=${cli?.github?.available == true} cli.glab=${cli?.gitlab?.available == true}",
+                            )
                         }
                     }
 
