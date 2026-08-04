@@ -75,8 +75,10 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.graphics.asComposeImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
@@ -129,7 +131,8 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
-import org.jetbrains.skia.Image as SkiaImage
+import org.jetbrains.skia.Codec
+import org.jetbrains.skia.Data
 
 // ---------------------------------------------------------------------------
 // Data model
@@ -691,17 +694,48 @@ internal fun fetchHttpsImageBytes(url: String, maxBytes: Long = MD_IMAGE_MAX_BYT
 }
 
 /**
- * Decode raw image bytes (PNG/JPEG/GIF/WebP/…) to a Compose [ImageBitmap] via Skiko's
- * [SkiaImage.makeFromEncoded] + [toComposeImageBitmap] — no Coil, no extra dependency. Null on
- * corrupt/unsupported payloads. (`createImageBitmap` is internal to Compose, so we call the
- * underlying Skiko path that it wraps.)
+ * Layout tokens for inline markdown images. Named constants (no magic numbers at call sites).
+ * Theme [Space]/[Radii] only cover spacing/corners; media-specific sizes live here because
+ * this change is chat-scoped and must not touch `theme/`.
  */
-internal fun decodeImageBytes(bytes: ByteArray): ImageBitmap? =
-    runCatching { SkiaImage.makeFromEncoded(bytes).toComposeImageBitmap() }.getOrNull()
+internal object MdImageDimens {
+    /** Max painted height for a successfully loaded image. */
+    val MaxHeight = 280.dp
+    /**
+     * Loading placeholder height — equals [MaxHeight] so the timeline never grows when the
+     * bitmap arrives (avoids up-to-160dp reflow from a shorter spinner box).
+     */
+    val LoadingHeight = MaxHeight
+    val SpinnerSize = 18.dp
+    val SpinnerStroke = 1.5.dp
+}
 
 /**
- * Load + decode an https image off the caller's thread (typically [Dispatchers.IO]). Returns null
- * for non-https, oversize, network, or decode failures.
+ * Decode raw image bytes (PNG/JPEG/GIF/WebP/…) to a **rasterised** Compose [ImageBitmap].
+ *
+ * Uses Skiko [Codec.readPixels] so pixel decode happens **here** (inside the caller's
+ * [runCatching] / IO dispatcher), not lazily at Compose draw time. [org.jetbrains.skia.Image.makeFromEncoded]
+ * alone is lazy; handing that to Compose would let truncated/corrupt payloads throw outside
+ * our catch and bypass the link fallback. Null on corrupt/unsupported/truncated payloads.
+ */
+internal fun decodeImageBytes(bytes: ByteArray): ImageBitmap? =
+    runCatching {
+        val data = Data.makeFromBytes(bytes)
+        val codec = Codec.makeFromData(data)
+        // Fully rasterise on this thread — failures surface here, not at draw time.
+        val raster = codec.readPixels()
+        if (raster.width <= 0 || raster.height <= 0 || raster.isNull) return@runCatching null
+        raster.setImmutable()
+        // SkiaBackedImageBitmap retains [raster]; do not close it. Codec/Data can be closed.
+        codec.close()
+        data.close()
+        raster.asComposeImageBitmap()
+    }.getOrNull()
+
+/**
+ * Load + fully decode an https image on [Dispatchers.IO]. Returns null for non-https, oversize,
+ * network, or decode failures. The returned [ImageBitmap] is already rasterised — safe to paint
+ * on the UI thread without further decode work.
  */
 internal suspend fun loadMarkdownImageBitmap(
     url: String,
@@ -714,10 +748,13 @@ internal suspend fun loadMarkdownImageBitmap(
 /**
  * Standalone markdown image `![alt](url)`.
  *
- * - `https://` URLs: fetch (size-capped) + Skiko-decode off the UI thread, then paint inline.
+ * - `https://` URLs: fetch (size-capped) + force-decode off the UI thread, then paint inline.
  * - Everything else (http, relative, data:): compact tappable link line that opens the system
  *   browser — Android's Coil path is also https-only for the same tracking/IP-leak reason.
- * - Load/decode failure falls back to the same link line (never a blank hole).
+ * - Load/decode failure falls back to a **distinct** failure link line (never a blank hole, never
+ *   identical to the deliberate non-https fallback).
+ * - Successful images are clickable (open URL in the system browser) so desktop users can inspect
+ *   the full-resolution original.
  *
  * [loadImage] is the load seam (default = real network fetch); tests inject a fake so the UI path
  * is covered without the network.
@@ -729,53 +766,65 @@ fun MarkdownImage(
 ) {
     val cs = MaterialTheme.colorScheme
     if (!isHttpsImageUrl(image.url)) {
-        MarkdownImageLinkLine(image)
+        MarkdownImageLinkLine(image, loadFailed = false)
         return
     }
     var bitmap by remember(image.url) { mutableStateOf<ImageBitmap?>(null) }
     var failed by remember(image.url) { mutableStateOf(false) }
     LaunchedEffect(image.url) {
-        // loadImage itself must not block the main dispatcher — the default seam hops to IO.
+        // loadImage itself must not block the main dispatcher — the default seam hops to IO and
+        // force-rasterises so draw-time decode cannot throw past our catch.
         val decoded = runCatching { loadImage(image.url) }.getOrNull()
         if (decoded != null) bitmap = decoded else failed = true
     }
     when {
         bitmap != null -> {
+            val bmp = bitmap!!
             Image(
-                bitmap = bitmap!!,
-                contentDescription = image.alt.ifEmpty { null },
+                bitmap = bmp,
+                contentDescription = image.alt.ifEmpty { "Image" },
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 280.dp)
+                    .heightIn(max = MdImageDimens.MaxHeight)
                     .clip(RoundedCornerShape(Radii.sm))
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable { openInBrowser(image.url) }
                     .testTag("md_image"),
             )
         }
-        failed -> MarkdownImageLinkLine(image)
+        failed -> MarkdownImageLinkLine(image, loadFailed = true)
         else -> Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(120.dp)
+                .height(MdImageDimens.LoadingHeight)
                 .clip(RoundedCornerShape(Radii.sm))
                 .background(cs.surfaceContainer)
                 .testTag("md_image_loading"),
             contentAlignment = Alignment.Center,
         ) {
             CircularProgressIndicator(
-                Modifier.size(18.dp),
+                Modifier.size(MdImageDimens.SpinnerSize),
                 color = cs.onSurfaceVariant,
-                strokeWidth = 1.5.dp,
+                strokeWidth = MdImageDimens.SpinnerStroke,
             )
         }
     }
 }
 
-/** Tappable 🖼 + alt/url link line — fallback for non-https and failed loads. */
+/**
+ * Tappable 🖼 + label link line. [loadFailed] distinguishes a deliberate non-https skip from a
+ * real fetch/decode failure so the user can tell them apart.
+ */
 @Composable
-private fun MarkdownImageLinkLine(image: MdBlock.Image) {
+private fun MarkdownImageLinkLine(image: MdBlock.Image, loadFailed: Boolean) {
     val cs = MaterialTheme.colorScheme
     val linkColor = cs.primary
+    val label = when {
+        loadFailed && image.alt.isNotEmpty() -> "Couldn't load image — ${image.alt}"
+        loadFailed -> "Couldn't load image"
+        else -> image.alt.ifEmpty { image.url }
+    }
     Text(
         text = buildAnnotatedString {
             append("🖼 ")
@@ -784,7 +833,7 @@ private fun MarkdownImageLinkLine(image: MdBlock.Image) {
                     image.url,
                     TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
                 ) { openInBrowser(image.url) },
-            ) { append(image.alt.ifEmpty { image.url }) }
+            ) { append(label) }
         },
         style = MaterialTheme.typography.bodyLarge,
         modifier = Modifier.testTag("md_image"),

@@ -23,6 +23,8 @@
 // any copied image files (javaFileListFlavor) are filtered and staged the same way.
 package dev.supermux.desktop.chat
 
+import androidx.compose.foundation.ContextMenuArea
+import androidx.compose.foundation.ContextMenuItem
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -90,8 +92,10 @@ import dev.supermux.net.ChunkSource
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ReasoningResponse
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.awt.FileDialog
 import java.awt.Frame
 import java.awt.Image
@@ -142,6 +146,12 @@ data class ComposerAttachment(
     val state: UploadState,
     val kind: String? = null,
     val runSeq: Long = 0L,
+    /**
+     * Absolute path of the staged local file when known (paste temp / picked path). Used to scrub
+     * [isComposerPasteTempFile] temps once the chip is removed or send clears the list. Null when
+     * the source is not path-backed (shouldn't happen for [FileChunkSource] stages).
+     */
+    val localPath: String? = null,
 )
 
 /**
@@ -187,11 +197,17 @@ internal fun composerFilesFromDragData(uris: List<String>): List<File> =
 
 /**
  * Pure Ctrl/Cmd+V paste-key predicate for the composer: `true` only for a KeyDown V with Ctrl OR
- * Meta held (Windows/Linux vs macOS). Extracted so the paste-image chord is unit-testable without
- * the UI harness.
+ * Meta held (Windows/Linux vs macOS) and Shift **not** held. Ctrl/Cmd+Shift+V is the conventional
+ * "paste as plain text / match style" chord and must fall through to the text field. Extracted so
+ * the paste-image chord is unit-testable without the UI harness.
  */
-internal fun isComposerPasteKey(key: Key, type: KeyEventType, ctrlOrMeta: Boolean): Boolean =
-    type == KeyEventType.KeyDown && key == Key.V && ctrlOrMeta
+internal fun isComposerPasteKey(
+    key: Key,
+    type: KeyEventType,
+    ctrlOrMeta: Boolean,
+    shiftPressed: Boolean = false,
+): Boolean =
+    type == KeyEventType.KeyDown && key == Key.V && ctrlOrMeta && !shiftPressed
 
 /**
  * Whether a paste-image gesture should consume the key and call [stageFiles]: the upload seam must
@@ -207,6 +223,20 @@ private val IMAGE_FILE_EXTENSIONS = setOf(
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif", "tif", "tiff",
 )
 
+/** Temp-dir name prefix for raster clipboard pastes ([clipboardImageToTempFile]). */
+internal const val COMPOSER_PASTE_TEMP_PREFIX = "composer-paste"
+
+/**
+ * Dimension / size caps for clipboard raster paste. Applied **before** allocating a pixel buffer
+ * or encoding PNG so a huge paste cannot freeze or OOM the desktop process.
+ * - [PASTE_IMAGE_MAX_EDGE]: max width or height in pixels
+ * - [PASTE_IMAGE_MAX_PIXELS]: max `width * height` (bounds the ARGB buffer for non-[BufferedImage]s)
+ * - [PASTE_IMAGE_MAX_ENCODED_BYTES]: max written PNG size; oversize files are deleted and dropped
+ */
+internal const val PASTE_IMAGE_MAX_EDGE: Int = 8192
+internal const val PASTE_IMAGE_MAX_PIXELS: Long = 16L * 1024L * 1024L // 16 MP
+internal const val PASTE_IMAGE_MAX_ENCODED_BYTES: Long = 8L * 1024L * 1024L // 8 MiB
+
 /**
  * Whether [file] looks like an image suitable for paste-to-attach: an `image/` MIME from
  * [composerMime], or a known image extension when the probe falls back to octet-stream.
@@ -218,38 +248,115 @@ internal fun isComposerImageFile(file: File): Boolean {
     return file.extension.lowercase() in IMAGE_FILE_EXTENSIONS
 }
 
+/** True when [file] lives under a [COMPOSER_PASTE_TEMP_PREFIX] temp directory we created. */
+internal fun isComposerPasteTempFile(file: File): Boolean {
+    val parent = file.parentFile ?: return false
+    return parent.name.startsWith(COMPOSER_PASTE_TEMP_PREFIX)
+}
+
+/**
+ * Delete a paste-origin temp PNG and its empty parent dir. Safe no-op for non-paste files.
+ * Called once the file is no longer needed (upload terminal + chip removed/cleared, or encode fail).
+ */
+internal fun cleanupComposerPasteTemp(file: File?) {
+    if (file == null || !isComposerPasteTempFile(file)) return
+    runCatching { if (file.exists()) file.delete() }
+    val dir = file.parentFile ?: return
+    runCatching {
+        if (dir.isDirectory && (dir.list()?.isEmpty() != false)) dir.delete()
+    }
+}
+
+/**
+ * Whether [image] passes dimension caps (edge + pixel count) before any buffer allocation / encode.
+ * Pure so oversize rejection is unit-testable without ImageIO.
+ */
+internal fun clipboardImageWithinCaps(width: Int, height: Int): Boolean {
+    if (width <= 0 || height <= 0) return false
+    if (width > PASTE_IMAGE_MAX_EDGE || height > PASTE_IMAGE_MAX_EDGE) return false
+    // Promote to Long before multiply to avoid Int overflow on huge dims.
+    if (width.toLong() * height.toLong() > PASTE_IMAGE_MAX_PIXELS) return false
+    return true
+}
+
 /**
  * Write an AWT [Image] (screenshot / copy-from-viewer paste) to a temp PNG and return the file.
- * The file is delete-on-exit; [stageFiles] reads it immediately via [FileChunkSource]. Null when
- * the image has no valid dimensions or encode fails.
+ * Applies dimension + encoded-byte caps before / after encode. Marks delete-on-exit as a safety
+ * net; callers must still [cleanupComposerPasteTemp] after staging lifecycle ends. Null when
+ * dimensions are invalid/oversize or encode fails (any partial file is deleted).
+ *
+ * **Must not run on the UI thread** for large rasters — PNG encode of a 4k² image is multi-second.
+ * Call from [Dispatchers.IO] (see [composerClipboardImageFiles] / the paste key handler).
  */
-internal fun clipboardImageToTempFile(image: Image): File? = runCatching {
-    val w = image.getWidth(null)
-    val h = image.getHeight(null)
-    if (w <= 0 || h <= 0) return null
-    val buffered = when (image) {
-        is BufferedImage -> image
-        else -> BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB).also { bi ->
-            val g = bi.createGraphics()
-            try {
-                g.drawImage(image, 0, 0, null)
-            } finally {
-                g.dispose()
+internal fun clipboardImageToTempFile(image: Image): File? {
+    var outFile: File? = null
+    var outDir: File? = null
+    return runCatching {
+        val w = image.getWidth(null)
+        val h = image.getHeight(null)
+        if (!clipboardImageWithinCaps(w, h)) return null
+        // Cap already bounds the w*h*4 allocation for non-BufferedImage copies.
+        val buffered = when (image) {
+            is BufferedImage -> image
+            else -> BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB).also { bi ->
+                val g = bi.createGraphics()
+                try {
+                    g.drawImage(image, 0, 0, null)
+                } finally {
+                    g.dispose()
+                }
             }
         }
+        val dir = Files.createTempDirectory(COMPOSER_PASTE_TEMP_PREFIX).toFile().apply {
+            deleteOnExit()
+            outDir = this
+        }
+        val out = File(dir, "paste-${System.currentTimeMillis()}.png").also {
+            outFile = it
+            it.deleteOnExit()
+        }
+        if (!ImageIO.write(buffered, "png", out)) {
+            cleanupComposerPasteTemp(out)
+            return null
+        }
+        if (out.length() > PASTE_IMAGE_MAX_ENCODED_BYTES) {
+            cleanupComposerPasteTemp(out)
+            return null
+        }
+        out
+    }.getOrElse {
+        // Encode / IO failure: scrub any partial temp so a crash mid-encode is not required to clean.
+        outFile?.let { cleanupComposerPasteTemp(it) }
+            ?: outDir?.let { runCatching { it.deleteRecursively() } }
+        null
     }
-    val dir = Files.createTempDirectory("composer-paste").toFile().apply { deleteOnExit() }
-    File(dir, "paste-${System.currentTimeMillis()}.png").also { out ->
-        if (!ImageIO.write(buffered, "png", out)) return null
-        out.deleteOnExit()
+}
+
+/**
+ * Cheap flavor-only probe: does this transferable *likely* hold a pasteable image? Used on the UI
+ * thread to decide whether to consume Ctrl/Cmd+V without running PNG encode. File-list is filtered
+ * to image files; raster [DataFlavor.imageFlavor] is accepted without decoding.
+ */
+internal fun transferableLikelyHasImage(transferable: Transferable): Boolean {
+    if (transferable.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) {
+        @Suppress("UNCHECKED_CAST")
+        val files = runCatching {
+            transferable.getTransferData(DataFlavor.javaFileListFlavor) as? List<*>
+        }.getOrNull()
+            ?.mapNotNull { it as? File }
+            ?.filter(::isComposerImageFile)
+            .orEmpty()
+        if (files.isNotEmpty()) return true
     }
-}.getOrNull()
+    return transferable.isDataFlavorSupported(DataFlavor.imageFlavor)
+}
 
 /**
  * Extract image files from a clipboard [Transferable]. Prefers a file-list of existing image files
  * (user copied image files in the file manager); otherwise encodes a raster [DataFlavor.imageFlavor]
- * snapshot to a temp PNG. Pure relative to the transferable so tests can feed a fake without
- * touching the real system clipboard.
+ * snapshot to a temp PNG (capped). Pure relative to the transferable so tests can feed a fake
+ * without touching the real system clipboard. **May be slow** for large rasters — call off the UI
+ * thread.
  */
 internal fun composerFilesFromClipboardTransferable(transferable: Transferable): List<File> {
     // File-list first: multi-select paste of real files should keep original names/MIME.
@@ -274,11 +381,23 @@ internal fun composerFilesFromClipboardTransferable(transferable: Transferable):
     return emptyList()
 }
 
-/** Read image files currently on the system clipboard (AWT). Empty on any failure / text-only clip. */
+/**
+ * Read image files currently on the system clipboard (AWT). Empty on any failure / text-only clip.
+ * **May encode a large PNG** — always invoke from [Dispatchers.IO], never the Compose UI thread.
+ */
 internal fun composerClipboardImageFiles(): List<File> = runCatching {
     val contents = Toolkit.getDefaultToolkit().systemClipboard.getContents(null) ?: return emptyList()
     composerFilesFromClipboardTransferable(contents)
 }.getOrDefault(emptyList())
+
+/**
+ * Cheap UI-thread probe of the system clipboard for paste-image consumption decisions.
+ * Does not encode; only checks flavors / file-list membership.
+ */
+internal fun composerClipboardLikelyHasImage(): Boolean = runCatching {
+    val contents = Toolkit.getDefaultToolkit().systemClipboard.getContents(null) ?: return false
+    transferableLikelyHasImage(contents)
+}.getOrDefault(false)
 
 /**
  * Send-gating predicate: something to send (text OR at least one attachment) AND no chip is still
@@ -462,16 +581,52 @@ fun DesktopComposer(
                 source = FileChunkSource(file),
                 state = UploadState.Uploading(0f),
                 kind = composerKind(mime),
+                // Remember the path so paste-origin temps can be deleted once the chip is gone.
+                localPath = file.absolutePath,
             ),
         )
         launchUpload(id)
     }
 
-    // Funnels a BATCH of files — from the Attach dialog OR an external OS drag-drop — through [stage]
-    // after filtering to files that still exist. The single funnel means a dropped file gets an
-    // IDENTICAL ComposerAttachment + upload + progress to a FileDialog-picked one (no parallel path).
+    // Funnels a BATCH of files — from the Attach dialog OR an external OS drag-drop / paste — through
+    // [stage] after filtering to files that still exist. The single funnel means a dropped/pasted
+    // file gets an IDENTICAL ComposerAttachment + upload + progress to a FileDialog-picked one.
     fun stageFiles(files: List<File>) {
         filterExistingFiles(files).forEach { stage(it) }
+    }
+
+    /** Drop a chip and scrub any paste-origin temp file it owned. */
+    fun removeAttachment(id: String) {
+        val idx = attachments.indexOfFirst { it.id == id }
+        if (idx < 0) return
+        val path = attachments[idx].localPath
+        attachments.removeAt(idx)
+        path?.let { cleanupComposerPasteTemp(File(it)) }
+    }
+
+    /** Clear all chips (after a successful send) and scrub paste-origin temps. */
+    fun clearAttachments() {
+        val paths = attachments.mapNotNull { it.localPath }
+        attachments.clear()
+        paths.forEach { cleanupComposerPasteTemp(File(it)) }
+    }
+
+    /**
+     * Run [pasteImageFiles] off the UI thread, then stage any results. Used by Ctrl/Cmd+V and the
+     * Paste-image menu/context actions so PNG encode never freezes the composer.
+     */
+    fun launchPasteImages() {
+        if (onUpload == null) return
+        scope.launch {
+            val files = withContext(Dispatchers.IO) { pasteImageFiles() }
+            if (shouldStageClipboardPaste(uploadBound = true, files = files)) {
+                stageFiles(files)
+            } else {
+                // Encode failed / empty: no chip to own cleanup — scrub any temps the seam may have
+                // written before a partial failure (defensive; clipboardImageToTempFile already cleans).
+                files.forEach { cleanupComposerPasteTemp(it) }
+            }
+        }
     }
 
     val canSend = canSendComposer(draft, attachments, sending)
@@ -483,7 +638,7 @@ fun DesktopComposer(
         if (canSendComposer(text, attachments, sending)) {
             val fileIds = attachments.mapNotNull { (it.state as? UploadState.Done)?.fileId }
             onSend(text.trim(), fileIds)
-            attachments.clear()
+            clearAttachments()
         }
     }
     val doSend = { sendWith(draft) }
@@ -639,7 +794,7 @@ fun DesktopComposer(
                     key(att.id) {
                         ComposerChip(
                             att = att,
-                            onRemove = { attachments.removeAll { it.id == att.id } },
+                            onRemove = { removeAttachment(att.id) },
                             onRetry = { launchUpload(att.id) },
                         )
                     }
@@ -654,6 +809,7 @@ fun DesktopComposer(
         val cs = MaterialTheme.colorScheme
         var modelMenu by remember { mutableStateOf(false) }
         var reasoningMenu by remember { mutableStateOf(false) }
+        var attachMenu by remember { mutableStateOf(false) }
         val modelCurrent = models?.current ?: sessionModel
         val showModelPill = models != null || !sessionModel.isNullOrBlank()
         val r = reasoning
@@ -722,74 +878,116 @@ fun DesktopComposer(
             }
         }
 
-        OutlinedTextField(
-            value = draft,
-            onValueChange = onDraftChange,
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("composer-input")
-                .onPreviewKeyEvent { e: KeyEvent ->
-                    if (isComposerSendKey(e.key, e.type, e.isShiftPressed)) {
-                        // Consume ONLY when we actually send; a blank/sending/upload-blocked draft
-                        // falls through so the multiline field handles Enter itself (no stray
-                        // newline, no double-send).
-                        if (canSend) { doSend(); true } else false
-                    } else if (isComposerPasteKey(e.key, e.type, e.isCtrlPressed || e.isMetaPressed)) {
-                        // Paste-image: only consume when the upload seam is bound AND the clipboard
-                        // actually holds image file(s) (or a raster we can encode). Text-only paste
-                        // (and text-only composers) fall through so the field keeps Ctrl/Cmd+V.
-                        val files = pasteImageFiles()
-                        if (shouldStageClipboardPaste(onUpload != null, files)) {
-                            stageFiles(files)
-                            true
+        // Right-click Paste image (discoverable without the keyboard) + the text field itself.
+        ContextMenuArea(
+            items = {
+                if (onUpload != null) {
+                    listOf(ContextMenuItem("Paste image") { launchPasteImages() })
+                } else {
+                    emptyList()
+                }
+            },
+        ) {
+            OutlinedTextField(
+                value = draft,
+                onValueChange = onDraftChange,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("composer-input")
+                    .onPreviewKeyEvent { e: KeyEvent ->
+                        if (isComposerSendKey(e.key, e.type, e.isShiftPressed)) {
+                            // Consume ONLY when we actually send; a blank/sending/upload-blocked draft
+                            // falls through so the multiline field handles Enter itself (no stray
+                            // newline, no double-send).
+                            if (canSend) { doSend(); true } else false
+                        } else if (isComposerPasteKey(
+                                e.key,
+                                e.type,
+                                ctrlOrMeta = e.isCtrlPressed || e.isMetaPressed,
+                                shiftPressed = e.isShiftPressed,
+                            )
+                        ) {
+                            // Paste-image: consume only when upload is bound AND a cheap flavor probe
+                            // says the clipboard has an image. Encoding runs on Dispatchers.IO so a
+                            // 4k² raster cannot freeze the UI. Text-only (and Ctrl/Cmd+Shift+V) fall
+                            // through so the field keeps plain-text paste.
+                            if (onUpload != null && composerClipboardLikelyHasImage()) {
+                                launchPasteImages()
+                                true
+                            } else {
+                                false
+                            }
                         } else {
                             false
                         }
-                    } else {
-                        false
+                    },
+                placeholder = { Text("Message the agent…") },
+                maxLines = 8,
+                leadingIcon = if (onUpload != null) {
+                    {
+                        // Attach menu: "Attach files…" (picker) + "Paste image" (clipboard) so paste
+                        // is mouse-discoverable without relying solely on the keyboard chord.
+                        Box {
+                            IconButton(
+                                onClick = { attachMenu = true },
+                                modifier = Modifier.testTag("composer-attach"),
+                            ) {
+                                Icon(Icons.Filled.Add, contentDescription = "Attach")
+                            }
+                            DropdownMenu(
+                                expanded = attachMenu,
+                                onDismissRequest = { attachMenu = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Attach files…") },
+                                    onClick = {
+                                        attachMenu = false
+                                        stageFiles(pickFiles())
+                                    },
+                                    modifier = Modifier.testTag("composer-attach-files"),
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Paste image") },
+                                    onClick = {
+                                        attachMenu = false
+                                        launchPasteImages()
+                                    },
+                                    modifier = Modifier.testTag("composer-paste-image"),
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    null
+                },
+                trailingIcon = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (onTranscribeAudio != null) {
+                            MicButton(
+                                recording = dictation.recording,
+                                transcribing = dictation.transcribing,
+                                micUnavailable = dictation.micUnavailable,
+                                onClick = { if (dictation.recording) dictation.stopMic() else dictation.startMic() },
+                                modifier = Modifier.testTag("composer-mic"),
+                            )
+                        }
+                        if (agentWorking) {
+                            IconButton(onClick = onInterrupt, modifier = Modifier.testTag("composer-stop")) {
+                                Icon(Icons.Filled.Stop, contentDescription = "Stop")
+                            }
+                        } else {
+                            IconButton(
+                                onClick = doSend,
+                                enabled = canSend,
+                                modifier = Modifier.testTag("composer-send"),
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                            }
+                        }
                     }
                 },
-            placeholder = { Text("Message the agent…") },
-            maxLines = 8,
-            leadingIcon = if (onUpload != null) {
-                {
-                    IconButton(
-                        onClick = { stageFiles(pickFiles()) },
-                        modifier = Modifier.testTag("composer-attach"),
-                    ) {
-                        Icon(Icons.Filled.Add, contentDescription = "Attach")
-                    }
-                }
-            } else {
-                null
-            },
-            trailingIcon = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (onTranscribeAudio != null) {
-                        MicButton(
-                            recording = dictation.recording,
-                            transcribing = dictation.transcribing,
-                            micUnavailable = dictation.micUnavailable,
-                            onClick = { if (dictation.recording) dictation.stopMic() else dictation.startMic() },
-                            modifier = Modifier.testTag("composer-mic"),
-                        )
-                    }
-                    if (agentWorking) {
-                        IconButton(onClick = onInterrupt, modifier = Modifier.testTag("composer-stop")) {
-                            Icon(Icons.Filled.Stop, contentDescription = "Stop")
-                        }
-                    } else {
-                        IconButton(
-                            onClick = doSend,
-                            enabled = canSend,
-                            modifier = Modifier.testTag("composer-send"),
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
-                        }
-                    }
-                }
-            },
-        )
+            )
+        }
         LaunchedEffect(dictation.errorMessage) {
             if (dictation.errorMessage != null) {
                 delay(4000)
