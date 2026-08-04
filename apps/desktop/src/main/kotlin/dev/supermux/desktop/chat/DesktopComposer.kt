@@ -18,7 +18,9 @@
 // below. Compose Desktop surfaces an OS file drop as `DragData.FilesList` (java.awt's
 // DataFlavor.javaFileListFlavor under the hood); each entry is a `file:` URI string, converted back to
 // a File and funneled through the SAME `stageFiles` path the Attach dialog uses, so a dropped file
-// gets an identical ComposerAttachment + upload + progress.
+// gets an identical ComposerAttachment + upload + progress. Clipboard paste-image (Ctrl/Cmd+V) also
+// routes through that funnel: a raster image on the system clipboard is written to a temp PNG, and
+// any copied image files (javaFileListFlavor) are filtered and staged the same way.
 package dev.supermux.desktop.chat
 
 import androidx.compose.foundation.background
@@ -72,6 +74,8 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -90,9 +94,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.awt.FileDialog
 import java.awt.Frame
+import java.awt.Image
+import java.awt.Toolkit
+import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.Transferable
+import java.awt.image.BufferedImage
 import java.io.File
 import java.net.URI
 import java.nio.file.Files
+import javax.imageio.ImageIO
 import kotlin.math.roundToInt
 
 /**
@@ -176,6 +186,101 @@ internal fun composerFilesFromDragData(uris: List<String>): List<File> =
     uris.mapNotNull { runCatching { File(URI(it)) }.getOrNull() }
 
 /**
+ * Pure Ctrl/Cmd+V paste-key predicate for the composer: `true` only for a KeyDown V with Ctrl OR
+ * Meta held (Windows/Linux vs macOS). Extracted so the paste-image chord is unit-testable without
+ * the UI harness.
+ */
+internal fun isComposerPasteKey(key: Key, type: KeyEventType, ctrlOrMeta: Boolean): Boolean =
+    type == KeyEventType.KeyDown && key == Key.V && ctrlOrMeta
+
+/**
+ * Whether a paste-image gesture should consume the key and call [stageFiles]: the upload seam must
+ * be bound (text-only composers ignore paste-image) AND the clipboard seam returned at least one
+ * image file. Pure so the stage-or-fallthrough decision is unit-testable without key injection.
+ */
+internal fun shouldStageClipboardPaste(uploadBound: Boolean, files: List<File>): Boolean =
+    uploadBound && files.isNotEmpty()
+
+/** Image file extensions accepted for clipboard file-list paste (probe MIME may be octet-stream
+ *  for a just-copied path with no content-type association). */
+private val IMAGE_FILE_EXTENSIONS = setOf(
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif", "tif", "tiff",
+)
+
+/**
+ * Whether [file] looks like an image suitable for paste-to-attach: an `image/` MIME from
+ * [composerMime], or a known image extension when the probe falls back to octet-stream.
+ */
+internal fun isComposerImageFile(file: File): Boolean {
+    if (!file.isFile) return false
+    val mime = composerMime(file.toPath())
+    if (mime.startsWith("image/")) return true
+    return file.extension.lowercase() in IMAGE_FILE_EXTENSIONS
+}
+
+/**
+ * Write an AWT [Image] (screenshot / copy-from-viewer paste) to a temp PNG and return the file.
+ * The file is delete-on-exit; [stageFiles] reads it immediately via [FileChunkSource]. Null when
+ * the image has no valid dimensions or encode fails.
+ */
+internal fun clipboardImageToTempFile(image: Image): File? = runCatching {
+    val w = image.getWidth(null)
+    val h = image.getHeight(null)
+    if (w <= 0 || h <= 0) return null
+    val buffered = when (image) {
+        is BufferedImage -> image
+        else -> BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB).also { bi ->
+            val g = bi.createGraphics()
+            try {
+                g.drawImage(image, 0, 0, null)
+            } finally {
+                g.dispose()
+            }
+        }
+    }
+    val dir = Files.createTempDirectory("composer-paste").toFile().apply { deleteOnExit() }
+    File(dir, "paste-${System.currentTimeMillis()}.png").also { out ->
+        if (!ImageIO.write(buffered, "png", out)) return null
+        out.deleteOnExit()
+    }
+}.getOrNull()
+
+/**
+ * Extract image files from a clipboard [Transferable]. Prefers a file-list of existing image files
+ * (user copied image files in the file manager); otherwise encodes a raster [DataFlavor.imageFlavor]
+ * snapshot to a temp PNG. Pure relative to the transferable so tests can feed a fake without
+ * touching the real system clipboard.
+ */
+internal fun composerFilesFromClipboardTransferable(transferable: Transferable): List<File> {
+    // File-list first: multi-select paste of real files should keep original names/MIME.
+    if (transferable.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) {
+        @Suppress("UNCHECKED_CAST")
+        val files = runCatching {
+            transferable.getTransferData(DataFlavor.javaFileListFlavor) as? List<*>
+        }.getOrNull()
+            ?.mapNotNull { it as? File }
+            ?.filter(::isComposerImageFile)
+            .orEmpty()
+        if (files.isNotEmpty()) return files
+    }
+    if (transferable.isDataFlavorSupported(DataFlavor.imageFlavor)) {
+        val img = runCatching {
+            transferable.getTransferData(DataFlavor.imageFlavor) as? Image
+        }.getOrNull()
+        if (img != null) {
+            clipboardImageToTempFile(img)?.let { return listOf(it) }
+        }
+    }
+    return emptyList()
+}
+
+/** Read image files currently on the system clipboard (AWT). Empty on any failure / text-only clip. */
+internal fun composerClipboardImageFiles(): List<File> = runCatching {
+    val contents = Toolkit.getDefaultToolkit().systemClipboard.getContents(null) ?: return emptyList()
+    composerFilesFromClipboardTransferable(contents)
+}.getOrDefault(emptyList())
+
+/**
  * Send-gating predicate: something to send (text OR at least one attachment) AND no chip is still
  * Uploading or Failed AND not already sending. Pure so the gating matrix is unit-testable without a
  * UI harness. The Uploading/Failed block is the load-bearing correctness bit — never send a message
@@ -229,6 +334,10 @@ internal fun composerPickFiles(): List<File> {
  *   the Attach affordance is hidden (text-only composer). [ChatPanel] binds this to
  *   `app.uploadResumable(session.id, …)`; tests inject a fake so they don't hit the network.
  * @param pickFiles the file-picker seam (default = the real AWT dialog); tests inject a fake.
+ * @param pasteImageFiles the clipboard-image seam (default = [composerClipboardImageFiles]); returns
+ *   image files currently on the system clipboard. Ctrl/Cmd+V routes a non-empty result through the
+ *   SAME [stageFiles] funnel drag-drop / Attach use. Tests inject a fake so they never touch AWT
+ *   clipboard state.
  * @param externalAttach a one-shot "stage this file then send" request (M4d-T3), delivered from
  *   outside the composer's own click-driven state (see [ComposerExternalAttach] KDoc — the
  *   off-by-default `SM_CHAT_ATTACH` headless hook). Routed through the SAME `stageFiles`/`sendWith`
@@ -280,6 +389,7 @@ fun DesktopComposer(
         onProgress: (Long, Long) -> Unit,
     ) -> String?)? = null,
     pickFiles: () -> List<File> = ::composerPickFiles,
+    pasteImageFiles: () -> List<File> = ::composerClipboardImageFiles,
     externalAttach: ComposerExternalAttach? = null,
     onExternalAttachConsumed: () -> Unit = {},
     onTranscribeAudio: (suspend (bytes: ByteArray, filename: String) -> String?)? = null,
@@ -624,6 +734,17 @@ fun DesktopComposer(
                         // falls through so the multiline field handles Enter itself (no stray
                         // newline, no double-send).
                         if (canSend) { doSend(); true } else false
+                    } else if (isComposerPasteKey(e.key, e.type, e.isCtrlPressed || e.isMetaPressed)) {
+                        // Paste-image: only consume when the upload seam is bound AND the clipboard
+                        // actually holds image file(s) (or a raster we can encode). Text-only paste
+                        // (and text-only composers) fall through so the field keeps Ctrl/Cmd+V.
+                        val files = pasteImageFiles()
+                        if (shouldStageClipboardPaste(onUpload != null, files)) {
+                            stageFiles(files)
+                            true
+                        } else {
+                            false
+                        }
                     } else {
                         false
                     }

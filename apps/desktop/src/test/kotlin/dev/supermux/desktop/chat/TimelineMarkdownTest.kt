@@ -4,6 +4,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.runComposeUiTest
@@ -11,6 +12,7 @@ import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import dev.supermux.ui.ColumnAlign
+import dev.supermux.ui.MdBlock
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -89,10 +91,11 @@ class TimelineMarkdownTest {
         assertTrue("https://example.com/docs" in urls, "expected a Url link annotation carrying the href, got $urls")
     }
 
-    // ── Standalone images render as a tappable link line (no Coil3) ──────────────────────
+    // ── Standalone images: https loads inline; non-https stays a tappable link line ──────
 
-    @Test fun standalone_image_renders_link_line_opening_the_url() = runComposeUiTest {
-        setContent { MarkdownBody(text = "![a diagram](https://example.com/pic.png)") }
+    @Test fun non_https_image_renders_link_line_opening_the_url() = runComposeUiTest {
+        // http (not https) must never fetch — tracking/IP-leak guard matches Android's Coil path.
+        setContent { MarkdownBody(text = "![a diagram](http://example.com/pic.png)") }
 
         onNodeWithTag("md_image").assertIsDisplayed()
         val node = onNodeWithTag("md_image").fetchSemanticsNode()
@@ -101,6 +104,96 @@ class TimelineMarkdownTest {
         assertTrue(annotated.text.contains("a diagram"), "expected the alt text as the link label")
         val urls = annotated.getLinkAnnotations(0, annotated.length)
             .mapNotNull { (it.item as? LinkAnnotation.Url)?.url }
-        assertTrue("https://example.com/pic.png" in urls, "expected the image url as a Url link annotation, got $urls")
+        assertTrue("http://example.com/pic.png" in urls, "expected the image url as a Url link annotation, got $urls")
+    }
+
+    @Test fun https_image_renders_inline_bitmap_when_loader_succeeds() = runComposeUiTest {
+        // Tiny 2×2 PNG — decode via the same Skiko path production uses, injected as the load seam
+        // so this never hits the network.
+        val png = decodeImageBytes(TINY_PNG_BYTES)
+        assertTrue(png != null, "fixture PNG must decode")
+        setContent {
+            MarkdownImage(
+                image = MdBlock.Image(url = "https://example.com/pic.png", alt = "a diagram"),
+                loadImage = { png },
+            )
+        }
+        waitUntil(timeoutMillis = 5_000L) {
+            onAllNodesWithTag("md_image").fetchSemanticsNodes().isNotEmpty()
+        }
+        onNodeWithTag("md_image").assertIsDisplayed()
+        // Loaded bitmap has no text/link annotation — it is a real Image, not the fallback line.
+        val node = onNodeWithTag("md_image").fetchSemanticsNode()
+        val annotated = node.config.getOrNull(SemanticsProperties.Text)?.firstOrNull()
+        assertTrue(annotated == null, "inline image must not be the link-line fallback")
+    }
+
+    @Test fun https_image_falls_back_to_link_line_when_loader_fails() = runComposeUiTest {
+        setContent {
+            MarkdownImage(
+                image = MdBlock.Image(url = "https://example.com/missing.png", alt = "broken"),
+                loadImage = { null },
+            )
+        }
+        waitUntil(timeoutMillis = 5_000L) {
+            onAllNodesWithTag("md_image").fetchSemanticsNodes().isNotEmpty()
+        }
+        val node = onNodeWithTag("md_image").fetchSemanticsNode()
+        val annotated = node.config.getOrNull(SemanticsProperties.Text)?.firstOrNull()
+        assertTrue(annotated != null, "failed load must fall back to the link line")
+        assertTrue(annotated.text.contains("broken"), "expected alt text on the fallback link")
+    }
+
+    // ── Pure helpers (https gate, size cap, Skiko decode) ─────────────────────────────
+
+    @Test fun isHttpsImageUrl_accepts_https_only() {
+        assertTrue(isHttpsImageUrl("https://example.com/a.png"))
+        assertTrue(isHttpsImageUrl("HTTPS://EXAMPLE.COM/a.png"))
+        assertTrue(!isHttpsImageUrl("http://example.com/a.png"))
+        assertTrue(!isHttpsImageUrl("ftp://example.com/a.png"))
+        assertTrue(!isHttpsImageUrl("/relative/path.png"))
+        assertTrue(!isHttpsImageUrl(""))
+    }
+
+    @Test fun readBytesCapped_returns_bytes_under_cap() {
+        val data = ByteArray(100) { it.toByte() }
+        val got = readBytesCapped(data.inputStream(), maxBytes = 200)
+        assertTrue(got != null && got.contentEquals(data))
+    }
+
+    @Test fun readBytesCapped_returns_null_when_stream_exceeds_cap() {
+        val data = ByteArray(50) { 1 }
+        assertTrue(readBytesCapped(data.inputStream(), maxBytes = 10) == null)
+    }
+
+    @Test fun decodeImageBytes_decodes_png() {
+        val bmp = decodeImageBytes(TINY_PNG_BYTES)
+        assertTrue(bmp != null, "expected Skiko to decode a valid PNG")
+        assertEquals(2, bmp!!.width)
+        assertEquals(2, bmp.height)
+    }
+
+    @Test fun decodeImageBytes_rejects_garbage() {
+        assertTrue(decodeImageBytes(byteArrayOf(1, 2, 3, 4, 5)) == null)
+    }
+
+    @Test fun fetchHttpsImageBytes_rejects_non_https() {
+        assertTrue(fetchHttpsImageBytes("http://example.com/x.png") == null)
+        assertTrue(fetchHttpsImageBytes("file:///tmp/x.png") == null)
+    }
+
+    companion object {
+        // 2×2 RGB PNG (73 bytes) — enough for Skiko/ImageIO to produce a real ImageBitmap.
+        private val TINY_PNG_BYTES = hex(
+            "89504e470d0a1a0a0000000d4948445200000002000000020802000000fdd49a73" +
+                "0000001049444154789c63f8cfc000440c100a001fee03fd8b5f14d40000000049454e44ae426082",
+        )
+
+        private fun hex(s: String): ByteArray {
+            val clean = s.replace(" ", "")
+            return ByteArray(clean.length / 2) { i ->
+                clean.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+            }
+        }
     }
 }

@@ -23,6 +23,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -61,6 +62,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -72,7 +74,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
@@ -115,11 +120,16 @@ import kotlinx.coroutines.withContext
 import java.awt.Desktop
 import java.awt.FileDialog
 import java.awt.Frame
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
+import java.net.HttpURLConnection
+import java.net.URI
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import org.jetbrains.skia.Image as SkiaImage
 
 // ---------------------------------------------------------------------------
 // Data model
@@ -599,19 +609,176 @@ private fun MarkdownTableCell(
 }
 
 /**
- * Standalone markdown image `![alt](url)`. Desktop renders a compact, tappable link line
- * (🖼 + alt/url) that opens the url in the system browser — it deliberately does NOT load the
- * bitmap inline. Loading images would pull the Coil3 dependency into the packaged desktop app
- * (jlink/installer), so the link-line fallback is the safe, dependency-free choice. Android
- * itself falls back to a link for non-https images, so this is acceptable desktop parity.
+ * Max download size for inline markdown images (bytes). Keeps a malicious/huge asset from
+ * ballooning RAM; anything over this falls back to the tappable link line.
+ */
+internal const val MD_IMAGE_MAX_BYTES: Long = 8L * 1024L * 1024L
+
+/** Only `https://` image URLs are fetched (message-content images are a tracking / IP-leak vector). */
+internal fun isHttpsImageUrl(url: String): Boolean =
+    url.startsWith("https://", ignoreCase = true)
+
+/**
+ * Read up to [maxBytes] from [stream]. Returns null if the stream would exceed the cap (size-
+ * capped so a huge body never lands fully in memory). Pure relative to the stream — unit-testable
+ * without the network.
+ */
+internal fun readBytesCapped(stream: InputStream, maxBytes: Long = MD_IMAGE_MAX_BYTES): ByteArray? {
+    val out = ByteArrayOutputStream()
+    val buf = ByteArray(8 * 1024)
+    var total = 0L
+    while (true) {
+        val n = stream.read(buf)
+        if (n < 0) break
+        total += n
+        if (total > maxBytes) return null
+        out.write(buf, 0, n)
+    }
+    return out.toByteArray()
+}
+
+/**
+ * GET [url] and return the response body when it is https, 2xx, and within [maxBytes]. Follows
+ * redirects only while the next hop stays https. Null on any failure — callers fall back to the
+ * link line. Blocking; call from [Dispatchers.IO], never the UI thread.
+ */
+internal fun fetchHttpsImageBytes(url: String, maxBytes: Long = MD_IMAGE_MAX_BYTES): ByteArray? {
+    if (!isHttpsImageUrl(url)) return null
+    return runCatching {
+        var current = url
+        // Cap redirect hops so a loop cannot hang the fetch.
+        repeat(5) {
+            if (!isHttpsImageUrl(current)) return null
+            val conn = (URI(current).toURL().openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = false
+                connectTimeout = 10_000
+                readTimeout = 15_000
+                requestMethod = "GET"
+                setRequestProperty("Accept", "image/*,*/*;q=0.8")
+            }
+            conn.connect()
+            val code = conn.responseCode
+            when (code) {
+                in 200..299 -> {
+                    val declared = conn.contentLengthLong
+                    if (declared > maxBytes) {
+                        conn.disconnect()
+                        return null
+                    }
+                    return conn.inputStream.use { readBytesCapped(it, maxBytes) }.also { conn.disconnect() }
+                }
+                in 300..399 -> {
+                    val next = conn.getHeaderField("Location")
+                    conn.disconnect()
+                    if (next.isNullOrBlank()) return null
+                    current = if (next.startsWith("https://", ignoreCase = true) ||
+                        next.startsWith("http://", ignoreCase = true)
+                    ) {
+                        next
+                    } else {
+                        // Relative redirect — resolve against the current URL.
+                        URI(current).resolve(next).toString()
+                    }
+                }
+                else -> {
+                    conn.disconnect()
+                    return null
+                }
+            }
+        }
+        null
+    }.getOrNull()
+}
+
+/**
+ * Decode raw image bytes (PNG/JPEG/GIF/WebP/…) to a Compose [ImageBitmap] via Skiko's
+ * [SkiaImage.makeFromEncoded] + [toComposeImageBitmap] — no Coil, no extra dependency. Null on
+ * corrupt/unsupported payloads. (`createImageBitmap` is internal to Compose, so we call the
+ * underlying Skiko path that it wraps.)
+ */
+internal fun decodeImageBytes(bytes: ByteArray): ImageBitmap? =
+    runCatching { SkiaImage.makeFromEncoded(bytes).toComposeImageBitmap() }.getOrNull()
+
+/**
+ * Load + decode an https image off the caller's thread (typically [Dispatchers.IO]). Returns null
+ * for non-https, oversize, network, or decode failures.
+ */
+internal suspend fun loadMarkdownImageBitmap(
+    url: String,
+    maxBytes: Long = MD_IMAGE_MAX_BYTES,
+): ImageBitmap? = withContext(Dispatchers.IO) {
+    val bytes = fetchHttpsImageBytes(url, maxBytes) ?: return@withContext null
+    decodeImageBytes(bytes)
+}
+
+/**
+ * Standalone markdown image `![alt](url)`.
+ *
+ * - `https://` URLs: fetch (size-capped) + Skiko-decode off the UI thread, then paint inline.
+ * - Everything else (http, relative, data:): compact tappable link line that opens the system
+ *   browser — Android's Coil path is also https-only for the same tracking/IP-leak reason.
+ * - Load/decode failure falls back to the same link line (never a blank hole).
+ *
+ * [loadImage] is the load seam (default = real network fetch); tests inject a fake so the UI path
+ * is covered without the network.
  */
 @Composable
-fun MarkdownImage(image: MdBlock.Image) {
+fun MarkdownImage(
+    image: MdBlock.Image,
+    loadImage: suspend (String) -> ImageBitmap? = { loadMarkdownImageBitmap(it) },
+) {
+    val cs = MaterialTheme.colorScheme
+    if (!isHttpsImageUrl(image.url)) {
+        MarkdownImageLinkLine(image)
+        return
+    }
+    var bitmap by remember(image.url) { mutableStateOf<ImageBitmap?>(null) }
+    var failed by remember(image.url) { mutableStateOf(false) }
+    LaunchedEffect(image.url) {
+        // loadImage itself must not block the main dispatcher — the default seam hops to IO.
+        val decoded = runCatching { loadImage(image.url) }.getOrNull()
+        if (decoded != null) bitmap = decoded else failed = true
+    }
+    when {
+        bitmap != null -> {
+            Image(
+                bitmap = bitmap!!,
+                contentDescription = image.alt.ifEmpty { null },
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 280.dp)
+                    .clip(RoundedCornerShape(Radii.sm))
+                    .testTag("md_image"),
+            )
+        }
+        failed -> MarkdownImageLinkLine(image)
+        else -> Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(120.dp)
+                .clip(RoundedCornerShape(Radii.sm))
+                .background(cs.surfaceContainer)
+                .testTag("md_image_loading"),
+            contentAlignment = Alignment.Center,
+        ) {
+            CircularProgressIndicator(
+                Modifier.size(18.dp),
+                color = cs.onSurfaceVariant,
+                strokeWidth = 1.5.dp,
+            )
+        }
+    }
+}
+
+/** Tappable 🖼 + alt/url link line — fallback for non-https and failed loads. */
+@Composable
+private fun MarkdownImageLinkLine(image: MdBlock.Image) {
     val cs = MaterialTheme.colorScheme
     val linkColor = cs.primary
     Text(
         text = buildAnnotatedString {
-            append("🖼 ") // 🖼
+            append("🖼 ")
             withLink(
                 LinkAnnotation.Url(
                     image.url,
