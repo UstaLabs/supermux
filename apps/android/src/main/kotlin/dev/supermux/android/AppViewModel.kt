@@ -1308,11 +1308,20 @@ class AppViewModel(
         runCatching { activeApi()?.kill(id) }
     }
 
+    /**
+     * (paName, soul) or null when EITHER fetch failed.
+     *
+     * A failed soul fetch must NOT flatten to "" — that renders an empty editor whose Save would
+     * overwrite the user's real soul.md with nothing. `getSoul()` throws on non-2xx (BrokerApi), so
+     * null here means "not loaded" and the screen must show an error instead of an editor.
+     */
     suspend fun assistantLoad(): Pair<String, String>? = coroutineScope {
         val api = activeApi() ?: return@coroutineScope null
         val cfg = async { runCatching { api.getConfig() }.getOrNull() }
-        val soul = async { runCatching { api.getSoul() }.getOrNull() ?: "" }
-        cfg.await()?.let { it.paName to soul.await() }
+        val soul = async { runCatching { api.getSoul() }.getOrNull() }
+        val cfgValue = cfg.await() ?: return@coroutineScope null
+        val soulValue = soul.await() ?: return@coroutineScope null
+        cfgValue.paName to soulValue
     }
 
     suspend fun assistantSave(paName: String, soul: String): Boolean {

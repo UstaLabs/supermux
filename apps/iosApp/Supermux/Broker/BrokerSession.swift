@@ -789,6 +789,10 @@ final class BrokerSession {
 
     // Soul (system prompt / persona markdown).
     func getSoul() async -> String { (try? await api.getSoul()) ?? "" }
+    /// Preserve transport failure separately from a legitimately empty soul.md — same reasoning as
+    /// `loadAgentStatuses` below. Flattening a failed fetch to "" renders an empty editor whose Save
+    /// would overwrite the user's real soul.md with nothing; nil means "not loaded".
+    func loadSoul() async -> String? { try? await api.getSoul() }
     func putSoul(text: String) async -> Bool { (try? await api.putSoul(text: text))?.boolValue ?? false }
 
     // Agent install status + login flow.
