@@ -107,7 +107,14 @@ import java.awt.datatransfer.Transferable
 import java.awt.image.BufferedImage
 import java.io.File
 import java.net.URI
+import java.nio.file.DirectoryStream
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.SecureDirectoryStream
+import java.nio.file.attribute.BasicFileAttributeView
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.FileTime
 import java.util.Collections
 import javax.imageio.ImageIO
 import kotlin.math.roundToInt
@@ -275,16 +282,73 @@ internal const val PASTE_IMAGE_ENCODE_MAX_EDGE: Int = 2048
 internal const val PASTE_IMAGE_MAX_ENCODED_BYTES: Long = 8L * 1024L * 1024L // 8 MiB
 
 /**
- * Absolute paths of temp files **this process created** via [clipboardImageToTempFile] /
- * [registerComposerPasteTemp]. Deletion is gated exclusively on membership here — never on a
- * path-name pattern — so a user-owned file under a directory named like `composer-paste-*` is safe.
+ * Filesystem identity of a paste temp **this process created**. Paths are reusable strings;
+ * ownership is the (parent fileKey, file fileKey, creationTime) triple recorded with
+ * [LinkOption.NOFOLLOW_LINKS] at registration. Cleanup re-reads those attributes the same way and
+ * refuses to delete when identity does not match — leaking a temp beats deleting a user file.
  */
-private val composerPasteGeneratedTemps: MutableSet<String> =
-    Collections.synchronizedSet(mutableSetOf())
+internal data class ComposerPasteTempIdentity(
+    /** Absolute path string used only as a registry lookup key (never as sole delete authority). */
+    val absolutePath: String,
+    /** Parent directory absolute path at registration. */
+    val parentAbsolutePath: String,
+    /** File name (relative to parent) at registration. */
+    val fileName: String,
+    /** [BasicFileAttributes.fileKey] of the parent directory (NOFOLLOW). */
+    val parentFileKey: Any?,
+    /** [BasicFileAttributes.fileKey] of the paste file itself (NOFOLLOW). */
+    val fileKey: Any?,
+    /** [BasicFileAttributes.creationTime] of the paste file at registration (NOFOLLOW). */
+    val creationTime: FileTime,
+)
 
-/** Test/helper: register [file] as a process-owned paste temp (absolute path). */
-internal fun registerComposerPasteTemp(file: File) {
-    composerPasteGeneratedTemps.add(file.absolutePath)
+/**
+ * Registry of paste temps this process created, keyed by absolute path for O(1) lookup.
+ * Deletion is gated on **identity match** ([ComposerPasteTempIdentity]), never path-name patterns
+ * alone — so a user file under `composer-paste-*`, a same-path recreation, or a parent swapped for
+ * a symlink cannot be deleted by path spoofing.
+ */
+private val composerPasteGeneratedTemps: MutableMap<String, ComposerPasteTempIdentity> =
+    Collections.synchronizedMap(mutableMapOf())
+
+/**
+ * Snapshot [file] + its parent with [LinkOption.NOFOLLOW_LINKS]. Null when the file/parent cannot
+ * be read (missing, or IO error) — callers must not delete without a proven identity.
+ */
+internal fun readComposerPasteTempIdentity(file: File): ComposerPasteTempIdentity? = runCatching {
+    val path = file.toPath().toAbsolutePath().normalize()
+    val parent = path.parent ?: return@runCatching null
+    val fileAttrs = Files.readAttributes(
+        path,
+        BasicFileAttributes::class.java,
+        LinkOption.NOFOLLOW_LINKS,
+    )
+    // Never own a symlink: we create real files/dirs only.
+    if (fileAttrs.isSymbolicLink) return@runCatching null
+    val parentAttrs = Files.readAttributes(
+        parent,
+        BasicFileAttributes::class.java,
+        LinkOption.NOFOLLOW_LINKS,
+    )
+    if (parentAttrs.isSymbolicLink || !parentAttrs.isDirectory) return@runCatching null
+    ComposerPasteTempIdentity(
+        absolutePath = path.toString(),
+        parentAbsolutePath = parent.toString(),
+        fileName = path.fileName.toString(),
+        parentFileKey = parentAttrs.fileKey(),
+        fileKey = fileAttrs.fileKey(),
+        creationTime = fileAttrs.creationTime(),
+    )
+}.getOrNull()
+
+/**
+ * Register [file] as a process-owned paste temp **after** it exists on disk. Reads identity with
+ * NOFOLLOW_LINKS. No-op (returns false) when the file cannot be proven — never register a bare path.
+ */
+internal fun registerComposerPasteTemp(file: File): Boolean {
+    val identity = readComposerPasteTempIdentity(file) ?: return false
+    composerPasteGeneratedTemps[identity.absolutePath] = identity
+    return true
 }
 
 /** Test helper: drop [file] from the registry without deleting it (fixture teardown). */
@@ -292,9 +356,112 @@ internal fun unregisterComposerPasteTemp(file: File) {
     composerPasteGeneratedTemps.remove(file.absolutePath)
 }
 
-/** True only when [file]'s absolute path was registered as a generated paste temp. */
+/** True only when [file]'s absolute path is currently registered as a generated paste temp. */
 internal fun isComposerPasteTempFile(file: File): Boolean =
     file.absolutePath in composerPasteGeneratedTemps
+
+/**
+ * Whether the live filesystem object at [identity]'s path still matches what we registered.
+ * Uses NOFOLLOW_LINKS on both parent and file so a parent→symlink swap or same-path recreation
+ * fails the check (different fileKey / isSymbolicLink / creationTime).
+ */
+internal fun composerPasteTempIdentityMatches(identity: ComposerPasteTempIdentity): Boolean =
+    runCatching {
+        val parent = Path.of(identity.parentAbsolutePath)
+        val parentAttrs = Files.readAttributes(
+            parent,
+            BasicFileAttributes::class.java,
+            LinkOption.NOFOLLOW_LINKS,
+        )
+        if (parentAttrs.isSymbolicLink || !parentAttrs.isDirectory) return@runCatching false
+        if (identity.parentFileKey != null && parentAttrs.fileKey() != identity.parentFileKey) {
+            return@runCatching false
+        }
+        val file = parent.resolve(identity.fileName)
+        val fileAttrs = Files.readAttributes(
+            file,
+            BasicFileAttributes::class.java,
+            LinkOption.NOFOLLOW_LINKS,
+        )
+        if (fileAttrs.isSymbolicLink) return@runCatching false
+        if (identity.fileKey != null && fileAttrs.fileKey() != identity.fileKey) {
+            return@runCatching false
+        }
+        // creationTime is part of the recorded identity; mismatch ⇒ not the object we created.
+        fileAttrs.creationTime() == identity.creationTime
+    }.getOrDefault(false)
+
+/**
+ * Delete the registered paste file **only if** it is still the exact filesystem object we created.
+ * Prefers [SecureDirectoryStream] (directory-fd-relative delete) so a path swap between verify and
+ * delete cannot redirect the unlink. If identity cannot be proven, leaves the file alone (leak OK).
+ *
+ * @return true when the file was deleted (or already gone after a matching identity check).
+ */
+private fun deleteComposerPasteTempIfOwned(identity: ComposerPasteTempIdentity): Boolean {
+    if (!composerPasteTempIdentityMatches(identity)) return false
+    val parent = Path.of(identity.parentAbsolutePath)
+    val name = Path.of(identity.fileName)
+    // Prefer SecureDirectoryStream: open the parent directory, re-check child attrs relative to
+    // that handle, then delete by name — no second path walk that could follow a new symlink.
+    val deletedViaSecure = runCatching {
+        Files.newDirectoryStream(parent).use { stream: DirectoryStream<Path> ->
+            if (stream !is SecureDirectoryStream<*>) return@runCatching false
+            @Suppress("UNCHECKED_CAST")
+            val sds = stream as SecureDirectoryStream<Path>
+            // Parent identity via the open directory (fd), not a re-resolved path.
+            val parentView = sds.getFileAttributeView(BasicFileAttributeView::class.java)
+                ?: return@runCatching false
+            val parentAttrs = parentView.readAttributes()
+            if (identity.parentFileKey != null && parentAttrs.fileKey() != identity.parentFileKey) {
+                return@runCatching false
+            }
+            val childView = sds.getFileAttributeView(
+                name,
+                BasicFileAttributeView::class.java,
+                LinkOption.NOFOLLOW_LINKS,
+            ) ?: return@runCatching false
+            val childAttrs = childView.readAttributes()
+            if (childAttrs.isSymbolicLink) return@runCatching false
+            if (identity.fileKey != null && childAttrs.fileKey() != identity.fileKey) {
+                return@runCatching false
+            }
+            if (childAttrs.creationTime() != identity.creationTime) return@runCatching false
+            sds.deleteFile(name)
+            true
+        }
+    }.getOrDefault(false)
+    if (deletedViaSecure) return true
+    // Fallback when SecureDirectoryStream is unavailable: re-verify then path delete. Still
+    // refuses when identity mismatches; residual TOCTOU window is only vs same-key replacement.
+    if (!composerPasteTempIdentityMatches(identity)) return false
+    return runCatching {
+        Files.deleteIfExists(parent.resolve(identity.fileName))
+        true
+    }.getOrDefault(false)
+}
+
+/**
+ * Best-effort remove of an empty parent dir **only if** it is still the directory we created
+ * (parent fileKey match, not a symlink). Never follows a parent that became a symlink.
+ */
+private fun deleteEmptyOwnedParent(identity: ComposerPasteTempIdentity) {
+    runCatching {
+        val parent = Path.of(identity.parentAbsolutePath)
+        val parentAttrs = Files.readAttributes(
+            parent,
+            BasicFileAttributes::class.java,
+            LinkOption.NOFOLLOW_LINKS,
+        )
+        if (parentAttrs.isSymbolicLink || !parentAttrs.isDirectory) return@runCatching
+        if (identity.parentFileKey != null && parentAttrs.fileKey() != identity.parentFileKey) {
+            return@runCatching
+        }
+        // Empty check without following links into the directory tree of a swapped target.
+        val empty = Files.newDirectoryStream(parent).use { it.iterator().hasNext().not() }
+        if (empty) Files.deleteIfExists(parent)
+    }
+}
 
 /**
  * Whether [file] looks like an image suitable for paste-to-attach: an `image/` MIME from
@@ -308,20 +475,22 @@ internal fun isComposerImageFile(file: File): Boolean {
 }
 
 /**
- * Delete a **registry-tracked** paste-origin temp PNG and its empty parent dir. Safe no-op for any
- * file we did not create (including user files under similarly-named directories). Called once the
- * file is no longer needed (chip removed/cleared, session dispose, encode fail).
+ * Delete a **registry-tracked** paste-origin temp PNG and its empty parent dir, but **only** when
+ * the live filesystem object still matches the identity recorded at creation (fileKey +
+ * creationTime, NOFOLLOW). Safe no-op for any file we did not create, for path-string spoofs
+ * (parent replaced by symlink, same-path recreation), and when identity cannot be proven — leaking
+ * a temp is preferred over deleting a user's file. Called once the file is no longer needed (chip
+ * removed/cleared, session dispose, encode fail).
  */
 internal fun cleanupComposerPasteTemp(file: File?) {
     if (file == null) return
     // Remove from registry first so a concurrent cleanup cannot double-delete; only proceed if we
-    // owned this path.
-    if (!composerPasteGeneratedTemps.remove(file.absolutePath)) return
-    runCatching { if (file.exists()) file.delete() }
-    val dir = file.parentFile ?: return
-    runCatching {
-        if (dir.isDirectory && (dir.list()?.isEmpty() != false)) dir.delete()
+    // had a registered identity for this path key.
+    val identity = composerPasteGeneratedTemps.remove(file.absolutePath) ?: return
+    if (deleteComposerPasteTempIfOwned(identity)) {
+        deleteEmptyOwnedParent(identity)
     }
+    // Identity mismatch: leave whatever is on disk alone (may be a user file at a reused path).
 }
 
 /**
@@ -365,7 +534,9 @@ internal fun scaleBufferedImageToMaxEdge(source: BufferedImage, maxEdge: Int): B
  * [PASTE_IMAGE_ENCODE_MAX_EDGE] before PNG encode so a 4k² paste stays responsive. Marks
  * delete-on-exit as a safety net; callers must still [cleanupComposerPasteTemp] after staging
  * lifecycle ends. Null when dimensions are invalid/oversize or encode fails (any partial file is
- * deleted). Successfully created files are registered in [composerPasteGeneratedTemps].
+ * deleted). Successfully created files are registered with filesystem **identity** (fileKey +
+ * creationTime, NOFOLLOW) in [composerPasteGeneratedTemps] — path string alone never authorises
+ * delete.
  *
  * **Must not run on the UI thread** for large rasters — PNG encode of a multi-megapixel image is
  * multi-second without downscale. Call from [Dispatchers.IO].
@@ -405,23 +576,37 @@ internal fun clipboardImageToTempFile(
             outFile = it
             it.deleteOnExit()
         }
-        // Register BEFORE write so a crash mid-encode still lets cleanup own the path; failed
-        // encodes remove via cleanupComposerPasteTemp.
-        registerComposerPasteTemp(out)
         if (!ImageIO.write(buffered, "png", out)) {
-            cleanupComposerPasteTemp(out)
+            // Not yet registered — scrub by direct path (we just created these).
+            scrubUnregisteredPasteTemp(out, dir)
             return null
         }
         if (out.length() > maxEncodedBytes) {
-            cleanupComposerPasteTemp(out)
+            scrubUnregisteredPasteTemp(out, dir)
+            return null
+        }
+        // Register AFTER a successful write so identity (fileKey/creationTime) reflects the real
+        // object. Failure to register must not hand out an untracked path for later path-only delete.
+        if (!registerComposerPasteTemp(out)) {
+            scrubUnregisteredPasteTemp(out, dir)
             return null
         }
         out
     }.getOrElse {
-        // Encode / IO failure: scrub any partial temp so a crash mid-encode is not required to clean.
-        outFile?.let { cleanupComposerPasteTemp(it) }
-            ?: outDir?.let { runCatching { it.deleteRecursively() } }
+        // Encode / IO failure: scrub any partial temp (not yet identity-registered).
+        scrubUnregisteredPasteTemp(outFile, outDir)
         null
+    }
+}
+
+/**
+ * Best-effort delete of a paste temp that was **never** identity-registered (encode failed mid-way).
+ * Safe only for files this function just created in-process — not for registry-gated cleanup.
+ */
+private fun scrubUnregisteredPasteTemp(file: File?, dir: File?) {
+    runCatching { file?.delete() }
+    runCatching {
+        if (dir != null && dir.isDirectory && (dir.list()?.isEmpty() != false)) dir.delete()
     }
 }
 

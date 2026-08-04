@@ -31,9 +31,6 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 
 /**
  * Paste-image contract for [DesktopComposer]: pure key/MIME helpers, clipboard Transferable
@@ -302,6 +299,100 @@ class DesktopComposerPasteTest {
         assertTrue(userDir.exists(), "user's directory must survive cleanup")
     }
 
+    /**
+     * REGRESSION (TOCTOU / parent-symlink): ownership is identity (fileKey + creationTime), not
+     * path string. Between create and cleanup an attacker replaces the parent directory with a
+     * symlink to a user directory that holds a file of the same name — cleanup must refuse.
+     */
+    @Test fun cleanupComposerPasteTemp_refusesWhenParentReplacedBySymlink() {
+        val img = BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB)
+        val paste = clipboardImageToTempFile(img)
+        assertNotNull(paste)
+        val pasteFile = paste!!
+        val pastePath = pasteFile.absolutePath
+        val parentPath = pasteFile.parentFile!!.toPath()
+        val fileName = pasteFile.name
+        assertTrue(isComposerPasteTempFile(pasteFile))
+
+        // Victim user file at the path the symlink will expose under the old parent name.
+        val victimDir = Files.createTempDirectory("user-docs-").toFile().apply { deleteOnExit() }
+        val victimFile = File(victimDir, fileName).apply {
+            writeBytes(tinyPng())
+            deleteOnExit()
+        }
+        val victimMarker = "USER-OWNED-BYTES-${System.nanoTime()}"
+        victimFile.writeText(victimMarker)
+        assertTrue(victimFile.exists())
+
+        // Attack: remove our temp tree, put a symlink at the same parent path → victimDir.
+        assertTrue(pasteFile.delete())
+        assertTrue(pasteFile.parentFile!!.delete())
+        Files.createSymbolicLink(parentPath, victimDir.toPath())
+
+        // Path string still matches the registry key; live object is the victim via the symlink.
+        val spoofed = File(pastePath)
+        assertTrue(spoofed.exists(), "spoofed path must resolve through the parent symlink")
+        assertEquals(victimMarker, spoofed.readText(), "spoofed path must be the victim file")
+
+        cleanupComposerPasteTemp(spoofed)
+
+        assertTrue(victimFile.exists(), "user file behind parent symlink must survive cleanup")
+        assertEquals(victimMarker, victimFile.readText(), "user file contents must be intact")
+        // Parent symlink may remain; that is a leak of a symlink, not of user data.
+        runCatching { Files.deleteIfExists(parentPath) }
+        victimFile.delete()
+        victimDir.delete()
+    }
+
+    /**
+     * REGRESSION (TOCTOU / same-path recreation): delete the generated file and create a different
+     * file at the exact same path. Cleanup must not delete the replacement (different fileKey).
+     */
+    @Test fun cleanupComposerPasteTemp_refusesWhenFileRecreatedAtSamePath() {
+        val img = BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB)
+        val paste = clipboardImageToTempFile(img)
+        assertNotNull(paste)
+        val pasteFile = paste!!
+        val absolutePath = pasteFile.absolutePath
+        val parent = pasteFile.parentFile!!
+        val name = pasteFile.name
+        assertTrue(isComposerPasteTempFile(pasteFile))
+
+        // Capture identity of the object we created (must differ after recreation).
+        val originalIdentity = readComposerPasteTempIdentity(pasteFile)
+        assertNotNull(originalIdentity)
+
+        // Attack: delete our file and put a different file at the same path (new inode).
+        assertTrue(pasteFile.delete())
+        val replacement = File(parent, name).apply {
+            writeText("REPLACEMENT-USER-DATA-${System.nanoTime()}")
+            deleteOnExit()
+        }
+        assertTrue(replacement.exists())
+        assertEquals(absolutePath, replacement.absolutePath)
+        val replacementIdentity = readComposerPasteTempIdentity(replacement)
+        assertNotNull(replacementIdentity)
+        // Different filesystem object → different fileKey (inode).
+        assertTrue(
+            originalIdentity!!.fileKey != replacementIdentity!!.fileKey,
+            "recreation must yield a new fileKey; got same ${originalIdentity.fileKey}",
+        )
+        // Registry still keys the path string — cleanup must still refuse.
+        assertTrue(isComposerPasteTempFile(replacement))
+
+        cleanupComposerPasteTemp(replacement)
+
+        assertTrue(replacement.exists(), "recreated file at the registered path must survive")
+        assertTrue(
+            replacement.readText().startsWith("REPLACEMENT-USER-DATA-"),
+            "replacement contents must be intact",
+        )
+        // Registry entry consumed; second cleanup is a no-op.
+        assertFalse(isComposerPasteTempFile(replacement))
+        replacement.delete()
+        parent.delete()
+    }
+
     // ── stage-or-fallthrough decision (drives the Ctrl/Cmd+V handler) ───────────
     @Test fun shouldStageClipboardPaste_requiresUploadAndFiles() {
         val png = tempNamed("a.png") { writeBytes(tinyPng()) }
@@ -558,22 +649,64 @@ class DesktopComposerPasteTest {
     }
 
     /**
-     * Production paste encode path: [clipboardImageToTempFile] invoked via the same IO hop
-     * [launchPasteImages] uses (`withContext(Dispatchers.IO)`), not an arbitrary raw Thread.
+     * Production paste encode path: drive the real [DesktopComposer] entry point (Attach →
+     * "Paste image" → [launchPasteImages] → `withContext(IO)` → `pasteImageFiles`), not a
+     * hand-rolled `withContext(IO) { clipboardImageToTempFile(...) }` that bypasses the entry point.
      */
-    @Test fun largeRasterEncode_viaProductionIoPath_completes() = runBlocking {
-        // 1024² exercises encode work; downscale target is 2048 so this stays full-res. The
-        // production key/menu handler runs pasteImageFiles on Dispatchers.IO.
+    @Test fun largeRasterEncode_viaLaunchPasteImages_completes() = runComposeUiTest {
+        // 1024² exercises encode work; downscale target is 2048 so this stays full-res.
         val img = BufferedImage(1024, 1024, BufferedImage.TYPE_INT_RGB)
         assertTrue(clipboardImageWithinCaps(1024, 1024))
-        val start = System.nanoTime()
-        val file = withContext(Dispatchers.IO) { clipboardImageToTempFile(img) }
-        val elapsedMs = (System.nanoTime() - start) / 1_000_000
-        assertNotNull(file, "1024² paste within caps must encode")
+        val encodeThread = java.util.concurrent.atomic.AtomicReference<String?>(null)
+        val encoded = java.util.concurrent.atomic.AtomicReference<File?>(null)
+        val startNs = java.util.concurrent.atomic.AtomicLong(0L)
+        setContent {
+            DesktopComposer(
+                draft = "",
+                onDraftChange = {},
+                sending = false,
+                agentWorking = false,
+                onSend = { _, _ -> },
+                onInterrupt = {},
+                onUpload = { _, _, _, _, _ -> "file-1" },
+                pickFiles = { emptyList() },
+                pasteImageFiles = {
+                    // Invoked by launchPasteImages on Dispatchers.IO — record that + encode.
+                    encodeThread.set(Thread.currentThread().name)
+                    startNs.compareAndSet(0L, System.nanoTime())
+                    val file = clipboardImageToTempFile(img)
+                    encoded.set(file)
+                    listOfNotNull(file)
+                },
+            )
+        }
+        onNodeWithTag("composer-attach").performClick()
+        onNodeWithTag("composer-paste-image").performClick()
+        waitUntil(timeoutMillis = 15_000L) {
+            onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isNotEmpty()
+        }
+        val file = encoded.get()
+        assertNotNull(file, "launchPasteImages → pasteImageFiles must encode the raster")
         assertTrue(file!!.isFile && file.length() > 0)
         assertTrue(isComposerPasteTempFile(file))
-        cleanupComposerPasteTemp(file)
-        assertTrue(elapsedMs < 15_000, "encode took ${elapsedMs}ms")
+        val thread = encodeThread.get()
+        assertNotNull(thread, "pasteImageFiles must run on a worker thread")
+        assertTrue(
+            thread!!.contains("DefaultDispatcher") || thread.contains("IO") || thread.contains("worker"),
+            "launchPasteImages must hop to IO; pasteImageFiles ran on: $thread",
+        )
+        assertTrue(
+            !thread.contains("AWT-EventQueue"),
+            "encode must not run on the AWT UI thread, got: $thread",
+        )
+        val elapsedMs = (System.nanoTime() - startNs.get()) / 1_000_000
+        assertTrue(elapsedMs < 15_000, "encode via launchPasteImages took ${elapsedMs}ms")
+        // Chip owns the temp — remove so we don't leak into later tests.
+        waitUntil(timeoutMillis = 5_000L) {
+            onAllNodesWithTag("composer-chip-remove").fetchSemanticsNodes().isNotEmpty()
+        }
+        onNodeWithTag("composer-chip-remove").performClick()
+        waitUntil(timeoutMillis = 2_000L) { !file.exists() }
     }
 
     // ── fixtures ────────────────────────────────────────────────────────────────

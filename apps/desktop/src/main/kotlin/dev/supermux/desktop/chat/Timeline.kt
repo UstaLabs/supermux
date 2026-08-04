@@ -98,8 +98,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.theme.LocalSemantics
+import dev.supermux.desktop.theme.Media
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Radii
+import dev.supermux.desktop.theme.Sizes
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.ui.openInBrowser
 import dev.supermux.proto.ActivityEvent
@@ -732,20 +734,19 @@ internal fun fetchHttpsImageBytes(url: String, maxBytes: Long = MD_IMAGE_MAX_BYT
     )
 
 /**
- * Layout tokens for inline markdown images. Named constants (no magic numbers at call sites).
- * Theme [Space]/[Radii] only cover spacing/corners; media-specific sizes live here because
- * this change is chat-scoped and must not touch `theme/`.
+ * Layout tokens for inline markdown images — aliases of theme [Media]/[Sizes] so chat call sites
+ * stay readable without reintroducing magic `N.dp` values.
  */
 internal object MdImageDimens {
     /** Max painted height for a successfully loaded image. */
-    val MaxHeight = 280.dp
+    val MaxHeight = Media.inlineImageMaxHeight
     /**
      * Loading placeholder height — equals [MaxHeight] so the timeline never grows when the
      * bitmap arrives (avoids up-to-160dp reflow from a shorter spinner box).
      */
     val LoadingHeight = MaxHeight
-    val SpinnerSize = 18.dp
-    val SpinnerStroke = 1.5.dp
+    val SpinnerSize = Sizes.iconSm
+    val SpinnerStroke = Sizes.hairline
 }
 
 /**

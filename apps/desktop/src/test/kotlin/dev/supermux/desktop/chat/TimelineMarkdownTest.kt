@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -16,7 +17,10 @@ import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import dev.supermux.desktop.theme.Media
+import dev.supermux.desktop.theme.Sizes
 import dev.supermux.ui.ColumnAlign
 import dev.supermux.ui.MdBlock
 import com.sun.net.httpserver.HttpServer
@@ -297,14 +301,20 @@ class TimelineMarkdownTest {
         // Loading box reserves the same height as the max painted image so the timeline does not
         // jump up by ~160dp when the bitmap replaces the spinner.
         assertEquals(MdImageDimens.MaxHeight, MdImageDimens.LoadingHeight)
+        // Theme-token wiring: chat dimens are aliases of Media/Sizes, not local magic dp.
+        assertEquals(Media.inlineImageMaxHeight, MdImageDimens.MaxHeight)
+        assertEquals(Sizes.iconSm, MdImageDimens.SpinnerSize)
+        assertEquals(Sizes.hairline, MdImageDimens.SpinnerStroke)
     }
 
     /**
-     * Assert actual layout bounds: loading placeholder height in px equals MaxHeight under the
-     * composition density (not just constant equality of the dp tokens).
+     * Assert actual layout bounds: loading placeholder height in px **equals** MaxHeight under the
+     * composition density (proves the reserved slot is the max image height, not a tiny spinner).
      */
     @Test fun mdImage_loadingPlaceholder_layoutHeightMatchesMaxHeight() = runComposeUiTest {
+        var density: Density? = null
         setContent {
+            density = LocalDensity.current
             // Constrain width so fillMaxWidth has a concrete measure.
             Box(Modifier.width(320.dp)) {
                 MarkdownImage(
@@ -322,20 +332,30 @@ class TimelineMarkdownTest {
         }
         val node = onNodeWithTag("md_image_loading").fetchSemanticsNode()
         val heightPx = node.layoutInfo.height
-        // 280.dp at the test density — require a substantial reserved height (not a tiny spinner box).
-        assertTrue(heightPx > 100, "loading placeholder layout height was $heightPx px (expected ~MaxHeight)")
-        // Bound: MaxHeight is 280.dp; allow density variance but stay near that scale.
-        assertTrue(heightPx < 800, "loading placeholder unexpectedly tall: $heightPx px")
+        val d = density!!
+        val expectedPx = with(d) { MdImageDimens.LoadingHeight.roundToPx() }
+        val maxPx = with(d) { MdImageDimens.MaxHeight.roundToPx() }
+        // Placeholder reserves exactly MaxHeight — the relationship that prevents upward reflow.
+        assertEquals(
+            expectedPx,
+            heightPx,
+            "loading placeholder height $heightPx px must equal LoadingHeight=$expectedPx px " +
+                "(MaxHeight=$maxPx px at density=${d.density})",
+        )
+        assertEquals(maxPx, heightPx, "LoadingHeight and MaxHeight must measure to the same px")
     }
 
     /**
      * After load, a short (2×2) image may be shorter than the loading box — that is the known
-     * downward-reflow trade-off. Assert we still paint something with real layout bounds.
+     * downward-reflow trade-off. Assert heightIn(max=MaxHeight) is enforced in **px** against the
+     * same MaxHeight token the placeholder uses (not a loose <800 band).
      */
     @Test fun mdImage_loaded_hasPositiveLayoutBounds() = runComposeUiTest {
         val png = decodeImageBytes(TINY_PNG_BYTES)
         assertTrue(png != null)
+        var density: Density? = null
         setContent {
+            density = LocalDensity.current
             Box(Modifier.width(320.dp).fillMaxWidth()) {
                 MarkdownImage(
                     image = MdBlock.Image(url = "https://example.com/pic.png", alt = "x"),
@@ -349,8 +369,12 @@ class TimelineMarkdownTest {
         val node = onNodeWithTag("md_image").fetchSemanticsNode()
         assertTrue(node.layoutInfo.width > 0, "loaded image width must be > 0")
         assertTrue(node.layoutInfo.height > 0, "loaded image height must be > 0")
-        // heightIn(max=MaxHeight) — painted height must not exceed a generous px bound for 280.dp
-        assertTrue(node.layoutInfo.height < 800, "image exceeded max height: ${node.layoutInfo.height}")
+        val maxPx = with(density!!) { MdImageDimens.MaxHeight.roundToPx() }
+        // heightIn(max=MaxHeight) — painted height must not exceed MaxHeight in px.
+        assertTrue(
+            node.layoutInfo.height <= maxPx,
+            "loaded image height ${node.layoutInfo.height} px exceeds MaxHeight=$maxPx px",
+        )
     }
 
     @Test fun fetchHttpsImageBytes_rejects_non_https() {

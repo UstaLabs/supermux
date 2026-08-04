@@ -27,6 +27,26 @@ object Radii {
 }
 
 /**
+ * Component size tokens beyond the 4-point spacing grid (icons, strokes, media bounds).
+ * Prefer these over raw `N.dp` at call sites — same discipline as [Space]/[Radii].
+ */
+object Sizes {
+    /** Compact icon / circular-progress size (toolbars, chips, inline spinners). */
+    val iconSm = 18.dp
+    /** Hairline stroke for compact progress indicators and status rings. */
+    val hairline = 1.5.dp
+}
+
+/** Media layout tokens (inline images, previews). */
+object Media {
+    /**
+     * Max painted height for inline markdown / chat images. Loading placeholders should reserve
+     * the same height so the timeline does not reflow when the bitmap arrives.
+     */
+    val inlineImageMaxHeight = 280.dp
+}
+
+/**
  * Subtle shadow for "calm depth" surfaces (cards, sheets).
  * Elevation is intentionally low and both ambient/spot are dimmed so
  * the shadow is present but never heavy.
