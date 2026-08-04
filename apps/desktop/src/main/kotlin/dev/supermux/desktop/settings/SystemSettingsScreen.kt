@@ -218,7 +218,10 @@ fun SystemSettingsScreen(
                     // Avoids the dual "Downloading…" rows when both `updating` and state are set.
                     when {
                         s.state != "idle" -> StateRow(s.state)
-                        updating -> StateRow("checking")
+                        // "starting", not "checking": this row appears while an UPDATE POST is in
+                        // flight and the broker status hasn't moved off idle yet. Labelling it
+                        // "Checking…" described the wrong operation entirely.
+                        updating -> StateRow("starting")
                     }
 
                     lastCheckedText(s.lastChecked)?.let {
@@ -281,18 +284,34 @@ fun SystemSettingsScreen(
                                         }
                                         result.started -> {
                                             var settled = false
+                                            var sawRunning = false
                                             for (i in 0 until updatePollAttempts) {
                                                 delay(updatePollDelayMs)
                                                 val fresh = updateStatus() ?: continue
                                                 status = fresh
-                                                if (!isRunningState(fresh.state)) {
+                                                if (isRunningState(fresh.state)) {
+                                                    sawRunning = true
+                                                    continue
+                                                }
+                                                // A non-running state is only "settled" once it is
+                                                // an OUTCOME (restart-required / failed) or we
+                                                // watched a run finish. A broker that accepted the
+                                                // request but still reports `idle` has NOT started
+                                                // yet — treating that as settled rendered nothing
+                                                // at all: no progress, no error, the screen
+                                                // identical to before the click.
+                                                if (fresh.state != "idle" || sawRunning) {
                                                     settled = true
                                                     break
                                                 }
                                             }
                                             if (!settled) {
-                                                runError =
+                                                runError = if (sawRunning) {
                                                     "Update is still running — check again later."
+                                                } else {
+                                                    "The broker accepted the update but hasn't " +
+                                                        "started it yet — check again shortly."
+                                                }
                                             }
                                             updating = false
                                         }
@@ -411,7 +430,10 @@ fun SystemSettingsScreen(
 }
 
 internal fun isRunningState(state: String): Boolean =
-    state == "checking" || state == "downloading" || state == "swapping"
+    // "starting" is the client-only pseudo-state (see stateLabel) — counted as running so the row
+    // gets a spinner rather than bare text. The broker never sends it, so broker-state callers
+    // (the Update-button gate, the poll loop) are unaffected.
+    state == "starting" || state == "checking" || state == "downloading" || state == "swapping"
 
 @Composable
 private fun UpdateAvailabilityRow(s: UpdateStatus) {
@@ -506,6 +528,9 @@ private fun StateRow(state: String) {
 }
 
 internal fun stateLabel(state: String): String = when (state) {
+    // Client-only pseudo-state: the update POST is in flight and the broker still reports idle.
+    // Never sent by the broker (its states are checking/downloading/swapping/restart-required/failed).
+    "starting" -> "Starting update…"
     "checking" -> "Checking…"
     "downloading" -> "Downloading…"
     "swapping" -> "Swapping…"
