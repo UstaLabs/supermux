@@ -23,14 +23,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
@@ -72,6 +76,8 @@ fun SettingsHub(
     section: SettingsSection,
     onSectionChange: (SettingsSection) -> Unit,
     onBack: () -> Unit,
+    /** Register Escape/close path that honors identity dirty-state (WorkspaceRoot wires this). */
+    onRegisterCloseHandler: ((() -> Unit) -> Unit)? = null,
     // Agents — null list means load failure (distinct from empty).
     agentStatuses: suspend () -> List<AgentInstallStatus>?,
     agentStartLogin: suspend (kind: String) -> AgentLoginState?,
@@ -97,7 +103,8 @@ fun SettingsHub(
     proxyRemove: suspend (domain: String) -> Boolean,
     // Assistant identity + curator (Task 5)
     assistantLoad: suspend () -> Pair<String, String>?,
-    assistantSave: suspend (paName: String, soul: String) -> Boolean,
+    /** null = success; non-null = error message. */
+    assistantSave: suspend (paName: String, soul: String) -> String?,
     curatorLoad: suspend () -> CuratorSettingsResponse?,
     curatorSave: suspend (
         enabled: Boolean,
@@ -116,7 +123,8 @@ fun SettingsHub(
     voiceSaveStt: suspend (engine: String?) -> Boolean,
     voiceSaveTts: suspend (engine: String?) -> Boolean,
     voiceSaveCleanup: suspend (engine: String?, model: String?) -> Boolean,
-    glossaryLoad: suspend () -> List<String>,
+    /** Null = load failure (not empty). */
+    glossaryLoad: suspend () -> List<String>?,
     glossarySave: suspend (List<String>) -> List<String>?,
     // Editor / LSP
     lspLoad: suspend () -> List<LspServer>,
@@ -132,13 +140,60 @@ fun SettingsHub(
     paKill: suspend (id: String) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    Column(Modifier.fillMaxSize().background(cs.background).testTag("settings_hub")) {
+    var identityDirty by remember { mutableStateOf(false) }
+    var showDiscardDialog by remember { mutableStateOf(false) }
+    /** When non-null, discard-confirm will switch to this section instead of closing the hub. */
+    var pendingSection by remember { mutableStateOf<SettingsSection?>(null) }
+
+    fun tryClose() {
+        if (identityDirty) {
+            pendingSection = null
+            showDiscardDialog = true
+        } else {
+            onBack()
+        }
+    }
+
+    fun trySectionChange(s: SettingsSection) {
+        if (s == section) return
+        if (identityDirty) {
+            pendingSection = s
+            showDiscardDialog = true
+        } else {
+            onSectionChange(s)
+        }
+    }
+
+    fun confirmDiscard() {
+        showDiscardDialog = false
+        identityDirty = false
+        val next = pendingSection
+        pendingSection = null
+        if (next != null) {
+            onSectionChange(next)
+        } else {
+            onBack()
+        }
+    }
+
+    // Keep the registered close handler current for Escape on the outer overlay.
+    DisposableEffect(identityDirty) {
+        onRegisterCloseHandler?.invoke { tryClose() }
+        onDispose { onRegisterCloseHandler?.invoke { onBack() } }
+    }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(cs.background)
+            .testTag("settings_hub"),
+    ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = Space.lg, vertical = Space.md),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Space.md),
         ) {
-            TextButton(onClick = onBack, modifier = Modifier.testTag("settings_hub_back")) {
+            TextButton(onClick = { tryClose() }, modifier = Modifier.testTag("settings_hub_back")) {
                 Text("Back")
             }
             Text(
@@ -164,7 +219,7 @@ fun SettingsHub(
                     RailRow(
                         label = s.label,
                         selected = s == section,
-                        onClick = { onSectionChange(s) },
+                        onClick = { trySectionChange(s) },
                         testTag = "settings_section_${s.name.lowercase()}",
                     )
                 }
@@ -207,6 +262,7 @@ fun SettingsHub(
                         curatorRunNow = curatorRunNow,
                         loadModels = curatorLoadModels,
                         loadReasoning = curatorLoadReasoning,
+                        onDirtyChange = { identityDirty = it },
                     )
                     SettingsSection.Voice -> VoiceSettingsScreen(
                         loadConfig = voiceLoadConfig,
@@ -225,19 +281,48 @@ fun SettingsHub(
                         lspInstallDone = lspInstallDone,
                         lspAddCustom = lspAddCustom,
                         lspRemoveCustom = lspRemoveCustom,
-                        onBack = onBack,
+                        onBack = { tryClose() },
                         showTopBar = false,
                     )
                     SettingsSection.PersonalAssistants -> PersonalAssistantsScreen(
                         load = paLoad,
                         create = paCreate,
                         kill = paKill,
-                        onBack = onBack,
+                        onBack = { tryClose() },
                         showTopBar = false,
                     )
                 }
             }
         }
+    }
+
+    if (showDiscardDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showDiscardDialog = false
+                pendingSection = null
+            },
+            title = { Text("Discard unsaved changes?") },
+            text = {
+                Text("You have unsaved edits to PA name or soul.md. Leave without saving?")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { confirmDiscard() },
+                    modifier = Modifier.testTag("settings_discard_confirm"),
+                ) { Text("Discard") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showDiscardDialog = false
+                        pendingSection = null
+                    },
+                    modifier = Modifier.testTag("settings_discard_cancel"),
+                ) { Text("Keep editing") }
+            },
+            modifier = Modifier.testTag("settings_discard_dialog"),
+        )
     }
 }
 

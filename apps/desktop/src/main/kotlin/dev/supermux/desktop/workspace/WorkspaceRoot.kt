@@ -81,7 +81,8 @@ enum class SettingsSection(val label: String) {
     Agents("Agents"),
     Devices("Devices"),
     Proxies("Proxies"),
-    Assistant("Assistant"),
+    /** Identity (PA name + soul.md + curator) — distinct from [PersonalAssistants] fleet. */
+    Assistant("Identity"),
     Voice("Voice"),
     EditorLsp("Editor / LSP"),
     PersonalAssistants("Personal assistants"),
@@ -822,6 +823,9 @@ fun WorkspaceRoot(
                     SettingsSection.Voice,
                     -> "settings_overlay"
                 }
+                // Escape is handled inside SettingsHub (dirty-soul discard confirm). The outer
+                // box only owns focus so keys reach the hub; it does not close unconditionally.
+                var settingsTryClose by remember { mutableStateOf<(() -> Unit)?>(null) }
                 Box(
                     Modifier
                         .fillMaxSize()
@@ -830,7 +834,7 @@ fun WorkspaceRoot(
                         .focusable()
                         .onPreviewKeyEvent { e ->
                             if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                                ui.settingsOpen = false
+                                settingsTryClose?.invoke() ?: run { ui.settingsOpen = false }
                                 true
                             } else {
                                 false
@@ -845,6 +849,7 @@ fun WorkspaceRoot(
                                     section = ui.settingsSection,
                                     onSectionChange = { ui.settingsSection = it },
                                     onBack = { ui.settingsOpen = false },
+                                    onRegisterCloseHandler = { settingsTryClose = it },
                                     agentStatuses = { hostApp.agentStatuses() },
                                     agentStartLogin = { hostApp.startAgentLogin(it) },
                                     agentPollLogin = { hostApp.agentLoginState(it) },

@@ -35,6 +35,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
@@ -73,7 +74,7 @@ class VoiceSettingsScreenTest {
         saveVoiceStt: suspend (String?) -> Boolean = { true },
         saveVoiceTts: suspend (String?) -> Boolean = { true },
         saveVoiceCleanup: suspend (String?, String?) -> Boolean = { _, _ -> true },
-        glossaryLoad: suspend () -> List<String> = { listOf("Supermux", "BrokerApi") },
+        glossaryLoad: suspend () -> List<String>? = { listOf("Supermux", "BrokerApi") },
         glossarySave: suspend (List<String>) -> List<String>? = { it },
     ) = @Composable {
         VoiceSettingsScreen(
@@ -108,7 +109,7 @@ class VoiceSettingsScreenTest {
         onNodeWithText("ChatGPT (Codex login)").assertIsDisplayed()
     }
 
-    @Test fun load_failure_shows_error() = runComposeUiTest {
+    @Test fun load_failure_shows_error_with_retry() = runComposeUiTest {
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(loadConfig = { null })()
@@ -116,7 +117,9 @@ class VoiceSettingsScreenTest {
         }
         waitForIdle()
         onNodeWithTag("voice_settings_error").assertIsDisplayed()
+        onNodeWithTag("voice_settings_retry").assertIsDisplayed()
         onNodeWithText("Couldn't load voice settings.").assertIsDisplayed()
+        onNodeWithTag("voice_settings_content").assertDoesNotExist()
     }
 
     @Test fun picking_stt_engine_persists() = runComposeUiTest {
@@ -145,6 +148,36 @@ class VoiceSettingsScreenTest {
         assertEquals("claude-voice", saved.get())
     }
 
+    @Test fun picking_stt_engine_failure_reverts_and_shows_error() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(saveVoiceStt = { false })()
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("voice_stt_chip").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("voice_stt_chip").performClick()
+        waitForIdle()
+        onNodeWithTag("voice_stt_chip_option_claude-voice").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("voice_save_error").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        // Reverted to original whisper from sampleConfig.
+        onNodeWithText("Whisper (local)").assertIsDisplayed()
+    }
+
     @Test fun picking_tts_engine_persists() = runComposeUiTest {
         val saved = AtomicReference<String?>(null)
         setContent {
@@ -169,6 +202,27 @@ class VoiceSettingsScreenTest {
         onNodeWithTag("voice_tts_chip_option_platform").performClick()
         waitUntil(timeoutMillis = 5_000) { saved.get() == "platform" }
         assertEquals("platform", saved.get())
+    }
+
+    @Test fun picking_tts_engine_failure_reverts() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(saveVoiceTts = { false })()
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("voice_tts_chip").performClick()
+        waitForIdle()
+        onNodeWithTag("voice_tts_chip_option_platform").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("voice_save_error").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithText("ChatGPT (Codex login)").assertIsDisplayed()
     }
 
     @Test fun cleanup_engine_switch_resets_model_and_reloads() = runComposeUiTest {
@@ -269,8 +323,6 @@ class VoiceSettingsScreenTest {
         onNodeWithTag("voice_glossary_term_Keep").assertIsDisplayed()
         onNodeWithTag("voice_glossary_input").performTextInput("Temp")
         onNodeWithTag("voice_glossary_add").performClick()
-        // Wait until BOTH the error banner and the restored term are visible —
-        // the production path reloads before clearing so Keep never disappears.
         waitUntil(timeoutMillis = 5_000) {
             try {
                 onNodeWithTag("voice_glossary_error").assertIsDisplayed()
@@ -284,6 +336,47 @@ class VoiceSettingsScreenTest {
         onNodeWithTag("voice_glossary_term_Temp").assertDoesNotExist()
     }
 
+    @Test fun glossary_load_failure_shows_error_not_empty() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(glossaryLoad = { null })()
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("voice_glossary_link").performClick()
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("voice_glossary_load_error").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("voice_glossary_retry").assertIsDisplayed()
+        onNodeWithTag("voice_glossary_empty").assertDoesNotExist()
+    }
+
+    @Test fun glossary_empty_shows_empty_not_error() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(glossaryLoad = { emptyList() })()
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("voice_glossary_link").performClick()
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("voice_glossary_empty").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("voice_glossary_load_error").assertDoesNotExist()
+    }
+
     @Test fun engine_label_helpers() {
         assertEquals("Whisper (local)", sttEngineLabel("whisper"))
         assertEquals("Device (system voice)", ttsEngineLabel("platform"))
@@ -295,7 +388,10 @@ class VoiceSettingsScreenTest {
 
     private fun appForVoice(
         configJson: String? = """{"voiceSttEngine":"whisper","voiceTtsEngine":"platform","voiceCleanupEngine":"codex"}""",
-        glossaryJson: String = """{"glossary":["Supermux"]}""",
+        glossaryJson: String? = """{"glossary":["Supermux"]}""",
+        configPutOk: Boolean = true,
+        glossaryGetStatus: HttpStatusCode = HttpStatusCode.OK,
+        glossaryPutStatus: HttpStatusCode = HttpStatusCode.OK,
     ): Pair<DesktopAppState, CopyOnWriteArrayList<Pair<HttpMethod, String>>> {
         val methods = CopyOnWriteArrayList<Pair<HttpMethod, String>>()
         val engine = MockEngine { req ->
@@ -311,11 +407,20 @@ class VoiceSettingsScreenTest {
                     }
                 }
                 path == "/settings/config" && req.method == HttpMethod.Put ->
-                    respond("{}", HttpStatusCode.OK, jsonHeaders)
-                path == "/config/voice-glossary" && req.method == HttpMethod.Get ->
-                    respond(glossaryJson, HttpStatusCode.OK, jsonHeaders)
+                    respond(
+                        "{}",
+                        if (configPutOk) HttpStatusCode.OK else HttpStatusCode.InternalServerError,
+                        jsonHeaders,
+                    )
+                path == "/config/voice-glossary" && req.method == HttpMethod.Get -> {
+                    if (glossaryJson == null) {
+                        respond("{}", glossaryGetStatus, jsonHeaders)
+                    } else {
+                        respond(glossaryJson, glossaryGetStatus, jsonHeaders)
+                    }
+                }
                 path == "/config/voice-glossary" && req.method == HttpMethod.Put ->
-                    respond(glossaryJson, HttpStatusCode.OK, jsonHeaders)
+                    respond(glossaryJson ?: """{"glossary":[]}""", glossaryPutStatus, jsonHeaders)
                 path.startsWith("/models") ->
                     respond("""{"models":[{"id":"m1","displayName":"Model 1"}]}""", HttpStatusCode.OK, jsonHeaders)
                 else ->
@@ -369,6 +474,80 @@ class VoiceSettingsScreenTest {
             }
         }
         assertTrue(methods.any { it.second == "/config/voice-glossary" })
+    }
+
+    /** B2: glossary GET 500 → Error, never empty that would overwrite. */
+    @Test fun desktop_app_state_glossary_null_on_broker_error() = runComposeUiTest {
+        val (app, _) = appForVoice(
+            glossaryJson = null,
+            glossaryGetStatus = HttpStatusCode.InternalServerError,
+        )
+        var result: List<String>? = emptyList()
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                VoiceSettingsScreen(
+                    loadConfig = { app.appConfig() },
+                    loadModels = { app.launcherModels(it) },
+                    saveVoiceStt = { app.saveVoiceStt(it) },
+                    saveVoiceTts = { app.saveVoiceTts(it) },
+                    saveVoiceCleanup = { e, m -> app.saveVoiceCleanup(e, m) },
+                    glossaryLoad = {
+                        result = app.fetchGlossary()
+                        result
+                    },
+                    glossarySave = { app.updateGlossary(it) },
+                )
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("voice_glossary_link").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("voice_glossary_load_error").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        assertNull(result)
+        onNodeWithTag("voice_glossary_empty").assertDoesNotExist()
+    }
+
+    @Test fun desktop_app_state_voice_stt_save_false_on_http_500() = runComposeUiTest {
+        val (app, methods) = appForVoice(configPutOk = false)
+        var ok = true
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                VoiceSettingsScreen(
+                    loadConfig = { app.appConfig() },
+                    loadModels = { app.launcherModels(it) },
+                    saveVoiceStt = {
+                        ok = app.saveVoiceStt(it)
+                        ok
+                    },
+                    saveVoiceTts = { app.saveVoiceTts(it) },
+                    saveVoiceCleanup = { e, m -> app.saveVoiceCleanup(e, m) },
+                    glossaryLoad = { app.fetchGlossary() },
+                    glossarySave = { app.updateGlossary(it) },
+                )
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("voice_stt_chip").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("voice_stt_chip").performClick()
+        waitForIdle()
+        onNodeWithTag("voice_stt_chip_option_claude-voice").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            methods.any { it.first == HttpMethod.Put && it.second == "/settings/config" } && !ok
+        }
+        onNodeWithTag("voice_save_error").assertIsDisplayed()
     }
 
     @Test fun settings_hub_opens_voice_section() = runComposeUiTest {

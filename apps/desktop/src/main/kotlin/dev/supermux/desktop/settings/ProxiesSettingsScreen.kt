@@ -16,15 +16,23 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -41,10 +49,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Space
+import dev.supermux.desktop.ui.openInBrowser
 import dev.supermux.net.CreateProxyResponse
 import dev.supermux.net.ProxyDto
 import kotlinx.coroutines.delay
@@ -81,6 +92,11 @@ fun ProxiesSettingsScreen(
     var removeTarget by remember { mutableStateOf<String?>(null) }
     var removeBusy by remember { mutableStateOf(false) }
     var removeError by remember { mutableStateOf<String?>(null) }
+    /** Domain pending make-public confirm; private→public only (making private is low-risk). */
+    var publicTarget by remember { mutableStateOf<String?>(null) }
+    var publicBusy by remember { mutableStateOf(false) }
+    var publicError by remember { mutableStateOf<String?>(null) }
+    var toggleError by remember { mutableStateOf<String?>(null) }
     var showCreate by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
@@ -187,40 +203,70 @@ fun ProxiesSettingsScreen(
                     }
                 }
                 is ProxiesLoadState.Ready -> {
-                    LazyColumn(
+                    Column(
                         Modifier
                             .widthIn(max = SettingsDetailMaxWidth)
                             .fillMaxWidth()
-                            .fillMaxSize()
-                            .testTag("proxies_list"),
-                        contentPadding = PaddingValues(bottom = Space.xl),
+                            .fillMaxSize(),
                     ) {
-                        items(state.proxies, key = { it.domain }) { proxy ->
-                            ProxyRow(
-                                proxy = proxy,
-                                onTogglePublic = { isPublic ->
-                                    scope.launch {
-                                        val ok = proxySetPublic(proxy.domain, isPublic)
-                                        if (ok) {
-                                            // Optimistic update; reload to stay in sync with broker.
-                                            val current = (loadState as? ProxiesLoadState.Ready)?.proxies.orEmpty()
-                                            loadState = ProxiesLoadState.Ready(
-                                                current.map {
-                                                    if (it.domain == proxy.domain) it.copy(isPublic = isPublic) else it
-                                                },
-                                            )
-                                        } else {
-                                            reloadKey++
-                                        }
-                                    }
-                                },
-                                onRemove = {
-                                    removeError = null
-                                    removeBusy = false
-                                    removeTarget = proxy.domain
-                                },
+                        toggleError?.let { err ->
+                            Text(
+                                err,
+                                color = cs.error,
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier
+                                    .padding(horizontal = Space.md, vertical = Space.sm)
+                                    .testTag("proxies_toggle_error"),
                             )
-                            HorizontalDivider(color = cs.outlineVariant)
+                        }
+                        LazyColumn(
+                            Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .testTag("proxies_list"),
+                            contentPadding = PaddingValues(bottom = Space.xl),
+                        ) {
+                            items(state.proxies, key = { it.domain }) { proxy ->
+                                ProxyRow(
+                                    proxy = proxy,
+                                    onTogglePublic = { isPublic ->
+                                        if (isPublic && !proxy.isPublic) {
+                                            // Exposing to the public internet needs an explicit confirm.
+                                            publicError = null
+                                            publicBusy = false
+                                            publicTarget = proxy.domain
+                                        } else {
+                                            scope.launch {
+                                                toggleError = null
+                                                val ok = proxySetPublic(proxy.domain, isPublic)
+                                                if (ok) {
+                                                    val current =
+                                                        (loadState as? ProxiesLoadState.Ready)?.proxies.orEmpty()
+                                                    loadState = ProxiesLoadState.Ready(
+                                                        current.map {
+                                                            if (it.domain == proxy.domain) {
+                                                                it.copy(isPublic = isPublic)
+                                                            } else {
+                                                                it
+                                                            }
+                                                        },
+                                                    )
+                                                } else {
+                                                    toggleError =
+                                                        "Couldn't update visibility for \"${proxy.domain}\"."
+                                                    reloadKey++
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onRemove = {
+                                        removeError = null
+                                        removeBusy = false
+                                        removeTarget = proxy.domain
+                                    },
+                                )
+                                HorizontalDivider(color = cs.outlineVariant)
+                            }
                         }
                     }
                 }
@@ -285,6 +331,71 @@ fun ProxiesSettingsScreen(
         )
     }
 
+    publicTarget?.let { domain ->
+        AlertDialog(
+            onDismissRequest = {
+                if (!publicBusy) {
+                    publicTarget = null
+                    publicError = null
+                }
+            },
+            title = { Text("Make proxy public?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+                    Text(
+                        "\"$domain\" will be reachable from the public internet " +
+                            "(not only devices on your network). Anyone with the URL can hit this port.",
+                    )
+                    publicError?.let { err ->
+                        Text(
+                            err,
+                            color = cs.error,
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.testTag("proxies_public_error"),
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !publicBusy,
+                    onClick = {
+                        if (publicBusy) return@TextButton
+                        publicBusy = true
+                        publicError = null
+                        scope.launch {
+                            val ok = proxySetPublic(domain, true)
+                            publicBusy = false
+                            if (ok) {
+                                publicTarget = null
+                                val current = (loadState as? ProxiesLoadState.Ready)?.proxies.orEmpty()
+                                loadState = ProxiesLoadState.Ready(
+                                    current.map {
+                                        if (it.domain == domain) it.copy(isPublic = true) else it
+                                    },
+                                )
+                            } else {
+                                publicError = "Couldn't make the proxy public. Try again."
+                            }
+                        }
+                    },
+                    modifier = Modifier.testTag("proxies_public_confirm"),
+                ) { Text("Make public", color = cs.error) }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !publicBusy,
+                    onClick = {
+                        publicTarget = null
+                        publicError = null
+                    },
+                    modifier = Modifier.testTag("proxies_public_cancel"),
+                ) { Text("Cancel") }
+            },
+            modifier = Modifier.testTag("proxies_public_dialog"),
+        )
+    }
+
     if (showCreate) {
         ExposePortDialog(
             sessions = sessionNames(),
@@ -304,6 +415,7 @@ private fun ProxyRow(
     onRemove: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
+    val clipboard = LocalClipboardManager.current
     val tagSafe = proxy.domain.replace(Regex("[^A-Za-z0-9._-]"), "_")
     Row(
         Modifier
@@ -330,14 +442,45 @@ private fun ProxyRow(
                 )
             }
             proxy.url?.takeIf { it.isNotBlank() }?.let { url ->
-                Text(
-                    url,
-                    color = cs.onSurfaceVariant,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = MonoFontFamily,
-                    maxLines = 1,
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.testTag("proxy_url_$tagSafe"),
-                )
+                ) {
+                    Text(
+                        url,
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = MonoFontFamily,
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    IconButton(
+                        onClick = { clipboard.setText(AnnotatedString(url)) },
+                        modifier = Modifier
+                            .size(Space.xxl)
+                            .testTag("proxy_url_copy_$tagSafe"),
+                    ) {
+                        Icon(
+                            Icons.Filled.ContentCopy,
+                            contentDescription = "Copy URL",
+                            tint = cs.primary,
+                            modifier = Modifier.size(Space.md),
+                        )
+                    }
+                    IconButton(
+                        onClick = { openInBrowser(url) },
+                        modifier = Modifier
+                            .size(Space.xxl)
+                            .testTag("proxy_url_open_$tagSafe"),
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.OpenInNew,
+                            contentDescription = "Open URL",
+                            tint = cs.primary,
+                            modifier = Modifier.size(Space.md),
+                        )
+                    }
+                }
             }
         }
         Text(
@@ -364,6 +507,7 @@ private fun ProxyRow(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ExposePortDialog(
     sessions: List<String>,
@@ -383,26 +527,46 @@ private fun ExposePortDialog(
     val portValid = portText.toIntOrNull()?.let { it in 1..65535 } == true
     val canCreate = selectedSession.isNotBlank() && portValid && !busy
 
+    fun submitCreate() {
+        val port = portText.toIntOrNull() ?: return
+        if (selectedSession.isBlank() || busy) return
+        busy = true
+        error = null
+        scope.launch {
+            val domain = domainText.trim().ifBlank { null }
+            val r = onCreate(selectedSession, port, domain)
+            busy = false
+            if (r == null) {
+                error = "Couldn't create the proxy. Try again."
+            } else {
+                created = true
+                onDismiss(true)
+            }
+        }
+    }
+
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss(created) },
         title = { Text("Expose port") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Space.md)) {
-                Box {
+                ExposedDropdownMenuBox(
+                    expanded = sessionMenu,
+                    onExpandedChange = { sessionMenu = it },
+                ) {
                     OutlinedTextField(
                         value = selectedSession.ifBlank { "Select session" },
                         onValueChange = {},
                         readOnly = true,
                         label = { Text("Session") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = sessionMenu) },
                         modifier = Modifier
                             .fillMaxWidth()
+                            .menuAnchor()
                             .testTag("proxies_create_session"),
-                        trailingIcon = {
-                            TextButton(onClick = { sessionMenu = true }) { Text("▾") }
-                        },
                         colors = settingsFieldColors(),
                     )
-                    DropdownMenu(
+                    ExposedDropdownMenu(
                         expanded = sessionMenu,
                         onDismissRequest = { sessionMenu = false },
                     ) {
@@ -434,6 +598,7 @@ private fun ExposePortDialog(
                     enabled = !busy,
                     modifier = Modifier
                         .fillMaxWidth()
+                        .submitOnEnter(canCreate) { submitCreate() }
                         .testTag("proxies_create_port"),
                     colors = settingsFieldColors(),
                 )
@@ -445,6 +610,7 @@ private fun ExposePortDialog(
                     enabled = !busy,
                     modifier = Modifier
                         .fillMaxWidth()
+                        .submitOnEnter(canCreate) { submitCreate() }
                         .testTag("proxies_create_domain"),
                     colors = settingsFieldColors(),
                 )
@@ -461,23 +627,7 @@ private fun ExposePortDialog(
         confirmButton = {
             Button(
                 enabled = canCreate,
-                onClick = {
-                    val port = portText.toIntOrNull() ?: return@Button
-                    if (selectedSession.isBlank() || busy) return@Button
-                    busy = true
-                    error = null
-                    scope.launch {
-                        val domain = domainText.trim().ifBlank { null }
-                        val r = onCreate(selectedSession, port, domain)
-                        busy = false
-                        if (r == null) {
-                            error = "Couldn't create the proxy. Try again."
-                        } else {
-                            created = true
-                            onDismiss(true)
-                        }
-                    }
-                },
+                onClick = { submitCreate() },
                 modifier = Modifier.testTag("proxies_create_confirm"),
             ) {
                 Text(if (busy) "Creating…" else "Create")

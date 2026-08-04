@@ -653,18 +653,26 @@ class DesktopAppState(
 
     /**
      * Load PA name + soul.md together.
-     * `null` = config/soul load failed; pair of empty strings is a valid empty assistant.
+     * `null` = config **or** soul load failed (do not enter Ready — empty soul is only valid
+     * when the GET succeeded). Pair of empty strings is a legitimate empty assistant.
      */
     suspend fun assistantLoad(): Pair<String, String>? {
         val cfg = runApi("assistantLoadConfig") { api.getConfig() } ?: return null
-        val soul = runApi("assistantLoadSoul") { api.getSoul() } ?: ""
+        val soul = runApi("assistantLoadSoul") { api.getSoul() } ?: return null
         return cfg.paName to soul
     }
 
-    /** PUT /settings/config {paName} then PUT /settings/soul. putSoul's boolean gates success. */
-    suspend fun assistantSave(paName: String, soul: String): Boolean {
-        runApi("assistantSaveConfig") { api.saveConfig(paName = paName); true }
-        return runApi("assistantSaveSoul") { api.putSoul(soul) } ?: false
+    /**
+     * PUT /settings/config {paName} then PUT /settings/soul.
+     * Returns null on full success; a human-readable error when either write fails
+     * (config failure is reported before soul is attempted).
+     */
+    suspend fun assistantSave(paName: String, soul: String): String? {
+        val configOk = runApi("assistantSaveConfig") { api.saveConfig(paName = paName); true } ?: false
+        if (!configOk) return "Couldn't save PA name — check connection and try again"
+        val soulOk = runApi("assistantSaveSoul") { api.putSoul(soul) } ?: false
+        if (!soulOk) return "Couldn't save soul.md — check connection and try again"
+        return null
     }
 
     /** GET /settings/curator. Null on failure. */
@@ -721,9 +729,14 @@ class DesktopAppState(
             true
         } ?: false
 
-    /** GET /config/voice-glossary. Empty on failure (glossary editor shows empty, not error). */
-    suspend fun fetchGlossary(): List<String> =
-        runApi("fetchGlossary") { api.fetchGlossary() } ?: emptyList()
+    /**
+     * GET /config/voice-glossary.
+     * `null` = transport/decode failure (UI Error + Retry); empty list = no terms yet.
+     * Never collapse failure into empty — adding a term after a failed load would overwrite
+     * the real glossary.
+     */
+    suspend fun fetchGlossary(): List<String>? =
+        runApi("fetchGlossary") { api.fetchGlossary() }
 
     /**
      * PUT /config/voice-glossary. Returns the persisted list, or null on failure so the UI can
@@ -731,13 +744,6 @@ class DesktopAppState(
      */
     suspend fun updateGlossary(terms: List<String>): List<String>? =
         runApi("updateGlossary") { api.updateGlossary(terms) }
-
-    /**
-     * POST {/sessions/<id>,}/transcribe {draft} → cleaned text (on-device-STT / draft cleanup path).
-     * Null on failure. Desktop mic path uses [transcribeAudio]; this is for draft-only cleanup.
-     */
-    suspend fun transcribeDraft(sessionId: String?, draft: String): String? =
-        runApi("transcribeDraft") { apiDictate.transcribeDraft(sessionId, draft).text }
 
     // ── Finish flow (M4b; mirrors AppViewModel.finish/finishReadiness/verifySuggest/verifySave) ──
     // The FinishDialog drives the whole job lifecycle off the [finishJobs] StateFlow; [finish] only

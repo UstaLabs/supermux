@@ -1,15 +1,15 @@
 // Ported from apps/android/.../settings/VoiceSettingsScreens.kt.
 // Desktop adaptations:
 //   - No Scaffold/Back — Settings hub owns navigation
-//   - PickerSheet → DropdownMenu (desktop pointer convention)
-//   - Glossary is an in-section sub-view (same hub section), not a separate nav route
-//   - Swipe-to-delete → Remove button (pointer UI)
-//   - sp/dp hardcodes → theme Space / MaterialTheme.typography
-//   - Integrates with existing MessageTts (reads voiceTtsEngine from config) — do not duplicate TTS
+//   - Glossary is an in-section expand (rail owns nav; no push-subpage)
+//   - Picker chips have border + chevron (not status-badge pills)
+//   - Failure ≠ empty for glossary; Error + Retry like Proxies
+//   - Engine save failures revert the chip and surface an error
 //   - testTags for compose UI tests + SM_VOICE headless verification
 package dev.supermux.desktop.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,11 +22,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -34,6 +36,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -50,10 +53,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import dev.supermux.desktop.chat.MessageTts
 import dev.supermux.desktop.theme.Radii
 import dev.supermux.desktop.theme.Space
+import dev.supermux.desktop.theme.Stroke
 import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ModelInfo
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private data class SttEngine(val id: String, val label: String)
@@ -90,6 +97,24 @@ internal fun voiceEngineFamily(id: String): String =
 internal fun voiceEngineLabel(id: String): String =
     VOICE_ENGINES.firstOrNull { it.id == id }?.label ?: id
 
+private const val ERROR_AUTO_RETRY_MS = 3_000L
+private const val PREVIEW_TTS_SAMPLE = "Hello from Supermux."
+
+/** Load model for voice config. */
+internal sealed class VoiceLoadState {
+    data object Loading : VoiceLoadState()
+    data object Ready : VoiceLoadState()
+    data class Error(val message: String) : VoiceLoadState()
+}
+
+/** Load model for glossary — failure is distinct from a legitimate empty list. */
+internal sealed class GlossaryLoadState {
+    data object Loading : GlossaryLoadState()
+    data object Empty : GlossaryLoadState()
+    data class Ready(val terms: List<String>) : GlossaryLoadState()
+    data class Error(val message: String) : GlossaryLoadState()
+}
+
 @Composable
 fun VoiceSettingsScreen(
     loadConfig: suspend () -> AppConfigDto?,
@@ -97,39 +122,9 @@ fun VoiceSettingsScreen(
     saveVoiceStt: suspend (engine: String?) -> Boolean,
     saveVoiceTts: suspend (engine: String?) -> Boolean,
     saveVoiceCleanup: suspend (engine: String?, model: String?) -> Boolean,
-    glossaryLoad: suspend () -> List<String>,
+    /** Null = failure; empty = no terms; never collapse failure into empty. */
+    glossaryLoad: suspend () -> List<String>?,
     glossarySave: suspend (List<String>) -> List<String>?,
-    modifier: Modifier = Modifier,
-) {
-    var showGlossary by remember { mutableStateOf(false) }
-    if (showGlossary) {
-        VoiceGlossaryPage(
-            load = glossaryLoad,
-            save = glossarySave,
-            onBack = { showGlossary = false },
-            modifier = modifier,
-        )
-    } else {
-        VoiceSettingsMain(
-            loadConfig = loadConfig,
-            loadModels = loadModels,
-            saveVoiceStt = saveVoiceStt,
-            saveVoiceTts = saveVoiceTts,
-            saveVoiceCleanup = saveVoiceCleanup,
-            onOpenGlossary = { showGlossary = true },
-            modifier = modifier,
-        )
-    }
-}
-
-@Composable
-private fun VoiceSettingsMain(
-    loadConfig: suspend () -> AppConfigDto?,
-    loadModels: suspend (family: String) -> List<ModelInfo>,
-    saveVoiceStt: suspend (engine: String?) -> Boolean,
-    saveVoiceTts: suspend (engine: String?) -> Boolean,
-    saveVoiceCleanup: suspend (engine: String?, model: String?) -> Boolean,
-    onOpenGlossary: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -139,26 +134,50 @@ private fun VoiceSettingsMain(
     var ttsEngine by remember { mutableStateOf(DEFAULT_TTS_ENGINE) }
     var engine by remember { mutableStateOf(DEFAULT_VOICE_ENGINE) }
     var selectedModel by remember { mutableStateOf("") }
-    var loading by remember { mutableStateOf(true) }
-    var loadError by remember { mutableStateOf(false) }
+    var loadState by remember { mutableStateOf<VoiceLoadState>(VoiceLoadState.Loading) }
+    var reloadKey by remember { mutableStateOf(0) }
     var showStt by remember { mutableStateOf(false) }
     var showTts by remember { mutableStateOf(false) }
     var showEngine by remember { mutableStateOf(false) }
     var showModel by remember { mutableStateOf(false) }
+    var saveError by remember { mutableStateOf<String?>(null) }
+    var glossaryExpanded by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
+    suspend fun loadOnce() {
+        if (loadState !is VoiceLoadState.Ready) {
+            loadState = VoiceLoadState.Loading
+        }
         val cfg = loadConfig()
         if (cfg == null) {
-            loadError = true
-            loading = false
-            return@LaunchedEffect
+            loadState = VoiceLoadState.Error("Couldn't load voice settings.")
+            return
         }
         sttEngine = cfg.voiceSttEngine?.ifBlank { null } ?: DEFAULT_STT_ENGINE
         ttsEngine = cfg.voiceTtsEngine?.ifBlank { null } ?: DEFAULT_TTS_ENGINE
         engine = cfg.voiceCleanupEngine?.ifBlank { null } ?: DEFAULT_VOICE_ENGINE
         selectedModel = cfg.voiceCleanupModel ?: ""
         models = loadModels(voiceEngineFamily(engine))
-        loading = false
+        saveError = null
+        loadState = VoiceLoadState.Ready
+    }
+
+    LaunchedEffect(reloadKey) { loadOnce() }
+
+    LaunchedEffect(loadState, reloadKey) {
+        if (loadState !is VoiceLoadState.Error) return@LaunchedEffect
+        while (isActive) {
+            delay(ERROR_AUTO_RETRY_MS)
+            val cfg = loadConfig()
+            if (cfg != null) {
+                sttEngine = cfg.voiceSttEngine?.ifBlank { null } ?: DEFAULT_STT_ENGINE
+                ttsEngine = cfg.voiceTtsEngine?.ifBlank { null } ?: DEFAULT_TTS_ENGINE
+                engine = cfg.voiceCleanupEngine?.ifBlank { null } ?: DEFAULT_VOICE_ENGINE
+                selectedModel = cfg.voiceCleanupModel ?: ""
+                models = loadModels(voiceEngineFamily(engine))
+                loadState = VoiceLoadState.Ready
+                break
+            }
+        }
     }
 
     Box(
@@ -168,34 +187,50 @@ private fun VoiceSettingsMain(
             .testTag("voice_settings_screen"),
         contentAlignment = Alignment.TopCenter,
     ) {
-        when {
-            loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        when (val state = loadState) {
+            is VoiceLoadState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(
                     color = cs.primary,
                     modifier = Modifier.testTag("voice_settings_loading"),
                 )
             }
-            loadError -> Box(
+            is VoiceLoadState.Error -> Column(
                 Modifier
                     .widthIn(max = SettingsDetailMaxWidth)
-                    .fillMaxSize()
+                    .fillMaxWidth()
                     .padding(Space.xl)
                     .testTag("voice_settings_error"),
-                contentAlignment = Alignment.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(Space.md),
             ) {
                 Text(
-                    "Couldn't load voice settings.",
+                    state.message,
                     color = cs.error,
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                OutlinedButton(
+                    onClick = { reloadKey++ },
+                    modifier = Modifier.testTag("voice_settings_retry"),
+                ) { Text("Retry") }
             }
-            else -> Column(
+            is VoiceLoadState.Ready -> Column(
                 Modifier
                     .widthIn(max = SettingsDetailMaxWidth)
                     .fillMaxWidth()
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
                     .testTag("voice_settings_content"),
             ) {
+                saveError?.let { err ->
+                    Text(
+                        err,
+                        color = cs.error,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier
+                            .padding(horizontal = Space.lg, vertical = Space.sm)
+                            .testTag("voice_save_error"),
+                    )
+                }
                 VoiceSettingRow(
                     label = "Speech engine",
                     desc = "Cloud STT for uploaded mic audio. Claude Code voice needs a Claude.ai login.",
@@ -209,8 +244,17 @@ private fun VoiceSettingsMain(
                         options = STT_ENGINES.map { it.id to it.label },
                         current = sttEngine,
                         onPick = { picked ->
+                            val previous = sttEngine
                             sttEngine = picked
-                            scope.launch { saveVoiceStt(picked) }
+                            scope.launch {
+                                val ok = saveVoiceStt(picked)
+                                if (!ok) {
+                                    sttEngine = previous
+                                    saveError = "Couldn't save speech engine."
+                                } else {
+                                    saveError = null
+                                }
+                            }
                         },
                         testTag = "voice_stt_chip",
                     )
@@ -222,19 +266,39 @@ private fun VoiceSettingsMain(
                     desc = "Device uses the OS voice. ChatGPT needs a Codex login.",
                     testTag = "voice_tts_row",
                 ) {
-                    ValueChip(
-                        text = ttsEngineLabel(ttsEngine).take(28),
-                        expanded = showTts,
-                        onExpand = { showTts = true },
-                        onDismiss = { showTts = false },
-                        options = TTS_ENGINES.map { it.id to it.label },
-                        current = ttsEngine,
-                        onPick = { picked ->
-                            ttsEngine = picked
-                            scope.launch { saveVoiceTts(picked) }
-                        },
-                        testTag = "voice_tts_chip",
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ValueChip(
+                            text = ttsEngineLabel(ttsEngine).take(28),
+                            expanded = showTts,
+                            onExpand = { showTts = true },
+                            onDismiss = { showTts = false },
+                            options = TTS_ENGINES.map { it.id to it.label },
+                            current = ttsEngine,
+                            onPick = { picked ->
+                                val previous = ttsEngine
+                                ttsEngine = picked
+                                scope.launch {
+                                    val ok = saveVoiceTts(picked)
+                                    if (!ok) {
+                                        ttsEngine = previous
+                                        saveError = "Couldn't save read-aloud engine."
+                                    } else {
+                                        saveError = null
+                                    }
+                                }
+                            },
+                            testTag = "voice_tts_chip",
+                        )
+                        TextButton(
+                            onClick = { MessageTts.toggle(PREVIEW_TTS_SAMPLE) },
+                            modifier = Modifier.testTag("voice_tts_preview"),
+                        ) {
+                            Text("Preview", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
                 }
                 HorizontalDivider(color = cs.outlineVariant)
 
@@ -251,11 +315,20 @@ private fun VoiceSettingsMain(
                         options = VOICE_ENGINES.map { it.id to it.label },
                         current = engine,
                         onPick = { picked ->
+                            val previousEngine = engine
+                            val previousModel = selectedModel
                             engine = picked
                             selectedModel = ""
                             scope.launch {
-                                saveVoiceCleanup(picked, "")
-                                models = loadModels(voiceEngineFamily(picked))
+                                val ok = saveVoiceCleanup(picked, "")
+                                if (!ok) {
+                                    engine = previousEngine
+                                    selectedModel = previousModel
+                                    saveError = "Couldn't save cleanup engine."
+                                } else {
+                                    saveError = null
+                                    models = loadModels(voiceEngineFamily(picked))
+                                }
                             }
                         },
                         testTag = "voice_cleanup_engine_chip",
@@ -279,8 +352,17 @@ private fun VoiceSettingsMain(
                         options = listOf("" to "Default") + models.map { it.id to it.displayName },
                         current = selectedModel,
                         onPick = { picked ->
+                            val previous = selectedModel
                             selectedModel = picked
-                            scope.launch { saveVoiceCleanup(null, picked) }
+                            scope.launch {
+                                val ok = saveVoiceCleanup(null, picked)
+                                if (!ok) {
+                                    selectedModel = previous
+                                    saveError = "Couldn't save cleanup model."
+                                } else {
+                                    saveError = null
+                                }
+                            }
                         },
                         testTag = "voice_cleanup_model_chip",
                     )
@@ -290,7 +372,7 @@ private fun VoiceSettingsMain(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .clickable(onClick = onOpenGlossary)
+                        .clickable { glossaryExpanded = !glossaryExpanded }
                         .padding(horizontal = Space.lg, vertical = Space.md)
                         .testTag("voice_glossary_link"),
                     verticalAlignment = Alignment.CenterVertically,
@@ -309,34 +391,67 @@ private fun VoiceSettingsMain(
                         )
                     }
                     Icon(
-                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = null,
+                        if (glossaryExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                        contentDescription = if (glossaryExpanded) "Collapse" else "Expand",
                         tint = cs.onSurfaceVariant,
                     )
                 }
                 HorizontalDivider(color = cs.outlineVariant)
+
+                if (glossaryExpanded) {
+                    VoiceGlossarySection(
+                        load = glossaryLoad,
+                        save = glossarySave,
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun VoiceGlossaryPage(
-    load: suspend () -> List<String>,
+private fun VoiceGlossarySection(
+    load: suspend () -> List<String>?,
     save: suspend (List<String>) -> List<String>?,
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     val terms = remember { mutableStateListOf<String>() }
     var newTerm by remember { mutableStateOf("") }
-    var loading by remember { mutableStateOf(true) }
+    var loadState by remember { mutableStateOf<GlossaryLoadState>(GlossaryLoadState.Loading) }
+    var reloadKey by remember { mutableStateOf(0) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(Unit) {
-        terms.addAll(load())
-        loading = false
+    suspend fun loadOnce() {
+        if (loadState !is GlossaryLoadState.Ready && loadState !is GlossaryLoadState.Empty) {
+            loadState = GlossaryLoadState.Loading
+        }
+        val result = load()
+        if (result == null) {
+            terms.clear()
+            loadState = GlossaryLoadState.Error("Couldn't load glossary.")
+        } else {
+            terms.clear()
+            terms.addAll(result)
+            loadState = if (result.isEmpty()) GlossaryLoadState.Empty else GlossaryLoadState.Ready(result)
+            error = null
+        }
+    }
+
+    LaunchedEffect(reloadKey) { loadOnce() }
+
+    LaunchedEffect(loadState, reloadKey) {
+        if (loadState !is GlossaryLoadState.Error) return@LaunchedEffect
+        while (isActive) {
+            delay(ERROR_AUTO_RETRY_MS)
+            val result = load()
+            if (result != null) {
+                terms.clear()
+                terms.addAll(result)
+                loadState = if (result.isEmpty()) GlossaryLoadState.Empty else GlossaryLoadState.Ready(result)
+                break
+            }
+        }
     }
 
     fun persist() {
@@ -344,15 +459,23 @@ private fun VoiceGlossaryPage(
         scope.launch {
             val saved = save(snapshot)
             if (saved == null) {
-                // Reload first, then replace the list atomically so the UI never
-                // lands on an intermediate empty state (avoids flaky "reverted"
-                // assertions and brief empty flashes under concurrent load).
+                // Only reload when the load succeeds — never replace with empty-on-failure.
                 val reloaded = load()
-                terms.clear()
-                terms.addAll(reloaded)
+                if (reloaded != null) {
+                    terms.clear()
+                    terms.addAll(reloaded)
+                    loadState = if (reloaded.isEmpty()) {
+                        GlossaryLoadState.Empty
+                    } else {
+                        GlossaryLoadState.Ready(reloaded)
+                    }
+                }
                 error = "Couldn't save — reverted"
             } else {
                 error = null
+                terms.clear()
+                terms.addAll(saved)
+                loadState = if (saved.isEmpty()) GlossaryLoadState.Empty else GlossaryLoadState.Ready(saved)
             }
         }
     }
@@ -363,133 +486,135 @@ private fun VoiceGlossaryPage(
             newTerm = ""
             return
         }
+        // Refuse add while load failed — would overwrite real glossary with one term.
+        if (loadState is GlossaryLoadState.Error || loadState is GlossaryLoadState.Loading) return
         terms.add(t)
         newTerm = ""
+        loadState = GlossaryLoadState.Ready(terms.toList())
         persist()
     }
 
     Column(
-        modifier
-            .fillMaxSize()
-            .background(cs.background)
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Space.lg)
             .testTag("voice_glossary_screen"),
     ) {
         Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Space.lg, vertical = Space.md),
+            Modifier.fillMaxWidth().padding(vertical = Space.md),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
-            TextButton(
-                onClick = onBack,
-                modifier = Modifier.testTag("voice_glossary_back"),
+            OutlinedTextField(
+                value = newTerm,
+                onValueChange = { newTerm = it },
+                modifier = Modifier
+                    .weight(1f)
+                    .submitOnEnter(newTerm.isNotBlank()) { add() }
+                    .testTag("voice_glossary_input"),
+                placeholder = { Text("Add a term (e.g. Supermux)") },
+                singleLine = true,
+                enabled = loadState !is GlossaryLoadState.Error && loadState !is GlossaryLoadState.Loading,
+                colors = settingsFieldColors(),
+            )
+            IconButton(
+                onClick = { add() },
+                enabled = newTerm.isNotBlank() &&
+                    loadState !is GlossaryLoadState.Error &&
+                    loadState !is GlossaryLoadState.Loading,
+                modifier = Modifier.testTag("voice_glossary_add"),
             ) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                Text(" Voice")
+                Icon(Icons.Filled.Add, contentDescription = "Add term", tint = cs.primary)
             }
+        }
+        Text(
+            "Terms the agent keeps spelled exactly, and that dictation is biased toward.",
+            color = cs.onSurfaceVariant,
+            style = MaterialTheme.typography.labelSmall,
+        )
+        error?.let {
             Text(
-                "Voice glossary",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+                it,
+                color = cs.error,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier
+                    .padding(vertical = Space.sm)
+                    .testTag("voice_glossary_error"),
             )
         }
-        HorizontalDivider(color = cs.outlineVariant)
 
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-            Column(
-                Modifier
-                    .widthIn(max = SettingsDetailMaxWidth)
-                    .fillMaxSize()
-                    .padding(horizontal = Space.lg),
+        when (val g = loadState) {
+            is GlossaryLoadState.Loading -> Box(
+                Modifier.fillMaxWidth().padding(Space.lg),
+                contentAlignment = Alignment.Center,
             ) {
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = Space.md),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
-                ) {
-                    OutlinedTextField(
-                        value = newTerm,
-                        onValueChange = { newTerm = it },
-                        modifier = Modifier
-                            .weight(1f)
-                            .submitOnEnter(newTerm.isNotBlank()) { add() }
-                            .testTag("voice_glossary_input"),
-                        placeholder = { Text("Add a term (e.g. Supermux)") },
-                        singleLine = true,
-                        colors = settingsFieldColors(),
-                    )
-                    IconButton(
-                        onClick = { add() },
-                        enabled = newTerm.isNotBlank(),
-                        modifier = Modifier.testTag("voice_glossary_add"),
-                    ) {
-                        Icon(Icons.Filled.Add, contentDescription = "Add term", tint = cs.primary)
-                    }
-                }
-                Text(
-                    "Terms the agent keeps spelled exactly, and that dictation is biased toward.",
-                    color = cs.onSurfaceVariant,
-                    style = MaterialTheme.typography.labelSmall,
+                CircularProgressIndicator(
+                    color = cs.primary,
+                    modifier = Modifier.testTag("voice_glossary_loading"),
                 )
-                error?.let {
-                    Text(
-                        it,
-                        color = cs.error,
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier
+            }
+            is GlossaryLoadState.Error -> Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = Space.lg)
+                    .testTag("voice_glossary_load_error"),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(Space.md),
+            ) {
+                Text(
+                    g.message,
+                    color = cs.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                OutlinedButton(
+                    onClick = { reloadKey++ },
+                    modifier = Modifier.testTag("voice_glossary_retry"),
+                ) { Text("Retry") }
+            }
+            is GlossaryLoadState.Empty -> Text(
+                "No terms yet — add the names dictation keeps getting wrong.",
+                color = cs.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier
+                    .padding(vertical = Space.lg)
+                    .testTag("voice_glossary_empty"),
+            )
+            is GlossaryLoadState.Ready -> Column(
+                Modifier
+                    .fillMaxWidth()
+                    .testTag("voice_glossary_list"),
+            ) {
+                terms.forEach { term ->
+                    val tagSafe = term.replace(Regex("[^A-Za-z0-9._-]"), "_")
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
                             .padding(vertical = Space.sm)
-                            .testTag("voice_glossary_error"),
-                    )
-                }
-
-                when {
-                    loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(
-                            color = cs.primary,
-                            modifier = Modifier.testTag("voice_glossary_loading"),
-                        )
-                    }
-                    terms.isEmpty() -> Text(
-                        "No terms yet — add the names dictation keeps getting wrong.",
-                        color = cs.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier
-                            .padding(vertical = Space.lg)
-                            .testTag("voice_glossary_empty"),
-                    )
-                    else -> LazyColumn(
-                        Modifier.fillMaxSize().testTag("voice_glossary_list"),
-                        contentPadding = PaddingValues(bottom = Space.xl),
+                            .testTag("voice_glossary_term_$tagSafe"),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        items(terms, key = { it }) { term ->
-                            val tagSafe = term.replace(Regex("[^A-Za-z0-9._-]"), "_")
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = Space.sm)
-                                    .testTag("voice_glossary_term_$tagSafe"),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    term,
-                                    color = cs.onSurface,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                TextButton(
-                                    onClick = {
-                                        terms.remove(term)
-                                        persist()
-                                    },
-                                    modifier = Modifier.testTag("voice_glossary_remove_$tagSafe"),
-                                ) {
-                                    Text("Remove", color = cs.error)
+                        Text(
+                            term,
+                            color = cs.onSurface,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            onClick = {
+                                terms.remove(term)
+                                if (terms.isEmpty()) {
+                                    loadState = GlossaryLoadState.Empty
+                                } else {
+                                    loadState = GlossaryLoadState.Ready(terms.toList())
                                 }
-                            }
-                            HorizontalDivider(color = cs.outlineVariant)
+                                persist()
+                            },
+                            modifier = Modifier.testTag("voice_glossary_remove_$tagSafe"),
+                        ) {
+                            Text("Remove", color = cs.error)
                         }
                     }
+                    HorizontalDivider(color = cs.outlineVariant)
                 }
             }
         }
@@ -542,13 +667,16 @@ private fun ValueChip(
 ) {
     val cs = MaterialTheme.colorScheme
     Box {
-        Box(
+        Row(
             Modifier
-                .clip(RoundedCornerShape(Radii.pill))
+                .clip(RoundedCornerShape(Radii.sm))
                 .background(cs.surfaceContainer)
+                .border(Stroke.thin, cs.outline, RoundedCornerShape(Radii.sm))
                 .clickable(onClick = onExpand)
                 .padding(horizontal = Space.md, vertical = Space.sm)
                 .testTag(testTag),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Space.xs),
         ) {
             Text(
                 text,
@@ -556,6 +684,7 @@ private fun ValueChip(
                 style = MaterialTheme.typography.labelMedium,
                 maxLines = 1,
             )
+            Text("▾", color = cs.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
         }
         DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
             options.forEach { (id, label) ->

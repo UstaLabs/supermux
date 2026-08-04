@@ -1078,7 +1078,7 @@ fun main() {
                                     "tts=${cfg?.voiceTtsEngine ?: "(default)"} " +
                                     "cleanup=${cfg?.voiceCleanupEngine ?: "(default)"} " +
                                     "model=${cfg?.voiceCleanupModel ?: "(default)"} " +
-                                    "glossaryTerms=${glossary.size}",
+                                    "glossaryTerms=${glossary?.size ?: "null"}",
                             )
                         }
                     }

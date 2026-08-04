@@ -36,6 +36,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
@@ -170,8 +171,6 @@ class ProxiesSettingsScreenTest {
         onNodeWithTag("proxies_expose_button").performClick()
         waitForIdle()
         onNodeWithTag("proxies_create_dialog").assertIsDisplayed()
-        // Pre-select session from the dropdown (first session is already selected in state,
-        // but prove the field is present before create).
         onNodeWithTag("proxies_create_session").assertIsDisplayed()
         onNodeWithTag("proxies_create_port").performTextInput("4000")
         onNodeWithTag("proxies_create_domain").performTextInput("new.example.local")
@@ -193,6 +192,29 @@ class ProxiesSettingsScreenTest {
             }
         }
         assertTrue(loads.get() >= 2)
+    }
+
+    @Test fun create_proxy_failure_keeps_dialog_and_shows_error() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(proxyCreate = { _, _, _ -> null })()
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("proxies_expose_button").performClick()
+        waitForIdle()
+        onNodeWithTag("proxies_create_port").performTextInput("4000")
+        onNodeWithTag("proxies_create_confirm").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("proxies_create_error").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("proxies_create_dialog").assertIsDisplayed()
+        onNodeWithTag("proxies_create_port").assertIsDisplayed()
     }
 
     @Test fun remove_requires_confirm_then_reloads() = runComposeUiTest {
@@ -240,7 +262,29 @@ class ProxiesSettingsScreenTest {
         assertTrue(loads.get() >= 2)
     }
 
-    @Test fun toggle_public_calls_set_proxy_public() = runComposeUiTest {
+    @Test fun remove_failure_shows_error_in_dialog() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(proxyRemove = { false })()
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("proxy_remove_app.example.local").performClick()
+        waitForIdle()
+        onNodeWithTag("proxies_remove_confirm").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("proxies_remove_error").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("proxies_remove_dialog").assertIsDisplayed()
+        onNodeWithTag("proxy_row_app.example.local").assertIsDisplayed()
+    }
+
+    @Test fun toggle_public_requires_confirm_then_calls_set() = runComposeUiTest {
         val toggled = AtomicReference<Pair<String, Boolean>?>(null)
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
@@ -262,8 +306,35 @@ class ProxiesSettingsScreenTest {
             }
         }
         onNodeWithTag("proxy_public_switch_app.example.local").performClick()
+        waitForIdle()
+        // Making public requires confirm — mutation not yet fired.
+        assertEquals(null, toggled.get())
+        onNodeWithTag("proxies_public_dialog").assertIsDisplayed()
+        onNodeWithText("Make proxy public?").assertIsDisplayed()
+        onNodeWithTag("proxies_public_confirm").performClick()
         waitUntil(timeoutMillis = 5_000) { toggled.get() != null }
         assertEquals("app.example.local" to true, toggled.get())
+    }
+
+    @Test fun toggle_public_failure_shows_error_in_dialog() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(proxySetPublic = { _, _ -> false })()
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("proxy_public_switch_app.example.local").performClick()
+        waitForIdle()
+        onNodeWithTag("proxies_public_confirm").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("proxies_public_error").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("proxies_public_dialog").assertIsDisplayed()
     }
 
     // ── DesktopAppState + BrokerApi (ktor mock) ─────────────────────────────────────────────────
@@ -363,6 +434,103 @@ class ProxiesSettingsScreenTest {
         waitUntil(timeoutMillis = 5_000) { called }
         assertEquals(null, result)
         onNodeWithTag("proxies_settings_error").assertIsDisplayed()
+    }
+
+    @Test fun desktop_app_state_remove_proxy_false_on_http_500() = runComposeUiTest {
+        val (app, methods) = appForProxies(deleteStatus = HttpStatusCode.InternalServerError)
+        var removed = true
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ProxiesSettingsScreen(
+                    proxiesLoad = { app.proxiesForSettings() },
+                    sessionNames = { listOf("web") },
+                    proxyCreate = { _, _, _ -> null },
+                    proxySetPublic = { _, _ -> true },
+                    proxyRemove = {
+                        removed = app.removeProxy(it)
+                        removed
+                    },
+                )
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("proxy_remove_app.example.local").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("proxy_remove_app.example.local").performClick()
+        waitForIdle()
+        onNodeWithTag("proxies_remove_confirm").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            methods.any { it.first == HttpMethod.Delete } && !removed
+        }
+        assertFalse(removed)
+        onNodeWithTag("proxies_remove_error").assertIsDisplayed()
+    }
+
+    @Test fun desktop_app_state_create_proxy_null_on_http_500() = runComposeUiTest {
+        val (app, _) = appForProxies(createStatus = HttpStatusCode.InternalServerError)
+        var created: CreateProxyResponse? = CreateProxyResponse("u", "d", 1)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ProxiesSettingsScreen(
+                    proxiesLoad = { app.proxiesForSettings() },
+                    sessionNames = { listOf("web") },
+                    proxyCreate = { s, p, d ->
+                        created = app.createProxy(s, p, d)
+                        created
+                    },
+                    proxySetPublic = { _, _ -> true },
+                    proxyRemove = { true },
+                )
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("proxies_expose_button").performClick()
+        waitForIdle()
+        onNodeWithTag("proxies_create_port").performTextInput("4000")
+        onNodeWithTag("proxies_create_confirm").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("proxies_create_error").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        assertEquals(null, created)
+    }
+
+    @Test fun desktop_app_state_toggle_public_false_on_http_500() = runComposeUiTest {
+        val (app, methods) = appForProxies(patchStatus = HttpStatusCode.InternalServerError)
+        var ok = true
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ProxiesSettingsScreen(
+                    proxiesLoad = { app.proxiesForSettings() },
+                    sessionNames = { listOf("web") },
+                    proxyCreate = { _, _, _ -> null },
+                    proxySetPublic = { d, p ->
+                        ok = app.setProxyPublic(d, p)
+                        ok
+                    },
+                    proxyRemove = { true },
+                )
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("proxy_public_switch_app.example.local").performClick()
+        waitForIdle()
+        onNodeWithTag("proxies_public_confirm").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            methods.any { it.first == HttpMethod.Patch } && !ok
+        }
+        assertFalse(ok)
+        onNodeWithTag("proxies_public_error").assertIsDisplayed()
     }
 
     @Test fun settings_hub_opens_proxies_section() = runComposeUiTest {
