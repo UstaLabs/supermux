@@ -89,7 +89,7 @@ fun SettingsHub(
     updateStatus: suspend () -> UpdateStatus?,
     checkUpdate: suspend () -> UpdateStatus?,
     runUpdate: suspend () -> RunUpdateResult?,
-    restartBroker: () -> Unit,
+    restartBroker: suspend () -> Boolean,
     // Editor / LSP
     lspLoad: suspend () -> List<LspServer>,
     lspToggle: suspend (id: String, enabled: Boolean) -> List<LspServer>?,

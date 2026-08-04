@@ -31,12 +31,24 @@ dependencies {
     testImplementation(libs.coroutines.test)
     testImplementation(kotlin("test"))
     testImplementation(libs.ktor.client.mock) // seed BrokerApi responses (e.g. terminal-tab list) in UI tests
+    // Real WS reconnect tests for System restart (local stub broker; not shipped).
+    testImplementation(libs.ktor.server.cio)
+    testImplementation(libs.ktor.server.websockets)
     @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
     testImplementation(compose.desktop.uiTestJUnit4)
     testImplementation(compose.desktop.currentOs)
 }
 
 kotlin { jvmToolchain(17) }
+
+// Never launch a real system browser from unit/UI tests (Agent OAuth, timeline links, etc.).
+// BrowserLauncher.openInBrowser checks this property and no-ops when set.
+tasks.withType<Test>().configureEach {
+    systemProperty("supermux.tests", "1")
+    // Compose UI tests + MockEngine can wedge a worker under load; one fork keeps the gate
+    // green-and-terminating (avoids historical hangs under parallel workers).
+    maxParallelForks = 1
+}
 
 // M3 editor: ship the SAME committed CodeMirror bundle the mobile apps use (single source of
 // truth: apps/android/src/main/assets/editor/) into desktop resources under editor/. KCEF loads

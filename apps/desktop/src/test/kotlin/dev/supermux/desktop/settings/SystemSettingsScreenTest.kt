@@ -4,6 +4,7 @@ package dev.supermux.desktop.settings
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -26,11 +27,28 @@ import dev.supermux.net.UpdateStatus
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import io.ktor.server.application.install
+import io.ktor.server.cio.CIO as ServerCIO
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.request.receiveText
+import io.ktor.server.response.respondText
+import io.ktor.server.routing.get
+import io.ktor.server.routing.post
+import io.ktor.server.routing.routing
+import io.ktor.server.websocket.WebSockets as ServerWebSockets
+import io.ktor.server.websocket.webSocket
 import io.ktor.utils.io.ByteReadChannel
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.DefaultWebSocketSession
+import io.ktor.websocket.Frame
+import io.ktor.websocket.close
+import io.ktor.websocket.readText
+import java.net.ServerSocket
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
@@ -42,10 +60,16 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Desktop-parity Task 3: [SystemSettingsScreen] load / recheck / update / restart + hub wiring.
@@ -100,7 +124,7 @@ class SystemSettingsScreenTest {
         updateStatus: suspend () -> UpdateStatus? = { sampleStatus() },
         checkUpdate: suspend () -> UpdateStatus? = { sampleStatus() },
         runUpdate: suspend () -> RunUpdateResult? = { null },
-        restartBroker: () -> Unit = {},
+        restartBroker: suspend () -> Boolean = { true },
     ) = @Composable {
         SystemSettingsScreen(
             updateStatus = updateStatus,
@@ -312,6 +336,44 @@ class SystemSettingsScreenTest {
         onNodeWithTag("system_update_available").assertIsDisplayed()
     }
 
+    /** Failed Recheck after a successful initial load must surface an error and keep prior status. */
+    @Test fun recheck_failure_after_load_surfaces_error_keeps_status() = runComposeUiTest {
+        val checkCalls = AtomicInteger(0)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(
+                    updateStatus = { sampleStatus(current = "1.0.0") },
+                    checkUpdate = {
+                        checkCalls.incrementAndGet()
+                        null
+                    },
+                )()
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithText("supermux 1.0.0").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("system_recheck").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("system_action_error").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        assertEquals(1, checkCalls.get())
+        onNodeWithText("Couldn't recheck for updates.").assertIsDisplayed()
+        // Stale status remains — not wiped on failed recheck.
+        onNodeWithText("supermux 1.0.0").assertIsDisplayed()
+    }
+
     @Test fun run_update_started_polls_status_until_settled() = runComposeUiTest {
         val runCalls = AtomicInteger(0)
         val polls = AtomicInteger(0)
@@ -359,6 +421,18 @@ class SystemSettingsScreenTest {
         }
         assertEquals(1, runCalls.get())
         assertTrue(polls.get() >= 3)
+        // Only one progress row (no duplicate Downloading… / Checking…).
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithText("Restart required").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        assertEquals(1, onAllNodesWithTag("system_update_state").fetchSemanticsNodes().size)
+        onNodeWithTag("system_update_state_restart_icon").assertIsDisplayed()
+        onNodeWithTag("system_update_state_spinner").assertDoesNotExist()
     }
 
     @Test fun run_update_instruction_surfaces_error() = runComposeUiTest {
@@ -399,13 +473,208 @@ class SystemSettingsScreenTest {
         onNodeWithText("Source install — update via git.").assertIsDisplayed()
     }
 
+    /** Empty 500 body must not silently look like "nothing happened". */
+    @Test fun run_update_empty_failure_surfaces_fallback_error() = runComposeUiTest {
+        val runCalls = AtomicInteger(0)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(
+                    updateStatus = {
+                        sampleStatus(updateAvailable = true, latest = "2.0.0", mode = "binary")
+                    },
+                    runUpdate = {
+                        runCalls.incrementAndGet()
+                        // Mirrors BrokerApi decoding of `500 {}` after the synthetic-error fill.
+                        RunUpdateResult(started = false, error = "HTTP 500")
+                    },
+                )()
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("system_update_broker").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("system_update_broker").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("system_run_error").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        assertEquals(1, runCalls.get())
+        onNodeWithText("HTTP 500").assertIsDisplayed()
+    }
+
+    @Test fun run_update_null_result_surfaces_unreachable() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(
+                    updateStatus = {
+                        sampleStatus(updateAvailable = true, latest = "2.0.0", mode = "binary")
+                    },
+                    runUpdate = { null },
+                )()
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("system_update_broker").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("system_update_broker").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithText("Couldn't reach the broker.").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+    }
+
+    /** Mid-flight failed status shows Failed + broker lastError + Retry update. */
+    @Test fun midflight_failed_shows_failed_row_and_retry() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(updateStatus = {
+                    sampleStatus(
+                        updateAvailable = true,
+                        latest = "2.0.0",
+                        mode = "binary",
+                        state = "failed",
+                        lastError = "Signature verification failed.",
+                    )
+                })()
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithText("Failed").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("system_update_state").assertIsDisplayed()
+        onNodeWithTag("system_update_state_failed_icon").assertIsDisplayed()
+        onNodeWithTag("system_update_state_spinner").assertDoesNotExist()
+        onNodeWithText("Signature verification failed.").assertIsDisplayed()
+        onNodeWithText("Retry update").assertIsDisplayed()
+    }
+
+    /** restart-required must not use an indefinite spinner. */
+    @Test fun restart_required_shows_icon_not_spinner() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(updateStatus = {
+                    sampleStatus(state = "restart-required", updateAvailable = false)
+                })()
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithText("Restart required").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("system_update_state_restart_icon").assertIsDisplayed()
+        onNodeWithTag("system_update_state_spinner").assertDoesNotExist()
+    }
+
+    /** While downloading, only one StateRow (no duplicate progress from the updating flag). */
+    @Test fun downloading_shows_single_progress_row() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(updateStatus = {
+                    sampleStatus(state = "downloading", updateAvailable = true, latest = "2.0.0")
+                })()
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithText("Downloading…").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        assertEquals(1, onAllNodesWithTag("system_update_state").fetchSemanticsNodes().size)
+        onNodeWithTag("system_update_state_spinner").assertIsDisplayed()
+    }
+
+    /**
+     * Polling timeout: when status never leaves a running state, surface an honest message
+     * instead of silently ending the update spinner. Uses a shortened poll budget so the gate
+     * stays fast (production is 120 × 1.5s).
+     */
+    @Test fun run_update_polling_timeout_surfaces_error() = runComposeUiTest {
+        val polls = AtomicInteger(0)
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                SystemSettingsScreen(
+                    updateStatus = {
+                        val n = polls.incrementAndGet()
+                        if (n == 1) {
+                            sampleStatus(updateAvailable = true, latest = "2.0.0")
+                        } else {
+                            sampleStatus(state = "downloading", updateAvailable = true, latest = "2.0.0")
+                        }
+                    },
+                    checkUpdate = { sampleStatus() },
+                    runUpdate = { RunUpdateResult(started = true) },
+                    restartBroker = { true },
+                    updatePollAttempts = 2,
+                    updatePollDelayMs = 20L,
+                )
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("system_update_broker").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("system_update_broker").performClick()
+        waitUntil(timeoutMillis = 10_000) {
+            try {
+                onNodeWithText("Update is still running — check again later.").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        assertTrue(polls.get() >= 3) // initial load + at least 2 polls
+    }
+
     // ── restart confirm ─────────────────────────────────────────────────────────────────────────
 
     @Test fun restart_requires_confirm_and_states_connection_kill() = runComposeUiTest {
         val restarted = AtomicBoolean(false)
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                screen(restartBroker = { restarted.set(true) })()
+                screen(restartBroker = {
+                    restarted.set(true)
+                    true
+                })()
             }
         }
         waitForIdle()
@@ -436,6 +705,35 @@ class SystemSettingsScreenTest {
         onNodeWithTag("system_restart_confirm").performClick()
         waitUntil(timeoutMillis = 5_000) { restarted.get() }
         assertTrue(restarted.get())
+    }
+
+    @Test fun restart_failure_surfaces_error() = runComposeUiTest {
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(restartBroker = { false })()
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("system_restart_broker").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("system_restart_broker").performClick()
+        waitForIdle()
+        onNodeWithTag("system_restart_confirm").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("system_restart_error").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithText("Couldn't restart the broker.").assertIsDisplayed()
     }
 
     // ── DesktopAppState + BrokerApi (ktor mock) ─────────────────────────────────────────────────
@@ -532,7 +830,7 @@ class SystemSettingsScreenTest {
                     },
                     checkUpdate = { null },
                     runUpdate = { null },
-                    restartBroker = {},
+                    restartBroker = { true },
                 )
             }
         }
@@ -569,19 +867,118 @@ class SystemSettingsScreenTest {
         assertEquals("Use git pull.", r.instruction)
     }
 
-    @Test fun desktop_app_state_restart_broker_posts_without_throw() = runBlocking {
+    @Test fun desktop_app_state_run_update_500_empty_body_has_error() = runBlocking {
+        val app = appForSystem(runJson = "{}", runStatus = HttpStatusCode.InternalServerError)
+        val r = app.runUpdate()
+        assertFalse(r!!.started)
+        assertEquals("HTTP 500", r.error)
+    }
+
+    @Test fun desktop_app_state_restart_broker_posts_ok() = runBlocking {
         val restarts = AtomicInteger(0)
         val app = appForSystem(restartCalls = restarts)
-        app.restartBroker()
-        // Fire-and-forget on stateScope (UnconfinedTestDispatcher runs eagerly).
-        waitUntilRestart(restarts, timeoutMs = 2_000)
+        assertTrue(app.restartBroker())
         assertEquals(1, restarts.get())
     }
 
-    private fun waitUntilRestart(counter: AtomicInteger, timeoutMs: Long) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (counter.get() == 0 && System.currentTimeMillis() < deadline) {
-            Thread.sleep(10)
+    @Test fun desktop_app_state_restart_broker_false_on_5xx() = runBlocking {
+        val restarts = AtomicInteger(0)
+        val app = appForSystem(
+            restartStatus = HttpStatusCode.InternalServerError,
+            restartCalls = restarts,
+        )
+        assertFalse(app.restartBroker())
+        assertEquals(1, restarts.get())
+    }
+
+    /**
+     * Real disconnect → reconnect: local stub broker accepts WS, serves restart POST by closing
+     * all sockets, then accepts a second connection with a fresh snapshot. This is the path the
+     * fake Boolean-flip test missed (`connectOnInit=false` never opened a socket).
+     */
+    @Test fun restart_broker_disconnects_and_reconnects_against_stub() = runBlocking {
+        val port = ServerSocket(0).use { it.localPort }
+        val wsOpens = AtomicInteger(0)
+        val restartPosts = AtomicInteger(0)
+        val liveSessions =
+            java.util.Collections.synchronizedList(mutableListOf<DefaultWebSocketSession>())
+
+        val server = embeddedServer(ServerCIO, port = port, host = "127.0.0.1") {
+            install(ServerWebSockets)
+            routing {
+                get("/api/update/status") {
+                    call.respondText(
+                        """{"current":"stub-1","commit":"deadbeef","mode":"binary","state":"idle","updateAvailable":false}""",
+                        contentType = io.ktor.http.ContentType.Application.Json,
+                    )
+                }
+                post("/system/restart") {
+                    restartPosts.incrementAndGet()
+                    // Close after responding so the client observes a clean disconnect.
+                    call.respondText("{}", contentType = io.ktor.http.ContentType.Application.Json)
+                    for (session in liveSessions.toList()) {
+                        try {
+                            session.close(CloseReason(CloseReason.Codes.SERVICE_RESTART, "stub restart"))
+                        } catch (_: Throwable) {
+                        }
+                    }
+                    liveSessions.clear()
+                }
+                webSocket("/ws") {
+                    wsOpens.incrementAndGet()
+                    liveSessions.add(this)
+                    try {
+                        for (frame in incoming) {
+                            if (frame is Frame.Text && frame.readText().contains("subscribe")) {
+                                send(
+                                    Frame.Text(
+                                        """{"type":"snapshot","sessions":[],"logs":{},"activity":{},"bgTasks":{},"agentState":{},"commands":{},"commandsResolved":{},"reads":{}}""",
+                                    ),
+                                )
+                            }
+                        }
+                    } finally {
+                        liveSessions.remove(this)
+                    }
+                }
+            }
+        }
+        server.start(wait = false)
+
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val app = DesktopAppState(
+            baseUrl = "ws://127.0.0.1:$port",
+            token = "stub-token",
+            scope = scope,
+            connectOnInit = true,
+        )
+        try {
+            // Wait for first snapshot (connected).
+            val first = withTimeoutOrNull(10_000) {
+                while (!app.connected) delay(50)
+                true
+            }
+            assertTrue(first == true, "never received first snapshot (opens=${wsOpens.get()})")
+            assertEquals(1, wsOpens.get())
+
+            assertTrue(app.restartBroker())
+            assertEquals(1, restartPosts.get())
+
+            // Drop then re-sync: connection count must go 1→2 with a fresh snapshot.
+            val reconnected = withTimeoutOrNull(15_000) {
+                while (wsOpens.get() < 2 || !app.connected) delay(50)
+                true
+            }
+            assertTrue(
+                reconnected == true,
+                "did not reconnect after restart (opens=${wsOpens.get()}, connected=${app.connected})",
+            )
+            assertEquals(2, wsOpens.get())
+            assertTrue(app.connected)
+        } finally {
+            app.close()
+            scope.cancel()
+            server.stop(100, 500)
         }
     }
 

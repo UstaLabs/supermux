@@ -1069,12 +1069,15 @@ class DesktopAppState(
         runApi("runUpdate") { api.runUpdate() }
 
     /**
-     * POST /system/restart — fire-and-forget broker restart. Kills this client's connection;
-     * [BrokerClient] reconnects when the broker is back. Failures are logged, not thrown.
+     * POST /system/restart — ask the broker to restart. Kills this client's connection;
+     * [BrokerClient] reconnects when the broker is back.
+     *
+     * @return true when the POST is accepted (2xx); false on 4xx/5xx or transport failure so the
+     *   System settings UI can surface an error instead of a blind "Restarting…" spinner.
      */
-    fun restartBroker() {
-        stateScope.launch { runApi("restartBroker") { api.restartBroker() } }
-    }
+    suspend fun restartBroker(): Boolean =
+        runApi("restartBroker") { api.restartBroker(); true } ?: false
+
 
     // ── LSP settings (M4g-4 Task 1) ────────────────────────────────────────────────────
     // Backs the LspSettingsScreen overlay (M4g-4 Task 2/3): enable/disable + install + add/remove

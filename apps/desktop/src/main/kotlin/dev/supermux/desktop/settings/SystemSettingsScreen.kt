@@ -8,6 +8,7 @@
 //   - Restart dialog text states plainly that this kills the desktop↔broker connection
 //   - Distinct from update/AppUpdate.kt (File ▸ "Check for Updates…") — this updates the *broker*
 //   - testTags for compose UI tests + SM_SYSTEM headless verification
+//   - restartBroker is suspend→Boolean so 5xx/unreachable surface instead of a blind spinner
 package dev.supermux.desktop.settings
 
 import androidx.compose.foundation.clickable
@@ -49,7 +50,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.ui.openInBrowser
@@ -63,14 +63,20 @@ import kotlinx.coroutines.launch
  *
  * This is **not** the desktop app's own self-update ([dev.supermux.desktop.update.AppUpdateScreen]);
  * that lives under File ▸ "Check for Updates…". Everything here targets the **active host's broker**.
+ *
+ * [restartBroker] returns true when the POST is accepted; false on 5xx / transport failure so the
+ * UI can surface an error instead of pretending a restart began.
  */
 @Composable
 fun SystemSettingsScreen(
     updateStatus: suspend () -> UpdateStatus?,
     checkUpdate: suspend () -> UpdateStatus?,
     runUpdate: suspend () -> RunUpdateResult?,
-    restartBroker: () -> Unit,
+    restartBroker: suspend () -> Boolean,
     modifier: Modifier = Modifier,
+    /** Max status polls after runUpdate starts (production: 120 × 1.5s ≈ 3 min). Tests shorten. */
+    updatePollAttempts: Int = 120,
+    updatePollDelayMs: Long = 1500L,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -78,10 +84,13 @@ fun SystemSettingsScreen(
     var status by remember { mutableStateOf<UpdateStatus?>(null) }
     var loading by remember { mutableStateOf(true) }
     var loadError by remember { mutableStateOf<String?>(null) }
+    /** Action-level errors that keep prior status visible (failed Recheck, update 5xx, etc.). */
+    var actionError by remember { mutableStateOf<String?>(null) }
     var checking by remember { mutableStateOf(false) }
     var showRestartConfirm by remember { mutableStateOf(false) }
     var restarting by remember { mutableStateOf(false) }
     var runError by remember { mutableStateOf<String?>(null) }
+    var restartError by remember { mutableStateOf<String?>(null) }
     var updating by remember { mutableStateOf(false) }
 
     suspend fun loadStatus(forceCheck: Boolean = false) {
@@ -89,8 +98,12 @@ fun SystemSettingsScreen(
         if (s != null) {
             status = s
             loadError = null
+            if (forceCheck) actionError = null
         } else if (status == null) {
             loadError = "Couldn't load update status."
+        } else if (forceCheck) {
+            // Prior status stays on screen; surface that Recheck failed so stale data is not blessed.
+            actionError = "Couldn't recheck for updates."
         }
         loading = false
         checking = false
@@ -123,6 +136,7 @@ fun SystemSettingsScreen(
                     .padding(Space.lg)
                     .testTag("system_settings_body"),
                 verticalArrangement = Arrangement.spacedBy(Space.lg),
+                horizontalAlignment = Alignment.Start,
             ) {
                 // Caption keeps broker-update distinct from File ▸ "Check for Updates…" (app).
                 SettingsCaption(
@@ -139,6 +153,7 @@ fun SystemSettingsScreen(
                             onClick = {
                                 if (checking || updating) return@TextButton
                                 checking = true
+                                actionError = null
                                 scope.launch { loadStatus(forceCheck = true) }
                             },
                             enabled = !checking && !updating && !restarting,
@@ -146,9 +161,9 @@ fun SystemSettingsScreen(
                         ) {
                             if (checking) {
                                 CircularProgressIndicator(
-                                    Modifier.size(14.dp),
+                                    Modifier.size(Space.md),
                                     color = cs.primary,
-                                    strokeWidth = 2.dp,
+                                    strokeWidth = Space.xs / 2,
                                 )
                             } else {
                                 Text("Recheck")
@@ -198,8 +213,12 @@ fun SystemSettingsScreen(
 
                     UpdateAvailabilityRow(s)
 
-                    if (s.state != "idle") {
-                        StateRow(s.state)
+                    // Single progress row: prefer live status when non-idle; otherwise a
+                    // brief "checking" while the POST is in flight and status hasn't moved yet.
+                    // Avoids the dual "Downloading…" rows when both `updating` and state are set.
+                    when {
+                        s.state != "idle" -> StateRow(s.state)
+                        updating -> StateRow("checking")
                     }
 
                     lastCheckedText(s.lastChecked)?.let {
@@ -217,6 +236,15 @@ fun SystemSettingsScreen(
                             color = cs.error,
                             style = MaterialTheme.typography.labelMedium,
                             modifier = Modifier.testTag("system_last_error"),
+                        )
+                    }
+
+                    actionError?.let {
+                        Text(
+                            it,
+                            color = cs.error,
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.testTag("system_action_error"),
                         )
                     }
 
@@ -243,6 +271,7 @@ fun SystemSettingsScreen(
                             onClick = {
                                 scope.launch {
                                     runError = null
+                                    actionError = null
                                     updating = true
                                     val result = runUpdate()
                                     when {
@@ -251,30 +280,37 @@ fun SystemSettingsScreen(
                                             updating = false
                                         }
                                         result.started -> {
-                                            for (i in 0 until 120) {
-                                                delay(1500)
+                                            var settled = false
+                                            for (i in 0 until updatePollAttempts) {
+                                                delay(updatePollDelayMs)
                                                 val fresh = updateStatus() ?: continue
                                                 status = fresh
-                                                if (!isRunningState(fresh.state)) break
+                                                if (!isRunningState(fresh.state)) {
+                                                    settled = true
+                                                    break
+                                                }
+                                            }
+                                            if (!settled) {
+                                                runError =
+                                                    "Update is still running — check again later."
                                             }
                                             updating = false
                                         }
                                         else -> {
-                                            runError = result.instruction ?: result.error
+                                            // 500 {} and similar leave instruction/error null —
+                                            // never silently clear the action as if nothing happened.
+                                            runError = result.instruction
+                                                ?: result.error
+                                                ?: "Couldn't start the update."
                                             updating = false
                                         }
                                     }
                                 }
                             },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("system_update_broker"),
+                            modifier = Modifier.testTag("system_update_broker"),
                         ) {
                             Text(if (s.state == "failed") "Retry update" else "Update broker")
                         }
-                    }
-                    if (updating) {
-                        StateRow(status?.state?.takeIf { isRunningState(it) } ?: "checking")
                     }
                     runError?.let {
                         Text(
@@ -305,9 +341,7 @@ fun SystemSettingsScreen(
                 Button(
                     onClick = { showRestartConfirm = true },
                     enabled = !restarting,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("system_restart_broker"),
+                    modifier = Modifier.testTag("system_restart_broker"),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = cs.error,
                         contentColor = cs.onError,
@@ -316,14 +350,22 @@ fun SystemSettingsScreen(
                     if (restarting) {
                         CircularProgressIndicator(
                             color = cs.onError,
-                            strokeWidth = 2.dp,
-                            modifier = Modifier.size(16.dp),
+                            strokeWidth = Space.xs / 2,
+                            modifier = Modifier.size(Space.lg),
                         )
                         Spacer(Modifier.width(Space.sm))
                         Text("Restarting…")
                     } else {
                         Text("Restart broker")
                     }
+                }
+                restartError?.let {
+                    Text(
+                        it,
+                        color = cs.error,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.testTag("system_restart_error"),
+                    )
                 }
                 SettingsCaption("Sessions will reconnect automatically.")
             }
@@ -345,9 +387,12 @@ fun SystemSettingsScreen(
                     onClick = {
                         showRestartConfirm = false
                         restarting = true
-                        restartBroker()
+                        restartError = null
                         scope.launch {
-                            delay(4000)
+                            val ok = restartBroker()
+                            if (!ok) {
+                                restartError = "Couldn't restart the broker."
+                            }
                             restarting = false
                         }
                     },
@@ -387,7 +432,7 @@ private fun UpdateAvailabilityRow(s: UpdateStatus) {
                 Icons.Filled.Download,
                 contentDescription = null,
                 tint = cs.primary,
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier.size(Space.lg),
             )
             Text(
                 "Update available" + (s.latest?.let { ": $it" } ?: ""),
@@ -404,7 +449,7 @@ private fun UpdateAvailabilityRow(s: UpdateStatus) {
                 Icons.Filled.CheckCircle,
                 contentDescription = null,
                 tint = cs.primary,
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier.size(Space.lg),
             )
             Text(
                 "Up to date",
@@ -419,24 +464,38 @@ private fun UpdateAvailabilityRow(s: UpdateStatus) {
 private fun StateRow(state: String) {
     val cs = MaterialTheme.colorScheme
     val failed = state == "failed"
+    val running = isRunningState(state)
+    val restartRequired = state == "restart-required"
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Space.sm),
         modifier = Modifier.testTag("system_update_state"),
     ) {
-        if (failed) {
-            Icon(
+        when {
+            failed -> Icon(
                 Icons.Filled.Close,
                 contentDescription = null,
                 tint = cs.error,
-                modifier = Modifier.size(14.dp),
+                modifier = Modifier
+                    .size(Space.md)
+                    .testTag("system_update_state_failed_icon"),
             )
-        } else {
-            CircularProgressIndicator(
+            running -> CircularProgressIndicator(
                 color = cs.primary,
-                strokeWidth = 2.dp,
-                modifier = Modifier.size(14.dp),
+                strokeWidth = Space.xs / 2,
+                modifier = Modifier
+                    .size(Space.md)
+                    .testTag("system_update_state_spinner"),
             )
+            restartRequired -> Icon(
+                Icons.Filled.CheckCircle,
+                contentDescription = null,
+                tint = cs.primary,
+                modifier = Modifier
+                    .size(Space.md)
+                    .testTag("system_update_state_restart_icon"),
+            )
+            // other terminal labels: text only
         }
         Text(
             stateLabel(state),

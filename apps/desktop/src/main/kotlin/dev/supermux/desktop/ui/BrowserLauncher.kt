@@ -12,8 +12,30 @@ import kotlin.concurrent.thread
  * the browser process), so it must NEVER run on the Compose UI thread — a click would freeze the
  * frame. Off-loaded to a short-lived daemon thread and guarded by `isDesktopSupported` + the BROWSE
  * capability check; a broken handoff logs (rather than silently swallowing) so it stays diagnosable.
+ *
+ * Test seam: [openInBrowserOverride] captures URLs without spawning a browser. When the JVM
+ * property `supermux.tests=1` is set (desktop `test` task), the system browser is never opened
+ * even if the override is null — no test may launch a browser (Agent OAuth would otherwise hang
+ * the full suite waiting on inherited browser pipes).
  */
+@Volatile
+var openInBrowserOverride: ((String) -> Unit)? = null
+
 fun openInBrowser(url: String) {
+    val override = openInBrowserOverride
+    if (override != null) {
+        override(url)
+        return
+    }
+    if (System.getProperty("supermux.tests") == "1") {
+        // Visible in test logs if a code path still tries to open a browser without an override.
+        println("[browser] suppressed under supermux.tests: $url")
+        return
+    }
+    openInSystemBrowser(url)
+}
+
+private fun openInSystemBrowser(url: String) {
     thread(isDaemon = true, name = "open-browser") {
         runCatching {
             if (Desktop.isDesktopSupported()) {

@@ -855,7 +855,7 @@ fun WorkspaceRoot(
                                     updateStatus = { hostApp.updateStatus() },
                                     checkUpdate = { hostApp.checkUpdate() },
                                     runUpdate = { hostApp.runUpdate() },
-                                    restartBroker = { hostApp.restartBroker() },
+                                    restartBroker = { hostApp.restartBroker() }, // suspend→Boolean
                                     lspLoad = { hostApp.lspLoad() },
                                     lspToggle = { id, enabled -> hostApp.lspToggle(id, enabled) },
                                     lspInstall = { id -> hostApp.lspInstall(id) },
