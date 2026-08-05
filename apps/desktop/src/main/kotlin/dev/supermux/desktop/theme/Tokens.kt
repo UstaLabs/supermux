@@ -27,9 +27,17 @@ object IconSize {
     val lg = 24.dp
 }
 
-/** Stroke widths for progress indicators and outlines. */
+/**
+ * Stroke widths — borders and progress indicators (not layout spacing).
+ * Prefer these over raw `1.dp` / `2.dp` so surfaces stay consistent.
+ *
+ * Merge note: two parity branches each grew this object. Unified here so every existing call site
+ * keeps its intended width — borders use [hairline] (1dp), progress indicators use [thin]/[md]
+ * (both 2dp; [md] is retained because the Devices spinner refers to it).
+ */
 object Stroke {
-    val thin = 1.5.dp
+    val hairline = 1.dp
+    val thin = 2.dp
     val md = 2.dp
 }
 
@@ -39,6 +47,19 @@ object Radii {
     val md = 12.dp
     val lg = 16.dp
     val pill = 999.dp
+}
+
+/**
+ * Component-size tokens that sit outside the spacing grid (status dots, menu widths).
+ * Named so call sites never hardcode magic dimensions.
+ */
+object Size {
+    /** Online-status badge on forge connection rows. */
+    val statusDot = 8.dp
+    /** Project-picker / forge omnibox dropdown width. */
+    val omniboxWidth = 384.dp
+    /** Max height of the scrollable omnibox option list. */
+    val omniboxListMax = 360.dp
 }
 
 /**

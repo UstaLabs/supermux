@@ -25,6 +25,9 @@ import dev.supermux.net.ChunkSource
 import dev.supermux.net.DeviceDto
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
+import dev.supermux.net.ForgeConnection
+import dev.supermux.net.ForgeConnectionsResponse
+import dev.supermux.net.ForgeSearchResponse
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
 import dev.supermux.net.FsRefsResult
@@ -41,6 +44,7 @@ import dev.supermux.net.PADto
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
+import dev.supermux.net.RemoteRepo
 import dev.supermux.net.RepoInfo
 import dev.supermux.net.CodexResetResult
 import dev.supermux.net.ReviewComment
@@ -1131,6 +1135,59 @@ class DesktopAppState(
     suspend fun launcherCommands(agent: String, workdir: String): List<SlashCommand> =
         if (workdir.isBlank()) emptyList()
         else runApi("launcherCommands") { api.previewCommands(agent, workdir).commands } ?: emptyList()
+
+    // ── Git hosting / forges (desktop-parity Task 4; mirrors AppViewModel.forges* + listForges) ──
+    // Settings hub manages accounts; the New-Session launcher project picker uses the search /
+    // clone / create half. All go through [runApi] and getOrNull-degrade like Android.
+
+    /** GET /forge/connections → configured accounts + CLI availability. Null on transport failure. */
+    suspend fun forgesLoad(): ForgeConnectionsResponse? =
+        runApi("forgesLoad") { api.listForges() }
+
+    /** POST /forge/connections — connect with a PAT. True on success. */
+    suspend fun forgeAdd(kind: String, token: String, host: String?, transport: String): Boolean =
+        runApi("forgeAdd") { api.addForge(kind, token, host, transport); true } ?: false
+
+    /** POST /forge/connections/import — import from `gh`/`glab` CLI auth. True on success. */
+    suspend fun forgeImport(kind: String, transport: String): Boolean =
+        runApi("forgeImport") { api.importForge(kind, transport); true } ?: false
+
+    /**
+     * DELETE /forge/connections/<id> — disconnect. True only when the account is gone afterwards.
+     * [BrokerApi.removeForge] does not check HTTP status, so we re-list to distinguish a 5xx no-op
+     * from a real removal (and surface failures in the settings UI).
+     */
+    suspend fun forgeRemove(id: String): Boolean =
+        runApi("forgeRemove") {
+            api.removeForge(id)
+            val stillThere = api.listForges().connections.any { it.id == id }
+            if (stillThere) error("forge $id still present after remove")
+            true
+        } ?: false
+
+    /** GET /forge/connections → connection list only (launcher omnibox). Empty on failure. */
+    suspend fun listForges(): List<ForgeConnection> =
+        runApi("listForges") { api.listForges().connections } ?: emptyList()
+
+    /**
+     * POST /forge/search → remote repos (+ per-connection errors) across connected forges.
+     * Null on transport/5xx so the UI can distinguish failure from an empty success.
+     */
+    suspend fun searchForge(query: String): ForgeSearchResponse? =
+        runApi("searchForge") { api.searchForge(query) }
+
+    /** POST /forge/clone → local path of the new checkout. Null on failure / blank path. */
+    suspend fun cloneForge(connectionId: String, owner: String, name: String): String? =
+        runApi("cloneForge") { api.cloneForge(connectionId, owner, name).localPath }
+            ?.ifBlank { null }
+
+    /** POST /forge/create-local → local path of a fresh `git init`. Null on failure / blank path. */
+    suspend fun createLocalRepo(name: String): String? =
+        runApi("createLocalRepo") { api.createLocalRepo(name).localPath }?.ifBlank { null }
+
+    /** POST /forge/create → create remote + clone; returns local path. Null on failure / blank. */
+    suspend fun createForge(connectionId: String, name: String): String? =
+        runApi("createForge") { api.createForge(connectionId, name).localPath }?.ifBlank { null }
 
     // ── In-session model + reasoning selection (mirrors AppViewModel's per-session model/reasoning
     //    helpers) ─────────────────────────────────────────────────────────────────────────────────

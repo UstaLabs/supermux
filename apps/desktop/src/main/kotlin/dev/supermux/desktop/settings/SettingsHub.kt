@@ -48,6 +48,7 @@ import dev.supermux.net.AgentInstallJob
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
 import dev.supermux.net.DeviceDto
+import dev.supermux.net.ForgeConnectionsResponse
 import dev.supermux.net.LspInstallResult
 import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
@@ -95,6 +96,11 @@ fun SettingsHub(
     paLoad: suspend () -> List<PADto>,
     paCreate: suspend (name: String, agent: String, focus: String?) -> Boolean,
     paKill: suspend (id: String) -> Unit,
+    // Git hosting (Task 4)
+    forgesLoad: suspend () -> ForgeConnectionsResponse?,
+    forgeAdd: suspend (kind: String, token: String, host: String?, transport: String) -> Boolean,
+    forgeImport: suspend (kind: String, transport: String) -> Boolean,
+    forgeRemove: suspend (id: String) -> Boolean,
 ) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxSize().background(cs.background).testTag("settings_hub")) {
@@ -174,6 +180,12 @@ fun SettingsHub(
                         kill = paKill,
                         onBack = onBack,
                         showTopBar = false,
+                    )
+                    SettingsSection.GitHosting -> GitHostingScreen(
+                        forgesLoad = forgesLoad,
+                        forgeAdd = forgeAdd,
+                        forgeImport = forgeImport,
+                        forgeRemove = forgeRemove,
                     )
                 }
             }
