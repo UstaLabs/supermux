@@ -10,9 +10,8 @@
 //     per-agent brand assets.
 //   - Voice dictation (M5-1): the SAME MicButton/DesktopDictationController the chat composer uses
 //     (dev.supermux.desktop.chat.Dictation.kt), wired to the id-less /transcribe path (no session
-//     yet). The slash-command "/" menu (no loadCommands seam on this screen) and the Forge omnibox
-//     clone/create UI (TODO(M4-forge)) are still omitted. Drag-and-drop staging is a TODO too (the
-//     Attach button covers the must-ship path).
+//     yet). The Forge omnibox (clone/create via ProjectPicker, desktop-parity Task 4) is wired.
+//     Drag-and-drop staging is a TODO too (the Attach button covers the must-ship path).
 //
 // THE SUBTLE PART (ported 1:1 from Android): the [launcherRestoring] gate plus lastSeenAgent /
 // lastSeenWorkdir (NOT one-shot "armed" booleans) distinguish a draft-restore SETTLING from a
@@ -59,6 +58,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.CircularProgressIndicator
@@ -81,10 +81,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.focusable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
@@ -109,23 +113,34 @@ import dev.supermux.desktop.chat.MicRecorder
 import dev.supermux.desktop.chat.rememberDesktopDictation
 import dev.supermux.desktop.host.HostDot
 import dev.supermux.desktop.host.HostView
+import dev.supermux.desktop.theme.Radii
+import dev.supermux.desktop.theme.Size
 import dev.supermux.desktop.theme.Space
+import dev.supermux.desktop.theme.Stroke
 import dev.supermux.desktop.upload.FileChunkSource
 import dev.supermux.net.ChunkSource
+import dev.supermux.net.ForgeConnection
+import dev.supermux.net.ForgeSearchResponse
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ReasoningLevel
 import dev.supermux.net.ReasoningResponse
+import dev.supermux.net.RemoteRepo
 import dev.supermux.net.RepoInfo
 import dev.supermux.net.resolveReasoningLevel
 import dev.supermux.net.showReasoningPicker
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
+import dev.supermux.session.OmniOption
+import dev.supermux.session.ProjectOption
+import dev.supermux.session.buildOmniboxOptions
 import dev.supermux.session.chooseDefaultProject
 import dev.supermux.session.formatWorkdir
 import dev.supermux.session.orderProjectsByRecency
 import dev.supermux.session.recentWorkdirs
 import dev.supermux.session.sessionsByRecency
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.awt.FileDialog
@@ -268,6 +283,13 @@ fun SessionLauncherScreen(
     selectedHost: String? = null,
     onSelectHost: (String) -> Unit = {},
     loadAgents: suspend () -> List<String> = { emptyList() },
+    // Forge omnibox for the project picker (connections + clone/create). Defaults = "no forges".
+    loadForges: suspend () -> List<ForgeConnection> = { emptyList() },
+    /** Null response = search failed (distinguishable from empty success). */
+    searchForge: suspend (query: String) -> ForgeSearchResponse? = { ForgeSearchResponse() },
+    cloneForge: suspend (connectionId: String, owner: String, name: String) -> String? = { _, _, _ -> null },
+    createLocalRepo: suspend (name: String) -> String? = { null },
+    createForge: suspend (connectionId: String, name: String) -> String? = { _, _ -> null },
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -634,6 +656,11 @@ fun SessionLauncherScreen(
                     projects = projects,
                     home = home,
                     validatePath = validatePath,
+                    loadForges = loadForges,
+                    searchForge = searchForge,
+                    cloneForge = cloneForge,
+                    createLocalRepo = createLocalRepo,
+                    createForge = createForge,
                     onPick = { workdir = it; workdirTouched = true; error = null },
                     onDismiss = { projectMenu = false },
                 )
@@ -1043,14 +1070,50 @@ private fun WorktreePill(label: String, active: Boolean, onClick: () -> Unit, mo
     }
 }
 
+/** How many cloud repos to reveal per "Load more" page in the forge omnibox. */
+internal const val FORGE_OMNIBOX_PAGE_SIZE = 10
+
+/** Result of mapping an omnibox key to a UI action (pure; unit-tested). */
+internal sealed class OmniboxKeyAction {
+    data object Dismiss : OmniboxKeyAction()
+    /** Hide the in-progress overlay only — host clone/create is not abortable. */
+    data object HideResolve : OmniboxKeyAction()
+    data class MoveHighlight(val index: Int) : OmniboxKeyAction()
+    data class Activate(val index: Int) : OmniboxKeyAction()
+}
+
 /**
- * Forge-free project picker: a search field that filters the known-projects list, plus a typed
- * path entry that validates against the broker. Rendered in a [DropdownMenu] (Android's
- * ModalBottomSheet ProjectPickerSheet, minus the forge omnibox — TODO(M4-forge)). Picking a
- * project or a validated path calls [onPick] and dismisses; an invalid typed path shows the
- * broker's validation error inline (and does NOT pick). The search field is the primary way
- * to narrow the list on desktop (mirrors iOS `.searchable` + Android's `project_search` field);
- * the path input is the escape hatch for an unlisted folder.
+ * Map a key press to an omnibox action. Null = leave the event for the text field.
+ * Pure so keyboard behaviour is testable without skiko key-injection flakiness.
+ */
+internal fun omniboxKeyAction(
+    key: Key,
+    highlight: Int,
+    count: Int,
+    resolving: Boolean,
+): OmniboxKeyAction? {
+    if (resolving) {
+        return if (key == Key.Escape) OmniboxKeyAction.HideResolve else null
+    }
+    return when (key) {
+        Key.DirectionDown -> if (count > 0) OmniboxKeyAction.MoveHighlight((highlight + 1) % count) else null
+        Key.DirectionUp -> if (count > 0) OmniboxKeyAction.MoveHighlight((highlight - 1 + count) % count) else null
+        Key.Enter, Key.NumPadEnter -> if (count > 0) OmniboxKeyAction.Activate(highlight.coerceIn(0, count - 1)) else null
+        Key.Escape -> OmniboxKeyAction.Dismiss
+        else -> null
+    }
+}
+
+/**
+ * Project picker with forge omnibox (Android [ProjectPickerSheet] parity): search known projects,
+ * type an arbitrary path, clone a remote repo, or create a new one (local / on a forge).
+ * Rendered as a [DropdownMenu] (desktop convention for the project heading-dropdown).
+ *
+ * Clone/create is long-running and **not abortable** on the broker (`git clone` via
+ * `execFileSync`). The progress overlay offers **Hide** (not Cancel): the host keeps working;
+ * if the user hides, a notice stays visible and a successful finish surfaces a ready path to pick.
+ * Search failures are distinct from empty results. Keyboard: autofocus search immediately
+ * (never gated on forge loading), ↑/↓, Enter, Escape.
  */
 @Composable
 internal fun ProjectPicker(
@@ -1061,19 +1124,196 @@ internal fun ProjectPicker(
     validatePath: suspend (String) -> PathValidation?,
     onPick: (String) -> Unit,
     onDismiss: () -> Unit,
+    loadForges: suspend () -> List<ForgeConnection> = { emptyList() },
+    /** Null = transport/5xx failure (must not look like "no repos found"). */
+    searchForge: suspend (String) -> ForgeSearchResponse? = { ForgeSearchResponse() },
+    cloneForge: suspend (connectionId: String, owner: String, name: String) -> String? = { _, _, _ -> null },
+    createLocalRepo: suspend (name: String) -> String? = { null },
+    createForge: suspend (connectionId: String, name: String) -> String? = { _, _ -> null },
+    /**
+     * Production leaves this true (heading dropdown). UI tests that need real [FocusRequester]
+     * semantics set false — headless skiko often does not report IsFocused inside [DropdownMenu].
+     */
+    useDropdownMenu: Boolean = true,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
+    val searchFocus = remember { FocusRequester() }
     var search by remember(expanded) { mutableStateOf("") }
     var manualPath by remember(expanded) { mutableStateOf("") }
     var validating by remember(expanded) { mutableStateOf(false) }
     var validationError by remember(expanded) { mutableStateOf<String?>(null) }
+    var connections by remember(expanded) { mutableStateOf(emptyList<ForgeConnection>()) }
+    var cloudRepos by remember(expanded) { mutableStateOf(emptyList<RemoteRepo>()) }
+    var searching by remember(expanded) { mutableStateOf(false) }
+    var searchError by remember(expanded) { mutableStateOf<String?>(null) }
+    var searchEmpty by remember(expanded) { mutableStateOf(false) }
+    var cloudVisible by remember(expanded) { mutableStateOf(FORGE_OMNIBOX_PAGE_SIZE) }
+    var resolving by remember(expanded) { mutableStateOf(false) }
+    var resolveLabel by remember(expanded) { mutableStateOf("") }
+    var resolveError by remember(expanded) { mutableStateOf<String?>(null) }
+    var resolveJob by remember(expanded) { mutableStateOf<Job?>(null) }
+    /** User hid the progress overlay while the host op is still in flight. */
+    var resolveHid by remember(expanded) { mutableStateOf(false) }
+    /** Path completed after Hide — discoverable one-click use (not silent disk materialisation). */
+    var readyPath by remember(expanded) { mutableStateOf<String?>(null) }
+    var searchAutofocused by remember(expanded) { mutableStateOf(false) }
+    var highlight by remember(expanded) { mutableStateOf(0) }
 
-    val filtered = remember(projects, home, search) { filterProjects(projects, home, search) }
+    val query = search.trim()
+    val projectOptions = remember(projects, home) {
+        projects.map { ProjectOption(it, formatWorkdir(it, home)) }
+    }
+
+    // Autofocus immediately when the menu opens — never wait on broker forge loading.
+    // searchAutofocused is set only from onFocusChanged (real focus), not after requestFocus(),
+    // so tests that see the ready tag have proof the field is focused — not a side-effect flag.
+    LaunchedEffect(expanded) {
+        if (expanded) {
+            runCatching { searchFocus.requestFocus() }
+        }
+    }
+    LaunchedEffect(expanded) {
+        if (expanded) {
+            connections = loadForges()
+        }
+    }
+
+    // Debounced forge search (≥2 chars, only with connections) — Android/web parity.
+    // Null response → error state; empty repos → empty message (not silent Create-only).
+    LaunchedEffect(query, connections, expanded) {
+        if (!expanded || connections.isEmpty() || query.length < 2) {
+            cloudRepos = emptyList()
+            searching = false
+            searchError = null
+            searchEmpty = false
+            cloudVisible = FORGE_OMNIBOX_PAGE_SIZE
+            return@LaunchedEffect
+        }
+        delay(250)
+        searching = true
+        searchError = null
+        searchEmpty = false
+        val result = searchForge(query)
+        searching = false
+        if (result == null) {
+            cloudRepos = emptyList()
+            searchError = "Couldn't search repositories — check the connection and try again."
+            searchEmpty = false
+        } else {
+            cloudRepos = result.repos
+            cloudVisible = FORGE_OMNIBOX_PAGE_SIZE
+            val partial = result.errors
+                .mapNotNull { it.message.takeIf { m -> m.isNotBlank() } }
+                .distinct()
+                .take(2)
+            searchError = when {
+                partial.isNotEmpty() && result.repos.isEmpty() ->
+                    partial.joinToString(" · ")
+                partial.isNotEmpty() ->
+                    "Some forges failed: ${partial.joinToString(" · ")}"
+                else -> null
+            }
+            searchEmpty = result.repos.isEmpty() && partial.isEmpty()
+        }
+    }
+
+    val pagedCloud = remember(cloudRepos, cloudVisible) {
+        cloudRepos.take(cloudVisible)
+    }
+    val options = remember(query, projectOptions, pagedCloud, connections) {
+        buildOmniboxOptions(query, projectOptions, pagedCloud, connections)
+    }
+    val locals = options.filterIsInstance<OmniOption.Local>()
+    val clouds = options.filterIsInstance<OmniOption.Cloud>()
+    val creates = options.filterIsInstance<OmniOption.Create>()
+    val cloudGroups = remember(clouds, connections) {
+        connections.mapNotNull { c ->
+            val repos = clouds.filter { it.connectionId == c.id }.map { it.repo }
+            if (repos.isEmpty()) null else c to repos
+        }
+    }
+    val hasMoreCloud = cloudRepos.size > cloudVisible
+
+    // Flat actionable rows for keyboard navigation (local pick / clone / create).
+    val navTargets = remember(locals, clouds, creates) {
+        buildList {
+            locals.forEach { add(OmniNav.Local(it.path)) }
+            clouds.forEach { add(OmniNav.Clone(it.repo)) }
+            creates.forEach { add(OmniNav.Create(it.createTarget, it.label)) }
+        }
+    }
+    LaunchedEffect(navTargets.size) {
+        if (highlight >= navTargets.size) highlight = (navTargets.size - 1).coerceAtLeast(0)
+    }
+
+    fun pick(path: String) {
+        onPick(path)
+        onDismiss()
+    }
+
+    /**
+     * Hide the progress overlay only. Does **not** abort the broker clone/create
+     * (host `git clone` is synchronous and uncancellable from the client).
+     */
+    fun hideResolveProgress() {
+        if (!resolving) return
+        resolving = false
+        resolveHid = true
+        resolveError = null
+        // Keep resolveLabel so the "continues on the host" banner can name the op.
+    }
+
+    fun resolve(label: String, block: suspend () -> String?) {
+        // Block while overlay is up OR a hidden host op is still in flight.
+        if (resolving || resolveJob?.isActive == true) return
+        resolving = true
+        resolveHid = false
+        resolveLabel = label
+        resolveError = null
+        readyPath = null
+        resolveJob = scope.launch {
+            try {
+                val path = block()
+                if (!path.isNullOrBlank()) {
+                    if (resolveHid) {
+                        // User already returned to the picker — surface the path for one-click use.
+                        readyPath = path
+                    } else {
+                        pick(path)
+                    }
+                } else {
+                    resolveError = "Couldn't $label — check the connection and try again."
+                }
+            } catch (_: CancellationException) {
+                // Scope disposed (menu closed / composition left) — not user Hide.
+            } catch (_: Throwable) {
+                resolveError = "Couldn't $label — check the connection and try again."
+            } finally {
+                resolving = false
+                resolveLabel = ""
+                resolveHid = false
+                resolveJob = null
+            }
+        }
+    }
+
+    fun activateNav(target: OmniNav) {
+        when (target) {
+            is OmniNav.Local -> pick(target.path)
+            is OmniNav.Clone -> resolve("clone ${target.repo.fullName}") {
+                cloneForge(target.repo.connectionId, target.repo.owner, target.repo.name)
+            }
+            is OmniNav.Create -> resolve("create $query") {
+                if (target.target == "local") createLocalRepo(query)
+                else createForge(target.target, query)
+            }
+        }
+    }
 
     fun confirmPath() {
         val p = manualPath.trim()
-        if (p.isEmpty() || validating) return
+        if (p.isEmpty() || validating || resolving) return
         validating = true
         validationError = null
         scope.launch {
@@ -1081,72 +1321,559 @@ internal fun ProjectPicker(
             validating = false
             val resolved = res?.path
             if (res != null && res.ok && !resolved.isNullOrBlank()) {
-                onPick(resolved)
-                onDismiss()
+                pick(resolved)
             } else {
                 validationError = res?.error ?: "Invalid path"
             }
         }
     }
 
-    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, modifier = Modifier.testTag("launcher_project_menu")) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp).width(360.dp)) {
-            OutlinedTextField(
-                value = search,
-                onValueChange = { search = it },
-                placeholder = { Text("Search projects…", color = cs.onSurfaceVariant) },
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("launcher_project_search"),
-            )
-            Spacer(Modifier.height(6.dp))
-            OutlinedTextField(
-                value = manualPath,
-                onValueChange = { manualPath = it; validationError = null },
-                placeholder = { Text("Type a path…", color = cs.onSurfaceVariant) },
-                singleLine = true,
-                trailingIcon = {
-                    IconButton(onClick = { confirmPath() }, enabled = manualPath.isNotBlank() && !validating, modifier = Modifier.testTag("launcher_path_confirm")) {
-                        if (validating) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = cs.primary)
-                        else Icon(Icons.Filled.Check, contentDescription = "Use this path", tint = cs.onSurfaceVariant)
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("launcher_path_input")
-                    .onPreviewKeyEvent { e ->
-                        if (e.type == KeyEventType.KeyDown && (e.key == Key.Enter || e.key == Key.NumPadEnter)) {
-                            confirmPath(); true
-                        } else {
-                            false
-                        }
-                    },
-            )
-            validationError?.let {
-                Spacer(Modifier.height(4.dp))
-                Text(it, color = cs.error, fontSize = 12.sp, modifier = Modifier.testTag("launcher_path_error"))
+    fun onOmniboxKey(e: androidx.compose.ui.input.key.KeyEvent): Boolean {
+        if (e.type != KeyEventType.KeyDown) return false
+        return when (val action = omniboxKeyAction(e.key, highlight, navTargets.size, resolving)) {
+            is OmniboxKeyAction.Dismiss -> {
+                onDismiss()
+                true
             }
-        }
-        if (filtered.isNotEmpty()) HorizontalDivider()
-        if (filtered.isEmpty() && projects.isNotEmpty()) {
-            Text(
-                "No projects match \"${search.trim()}\".",
-                color = cs.onSurfaceVariant,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp).testTag("launcher_project_empty"),
-            )
-        }
-        filtered.forEach { path ->
-            val selected = path == current
-            DropdownMenuItem(
-                text = { Text(formatWorkdir(path, home), color = if (selected) cs.primary else cs.onSurface, fontSize = 14.sp, maxLines = 1) },
-                trailingIcon = { if (selected) Icon(Icons.Filled.Check, null, Modifier.size(16.dp), tint = cs.primary) },
-                modifier = Modifier.testTag("project_row_$path"),
-                onClick = { onPick(path); onDismiss() },
-            )
+            is OmniboxKeyAction.HideResolve -> {
+                hideResolveProgress()
+                true
+            }
+            is OmniboxKeyAction.MoveHighlight -> {
+                highlight = action.index
+                true
+            }
+            is OmniboxKeyAction.Activate -> {
+                navTargets.getOrNull(action.index)?.let { activateNav(it) }
+                true
+            }
+            null -> false
         }
     }
+
+    // resolveHid + non-blank label: user hid while host op still in flight (label cleared in finally).
+    val hostOpContinues = resolveHid && resolveLabel.isNotEmpty()
+    val hostOpVerb = when {
+        resolveLabel.startsWith("clone ") -> "Clone"
+        resolveLabel.startsWith("create ") -> "Create"
+        else -> "Operation"
+    }
+    val hostOpTarget = resolveLabel
+        .removePrefix("clone ")
+        .removePrefix("create ")
+        .ifBlank { null }
+
+    @Composable
+    fun MenuBody() {
+        Box(
+            Modifier
+                .width(Size.omniboxWidth)
+                .focusable()
+                .onPreviewKeyEvent { onOmniboxKey(it) }
+                .testTag("launcher_omnibox_root"),
+        ) {
+            Column(Modifier.padding(horizontal = Space.md, vertical = Space.xs)) {
+                OutlinedTextField(
+                    value = search,
+                    onValueChange = {
+                        search = it
+                        resolveError = null
+                        readyPath = null
+                        highlight = 0
+                    },
+                    placeholder = {
+                        Text(
+                            if (connections.isEmpty()) "Search projects…"
+                            else "Search projects, repos, or type a path",
+                            color = cs.onSurfaceVariant,
+                        )
+                    },
+                    singleLine = true,
+                    enabled = !resolving,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(searchFocus)
+                        .onFocusChanged { if (it.isFocused) searchAutofocused = true }
+                        .testTag("launcher_project_search")
+                        .onPreviewKeyEvent { onOmniboxKey(it) },
+                )
+                // Ready only after the search field actually receives focus (onFocusChanged).
+                // Holds while loadForges is still pending when autofocus is independent of forges.
+                if (searchAutofocused) {
+                    Text(
+                        "",
+                        modifier = Modifier
+                            .size(1.dp)
+                            .testTag("launcher_project_autofocus_ready"),
+                    )
+                }
+                Spacer(Modifier.height(Space.xs))
+                OutlinedTextField(
+                    value = manualPath,
+                    onValueChange = { manualPath = it; validationError = null },
+                    placeholder = { Text("Type a path…", color = cs.onSurfaceVariant) },
+                    singleLine = true,
+                    enabled = !resolving,
+                    trailingIcon = {
+                        IconButton(
+                            onClick = { confirmPath() },
+                            enabled = manualPath.isNotBlank() && !validating && !resolving,
+                            modifier = Modifier.testTag("launcher_path_confirm"),
+                        ) {
+                            if (validating) {
+                                CircularProgressIndicator(
+                                    Modifier.size(Space.lg),
+                                    strokeWidth = Stroke.thin,
+                                    color = cs.primary,
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Filled.Check,
+                                    contentDescription = "Use this path",
+                                    tint = cs.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("launcher_path_input")
+                        .onPreviewKeyEvent { e ->
+                            if (e.type == KeyEventType.KeyDown &&
+                                (e.key == Key.Enter || e.key == Key.NumPadEnter)
+                            ) {
+                                confirmPath()
+                                true
+                            } else if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                                if (resolving) hideResolveProgress() else onDismiss()
+                                true
+                            } else {
+                                false
+                            }
+                        },
+                )
+                validationError?.let {
+                    Spacer(Modifier.height(Space.xs))
+                    Text(
+                        it,
+                        color = cs.error,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.testTag("launcher_path_error"),
+                    )
+                }
+                if (hostOpContinues) {
+                    Spacer(Modifier.height(Space.xs))
+                    Text(
+                        buildString {
+                            append(hostOpVerb)
+                            if (hostOpTarget != null) {
+                                append(' ')
+                                append(hostOpTarget)
+                            }
+                            append(" continues on the host…")
+                        },
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.testTag("launcher_forge_host_continues"),
+                    )
+                }
+                readyPath?.let { path ->
+                    Spacer(Modifier.height(Space.xs))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                        modifier = Modifier.testTag("launcher_forge_ready"),
+                    ) {
+                        Text(
+                            "Ready — ${formatWorkdir(path, home)}",
+                            color = cs.primary,
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            onClick = { pick(path) },
+                            modifier = Modifier.testTag("launcher_forge_use_ready"),
+                        ) {
+                            Text("Use", color = cs.primary)
+                        }
+                    }
+                }
+                resolveError?.let {
+                    Spacer(Modifier.height(Space.xs))
+                    Text(
+                        it,
+                        color = cs.error,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.testTag("launcher_forge_error"),
+                    )
+                }
+                searchError?.let {
+                    Spacer(Modifier.height(Space.xs))
+                    Text(
+                        it,
+                        color = cs.error,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.testTag("launcher_forge_search_error"),
+                    )
+                }
+            }
+
+            val nothingLocal = locals.isEmpty() && cloudGroups.isEmpty() &&
+                creates.isEmpty() && !searching && projects.isNotEmpty() && query.isNotEmpty()
+            if (nothingLocal && connections.isEmpty()) {
+                Text(
+                    "No projects match \"${query}\".",
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier
+                        .padding(horizontal = Space.xl - Space.xs, vertical = Space.sm)
+                        .testTag("launcher_project_empty"),
+                )
+            }
+            if (searchEmpty && !searching && query.length >= 2 && connections.isNotEmpty() &&
+                cloudGroups.isEmpty()
+            ) {
+                Text(
+                    "No repos match \"${query}\".",
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier
+                        .padding(horizontal = Space.xl - Space.xs, vertical = Space.sm)
+                        .testTag("launcher_forge_empty"),
+                )
+            }
+
+            if (locals.isNotEmpty() || cloudGroups.isNotEmpty() || creates.isNotEmpty() ||
+                searching || hasMoreCloud
+            ) {
+                HorizontalDivider()
+            }
+
+            Column(
+                Modifier
+                    .heightIn(max = Size.omniboxListMax)
+                    .verticalScroll(rememberScrollState())
+                    .testTag("launcher_omnibox_list"),
+            ) {
+                if (locals.isNotEmpty()) {
+                    Text(
+                        "Projects",
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(
+                            horizontal = Space.xl - Space.xs,
+                            vertical = Space.xs,
+                        ),
+                    )
+                    locals.forEachIndexed { i, o ->
+                        val selected = o.path == current
+                        val navIndex = navTargets.indexOfFirst {
+                            it is OmniNav.Local && it.path == o.path
+                        }
+                        val hi = navIndex == highlight
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(
+                                        o.path.trimEnd('/').substringAfterLast('/').ifEmpty { o.path },
+                                        color = when {
+                                            hi -> cs.primary
+                                            selected -> cs.primary
+                                            else -> cs.onSurface
+                                        },
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                    )
+                                    Text(
+                                        o.label,
+                                        color = cs.onSurfaceVariant,
+                                        fontFamily = FontFamily.Monospace,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1,
+                                    )
+                                }
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Filled.FolderOpen,
+                                    contentDescription = null,
+                                    tint = cs.onSurfaceVariant,
+                                    modifier = Modifier.size(Space.lg + Space.xs),
+                                )
+                            },
+                            trailingIcon = {
+                                if (selected) {
+                                    Icon(Icons.Filled.Check, null, Modifier.size(Space.lg), tint = cs.primary)
+                                }
+                            },
+                            enabled = !resolving,
+                            modifier = Modifier
+                                .testTag("project_row_${o.path}")
+                                .then(
+                                    if (hi) Modifier.background(cs.primary.copy(alpha = 0.08f))
+                                    else Modifier,
+                                ),
+                            onClick = { pick(o.path) },
+                        )
+                    }
+                } else if (query.isEmpty() && projects.isEmpty() && connections.isEmpty()) {
+                    Text(
+                        "Type a path or search your projects.",
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(
+                            horizontal = Space.xl - Space.xs,
+                            vertical = Space.lg + Space.xs,
+                        ),
+                    )
+                }
+
+                cloudGroups.forEach { (conn, repos) ->
+                    Text(
+                        "${conn.host} · @${conn.account.login}",
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .padding(horizontal = Space.xl - Space.xs, vertical = Space.xs)
+                            .testTag("forge_group_${conn.id}"),
+                    )
+                    repos.forEach { repo ->
+                        val navIndex = navTargets.indexOfFirst {
+                            it is OmniNav.Clone && it.repo.fullName == repo.fullName &&
+                                it.repo.connectionId == repo.connectionId
+                        }
+                        val hi = navIndex == highlight
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(
+                                        repo.name,
+                                        color = if (hi) cs.primary else cs.onSurface,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                    )
+                                    Text(
+                                        repo.fullName,
+                                        color = cs.onSurfaceVariant,
+                                        fontFamily = FontFamily.Monospace,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1,
+                                    )
+                                }
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Filled.FolderOpen,
+                                    contentDescription = null,
+                                    tint = cs.onSurfaceVariant,
+                                    modifier = Modifier.size(Space.lg + Space.xs),
+                                )
+                            },
+                            trailingIcon = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(Space.xs),
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Download,
+                                        contentDescription = "Clone",
+                                        tint = cs.onSurfaceVariant,
+                                        modifier = Modifier.size(Space.md + Space.xs),
+                                    )
+                                    Text(
+                                        "Clone",
+                                        color = cs.onSurfaceVariant,
+                                        style = MaterialTheme.typography.labelMedium,
+                                    )
+                                }
+                            },
+                            enabled = !resolving,
+                            modifier = Modifier
+                                .testTag("forge_clone_${repo.fullName}")
+                                .then(
+                                    if (hi) Modifier.background(cs.primary.copy(alpha = 0.08f))
+                                    else Modifier,
+                                ),
+                            onClick = {
+                                resolve("clone ${repo.fullName}") {
+                                    cloneForge(repo.connectionId, repo.owner, repo.name)
+                                }
+                            },
+                        )
+                    }
+                }
+
+                if (hasMoreCloud && !searching) {
+                    TextButton(
+                        onClick = {
+                            cloudVisible += FORGE_OMNIBOX_PAGE_SIZE
+                        },
+                        enabled = !resolving,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("launcher_forge_load_more"),
+                    ) {
+                        Text(
+                            "Load more (${cloudRepos.size - cloudVisible} remaining)",
+                            color = cs.primary,
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                    }
+                }
+
+                if (searching && cloudGroups.isEmpty()) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Space.xl - Space.xs, vertical = Space.md + Space.xs)
+                            .testTag("launcher_forge_searching"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                    ) {
+                        CircularProgressIndicator(
+                            Modifier.size(Space.lg),
+                            strokeWidth = Stroke.thin,
+                            color = cs.primary,
+                        )
+                        Text(
+                            "Searching repos…",
+                            color = cs.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                    }
+                }
+
+                if (creates.isNotEmpty()) {
+                    Text(
+                        "Create",
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(
+                            horizontal = Space.xl - Space.xs,
+                            vertical = Space.xs,
+                        ),
+                    )
+                    creates.forEach { c ->
+                        val navIndex = navTargets.indexOfFirst {
+                            it is OmniNav.Create && it.target == c.createTarget
+                        }
+                        val hi = navIndex == highlight
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    c.label,
+                                    color = if (hi) cs.primary else cs.onSurface,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Filled.Add,
+                                    contentDescription = null,
+                                    tint = cs.onSurfaceVariant,
+                                    modifier = Modifier.size(Space.lg + Space.xs),
+                                )
+                            },
+                            enabled = !resolving,
+                            modifier = Modifier
+                                .testTag("forge_create_${c.createTarget}")
+                                .then(
+                                    if (hi) Modifier.background(cs.primary.copy(alpha = 0.08f))
+                                    else Modifier,
+                                ),
+                            onClick = {
+                                resolve("create $query") {
+                                    if (c.createTarget == "local") createLocalRepo(query)
+                                    else createForge(c.createTarget, query)
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+
+            if (resolving) {
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .background(cs.scrim.copy(alpha = 0.35f))
+                        .testTag("launcher_forge_resolving"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(Space.xs),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(Radii.lg))
+                            .background(cs.surfaceContainerHigh)
+                            .padding(horizontal = Space.lg, vertical = Space.md),
+                    ) {
+                        CircularProgressIndicator(
+                            color = cs.primary,
+                            strokeWidth = Stroke.thin,
+                            modifier = Modifier.size(Space.xl),
+                        )
+                        Text(
+                            when {
+                                resolveLabel.startsWith("clone ") ->
+                                    "Cloning ${resolveLabel.removePrefix("clone ")}…"
+                                resolveLabel.startsWith("create ") ->
+                                    "Creating ${resolveLabel.removePrefix("create ")}…"
+                                else -> "Working…"
+                            },
+                            color = cs.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.testTag("launcher_forge_resolving_label"),
+                        )
+                        // Honest: broker clone/create is not abortable — Hide only drops the
+                        // overlay; the host keeps working (Agents install cancel parity).
+                        Text(
+                            "Continues on the host if you hide.",
+                            color = cs.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.testTag("launcher_forge_hide_hint"),
+                        )
+                        TextButton(
+                            onClick = { hideResolveProgress() },
+                            modifier = Modifier.testTag("launcher_forge_hide"),
+                        ) {
+                            Text("Hide", color = cs.primary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (useDropdownMenu) {
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = {
+                // Escape/outside click while overlay is up only hides progress — host keeps going.
+                if (resolving) hideResolveProgress()
+                else onDismiss()
+            },
+            modifier = Modifier.testTag("launcher_project_menu"),
+        ) {
+            MenuBody()
+        }
+    } else if (expanded) {
+        // Plain host for UI tests that assert real focus (DropdownMenu popup breaks IsFocused).
+        Box(Modifier.testTag("launcher_project_menu")) {
+            MenuBody()
+        }
+    }
+}
+
+/** Keyboard-navigable row in the forge omnibox. */
+private sealed class OmniNav {
+    data class Local(val path: String) : OmniNav()
+    data class Clone(val repo: RemoteRepo) : OmniNav()
+    data class Create(val target: String, val label: String) : OmniNav()
 }
 
 /**

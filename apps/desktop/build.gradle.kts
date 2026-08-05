@@ -31,12 +31,24 @@ dependencies {
     testImplementation(libs.coroutines.test)
     testImplementation(kotlin("test"))
     testImplementation(libs.ktor.client.mock) // seed BrokerApi responses (e.g. terminal-tab list) in UI tests
+    // Real WS reconnect tests for System restart (local stub broker; not shipped).
+    testImplementation(libs.ktor.server.cio)
+    testImplementation(libs.ktor.server.websockets)
     @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
     testImplementation(compose.desktop.uiTestJUnit4)
     testImplementation(compose.desktop.currentOs)
 }
 
 kotlin { jvmToolchain(17) }
+
+// Never launch a real system browser from unit/UI tests (Agent OAuth, timeline links, etc.).
+// BrowserLauncher.openInBrowser checks this property and no-ops when set.
+tasks.withType<Test>().configureEach {
+    systemProperty("supermux.tests", "1")
+    // Compose UI tests + MockEngine can wedge a worker under load; one fork keeps the gate
+    // green-and-terminating (avoids the historical TerminalTabs hang under parallel workers).
+    maxParallelForks = 1
+}
 
 // M3 editor: ship the SAME committed CodeMirror bundle the mobile apps use (single source of
 // truth: apps/android/src/main/assets/editor/) into desktop resources under editor/. KCEF loads
@@ -62,9 +74,40 @@ compose.desktop {
             "--add-opens", "java.desktop/sun.awt=ALL-UNNAMED",
             "--add-opens", "java.desktop/java.awt.peer=ALL-UNNAMED",
         )
+        // macOS needs TWO more opens, and the failure mode is silent: JCEF's
+        // CefBrowserWindowMac.getWindowHandle() reflects into `sun.lwawt.LWComponentPeer`
+        // (getPlatformWindow) plus `sun.lwawt.macosx.CPlatformWindow` / `CFRetainedResource
+        // $CFNativeAction` to obtain the NSWindow handle — a path a JetBrainsRuntime skips via
+        // JdkEx.WindowHandleAccessor, but jpackage's runtime here is Corretto, so the reflection is
+        // live. Without these it logs "failed to retrieve platform window handle" +
+        // IllegalAccessException, never creates the native browser window, and the editor pane
+        // renders as a BLANK WHITE rectangle (CEF itself initializes fine — nothing crashes).
+        // Host-conditional because the packages only exist in a macOS java.desktop; adding them on
+        // Linux/Windows would just print a "package not in java.desktop" warning at every start,
+        // and the mac app image can only be built on a mac anyway.
+        val macBuildHost = System.getProperty("os.name").orEmpty().lowercase()
+            .let { it.contains("mac") || it.contains("darwin") }
+        if (macBuildHost) {
+            jvmArgs += listOf(
+                "--add-opens", "java.desktop/sun.lwawt=ALL-UNNAMED",
+                "--add-opens", "java.desktop/sun.lwawt.macosx=ALL-UNNAMED",
+            )
+        }
         nativeDistributions {
-            targetFormats(TargetFormat.Deb, TargetFormat.Msi, TargetFormat.AppImage)
-            packageName = "supermux"
+            // Host-scoped: jpackage can only ever build the formats of the OS it runs on, AND on
+            // macOS Compose eagerly creates a `notarize<Format>` task per declared format —
+            // `notarizeAppImage` then hard-fails configuration with "AppImage cannot be notarized!".
+            if (macBuildHost) {
+                targetFormats(TargetFormat.Dmg)
+            } else {
+                targetFormats(TargetFormat.Deb, TargetFormat.Msi, TargetFormat.AppImage)
+            }
+            // macOS gets a DISTINCT name: the shipping native SwiftUI client installs as
+            // `Supermux.app`, and on a case-insensitive volume `/Applications/supermux.app` is the
+            // SAME PATH — dragging this DMG's app over would silently replace it. (Setting
+            // `macOS { packageName }` alone does NOT rename the bundle in Compose 1.11.1 — the app
+            // image and DMG both keep this outer name — so scope it here instead.)
+            packageName = if (macBuildHost) "Supermux Desktop" else "supermux"
             packageVersion = "1.0.0"
             description = "supermux desktop"
             vendor = "UstaLabs"
@@ -87,6 +130,40 @@ compose.desktop {
                 debMaintainer = "supermux"
                 menuGroup = "Development"
                 appCategory = "Development"
+            }
+            // macOS DMG. Deliberately a DIFFERENT app name + bundle id from the shipping native
+            // SwiftUI mac client (`Supermux.app` / `dev.supermux.app`): both would land in
+            // /Applications, and on a case-insensitive volume `supermux.app` and `Supermux.app` are
+            // the SAME path — installing this would silently replace the native app. `packageName`
+            // here is mac-only; Linux/Windows keep "supermux" from the block above.
+            macOS {
+                bundleID = "dev.supermux.desktop"
+                dockName = "Supermux Desktop"
+                appCategory = "public.app-category.developer-tools"
+                // Hardened runtime is mandatory for notarization; see the plist for why each
+                // entitlement is needed (JIT, and library validation for the downloaded CEF).
+                entitlementsFile.set(project.file("entitlements.mac.plist"))
+                runtimeEntitlementsFile.set(project.file("entitlements.mac.plist"))
+                // Signing is OPT-IN so unsigned local/CI dry-run builds keep working untouched:
+                // pass -PsmMacSignIdentity=<identity-or-sha1> (plus -PsmMacSignKeychain=<path> when
+                // the identity lives outside the login keychain). ⚠️ Use the SHA-1 fingerprint from
+                // `security find-identity -v <keychain>`, not the display label — codesign fails to
+                // resolve a Developer ID by label out of a non-default keychain (release v0.11.11
+                // burned a whole tag on exactly that).
+                val signIdentity = project.findProperty("smMacSignIdentity") as String?
+                if (!signIdentity.isNullOrBlank()) {
+                    signing {
+                        sign.set(true)
+                        identity.set(signIdentity)
+                        (project.findProperty("smMacSignKeychain") as String?)
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { keychain.set(it) }
+                    }
+                }
+                // NOTE: notarization is NOT declared here. Compose's notarization block only speaks
+                // Apple-ID + app-specific-password, and this project's credential is an App Store
+                // Connect API key (the same one release CI uses), so the DMG is submitted with
+                // `xcrun notarytool submit --key/--key-id/--issuer` and stapled afterwards.
             }
         }
     }

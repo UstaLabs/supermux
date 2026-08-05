@@ -1,10 +1,19 @@
 package dev.supermux.desktop
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -14,9 +23,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyShortcut
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.Tray
@@ -26,6 +39,10 @@ import androidx.compose.ui.window.isTraySupported
 import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.rememberWindowState
 import dev.supermux.desktop.auth.DesktopTokenStore
+import dev.supermux.desktop.chat.AssistantMessage
+import dev.supermux.desktop.chat.decodeImageBytes
+import dev.supermux.desktop.chat.loadMarkdownImageBitmap
+import dev.supermux.desktop.chat.prunePasteCache
 import dev.supermux.desktop.host.DesktopHostBootstrap
 import dev.supermux.desktop.host.DesktopHostStores
 import dev.supermux.desktop.host.FleetState
@@ -38,10 +55,12 @@ import dev.supermux.desktop.pairing.OnboardingScreen
 import dev.supermux.desktop.pairing.PairingState
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
+import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.desktop.workspace.WorkspaceRoot
 import dev.supermux.desktop.workspace.WorkspaceStateStore
 import dev.supermux.desktop.workspace.WorkspaceUiState
+import java.io.File
 
 // Headless-verification env hooks (ALL off by default; for Xvfb runs with no input injection).
 // Catalogued here for discoverability — some are read at their use-site rather than in main():
@@ -85,6 +104,30 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //                                  ArchivedScreen's Resume button uses: app.resume(id) fire-and-
 //                                  forget + close the overlay (M4e). SPAWNS/UN-ARCHIVES a real
 //                                  session — point it at a throwaway you archived yourself.  [main]
+//   SM_SETTINGS=1                 — open the Settings hub on Agents (File ▸ "Settings…"'s SAME
+//                                  ui.openSettings()) on start, loading real app.agentStatuses()
+//                                  (GET /agents/status, read-only) from the active host          [main]
+//   SM_DEVICES=1                  — open the Settings hub on Devices via ui.openSettings(Devices)
+//                                  on start, loading real app.devices() (GET /devices, read-only)
+//                                  from the active host. Off by default; never mints/revokes.    [main]
+//   SM_GIT_HOSTING=1              — open the Settings hub on Git hosting (Task 4) via the SAME
+//                                  ui.openSettings(GitHosting), loading real app.forgesLoad()
+//                                  (GET /forge/connections, read-only). Off by default.       [main]
+//   SM_SYSTEM=1                   — open the Settings hub on System via ui.openSettings(System)
+//                                  on start, loading real app.updateStatus() (GET /api/update/status,
+//                                  read-only) from the active host. Off by default; never calls
+//                                  runUpdate/restartBroker (those kill/update the live broker).  [main]
+//   SM_PROXIES=1                  — open the Settings hub on Proxies via ui.openSettings(Proxies)
+//                                  on start, loading real app.proxiesForSettings() (GET /proxies,
+//                                  read-only). Never creates/removes/toggles. Off by default.    [main]
+//   SM_ASSISTANT=1                — open the Settings hub on Assistant via ui.openSettings(Assistant)
+//                                  on start, loading real app.assistantLoad() + curatorSettings()
+//                                  (GET /settings/config, /settings/soul, /settings/curator,
+//                                  read-only). Never saves or runs curator. Off by default.      [main]
+//   SM_VOICE=1                    — open the Settings hub on Voice via ui.openSettings(Voice) on
+//                                  start, loading real app.appConfig() + fetchGlossary() (GET
+//                                  /settings/config, /config/voice-glossary, read-only). Never
+//                                  mutates engines or glossary. Off by default.                  [main]
 //   SM_USAGE=1                    — open the Usage overlay (File ▸ "Usage…"'s SAME ui.openUsage())
 //                                  on start, loading the real app.usage() (GET /usage, read-only)
 //                                  (M4f). Read-only — never calls redeemCodexReset() (that burns a
@@ -136,8 +179,19 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //                                  unaffected. A forced (SM_INTRO=1) run does NOT mark seen.  [main]
 //   SM_INTRO_FREEZE=<t 0..1>      — freeze the intro timeline at <t> (no auto-advance/finish)
 //                                  for deterministic phase screenshots              [FirstRunIntro]
+//   SM_MD_IMAGE=<url-or-path|1>   — render a chat AssistantMessage containing a markdown image for
+//                                  headless screenshot verification of inline-image layout (natural
+//                                  size / shrink-only, loading placeholder, click seam). Value is
+//                                  an https URL (production fetch), a local file path (decoded from
+//                                  disk — never posted to a real session), or "1" for a built-in
+//                                  2×2 PNG fixture. Overlay only; no broker traffic. Off by default.
+//                                  [main]
 fun main() {
     val store = DesktopTokenStore()
+    // Reclaim aged clipboard-paste PNGs under <config>/paste-cache/ (app-owned; never /tmp).
+    // Individual files are never deleted by path during composer lifecycle — only this age prune.
+    runCatching { prunePasteCache() }
+        .onFailure { println("[Main] paste-cache prune failed (continuing): $it") }
     // Dev override, mirrors the mac app's SM_PAIR_TOKEN/SM_PAIR_BASE guard (SupermuxApp.swift
     // requires BOTH to be present and non-empty) — lets a dev/CI run seed a pairing without the
     // onboarding UI. Requiring both prevents a stray SM_PAIR_TOKEN from silently clobbering a
@@ -274,6 +328,11 @@ fun main() {
                         Item("Usage…") {
                             ui.openUsage()
                         }
+                        Item("Settings…") {
+                            ui.openSettings()
+                        }
+                        // Existing items keep working — they open the Settings hub focused on
+                        // that section (same overlay as Settings…, not a separate stack).
                         Item("Editor / LSP…") {
                             ui.openLspSettings()
                         }
@@ -285,6 +344,14 @@ fun main() {
                         }
                         Separator()
                         Item("Unpair…") { showUnpairConfirm = true }
+                    }
+                    Menu("Edit", mnemonic = 'E') {
+                        // Same paste-image path as Attach ▸ Paste image / Ctrl+V in the composer.
+                        // Accelerator label documents the chord; the composer's onPreviewKeyEvent
+                        // owns the live key handling when the field is focused.
+                        Item("Paste image", shortcut = KeyShortcut(Key.V, ctrl = true)) {
+                            ui.requestPasteImage()
+                        }
                     }
                     Menu("View", mnemonic = 'V') {
                         CheckboxItem("Show Sidebar", checked = !ui.layout.sidebarCollapsed) {
@@ -969,6 +1036,143 @@ fun main() {
                         }
                     }
 
+                    // Headless Settings-hub / Agents verification hook (desktop-parity Task 1):
+                    // SM_SETTINGS=1 opens the Settings hub on Agents via the SAME
+                    // `ui.openSettings()` the File ▸ "Settings…" menu item calls, so the hub loads
+                    // real `app.agentStatuses()` (GET /agents/status) under Xvfb. Read-only by
+                    // construction — never starts install/login. Off by default; harmless in prod.
+                    val settingsHook = System.getenv("SM_SETTINGS") == "1"
+                    if (settingsHook) {
+                        LaunchedEffect(app) {
+                            delay(3_000)
+                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.Agents)
+                            println("[settings] opened the Settings hub (Agents)")
+                            // Prove the screen loads REAL data from the live broker, not just the shell.
+                            val statuses = app.agentStatuses()
+                            println("[settings] agentStatuses count=${statuses?.size ?: "null"} kinds=${statuses?.joinToString { "${it.kind}:${if (it.installed) "inst" else "miss"}:${if (it.authed) "auth" else "noauth"}" } ?: "(load failed)"}")
+                        }
+                    }
+
+                    // Headless Devices verification hook (desktop-parity Task 2): SM_DEVICES=1 opens
+                    // the Settings hub on Devices via the SAME `ui.openSettings(Devices)` path the
+                    // rail uses, so DevicesSettingsScreen loads real `app.devices()` (GET /devices)
+                    // under Xvfb. Read-only by construction — never calls addDevice/revokeDevice.
+                    // Off by default; harmless in prod.
+                    val devicesHook = System.getenv("SM_DEVICES") == "1"
+                    if (devicesHook) {
+                        LaunchedEffect(app) {
+                            delay(3_000)
+                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.Devices)
+                            println("[devices] opened the Settings hub (Devices)")
+                            val devices = app.devices()
+                            println(
+                                "[devices] devices count=${devices?.size ?: "null"} " +
+                                    "names=${devices?.joinToString { it.name } ?: "(load failed)"}",
+                            )
+                        }
+                    }
+
+                    // Headless Git-hosting verification hook (desktop-parity Task 4):
+                    // SM_GIT_HOSTING=1 opens the Settings hub on the Git hosting section via the
+                    // SAME ui.openSettings(GitHosting) path, then loads real app.forgesLoad()
+                    // (GET /forge/connections) under Xvfb. Read-only by construction — never
+                    // add/import/remove. Off by default; harmless in production.
+                    val gitHostingHook = System.getenv("SM_GIT_HOSTING") == "1"
+                    if (gitHostingHook) {
+                        LaunchedEffect(app) {
+                            delay(3_000)
+                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.GitHosting)
+                            println("[git-hosting] opened the Settings hub (Git hosting)")
+                            val forges = app.forgesLoad()
+                            val conns = forges?.connections.orEmpty()
+                            val cli = forges?.cli
+                            println(
+                                "[git-hosting] forgesLoad connections=${conns.size} " +
+                                    "accounts=${conns.joinToString { "${it.kind}:@${it.account.login}" }.ifEmpty { "(none)" }} " +
+                                    "cli.gh=${cli?.github?.available == true} cli.glab=${cli?.gitlab?.available == true}",
+                            )
+                        }
+                    }
+
+                    // Headless Proxies verification hook (desktop-parity Task 5): SM_PROXIES=1 opens
+                    // the Settings hub on Proxies via the SAME ui.openSettings(Proxies) path the
+                    // rail uses. Read-only — never createProxy/setProxyPublic/removeProxy.
+                    val proxiesHook = System.getenv("SM_PROXIES") == "1"
+                    if (proxiesHook) {
+                        LaunchedEffect(app) {
+                            delay(3_000)
+                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.Proxies)
+                            println("[proxies] opened the Settings hub (Proxies)")
+                            val proxies = app.proxiesForSettings()
+                            println(
+                                "[proxies] proxies count=${proxies?.size ?: "null"} " +
+                                    "domains=${proxies?.joinToString { it.domain } ?: "(load failed)"}",
+                            )
+                        }
+                    }
+
+                    // Headless System verification hook (desktop-parity Task 3): SM_SYSTEM=1 opens
+                    // the Settings hub on System via ui.openSettings(System) so SystemSettingsScreen
+                    // loads real `app.updateStatus()` (GET /api/update/status) under Xvfb.
+                    // Read-only by construction — never calls runUpdate/restartBroker (those mutate
+                    // the live broker). Distinct from File ▸ "Check for Updates…" (desktop app).
+                    // Off by default; harmless in prod.
+                    val systemHook = System.getenv("SM_SYSTEM") == "1"
+                    if (systemHook) {
+                        LaunchedEffect(app) {
+                            delay(3_000)
+                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.System)
+                            println("[system] opened the Settings hub (System)")
+                            val st = app.updateStatus()
+                            println(
+                                "[system] updateStatus current=${st?.current ?: "null"} " +
+                                    "latest=${st?.latest ?: "-"} available=${st?.updateAvailable} " +
+                                    "mode=${st?.mode ?: "-"} state=${st?.state ?: "-"} " +
+                                    "commit=${st?.commit?.take(8) ?: "-"} " +
+                                    "lastChecked=${st?.lastChecked ?: "-"}",
+                            )
+                        }
+                    }
+
+                    // Headless Assistant verification hook (desktop-parity Task 5): SM_ASSISTANT=1
+                    // opens Assistant (soul + curator). Read-only — never saves or runCuratorNow.
+                    val assistantHook = System.getenv("SM_ASSISTANT") == "1"
+                    if (assistantHook) {
+                        LaunchedEffect(app) {
+                            delay(3_000)
+                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.Assistant)
+                            println("[assistant] opened the Settings hub (Assistant)")
+                            val pair = app.assistantLoad()
+                            val curator = app.curatorSettings()
+                            println(
+                                "[assistant] paName=${pair?.first ?: "(load failed)"} " +
+                                    "soulChars=${pair?.second?.length ?: "null"} " +
+                                    "curatorEnabled=${curator?.config?.enabled ?: "(load failed)"} " +
+                                    "nextRun=${curator?.nextRun ?: "—"}",
+                            )
+                        }
+                    }
+
+                    // Headless Voice verification hook (desktop-parity Task 5): SM_VOICE=1 opens
+                    // Voice settings. Read-only — never mutates STT/TTS/cleanup/glossary.
+                    val voiceHook = System.getenv("SM_VOICE") == "1"
+                    if (voiceHook) {
+                        LaunchedEffect(app) {
+                            delay(3_000)
+                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.Voice)
+                            println("[voice] opened the Settings hub (Voice)")
+                            val cfg = app.appConfig()
+                            val glossary = app.fetchGlossary()
+                            println(
+                                "[voice] stt=${cfg?.voiceSttEngine ?: "(default)"} " +
+                                    "tts=${cfg?.voiceTtsEngine ?: "(default)"} " +
+                                    "cleanup=${cfg?.voiceCleanupEngine ?: "(default)"} " +
+                                    "model=${cfg?.voiceCleanupModel ?: "(default)"} " +
+                                    "glossaryTerms=${glossary?.size ?: "null"}",
+                            )
+                        }
+                    }
+
                     // Headless Usage-panel verification hook (M4f): SM_USAGE=1 opens the Usage
                     // overlay on start via the SAME `ui.openUsage()` the File ▸ "Usage…" menu item
                     // calls, so WorkspaceRoot's own LaunchedEffect(ui.usageOpen) loads the real
@@ -1120,6 +1324,83 @@ fun main() {
                     if (System.getenv("SM_INTRO") != "1") runCatching { introStore.markSeen() }
                 })
             }
+
+            // Headless inline-image layout verification (SM_MD_IMAGE) — see catalogue above.
+            val mdImageSrc = System.getenv("SM_MD_IMAGE")?.takeIf { it.isNotBlank() }
+            if (mdImageSrc != null) {
+                MdImageVerifyOverlay(source = mdImageSrc)
+            }
+        }
+    }
+}
+
+/**
+ * Full-window overlay that paints one [AssistantMessage] containing a markdown image so inline-
+ * image layout (natural size, max-height clamp, loading placeholder) can be screenshotted under
+ * Xvfb without posting into a real session. [source] is `1` (built-in 2×2 PNG), an https URL, or a
+ * local filesystem path.
+ */
+@Composable
+private fun MdImageVerifyOverlay(source: String) {
+    val tinyPngHex =
+        "89504e470d0a1a0a0000000d4948445200000002000000020802000000fdd49a73" +
+            "0000001049444154789c63f8cfc000440c100a001fee03fd8b5f14d40000000049454e44ae426082"
+    val tinyPng = remember {
+        ByteArray(tinyPngHex.length / 2) { i ->
+            tinyPngHex.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+        }
+    }
+    val isHttps = source.startsWith("https://", ignoreCase = true)
+    val localFile = if (!isHttps && source != "1") File(source).takeIf { it.isFile } else null
+    val localBytes: ByteArray? = when {
+        source == "1" -> tinyPng
+        localFile != null -> runCatching { localFile.readBytes() }.getOrNull()
+        else -> null
+    }
+    // Synthetic https so MarkdownImage takes the inline path; [loadImage] serves local bytes.
+    val displayUrl = if (isHttps) source else "https://md-image-verify.local/fixture.png"
+    val md = "![md-image-verify]($displayUrl)"
+    val loadImage: suspend (String) -> ImageBitmap? = when {
+        localBytes != null -> ({ decodeImageBytes(localBytes) })
+        isHttps -> ({ loadMarkdownImageBitmap(it) })
+        else -> ({ null })
+    }
+    LaunchedEffect(source) {
+        when {
+            localBytes != null ->
+                println("[md-image] SM_MD_IMAGE overlay source=$source localBytes=${localBytes.size}")
+            isHttps ->
+                println("[md-image] SM_MD_IMAGE overlay source=$source https production fetch")
+            else ->
+                println("[md-image] SM_MD_IMAGE bad source (need 1, https URL, or readable file): $source")
+        }
+    }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surface)
+            .testTag("sm_md_image_overlay"),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        Column(
+            Modifier
+                .widthIn(max = 860.dp)
+                .fillMaxWidth()
+                .padding(Space.lg)
+                .testTag("sm_md_image_message"),
+        ) {
+            Text(
+                "SM_MD_IMAGE verification",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(bottom = Space.sm),
+            )
+            // Same chat stack: AssistantMessage → MarkdownBody → MarkdownImage (with seams).
+            AssistantMessage(
+                text = md,
+                onOpenUrl = { /* never launch browser under Xvfb */ },
+                loadImage = loadImage,
+            )
         }
     }
 }

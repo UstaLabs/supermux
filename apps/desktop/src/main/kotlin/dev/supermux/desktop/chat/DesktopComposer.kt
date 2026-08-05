@@ -18,9 +18,15 @@
 // below. Compose Desktop surfaces an OS file drop as `DragData.FilesList` (java.awt's
 // DataFlavor.javaFileListFlavor under the hood); each entry is a `file:` URI string, converted back to
 // a File and funneled through the SAME `stageFiles` path the Attach dialog uses, so a dropped file
-// gets an identical ComposerAttachment + upload + progress.
+// gets an identical ComposerAttachment + upload + progress. Clipboard paste-image (Ctrl/Cmd+V) also
+// routes through that funnel: a raster image on the system clipboard is written into the app's
+// exclusive paste-cache directory (beside desktop config), and any copied image files
+// (javaFileListFlavor) are filtered and staged the same way. Cache entries are pruned by age —
+// never deleted by individual path during chip/send lifecycle (see paste-cache section below).
 package dev.supermux.desktop.chat
 
+import androidx.compose.foundation.ContextMenuArea
+import androidx.compose.foundation.ContextMenuItem
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -72,6 +78,8 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -79,6 +87,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.desktop.auth.DesktopTokenStore
 import dev.supermux.desktop.session.DEFAULT_MODEL_ID
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.upload.FileChunkSource
@@ -86,13 +95,28 @@ import dev.supermux.net.ChunkSource
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ReasoningResponse
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.awt.FileDialog
 import java.awt.Frame
+import java.awt.Image
+import java.awt.RenderingHints
+import java.awt.Toolkit
+import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.Transferable
+import java.awt.image.BufferedImage
 import java.io.File
 import java.net.URI
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.attribute.BasicFileAttributes
+import java.time.Duration
+import java.time.Instant
+import java.util.UUID
+import javax.imageio.ImageIO
 import kotlin.math.roundToInt
 
 /**
@@ -132,6 +156,13 @@ data class ComposerAttachment(
     val state: UploadState,
     val kind: String? = null,
     val runSeq: Long = 0L,
+    /**
+     * Absolute path of the staged local file when known (paste-cache entry / picked path).
+     * Paste images live under the app-owned paste-cache; they are **not** deleted when the chip
+     * is removed — age-based [prunePasteCache] reclaims them. Null when the source is not
+     * path-backed (shouldn't happen for [FileChunkSource] stages).
+     */
+    val localPath: String? = null,
 )
 
 /**
@@ -174,6 +205,368 @@ internal fun filterExistingFiles(files: List<File>): List<File> = files.filter {
  *  entry that fails to parse (malformed/non-file URI) is dropped rather than throwing. */
 internal fun composerFilesFromDragData(uris: List<String>): List<File> =
     uris.mapNotNull { runCatching { File(URI(it)) }.getOrNull() }
+
+/**
+ * Pure Ctrl/Cmd+V paste-key predicate for the composer: `true` only for a KeyDown V with Ctrl OR
+ * Meta held (Windows/Linux vs macOS) and Shift **not** held. Ctrl and Meta are **separate** flags
+ * so tests can prove each modifier path distinctly (not a single `ctrlOrMeta=true` called twice).
+ * Ctrl/Cmd+Shift+V is the conventional "paste as plain text / match style" chord and must fall
+ * through to the text field.
+ */
+internal fun isComposerPasteKey(
+    key: Key,
+    type: KeyEventType,
+    ctrlPressed: Boolean,
+    metaPressed: Boolean,
+    shiftPressed: Boolean = false,
+): Boolean =
+    type == KeyEventType.KeyDown &&
+        key == Key.V &&
+        (ctrlPressed || metaPressed) &&
+        !shiftPressed
+
+/**
+ * Whether a paste-image gesture should consume the key and call [stageFiles]: the upload seam must
+ * be bound (text-only composers ignore paste-image) AND the clipboard seam returned at least one
+ * image file. Pure so the stage-or-fallthrough decision is unit-testable without key injection.
+ */
+internal fun shouldStageClipboardPaste(uploadBound: Boolean, files: List<File>): Boolean =
+    uploadBound && files.isNotEmpty()
+
+/**
+ * Production paste-key handler decision used by [DesktopComposer]'s `onPreviewKeyEvent`.
+ * Returns true when the event should be **consumed** for paste-image (and [onPasteImage] is
+ * invoked); false when the key must fall through to the text field (text paste / non-paste keys).
+ * Distinct [ctrlPressed]/[metaPressed] so Ctrl vs Meta are real separate inputs.
+ */
+internal fun handleComposerPasteKey(
+    key: Key,
+    type: KeyEventType,
+    ctrlPressed: Boolean,
+    metaPressed: Boolean,
+    shiftPressed: Boolean,
+    uploadBound: Boolean,
+    /** Lazily evaluated so the clipboard is only probed after the paste-key chord matches. */
+    likelyHasImage: () -> Boolean,
+    onPasteImage: () -> Unit,
+): Boolean {
+    if (!isComposerPasteKey(key, type, ctrlPressed, metaPressed, shiftPressed)) return false
+    if (uploadBound && likelyHasImage()) {
+        onPasteImage()
+        return true
+    }
+    return false
+}
+
+/** Image file extensions accepted for clipboard file-list paste (probe MIME may be octet-stream
+ *  for a just-copied path with no content-type association). */
+private val IMAGE_FILE_EXTENSIONS = setOf(
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif", "tif", "tiff",
+)
+
+/**
+ * Dimension / size caps for clipboard raster paste. Applied **before** allocating a pixel buffer
+ * or encoding PNG so a huge paste cannot freeze or OOM the desktop process.
+ * - [PASTE_IMAGE_MAX_EDGE]: max width or height in pixels (hard reject)
+ * - [PASTE_IMAGE_MAX_PIXELS]: max `width * height` (bounds the ARGB buffer for non-[BufferedImage]s)
+ * - [PASTE_IMAGE_ENCODE_MAX_EDGE]: soft downscale target before PNG encode (keeps large pastes fast)
+ * - [PASTE_IMAGE_MAX_ENCODED_BYTES]: max written PNG size; oversize files are dropped (left for pruner)
+ */
+internal const val PASTE_IMAGE_MAX_EDGE: Int = 8192
+internal const val PASTE_IMAGE_MAX_PIXELS: Long = 16L * 1024L * 1024L // 16 MP
+/** Max edge after optional downscale for encode — 4096² PNG encode is multi-second; 2048² is cheap. */
+internal const val PASTE_IMAGE_ENCODE_MAX_EDGE: Int = 2048
+internal const val PASTE_IMAGE_MAX_ENCODED_BYTES: Long = 8L * 1024L * 1024L // 8 MiB
+
+// ── paste-cache: app-owned directory, random names, age-based prune only ─────────
+//
+// Pasted raster images are written under `<desktop-config>/paste-cache/` (next to auth.json /
+// ui-state.json / kcef-bundle), NOT under shared /tmp. Each write uses a fresh UUID name; names
+// are never reused. Individual files are never deleted by path during chip remove / send /
+// session dispose — that class of bug is removed by design. [prunePasteCache] reclaims entries
+// older than [PASTE_CACHE_TTL] on startup and opportunistically on write. The pruner never
+// follows symlinks out of the cache and refuses to run if the cache path resolves outside the
+// app config directory.
+
+/** Directory name under the desktop config root for clipboard paste PNGs. */
+internal const val PASTE_CACHE_DIR_NAME = "paste-cache"
+
+/** Age after which paste-cache entries are reclaimed. Short: pastes only need to survive upload. */
+internal val PASTE_CACHE_TTL: Duration = Duration.ofHours(1)
+
+/**
+ * Test override for the desktop config directory ([DesktopTokenStore.defaultPath] parent).
+ * When set, paste-cache is `<override>/paste-cache/`. Cleared by tests in teardown.
+ */
+@Volatile
+internal var desktopConfigDirOverride: Path? = null
+
+/** Resolved desktop config directory (production or test override). */
+internal fun desktopConfigDir(): Path =
+    (desktopConfigDirOverride ?: DesktopTokenStore.defaultPath().parent)
+        .toAbsolutePath().normalize()
+
+/** Paste-cache directory: always a direct child of [desktopConfigDir] named [PASTE_CACHE_DIR_NAME]. */
+internal fun pasteCacheDir(): Path = desktopConfigDir().resolve(PASTE_CACHE_DIR_NAME)
+
+/**
+ * Ensure the paste-cache directory exists and its real path still lies under the app config dir.
+ * Returns null when the path would escape the config root (e.g. paste-cache is a symlink out) —
+ * callers must not write then.
+ */
+internal fun ensurePasteCacheDir(): Path? = runCatching {
+    val config = desktopConfigDir()
+    Files.createDirectories(config)
+    val cache = pasteCacheDir()
+    Files.createDirectories(cache)
+    val configReal = config.toRealPath()
+    val cacheReal = cache.toRealPath()
+    if (!cacheReal.startsWith(configReal)) return@runCatching null
+    // Must remain the direct paste-cache child of config (no intervening symlink rename games).
+    if (cacheReal.fileName.toString() != PASTE_CACHE_DIR_NAME) return@runCatching null
+    cacheReal
+}.getOrNull()
+
+/**
+ * Whether [name] matches the paste-cache files this app writes (`paste-<uuid>.png`).
+ * The age pruner only unlinks names that pass this check — foreign files in the cache dir
+ * (even aged ones) are left alone.
+ */
+internal fun isComposerPasteCacheEntryName(name: String): Boolean =
+    name.startsWith("paste-") && name.endsWith(".png")
+
+/**
+ * Reclaim aged **app-owned** regular-file entries inside the paste-cache.
+ *
+ * Safety rules (by design — no identity registry):
+ * - Refuses to run if the cache path's real location is outside the app config directory.
+ * - Lists the cache directory only; never recurses.
+ * - Reads each entry with [LinkOption.NOFOLLOW_LINKS]; skips symlinks and non-regular files.
+ * - Deletes only regular files whose **name** matches [isComposerPasteCacheEntryName]
+ *   (`paste-*.png` — the only names [clipboardImageToTempFile] writes) **and** whose
+ *   last-modified time is older than [maxAge]. Anything else in the directory is not ours.
+ *
+ * @return number of files deleted, or `-1` when the pruner refused to run (unsafe path).
+ */
+internal fun prunePasteCache(
+    maxAge: Duration = PASTE_CACHE_TTL,
+    now: Instant = Instant.now(),
+): Int {
+    val config = desktopConfigDir()
+    val cache = pasteCacheDir()
+    if (!Files.exists(cache)) return 0
+
+    val configReal = runCatching {
+        if (Files.exists(config)) config.toRealPath() else config.toAbsolutePath().normalize()
+    }.getOrElse { return -1 }
+    val cacheReal = runCatching { cache.toRealPath() }.getOrElse { return -1 }
+    if (!cacheReal.startsWith(configReal)) return -1
+    if (cacheReal.fileName.toString() != PASTE_CACHE_DIR_NAME) return -1
+
+    // When paste-cache itself is a symlink, toRealPath already followed it; we require the
+    // resolved location to sit under config (checked above). Listing uses the real path so we
+    // never walk through a symlink entry *out* of the cache via a child link.
+    if (!Files.isDirectory(cacheReal)) return -1
+
+    val cutoff = now.minus(maxAge)
+    var deleted = 0
+    runCatching {
+        Files.newDirectoryStream(cacheReal).use { stream ->
+            for (entry in stream) {
+                // Provenance: only ever unlink names we generate (paste-<uuid>.png).
+                if (!isComposerPasteCacheEntryName(entry.fileName.toString())) continue
+                val attrs = runCatching {
+                    Files.readAttributes(
+                        entry,
+                        BasicFileAttributes::class.java,
+                        LinkOption.NOFOLLOW_LINKS,
+                    )
+                }.getOrNull() ?: continue
+                // Never follow or delete through a symlink (target may lie outside the cache).
+                if (attrs.isSymbolicLink) continue
+                if (!attrs.isRegularFile) continue
+                if (attrs.lastModifiedTime().toInstant().isAfter(cutoff)) continue
+                // Re-check immediately before unlink: skip if entry became a symlink or renamed.
+                val still = runCatching {
+                    Files.readAttributes(
+                        entry,
+                        BasicFileAttributes::class.java,
+                        LinkOption.NOFOLLOW_LINKS,
+                    )
+                }.getOrNull() ?: continue
+                if (still.isSymbolicLink || !still.isRegularFile) continue
+                if (!isComposerPasteCacheEntryName(entry.fileName.toString())) continue
+                if (runCatching { Files.deleteIfExists(entry) }.getOrDefault(false)) {
+                    deleted++
+                }
+            }
+        }
+    }
+    return deleted
+}
+
+/**
+ * Whether [file] looks like an image suitable for paste-to-attach: an `image/` MIME from
+ * [composerMime], or a known image extension when the probe falls back to octet-stream.
+ */
+internal fun isComposerImageFile(file: File): Boolean {
+    if (!file.isFile) return false
+    val mime = composerMime(file.toPath())
+    if (mime.startsWith("image/")) return true
+    return file.extension.lowercase() in IMAGE_FILE_EXTENSIONS
+}
+
+/**
+ * Whether [image] passes dimension caps (edge + pixel count) before any buffer allocation / encode.
+ * Pure so oversize rejection is unit-testable without ImageIO.
+ */
+internal fun clipboardImageWithinCaps(width: Int, height: Int): Boolean {
+    if (width <= 0 || height <= 0) return false
+    if (width > PASTE_IMAGE_MAX_EDGE || height > PASTE_IMAGE_MAX_EDGE) return false
+    // Promote to Long before multiply to avoid Int overflow on huge dims.
+    if (width.toLong() * height.toLong() > PASTE_IMAGE_MAX_PIXELS) return false
+    return true
+}
+
+/**
+ * Scale [source] so neither edge exceeds [maxEdge], preserving aspect ratio. Returns [source]
+ * unchanged when already within the bound. Pure relative to the bitmap.
+ */
+internal fun scaleBufferedImageToMaxEdge(source: BufferedImage, maxEdge: Int): BufferedImage {
+    val w = source.width
+    val h = source.height
+    if (w <= maxEdge && h <= maxEdge) return source
+    val scale = minOf(maxEdge.toDouble() / w, maxEdge.toDouble() / h)
+    val nw = (w * scale).roundToInt().coerceAtLeast(1)
+    val nh = (h * scale).roundToInt().coerceAtLeast(1)
+    val out = BufferedImage(nw, nh, BufferedImage.TYPE_INT_ARGB)
+    val g = out.createGraphics()
+    try {
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+        g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+        g.drawImage(source, 0, 0, nw, nh, null)
+    } finally {
+        g.dispose()
+    }
+    return out
+}
+
+/**
+ * Write an AWT [Image] (screenshot / copy-from-viewer paste) into the app-owned [pasteCacheDir]
+ * as a freshly named PNG and return the file. Applies dimension + encoded-byte caps before /
+ * after encode. Large images are downscaled to [PASTE_IMAGE_ENCODE_MAX_EDGE] before PNG encode.
+ *
+ * **No per-file deletion** — failed encodes may leave a partial/oversize entry for [prunePasteCache];
+ * chip remove / send never unlink by path. Names are UUID-based and never reused.
+ *
+ * **Must not run on the UI thread** for large rasters — PNG encode of a multi-megapixel image is
+ * multi-second without downscale. Call from [Dispatchers.IO].
+ *
+ * @param maxEncodedBytes injectable for tests of the encoded-byte reject path without writing 8 MiB.
+ */
+internal fun clipboardImageToTempFile(
+    image: Image,
+    maxEncodedBytes: Long = PASTE_IMAGE_MAX_ENCODED_BYTES,
+    encodeMaxEdge: Int = PASTE_IMAGE_ENCODE_MAX_EDGE,
+): File? = runCatching {
+    val w = image.getWidth(null)
+    val h = image.getHeight(null)
+    if (!clipboardImageWithinCaps(w, h)) return null
+    // Cap already bounds the w*h*4 allocation for non-BufferedImage copies.
+    val raw = when (image) {
+        is BufferedImage -> image
+        else -> BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB).also { bi ->
+            val g = bi.createGraphics()
+            try {
+                g.drawImage(image, 0, 0, null)
+            } finally {
+                g.dispose()
+            }
+        }
+    }
+    // Downscale large pastes before PNG encode (quality/speed trade-off for chat attach).
+    val buffered = scaleBufferedImageToMaxEdge(raw, encodeMaxEdge)
+    val dir = ensurePasteCacheDir() ?: return null
+    // Opportunistic reclaim of aged entries (also runs at app startup).
+    prunePasteCache()
+    val out = dir.resolve("paste-${UUID.randomUUID()}.png").toFile()
+    if (!ImageIO.write(buffered, "png", out)) {
+        // Leave any partial for the age pruner — never delete-by-path.
+        return null
+    }
+    if (out.length() > maxEncodedBytes) {
+        // Oversize: leave for pruner; do not hand out the path.
+        return null
+    }
+    out
+}.getOrNull()
+
+/**
+ * Cheap flavor-only probe: does this transferable *likely* hold a pasteable image? Used on the UI
+ * thread to decide whether to consume Ctrl/Cmd+V without running PNG encode. File-list is filtered
+ * to image files; raster [DataFlavor.imageFlavor] is accepted without decoding.
+ */
+internal fun transferableLikelyHasImage(transferable: Transferable): Boolean {
+    if (transferable.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) {
+        @Suppress("UNCHECKED_CAST")
+        val files = runCatching {
+            transferable.getTransferData(DataFlavor.javaFileListFlavor) as? List<*>
+        }.getOrNull()
+            ?.mapNotNull { it as? File }
+            ?.filter(::isComposerImageFile)
+            .orEmpty()
+        if (files.isNotEmpty()) return true
+    }
+    return transferable.isDataFlavorSupported(DataFlavor.imageFlavor)
+}
+
+/**
+ * Extract image files from a clipboard [Transferable]. Prefers a file-list of existing image files
+ * (user copied image files in the file manager); otherwise encodes a raster [DataFlavor.imageFlavor]
+ * snapshot to a temp PNG (capped). Pure relative to the transferable so tests can feed a fake
+ * without touching the real system clipboard. **May be slow** for large rasters — call off the UI
+ * thread.
+ */
+internal fun composerFilesFromClipboardTransferable(transferable: Transferable): List<File> {
+    // File-list first: multi-select paste of real files should keep original names/MIME.
+    if (transferable.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) {
+        @Suppress("UNCHECKED_CAST")
+        val files = runCatching {
+            transferable.getTransferData(DataFlavor.javaFileListFlavor) as? List<*>
+        }.getOrNull()
+            ?.mapNotNull { it as? File }
+            ?.filter(::isComposerImageFile)
+            .orEmpty()
+        if (files.isNotEmpty()) return files
+    }
+    if (transferable.isDataFlavorSupported(DataFlavor.imageFlavor)) {
+        val img = runCatching {
+            transferable.getTransferData(DataFlavor.imageFlavor) as? Image
+        }.getOrNull()
+        if (img != null) {
+            clipboardImageToTempFile(img)?.let { return listOf(it) }
+        }
+    }
+    return emptyList()
+}
+
+/**
+ * Read image files currently on the system clipboard (AWT). Empty on any failure / text-only clip.
+ * **May encode a large PNG** — always invoke from [Dispatchers.IO], never the Compose UI thread.
+ */
+internal fun composerClipboardImageFiles(): List<File> = runCatching {
+    val contents = Toolkit.getDefaultToolkit().systemClipboard.getContents(null) ?: return emptyList()
+    composerFilesFromClipboardTransferable(contents)
+}.getOrDefault(emptyList())
+
+/**
+ * Cheap UI-thread probe of the system clipboard for paste-image consumption decisions.
+ * Does not encode; only checks flavors / file-list membership.
+ */
+internal fun composerClipboardLikelyHasImage(): Boolean = runCatching {
+    val contents = Toolkit.getDefaultToolkit().systemClipboard.getContents(null) ?: return false
+    transferableLikelyHasImage(contents)
+}.getOrDefault(false)
 
 /**
  * Send-gating predicate: something to send (text OR at least one attachment) AND no chip is still
@@ -229,6 +622,13 @@ internal fun composerPickFiles(): List<File> {
  *   the Attach affordance is hidden (text-only composer). [ChatPanel] binds this to
  *   `app.uploadResumable(session.id, …)`; tests inject a fake so they don't hit the network.
  * @param pickFiles the file-picker seam (default = the real AWT dialog); tests inject a fake.
+ * @param pasteImageFiles the clipboard-image seam (default = [composerClipboardImageFiles]); returns
+ *   image files currently on the system clipboard. Ctrl/Cmd+V routes a non-empty result through the
+ *   SAME [stageFiles] funnel drag-drop / Attach use. Tests inject a fake so they never touch AWT
+ *   clipboard state.
+ * @param clipboardLikelyHasImage cheap UI-thread probe (default = [composerClipboardLikelyHasImage])
+ *   used to decide whether Ctrl/Cmd+V should be consumed for paste-image. Tests inject so key-event
+ *   tests do not depend on the real system clipboard.
  * @param externalAttach a one-shot "stage this file then send" request (M4d-T3), delivered from
  *   outside the composer's own click-driven state (see [ComposerExternalAttach] KDoc — the
  *   off-by-default `SM_CHAT_ATTACH` headless hook). Routed through the SAME `stageFiles`/`sendWith`
@@ -280,6 +680,8 @@ fun DesktopComposer(
         onProgress: (Long, Long) -> Unit,
     ) -> String?)? = null,
     pickFiles: () -> List<File> = ::composerPickFiles,
+    pasteImageFiles: () -> List<File> = ::composerClipboardImageFiles,
+    clipboardLikelyHasImage: () -> Boolean = ::composerClipboardLikelyHasImage,
     externalAttach: ComposerExternalAttach? = null,
     onExternalAttachConsumed: () -> Unit = {},
     onTranscribeAudio: (suspend (bytes: ByteArray, filename: String) -> String?)? = null,
@@ -291,6 +693,13 @@ fun DesktopComposer(
     sessionModel: String? = null,
     onPickModel: (String) -> Unit = {},
     onPickReasoning: (String) -> Unit = {},
+    /**
+     * One-shot paste-image request from the native Edit ▸ Paste image menu (or tests). When the
+     * nonce changes to a non-zero value, runs the same [launchPasteImages] path as Ctrl/Cmd+V /
+     * Attach ▸ Paste image, then calls [onPasteImageRequestConsumed].
+     */
+    pasteImageRequestNonce: Long = 0L,
+    onPasteImageRequestConsumed: () -> Unit = {},
 ) {
     // Attachment state is SCOPED to [sessionKey]: ChatPanel deliberately stays composed across
     // session switches (no key(session.id) wrapper), so a bare remember{} would leak session A's
@@ -300,6 +709,8 @@ fun DesktopComposer(
     // Plain-var counters (single Main-thread dispatcher — no atomics needed); one holder per session.
     val ids = remember(sessionKey) { object { var nextId = 0L; var nextSeq = 0L } }
     val scope = rememberCoroutineScope()
+    // Session switch discards [attachments] via remember(sessionKey). Paste-cache files are left
+    // for [prunePasteCache] (age TTL) — never unlinked by path on dispose.
 
     // Guarded update: apply only when the chip STILL exists AND belongs to the run identified by
     // [seq]. A late callback from a removed chip (idx < 0) or a superseded run (runSeq mismatch, e.g.
@@ -352,16 +763,64 @@ fun DesktopComposer(
                 source = FileChunkSource(file),
                 state = UploadState.Uploading(0f),
                 kind = composerKind(mime),
+                // Remember the path for diagnostics; paste-cache entries are reclaimed by age prune.
+                localPath = file.absolutePath,
             ),
         )
         launchUpload(id)
     }
 
-    // Funnels a BATCH of files — from the Attach dialog OR an external OS drag-drop — through [stage]
-    // after filtering to files that still exist. The single funnel means a dropped file gets an
-    // IDENTICAL ComposerAttachment + upload + progress to a FileDialog-picked one (no parallel path).
+    // Funnels a BATCH of files — from the Attach dialog OR an external OS drag-drop / paste — through
+    // [stage] after filtering to files that still exist. The single funnel means a dropped/pasted
+    // file gets an IDENTICAL ComposerAttachment + upload + progress to a FileDialog-picked one.
     fun stageFiles(files: List<File>) {
         filterExistingFiles(files).forEach { stage(it) }
+    }
+
+    /** Drop a chip. Paste-cache files are left for [prunePasteCache] (never unlinked by path). */
+    fun removeAttachment(id: String) {
+        val idx = attachments.indexOfFirst { it.id == id }
+        if (idx < 0) return
+        attachments.removeAt(idx)
+    }
+
+    /** Clear all chips (after a successful send). Paste-cache reclaim is age-based only. */
+    fun clearAttachments() {
+        attachments.clear()
+    }
+
+    // True while pasteImageFiles() is running on IO — shows a pending chip so the ~1s encode is not
+    // silent (chip for the real file appears only after encode+stage returns).
+    var pastePending by remember(sessionKey) { mutableStateOf(false) }
+
+    /**
+     * Run [pasteImageFiles] off the UI thread, then stage any results. Used by Ctrl/Cmd+V and the
+     * Paste-image menu/context actions so PNG encode never freezes the composer. Shows a pending
+     * chip immediately so the user gets feedback during encode.
+     */
+    fun launchPasteImages() {
+        if (onUpload == null) return
+        if (pastePending) return
+        pastePending = true
+        scope.launch {
+            try {
+                val files = withContext(Dispatchers.IO) { pasteImageFiles() }
+                if (shouldStageClipboardPaste(uploadBound = true, files = files)) {
+                    stageFiles(files)
+                }
+                // Encode failed / empty: any partial paste-cache write is left for [prunePasteCache].
+            } finally {
+                pastePending = false
+            }
+        }
+    }
+
+    // Edit ▸ Paste image / WorkspaceUiState.pasteImageRequestNonce — same funnel as the Attach menu.
+    LaunchedEffect(pasteImageRequestNonce) {
+        if (pasteImageRequestNonce > 0L) {
+            launchPasteImages()
+            onPasteImageRequestConsumed()
+        }
     }
 
     val canSend = canSendComposer(draft, attachments, sending)
@@ -373,7 +832,7 @@ fun DesktopComposer(
         if (canSendComposer(text, attachments, sending)) {
             val fileIds = attachments.mapNotNull { (it.state as? UploadState.Done)?.fileId }
             onSend(text.trim(), fileIds)
-            attachments.clear()
+            clearAttachments()
         }
     }
     val doSend = { sendWith(draft) }
@@ -517,7 +976,7 @@ fun DesktopComposer(
                 },
             ),
     ) {
-        if (attachments.isNotEmpty()) {
+        if (attachments.isNotEmpty() || pastePending) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -525,11 +984,14 @@ fun DesktopComposer(
                     .padding(bottom = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                if (pastePending) {
+                    PastePendingChip()
+                }
                 attachments.forEach { att ->
                     key(att.id) {
                         ComposerChip(
                             att = att,
-                            onRemove = { attachments.removeAll { it.id == att.id } },
+                            onRemove = { removeAttachment(att.id) },
                             onRetry = { launchUpload(att.id) },
                         )
                     }
@@ -544,6 +1006,7 @@ fun DesktopComposer(
         val cs = MaterialTheme.colorScheme
         var modelMenu by remember { mutableStateOf(false) }
         var reasoningMenu by remember { mutableStateOf(false) }
+        var attachMenu by remember { mutableStateOf(false) }
         val modelCurrent = models?.current ?: sessionModel
         val showModelPill = models != null || !sessionModel.isNullOrBlank()
         val r = reasoning
@@ -612,63 +1075,115 @@ fun DesktopComposer(
             }
         }
 
-        OutlinedTextField(
-            value = draft,
-            onValueChange = onDraftChange,
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("composer-input")
-                .onPreviewKeyEvent { e: KeyEvent ->
-                    if (isComposerSendKey(e.key, e.type, e.isShiftPressed)) {
-                        // Consume ONLY when we actually send; a blank/sending/upload-blocked draft
-                        // falls through so the multiline field handles Enter itself (no stray
-                        // newline, no double-send).
-                        if (canSend) { doSend(); true } else false
-                    } else {
-                        false
+        // Right-click Paste image (discoverable without the keyboard) + the text field itself.
+        ContextMenuArea(
+            items = {
+                if (onUpload != null) {
+                    listOf(ContextMenuItem("Paste image") { launchPasteImages() })
+                } else {
+                    emptyList()
+                }
+            },
+        ) {
+            OutlinedTextField(
+                value = draft,
+                onValueChange = onDraftChange,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("composer-input")
+                    .onPreviewKeyEvent { e: KeyEvent ->
+                        if (isComposerSendKey(e.key, e.type, e.isShiftPressed)) {
+                            // Consume ONLY when we actually send; a blank/sending/upload-blocked draft
+                            // falls through so the multiline field handles Enter itself (no stray
+                            // newline, no double-send).
+                            if (canSend) { doSend(); true } else false
+                        } else if (
+                            handleComposerPasteKey(
+                                key = e.key,
+                                type = e.type,
+                                ctrlPressed = e.isCtrlPressed,
+                                metaPressed = e.isMetaPressed,
+                                shiftPressed = e.isShiftPressed,
+                                uploadBound = onUpload != null,
+                                // Probe clipboard ONLY after the paste chord matches — not on every
+                                // keystroke (cross-process X11/Wayland selection can stall).
+                                likelyHasImage = clipboardLikelyHasImage,
+                                onPasteImage = { launchPasteImages() },
+                            )
+                        ) {
+                            // Consumed: paste-image launched on IO (see [launchPasteImages]).
+                            true
+                        } else {
+                            false
+                        }
+                    },
+                placeholder = { Text("Message the agent…") },
+                maxLines = 8,
+                leadingIcon = if (onUpload != null) {
+                    {
+                        // Attach menu: "Attach files…" (picker) + "Paste image" (clipboard) so paste
+                        // is mouse-discoverable without relying solely on the keyboard chord.
+                        Box {
+                            IconButton(
+                                onClick = { attachMenu = true },
+                                modifier = Modifier.testTag("composer-attach"),
+                            ) {
+                                Icon(Icons.Filled.Add, contentDescription = "Attach")
+                            }
+                            DropdownMenu(
+                                expanded = attachMenu,
+                                onDismissRequest = { attachMenu = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Attach files…") },
+                                    onClick = {
+                                        attachMenu = false
+                                        stageFiles(pickFiles())
+                                    },
+                                    modifier = Modifier.testTag("composer-attach-files"),
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Paste image") },
+                                    onClick = {
+                                        attachMenu = false
+                                        launchPasteImages()
+                                    },
+                                    modifier = Modifier.testTag("composer-paste-image"),
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    null
+                },
+                trailingIcon = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (onTranscribeAudio != null) {
+                            MicButton(
+                                recording = dictation.recording,
+                                transcribing = dictation.transcribing,
+                                micUnavailable = dictation.micUnavailable,
+                                onClick = { if (dictation.recording) dictation.stopMic() else dictation.startMic() },
+                                modifier = Modifier.testTag("composer-mic"),
+                            )
+                        }
+                        if (agentWorking) {
+                            IconButton(onClick = onInterrupt, modifier = Modifier.testTag("composer-stop")) {
+                                Icon(Icons.Filled.Stop, contentDescription = "Stop")
+                            }
+                        } else {
+                            IconButton(
+                                onClick = doSend,
+                                enabled = canSend,
+                                modifier = Modifier.testTag("composer-send"),
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                            }
+                        }
                     }
                 },
-            placeholder = { Text("Message the agent…") },
-            maxLines = 8,
-            leadingIcon = if (onUpload != null) {
-                {
-                    IconButton(
-                        onClick = { stageFiles(pickFiles()) },
-                        modifier = Modifier.testTag("composer-attach"),
-                    ) {
-                        Icon(Icons.Filled.Add, contentDescription = "Attach")
-                    }
-                }
-            } else {
-                null
-            },
-            trailingIcon = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (onTranscribeAudio != null) {
-                        MicButton(
-                            recording = dictation.recording,
-                            transcribing = dictation.transcribing,
-                            micUnavailable = dictation.micUnavailable,
-                            onClick = { if (dictation.recording) dictation.stopMic() else dictation.startMic() },
-                            modifier = Modifier.testTag("composer-mic"),
-                        )
-                    }
-                    if (agentWorking) {
-                        IconButton(onClick = onInterrupt, modifier = Modifier.testTag("composer-stop")) {
-                            Icon(Icons.Filled.Stop, contentDescription = "Stop")
-                        }
-                    } else {
-                        IconButton(
-                            onClick = doSend,
-                            enabled = canSend,
-                            modifier = Modifier.testTag("composer-send"),
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
-                        }
-                    }
-                }
-            },
-        )
+            )
+        }
         LaunchedEffect(dictation.errorMessage) {
             if (dictation.errorMessage != null) {
                 delay(4000)
@@ -683,6 +1198,33 @@ fun DesktopComposer(
                 modifier = Modifier.padding(top = 4.dp).testTag("composer-mic-error"),
             )
         }
+    }
+}
+
+/** Indeterminate chip shown while clipboard raster encode runs (before a real upload chip exists). */
+@Composable
+private fun PastePendingChip() {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(cs.surfaceContainerHigh)
+            .padding(horizontal = 10.dp, vertical = 5.dp)
+            .testTag("composer-paste-pending"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(12.dp),
+            color = cs.primary,
+            strokeWidth = 1.5.dp,
+        )
+        Text(
+            text = "Pasting image…",
+            color = cs.onSurface,
+            fontSize = 12.sp,
+            maxLines = 1,
+        )
     }
 }
 

@@ -14,12 +14,24 @@ package dev.supermux.desktop.state
 import dev.supermux.desktop.notify.AgentReplyEvent
 import dev.supermux.desktop.session.StagedUpload
 import dev.supermux.net.AddCommentBody
+import dev.supermux.net.AddDeviceResponse
+import dev.supermux.net.AgentInstallJob
+import dev.supermux.net.AgentInstallStatus
+import dev.supermux.net.AgentLoginState
+import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.BrokerClient
 import dev.supermux.net.ChunkSource
+import dev.supermux.net.CreateProxyResponse
+import dev.supermux.net.CuratorConfig
+import dev.supermux.net.CuratorSettingsResponse
+import dev.supermux.net.DeviceDto
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
+import dev.supermux.net.ForgeConnection
+import dev.supermux.net.ForgeConnectionsResponse
+import dev.supermux.net.ForgeSearchResponse
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
 import dev.supermux.net.FsRefsResult
@@ -30,20 +42,25 @@ import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ModelsResponse
+import dev.supermux.net.OpenCodeOAuthStart
+import dev.supermux.net.OpenCodeProvider
 import dev.supermux.net.PADto
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
+import dev.supermux.net.RemoteRepo
 import dev.supermux.net.RepoInfo
 import dev.supermux.net.CodexResetResult
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.ReviewSubmitResult
+import dev.supermux.net.RunUpdateResult
 import dev.supermux.net.SpawnRequest
 import dev.supermux.net.SpawnResponse
 import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalSummary
 import dev.supermux.net.TranscribeResponse
 import dev.supermux.net.UpdateCommentBody
+import dev.supermux.net.UpdateStatus
 import dev.supermux.net.UsageResponse
 import dev.supermux.net.VerifySaveResult
 import dev.supermux.net.VerifySuggestResult
@@ -612,6 +629,128 @@ class DesktopAppState(
     suspend fun proxies(): List<ProxyDto> =
         runApi("proxies") { api.proxies() } ?: emptyList()
 
+    // ── Proxies management (desktop-parity Task 5) ─────────────────────────────────────────────
+    // Session-links menu only *reads* proxies; the Settings Proxies section creates/toggles/removes.
+    // [proxiesForSettings] returns null on failure so the UI can distinguish Error from Empty
+    // (same contract as [devices]).
+
+    /**
+     * GET /proxies for the Settings Proxies section.
+     * `null` = transport/decode failure; empty list = none configured.
+     */
+    suspend fun proxiesForSettings(): List<ProxyDto>? =
+        runApi("proxiesForSettings") { api.proxies() }
+
+    /** POST /proxies {sessionName, port, domain?} — null on failure. */
+    suspend fun createProxy(sessionName: String, port: Int, domain: String? = null): CreateProxyResponse? =
+        runApi("createProxy") { api.createProxy(sessionName, port, domain) }
+
+    /** PATCH /proxies/<domain> {isPublic}. False on failure. */
+    suspend fun setProxyPublic(domain: String, isPublic: Boolean): Boolean =
+        runApi("setProxyPublic") { api.setProxyPublic(domain, isPublic); true } ?: false
+
+    /** DELETE /proxies/<domain>. False on failure. */
+    suspend fun removeProxy(domain: String): Boolean =
+        runApi("removeProxy") { api.removeProxy(domain); true } ?: false
+
+    // ── Assistant identity + curator (desktop-parity Task 5) ───────────────────────────────────
+    // Backs the Assistant section: PA name + soul.md + nightly curator. Mirrors AppViewModel
+    // assistantLoad/assistantSave/curatorSettings/saveCurator/runCuratorNow.
+
+    /**
+     * Load PA name + soul.md together.
+     * `null` = config **or** soul load failed (do not enter Ready — empty soul is only valid
+     * when the GET succeeded). Pair of empty strings is a legitimate empty assistant.
+     */
+    suspend fun assistantLoad(): Pair<String, String>? {
+        val cfg = runApi("assistantLoadConfig") { api.getConfig() } ?: return null
+        val soul = runApi("assistantLoadSoul") { api.getSoul() } ?: return null
+        return cfg.paName to soul
+    }
+
+    /**
+     * PUT /settings/config {paName} then PUT /settings/soul.
+     * Returns null on full success; a human-readable error when either write fails
+     * (config failure is reported before soul is attempted).
+     */
+    suspend fun assistantSave(paName: String, soul: String): String? {
+        val configOk = runApi("assistantSaveConfig") { api.saveConfig(paName = paName); true } ?: false
+        if (!configOk) return "Couldn't save PA name — check connection and try again"
+        val soulOk = runApi("assistantSaveSoul") { api.putSoul(soul) } ?: false
+        if (!soulOk) return "Couldn't save soul.md — check connection and try again"
+        return null
+    }
+
+    /** GET /settings/curator. Null on failure. */
+    suspend fun curatorSettings(): CuratorSettingsResponse? =
+        runApi("curatorSettings") { api.getCuratorSettings() }
+
+    /** PUT /settings/curator. Null on failure. */
+    suspend fun saveCurator(
+        enabled: Boolean,
+        hour: Int,
+        minute: Int,
+        agent: String = "claude",
+        model: String? = null,
+        reasoningLevel: String? = null,
+    ): CuratorSettingsResponse? =
+        runApi("saveCurator") {
+            api.saveCuratorSettings(
+                CuratorConfig(
+                    enabled = enabled,
+                    hour = hour,
+                    minute = minute,
+                    agent = agent,
+                    model = model,
+                    reasoningLevel = reasoningLevel,
+                ),
+            )
+        }
+
+    /** POST /settings/curator/run-now. False on failure. */
+    suspend fun runCuratorNow(): Boolean =
+        runApi("runCuratorNow") { api.runCuratorNow(); true } ?: false
+
+    // ── Voice settings (desktop-parity Task 5) ─────────────────────────────────────────────────
+    // STT / TTS / cleanup engines + glossary. MessageTts already reads voiceTtsEngine via
+    // getConfig() (init above); Dictation posts multipart audio. Saving config here integrates —
+    // do not reimplement speak/transcribe in the settings UI.
+
+    /** GET /settings/config. Null on failure. */
+    suspend fun appConfig(): AppConfigDto? =
+        runApi("appConfig") { api.getConfig() }
+
+    /** Persist STT engine (null = broker default). False on failure. */
+    suspend fun saveVoiceStt(engine: String?): Boolean =
+        runApi("saveVoiceStt") { api.saveConfig(voiceSttEngine = engine); true } ?: false
+
+    /** Persist read-aloud engine (platform | codex). False on failure. */
+    suspend fun saveVoiceTts(engine: String?): Boolean =
+        runApi("saveVoiceTts") { api.saveConfig(voiceTtsEngine = engine); true } ?: false
+
+    /** Persist cleanup engine and/or model. False on failure. */
+    suspend fun saveVoiceCleanup(engine: String?, model: String?): Boolean =
+        runApi("saveVoiceCleanup") {
+            api.saveConfig(voiceCleanupEngine = engine, voiceCleanupModel = model)
+            true
+        } ?: false
+
+    /**
+     * GET /config/voice-glossary.
+     * `null` = transport/decode failure (UI Error + Retry); empty list = no terms yet.
+     * Never collapse failure into empty — adding a term after a failed load would overwrite
+     * the real glossary.
+     */
+    suspend fun fetchGlossary(): List<String>? =
+        runApi("fetchGlossary") { api.fetchGlossary() }
+
+    /**
+     * PUT /config/voice-glossary. Returns the persisted list, or null on failure so the UI can
+     * revert (Android VoiceGlossaryPage parity).
+     */
+    suspend fun updateGlossary(terms: List<String>): List<String>? =
+        runApi("updateGlossary") { api.updateGlossary(terms) }
+
     // ── Finish flow (M4b; mirrors AppViewModel.finish/finishReadiness/verifySuggest/verifySave) ──
     // The FinishDialog drives the whole job lifecycle off the [finishJobs] StateFlow; [finish] only
     // KICKS OFF the async job — its terminal outcome arrives on the WS finish_job frame ([reduce]).
@@ -949,6 +1088,127 @@ class DesktopAppState(
         runApi("killPersonalAssistant") { api.kill(id); true }
     }
 
+    // ── Agents settings (desktop-parity Task 1) ───────────────────────────────────────────
+    // Backs the Agents section of the Settings hub. Mirrors AppViewModel.agent* +
+    // openCode* (Android) and BrokerSession agent install/login (iOS). All go through [runApi]
+    // and degrade to empty/null — never throw into the UI.
+
+    /**
+     * GET /agents/status — install + auth state per agent CLI.
+     * Returns `null` on transport/decode failure so the UI can distinguish Error from a
+     * legitimate empty list (both used to collapse to `emptyList()`, leaving Settings stale).
+     */
+    suspend fun agentStatuses(): List<AgentInstallStatus>? =
+        runApi("agentStatuses") { api.agentStatuses() }
+
+    /** POST /agents/<kind>/install — start (or resume) the broker-owned install job. */
+    suspend fun startAgentInstall(kind: String): AgentInstallJob? =
+        runApi("startAgentInstall") { api.startAgentInstall(kind) }
+
+    /** GET /agents/<kind>/install — poll the latest install job. */
+    suspend fun agentInstallState(kind: String): AgentInstallJob? =
+        runApi("agentInstallState") { api.agentInstallState(kind) }
+
+    /** POST /agents/<kind>/login — start a CLI device-code / link login. */
+    suspend fun startAgentLogin(kind: String): AgentLoginState? =
+        runApi("startAgentLogin") { api.startAgentLogin(kind) }
+
+    /** GET /agents/<kind>/login — poll the current login state. */
+    suspend fun agentLoginState(kind: String): AgentLoginState? =
+        runApi("agentLoginState") { api.agentLoginState(kind) }
+
+    /** POST /agents/<kind>/login/code — hand the CLI a pasted device code. */
+    suspend fun sendAgentLoginCode(kind: String, code: String) {
+        runApi("sendAgentLoginCode") { api.sendAgentLoginCode(kind, code); true }
+    }
+
+    /** POST /agents/<kind>/login/cancel — abort an in-progress login. */
+    suspend fun cancelAgentLogin(kind: String) {
+        runApi("cancelAgentLogin") { api.cancelAgentLogin(kind); true }
+    }
+
+    /**
+     * Save an API key / OAuth token for a CLI-login agent via PUT /settings/config.
+     * Mirrors AppViewModel.agentSaveSecret: claude → claudeOauthToken, codex → codexApiKey,
+     * cursor → cursorApiKey. Returns false for unknown kinds or transport failure.
+     */
+    suspend fun saveAgentSecret(kind: String, value: String): Boolean =
+        runApi("saveAgentSecret") {
+            when (kind) {
+                "claude" -> api.saveConfig(claudeOauthToken = value)
+                "codex" -> api.saveConfig(codexApiKey = value)
+                "cursor" -> api.saveConfig(cursorApiKey = value)
+                else -> return@runApi false
+            }
+            true
+        } ?: false
+
+    /** GET /opencode/providers — providers with auth methods. Empty on failure. */
+    suspend fun openCodeProviders(): List<OpenCodeProvider> =
+        runApi("openCodeProviders") { api.openCodeProviders() } ?: emptyList()
+
+    /** POST /opencode/auth/key — save an API key for a provider. */
+    suspend fun setOpenCodeKey(providerId: String, key: String): Boolean =
+        runApi("setOpenCodeKey") { api.setOpenCodeKey(providerId, key); true } ?: false
+
+    /** POST /opencode/auth/oauth/start — begin browser OAuth for a provider method. */
+    suspend fun startOpenCodeOAuth(providerId: String, method: Int): OpenCodeOAuthStart? =
+        runApi("startOpenCodeOAuth") { api.startOpenCodeOAuth(providerId, method) }
+
+    /** POST /opencode/auth/oauth/finish — complete OAuth with a pasted code. */
+    suspend fun finishOpenCodeOAuth(providerId: String, method: Int, code: String): Boolean =
+        runApi("finishOpenCodeOAuth") { api.finishOpenCodeOAuth(providerId, method, code); true } ?: false
+
+    // ── Devices settings (desktop-parity Task 2) ───────────────────────────────────────────
+    // Backs the Devices section of the Settings hub. Mirrors AppViewModel devices / addDevice /
+    // revokeDevice (Android MoreScreens). All go through [runApi] and degrade to null/false.
+
+    /**
+     * GET /devices — paired devices with last_seen.
+     * Returns `null` on transport/decode failure so the UI can distinguish Error from empty.
+     */
+    suspend fun devices(): List<DeviceDto>? =
+        runApi("devices") { api.devices() }
+
+    /** POST /devices {name} → one-time pairing URL. Null on failure. */
+    suspend fun addDevice(name: String): AddDeviceResponse? =
+        runApi("addDevice") { api.addDevice(name) }
+
+    /** DELETE /devices/<name> — revoke a paired device. False on failure. */
+    suspend fun revokeDevice(name: String): Boolean =
+        runApi("revokeDevice") { api.revokeDevice(name); true } ?: false
+
+    // ── System / maintenance (desktop-parity Task 3) ───────────────────────────────────
+    // Backs the System section of the Settings hub. Mirrors AppViewModel updateStatus /
+    // checkUpdate / runUpdate / restartBroker. Broker self-update is distinct from the
+    // desktop app's own AppUpdate (File ▸ "Check for Updates…").
+
+    /** GET /api/update/status — cached broker updater state. Null on transport/decode failure. */
+    suspend fun updateStatus(): UpdateStatus? =
+        runApi("updateStatus") { api.updateStatus() }
+
+    /**
+     * POST /api/update/check — force the broker to poll versions.json and return post-check
+     * status. Null on failure. Used by System "Recheck" so the UI does not only re-read cache.
+     */
+    suspend fun checkUpdate(): UpdateStatus? =
+        runApi("checkUpdate") { api.checkUpdate() }
+
+    /** POST /api/update/run — start broker self-update (binary mode). Null on transport failure. */
+    suspend fun runUpdate(): RunUpdateResult? =
+        runApi("runUpdate") { api.runUpdate() }
+
+    /**
+     * POST /system/restart — ask the broker to restart. Kills this client's connection;
+     * [BrokerClient] reconnects when the broker is back.
+     *
+     * @return true when the POST is accepted (2xx); false on 4xx/5xx or transport failure so the
+     *   System settings UI can surface an error instead of a blind "Restarting…" spinner.
+     */
+    suspend fun restartBroker(): Boolean =
+        runApi("restartBroker") { api.restartBroker(); true } ?: false
+
+
     // ── LSP settings (M4g-4 Task 1) ────────────────────────────────────────────────────
     // Backs the LspSettingsScreen overlay (M4g-4 Task 2/3): enable/disable + install + add/remove
     // custom language servers. [lspInstallLog]/[lspInstallDone] (above) already stream the live
@@ -1034,6 +1294,59 @@ class DesktopAppState(
     suspend fun launcherCommands(agent: String, workdir: String): List<SlashCommand> =
         if (workdir.isBlank()) emptyList()
         else runApi("launcherCommands") { api.previewCommands(agent, workdir).commands } ?: emptyList()
+
+    // ── Git hosting / forges (desktop-parity Task 4; mirrors AppViewModel.forges* + listForges) ──
+    // Settings hub manages accounts; the New-Session launcher project picker uses the search /
+    // clone / create half. All go through [runApi] and getOrNull-degrade like Android.
+
+    /** GET /forge/connections → configured accounts + CLI availability. Null on transport failure. */
+    suspend fun forgesLoad(): ForgeConnectionsResponse? =
+        runApi("forgesLoad") { api.listForges() }
+
+    /** POST /forge/connections — connect with a PAT. True on success. */
+    suspend fun forgeAdd(kind: String, token: String, host: String?, transport: String): Boolean =
+        runApi("forgeAdd") { api.addForge(kind, token, host, transport); true } ?: false
+
+    /** POST /forge/connections/import — import from `gh`/`glab` CLI auth. True on success. */
+    suspend fun forgeImport(kind: String, transport: String): Boolean =
+        runApi("forgeImport") { api.importForge(kind, transport); true } ?: false
+
+    /**
+     * DELETE /forge/connections/<id> — disconnect. True only when the account is gone afterwards.
+     * [BrokerApi.removeForge] does not check HTTP status, so we re-list to distinguish a 5xx no-op
+     * from a real removal (and surface failures in the settings UI).
+     */
+    suspend fun forgeRemove(id: String): Boolean =
+        runApi("forgeRemove") {
+            api.removeForge(id)
+            val stillThere = api.listForges().connections.any { it.id == id }
+            if (stillThere) error("forge $id still present after remove")
+            true
+        } ?: false
+
+    /** GET /forge/connections → connection list only (launcher omnibox). Empty on failure. */
+    suspend fun listForges(): List<ForgeConnection> =
+        runApi("listForges") { api.listForges().connections } ?: emptyList()
+
+    /**
+     * POST /forge/search → remote repos (+ per-connection errors) across connected forges.
+     * Null on transport/5xx so the UI can distinguish failure from an empty success.
+     */
+    suspend fun searchForge(query: String): ForgeSearchResponse? =
+        runApi("searchForge") { api.searchForge(query) }
+
+    /** POST /forge/clone → local path of the new checkout. Null on failure / blank path. */
+    suspend fun cloneForge(connectionId: String, owner: String, name: String): String? =
+        runApi("cloneForge") { api.cloneForge(connectionId, owner, name).localPath }
+            ?.ifBlank { null }
+
+    /** POST /forge/create-local → local path of a fresh `git init`. Null on failure / blank path. */
+    suspend fun createLocalRepo(name: String): String? =
+        runApi("createLocalRepo") { api.createLocalRepo(name).localPath }?.ifBlank { null }
+
+    /** POST /forge/create → create remote + clone; returns local path. Null on failure / blank. */
+    suspend fun createForge(connectionId: String, name: String): String? =
+        runApi("createForge") { api.createForge(connectionId, name).localPath }?.ifBlank { null }
 
     // ── In-session model + reasoning selection (mirrors AppViewModel's per-session model/reasoning
     //    helpers) ─────────────────────────────────────────────────────────────────────────────────

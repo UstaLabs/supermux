@@ -10,6 +10,7 @@ package dev.supermux.desktop.workspace
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -63,8 +64,7 @@ import dev.supermux.desktop.session.ArchivedScreen
 import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.session.SessionLauncherScreen
 import dev.supermux.desktop.session.SessionListPanel
-import dev.supermux.desktop.settings.LspSettingsScreen
-import dev.supermux.desktop.settings.PersonalAssistantsScreen
+import dev.supermux.desktop.settings.SettingsHub
 import dev.supermux.desktop.update.AppUpdateBanner
 import dev.supermux.desktop.update.AppUpdateScreen
 import dev.supermux.desktop.state.DesktopAppState
@@ -73,6 +73,24 @@ import dev.supermux.net.ArchivedDto
 import dev.supermux.net.UsageResponse
 import dev.supermux.session.inferHomeDir
 import kotlinx.coroutines.flow.MutableStateFlow
+
+/**
+ * Sections of the Settings hub (left rail), in rail order: Agents (Task 1), Devices (Task 2),
+ * System (Task 3), Git hosting (Task 4), Proxies / Identity / Voice (Task 5). Editor/LSP and
+ * Personal Assistants are the pre-existing screens folded into the hub.
+ */
+enum class SettingsSection(val label: String) {
+    Agents("Agents"),
+    Devices("Devices"),
+    System("System"),
+    GitHosting("Git hosting"),
+    Proxies("Proxies"),
+    /** Identity (PA name + soul.md + curator) — distinct from [PersonalAssistants] fleet. */
+    Assistant("Identity"),
+    Voice("Voice"),
+    EditorLsp("Editor / LSP"),
+    PersonalAssistants("Personal assistants"),
+}
 
 /**
  * Holder for the workspace UI state that both [WorkspaceRoot] and the window MenuBar (Main.kt) act
@@ -122,19 +140,44 @@ class WorkspaceUiState {
      * [launcherOpen]/[archivedOpen]/[usageOpen] — Main's MenuBar renders outside WorkspaceRoot's
      * composition but must open it.
      */
-    var lspSettingsOpen by mutableStateOf(false)
-    var personalAssistantsOpen by mutableStateOf(false)
+    /**
+     * Whether the Settings hub overlay is showing (Agents / Editor·LSP / Personal Assistants).
+     * Flipped on by File ▸ "Settings…", File ▸ "Editor / LSP…", File ▸ "Personal Assistants…",
+     * and the SessionDetail overflow ⋮ row; flipped off by the hub's back/escape.
+     */
+    var settingsOpen by mutableStateOf(false)
+
+    /** Which section the Settings hub detail pane shows. */
+    var settingsSection by mutableStateOf(SettingsSection.Agents)
+
     var appUpdateOpen by mutableStateOf(false)
 
     /**
+     * Compatibility views over [settingsOpen]/[settingsSection] so existing tests that set
+     * `lspSettingsOpen = true` / assert `personalAssistantsOpen` keep working while the hub is
+     * the single overlay.
+     */
+    var lspSettingsOpen: Boolean
+        get() = settingsOpen && settingsSection == SettingsSection.EditorLsp
+        set(value) {
+            if (value) openLspSettings() else if (lspSettingsOpen) settingsOpen = false
+        }
+
+    var personalAssistantsOpen: Boolean
+        get() = settingsOpen && settingsSection == SettingsSection.PersonalAssistants
+        set(value) {
+            if (value) openPersonalAssistants() else if (personalAssistantsOpen) settingsOpen = false
+        }
+
+    /**
      * Any full-pane modal overlay ([launcherOpen], [archivedOpen], [usageOpen],
-     * [lspSettingsOpen], or [personalAssistantsOpen]) is up. The workspace pane/sidebar shortcuts
+     * [settingsOpen], or [appUpdateOpen]) is up. The workspace pane/sidebar shortcuts
      * (Ctrl+B/L/E/T/D) are gated
      * OFF while this is true, so a chord an overlay leaves unhandled can't bubble to
      * [workspaceShortcuts] and silently mutate the layout behind it. One gate for every overlay,
      * so new overlays don't each have to remember to extend the guard.
      */
-    val overlayOpen: Boolean get() = launcherOpen || archivedOpen || usageOpen || lspSettingsOpen || personalAssistantsOpen || appUpdateOpen
+    val overlayOpen: Boolean get() = launcherOpen || archivedOpen || usageOpen || settingsOpen || appUpdateOpen
 
     /**
      * Open the New-Session launcher, enforcing the "at most one overlay" invariant (closes the
@@ -148,8 +191,7 @@ class WorkspaceUiState {
         launcherOpen = true
         archivedOpen = false
         usageOpen = false
-        lspSettingsOpen = false
-        personalAssistantsOpen = false
+        settingsOpen = false
         appUpdateOpen = false
     }
 
@@ -158,8 +200,7 @@ class WorkspaceUiState {
         archivedOpen = true
         launcherOpen = false
         usageOpen = false
-        lspSettingsOpen = false
-        personalAssistantsOpen = false
+        settingsOpen = false
         appUpdateOpen = false
     }
 
@@ -168,37 +209,35 @@ class WorkspaceUiState {
         usageOpen = true
         launcherOpen = false
         archivedOpen = false
-        lspSettingsOpen = false
-        personalAssistantsOpen = false
+        settingsOpen = false
         appUpdateOpen = false
     }
 
-    /** Open the LSP settings overlay; the "at most one overlay" mirror of [openLauncher]/
-     *  [openArchived]/[openUsage]. */
-    fun openLspSettings() {
-        lspSettingsOpen = true
+    /**
+     * Open the Settings hub on [section], enforcing the "at most one overlay" invariant.
+     * File ▸ "Settings…" uses [SettingsSection.Agents]; the existing Editor/LSP and Personal
+     * Assistants menu items keep working by routing here with their section selected.
+     */
+    fun openSettings(section: SettingsSection = SettingsSection.Agents) {
+        settingsSection = section
+        settingsOpen = true
         launcherOpen = false
         archivedOpen = false
         usageOpen = false
-        personalAssistantsOpen = false
         appUpdateOpen = false
     }
 
-    fun openPersonalAssistants() {
-        personalAssistantsOpen = true
-        launcherOpen = false
-        archivedOpen = false
-        usageOpen = false
-        lspSettingsOpen = false
-        appUpdateOpen = false
-    }
+    /** Open Settings hub focused on Editor / LSP (File ▸ "Editor / LSP…" + overflow menu). */
+    fun openLspSettings() = openSettings(SettingsSection.EditorLsp)
+
+    /** Open Settings hub focused on Personal Assistants. */
+    fun openPersonalAssistants() = openSettings(SettingsSection.PersonalAssistants)
 
     fun openAppUpdate() {
         launcherOpen = false
         archivedOpen = false
         usageOpen = false
-        lspSettingsOpen = false
-        personalAssistantsOpen = false
+        settingsOpen = false
         appUpdateOpen = true
     }
 
@@ -266,6 +305,19 @@ class WorkspaceUiState {
      * Main.kt; null in normal operation. Cleared once the matching composer consumes it.
      */
     var externalDictate by mutableStateOf<Pair<String, dev.supermux.desktop.chat.ComposerExternalDictate>?>(null)
+
+    /**
+     * One-shot "paste image from clipboard into the selected session's composer" request. Bumped by
+     * Edit ▸ Paste image in the native MenuBar; the selected session's [DesktopComposer] runs the
+     * same [launchPasteImages] path as Ctrl/Cmd+V / Attach ▸ Paste image, then clears the nonce.
+     * Zero in normal operation.
+     */
+    var pasteImageRequestNonce by mutableStateOf(0L)
+
+    /** Bump [pasteImageRequestNonce] so the selected composer's paste-image path runs once. */
+    fun requestPasteImage() {
+        pasteImageRequestNonce = pasteImageRequestNonce + 1
+    }
 
     /**
      * One-shot "open this archived session's read-only transcript" request (an ARCHIVED session
@@ -576,6 +628,9 @@ fun WorkspaceRoot(
                         // the SessionDetail whose id matches.
                         externalDictate = ui.externalDictate?.takeIf { it.first == session.id }?.second,
                         onExternalDictateConsumed = { ui.externalDictate = null },
+                        // Edit ▸ Paste image — only the selected session's composer responds.
+                        pasteImageRequestNonce = ui.pasteImageRequestNonce,
+                        onPasteImageRequestConsumed = { ui.pasteImageRequestNonce = 0L },
                         // Overflow ⋮ "Usage" row (M4f): the SAME ui.openUsage() the File ▸
                         // "Usage…" menu item calls.
                         onUsage = { ui.openUsage() },
@@ -658,6 +713,12 @@ fun WorkspaceRoot(
                         selectedHost = activeHostId,
                         onSelectHost = { fleet?.setActiveHost(it) },
                         loadAgents = { hostApp.launcherAgents() },
+                        // Forge omnibox (Task 4): clone/create lands the new path in workdir.
+                        loadForges = { hostApp.listForges() },
+                        searchForge = { hostApp.searchForge(it) },
+                        cloneForge = { cid, owner, name -> hostApp.cloneForge(cid, owner, name) },
+                        createLocalRepo = { hostApp.createLocalRepo(it) },
+                        createForge = { cid, name -> hostApp.createForge(cid, name) },
                     )
                 }
             }
@@ -767,31 +828,42 @@ fun WorkspaceRoot(
                 }
             }
 
-            // ── LSP settings: a FULL-PANE overlay above the workspace (M4g-4 Task 3) ──
-            // Same shape as the launcher/archived/usage overlays, but UNLIKE them the SCREEN itself
-            // owns its server-list load/toggle/install/add/remove state (LspSettingsScreen's own
-            // LaunchedEffect(Unit) — mirrors Android's EditorLspSection, since toggle/install/add/
-            // remove all need to mutate the list in place, unlike Usage's single redeem-swap).
-            // WorkspaceRoot only supplies the app.lsp* lambdas + the live app.lspInstallLog/
-            // app.lspInstallDone StateFlows (folded from lsp_install_progress/lsp_install_done
-            // frames by DesktopAppState) — because the composable is torn down + rebuilt each time
-            // ui.lspSettingsOpen flips off/on, a re-open always re-fetches (same net effect as
-            // Usage's explicit reset-to-null-on-close).
-            if (ui.lspSettingsOpen) {
-                // Self-focusing (mirrors the Usage overlay, NOT the launcher/archived Boxes): this
-                // screen has no text field a user would naturally focus first when it opens, so
-                // Escape needs a focus owner from frame one.
-                val lspFocus = remember { FocusRequester() }
-                LaunchedEffect(Unit) { runCatching { lspFocus.requestFocus() } }
+            // ── Settings hub: FULL-PANE overlay (desktop-parity Task 1) ──
+            // Single entry point for Agents + folded Editor/LSP + Personal Assistants.
+            // openLspSettings()/openPersonalAssistants() still work — they open this hub with
+            // the matching section selected. Host-scoped: key(activeHostId) + hostApp.* so a
+            // fleet switch reloads the active broker's agent/LSP/PA state.
+            if (ui.settingsOpen) {
+                val settingsFocus = remember { FocusRequester() }
+                LaunchedEffect(Unit) { runCatching { settingsFocus.requestFocus() } }
+                // One overlay tag: settings_overlay for Agents (and as a general alias via
+                // settings_hub); legacy tags when the hub is focused on folded sections so
+                // EditorLspScreenTest / PA tests keep resolving.
+                val overlayTag = when (ui.settingsSection) {
+                    SettingsSection.EditorLsp -> "lsp_settings_overlay"
+                    SettingsSection.PersonalAssistants -> "personal_assistants_overlay"
+                    SettingsSection.Agents, SettingsSection.Devices -> "settings_overlay"
+                    SettingsSection.Agents, SettingsSection.GitHosting -> "settings_overlay"
+                    SettingsSection.Agents, SettingsSection.Devices, SettingsSection.System -> "settings_overlay"
+                    SettingsSection.Agents,
+                    SettingsSection.Devices,
+                    SettingsSection.Proxies,
+                    SettingsSection.Assistant,
+                    SettingsSection.Voice,
+                    -> "settings_overlay"
+                }
+                // Escape is handled inside SettingsHub (dirty-soul discard confirm). The outer
+                // box only owns focus so keys reach the hub; it does not close unconditionally.
+                var settingsTryClose by remember { mutableStateOf<(() -> Unit)?>(null) }
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .testTag("lsp_settings_overlay")
-                        .focusRequester(lspFocus)
+                        .testTag(overlayTag)
+                        .focusRequester(settingsFocus)
                         .focusable()
                         .onPreviewKeyEvent { e ->
                             if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                                ui.lspSettingsOpen = false
+                                settingsTryClose?.invoke() ?: run { ui.settingsOpen = false }
                                 true
                             } else {
                                 false
@@ -802,7 +874,59 @@ fun WorkspaceRoot(
                         HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
                         Box(Modifier.weight(1f)) {
                             androidx.compose.runtime.key(activeHostId) {
-                                LspSettingsScreen(
+                                SettingsHub(
+                                    section = ui.settingsSection,
+                                    onSectionChange = { ui.settingsSection = it },
+                                    onBack = { ui.settingsOpen = false },
+                                    onRegisterCloseHandler = { settingsTryClose = it },
+                                    agentStatuses = { hostApp.agentStatuses() },
+                                    agentStartLogin = { hostApp.startAgentLogin(it) },
+                                    agentPollLogin = { hostApp.agentLoginState(it) },
+                                    agentSendCode = { kind, code -> hostApp.sendAgentLoginCode(kind, code) },
+                                    agentCancelLogin = { hostApp.cancelAgentLogin(it) },
+                                    agentSaveSecret = { kind, value -> hostApp.saveAgentSecret(kind, value) },
+                                    agentStartInstall = { hostApp.startAgentInstall(it) },
+                                    agentPollInstall = { hostApp.agentInstallState(it) },
+                                    openCodeProviders = { hostApp.openCodeProviders() },
+                                    openCodeSetKey = { id, key -> hostApp.setOpenCodeKey(id, key) },
+                                    openCodeStartOAuth = { id, method -> hostApp.startOpenCodeOAuth(id, method) },
+                                    openCodeFinishOAuth = { id, method, code -> hostApp.finishOpenCodeOAuth(id, method, code) },
+                                    devicesLoad = { hostApp.devices() },
+                                    deviceAdd = { name -> hostApp.addDevice(name) },
+                                    deviceRevoke = { name -> hostApp.revokeDevice(name) },
+                                    updateStatus = { hostApp.updateStatus() },
+                                    checkUpdate = { hostApp.checkUpdate() },
+                                    runUpdate = { hostApp.runUpdate() },
+                                    restartBroker = { hostApp.restartBroker() }, // suspend→Boolean
+                                    proxiesLoad = { hostApp.proxiesForSettings() },
+                                    proxySessionNames = { hostApp.sessions.value.map { it.name } },
+                                    proxyCreate = { session, port, domain ->
+                                        hostApp.createProxy(session, port, domain)
+                                    },
+                                    proxySetPublic = { domain, isPublic ->
+                                        hostApp.setProxyPublic(domain, isPublic)
+                                    },
+                                    proxyRemove = { domain -> hostApp.removeProxy(domain) },
+                                    assistantLoad = { hostApp.assistantLoad() },
+                                    assistantSave = { paName, soul -> hostApp.assistantSave(paName, soul) },
+                                    curatorLoad = { hostApp.curatorSettings() },
+                                    curatorSave = { enabled, hour, minute, agent, model, reasoning ->
+                                        hostApp.saveCurator(enabled, hour, minute, agent, model, reasoning)
+                                    },
+                                    curatorRunNow = { hostApp.runCuratorNow() },
+                                    curatorLoadModels = { agent -> hostApp.launcherModels(agent) },
+                                    curatorLoadReasoning = { agent, model ->
+                                        hostApp.launcherReasoning(agent, model)
+                                    },
+                                    voiceLoadConfig = { hostApp.appConfig() },
+                                    voiceLoadModels = { family -> hostApp.launcherModels(family) },
+                                    voiceSaveStt = { engine -> hostApp.saveVoiceStt(engine) },
+                                    voiceSaveTts = { engine -> hostApp.saveVoiceTts(engine) },
+                                    voiceSaveCleanup = { engine, model ->
+                                        hostApp.saveVoiceCleanup(engine, model)
+                                    },
+                                    glossaryLoad = { hostApp.fetchGlossary() },
+                                    glossarySave = { terms -> hostApp.updateGlossary(terms) },
                                     lspLoad = { hostApp.lspLoad() },
                                     lspToggle = { id, enabled -> hostApp.lspToggle(id, enabled) },
                                     lspInstall = { id -> hostApp.lspInstall(id) },
@@ -812,39 +936,15 @@ fun WorkspaceRoot(
                                         hostApp.lspAddCustom(args.id, args.label, args.command, args.extensions, args.args, args.languageId, args.installCmd)
                                     },
                                     lspRemoveCustom = { id -> hostApp.lspRemoveCustom(id) },
-                                    onBack = { ui.lspSettingsOpen = false },
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (ui.personalAssistantsOpen) {
-                val paFocus = remember { FocusRequester() }
-                LaunchedEffect(Unit) { runCatching { paFocus.requestFocus() } }
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .testTag("personal_assistants_overlay")
-                        .focusRequester(paFocus)
-                        .focusable()
-                        .onPreviewKeyEvent { e ->
-                            if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                                ui.personalAssistantsOpen = false
-                                true
-                            } else false
-                        },
-                ) {
-                    Column(Modifier.fillMaxSize()) {
-                        HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
-                        Box(Modifier.weight(1f)) {
-                            androidx.compose.runtime.key(activeHostId) {
-                                PersonalAssistantsScreen(
-                                    load = { hostApp.personalAssistants() },
-                                    create = { name, agent, focus -> hostApp.createPersonalAssistant(name, agent, focus) },
-                                    kill = { hostApp.killPersonalAssistant(it) },
-                                    onBack = { ui.personalAssistantsOpen = false },
+                                    paLoad = { hostApp.personalAssistants() },
+                                    paCreate = { name, agent, focus -> hostApp.createPersonalAssistant(name, agent, focus) },
+                                    paKill = { hostApp.killPersonalAssistant(it) },
+                                    forgesLoad = { hostApp.forgesLoad() },
+                                    forgeAdd = { kind, token, host, transport ->
+                                        hostApp.forgeAdd(kind, token, host, transport)
+                                    },
+                                    forgeImport = { kind, transport -> hostApp.forgeImport(kind, transport) },
+                                    forgeRemove = { id -> hostApp.forgeRemove(id) },
                                 )
                             }
                         }
@@ -919,33 +1019,39 @@ private fun HostScopeBar(
     val selected = hosts.firstOrNull { it.recordId == selectedHostId } ?: hosts.first()
     val cs = MaterialTheme.colorScheme
     var expanded by remember { mutableStateOf(false) }
+    // Compact control (not full-width) so DropdownMenu anchors to a chip-sized box
+    // instead of stretching across the settings pane.
     Column(Modifier.fillMaxWidth().background(cs.surfaceContainer)) {
-        Box {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { expanded = true }
-                    .padding(horizontal = 16.dp, vertical = 10.dp)
-                    .testTag("host_scope_picker"),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Host", color = cs.onSurfaceVariant)
-                Spacer(Modifier.weight(1f))
-                HostDot(selected.colorIndex, size = 9.dp)
-                Text(
-                    selected.displayLabel + if (!selected.online) " · Offline" else "",
-                    modifier = Modifier.padding(start = 7.dp, end = 5.dp),
-                    color = cs.onSurface,
-                )
-                Text("⌄", color = cs.onSurfaceVariant)
-            }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                hosts.forEach { host ->
-                    DropdownMenuItem(
-                        text = { Text(host.displayLabel + if (!host.online) " (offline)" else "") },
-                        leadingIcon = { HostDot(host.colorIndex, size = 10.dp) },
-                        onClick = { expanded = false; onSelect(host.recordId) },
+        Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Host", color = cs.onSurfaceVariant)
+            Box {
+                Row(
+                    Modifier
+                        .clickable { expanded = true }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                        .testTag("host_scope_picker"),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    HostDot(selected.colorIndex, size = 9.dp)
+                    Text(
+                        selected.displayLabel + if (!selected.online) " · Offline" else "",
+                        modifier = Modifier.padding(start = 7.dp, end = 5.dp),
+                        color = cs.onSurface,
                     )
+                    Text("⌄", color = cs.onSurfaceVariant)
+                }
+                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    hosts.forEach { host ->
+                        DropdownMenuItem(
+                            text = { Text(host.displayLabel + if (!host.online) " (offline)" else "") },
+                            leadingIcon = { HostDot(host.colorIndex, size = 10.dp) },
+                            onClick = { expanded = false; onSelect(host.recordId) },
+                        )
+                    }
                 }
             }
         }

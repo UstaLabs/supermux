@@ -16,6 +16,29 @@ object Space {
     val lg = 16.dp
     val xl = 24.dp
     val xxl = 32.dp
+    /** Pairing / QR display size (scannable at arm's length on a desktop monitor). */
+    val qr = 200.dp
+}
+
+/** Icon and inline-control sizes. */
+object IconSize {
+    val sm = 14.dp
+    val md = 18.dp
+    val lg = 24.dp
+}
+
+/**
+ * Stroke widths — borders and progress indicators (not layout spacing).
+ * Prefer these over raw `1.dp` / `2.dp` so surfaces stay consistent.
+ *
+ * Merge note: two parity branches each grew this object. Unified here so every existing call site
+ * keeps its intended width — borders use [hairline] (1dp), progress indicators use [thin]/[md]
+ * (both 2dp; [md] is retained because the Devices spinner refers to it).
+ */
+object Stroke {
+    val hairline = 1.dp
+    val thin = 2.dp
+    val md = 2.dp
 }
 
 /** Corner-radius tokens. */
@@ -24,6 +47,39 @@ object Radii {
     val md = 12.dp
     val lg = 16.dp
     val pill = 999.dp
+}
+
+/**
+ * Component-size tokens that sit outside the spacing grid (status dots, menu widths).
+ * Named so call sites never hardcode magic dimensions.
+ */
+object Size {
+    /** Online-status badge on forge connection rows. */
+    val statusDot = 8.dp
+    /** Project-picker / forge omnibox dropdown width. */
+    val omniboxWidth = 384.dp
+    /** Max height of the scrollable omnibox option list. */
+    val omniboxListMax = 360.dp
+}
+
+/**
+ * Component size tokens beyond the 4-point spacing grid (icons, strokes, media bounds).
+ * Prefer these over raw `N.dp` at call sites — same discipline as [Space]/[Radii].
+ */
+object Sizes {
+    /** Compact icon / circular-progress size (toolbars, chips, inline spinners). */
+    val iconSm = 18.dp
+    /** Hairline stroke for compact progress indicators and status rings. */
+    val hairline = 1.5.dp
+}
+
+/** Media layout tokens (inline images, previews). */
+object Media {
+    /**
+     * Max painted height for inline markdown / chat images. Loading placeholders should reserve
+     * the same height so the timeline does not reflow when the bitmap arrives.
+     */
+    val inlineImageMaxHeight = 280.dp
 }
 
 /**

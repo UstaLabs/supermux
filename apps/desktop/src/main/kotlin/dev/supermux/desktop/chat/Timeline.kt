@@ -23,6 +23,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -33,6 +34,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -61,6 +63,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -72,8 +75,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asComposeImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
@@ -91,8 +100,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.theme.LocalSemantics
+import dev.supermux.desktop.theme.Media
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Radii
+import dev.supermux.desktop.theme.Sizes
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.ui.openInBrowser
 import dev.supermux.proto.ActivityEvent
@@ -115,11 +126,17 @@ import kotlinx.coroutines.withContext
 import java.awt.Desktop
 import java.awt.FileDialog
 import java.awt.Frame
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
+import java.net.HttpURLConnection
+import java.net.URI
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import org.jetbrains.skia.Codec
+import org.jetbrains.skia.Data
 
 // ---------------------------------------------------------------------------
 // Data model
@@ -348,7 +365,13 @@ fun FencedCodeBlock(code: String) {
  * Footer: copy + native read-aloud (Android/web parity).
  */
 @Composable
-fun AssistantMessage(text: String, onOpenFile: (FilePathRef) -> Unit = {}, ts: String? = null) {
+fun AssistantMessage(
+    text: String,
+    onOpenFile: (FilePathRef) -> Unit = {},
+    ts: String? = null,
+    onOpenUrl: (String) -> Unit = ::openInBrowser,
+    loadImage: suspend (String) -> ImageBitmap? = { loadMarkdownImageBitmap(it) },
+) {
     Column(Modifier.fillMaxWidth()) {
         // SelectionContainer makes the prose mouse-selectable/copyable; links inside stay clickable.
         SelectionContainer {
@@ -357,6 +380,8 @@ fun AssistantMessage(text: String, onOpenFile: (FilePathRef) -> Unit = {}, ts: S
                 modifier = Modifier.fillMaxWidth(),
                 onOpenFile = onOpenFile,
                 linkify = true,
+                onOpenUrl = onOpenUrl,
+                loadImage = loadImage,
             )
         }
         MessageMetaRow(text = text, ts = ts)
@@ -443,7 +468,20 @@ private fun MessageMetaRow(text: String, ts: String?) {
  * this so they never drift.
  */
 @Composable
-fun MarkdownBody(text: String, modifier: Modifier = Modifier, onOpenFile: (FilePathRef) -> Unit = {}, linkify: Boolean = false) {
+fun MarkdownBody(
+    text: String,
+    modifier: Modifier = Modifier,
+    onOpenFile: (FilePathRef) -> Unit = {},
+    linkify: Boolean = false,
+    /**
+     * Open-URL seam for inline images and (via callers) click tests. Defaults to the system browser;
+     * tests inject a recorder so clicks never launch Chrome (which would hang the Gradle worker).
+     * Threaded into [MarkdownImage] so a future click test at the [MarkdownBody] level stays safe.
+     */
+    onOpenUrl: (String) -> Unit = ::openInBrowser,
+    /** Load seam for https images — default production fetch; tests/SM_MD_IMAGE inject fakes. */
+    loadImage: suspend (String) -> ImageBitmap? = { loadMarkdownImageBitmap(it) },
+) {
     val cs = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
     val blocks = parseMarkdownBlocks(text)
@@ -523,7 +561,7 @@ fun MarkdownBody(text: String, modifier: Modifier = Modifier, onOpenFile: (FileP
                     )
                 }
                 is MdBlock.Table -> MarkdownTable(block, onOpenFile, linkify)
-                is MdBlock.Image -> MarkdownImage(block)
+                is MdBlock.Image -> MarkdownImage(block, loadImage = loadImage, onOpenUrl = onOpenUrl)
             }
         }
     }
@@ -599,25 +637,310 @@ private fun MarkdownTableCell(
 }
 
 /**
- * Standalone markdown image `![alt](url)`. Desktop renders a compact, tappable link line
- * (🖼 + alt/url) that opens the url in the system browser — it deliberately does NOT load the
- * bitmap inline. Loading images would pull the Coil3 dependency into the packaged desktop app
- * (jlink/installer), so the link-line fallback is the safe, dependency-free choice. Android
- * itself falls back to a link for non-https images, so this is acceptable desktop parity.
+ * Max download size for inline markdown images (bytes). Keeps a malicious/huge asset from
+ * ballooning RAM; anything over this falls back to the tappable link line.
+ */
+internal const val MD_IMAGE_MAX_BYTES: Long = 8L * 1024L * 1024L
+
+/** Only `https://` image URLs are fetched (message-content images are a tracking / IP-leak vector). */
+internal fun isHttpsImageUrl(url: String): Boolean =
+    url.startsWith("https://", ignoreCase = true)
+
+/**
+ * Read up to [maxBytes] from [stream]. Returns null if the stream would exceed the cap (size-
+ * capped so a huge body never lands fully in memory). Pure relative to the stream — unit-testable
+ * without the network.
+ */
+internal fun readBytesCapped(stream: InputStream, maxBytes: Long = MD_IMAGE_MAX_BYTES): ByteArray? {
+    val out = ByteArrayOutputStream()
+    val buf = ByteArray(8 * 1024)
+    var total = 0L
+    while (true) {
+        val n = stream.read(buf)
+        if (n < 0) break
+        total += n
+        if (total > maxBytes) return null
+        out.write(buf, 0, n)
+    }
+    return out.toByteArray()
+}
+
+/** Default redirect hop budget for [fetchHttpsImageBytes] — loops must not hang the loader. */
+internal const val MD_IMAGE_MAX_REDIRECTS: Int = 5
+
+/**
+ * Resolve a redirect [Location] against [currentUrl]. Absolute http(s) locations are used as-is;
+ * relative locations are resolved with [URI.resolve]. Pure — unit-testable without the network.
+ */
+internal fun resolveImageRedirectUrl(currentUrl: String, location: String): String {
+    val next = location.trim()
+    if (next.startsWith("https://", ignoreCase = true) ||
+        next.startsWith("http://", ignoreCase = true)
+    ) {
+        return next
+    }
+    return URI(currentUrl).resolve(next).toString()
+}
+
+/** Open a GET connection for image fetch. Extracted so tests can inject a local server opener. */
+internal fun openImageHttpConnection(url: String): HttpURLConnection =
+    (URI(url).toURL().openConnection() as HttpURLConnection).apply {
+        instanceFollowRedirects = false
+        connectTimeout = 10_000
+        readTimeout = 15_000
+        requestMethod = "GET"
+        setRequestProperty("Accept", "image/*,*/*;q=0.8")
+    }
+
+/**
+ * GET [url] and return the response body when every hop is allowed by [isAllowedUrl], the status is
+ * 2xx, and the body is within [maxBytes]. Follows up to [maxRedirects] hops. Null on any failure —
+ * callers fall back to the link line. Blocking; call from [Dispatchers.IO], never the UI thread.
+ *
+ * [isAllowedUrl] / [openConnection] are seams for the production network-matrix tests (local
+ * HttpServer, redirect/downgrade/hop/oversize/404). Production uses [fetchHttpsImageBytes].
+ */
+internal fun fetchImageBytesWithPolicy(
+    url: String,
+    maxBytes: Long = MD_IMAGE_MAX_BYTES,
+    maxRedirects: Int = MD_IMAGE_MAX_REDIRECTS,
+    isAllowedUrl: (String) -> Boolean = ::isHttpsImageUrl,
+    openConnection: (String) -> HttpURLConnection = ::openImageHttpConnection,
+): ByteArray? {
+    if (!isAllowedUrl(url)) return null
+    return runCatching {
+        var current = url
+        repeat(maxRedirects) {
+            if (!isAllowedUrl(current)) return null
+            val conn = openConnection(current)
+            conn.connect()
+            val code = conn.responseCode
+            when (code) {
+                in 200..299 -> {
+                    val declared = conn.contentLengthLong
+                    if (declared > maxBytes) {
+                        conn.disconnect()
+                        return null
+                    }
+                    return conn.inputStream.use { readBytesCapped(it, maxBytes) }.also { conn.disconnect() }
+                }
+                in 300..399 -> {
+                    val next = conn.getHeaderField("Location")
+                    conn.disconnect()
+                    if (next.isNullOrBlank()) return null
+                    current = resolveImageRedirectUrl(current, next)
+                    // Reject immediately on scheme downgrade / disallowed hop so we never open it.
+                    if (!isAllowedUrl(current)) return null
+                }
+                else -> {
+                    conn.disconnect()
+                    return null
+                }
+            }
+        }
+        null
+    }.getOrNull()
+}
+
+/**
+ * GET [url] and return the response body when it is https, 2xx, and within [maxBytes]. Follows
+ * redirects only while the next hop stays https. Null on any failure — callers fall back to the
+ * link line. Blocking; call from [Dispatchers.IO], never the UI thread.
+ */
+internal fun fetchHttpsImageBytes(url: String, maxBytes: Long = MD_IMAGE_MAX_BYTES): ByteArray? =
+    fetchImageBytesWithPolicy(
+        url = url,
+        maxBytes = maxBytes,
+        maxRedirects = MD_IMAGE_MAX_REDIRECTS,
+        isAllowedUrl = ::isHttpsImageUrl,
+        openConnection = ::openImageHttpConnection,
+    )
+
+/**
+ * Layout tokens for inline markdown images — aliases of theme [Media]/[Sizes] so chat call sites
+ * stay readable without reintroducing magic `N.dp` values.
+ */
+internal object MdImageDimens {
+    /** Max painted height for a successfully loaded image (shrink-only bound). */
+    val MaxHeight = Media.inlineImageMaxHeight
+    /**
+     * Loading placeholder height when aspect ratio is not yet known — equals [MaxHeight] so the
+     * timeline never grows upward when a tall bitmap arrives.
+     */
+    val LoadingHeight = MaxHeight
+    val SpinnerSize = Sizes.iconSm
+    val SpinnerStroke = Sizes.hairline
+}
+
+/**
+ * Paint size for an inline image: natural pixel size in [density], only **shrunk** to fit within
+ * [maxWidth] × [maxHeight] — never upscaled (desktop/browser convention).
+ */
+internal fun mdImagePaintSize(
+    pixelWidth: Int,
+    pixelHeight: Int,
+    maxWidth: Dp,
+    maxHeight: Dp,
+    density: androidx.compose.ui.unit.Density,
+): Pair<Dp, Dp> {
+    if (pixelWidth <= 0 || pixelHeight <= 0) return maxWidth to maxHeight
+    val iw = with(density) { pixelWidth.toDp() }
+    val ih = with(density) { pixelHeight.toDp() }
+    val scale = minOf(1f, maxWidth / iw, maxHeight / ih)
+    return (iw * scale) to (ih * scale)
+}
+
+/**
+ * Decode raw image bytes (PNG/JPEG/GIF/WebP/…) to a **rasterised** Compose [ImageBitmap].
+ *
+ * Uses Skiko [Codec.readPixels] so pixel decode happens **here** (inside the caller's
+ * [runCatching] / IO dispatcher), not lazily at Compose draw time. [org.jetbrains.skia.Image.makeFromEncoded]
+ * alone is lazy; handing that to Compose would let truncated/corrupt payloads throw outside
+ * our catch and bypass the link fallback. Null on corrupt/unsupported/truncated payloads.
+ */
+internal fun decodeImageBytes(bytes: ByteArray): ImageBitmap? =
+    runCatching {
+        val data = Data.makeFromBytes(bytes)
+        val codec = Codec.makeFromData(data)
+        // Fully rasterise on this thread — failures surface here, not at draw time.
+        val raster = codec.readPixels()
+        if (raster.width <= 0 || raster.height <= 0 || raster.isNull) return@runCatching null
+        raster.setImmutable()
+        // SkiaBackedImageBitmap retains [raster]; do not close it. Codec/Data can be closed.
+        codec.close()
+        data.close()
+        raster.asComposeImageBitmap()
+    }.getOrNull()
+
+/**
+ * Load + fully decode an https image on [Dispatchers.IO]. Returns null for non-https, oversize,
+ * network, or decode failures. The returned [ImageBitmap] is already rasterised — safe to paint
+ * on the UI thread without further decode work.
+ *
+ * This is the **production** load path used by [MarkdownImage]'s default [loadImage] seam —
+ * tests that care about the dispatcher hop must call this (or the default seam), not reimplement
+ * `withContext(IO)` themselves.
+ */
+internal suspend fun loadMarkdownImageBitmap(
+    url: String,
+    maxBytes: Long = MD_IMAGE_MAX_BYTES,
+    fetchBytes: (String, Long) -> ByteArray? = { u, max -> fetchHttpsImageBytes(u, max) },
+): ImageBitmap? = withContext(Dispatchers.IO) {
+    val bytes = fetchBytes(url, maxBytes) ?: return@withContext null
+    decodeImageBytes(bytes)
+}
+
+/**
+ * Standalone markdown image `![alt](url)`.
+ *
+ * - `https://` URLs: fetch (size-capped) + force-decode off the UI thread, then paint inline.
+ * - Everything else (http, relative, data:): compact tappable link line that opens the system
+ *   browser — Android's Coil path is also https-only for the same tracking/IP-leak reason.
+ * - Load/decode failure falls back to a **distinct** failure link line (never a blank hole, never
+ *   identical to the deliberate non-https fallback).
+ * - Successful images are clickable (open URL via [onOpenUrl]) so desktop users can inspect the
+ *   full-resolution original. [onOpenUrl] defaults to the system browser; tests inject a recorder
+ *   so a click never launches Chrome (which would hang the Gradle test worker).
+ *
+ * [loadImage] is the load seam (default = real network fetch); tests inject a fake so the UI path
+ * is covered without the network.
  */
 @Composable
-fun MarkdownImage(image: MdBlock.Image) {
+fun MarkdownImage(
+    image: MdBlock.Image,
+    loadImage: suspend (String) -> ImageBitmap? = { loadMarkdownImageBitmap(it) },
+    onOpenUrl: (String) -> Unit = ::openInBrowser,
+) {
+    val cs = MaterialTheme.colorScheme
+    if (!isHttpsImageUrl(image.url)) {
+        MarkdownImageLinkLine(image, loadFailed = false, onOpenUrl = onOpenUrl)
+        return
+    }
+    var bitmap by remember(image.url) { mutableStateOf<ImageBitmap?>(null) }
+    var failed by remember(image.url) { mutableStateOf(false) }
+    LaunchedEffect(image.url) {
+        // loadImage itself must not block the main dispatcher — the default seam hops to IO and
+        // force-rasterises so draw-time decode cannot throw past our catch.
+        val decoded = runCatching { loadImage(image.url) }.getOrNull()
+        if (decoded != null) bitmap = decoded else failed = true
+    }
+    when {
+        bitmap != null -> {
+            val bmp = bitmap!!
+            // Natural size, shrink-only past max width/height — never upscale a small icon to the
+            // column width (fillMaxWidth + ContentScale.Fit would paint 32×32 as a 280×280 blob).
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val density = LocalDensity.current
+                val (w, h) = mdImagePaintSize(
+                    pixelWidth = bmp.width,
+                    pixelHeight = bmp.height,
+                    maxWidth = maxWidth,
+                    maxHeight = MdImageDimens.MaxHeight,
+                    density = density,
+                )
+                Image(
+                    bitmap = bmp,
+                    contentDescription = image.alt.ifEmpty { "Image" },
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .width(w)
+                        .height(h)
+                        .clip(RoundedCornerShape(Radii.sm))
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable { onOpenUrl(image.url) }
+                        .testTag("md_image"),
+                )
+            }
+        }
+        failed -> MarkdownImageLinkLine(image, loadFailed = true, onOpenUrl = onOpenUrl)
+        else -> {
+            // Reserve MaxHeight until dimensions are known (bounds upward reflow). Once the bitmap
+            // arrives, paint size uses its aspect ratio via [mdImagePaintSize].
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(MdImageDimens.LoadingHeight)
+                    .clip(RoundedCornerShape(Radii.sm))
+                    .background(cs.surfaceContainer)
+                    .testTag("md_image_loading"),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(
+                    Modifier.size(MdImageDimens.SpinnerSize),
+                    color = cs.onSurfaceVariant,
+                    strokeWidth = MdImageDimens.SpinnerStroke,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Tappable 🖼 + label link line. [loadFailed] distinguishes a deliberate non-https skip from a
+ * real fetch/decode failure so the user can tell them apart.
+ */
+@Composable
+private fun MarkdownImageLinkLine(
+    image: MdBlock.Image,
+    loadFailed: Boolean,
+    onOpenUrl: (String) -> Unit = ::openInBrowser,
+) {
     val cs = MaterialTheme.colorScheme
     val linkColor = cs.primary
+    val label = when {
+        loadFailed && image.alt.isNotEmpty() -> "Couldn't load image — ${image.alt}"
+        loadFailed -> "Couldn't load image"
+        else -> image.alt.ifEmpty { image.url }
+    }
     Text(
         text = buildAnnotatedString {
-            append("🖼 ") // 🖼
+            append("🖼 ")
             withLink(
                 LinkAnnotation.Url(
                     image.url,
                     TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
-                ) { openInBrowser(image.url) },
-            ) { append(image.alt.ifEmpty { image.url }) }
+                ) { onOpenUrl(image.url) },
+            ) { append(label) }
         },
         style = MaterialTheme.typography.bodyLarge,
         modifier = Modifier.testTag("md_image"),

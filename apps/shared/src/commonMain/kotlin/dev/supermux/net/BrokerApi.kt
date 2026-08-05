@@ -1066,28 +1066,46 @@ class BrokerApi(
     private suspend inline fun <reified T> getJson(url: String): T =
         decode(http.get(url) { header("Authorization", bearerHeader()) })
 
+    /**
+     * Fire-and-forget JSON mutations (POST/PUT/PATCH with no decoded body). Non-2xx MUST throw
+     * so callers that do `mutation(); true` (or runCatching.isSuccess) do not treat HTTP 4xx/5xx
+     * as success. Matches [decode]'s SKIE-safe CancellationException contract.
+     */
+    private suspend fun ensureMutationSuccess(resp: HttpResponse) {
+        if (resp.status.isSuccess()) return
+        val text = try {
+            resp.bodyAsText()
+        } catch (c: CancellationException) {
+            throw c
+        } catch (_: Throwable) {
+            ""
+        }
+        println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
+        throw CancellationException("BrokerApi request unavailable")
+    }
+
     private suspend inline fun <reified B> postJson(url: String, body: B) {
-        http.post(url) {
+        ensureMutationSuccess(http.post(url) {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
-        }
+        })
     }
 
     private suspend inline fun <reified B> putJson(url: String, body: B) {
-        http.put(url) {
+        ensureMutationSuccess(http.put(url) {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
-        }
+        })
     }
 
     private suspend inline fun <reified B> patchJson(url: String, body: B) {
-        http.patch(url) {
+        ensureMutationSuccess(http.patch(url) {
             header("Authorization", bearerHeader())
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
-        }
+        })
     }
 
     /** POST a JSON body and decode the JSON response (for endpoints that return data). */
@@ -1330,10 +1348,24 @@ class BrokerApi(
         return out
     }
 
-    /** GET /settings/soul → soul.md text ("" on any failure — never throws). */
+    /**
+     * GET /settings/soul → soul.md text.
+     * Empty string is a legitimate empty soul; non-2xx throws [CancellationException]
+     * (same SKIE-safe contract as [decode]) so callers can distinguish fetch-failure from
+     * an intentionally blank soul — critical so a failed load never becomes a blank Save.
+     */
     suspend fun getSoul(): String {
         val resp = http.get("$httpBase/settings/soul") { header("Authorization", bearerHeader()) }
-        return if (resp.status.isSuccess()) resp.bodyAsText() else ""
+        if (resp.status.isSuccess()) return resp.bodyAsText()
+        val text = try {
+            resp.bodyAsText()
+        } catch (c: CancellationException) {
+            throw c
+        } catch (_: Throwable) {
+            ""
+        }
+        println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
+        throw CancellationException("BrokerApi request unavailable")
     }
 
     /** PUT /settings/soul (text/plain body) → true on success. */
@@ -1451,10 +1483,17 @@ class BrokerApi(
 
     // ── System: restart + update status ────────────────────────────────────────
 
-    /** POST /system/restart — restart the broker service (fire-and-forget). */
+    /**
+     * POST /system/restart — restart the broker service.
+     * Non-2xx throws [CancellationException] (same SKIE-safe contract as other mutations) so
+     * callers can distinguish accepted restarts from 5xx / unreachable failures.
+     */
     suspend fun restartBroker() {
-        http.post("$httpBase/system/restart") { header("Authorization", bearerHeader()) }
+        ensureMutationSuccess(
+            http.post("$httpBase/system/restart") { header("Authorization", bearerHeader()) },
+        )
     }
+
 
     /** GET /api/update/status → in-app updater state (cached; no network re-poll). */
     suspend fun updateStatus(): UpdateStatus =
@@ -1474,16 +1513,27 @@ class BrokerApi(
      *  The broker returns 202 `{started:true}` and updates asynchronously (poll
      *  [updateStatus] for downloading→swapping→restart-required), 409 `{error:"busy"}`
      *  if an update is already running, or 400 `{error,instruction}` for
-     *  source/docker/disabled installs. The body is decoded for every status. */
+     *  source/docker/disabled installs. The body is decoded for every status.
+     *  Empty / uninformative non-2xx bodies (e.g. `500 {}`) get a synthetic `error` so
+     *  clients never treat "nothing happened" as success. */
     suspend fun runUpdate(): RunUpdateResult {
         val resp = http.post("$httpBase/api/update/run") { header("Authorization", bearerHeader()) }
         val text = resp.bodyAsText()
-        return try {
+        val decoded = try {
             json.decodeFromString<RunUpdateResult>(text)
         } catch (e: Throwable) {
             RunUpdateResult(error = text.ifBlank { "HTTP ${resp.status.value}" })
         }
+        if (!resp.status.isSuccess() &&
+            !decoded.started &&
+            decoded.error.isNullOrBlank() &&
+            decoded.instruction.isNullOrBlank()
+        ) {
+            return decoded.copy(error = "HTTP ${resp.status.value}")
+        }
+        return decoded
     }
+
 
     /** GET /settings/curator → {config:{enabled,hour,minute,agent,model,reasoningLevel}, nextRun} */
     suspend fun getCuratorSettings(): CuratorSettingsResponse =
@@ -1497,11 +1547,11 @@ class BrokerApi(
             setBody(json.encodeToString(config))
         })
 
-    /** POST /settings/curator/run-now */
+    /** POST /settings/curator/run-now — non-2xx throws (same contract as postJson/putJson). */
     suspend fun runCuratorNow() {
-        http.post("$httpBase/settings/curator/run-now") {
+        ensureMutationSuccess(http.post("$httpBase/settings/curator/run-now") {
             header("Authorization", bearerHeader())
-        }
+        })
     }
 
     /** GET /usage → raw JSON string */
@@ -1529,11 +1579,11 @@ class BrokerApi(
             setBody(json.encodeToString(AddDeviceBody(name)))
         })
 
-    /** DELETE /devices/<urlencoded name> */
+    /** DELETE /devices/<urlencoded name> — non-2xx throws (same contract as postJson/putJson). */
     suspend fun revokeDevice(name: String) {
-        http.delete("$httpBase/devices/${urlEncode(name)}") {
+        ensureMutationSuccess(http.delete("$httpBase/devices/${urlEncode(name)}") {
             header("Authorization", bearerHeader())
-        }
+        })
     }
 
     /** GET /archived-sessions */
@@ -1638,11 +1688,11 @@ class BrokerApi(
     suspend fun setProxyPublic(domain: String, isPublic: Boolean) =
         patchJson("$httpBase/proxies/${urlEncode(domain)}", SetProxyPublicBody(isPublic))
 
-    /** DELETE /proxies/<domain> */
+    /** DELETE /proxies/<domain> — non-2xx throws (same contract as [revokeDevice]/postJson). */
     suspend fun removeProxy(domain: String) {
-        http.delete("$httpBase/proxies/${urlEncode(domain)}") {
+        ensureMutationSuccess(http.delete("$httpBase/proxies/${urlEncode(domain)}") {
             header("Authorization", bearerHeader())
-        }
+        })
     }
 
     /**

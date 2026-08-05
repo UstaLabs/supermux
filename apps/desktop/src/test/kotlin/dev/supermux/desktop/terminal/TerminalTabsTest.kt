@@ -25,13 +25,15 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 
 /**
  * UI spec for the web-parity terminal [TerminalTabs] strip: hydration from the broker list, add,
@@ -47,13 +49,26 @@ import kotlin.test.assertTrue
  * TIMING: the tab set hydrates in a `LaunchedEffect` that suspends on a real HTTP call (the ktor
  * MockEngine, on its OWN dispatcher — not the compose test clock), so `waitForIdle()` alone can
  * return before hydration lands. Every test therefore polls with [waitForTag] / `waitUntil`.
+ *
+ * RESOURCE: each test owns an [HttpClient]; [AfterTest] closes them so a full-suite run does not
+ * wedge a worker on leaked MockEngine dispatchers (historical hang at setContent / waitForTag).
  */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
 class TerminalTabsTest {
 
+    private val clients = mutableListOf<HttpClient>()
+
+    @AfterTest
+    fun closeClients() {
+        clients.forEach { runCatching { it.close() } }
+        clients.clear()
+    }
+
     /** DesktopAppState over a given MockEngine (no WS / no real broker). */
     private fun appWithEngine(engine: MockEngine): DesktopAppState {
-        val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
+        val client = HttpClient(engine)
+        clients.add(client)
+        val api = BrokerApi("ws://test:9898", "t", client)
         return DesktopAppState(
             baseUrl = "ws://test:9898",
             token = "t",
@@ -65,9 +80,16 @@ class TerminalTabsTest {
 
     /** BrokerApi whose /api/term/list returns exactly [terminalListJson] (deterministic ids). */
     private fun appWithTerminals(terminalListJson: String): DesktopAppState =
-        appWithEngine(MockEngine { _ ->
+        appWithEngine(MockEngine { req ->
+            // Only the list endpoint is needed; answer everything else with empty JSON so a stray
+            // call cannot hang on a mismatched body decode.
+            val body = if (req.url.encodedPath.contains("/api/term/list")) {
+                terminalListJson
+            } else {
+                "{}"
+            }
             respond(
-                content = ByteReadChannel(terminalListJson),
+                content = ByteReadChannel(body),
                 status = HttpStatusCode.OK,
                 headers = headersOf(HttpHeaders.ContentType, "application/json"),
             )
@@ -184,10 +206,16 @@ class TerminalTabsTest {
     fun tab_added_during_hydration_survives_the_merge() = runComposeUiTest {
         val mounts = mutableListOf<String>()
         val disposals = mutableListOf<String>()
-        // Gate the /api/term/list response so we can act while hydration is still in flight.
-        val gate = CompletableDeferred<Unit>()
+        // Gate the /api/term/list response with a non-blocking poll so the MockEngine coroutine
+        // never permanently occupies a worker thread (CompletableDeferred.await can wedge under
+        // full-suite load when compose waitForIdle races the suspended handler).
+        val release = AtomicBoolean(false)
         val app = appWithEngine(MockEngine { _ ->
-            gate.await()
+            var spins = 0
+            while (!release.get() && spins < 500) {
+                delay(10)
+                spins++
+            }
             respond(
                 content = ByteReadChannel("""{"terminals":[{"id":"main","createdAt":1}]}"""),
                 status = HttpStatusCode.OK,
@@ -201,7 +229,7 @@ class TerminalTabsTest {
         waitUntil(timeoutMillis = 5_000) { mounts.size == 1 }
         val localId = mounts[0]
 
-        gate.complete(Unit)
+        release.set(true)
         waitForTag("term-tab-main")
 
         // The locally-added tab survived hydration (MERGED, not clobbered): still in the strip,
