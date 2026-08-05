@@ -1469,10 +1469,17 @@ class BrokerApi(
 
     // ── System: restart + update status ────────────────────────────────────────
 
-    /** POST /system/restart — restart the broker service (fire-and-forget). */
+    /**
+     * POST /system/restart — restart the broker service.
+     * Non-2xx throws [CancellationException] (same SKIE-safe contract as other mutations) so
+     * callers can distinguish accepted restarts from 5xx / unreachable failures.
+     */
     suspend fun restartBroker() {
-        http.post("$httpBase/system/restart") { header("Authorization", bearerHeader()) }
+        ensureMutationSuccess(
+            http.post("$httpBase/system/restart") { header("Authorization", bearerHeader()) },
+        )
     }
+
 
     /** GET /api/update/status → in-app updater state (cached; no network re-poll). */
     suspend fun updateStatus(): UpdateStatus =
@@ -1492,16 +1499,27 @@ class BrokerApi(
      *  The broker returns 202 `{started:true}` and updates asynchronously (poll
      *  [updateStatus] for downloading→swapping→restart-required), 409 `{error:"busy"}`
      *  if an update is already running, or 400 `{error,instruction}` for
-     *  source/docker/disabled installs. The body is decoded for every status. */
+     *  source/docker/disabled installs. The body is decoded for every status.
+     *  Empty / uninformative non-2xx bodies (e.g. `500 {}`) get a synthetic `error` so
+     *  clients never treat "nothing happened" as success. */
     suspend fun runUpdate(): RunUpdateResult {
         val resp = http.post("$httpBase/api/update/run") { header("Authorization", bearerHeader()) }
         val text = resp.bodyAsText()
-        return try {
+        val decoded = try {
             json.decodeFromString<RunUpdateResult>(text)
         } catch (e: Throwable) {
             RunUpdateResult(error = text.ifBlank { "HTTP ${resp.status.value}" })
         }
+        if (!resp.status.isSuccess() &&
+            !decoded.started &&
+            decoded.error.isNullOrBlank() &&
+            decoded.instruction.isNullOrBlank()
+        ) {
+            return decoded.copy(error = "HTTP ${resp.status.value}")
+        }
+        return decoded
     }
+
 
     /** GET /settings/curator → {config:{enabled,hour,minute,agent,model,reasoningLevel}, nextRun} */
     suspend fun getCuratorSettings(): CuratorSettingsResponse =

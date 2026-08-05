@@ -94,6 +94,10 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //   SM_GIT_HOSTING=1              — open the Settings hub on Git hosting (Task 4) via the SAME
 //                                  ui.openSettings(GitHosting), loading real app.forgesLoad()
 //                                  (GET /forge/connections, read-only). Off by default.       [main]
+//   SM_SYSTEM=1                   — open the Settings hub on System via ui.openSettings(System)
+//                                  on start, loading real app.updateStatus() (GET /api/update/status,
+//                                  read-only) from the active host. Off by default; never calls
+//                                  runUpdate/restartBroker (those kill/update the live broker).  [main]
 //   SM_USAGE=1                    — open the Usage overlay (File ▸ "Usage…"'s SAME ui.openUsage())
 //                                  on start, loading the real app.usage() (GET /usage, read-only)
 //                                  (M4f). Read-only — never calls redeemCodexReset() (that burns a
@@ -1037,6 +1041,29 @@ fun main() {
                                 "[git-hosting] forgesLoad connections=${conns.size} " +
                                     "accounts=${conns.joinToString { "${it.kind}:@${it.account.login}" }.ifEmpty { "(none)" }} " +
                                     "cli.gh=${cli?.github?.available == true} cli.glab=${cli?.gitlab?.available == true}",
+                            )
+                        }
+                    }
+
+                    // Headless System verification hook (desktop-parity Task 3): SM_SYSTEM=1 opens
+                    // the Settings hub on System via ui.openSettings(System) so SystemSettingsScreen
+                    // loads real `app.updateStatus()` (GET /api/update/status) under Xvfb.
+                    // Read-only by construction — never calls runUpdate/restartBroker (those mutate
+                    // the live broker). Distinct from File ▸ "Check for Updates…" (desktop app).
+                    // Off by default; harmless in prod.
+                    val systemHook = System.getenv("SM_SYSTEM") == "1"
+                    if (systemHook) {
+                        LaunchedEffect(app) {
+                            delay(3_000)
+                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.System)
+                            println("[system] opened the Settings hub (System)")
+                            val st = app.updateStatus()
+                            println(
+                                "[system] updateStatus current=${st?.current ?: "null"} " +
+                                    "latest=${st?.latest ?: "-"} available=${st?.updateAvailable} " +
+                                    "mode=${st?.mode ?: "-"} state=${st?.state ?: "-"} " +
+                                    "commit=${st?.commit?.take(8) ?: "-"} " +
+                                    "lastChecked=${st?.lastChecked ?: "-"}",
                             )
                         }
                     }

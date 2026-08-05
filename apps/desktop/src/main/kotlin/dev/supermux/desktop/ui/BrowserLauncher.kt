@@ -14,8 +14,9 @@ import kotlin.concurrent.thread
  * capability check; a broken handoff logs (rather than silently swallowing) so it stays diagnosable.
  *
  * Test seam: [openInBrowserOverride] captures URLs without spawning a browser. When the JVM
- * property `supermux.tests=1` is set (desktop `test` task), the system browser is never opened
- * even if the override is null — no test may launch a browser.
+ * property `supermux.tests=1` is set (desktop `test` task), the system browser is never opened even
+ * if the override is null — no test may launch a browser (Agent OAuth would otherwise hang the full
+ * suite waiting on inherited browser pipes).
  */
 @Volatile
 var openInBrowserOverride: ((String) -> Unit)? = null

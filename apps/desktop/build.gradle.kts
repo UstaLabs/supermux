@@ -31,6 +31,9 @@ dependencies {
     testImplementation(libs.coroutines.test)
     testImplementation(kotlin("test"))
     testImplementation(libs.ktor.client.mock) // seed BrokerApi responses (e.g. terminal-tab list) in UI tests
+    // Real WS reconnect tests for System restart (local stub broker; not shipped).
+    testImplementation(libs.ktor.server.cio)
+    testImplementation(libs.ktor.server.websockets)
     @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
     testImplementation(compose.desktop.uiTestJUnit4)
     testImplementation(compose.desktop.currentOs)
@@ -45,9 +48,6 @@ tasks.withType<Test>().configureEach {
     // Compose UI tests + MockEngine can wedge a worker under load; one fork keeps the gate
     // green-and-terminating (avoids the historical TerminalTabs hang under parallel workers).
     maxParallelForks = 1
-    // Fail a wedged test rather than hanging the whole suite indefinitely.
-    // (JUnit platform respects junit.jupiter.execution.timeout if used; kotlin.test does not.
-    //  The suite still relies on per-waitUntil timeouts inside compose tests.)
 }
 
 // M3 editor: ship the SAME committed CodeMirror bundle the mobile apps use (single source of
