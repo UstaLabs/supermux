@@ -1,10 +1,19 @@
 package dev.supermux.desktop
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -14,9 +23,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyShortcut
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.Tray
@@ -26,6 +39,10 @@ import androidx.compose.ui.window.isTraySupported
 import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.rememberWindowState
 import dev.supermux.desktop.auth.DesktopTokenStore
+import dev.supermux.desktop.chat.AssistantMessage
+import dev.supermux.desktop.chat.decodeImageBytes
+import dev.supermux.desktop.chat.loadMarkdownImageBitmap
+import dev.supermux.desktop.chat.prunePasteCache
 import dev.supermux.desktop.host.DesktopHostBootstrap
 import dev.supermux.desktop.host.DesktopHostStores
 import dev.supermux.desktop.host.FleetState
@@ -38,10 +55,12 @@ import dev.supermux.desktop.pairing.OnboardingScreen
 import dev.supermux.desktop.pairing.PairingState
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
+import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.desktop.workspace.WorkspaceRoot
 import dev.supermux.desktop.workspace.WorkspaceStateStore
 import dev.supermux.desktop.workspace.WorkspaceUiState
+import java.io.File
 
 // Headless-verification env hooks (ALL off by default; for Xvfb runs with no input injection).
 // Catalogued here for discoverability — some are read at their use-site rather than in main():
@@ -160,8 +179,19 @@ import dev.supermux.desktop.workspace.WorkspaceUiState
 //                                  unaffected. A forced (SM_INTRO=1) run does NOT mark seen.  [main]
 //   SM_INTRO_FREEZE=<t 0..1>      — freeze the intro timeline at <t> (no auto-advance/finish)
 //                                  for deterministic phase screenshots              [FirstRunIntro]
+//   SM_MD_IMAGE=<url-or-path|1>   — render a chat AssistantMessage containing a markdown image for
+//                                  headless screenshot verification of inline-image layout (natural
+//                                  size / shrink-only, loading placeholder, click seam). Value is
+//                                  an https URL (production fetch), a local file path (decoded from
+//                                  disk — never posted to a real session), or "1" for a built-in
+//                                  2×2 PNG fixture. Overlay only; no broker traffic. Off by default.
+//                                  [main]
 fun main() {
     val store = DesktopTokenStore()
+    // Reclaim aged clipboard-paste PNGs under <config>/paste-cache/ (app-owned; never /tmp).
+    // Individual files are never deleted by path during composer lifecycle — only this age prune.
+    runCatching { prunePasteCache() }
+        .onFailure { println("[Main] paste-cache prune failed (continuing): $it") }
     // Dev override, mirrors the mac app's SM_PAIR_TOKEN/SM_PAIR_BASE guard (SupermuxApp.swift
     // requires BOTH to be present and non-empty) — lets a dev/CI run seed a pairing without the
     // onboarding UI. Requiring both prevents a stray SM_PAIR_TOKEN from silently clobbering a
@@ -314,6 +344,14 @@ fun main() {
                         }
                         Separator()
                         Item("Unpair…") { showUnpairConfirm = true }
+                    }
+                    Menu("Edit", mnemonic = 'E') {
+                        // Same paste-image path as Attach ▸ Paste image / Ctrl+V in the composer.
+                        // Accelerator label documents the chord; the composer's onPreviewKeyEvent
+                        // owns the live key handling when the field is focused.
+                        Item("Paste image", shortcut = KeyShortcut(Key.V, ctrl = true)) {
+                            ui.requestPasteImage()
+                        }
                     }
                     Menu("View", mnemonic = 'V') {
                         CheckboxItem("Show Sidebar", checked = !ui.layout.sidebarCollapsed) {
@@ -1286,6 +1324,83 @@ fun main() {
                     if (System.getenv("SM_INTRO") != "1") runCatching { introStore.markSeen() }
                 })
             }
+
+            // Headless inline-image layout verification (SM_MD_IMAGE) — see catalogue above.
+            val mdImageSrc = System.getenv("SM_MD_IMAGE")?.takeIf { it.isNotBlank() }
+            if (mdImageSrc != null) {
+                MdImageVerifyOverlay(source = mdImageSrc)
+            }
+        }
+    }
+}
+
+/**
+ * Full-window overlay that paints one [AssistantMessage] containing a markdown image so inline-
+ * image layout (natural size, max-height clamp, loading placeholder) can be screenshotted under
+ * Xvfb without posting into a real session. [source] is `1` (built-in 2×2 PNG), an https URL, or a
+ * local filesystem path.
+ */
+@Composable
+private fun MdImageVerifyOverlay(source: String) {
+    val tinyPngHex =
+        "89504e470d0a1a0a0000000d4948445200000002000000020802000000fdd49a73" +
+            "0000001049444154789c63f8cfc000440c100a001fee03fd8b5f14d40000000049454e44ae426082"
+    val tinyPng = remember {
+        ByteArray(tinyPngHex.length / 2) { i ->
+            tinyPngHex.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+        }
+    }
+    val isHttps = source.startsWith("https://", ignoreCase = true)
+    val localFile = if (!isHttps && source != "1") File(source).takeIf { it.isFile } else null
+    val localBytes: ByteArray? = when {
+        source == "1" -> tinyPng
+        localFile != null -> runCatching { localFile.readBytes() }.getOrNull()
+        else -> null
+    }
+    // Synthetic https so MarkdownImage takes the inline path; [loadImage] serves local bytes.
+    val displayUrl = if (isHttps) source else "https://md-image-verify.local/fixture.png"
+    val md = "![md-image-verify]($displayUrl)"
+    val loadImage: suspend (String) -> ImageBitmap? = when {
+        localBytes != null -> ({ decodeImageBytes(localBytes) })
+        isHttps -> ({ loadMarkdownImageBitmap(it) })
+        else -> ({ null })
+    }
+    LaunchedEffect(source) {
+        when {
+            localBytes != null ->
+                println("[md-image] SM_MD_IMAGE overlay source=$source localBytes=${localBytes.size}")
+            isHttps ->
+                println("[md-image] SM_MD_IMAGE overlay source=$source https production fetch")
+            else ->
+                println("[md-image] SM_MD_IMAGE bad source (need 1, https URL, or readable file): $source")
+        }
+    }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surface)
+            .testTag("sm_md_image_overlay"),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        Column(
+            Modifier
+                .widthIn(max = 860.dp)
+                .fillMaxWidth()
+                .padding(Space.lg)
+                .testTag("sm_md_image_message"),
+        ) {
+            Text(
+                "SM_MD_IMAGE verification",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(bottom = Space.sm),
+            )
+            // Same chat stack: AssistantMessage → MarkdownBody → MarkdownImage (with seams).
+            AssistantMessage(
+                text = md,
+                onOpenUrl = { /* never launch browser under Xvfb */ },
+                loadImage = loadImage,
+            )
         }
     }
 }

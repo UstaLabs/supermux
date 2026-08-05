@@ -138,6 +138,7 @@ class DesktopComposerAttachTest {
             )
         }
         onNodeWithTag("composer-attach").performClick()
+        onNodeWithTag("composer-attach-files").performClick()
         waitForIdle()
         // Chip shows a determinate % while uploading; send is BLOCKED (upload in flight).
         onNodeWithText("note.txt · 30%").assertExists()
@@ -167,6 +168,7 @@ class DesktopComposerAttachTest {
             )
         }
         onNodeWithTag("composer-attach").performClick()
+        onNodeWithTag("composer-attach-files").performClick()
         waitUntil(timeoutMillis = 5_000L) { onAllNodesWithText("note.txt · Retry").fetchSemanticsNodes().isNotEmpty() }
         onNodeWithTag("composer-send").assertIsNotEnabled() // Failed blocks send
 
@@ -192,6 +194,7 @@ class DesktopComposerAttachTest {
             )
         }
         onNodeWithTag("composer-attach").performClick()
+        onNodeWithTag("composer-attach-files").performClick()
         waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isNotEmpty() }
         onNodeWithTag("composer-send").assertIsEnabled()
 
@@ -218,6 +221,7 @@ class DesktopComposerAttachTest {
             )
         }
         onNodeWithTag("composer-attach").performClick()
+        onNodeWithTag("composer-attach-files").performClick()
         waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isNotEmpty() }
 
         onNodeWithTag("composer-send").performClick()
@@ -252,6 +256,7 @@ class DesktopComposerAttachTest {
             )
         }
         onNodeWithTag("composer-attach").performClick()
+        onNodeWithTag("composer-attach-files").performClick()
         waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("composer-chip").fetchSemanticsNodes().size == 2 }
 
         // Exactly the two real files staged + uploaded — the missing entry never became a chip.
@@ -280,6 +285,7 @@ class DesktopComposerAttachTest {
             )
         }
         onNodeWithTag("composer-attach").performClick()
+        onNodeWithTag("composer-attach-files").performClick()
         waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("composer-chip").fetchSemanticsNodes().size == 2 }
 
         // A batch stage (as a drop would funnel in) is still governed by T1's session scoping: a
@@ -307,6 +313,7 @@ class DesktopComposerAttachTest {
             )
         }
         onNodeWithTag("composer-attach").performClick()
+        onNodeWithTag("composer-attach-files").performClick()
         waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isNotEmpty() }
         onNodeWithTag("composer-send").assertIsEnabled()
 
@@ -334,6 +341,7 @@ class DesktopComposerAttachTest {
             )
         }
         onNodeWithTag("composer-attach").performClick()
+        onNodeWithTag("composer-attach-files").performClick()
         // Chip settles to Done (label = bare name).
         waitUntil(timeoutMillis = 5_000L) { onAllNodesWithText("note.txt").fetchSemanticsNodes().isNotEmpty() }
         onNodeWithTag("composer-send").assertIsEnabled()
